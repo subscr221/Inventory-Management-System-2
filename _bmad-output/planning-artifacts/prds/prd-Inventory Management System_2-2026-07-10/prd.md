@@ -401,9 +401,11 @@ The platform is not, and will not become in v1:
 
 ## 6. MVP Scope
 
-The source document mandates phased rollout (12 to 18 months to operational, 2 to 3 locations per change wave) but does not define a module-level MVP cut. On 2026-07-10 the business confirmed the reordering direction: phasing follows revenue exposure, pulling job-work services and R&D/maker-hub tracking into Phase 1. The remaining boundary is proposed for confirmation. `[ASSUMPTION: apart from the confirmed job-work and R&D placement, phase boundaries are PM-proposed from source dependencies (C-12, A-13, A-11), not stakeholder-agreed.]`
+Delivery approach (confirmed 2026-07-10): **spine-first custom build over a 36-month program**. The compliance spine (statutory edit log, DOA registry, event-sourced location, calibration and statutory lockouts, business-stream tagging) is built and acceptance-tested first as the platform layer every module sits on; modules then land in waves. Phasing follows revenue exposure, pulling job-work services and R&D/maker-hub tracking into Phase 1. The remaining wave boundary is proposed for confirmation. `[ASSUMPTION: apart from the confirmed job-work and R&D placement, wave boundaries are PM-proposed from source dependencies (C-12, A-13, A-11), not stakeholder-agreed.]`
 
 ### 6.1 Phase 1 (first go-live)
+
+First go-live slice, at a single pilot site: the compliance spine, core inventory, the frontline gate edge, and job-work services. `[ASSUMPTION: the slice composition follows the party-session recommendation; first go-live is assumed to land well inside the 36-month program envelope, sequencing to be set by the program plan.]` The remaining Phase 1 items below follow in waves at 2 to 3 locations each:
 
 - Core inventory, warehouse operations, and the frontline edge layer (gate, weighbridge, putaway, indent loop) with offline-first capture.
 - Procurement and supplier management including MSME compliance; approvals resolved through the DOA registry with ERP-synced budget checks.
@@ -423,7 +425,7 @@ The source document mandates phased rollout (12 to 18 months to operational, 2 t
 
 ### 6.3 Out of Scope for MVP
 
-Everything in §5, plus: multi-country data residency (contingent on C-04 clarification, see §14), RFID and IoT beyond barcode scanning where not already deployed, put-to-light picking.
+Everything in §5, plus: multi-country data residency (resolved out of scope: India only, see §14 question 1), RFID and IoT beyond barcode scanning where not already deployed, put-to-light picking.
 
 ## 7. Success Metrics
 
@@ -455,7 +457,8 @@ The source defines 48 metrics (SM-01 to SM-48) with targets and measurement meth
 Source §4 is normative; headline values:
 
 - **Scale (NFR-S-01 to S-05):** 50 locations scaling to 200+ without architectural change; 500k+ SKUs; 1,000 concurrent users with headroom to 5,000; 10k+ order lines/hour; 8-financial-year retention (3 online, archive restorable to queryable within 48 hours).
-- **Performance (NFR-P-01 to P-05):** operational screens under 2s; single-SKU stock queries under 1s; standard reports under 10s; availability 99.5% of operational hours (target 99.9%); API p95 under 500ms.
+- **Performance (NFR-P-01 to P-05):** operational screens under 2s; single-SKU stock queries under 1s; standard reports under 10s; API p95 under 500ms.
+- **Availability (NFR-P-04, restated as a two-tier SLA, confirmed 2026-07-10):** tier 1, frontline edge capture (gate, weighbridge, putaway, crib, hub POS, technician flows) is available 24x7 by offline-first architecture - device-local capture with store-and-forward is the availability mechanism, and the degraded state must be visible on the device ("captured, pending sync"). Tier 2, the central control plane (order release, closure, IRN-gated dispatch, approvals) carries 99.5% availability (target 99.9%) over per-site operating windows defined in the program plan. This supersedes the source's "business hours" phrasing.
 - **Security (NFR-SEC-01 to SEC-06):** SSO (SAML 2.0/OIDC); RBAC to module, function, location, and data level; TLS 1.2+ and AES-256; immutable audit log (extended by FR-AC-13); enforced segregation of duties; DPDP Act 2023 and DPDP Rules 2025 compliance.
 - **Data integrity (NFR-DI-01 to DI-05):** ACID inventory transactions; no double allocation; cross-location sync lag at most 5s with graceful partition handling; daily backups, RTO 4h, RPO 1h; idempotent financial postings.
 - **Usability (NFR-U-01 to U-06):** responsive on desktop and rugged tablets; WCAG 2.1 AA; i18n and multi-currency; offline-first frontline capture as a normal path `[ASSUMPTION: offline is a firm requirement for all frontline flows, not the conditional phrasing of A-03]`; scan-first, glove-friendly, one-handed moment-of-use ergonomics.
@@ -509,29 +512,31 @@ Go-live quality is set by opening balances; an error here repeats its damage on 
 
 ## 13. Rollout and Change Management
 
-- Operational within 12 to 18 months of kickoff; phased by location or module (C-01).
+- Program timeline re-baselined (confirmed 2026-07-10): **36 months**, superseding C-01's 12 to 18 months; delivery is spine-first (see §6), with first go-live at a single pilot site inside the envelope.
 - Change capacity caps rollout at 2 to 3 locations per wave (C-06).
+- Pilot-site selection is open: operations argued for the hardest site (worst connectivity, busiest gate) to prove the system where it is weakest; change-management convention favors a receptive site. Program sponsor to decide.
 - Platform decision (2026-07-10): **custom build**. The business has concluded that no candidate COTS platform can deliver the India-specific statutory constructions (non-disableable edit log, weighbridge stamping blocks, 90-day hazardous timers, DOA registry, event-sourced location) within acceptable customization limits. This supersedes source constraint C-02's COTS preference; C-02's budget rationale ("full custom build impractical") now conflicts with the decision and must be re-baselined (see §14, question 10). Evaluation background is in the addendum.
 - Barcode hardware is budgeted separately and assumed in place at go-live (A-05); a dedicated project team is assumed available (A-06).
 
 ## 14. Open Questions
 
-1. **Multi-country footprint.** §1 frames one Indian enterprise and A-08 assumes GST registrations in every operating state, yet C-04 contemplates multi-country data residency. Is multi-country real, planned, or contingency-only? Drives residency architecture.
+1. **Multi-country footprint.** Resolved 2026-07-10: **India only**. Source constraint C-04 (multi-country data residency) is superseded and replaced by an architecture principle: no region-bound assumptions hard-coded in the data layer, so residency support stays cheap if the footprint ever changes.
 2. **COTS vs compliance depth.** Resolved 2026-07-10: no candidate COTS platform (Manhattan, Blue Yonder, Oracle SCM Cloud, SAP IBP, Kinaxis) can deliver the required customization. Custom build selected; see §13 and question 10.
-3. **Availability window.** NFR-P-04 defines availability over "business hours," but offline-first flows and multi-shift operations imply near-24x7 expectations. What is the contractual uptime window?
+3. **Availability window.** Resolved 2026-07-10: two-tier SLA adopted (see §8) - edge capture 24x7 by offline-first architecture, central control plane at 99.5% (target 99.9%) over per-site operating windows. Residual: the per-site operating windows themselves are defined in the program plan.
 4. **Retention reconciliation.** NFR-S-05 (8 financial years) and NFR-D-02 (per-type statutory minimums) need a single unified retention table per record and document class.
 5. **"Real-time" quantification.** INT-EC-01 promises a real-time availability feed while NFR-DI-03 permits 5s sync lag and NFR-P-05 allows 2s API tails. Define "real-time" numerically per feed.
 6. **DPDP compliance date.** Obligations phase in to May 2027. Must the platform be compliant at launch or by the phased deadlines?
-7. **Access matrix completion.** The role-capability matrix covers 7 of ~36 roles; the "Configure system settings" capability is ambiguously placed under Finance annotated "(Admin)". The full matrix is a UX/architecture prerequisite. Suggested owner: security/UX lead, due before Phase 1 detailed design.
+7. **Access matrix completion.** Owner assigned 2026-07-10: the **Super Admin (system owner) acts as security lead** for the full role-capability matrix, due before Phase 1 detailed design. Requirements confirmed: roles modeled as hats (assignable capabilities, location-scoped), segregation-of-duties constraints as first-class matrix rows, and "Configure system settings" reassigned from the Finance column to System Administrator. Residual: the matrix itself still has to be produced and audited for traceability.
 8. **Baseline-dependent targets.** SM-16, SM-32, SM-37, SM-39, SM-42 defer hard targets until baselines exist; owners and baseline windows need naming.
 9. **MVP boundary confirmation.** Partially resolved 2026-07-10: the business directed reordering by revenue exposure, moving job-work services and R&D/maker-hub tracking into Phase 1 (see §6.1). The remaining Phase 1/Phase 2 boundary stands as proposed and still needs sign-off.
-10. **Custom-build feasibility.** The custom-build decision (§13) conflicts with C-02's budget rationale and puts pressure on the 12-to-18-month operational timeline (C-01) and the 2-to-3-locations-per-wave change capacity (C-06). Budget, delivery approach (in-house, partner, or hybrid), and a re-baselined timeline need owners before architecture commits. Suggested owner: program sponsor with finance.
+10. **Custom-build feasibility.** Substantially resolved 2026-07-10: delivery approach is **spine-first** (compliance platform layer built and acceptance-tested before modules) and the timeline is re-baselined to **36 months**, superseding C-01 and dissolving the schedule conflict with C-02. Residuals: the budget envelope for the custom build (C-02's original objection) still needs a figure from the sponsor and finance; build sourcing (in-house, partner, or hybrid) is undecided; the spine acceptance contract is to be enumerated from the existing testable FRs (C-07, FR-AC-13, FR-M-13/14, FR-DOA-01, INT-LOC-01) as an architecture-phase deliverable.
 
 ## 15. Assumptions Index
 
 Source assumptions A-01 to A-14 (locations count, ERP in place, connectivity, item-master governance, barcode budget, project team, cloud hosting, Ind AS and GST registrations, DSIR recognition, operator-entered meters first, BOM release governance, booked-hours approximation, BIS licences, maker-hub scrap ownership) are carried as stated in source §7.1. PRD-added assumptions:
 
 - §6 - Phase 1/Phase 2 module split is PM-proposed from dependency constraints, except the job-work and R&D/maker-hub placement in Phase 1, which the business confirmed on 2026-07-10.
+- §6.1 - The first go-live slice (spine, core inventory, gate edge, job-work at one pilot site) follows the party-session recommendation; first go-live is assumed to land well inside the 36-month envelope, with exact sequencing owned by the program plan.
 - §6.1 - Pulling both job-work and R&D into Phase 1 interprets the business direction "reorder by revenue exposure"; if only job-work was intended, R&D reverts to Phase 2.
 - §7 - Counter-metrics SM-C1 to SM-C3 are proposed; the source defines none.
 - §2.3 - Treating the four fully-worked source stories as the PRD's complete journey set (remaining moments live as scored stubs) assumes no additional journey is PRD-blocking.

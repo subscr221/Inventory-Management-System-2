@@ -4,7 +4,9 @@ Depth preserved from the source requirements document that belongs in downstream
 
 ## Platform Selection Considerations (feeds architecture / procurement)
 
-- Decision 2026-07-10: **custom build selected**. The business concluded the COTS candidates (Manhattan Associates, Blue Yonder, Oracle SCM Cloud, SAP IBP, Kinaxis) cannot deliver the required customization. Source constraint C-02 (COTS preferred, custom impractical on budget) is superseded; budget and timeline re-baselining is tracked as PRD open question 10.
+- Decision 2026-07-10: **custom build selected**. The business concluded the COTS candidates (Manhattan Associates, Blue Yonder, Oracle SCM Cloud, SAP IBP, Kinaxis) cannot deliver the required customization. Source constraint C-02 (COTS preferred, custom impractical on budget) is superseded.
+- Delivery decisions 2026-07-10: **spine-first** build order (compliance platform layer with its own acceptance contract before any module) over a **36-month** program, superseding C-01's 12 to 18 months; first go-live is a four-capability slice (spine, core inventory, gate edge, job-work) at one pilot site. Budget envelope and build sourcing (in-house, partner, hybrid) remain open under PRD question 10; pilot-site selection (hardest site vs receptive site) is with the sponsor.
+- Architecture principle replacing C-04 (India-only decision): no region-bound assumptions hard-coded in the data layer.
 - C-05 still applies to the custom stack: alignment with the organization's preferred tech ecosystem (Microsoft-centric, Java-based, or cloud-agnostic) is a build-stack selection factor.
 - The compliance constructions that drove the decision (retain as architecture requirements, no longer selection tests):
   - Non-disableable statutory edit log with no hard deletes (C-07, FR-AC-13).
