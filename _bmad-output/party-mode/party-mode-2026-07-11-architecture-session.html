@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRD Room — Session 5: Architecture Spine</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: #0f1117;
+    color: #e1e4e8;
+    line-height: 1.6;
+    padding: 2rem;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  header {
+    text-align: center;
+    padding: 3rem 0 2rem;
+    border-bottom: 1px solid #21262d;
+    margin-bottom: 2rem;
+  }
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #f0f6fc;
+    margin-bottom: 0.5rem;
+  }
+  .subtitle {
+    color: #8b949e;
+    font-size: 0.95rem;
+  }
+  .meta {
+    display: flex;
+    gap: 1.5rem;
+    justify-content: center;
+    margin-top: 1rem;
+    color: #6e7681;
+    font-size: 0.85rem;
+    flex-wrap: wrap;
+  }
+  .scene {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+  }
+  .scene h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #8b949e;
+    margin-bottom: 1.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .cast {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .persona {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #21262d;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+  }
+  .persona .icon { font-size: 1.3rem; }
+  .persona .name { font-weight: 600; color: #f0f6fc; }
+  .persona .role { color: #8b949e; font-size: 0.8rem; }
+  .exchange {
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid #21262d;
+  }
+  .exchange:last-child { border-bottom: none; }
+  .turn {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    align-items: flex-start;
+  }
+  .turn .avatar {
+    font-size: 1.5rem;
+    min-width: 2rem;
+    text-align: center;
+    padding-top: 0.1rem;
+  }
+  .turn .bubble {
+    background: #1c2128;
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    flex: 1;
+  }
+  .turn .bubble .speaker {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: #58a6ff;
+    margin-bottom: 0.25rem;
+  }
+  .turn .bubble .text {
+    font-size: 0.9rem;
+    color: #c9d1d9;
+    line-height: 1.5;
+  }
+  .turn .bubble .text em { color: #8b949e; }
+  .decision {
+    background: #1a2332;
+    border-left: 3px solid #58a6ff;
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin: 1.5rem 0;
+  }
+  .decision h3 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #58a6ff;
+    margin-bottom: 0.5rem;
+  }
+  .decision p {
+    font-size: 0.85rem;
+    color: #c9d1d9;
+  }
+  .decision .tag {
+    display: inline-block;
+    background: #1f6feb33;
+    color: #58a6ff;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    margin-right: 0.25rem;
+  }
+  .outcome {
+    background: linear-gradient(135deg, #1a2332 0%, #162233 100%);
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 2rem;
+    margin: 2rem 0;
+  }
+  .outcome h2 {
+    font-size: 1.2rem;
+    color: #f0f6fc;
+    margin-bottom: 1rem;
+  }
+  .outcome ul {
+    list-style: none;
+    padding: 0;
+  }
+  .outcome li {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #21262d;
+    font-size: 0.9rem;
+    color: #c9d1d9;
+  }
+  .outcome li:last-child { border-bottom: none; }
+  .outcome li::before {
+    content: "✓";
+    color: #3fb950;
+    margin-right: 0.75rem;
+    font-weight: 700;
+  }
+  .outcome li.deferred::before {
+    content: "⏳";
+    color: #d29922;
+  }
+  footer {
+    text-align: center;
+    padding: 2rem 0;
+    color: #484f58;
+    font-size: 0.8rem;
+    border-top: 1px solid #21262d;
+    margin-top: 3rem;
+  }
+  .divider {
+    text-align: center;
+    color: #30363d;
+    margin: 0.5rem 0;
+    font-size: 0.8rem;
+  }
+  svg { max-width: 100%; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Architecture Spine</h1>
+  <p class="subtitle">PRD Room — Session 5</p>
+  <div class="meta">
+    <span>📅 2026-07-11</span>
+    <span>🏗️ Winston (Architect) presiding</span>
+    <span>📋 16 Architecture Decisions</span>
+    <span>📦 14 Modules</span>
+    <span>🔗 342 FRs mapped</span>
+  </div>
+</header>
+
+<div class="scene">
+  <h2>In the Room</h2>
+  <div class="cast">
+    <div class="persona"><span class="icon">🏗️</span><span class="name">Winston</span><span class="role">System Architect</span></div>
+    <div class="persona"><span class="icon">🧭</span><span class="name">John</span><span class="role">Product Manager</span></div>
+    <div class="persona"><span class="icon">📋</span><span class="name">Mary</span><span class="role">Business Analyst</span></div>
+    <div class="persona"><span class="icon">🎨</span><span class="name">Sally</span><span class="role">UX Designer</span></div>
+    <div class="persona"><span class="icon">🦺</span><span class="name">Ravi</span><span class="role">Shopfloor & Operations Veteran</span></div>
+  </div>
+</div>
+
+<div class="scene">
+  <h2>The Paradigm</h2>
+
+  <div class="exchange">
+    <div class="turn">
+      <div class="avatar">🏗️</div>
+      <div class="bubble">
+        <div class="speaker">Winston</div>
+        <div class="text">This isn't a monolith. It's not microservices either. It's a <strong>partitioned system with a local-first write path at every site, governed by a central control plane</strong>. Every site — plant, warehouse, R&D store, hub — runs its own instance that works when the network doesn't. The central plane owns reconciliation, not operation. The frontline edge doesn't ask permission to capture a gate event.</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🧭</div>
+      <div class="bubble">
+        <div class="speaker">John</div>
+        <div class="text">So the edge owns writes, the center owns truth. What's the latency budget on that reconciliation?</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🏗️</div>
+      <div class="bubble">
+        <div class="speaker">Winston</div>
+        <div class="text">5 seconds ceiling for cross-location sync. Most events — gate entry, weighbridge — can be seconds behind. The ones that can't: stock allocation, IRN-gated dispatch, the QC lockout. Those resolve at the central plane.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="decision">
+    <h3><span class="tag">AD-1</span> Partitioned Local-First Paradigm</h3>
+    <p><strong>Binds:</strong> all modules, all edge devices<br>
+    <strong>Prevents:</strong> a monolith that requires network connectivity for frontline operations<br>
+    <strong>Rule:</strong> every site operates its own local-first write path. The edge device writes to local SQLite, not the central API. The degraded state is visible on the device.</p>
+  </div>
+</div>
+
+<div class="scene">
+  <h2>The Event Model</h2>
+
+  <div class="exchange">
+    <div class="turn">
+      <div class="avatar">📋</div>
+      <div class="bubble">
+        <div class="speaker">Mary</div>
+        <div class="text">If the gate event is captured on the device and the central plane hasn't seen it yet, where does the statutory edit log live? FR-AC-13 says tamper-proof, non-disableable, auditor-reportable. When the auditor opens the book, which one is the book?</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🏗️</div>
+      <div class="bubble">
+        <div class="speaker">Winston</div>
+        <div class="text">The device event is the source event. It carries a device-assigned sequence number, a hash of the prior event, and a device signature. When it syncs to the central plane, the central plane appends it to the global event stream. The auditor opens the central plane. The device ledger is the evidence, not the book.</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🦺</div>
+      <div class="bubble">
+        <div class="speaker">Ravi</div>
+        <div class="text">The guard at 2am captures a gate entry. Five minutes later, the shift supervisor sees an alert on the dashboard: 'gate event pending sync — 1047, Truck MH-04-EX-8821, 02:14'. If the supervisor doesn't see the pending event, he'll call the guard and ask why the truck isn't in the system.</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🏗️</div>
+      <div class="bubble">
+        <div class="speaker">Winston</div>
+        <div class="text">Exactly. The degraded state is visible at both ends. Nobody calls Suresh.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="decision">
+    <h3><span class="tag">AD-2</span> Gate-Token Event Chain</h3>
+    <p><strong>Binds:</strong> gate, weighbridge, receiving, putaway<br>
+    <strong>Prevents:</strong> disconnected gate and weighbridge events that cannot be correlated<br>
+    <strong>Rule:</strong> every inbound event chain starts with a gate event creating a vehicle-to-PO binding token. Events are stitched by token, not by timestamp.</p>
+  </div>
+
+  <div class="decision">
+    <h3><span class="tag">AD-16</span> Idempotency Keys on All Edge-Originated Commands</h3>
+    <p><strong>Binds:</strong> all edge devices, central event store<br>
+    <strong>Prevents:</strong> duplicate events from multiple devices capturing the same physical fact<br>
+    <strong>Rule:</strong> every command carries an idempotency_key. Central plane deduplicates. HTTP 409 on duplicate.</p>
+  </div>
+</div>
+
+<div class="scene">
+  <h2>The Stack</h2>
+
+  <div class="exchange">
+    <div class="turn">
+      <div class="avatar">🧭</div>
+      <div class="bubble">
+        <div class="speaker">John</div>
+        <div class="text">What's the event store? Because if we're building a custom platform on a 36-month timeline, I don't want us also building an event store.</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🏗️</div>
+      <div class="bubble">
+        <div class="speaker">Winston</div>
+        <div class="text">PostgreSQL 18.4 with the event-sourcing-lite pattern. One <code>domain_events</code> table, 8 columns, per-stream optimistic concurrency. One database to operate, backup, and monitor. KurrentDB 26.1 is the mature alternative if we want built-in projections, but PostgreSQL can handle our scale.</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🦺</div>
+      <div class="bubble">
+        <div class="speaker">Ravi</div>
+        <div class="text">One database. One backup, one restore, one thing to wake up at 3am. I've seen too many 'purpose-built' services that became the thing nobody knew how to fix when the consultant left.</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🎨</div>
+      <div class="bubble">
+        <div class="speaker">Sally</div>
+        <div class="text">What actually runs on the device? The edge devices are rugged tablets and scanners. They need to work offline.</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🏗️</div>
+      <div class="bubble">
+        <div class="speaker">Winston</div>
+        <div class="text">PWA with a service worker and local SQLite. <strong>PowerSync</strong> handles the sync — PostgreSQL to on-device SQLite, upload queue, crash recovery. For the framework: Next.js 16 or TanStack Start 1.x. The sync layer is abstracted from the framework.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="decision">
+    <h3>Stack: PostgreSQL 18.4 · Node.js 24 LTS · PowerSync 1.23.x · Next.js 16 / TanStack Start 1.x · AWS Mumbai + Hyderabad</h3>
+    <p>Deployment: ECS Fargate (no Kubernetes), RDS Aurora PostgreSQL Multi-AZ, CloudFront CDN. Three environments. DR via Aurora Global Database with RTO 4h, RPO 1h.</p>
+  </div>
+</div>
+
+<div class="scene">
+  <h2>The Key Trade-Offs</h2>
+
+  <div class="exchange">
+    <div class="turn">
+      <div class="avatar">🧭</div>
+      <div class="bubble">
+        <div class="speaker">John</div>
+        <div class="text">Which five capabilities for first go-live?</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🏗️</div>
+      <div class="bubble">
+        <div class="speaker">Winston</div>
+        <div class="text">Compliance spine, core inventory, frontline gate edge, job-work services, and R&D/maker-hub. The spine-first approach means the compliance layer is built and acceptance-tested before any module lands.</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">📋</div>
+      <div class="bubble">
+        <div class="speaker">Mary</div>
+        <div class="text">The compliance spine maps to 27 requirements. The spine acceptance contract is five testable contracts: edit log integrity, DOA registry resolution, event-sourced location, calibration lockout, business-stream tagging. That's the gate for Phase 1.</div>
+      </div>
+    </div>
+    <div class="turn">
+      <div class="avatar">🦺</div>
+      <div class="bubble">
+        <div class="speaker">Ravi</div>
+        <div class="text">The pilot site should be the ugliest one. The worst connectivity, the most paper registers, the most tribal knowledge. If the spine survives that site, it survives anywhere.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="outcome">
+  <h2>Session Outcomes</h2>
+  <ul>
+    <li>16 Architecture Decisions (AD-1 through AD-16) with Binds/Prevents/Rule</li>
+    <li>Event envelope: 11-field uniform contract across entire system</li>
+    <li>14 modules mapped to 342 FRs with governing ADs</li>
+    <li>Consistency conventions: naming, IDs, dates, error shapes, state mutation, auth</li>
+    <li>Deployment: AWS Mumbai primary, Hyderabad DR, ECS Fargate, RDS Aurora</li>
+    <li>Retention: 8 years online, per-type classes, S3 cold storage, DPDP crypto-shredding</li>
+    <li>API: REST v1, SSO-gated, edit-logged, 10 stable error codes</li>
+    <li>Spine acceptance contract: 5 testable contracts as Phase 1 gate</li>
+    <li class="deferred">Framework: Next.js 16 vs TanStack Start 1.x — deferred to first frontend story</li>
+    <li class="deferred">Build sourcing, pilot site, budget envelope — sponsor decisions</li>
+  </ul>
+</div>
+
+<div class="scene">
+  <h2>Winston's Closing</h2>
+  <div class="exchange">
+    <div class="turn">
+      <div class="avatar">🏗️</div>
+      <div class="bubble">
+        <div class="speaker">Winston</div>
+        <div class="text">The spine is consistent. Every AD prevents a specific divergence. The paradigm — partitioned local-first — is the load-bearing decision. Everything else flows from it. The stack is PostgreSQL 18.4, Node.js 24 LTS, PowerSync for sync, Next.js 16 or TanStack Start 1.x for the frontend, AWS Mumbai/Hyderabad for deployment. The event envelope is uniform across the entire system. The dependency direction is strict — compliance spine at the bottom, no circular dependencies. The data ownership is clear — one owner per entity, read models are shared. The testing strategy is concrete — five acceptance contracts that prove the spine works before any module lands. I approve the spine.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  PRD Room · Session 5 · 2026-07-11 · Architecture Spine for Materials & Supply Chain Management Platform<br>
+  Handoff to epics and stories ready. 16 ADs stable. 342 FRs mapped.
+</footer>
+
+</body>
+</html>
