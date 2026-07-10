@@ -1,0 +1,27 @@
+# 3. Functional Requirements
+
+## Table of Contents
+
+- [3. Functional Requirements](#table-of-contents)
+  - [3.1 Inventory Management](./31-inventory-management.md)
+  - [3.2 Procurement and Supplier Management](./32-procurement-and-supplier-management.md)
+  - [3.3 Tender Management and Vendor Selection](./33-tender-management-and-vendor-selection.md)
+  - [3.4 Order Management and Fulfillment](./34-order-management-and-fulfillment.md)
+  - [3.5 Warehouse Management](./35-warehouse-management.md)
+  - [3.6 Demand Planning and Forecasting](./36-demand-planning-and-forecasting.md)
+  - [3.7 Logistics and Transportation Management](./37-logistics-and-transportation-management.md)
+  - [3.8 Reporting and Analytics](./38-reporting-and-analytics.md)
+  - [3.9 R&D Centre and Maker-Hub Materials Management](./39-rd-centre-and-maker-hub-materials-management.md)
+  - [3.10 Bill of Materials Management](./310-bill-of-materials-management.md)
+  - [3.11 Maintenance and Calibration Management](./311-maintenance-and-calibration-management.md)
+  - [3.12 Quality Control for Finished Goods](./312-quality-control-for-finished-goods.md)
+  - [3.13 Scrap, Defectives, and Disposal Management](./313-scrap-defectives-and-disposal-management.md)
+  - [3.14 Fixed Assets, Intangible Assets, and Depreciation](./314-fixed-assets-intangible-assets-and-depreciation.md)
+  - [3.15 R&D Accounting Separation and Statutory Compliance](./315-rd-accounting-separation-and-statutory-compliance.md)
+  - [3.16 Production Order Management and Production WIP](./316-production-order-management-and-production-wip.md)
+  - [3.17 Job-Work Services Management](./317-job-work-services-management.md)
+  - [3.18 Imports and Landed Cost Management](./318-imports-and-landed-cost-management.md)
+  - [3.19 Tooling and Tool Crib Management](./319-tooling-and-tool-crib-management.md)
+  - [3.20 Gate Passes and Returnable Materials](./320-gate-passes-and-returnable-materials.md)
+  - [3.21 Budget Control (ERP-Synced)](./321-budget-control-erp-synced.md)
+  - [3.22 Approvals and Delegation of Authority](./322-approvals-and-delegation-of-authority.md)

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PRD Discovery Room — The v2.0 Expansion Session</title>
+<style>
+  :root { --bg:#14161d; --card:#1e2230; --ink:#e8e6df; --dim:#9a97a8; --line:#33384a; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:16px/1.6 Georgia, 'Times New Roman', serif; padding:2.5rem 1rem 4rem; }
+  main { max-width:820px; margin:0 auto; }
+  h1 { font-size:1.7rem; letter-spacing:.02em; }
+  .sub { color:var(--dim); margin:.4rem 0 2rem; font-style:italic; }
+  .cast { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:.6rem; margin-bottom:2.2rem; }
+  .m { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:.7rem .9rem; font-size:.86rem; }
+  .m b { font-family:system-ui,sans-serif; font-size:.95rem; }
+  .m span { color:var(--dim); display:block; }
+  h2 { font-size:1.05rem; color:var(--dim); text-transform:uppercase; letter-spacing:.14em; margin:2.2rem 0 1rem; font-family:system-ui,sans-serif; }
+  .turn { background:var(--card); border-left:3px solid var(--line); border-radius:0 10px 10px 0; padding:.8rem 1rem; margin:.7rem 0; }
+  .turn b { font-family:system-ui,sans-serif; }
+  .stage { color:var(--dim); font-style:italic; text-align:center; margin:1.4rem 0; }
+  .outcome { background:linear-gradient(160deg,#232a3d,#1b2130); border:1px solid #3d4560; border-radius:12px; padding:1.1rem 1.3rem; margin-top:2.4rem; }
+  .outcome b { font-family:system-ui,sans-serif; }
+  footer { color:var(--dim); font-size:.8rem; margin-top:2.5rem; text-align:center; font-family:system-ui,sans-serif; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎪 The PRD Discovery Room — v2.0 Expansion Night</h1>
+  <p class="sub">10 July 2026 · The room reconvenes with three new chairs pulled up to the table. Sally's seat sits empty; three specialists take the far side. On the agenda: an SCM document about to learn what an R&amp;D centre, a maker-hub, a scrap yard, and a chartered accountant do to a tidy warehouse system.</p>
+
+  <div class="cast">
+    <div class="m"><b>🧭 John</b><span>PM — cuts scope out loud</span></div>
+    <div class="m"><b>📊 Mary</b><span>BA — R&amp;D &amp; maker-hub flows</span></div>
+    <div class="m"><b>🏗️ Winston</b><span>Architect — BOM regimes</span></div>
+    <div class="m"><b>🦺 Ravi</b><span>Ops veteran — maintenance</span></div>
+    <div class="m"><b>🔬 Dr. Kavitha Rao</b><span>QC Head — walk-on</span></div>
+    <div class="m"><b>♻️ Farida Ansari</b><span>Disposal &amp; commercial — walk-on</span></div>
+    <div class="m"><b>🧮 CA Meera Iyer</b><span>Chartered accountant — walk-on</span></div>
+  </div>
+
+  <h2>One word, three physics</h2>
+  <div class="turn">📊 <b>Mary:</b> The most dangerous word in this document is "issue". Three physical realities hid under one verb — consumed, accumulated into a prototype, loaned — and if anyone collapses them back, a Rs 8 lakh oscilloscope leaves the ledger as a consumable and nobody can answer "who has it".</div>
+  <div class="turn">🏗️ <b>Winston:</b> And your build record needs a foreign key, not a paragraph. If build 7 swapped a 10k resistor for two 4k7 in series, the record of truth is the as-built snapshot line — "changed some resistors" in a lab notebook is a feature without an artifact.</div>
+
+  <h2>The lathe has one parts list</h2>
+  <div class="turn">🏗️ <b>Winston:</b> Machine spare-parts lists are equipment BOMs. I claim the structure record, you keep the schedule — otherwise two lists for the same lathe disagree by the next audit.</div>
+  <div class="turn">🦺 <b>Ravi:</b> Fine — spares where-used hangs off your structures, because I refuse to keep a second parts list that goes stale by Diwali. But remember half my technicians are hats, not badges: the maker-hub kid on the front desk is my first responder on Sundays.</div>
+
+  <h2>No override, on the record</h2>
+  <div class="turn">🦺 <b>Ravi:</b> Kavitha, I built the calibration lockout with no override and I want your yes in this room: the day one inspector logs a batch on an overdue vernier "just this once", your whole register is decoration.</div>
+  <div class="turn">🔬 <b>Kavitha:</b> You have it — I once had a quarter of HV test releases go suspect because the megger's sticker said March and the register said September. Live status by asset ID, no photocopied calendars. And John — cut conditional release to phase two and you haven't cut scope, you've designed the bypass.</div>
+
+  <h2>The statute always wins</h2>
+  <div class="turn">🧮 <b>Meera:</b> FR-I-05 as written ships LIFO as a configuration option, and Ind AS 2 permits FIFO and weighted average only. Strike it today or the first statutory audit strikes it for you, with a qualification attached.</div>
+  <div class="turn">♻️ <b>Farida:</b> Which is why I hard-code nothing — the 1961 Act died this April and 206C is now 394. My screens capture fields; the rates live in her lane. Also: tare weighment with six labourers in the truck bed, gross with two. That trick was 400 kilos of copper per lift. Random re-weighment is not negotiable.</div>
+  <div class="turn">🧮 <b>Meera:</b> I once audited a makerspace that booked member materials as "miscellaneous income" — three weekends rebuilding B2C supplies from till rolls before the GST officer did it for us. The hub counter issues a proper invoice or it does not sell.</div>
+
+  <h2>The scope fight</h2>
+  <div class="turn">🧭 <b>John:</b> MVP call, scored out loud: R&amp;D materials ships first — Pain 4 × Frequency 5 × Data-Integrity-Risk 5. Depreciation survives one more quarter in a spreadsheet. And Mary, before you object: member records looked like CRM to me.</div>
+  <div class="turn">📊 <b>Mary:</b> Without a member record there is no billing account for a point-of-use sale, no custodian for a loaned jig, no job card to bill — a shop with stock and no customers. Cut loyalty points if you like; the record stays.</div>
+  <p class="stage">— subscriptions went out of scope; the records stayed. Both claimed the win. —</p>
+
+  <div class="outcome">
+    <b>Outcome:</b> SCM-Requirements-Document.md v2.0 — seven new modules (FR-RD, FR-B, FR-M, FR-Q, FR-SC, FR-FA, FR-AC; 117 requirements), 18 new success metrics, 16 new roles, four integration families, LIFO removed per Ind AS 2, DPDP Act 2023 in, statutory audit-trail wired to NFR-SEC-04, and a scrap yard with more locks than requirements.
+  </div>
+
+  <footer>PRD Discovery Room · BMAD party mode · session three · walk-ons: Kavitha, Farida, Meera</footer>
+</main>
+</body>
+</html>
