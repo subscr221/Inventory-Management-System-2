@@ -30,6 +30,7 @@ companions: []
 | Module Domain | `{module}/` | inventory, warehouse, procurement, bom, production, jobwork, research, quality, maintenance, scrap, assets, compliance, gate, reporting |
 | Integration Adapters | `adapters/` | ERP sync (dual-mastership), statutory gateway (IRP, GST, e-way bill), IAM/SSO |
 | API Gateway | `api/` | REST API v1; SSO-gated; edit-logged for mutating operations |
+| Notification Service | `notify/` | Central alert and push delivery; subscribes to read-model projections and event triggers; delivers PWA push, in-app, and email/SMS; owns escalation clocks |
 
 **Dependency direction:**
 
@@ -178,6 +179,7 @@ graph TD
 | Logging | Every mutating API request logged to the edit log with `trace_id` |
 | Auth | SSO (SAML 2.0/OIDC) via IAM gateway. RBAC to module, function, location, and data level |
 | Config | Workflow rules, retention classes, statutory thresholds as dated configuration files, not hard-coded |
+| Frontend standards | WCAG 2.1 AA conformance for every UI surface (NFR-U-02/03); i18n via the stable `error_code` → localized-message mapping plus per-locale resource files — no hard-coded user-facing strings |
 
 ## Stack
 
@@ -221,6 +223,7 @@ graph TD
   compliance/              # Financial compliance spine
   gate/                    # Gate passes and returnable materials module
   reporting/               # Reporting and analytics module
+  notify/                  # Notification service — push, alerts, escalation clocks
   adapters/                # External integration adapters
     erp/                   # ERP dual-mastership sync
     statutory/             # IRP, GST, e-way bill gateway
@@ -257,6 +260,7 @@ graph TD
 | DOA Registry | FR-DOA-01 | `compliance/` | AD-3, AD-12 |
 | Gate Passes | FR-GP-01–FR-GP-14 | `gate/` | AD-2, AD-13, AD-14 |
 | Reporting | FR-R-01–FR-R-08 | `reporting/` | AD-14 |
+| Notifications & Alerts | FR-P-04/UJ-IND-01 (push-notified indent decisions), FR-M-04 (fault alerts), FR-GP-09/FR-GP-10 + FR-JW-14 (escalating overdue clocks) | `notify/` | AD-14 |
 | Event Envelope | all | `events/` | AD-16 |
 | Offline Sync | all edge | `edge/`, `sync/` | AD-1, AD-16 |
 
@@ -339,3 +343,4 @@ The compliance spine is accepted when these five tests pass against a deployed s
 | GraphQL vs REST for reporting queries | REST is the default; GraphQL for ad-hoc reporting may be added later | During reporting module design |
 | Meter ingestion automation (INT-MTR-01) | Phase 2; operator-entered readings acceptable for Phase 1 | Phase 2 planning |
 | EPR portal automation (INT-EPR-01) | Phase 2; manual upload acceptable for Phase 1 | Phase 2 planning |
+| Phase-1 outbound demand source (decision D1) | Resolved in epics (Story 2.9): Phase-1 outbound demand is served by an ERP sales-order projection plus an open-PO inbound reference projection; native order capture (FR-O) remains Phase 2 (Epic 15) | Closed — revisit only if Epic 15 order capture is pulled forward |

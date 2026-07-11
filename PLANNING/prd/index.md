@@ -1,5 +1,7 @@
 # PRD: Materials & Supply Chain Management Platform
 
+> **Generated copy — do not edit independently.** This folder is a generated sharding of the authoritative whole PRD at `_bmad-output/planning-artifacts/prds/prd-Inventory Management System_2-2026-07-10/archive/prd.md`. The whole PRD is the document of record; make changes there and re-shard this copy in the same change cycle.
+
 ## Table of Contents
 
 - [PRD: Materials & Supply Chain Management Platform](#table-of-contents)
