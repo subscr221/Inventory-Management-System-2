@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 768" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <!-- Page background -->
+  <rect x="0" y="0" width="1024" height="768" fill="#f8f9fa"/>
+
+  <!-- Header bar -->
+  <rect x="0" y="0" width="1024" height="64" fill="#1f2937"/>
+  <text x="24" y="38" font-size="20" font-weight="700" fill="#ffffff">Materials &amp; Supply Chain Platform</text>
+
+  <!-- Sync state badge (in header) -->
+  <rect x="620" y="16" width="150" height="32" rx="16" fill="#10b981" fill-opacity="0.15" stroke="#10b981" stroke-width="1.5"/>
+  <circle cx="638" cy="32" r="5" fill="#10b981"/>
+  <text x="652" y="37" font-size="12" font-weight="600" letter-spacing="0.02em" fill="#10b981">Online</text>
+
+  <!-- User avatar + name -->
+  <circle cx="960" cy="32" r="20" fill="#8a95a1"/>
+  <text x="960" y="37" font-size="12" font-weight="600" fill="#ffffff" text-anchor="middle">GO</text>
+  <text x="792" y="30" font-size="12" font-weight="600" fill="#ffffff">Raman Gate</text>
+  <text x="792" y="44" font-size="11" fill="#d0d5db">Gate Officer</text>
+
+  <!-- Left sidebar navigation -->
+  <rect x="0" y="64" width="220" height="704" fill="#ffffff" stroke="#e4e8eb" stroke-width="1"/>
+
+  <!-- Nav item: Dashboard -->
+  <rect x="0" y="80" width="220" height="56" fill="#ffffff"/>
+  <rect x="16" y="96" width="24" height="24" fill="#e4e8eb"/>
+  <text x="56" y="112" font-size="14" fill="#3d4651">Dashboard</text>
+
+  <!-- Nav item: Frontline (active) -->
+  <rect x="0" y="136" width="220" height="56" fill="#e0e8ff"/>
+  <rect x="0" y="136" width="4" height="56" fill="#1f47d9"/>
+  <rect x="16" y="152" width="24" height="24" fill="#1f47d9"/>
+  <text x="56" y="168" font-size="14" font-weight="600" fill="#1f47d9">Frontline</text>
+
+  <!-- Nav item: Inventory -->
+  <rect x="0" y="192" width="220" height="56" fill="#ffffff"/>
+  <rect x="16" y="208" width="24" height="24" fill="#e4e8eb"/>
+  <text x="56" y="224" font-size="14" fill="#3d4651">Inventory</text>
+
+  <!-- Nav item: Procurement -->
+  <rect x="0" y="248" width="220" height="56" fill="#ffffff"/>
+  <rect x="16" y="264" width="24" height="24" fill="#e4e8eb"/>
+  <text x="56" y="280" font-size="14" fill="#3d4651">Procurement</text>
+
+  <!-- Nav item: Operations -->
+  <rect x="0" y="304" width="220" height="56" fill="#ffffff"/>
+  <rect x="16" y="320" width="24" height="24" fill="#e4e8eb"/>
+  <text x="56" y="336" font-size="14" fill="#3d4651">Operations</text>
+
+  <!-- Nav item: Admin -->
+  <rect x="0" y="360" width="220" height="56" fill="#ffffff"/>
+  <rect x="16" y="376" width="24" height="24" fill="#e4e8eb"/>
+  <text x="56" y="392" font-size="14" fill="#3d4651">Admin</text>
+
+  <!-- Main content area -->
+  <text x="244" y="104" font-size="24" font-weight="700" fill="#1f2937">Frontline Task Queue</text>
+  <text x="244" y="128" font-size="14" fill="#54636e">Gate Events awaiting action (3 pending)</text>
+
+  <!-- Card 1 -->
+  <rect x="244" y="152" width="756" height="120" rx="8" fill="#ffffff" stroke="#d0d5db" stroke-width="1.5"/>
+  <text x="264" y="180" font-size="16" font-weight="700" fill="#1f2937">PO-2026-0900</text>
+  <rect x="410" y="164" width="130" height="24" rx="4" fill="#8b5cf6" fill-opacity="0.15" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="475" y="180" font-size="12" font-weight="600" fill="#8b5cf6" text-anchor="middle">Awaiting Weighment</text>
+  <text x="264" y="204" font-size="14" fill="#54636e">Vehicle: MH-08-AB-2345 · Supplier: Electronica Ltd</text>
+  <text x="264" y="224" font-size="12" fill="#8a95a1">Challan QM-2026-0845 · Captured 02:00 AM</text>
+  <rect x="264" y="236" width="140" height="28" rx="4" fill="#1f47d9"/>
+  <text x="334" y="255" font-size="13" fill="#ffffff" text-anchor="middle">Start Weighment</text>
+  <rect x="416" y="236" width="120" height="28" rx="4" fill="#f0f2f5" stroke="#d0d5db" stroke-width="1"/>
+  <text x="476" y="255" font-size="13" fill="#1f2937" text-anchor="middle">View Details</text>
+
+  <!-- Card 2 -->
+  <rect x="244" y="284" width="756" height="120" rx="8" fill="#ffffff" stroke="#d0d5db" stroke-width="1.5"/>
+  <text x="264" y="312" font-size="16" font-weight="700" fill="#1f2937">PO-2026-0888</text>
+  <rect x="410" y="296" width="110" height="24" rx="4" fill="#f59e0b" fill-opacity="0.15" stroke="#f59e0b" stroke-width="1"/>
+  <text x="465" y="312" font-size="12" font-weight="600" fill="#f59e0b" text-anchor="middle">In Receiving</text>
+  <text x="264" y="336" font-size="14" fill="#54636e">Vehicle: KA-05-CD-7788 · Supplier: SteelWorks Ltd</text>
+  <text x="264" y="356" font-size="12" fill="#8a95a1">48 of 50 items unloaded</text>
+  <rect x="264" y="368" width="140" height="28" rx="4" fill="#1f47d9"/>
+  <text x="334" y="387" font-size="13" fill="#ffffff" text-anchor="middle">Start Putaway</text>
+  <rect x="416" y="368" width="120" height="28" rx="4" fill="#f0f2f5" stroke="#d0d5db" stroke-width="1"/>
+  <text x="476" y="387" font-size="13" fill="#1f2937" text-anchor="middle">View Details</text>
+
+  <!-- Card 3 -->
+  <rect x="244" y="416" width="756" height="120" rx="8" fill="#ffffff" stroke="#d0d5db" stroke-width="1.5"/>
+  <text x="264" y="444" font-size="16" font-weight="700" fill="#1f2937">PO-2026-0879</text>
+  <rect x="410" y="428" width="100" height="24" rx="4" fill="#10b981" fill-opacity="0.15" stroke="#10b981" stroke-width="1"/>
+  <text x="460" y="444" font-size="12" font-weight="600" fill="#10b981" text-anchor="middle">Captured</text>
+  <text x="264" y="468" font-size="14" fill="#54636e">Vehicle: MH-12-XY-1102 · Supplier: Bright Metals Co</text>
+  <text x="264" y="488" font-size="12" fill="#8a95a1">Gate event QM-2026-0839 · Captured 01:20 AM</text>
+  <rect x="264" y="500" width="140" height="28" rx="4" fill="#1f47d9"/>
+  <text x="334" y="519" font-size="13" fill="#ffffff" text-anchor="middle">Confirm Gate Event</text>
+  <rect x="416" y="500" width="120" height="28" rx="4" fill="#f0f2f5" stroke="#d0d5db" stroke-width="1"/>
+  <text x="476" y="519" font-size="13" fill="#1f2937" text-anchor="middle">View Details</text>
+
+  <!-- Empty state hint (queue is short) -->
+  <rect x="244" y="552" width="756" height="56" rx="8" fill="#f0f2f5" stroke="#d0d5db" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="622" y="584" font-size="13" fill="#6b7683" text-anchor="middle">Queue is short today - showing all 3 of 3 pending gate events. New events will appear here automatically.</text>
+</svg>

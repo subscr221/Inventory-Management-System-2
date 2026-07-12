@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 768" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <!-- Page background -->
+  <rect x="0" y="0" width="1024" height="768" fill="#ffffff"/>
+
+  <!-- Header bar -->
+  <rect x="0" y="0" width="1024" height="64" fill="#1f2937"/>
+  <text x="24" y="38" font-size="20" font-weight="700" fill="#ffffff">Gate Event Capture</text>
+
+  <!-- Sync state badge (in header) -->
+  <rect x="720" y="16" width="180" height="32" rx="16" fill="#f59e0b" fill-opacity="0.15" stroke="#f59e0b" stroke-width="1.5"/>
+  <circle cx="738" cy="32" r="5" fill="#f59e0b"/>
+  <text x="752" y="37" font-size="12" font-weight="600" letter-spacing="0.02em" fill="#f59e0b">Captured, pending sync</text>
+
+  <circle cx="960" cy="32" r="20" fill="#8a95a1"/>
+  <text x="960" y="37" font-size="12" font-weight="600" fill="#ffffff" text-anchor="middle">GO</text>
+
+  <!-- Page title -->
+  <text x="512" y="128" font-size="24" font-weight="700" fill="#1f2937" text-anchor="middle">Scan Vehicle / PO Number</text>
+  <text x="512" y="154" font-size="14" fill="#54636e" text-anchor="middle">Scan the challan or PO barcode to begin - no typing required</text>
+
+  <!-- Large scan field: 56px tall, autofocus, dominates screen -->
+  <rect x="112" y="184" width="800" height="56" rx="4" fill="#ffffff" stroke="#1f47d9" stroke-width="2"/>
+  <text x="136" y="219" font-size="20" fill="#b3bcc4">Waiting for scan...</text>
+  <!-- clear button -->
+  <circle cx="880" cy="212" r="12" fill="#f0f2f5"/>
+  <text x="880" y="217" font-size="14" fill="#54636e" text-anchor="middle">x</text>
+  <text x="112" y="262" font-size="12" fill="#8a95a1">Autofocus enabled - point the scanner at any barcode or QR code</text>
+
+  <!-- Divider -->
+  <rect x="112" y="292" width="800" height="1" fill="#e4e8eb"/>
+
+  <!-- Recent scans label -->
+  <text x="112" y="324" font-size="12" font-weight="600" letter-spacing="0.02em" fill="#6b7683">RECENT SCANS - TAP TO REUSE</text>
+
+  <!-- Recent scan quick-tap buttons -->
+  <rect x="112" y="340" width="250" height="56" rx="8" fill="#f8f9fa" stroke="#d0d5db" stroke-width="1.5"/>
+  <text x="136" y="364" font-size="16" font-weight="600" fill="#1f2937">QM-2026-0845</text>
+  <text x="136" y="384" font-size="12" fill="#8a95a1">Scanned 3 min ago</text>
+
+  <rect x="382" y="340" width="250" height="56" rx="8" fill="#f8f9fa" stroke="#d0d5db" stroke-width="1.5"/>
+  <text x="406" y="364" font-size="16" font-weight="600" fill="#1f2937">QM-2026-0844</text>
+  <text x="406" y="384" font-size="12" fill="#8a95a1">Scanned 12 min ago</text>
+
+  <rect x="652" y="340" width="260" height="56" rx="8" fill="#f8f9fa" stroke="#d0d5db" stroke-width="1.5"/>
+  <text x="676" y="364" font-size="16" font-weight="600" fill="#1f2937">PO-2026-0900</text>
+  <text x="676" y="384" font-size="12" fill="#8a95a1">Scanned 40 min ago</text>
+
+  <!-- Divider -->
+  <rect x="112" y="428" width="800" height="1" fill="#e4e8eb"/>
+
+  <!-- Fallback options -->
+  <text x="112" y="460" font-size="12" font-weight="600" letter-spacing="0.02em" fill="#6b7683">CAN'T SCAN?</text>
+
+  <rect x="112" y="476" width="220" height="48" rx="4" fill="transparent" stroke="#1f47d9" stroke-width="2"/>
+  <text x="222" y="505" font-size="14" font-weight="600" fill="#1f47d9" text-anchor="middle">Can't Scan?</text>
+
+  <rect x="352" y="476" width="220" height="48" rx="4" fill="#f0f2f5" stroke="#d0d5db" stroke-width="1.5"/>
+  <text x="462" y="505" font-size="14" font-weight="600" fill="#1f2937" text-anchor="middle">Enter Manually</text>
+
+  <!-- footer hint -->
+  <text x="512" y="720" font-size="12" fill="#8a95a1" text-anchor="middle">Scan field times out after 30 seconds of inactivity - a restart notice will appear</text>
+</svg>

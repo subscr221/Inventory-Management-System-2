@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 768" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <rect x="0" y="0" width="1024" height="768" fill="#ffffff"/>
+  <text x="24" y="32" font-size="18" font-weight="700" fill="#1f2937">Sync State Badge - Header Context (4 States)</text>
+
+  <!-- STATE 1: ONLINE -->
+  <text x="24" y="64" font-size="12" font-weight="600" letter-spacing="0.02em" fill="#6b7683">1. ONLINE</text>
+  <rect x="24" y="72" width="976" height="64" fill="#1f2937"/>
+  <text x="48" y="108" font-size="18" font-weight="700" fill="#ffffff">Materials &amp; Supply Chain Platform</text>
+  <rect x="600" y="88" width="150" height="32" rx="16" fill="#10b981" fill-opacity="0.15" stroke="#10b981" stroke-width="1.5"/>
+  <circle cx="618" cy="104" r="5" fill="#10b981"/>
+  <text x="632" y="109" font-size="12" font-weight="600" fill="#10b981">Online</text>
+  <rect x="770" y="88" width="160" height="32" fill="#3d4651"/>
+  <text x="850" y="109" font-size="11" fill="#d0d5db" text-anchor="middle">Dashboard | Frontline | Admin</text>
+  <circle cx="968" cy="104" r="18" fill="#8a95a1"/>
+  <text x="968" y="109" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">GO</text>
+
+  <!-- STATE 2: OFFLINE (captured) -->
+  <text x="24" y="176" font-size="12" font-weight="600" letter-spacing="0.02em" fill="#6b7683">2. OFFLINE (CAPTURED)</text>
+  <rect x="24" y="184" width="976" height="64" fill="#1f2937"/>
+  <text x="48" y="220" font-size="18" font-weight="700" fill="#ffffff">Materials &amp; Supply Chain Platform</text>
+  <rect x="560" y="200" width="220" height="32" rx="16" fill="#f59e0b" fill-opacity="0.15" stroke="#f59e0b" stroke-width="1.5"/>
+  <circle cx="578" cy="216" r="5" fill="#f59e0b"/>
+  <text x="592" y="221" font-size="12" font-weight="600" fill="#f59e0b">Captured, pending sync</text>
+  <rect x="800" y="200" width="130" height="32" fill="#3d4651"/>
+  <text x="865" y="221" font-size="11" fill="#d0d5db" text-anchor="middle">Frontline | Admin</text>
+  <circle cx="968" cy="216" r="18" fill="#8a95a1"/>
+  <text x="968" y="221" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">GO</text>
+
+  <!-- STATE 3: SYNCING -->
+  <text x="24" y="288" font-size="12" font-weight="600" letter-spacing="0.02em" fill="#6b7683">3. SYNCING</text>
+  <rect x="24" y="296" width="976" height="64" fill="#1f2937"/>
+  <text x="48" y="332" font-size="18" font-weight="700" fill="#ffffff">Materials &amp; Supply Chain Platform</text>
+  <rect x="600" y="312" width="150" height="32" rx="16" fill="#3b82f6" fill-opacity="0.15" stroke="#3b82f6" stroke-width="1.5"/>
+  <circle cx="618" cy="328" r="8" fill="none" stroke="#3b82f6" stroke-width="2" stroke-dasharray="8 4"/>
+  <text x="636" y="333" font-size="12" font-weight="600" fill="#3b82f6">Syncing...</text>
+  <rect x="770" y="312" width="160" height="32" fill="#3d4651"/>
+  <text x="850" y="333" font-size="11" fill="#d0d5db" text-anchor="middle">Dashboard | Frontline | Admin</text>
+  <circle cx="968" cy="328" r="18" fill="#8a95a1"/>
+  <text x="968" y="333" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">GO</text>
+
+  <!-- STATE 4: SYNC ERROR -->
+  <text x="24" y="400" font-size="12" font-weight="600" letter-spacing="0.02em" fill="#6b7683">4. SYNC ERROR</text>
+  <rect x="24" y="408" width="976" height="64" fill="#1f2937"/>
+  <text x="48" y="444" font-size="18" font-weight="700" fill="#ffffff">Materials &amp; Supply Chain Platform</text>
+  <rect x="540" y="424" width="150" height="32" rx="16" fill="#ef4444" fill-opacity="0.15" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="555" y="447" font-size="14" fill="#ef4444">!</text>
+  <text x="575" y="445" font-size="12" font-weight="600" fill="#ef4444">Sync Error</text>
+  <rect x="700" y="424" width="90" height="32" rx="4" fill="#ef4444"/>
+  <text x="745" y="445" font-size="12" font-weight="600" fill="#ffffff" text-anchor="middle">Retry</text>
+  <circle cx="968" cy="440" r="18" fill="#8a95a1"/>
+  <text x="968" y="445" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">GO</text>
+
+  <!-- Legend / notes -->
+  <rect x="24" y="500" width="976" height="240" rx="8" fill="#f8f9fa" stroke="#d0d5db" stroke-width="1"/>
+  <text x="48" y="530" font-size="14" font-weight="700" fill="#1f2937">State Transition Notes</text>
+  <text x="48" y="556" font-size="13" fill="#3d4651">Online (connected) leads to Offline (captured) when network is lost. Events queue locally, no data loss.</text>
+  <text x="48" y="580" font-size="13" fill="#3d4651">Offline (captured) leads to Syncing when network is restored. Central processes queued events.</text>
+  <text x="48" y="604" font-size="13" fill="#3d4651">Syncing leads to Online (synced) on success, or Sync Error if the last attempt failed.</text>
+  <text x="48" y="628" font-size="13" fill="#3d4651">Sync Error leads back to Online (synced) after a successful Retry Sync.</text>
+  <text x="48" y="660" font-size="13" font-weight="600" fill="#1f2937">Colors: Online #10b981, Captured #f59e0b, Syncing #3b82f6, Sync Error #ef4444</text>
+  <text x="48" y="684" font-size="12" fill="#8a95a1">Badge always sits in the header, next to primary navigation and the user avatar. Never hidden.</text>
+</svg>

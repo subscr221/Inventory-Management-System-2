@@ -1,0 +1,196 @@
+# generated: 2026-07-12
+# last_updated: 2026-07-12
+# project: Inventory Management System_2
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; sprint-status surfaces open ones
+#
+# PILOT SLICE (first go-live at a single site) — Epics 1, 2, 3, 5, 7, 8, 9 +
+# Story 11.2 + Epic 13 sign-off gate. Pilot items are marked "# PILOT" inline.
+# NOTE: epic number != build order. Recommended pilot build order:
+#   Epic 1 -> Epic 2 -> Epic 3 -> Epic 5 -> Epic 7 -> Epic 8 -> Epic 9 -> Story 11.2 -> Epic 13 gate.
+# (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
+
+generated: 2026-07-12
+last_updated: 2026-07-12
+project: Inventory Management System_2
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # --- Epic 1: Platform Foundation, Compliance Spine, and Offline Edge Shell  [PILOT] ---
+  epic-1: backlog
+  1-1-core-infrastructure-deployment-and-event-store-schema: backlog   # PILOT
+  1-2-sso-authentication-and-role-based-access-control: backlog   # PILOT
+  1-3-statutory-edit-log: backlog   # PILOT
+  1-4-enterprise-doa-registry: backlog   # PILOT
+  1-5-business-stream-tagging-enforcement: backlog   # PILOT
+  1-6-event-sourced-location-with-asserted-expected-separation: backlog   # PILOT
+  1-7-calibration-lockout-enforcement: backlog   # PILOT
+  1-8-offline-edge-pwa-shell-and-powersync-sync-layer: backlog   # PILOT
+  1-9-spine-acceptance-contract-ci-gate: backlog   # PILOT
+  1-10-ci-cd-pipeline-construction: backlog   # PILOT
+  1-11-notification-and-alerting-foundation: backlog   # PILOT
+  epic-1-retrospective: optional
+
+  # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---
+  epic-2: backlog
+  2-1-item-master-and-location-register: backlog   # PILOT
+  2-2-real-time-multi-location-stock-balances: backlog   # PILOT
+  2-3-lot-batch-and-serial-traceability: backlog   # PILOT
+  2-4-ind-as-2-compliant-inventory-valuation: backlog   # PILOT
+  2-5-inter-location-transfer-requests: backlog   # PILOT
+  2-6-cycle-counting-and-physical-inventory: backlog   # PILOT
+  2-7-safety-stock-reorder-points-and-obsolescence-flagging: backlog   # PILOT
+  2-8-consignment-and-vmi-stock-segregation: backlog   # PILOT
+  2-9-erp-inbound-reference-projections: backlog   # PILOT
+  epic-2-retrospective: optional
+
+  # --- Epic 3: Warehouse Operations and Frontline Capture Flows  [PILOT] ---
+  epic-3: backlog
+  3-1-warehouse-topology-setup-fr-w-01: backlog   # PILOT
+  3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: backlog   # PILOT
+  3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: backlog   # PILOT
+  3-4-goods-receiving-against-asn-or-po-fr-w-02: backlog   # PILOT
+  3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: backlog   # PILOT
+  3-6-pick-task-generation-and-execution-fr-w-04: backlog   # PILOT
+  3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: backlog   # PILOT
+  3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: backlog   # PILOT
+  3-9-forward-pick-replenishment-fr-w-08: backlog   # PILOT
+  3-10-cross-docking-execution-fr-w-09: backlog   # PILOT
+  epic-3-retrospective: optional
+
+  # --- Epic 4: Procurement and Supplier Management (wave 1, post-pilot) ---
+  epic-4: backlog
+  4-1-supplier-registry-and-onboarding: backlog
+  4-2-supplier-performance-scorecards: backlog
+  4-3-purchase-requisition-and-indent-loop: backlog
+  4-4-purchase-order-management: backlog
+  4-5-goods-receipt-and-three-way-match: backlog
+  4-6-msme-compliance-tracking: backlog
+  4-7-supplier-invoice-capture: backlog
+  epic-4-retrospective: optional
+
+  # --- Epic 5: BOM and Engineering Change Management  [PILOT] ---
+  epic-5: backlog
+  5-1-multi-level-bom-creation: backlog   # PILOT
+  5-2-bom-lifecycle-and-immutability: backlog   # PILOT
+  5-3-eco-workflow-and-where-used-impact: backlog   # PILOT
+  5-4-randd-draft-bom-regime: backlog   # PILOT
+  5-5-approved-alternates-and-bom-explosion: backlog   # PILOT
+  5-6-cost-rollups-job-work-kit-tagging-and-erp-outbound-sync: backlog   # PILOT
+  epic-5-retrospective: optional
+
+  # --- Epic 6: Production Orders and Manufacturing WIP (wave, post-pilot) ---
+  epic-6: backlog
+  6-1-production-order-creation-and-release-gate: backlog
+  6-2-material-staging-issue-and-wip-ledger: backlog
+  6-3-production-completions-and-qc-hand-off: backlog
+  6-4-lot-genealogy-closure-and-offline-execution: backlog
+  epic-6-retrospective: optional
+
+  # --- Epic 7: Maintenance, Calibration, and Asset Register  [PILOT] ---
+  epic-7: backlog
+  7-1-asset-register-and-criticality-classification: backlog   # PILOT
+  7-2-preventive-maintenance-plans-and-work-order-generation: backlog   # PILOT
+  7-3-fault-reporting-and-breakdown-work-orders: backlog   # PILOT
+  7-4-spare-parts-cataloguing-reservation-and-critical-spares-alerts: backlog   # PILOT
+  7-5-calibration-register-and-non-overridable-lockout: backlog   # PILOT
+  7-6-statutory-examinations-cost-accumulation-and-machine-status-broadcast: backlog   # PILOT
+  7-7-amc-warranty-and-insurance-tracking: backlog   # PILOT
+  7-8-offline-technician-workflow-and-closure-codes: backlog   # PILOT
+  epic-7-retrospective: optional
+
+  # --- Epic 8: Quality Control and Batch Release  [PILOT] ---
+  epic-8: backlog
+  8-1-inspection-plans-and-qc-gate: backlog   # PILOT
+  8-2-aql-sampling-and-result-capture: backlog   # PILOT
+  8-3-lot-disposition-accept-reject-conditional-release: backlog   # PILOT
+  8-4-coa-coc-retention-samples-and-batch-release-records: backlog   # PILOT
+  8-5-quality-holds-and-recall-trace: backlog   # PILOT
+  8-6-statutory-release-blocks-and-quality-reporting: backlog   # PILOT
+  8-7-compliance-master-data-bis-licence-register-and-label-masters: backlog   # PILOT
+  8-8-witnessed-inspections-and-prototype-stock-rules: backlog   # PILOT
+  epic-8-retrospective: optional
+
+  # --- Epic 9: Job-Work Services  [PILOT] ---
+  epic-9: backlog
+  9-1-job-work-service-order-creation: backlog   # PILOT
+  9-2-customer-material-receipt-and-segregated-stock: backlog   # PILOT
+  9-3-custody-ledger-and-consumption: backlog   # PILOT
+  9-4-process-loss-offcut-election-capture-and-qc-gated-dispatch: backlog   # PILOT
+  9-5-statutory-return-clocks-and-closure-gate: backlog   # PILOT
+  9-6-offcut-election-execution-and-erp-billing-feed: backlog   # PILOT
+  epic-9-retrospective: optional
+
+  # --- Epic 10: R&D and Maker-Hub Operations (wave, post-pilot) ---
+  epic-10: backlog
+  10-1-randd-and-maker-hub-location-types-and-project-master: backlog
+  10-2-randd-requisition-budget-check-and-issue-types: backlog
+  10-3-project-wip-ledger-and-prototype-build-records: backlog
+  10-4-hub-member-records-and-machine-time-booking: backlog
+  10-5-randd-physical-verification-and-cost-reporting: backlog
+  10-6-offline-point-of-use-sale-and-payment-capture: backlog
+  10-7-member-job-cards-and-statements: backlog
+  epic-10-retrospective: optional
+
+  # --- Epic 11: Financial Compliance and Period Close (Story 11.2 in pilot) ---
+  epic-11: backlog
+  11-1-itc-register-per-gstin: backlog
+  11-2-irn-before-dispatch-enforcement-and-branch-transfer-documents: backlog   # PILOT
+  11-3-erp-synced-budget-control: backlog
+  11-4-period-locks-reconciliation-and-audit-evidence: backlog
+  epic-11-retrospective: optional
+
+  # --- Epic 12: Cross-Module Reporting and Executive Analytics (Phase 2) ---
+  epic-12: backlog
+  12-1-role-specific-operational-dashboards: backlog
+  12-2-cross-module-executive-kpi-dashboard: backlog
+  12-3-domain-report-suites: backlog
+  12-4-self-service-ad-hoc-report-builder-and-export: backlog
+  12-5-configurable-exception-rule-engine: backlog
+  12-6-scheduled-report-distribution-and-shared-definitions: backlog
+  epic-12-retrospective: optional
+
+  # --- Epic 13: Data Migration Sign-Off Gate  [PILOT] ---
+  epic-13: backlog
+  13-1-opening-stock-migration-and-verification: backlog   # PILOT
+  13-2-active-document-migration-boms-pos-challans-custody-registers: backlog   # PILOT
+  13-3-go-live-reconciliation-sign-off-gate: backlog   # PILOT
+  epic-13-retrospective: optional

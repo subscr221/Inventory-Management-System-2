@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 768" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <!-- Page background -->
+  <rect x="0" y="0" width="1024" height="768" fill="#f8f9fa"/>
+
+  <!-- Header bar -->
+  <rect x="0" y="0" width="1024" height="64" fill="#1f2937"/>
+  <text x="24" y="38" font-size="20" font-weight="700" fill="#ffffff">Approvals Queue</text>
+
+  <rect x="740" y="16" width="120" height="32" rx="16" fill="#10b981" fill-opacity="0.15" stroke="#10b981" stroke-width="1.5"/>
+  <circle cx="758" cy="32" r="5" fill="#10b981"/>
+  <text x="772" y="37" font-size="12" font-weight="600" fill="#10b981">Online</text>
+
+  <circle cx="960" cy="32" r="20" fill="#8a95a1"/>
+  <text x="960" y="37" font-size="12" font-weight="600" fill="#ffffff" text-anchor="middle">RP</text>
+  <text x="792" y="30" font-size="12" font-weight="600" fill="#ffffff">Rajesh Patel</text>
+  <text x="792" y="44" font-size="11" fill="#d0d5db">Warehouse Manager</text>
+
+  <text x="24" y="100" font-size="24" font-weight="700" fill="#1f2937">Pending Indent Approvals (2)</text>
+
+  <!-- Approval Card 1 -->
+  <rect x="24" y="120" width="976" height="280" rx="8" fill="#ffffff" stroke="#d0d5db" stroke-width="1.5"/>
+
+  <!-- card header -->
+  <text x="48" y="150" font-size="18" font-weight="700" fill="#1f2937">INDENT APPROVAL NEEDED</text>
+  <rect x="780" y="132" width="196" height="28" rx="4" fill="#8b5cf6" fill-opacity="0.15" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="878" y="151" font-size="12" font-weight="600" fill="#8b5cf6" text-anchor="middle">Awaiting Store Manager</text>
+
+  <rect x="24" y="166" width="976" height="1" fill="#e4e8eb"/>
+
+  <text x="48" y="192" font-size="14" fill="#3d4651">Indent: <tspan font-weight="700">IND-2026-0456</tspan></text>
+  <text x="48" y="212" font-size="14" fill="#3d4651">Raised by: Avi Singh (Production Supervisor)</text>
+  <text x="48" y="232" font-size="14" fill="#3d4651">Department: Electronics</text>
+  <text x="600" y="192" font-size="14" fill="#3d4651">Amount: <tspan font-weight="700">Rs 1,23,000</tspan> (Budget available)</text>
+  <text x="600" y="212" font-size="14" fill="#3d4651">Reason: Production readiness</text>
+
+  <rect x="24" y="246" width="976" height="1" fill="#e4e8eb"/>
+
+  <text x="48" y="268" font-size="12" font-weight="600" letter-spacing="0.02em" fill="#6b7683">LINE ITEMS (3)</text>
+  <rect x="48" y="278" width="12" height="12" fill="#ffffff" stroke="#8a95a1" stroke-width="1.5"/>
+  <text x="70" y="288" font-size="13" fill="#3d4651">Motor 5kW - 20 units - Rs 45,000</text>
+  <rect x="48" y="298" width="12" height="12" fill="#ffffff" stroke="#8a95a1" stroke-width="1.5"/>
+  <text x="70" y="308" font-size="13" fill="#3d4651">Servo Valve - 15 units - Rs 35,000</text>
+  <rect x="48" y="318" width="12" height="12" fill="#ffffff" stroke="#8a95a1" stroke-width="1.5"/>
+  <text x="70" y="328" font-size="13" fill="#3d4651">Sensor - 100 units - Rs 43,000</text>
+
+  <text x="600" y="288" font-size="13" fill="#3d4651">Approval Required By: 02-Jul-2026</text>
+  <text x="600" y="308" font-size="13" fill="#3d4651">Approver: Rajesh Patel</text>
+  <text x="600" y="328" font-size="13" fill="#3d4651">Delegation: None active</text>
+
+  <rect x="24" y="346" width="976" height="1" fill="#e4e8eb"/>
+
+  <!-- Action buttons -->
+  <rect x="48" y="360" width="160" height="28" rx="4" fill="#1f47d9"/>
+  <text x="128" y="379" font-size="13" fill="#ffffff" text-anchor="middle">Approve</text>
+  <rect x="224" y="360" width="200" height="28" rx="4" fill="#f0f2f5" stroke="#d0d5db" stroke-width="1"/>
+  <text x="324" y="379" font-size="13" fill="#1f2937" text-anchor="middle">Request More Info</text>
+
+  <!-- Approval Card 2 -->
+  <rect x="24" y="416" width="976" height="200" rx="8" fill="#ffffff" stroke="#d0d5db" stroke-width="1.5"/>
+
+  <text x="48" y="446" font-size="18" font-weight="700" fill="#1f2937">INDENT APPROVAL NEEDED</text>
+  <rect x="780" y="428" width="196" height="28" rx="4" fill="#8b5cf6" fill-opacity="0.15" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="878" y="447" font-size="12" font-weight="600" fill="#8b5cf6" text-anchor="middle">Awaiting Store Manager</text>
+
+  <rect x="24" y="462" width="976" height="1" fill="#e4e8eb"/>
+
+  <text x="48" y="488" font-size="14" fill="#3d4651">Indent: <tspan font-weight="700">IND-2026-0461</tspan></text>
+  <text x="48" y="508" font-size="14" fill="#3d4651">Raised by: Neha Rao (Floor Supervisor)</text>
+  <text x="48" y="528" font-size="14" fill="#3d4651">Department: Fabrication</text>
+  <text x="600" y="488" font-size="14" fill="#3d4651">Amount: <tspan font-weight="700">Rs 58,500</tspan> (Budget available)</text>
+  <text x="600" y="508" font-size="14" fill="#3d4651">Reason: Safety stock threshold met</text>
+  <text x="600" y="528" font-size="13" fill="#3d4651">Approver: Rajesh Patel · Delegation: None active</text>
+
+  <rect x="24" y="546" width="976" height="1" fill="#e4e8eb"/>
+
+  <rect x="48" y="560" width="160" height="28" rx="4" fill="#1f47d9"/>
+  <text x="128" y="579" font-size="13" fill="#ffffff" text-anchor="middle">Approve</text>
+  <rect x="224" y="560" width="200" height="28" rx="4" fill="#f0f2f5" stroke="#d0d5db" stroke-width="1"/>
+  <text x="324" y="579" font-size="13" fill="#1f2937" text-anchor="middle">Request More Info</text>
+
+  <text x="24" y="648" font-size="12" fill="#8a95a1">Approving requires the audit trail: approver name, reason, and rollback path are always visible.</text>
+</svg>

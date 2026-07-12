@@ -33,6 +33,7 @@ colors:
     700: "#54636e"
     800: "#3d4651"
     900: "#1f2937"
+    950: "#000000"   # badge ink - see Section 9.6 for rationale
   
   semantic:
     success: "#10b981"
@@ -41,6 +42,17 @@ colors:
     info: "#3b82f6"
     pending: "#8b5cf6"
     offline: "#9ca3af"
+    # "_strong" variants are darkened fills used only where a solid color
+    # surface must carry WHITE text at AAA contrast (badges, danger button,
+    # error message text). See Section 9.6 for measured ratios.
+    error_strong: "#991b1b"
+    info_strong: "#1e40af"
+    pending_strong: "#5b21b6"
+    # "_dark" variants are lightened tints used only for inline text/icons
+    # on dark-mode surfaces (neutral.900), where the base hue fails AA.
+    error_dark: "#f87171"
+    info_dark: "#60a5fa"
+    pending_dark: "#a78bfa"
   
   intent:
     captured: "#10b981"
@@ -127,22 +139,23 @@ components:
     primary: "bg-{primary.600} text-white"
     secondary: "bg-{neutral.100} text-{neutral.900}"
     tertiary: "bg-transparent border-2 border-{primary.600} text-{primary.600}"
-    danger: "bg-{semantic.error} text-white"
-    disabled: "bg-{neutral.200} text-{neutral.400} cursor-not-allowed"
+    danger: "bg-{semantic.error_strong} text-white"   # 8.31:1 AAA - see Section 9.6
+    disabled: "bg-{neutral.200} text-{neutral.400} cursor-not-allowed"   # WCAG 1.4.3 exempt, see Section 9.6
   
   input:
-    border_color: "{neutral.300}"
+    border_color: "{neutral.500}"   # 3.05:1, meets WCAG 1.4.11 non-text minimum - see Section 9.6
     focus_color: "{primary.500}"
-    error_color: "{semantic.error}"
+    error_border_color: "{semantic.error}"       # 3.76:1, non-text use only (border/icon)
+    error_text_color: "{semantic.error_strong}"  # 8.31:1 AAA, required for error message TEXT
     disabled_bg: "{neutral.100}"
   
   badge:
-    success: "bg-{semantic.success}/10 text-{semantic.success}"
-    warning: "bg-{semantic.warning}/10 text-{semantic.warning}"
-    error: "bg-{semantic.error}/10 text-{semantic.error}"
-    info: "bg-{semantic.info}/10 text-{semantic.info}"
-    pending: "bg-{semantic.pending}/10 text-{semantic.pending}"
-    offline: "bg-{semantic.offline}/10 text-{semantic.offline}"
+    success: "bg-{semantic.success} text-{neutral.950}"          # 8.28:1 AAA
+    warning: "bg-{semantic.warning} text-{neutral.950}"          # 9.78:1 AAA
+    error: "bg-{semantic.error_strong} text-white"                # 8.31:1 AAA
+    info: "bg-{semantic.info_strong} text-white"                  # 8.72:1 AAA
+    pending: "bg-{semantic.pending_strong} text-white"            # 8.98:1 AAA
+    offline: "bg-{semantic.offline} text-{neutral.950}"           # 8.27:1 AAA
 
 ---
 
@@ -173,7 +186,7 @@ This platform is the operational nerve center for a multi-stream supply chain. D
 
 ### 2.1 Primary Palette
 
-The primary blue (`{primary.600}` #1f47d9) signals intentional action: approval, submission, confirmation. Paired with white text on dark backgrounds, it meets AAA contrast (7.2:1 minimum). Shades are reserved for states: lighter for hover, darker for active, lightest for backgrounds.
+The primary blue (`{primary.600}` #1f47d9) signals intentional action: approval, submission, confirmation. White text on this fill measures 7.09:1, not the 7.2:1 previously documented; it still clears the AAA (7:1) threshold, but only by a 0.09 margin (see Section 9.6). Because that margin is thin, any critical, high-emphasis call-to-action that must guarantee AAA under all rendering conditions should use `{primary.700}` (#1a3ab3, 9.13:1) instead. Shades are reserved for states: lighter for hover, darker for active, lightest for backgrounds.
 
 **Primary use cases:**
 - Call-to-action buttons (approve, submit, issue, allocate)
@@ -189,20 +202,22 @@ The primary blue (`{primary.600}` #1f47d9) signals intentional action: approval,
 - **Pending** (`{semantic.pending}` #8b5cf6) — workflow awaiting action (approval, inspection, disposition)
 - **Offline** (`{semantic.offline}` #9ca3af) — device network state, no service available
 
+None of the six semantic hues above are safe as standalone text color directly on a white or light background; measured contrast ranges from 2.15:1 to 4.23:1, all below the AA (4.5:1) minimum (see Section 9.6). Semantic colors are for fills, icons, and accents only, always inside a verified badge treatment (Section 7.3) or paired with an icon and neutral-colored text, consistent with the "color is never the only signal" rule in Section 8.
+
 ### 2.3 Sync State Indicators
 
-Every device carries a visible sync state badge in the app header:
+Every device carries a visible sync state badge in the app header, rendered with the same solid-fill badge component and corrected tokens defined in Section 7.3:
 
-- **Captured** (`{intent.captured}` #10b981) — events queued locally, no network required, device continues
-- **Syncing** (`{intent.syncing}` #3b82f6) — active network sync in progress, user can continue working
-- **Sync Pending** (`{intent.sync_pending}` #f59e0b) — network restored, sync queued, no data loss
-- **Sync Error** (`{intent.sync_error}` #ef4444) — sync failed on last attempt; retry available; no data loss
+- **Captured** (`{intent.captured}` #10b981, badge text `{neutral.950}`) - events queued locally, no network required, device continues
+- **Syncing** (`{intent.syncing}` #3b82f6, rendered with `{semantic.info_strong}` fill and white text) - active network sync in progress, user can continue working
+- **Sync Pending** (`{intent.sync_pending}` #f59e0b, badge text `{neutral.950}`) - network restored, sync queued, no data loss
+- **Sync Error** (`{intent.sync_error}` #ef4444, rendered with `{semantic.error_strong}` fill and white text) - sync failed on last attempt; retry available; no data loss
 
-The state label and icon appear in a footer badge with no jargon: "Captured, pending sync" (not "offline mode").
+The state label and icon appear in a header badge with no jargon: "Captured, pending sync" (not "offline mode").
 
 ### 2.4 Dark Mode
 
-A dark theme is provided as an alternate (CSS custom properties swap `colors` object). The contrast ratios remain AAA; the interface reflects the same design intent in low-light warehouse conditions.
+A dark theme is provided as an alternate (CSS custom properties swap `colors` object). The base neutral pairing (`{neutral.50}` text on `{neutral.900}` background) measures 13.93:1, comfortably AAA. The six semantic hues do not carry this guarantee automatically: used as inline text or icon color directly on the `{neutral.900}` background, `{semantic.error}`, `{semantic.info}`, and `{semantic.pending}` fall below AA (3.90:1, 3.99:1, and 3.47:1 respectively). Dark-mode inline text and icons in those three colors must use the `{semantic.error_dark}`, `{semantic.info_dark}`, and `{semantic.pending_dark}` tints instead, which measure 5.31:1, 5.77:1, and 5.39:1 against `{neutral.900}` (AA). Solid-fill badges are unaffected by theme, since Section 7.3's badge tokens already carry their own verified fill/text pairing regardless of background. Full figures are in Section 9.6.
 
 ---
 
@@ -338,12 +353,16 @@ No visible cursor; only the entered value and a clear button (×) visible.
 
 ### 7.3 Status & State Badges
 
-- **Success** badge (green fill, dark text) — "Approved", "Captured", "Delivered"
-- **Warning** badge (yellow fill, dark text) — "Tolerance Breach", "Awaiting Review", "Overdue"
-- **Error** badge (red fill, white text) — "Rejected", "Failed", "Blocked"
-- **Info** badge (blue fill, white text) — "In Progress", "Pending", "Conditional"
-- **Pending** badge (purple fill, white text) — "Awaiting Approval", "Awaiting Inspection"
-- **Offline** badge (gray fill, dark text) — "Offline Mode", "Syncing"
+All six badges use a single, unified treatment: a solid color fill with a single verified text color, never a tinted background with same-color text. The earlier draft's YAML tokens (`bg-{semantic.success}/10 text-{semantic.success}`, a 10%-opacity tint with same-color text) contradicted this prose and, when measured, failed AA outright (2.31:1 at best, 1.99:1 at worst - see Section 9.6). The tokens in the YAML frontmatter now match the descriptions below exactly:
+
+- **Success** badge (`{semantic.success}` #10b981 fill, `{neutral.950}` black text) - 8.28:1 AAA - "Approved", "Captured", "Delivered"
+- **Warning** badge (`{semantic.warning}` #f59e0b fill, `{neutral.950}` black text) - 9.78:1 AAA - "Tolerance Breach", "Awaiting Review", "Overdue"
+- **Error** badge (`{semantic.error_strong}` #991b1b fill, white text) - 8.31:1 AAA - "Rejected", "Failed", "Blocked"
+- **Info** badge (`{semantic.info_strong}` #1e40af fill, white text) - 8.72:1 AAA - "In Progress", "Pending", "Conditional"
+- **Pending** badge (`{semantic.pending_strong}` #5b21b6 fill, white text) - 8.98:1 AAA - "Awaiting Approval", "Awaiting Inspection"
+- **Offline** badge (`{semantic.offline}` #9ca3af fill, `{neutral.950}` black text) - 8.27:1 AAA - "Offline Mode", "Syncing"
+
+Error, Info, and Pending use a darker "_strong" fill than their base semantic hue so that white text clears AAA; Success, Warning, and Offline keep their base hue with black (`{neutral.950}`) text. Every badge now clears AAA (7:1), not just the AA (4.5:1) floor a solid-fill treatment would technically require for 12px bold label text. See Section 9.6 for the full before/after audit.
 
 Badges are 20–28px tall, padded with sm/md spacing, label text only (no icons inside badges; icon precedes the badge if needed).
 
@@ -367,7 +386,7 @@ Title and metadata on left (right-aligned action badges if needed); action butto
 
 ### Do's
 - ✓ Use scan fields as the entry point; keyboard is secondary
-- ✓ Show sync state in every screen footer; never hide network status
+- ✓ Show sync state in every screen header; never hide network status
 - ✓ Provide immediate visual confirmation after every action ("Captured, pending sync")
 - ✓ Make approval workflows explicit: show the approver name, reason fields, and rollback buttons
 - ✓ Ensure every transaction has an undo or reversal path visible in the UI
@@ -394,12 +413,12 @@ Title and metadata on left (right-aligned action badges if needed); action butto
 
 ### 9.1 Color Contrast
 
-All text meets AAA (7:1) or AA (4.5:1) minimum:
+All text meets AAA (7:1) or AA (4.5:1) minimum, verified per pair in Section 9.6:
 
-- **AAA (7:1):** Body text, labels, link text
-- **AA (4.5:1):** Small text, disabled state, secondary text
+- **AAA (7:1):** Body text, links, and standalone semantic-color usage
+- **AA (4.5:1):** Small text (badge/label text under 14px bold or 18px regular), disabled state, secondary text
 
-Icons used for meaning always include text or aria-label.
+Semantic colors (Section 2.2) are never used as bare text color on white or light backgrounds; they appear only inside a verified solid-fill badge (Section 7.3) or paired with neutral-colored text and an icon. Disabled controls (`{neutral.400}` text on `{neutral.200}`, 1.56:1) are exempt from this requirement per WCAG 1.4.3, since inactive UI components carry no contrast obligation; this is a documented exception, not a failure. Icons used for meaning always include text or aria-label.
 
 ### 9.2 Focus Management
 
@@ -410,7 +429,7 @@ Icons used for meaning always include text or aria-label.
 
 ### 9.3 Semantic HTML
 
-- Headings nest logically (h1 → h2 → h3, no skips)
+- Headings nest logically (h1, then h2, then h3, no skips)
 - Forms use `<label>` elements (not placeholder-only)
 - Buttons are `<button>` or `<a role="button">`, not divs with click handlers
 - Lists use `<ul>` or `<ol>` for grouped items
@@ -429,15 +448,93 @@ Icons used for meaning always include text or aria-label.
 - Right-to-left (RTL) languages are supported via CSS direction and logical properties
 - Currency, dates, and numbers are formatted per locale
 
+### 9.6 Contrast Ratio Audit
+
+Every foreground/background pair used by the components in this document was recalculated against the WCAG 2.1 relative-luminance formula (`L = 0.2126R + 0.7152G + 0.0722B` on linearized sRGB channels, contrast ratio `(L1 + 0.05) / (L2 + 0.05)`). This section is the authoritative record of claimed versus actual ratios, the pairs that failed, and the corrected values now in effect. All corrected values are already reflected in the YAML frontmatter and the component prose earlier in this document.
+
+**Text and button pairs**
+
+| Component | Foreground | Background | Claimed | Actual | Standard | Result |
+| --- | --- | --- | --- | --- | --- | --- |
+| Button primary text | white | `{primary.600}` #1f47d9 | AAA (7.2:1) | 7.09:1 | AAA (7:1) | Pass, thin margin (correction: claim updated to 7.09:1) |
+| Button primary text, safer alternative | white | `{primary.700}` #1a3ab3 | not documented | 9.13:1 | AAA (7:1) | Pass, recommended for critical CTAs |
+| Button secondary text | `{neutral.900}` | `{neutral.100}` | implied AAA | 13.09:1 | AAA (7:1) | Pass |
+| Button tertiary text/border | `{primary.600}` | white | implied AAA | 7.09:1 | AAA (7:1) | Pass, thin margin |
+| Button danger text, original | white | `{semantic.error}` #ef4444 | implied AAA | 3.76:1 | AA (4.5:1) | Fail, below AA |
+| Button danger text, corrected | white | `{semantic.error_strong}` #991b1b | n/a | 8.31:1 | AAA (7:1) | Pass (correction applied) |
+| Button disabled text | `{neutral.400}` | `{neutral.200}` | n/a | 1.56:1 | exempt | WCAG 1.4.3 exempts inactive controls; no fix required |
+| Input border, original | `{neutral.300}` | white | implied 3:1 | 1.48:1 | AA non-text (3:1) | Fail, below non-text minimum |
+| Input border, corrected | `{neutral.500}` | white | n/a | 3.05:1 | AA non-text (3:1) | Pass (minimum); `{neutral.600}` at 4.62:1 recommended for margin |
+| Input focus ring | `{primary.500}` | white | implied 3:1 | 3.89:1 | AA non-text (3:1) | Pass, no change needed |
+| Input error message text, original | `{semantic.error}` | white | implied AAA | 3.76:1 | AA (4.5:1) | Fail, below AA |
+| Input error message text, corrected | `{semantic.error_strong}` | white | n/a | 8.31:1 | AAA (7:1) | Pass (correction applied) |
+
+**Semantic colors as standalone text on white**
+
+| Semantic color | Hex | Actual on white | Result |
+| --- | --- | --- | --- |
+| Success | #10b981 | 2.54:1 | Fail AA |
+| Warning | #f59e0b | 2.15:1 | Fail AA |
+| Error | #ef4444 | 3.76:1 | Fail AA |
+| Info | #3b82f6 | 3.68:1 | Fail AA |
+| Pending | #8b5cf6 | 4.23:1 | Fail AA |
+| Offline | #9ca3af | 2.54:1 | Fail AA |
+
+None of the six base semantic hues are safe as bare text on white. Section 2.2 and Section 9.1 now state this explicitly: these colors are for fills, icons, and accents only.
+
+**Badge contrast, before and after unification**
+
+| Badge | Before (10% tint bg, same-color text) | After (solid fill, unified spec) | Fill | Text |
+| --- | --- | --- | --- | --- |
+| Success | 2.31:1, fail AA | 8.28:1, pass AAA | `{semantic.success}` #10b981 | `{neutral.950}` black |
+| Warning | 1.99:1, fail AA | 9.78:1, pass AAA | `{semantic.warning}` #f59e0b | `{neutral.950}` black |
+| Error | 3.29:1, fail AA | 8.31:1, pass AAA | `{semantic.error_strong}` #991b1b | white |
+| Info | 3.29:1, fail AA | 8.72:1, pass AAA | `{semantic.info_strong}` #1e40af | white |
+| Pending | 3.75:1, fail AA | 8.98:1, pass AAA | `{semantic.pending_strong}` #5b21b6 | white |
+| Offline | 2.35:1, fail AA | 8.27:1, pass AAA | `{semantic.offline}` #9ca3af | `{neutral.950}` black |
+
+All six badges failed AA under the original tinted-background spec and now pass AAA under the corrected solid-fill spec.
+
+**Dark mode pairs**
+
+| Pair | Actual | Standard | Result |
+| --- | --- | --- | --- |
+| `{neutral.50}` text on `{neutral.900}` background | 13.93:1 | AAA (7:1) | Pass |
+| `{semantic.success}` text on `{neutral.900}`, original hue | 5.79:1 | AA (4.5:1) | Pass AA, not AAA |
+| `{semantic.warning}` text on `{neutral.900}`, original hue | 6.83:1 | AA (4.5:1) | Pass AA, close to AAA |
+| `{semantic.offline}` text on `{neutral.900}`, original hue | 5.78:1 | AA (4.5:1) | Pass AA, not AAA |
+| `{semantic.error}` text on `{neutral.900}`, original hue | 3.90:1 | AA (4.5:1) | Fail AA |
+| `{semantic.info}` text on `{neutral.900}`, original hue | 3.99:1 | AA (4.5:1) | Fail AA |
+| `{semantic.pending}` text on `{neutral.900}`, original hue | 3.47:1 | AA (4.5:1) | Fail AA |
+| `{semantic.error_dark}` #f87171 text on `{neutral.900}`, corrected | 5.31:1 | AA (4.5:1) | Pass (correction applied) |
+| `{semantic.info_dark}` #60a5fa text on `{neutral.900}`, corrected | 5.77:1 | AA (4.5:1) | Pass (correction applied) |
+| `{semantic.pending_dark}` #a78bfa text on `{neutral.900}`, corrected | 5.39:1 | AA (4.5:1) | Pass (correction applied) |
+| Dark-mode border, original: `{neutral.700}` on `{neutral.900}` | 2.37:1 | AA non-text (3:1) | Fail |
+| Dark-mode border, corrected: `{neutral.600}` on `{neutral.900}` | 3.18:1 | AA non-text (3:1) | Pass (minimum); `{neutral.500}` at 4.82:1 recommended for margin |
+
+The original claim in Section 2.4 that "the contrast ratios remain AAA" in dark mode was inaccurate for the error, info, and pending hues; the corrected `_dark` tints resolve this at AA.
+
+**Summary of corrections applied**
+
+1. Corrected the documented primary.600-on-white ratio from 7.2:1 to the measured 7.09:1; it still passes AAA, but the margin is thin enough to recommend `{primary.700}` for critical CTAs.
+2. Added `{semantic.error_strong}` (#991b1b), `{semantic.info_strong}` (#1e40af), and `{semantic.pending_strong}` (#5b21b6) for solid fills that must carry white text at AAA.
+3. Added `{neutral.950}` (#000000, "badge ink") for solid fills that must carry black text at AAA.
+4. Added `{semantic.error_dark}` (#f87171), `{semantic.info_dark}` (#60a5fa), and `{semantic.pending_dark}` (#a78bfa) for dark-mode inline text and icons.
+5. Unified the badge component (YAML and prose) to a single solid-fill treatment; all six badges now pass AAA (was: all six failing AA).
+6. Updated `button.danger` to use `{semantic.error_strong}`, resolving a 3.76:1 AA failure (now 8.31:1 AAA).
+7. Updated `input.border_color` from `{neutral.300}` (1.48:1) to `{neutral.500}` (3.05:1) to meet the WCAG 1.4.11 non-text minimum; split the original `input.error_color` token into `error_border_color` (non-text use) and `error_text_color` (`{semantic.error_strong}`, for message text).
+8. Corrected the inverted background/text swap direction documented in Section 10, and updated the dark-mode border swap from `{neutral.700}` to `{neutral.600}`.
+9. Clarified Section 9.1 so the AAA/AA rule matches what is actually achievable and enforced: body text and links at AAA, badge/label text and disabled state at AA, with an explicit WCAG 1.4.3 exemption noted for disabled controls.
+
 ---
 
 ## 10. Dark Mode
 
-Dark theme swaps the following:
+Dark theme swaps the following. The direction below was previously documented backward (it read as if the default background were `{neutral.900}`); the corrected direction is:
 
-- **Background:** `{neutral.900}` → `{neutral.50}`
-- **Text:** `{neutral.50}` → `{neutral.900}`
-- **Borders:** `{neutral.300}` → `{neutral.700}`
+- **Background:** light mode `{neutral.50}` becomes dark mode `{neutral.900}`
+- **Text:** light mode `{neutral.900}` becomes dark mode `{neutral.50}`
+- **Borders:** light mode `{neutral.300}` becomes dark mode `{neutral.600}` (corrected from `{neutral.700}`, which measured 2.37:1 against `{neutral.900}` and failed the 3:1 non-text minimum; `{neutral.600}` measures 3.18:1 and passes, see Section 9.6)
 - **Shadows:** adjust opacity to maintain perceived depth
 
 Scheme is toggled via `prefers-color-scheme` media query or a theme-toggle button in the header. The choice is persisted in localStorage.
