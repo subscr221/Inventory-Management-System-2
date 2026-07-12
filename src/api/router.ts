@@ -35,7 +35,13 @@ export class Router {
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    } catch {
+      sendError(res, 400, 'BAD_REQUEST', 'Invalid URL');
+      return;
+    }
     const method = req.method ?? 'GET';
 
     for (const route of this.routes) {
@@ -45,7 +51,11 @@ export class Router {
 
       const params: Record<string, string> = {};
       route.paramNames.forEach((name, i) => {
-        params[name] = match[i + 1] ?? '';
+        try {
+          params[name] = decodeURIComponent(match[i + 1] ?? '');
+        } catch {
+          params[name] = match[i + 1] ?? '';
+        }
       });
 
       await route.handler(req, res, params);

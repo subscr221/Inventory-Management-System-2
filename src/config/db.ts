@@ -14,7 +14,7 @@ export function getPool(): pg.Pool {
       user: config.db.user,
       password: config.db.password,
       max: config.db.max,
-      ssl: config.db.ssl ? { rejectUnauthorized: false } : false,
+      ssl: config.db.ssl ? true : false,
     });
   }
   return pool;

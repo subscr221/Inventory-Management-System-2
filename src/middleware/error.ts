@@ -61,12 +61,12 @@ export function withErrorHandler(handler: RouteHandler): RouteHandler {
     try {
       await handler(req, res, params);
     } catch (err) {
+      if (res.headersSent) return;
       if (err instanceof AppError) {
         sendError(res, err.statusCode, err.errorCode, err.message, err.details);
         return;
       }
-      const message = err instanceof Error ? err.message : 'Internal server error';
-      sendError(res, 500, 'INTERNAL_ERROR', message);
+      sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
     }
   };
 }

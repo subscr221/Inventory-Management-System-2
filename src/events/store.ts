@@ -62,6 +62,18 @@ export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
     throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'event_type is required and must be a non-empty string');
   }
 
+  if (obj['event_version'] !== undefined && (!Number.isInteger(obj['event_version']) || (obj['event_version'] as number) <= 0)) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'event_version must be a positive integer');
+  }
+
+  if (obj['schema_version'] !== undefined && (!Number.isInteger(obj['schema_version']) || (obj['schema_version'] as number) <= 0)) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'schema_version must be a positive integer');
+  }
+
+  if (obj['idempotency_key'] !== undefined && obj['idempotency_key'] !== null && typeof obj['idempotency_key'] !== 'string') {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'idempotency_key must be a string or null');
+  }
+
   if (typeof obj['payload'] !== 'object' || obj['payload'] === null || Array.isArray(obj['payload'])) {
     throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'payload is required and must be a JSON object');
   }
@@ -91,7 +103,8 @@ export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
     throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.actor.location_id is required and must be a valid UUID');
   }
 
-  if (typeof meta['occurred_at'] !== 'string' || isNaN(Date.parse(meta['occurred_at']))) {
+  const ISO8601_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+  if (typeof meta['occurred_at'] !== 'string' || !ISO8601_REGEX.test(meta['occurred_at'])) {
     throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.occurred_at is required and must be a valid ISO-8601 timestamp');
   }
 
@@ -104,55 +117,8 @@ export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
   }
 }
 
-export async function persistEvent(envelope: EventEnvelope): Promise<PersistedEvent> {
-  const pool = getPool();
-  const eventId = randomUUID();
-  const syncedAt = new Date().toISOString();
-
-  const metadata = {
-    ...envelope.metadata,
-    synced_at: syncedAt,
-  };
-
-  if (envelope.idempotency_key) {
-    const existing = await pool.query(
-      `SELECT event_id FROM domain_events WHERE idempotency_key = $1`,
-      [envelope.idempotency_key],
-    );
-    if (existing.rows.length > 0) {
-      throw new AppError(
-        409,
-        'DUPLICATE_EVENT',
-        'Event with this idempotency_key already exists',
-        { existing_event_id: existing.rows[0]!['event_id'] },
-      );
-    }
-  }
-
-  const versionResult = await pool.query(
-    `SELECT COALESCE(MAX(event_version), 0) + 1 AS next_version FROM domain_events WHERE stream_id = $1`,
-    [envelope.stream_id],
-  );
-  const nextVersion = versionResult.rows[0]!['next_version'] as number;
-
-  const result = await pool.query(
-    `INSERT INTO domain_events (event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     RETURNING event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at`,
-    [
-      eventId,
-      envelope.stream_type,
-      envelope.stream_id,
-      envelope.event_type,
-      nextVersion,
-      JSON.stringify(envelope.payload),
-      JSON.stringify(metadata),
-      envelope.schema_version ?? 1,
-      envelope.idempotency_key ?? null,
-    ],
-  );
-
-  const row = result.rows[0]!;
+function mapRowToEvent(row: Record<string, unknown>): PersistedEvent {
+  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
   return {
     event_id: row['event_id'] as string,
     stream_type: row['stream_type'] as string,
@@ -163,8 +129,76 @@ export async function persistEvent(envelope: EventEnvelope): Promise<PersistedEv
     metadata: row['metadata'] as PersistedEvent['metadata'],
     schema_version: row['schema_version'] as number,
     idempotency_key: row['idempotency_key'] as string | null,
-    created_at: (row['created_at'] as Date).toISOString(),
+    created_at: createdAt,
   };
+}
+
+export async function persistEvent(envelope: EventEnvelope): Promise<PersistedEvent> {
+  const pool = getPool();
+  const eventId = randomUUID();
+  const syncedAt = new Date().toISOString();
+
+  const metadata = {
+    ...envelope.metadata,
+    synced_at: syncedAt,
+  };
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let nextVersion: number;
+    if (envelope.event_version !== undefined) {
+      nextVersion = envelope.event_version;
+    } else {
+      const versionResult = await client.query(
+        `SELECT COALESCE(MAX(event_version), 0) + 1 AS next_version FROM domain_events WHERE stream_id = $1`,
+        [envelope.stream_id],
+      );
+      nextVersion = versionResult.rows[0]!['next_version'] as number;
+    }
+
+    const result = await client.query(
+      `INSERT INTO domain_events (event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at`,
+      [
+        eventId,
+        envelope.stream_type,
+        envelope.stream_id,
+        envelope.event_type,
+        nextVersion,
+        envelope.payload,
+        metadata,
+        envelope.schema_version ?? 1,
+        envelope.idempotency_key ?? null,
+      ],
+    );
+
+    await client.query('COMMIT');
+    return mapRowToEvent(result.rows[0]!);
+  } catch (err: unknown) {
+    await client.query('ROLLBACK');
+    if (err && typeof err === 'object' && 'code' in err) {
+      if (err.code === '23505') {
+        const detail = (err as { detail?: string }).detail || '';
+        if (detail.includes('uq_idempotency')) {
+          // If we hit uq_idempotency, try to get the existing event_id
+          const existing = await client.query(
+            `SELECT event_id FROM domain_events WHERE idempotency_key = $1`,
+            [envelope.idempotency_key]
+          );
+          const existingEventId = existing.rows.length > 0 ? existing.rows[0]!['event_id'] : 'unknown';
+          throw new AppError(409, 'DUPLICATE_EVENT', 'Event with this idempotency_key already exists', { existing_event_id: existingEventId });
+        } else if (detail.includes('uq_stream_version')) {
+          throw new AppError(409, 'STREAM_CONFLICT', 'Event version conflict in stream', { stream_id: envelope.stream_id, event_version: envelope.event_version });
+        }
+      }
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function readStream(
@@ -180,16 +214,5 @@ export async function readStream(
     [streamType, streamId],
   );
 
-  return result.rows.map((row) => ({
-    event_id: row['event_id'] as string,
-    stream_type: row['stream_type'] as string,
-    stream_id: row['stream_id'] as string,
-    event_type: row['event_type'] as string,
-    event_version: row['event_version'] as number,
-    payload: row['payload'] as Record<string, unknown>,
-    metadata: row['metadata'] as PersistedEvent['metadata'],
-    schema_version: row['schema_version'] as number,
-    idempotency_key: row['idempotency_key'] as string | null,
-    created_at: (row['created_at'] as Date).toISOString(),
-  }));
+  return result.rows.map(mapRowToEvent);
 }

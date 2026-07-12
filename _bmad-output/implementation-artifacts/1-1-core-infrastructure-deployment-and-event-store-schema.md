@@ -4,7 +4,7 @@ baseline_commit: 5038c40421700f58feffb7a189f166358ae1360e
 
 # Story 1.1: Core Infrastructure Deployment and Event Store Schema
 
-Status: review
+Status: done
 
 ## Story
 
@@ -374,3 +374,30 @@ Qwen 3.7 Max (via Kilo)
 - `deploy/provision/provision.sh` (new)
 - `deploy/provision/teardown.sh` (new)
 - `test/integration/story-1-1.test.ts` (new)
+
+### Review Findings
+
+- [x] [Review][Patch] Database TLS certificate validation is disabled [src/config/db.ts]
+- [x] [Review][Patch] Concurrent writes race condition / 500 instead of STREAM_CONFLICT [src/events/store.ts]
+- [x] [Review][Patch] Idempotency dedup is a TOCTOU race; returns 500 instead of 409 [src/events/store.ts]
+- [x] [Review][Patch] Event write path is not wrapped in a transaction [src/events/store.ts]
+- [x] [Review][Patch] `payload`/`metadata` written with `JSON.stringify` double-encodes JSONB [src/events/store.ts]
+- [x] [Review][Patch] Unbounded request body enables trivial DoS / OOM [src/api/v1/events.ts:100-108]
+- [x] [Review][Patch] Malformed JSON returns 500, not 400 [src/api/v1/events.ts:107]
+- [x] [Review][Patch] Internal error messages are leaked to clients [src/middleware/error.ts:495]
+- [x] [Review][Patch] 500 fallback in server bootstrap emits a non-conforming error envelope [src/server.ts:522-524]
+- [x] [Review][Patch] `readStream` never validates that `streamId` is a UUID [src/api/v1/events.ts:117-127]
+- [x] [Review][Patch] `occurred_at` validation accepts non-ISO-8601 strings [src/events/store.ts:320]
+- [x] [Review][Patch] Client-supplied `event_version` and `schema_version` are unvalidated [src/events/store.ts:261-262]
+- [x] [Review][Patch] Encoded stream ids never match stored values (missing decodeURIComponent) [src/api/router.ts:78-80]
+- [x] [Review][Patch] URL parse throws; falls through to generic 500 [src/api/router.ts:69]
+- [x] [Review][Patch] `server.listen(NaN)` if port env var is invalid [src/config/index.ts:182]
+- [x] [Review][Patch] Second write throws ERR_HTTP_HEADERS_SENT if handler throws after headers sent [src/middleware/error.ts:487-498]
+- [x] [Review][Patch] No graceful shutdown; DB connections leak [src/server.ts]
+- [x] [Review][Patch] Duplicated row-mapping logic [src/events/store.ts]
+- [x] [Review][Defer] No authentication or authorization anywhere [src/server.ts:515] — deferred, pre-existing (Story 1.2 scope)
+- [x] [Review][Defer] `readStream` has no pagination or limit [src/events/store.ts:396-421] — deferred, pre-existing (Not required in Story 1.1)
+- [x] [Review][Defer] Global idempotency uniqueness is likely too broad [events/domain_events.sql:20] — deferred, pre-existing (Matches spec requirements)
+- [x] [Review][Defer] `trace_id` is generated fresh per error and never logged [src/middleware/error.ts:455] — deferred, pre-existing
+- [x] [Review][Defer] Migration has no versioning and a brittle path [src/events/migrate.ts:210] — deferred, pre-existing (Full migration system out of scope)
+- [x] [Review][Defer] Extra/unknown properties are silently accepted [src/events/store.ts] — deferred, pre-existing
