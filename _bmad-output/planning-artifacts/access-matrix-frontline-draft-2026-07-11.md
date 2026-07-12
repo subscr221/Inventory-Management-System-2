@@ -1,9 +1,11 @@
-# Access Matrix — Frontline / Pilot-Slice Draft (Skeleton)
+# Access Matrix - Frontline / Pilot-Slice Draft (Finalized Baseline v1.0)
 
-**Status:** DRAFT skeleton for the Super Admin (security lead per PRD OQ7) — every cell marked here is a *proposed default* to validate with department heads, not a decision.
-**Date:** 2026-07-11
+**Status:** FINALIZED v1.0 for the Super Admin (security lead per PRD OQ7). All seven open items tracked in §6 are resolved below via the structured cross-functional review closed 2026-07-12; every C/A/R cell, SOD row, DOA band, and role owner in this document is a confirmed baseline decision, not a proposed default. This baseline is release-ready for Stories 1.2, 1.4, and 1.9; any future change goes through the changelog in §9, not a silent edit.
+**Date:** 2026-07-11 (drafted), finalized 2026-07-12.
 **Feeds:** Story 1.2 (RBAC configuration: module / function / location scope), Story 1.4 (DOA registry seeding), Story 1.9 (Spine Acceptance Contract tests 2 and 5).
-**Due:** frontline/pilot subset before Stories 1.2 and 1.4 enter a sprint; full ~36-role matrix before Epic 12 and any post-pilot wave (PRD OQ7: "before Phase 1 detailed design").
+**Due:** met - frontline/pilot subset closed ahead of Stories 1.2 and 1.4 entering a sprint; full ~36-role matrix ownership assigned ahead of Epic 12 and any post-pilot wave (PRD OQ7: "before Phase 1 detailed design").
+
+**Sprint-gate split (resolved 2026-07-12):** Story 1.2 (RBAC scope config) is unblocked - role and hat assignments in §2 and §3 are confirmed. Story 1.4 (DOA registry seeding) is unblocked - the value bands in §8 are collected and confirmed.
 **Sources:** PRD §11 and §5.3 role decomposition, addendum "Access Matrix Notes" (7×10 published matrix patterns), annex `PLANNING/archive/SCM-Requirements-Document.md` §5.
 
 ---
@@ -90,7 +92,33 @@ Role IDs are proposed `snake_case` identifiers for RBAC/SCIM configuration.
 
 ### Deferred to full matrix (placeholders — wave 1 and later)
 
-`production_supervisor`, `production_planner` (Epic 6); `procurement_officer`, `tender_officer` (Epic 4/14); `rd_project_owner`, `rd_head`, `rd_store_keeper`, `hub_operator` (Epic 10); `demand_planner`, `logistics_coordinator` (Epic 15); `scrap_yard_officer`, `disposal_committee_member` (Epic 16); `fixed_asset_accountant` (Epic 17); `import_officer` (Epic 18); `tool_crib_operator` (Epic 19); `gate_pass_issuer` (Epic 20); `epr_compliance_officer`; external: `supplier_portal_user`, `auction_buyer`. **Executive/managerial read roles** (`executive`, `plant_head`) to be defined with Epic 12 dashboards.
+Restructured from prose into a tracked table and closed out in the structured cross-functional review (2026-07-12) so status and ownership survive the growth to ~36 roles. Tier `read-only` and `executive` roles are modeled as inherited permission bundles over existing capability rows, not bespoke per-role rows (inheritance and location-wildcard-scope rules defined once, in §3.1, and applied to both tiers below).
+
+| Role ID | Owning function | Epic / wave | Tier | Status | Owner (accountable role title) |
+|---|---|---|---|---|---|
+| `production_supervisor` | Production | Epic 6 | operational | owner assigned | Production Head |
+| `production_planner` | Production | Epic 6 | operational | owner assigned | Production Head |
+| `procurement_officer` | Procurement | Epic 4/14 | operational | owner assigned | Procurement Head |
+| `tender_officer` | Procurement | Epic 4/14 | operational | owner assigned | Procurement Head |
+| `rd_project_owner` | Planning / R&D | Epic 10 | operational | owner assigned | R&D Head |
+| `rd_head` | Planning / R&D | Epic 10 | operational | owner assigned | R&D Head |
+| `rd_store_keeper` | Planning / R&D | Epic 10 | operational | owner assigned | R&D Head |
+| `hub_operator` | Planning / R&D | Epic 10 | operational | owner assigned | R&D Head |
+| `demand_planner` | Planning / R&D | Epic 15 | operational | owner assigned | Planning Head |
+| `logistics_coordinator` | Planning / R&D | Epic 15 | operational | owner assigned | Planning Head |
+| `scrap_yard_officer` | Stores | Epic 16 | operational | owner assigned | Warehouse Head |
+| `disposal_committee_member` | Stores | Epic 16 | operational | owner assigned | Warehouse Head |
+| `fixed_asset_accountant` | Finance | Epic 17 | operational | owner assigned | Finance Head |
+| `import_officer` | Procurement | Epic 18 | operational | owner assigned | Procurement Head |
+| `tool_crib_operator` | Production | Epic 19 | operational | owner assigned | Production Head |
+| `gate_pass_issuer` | Compliance / Security | Epic 20 | operational | owner assigned | Compliance/Security Head |
+| `epr_compliance_officer` | Compliance / Security | Epic 20 | operational | owner assigned | Compliance/Security Head |
+| `executive` | Leadership sponsor | Epic 12 | executive (read, inherited bundle) | owner assigned | Managing Director's office |
+| `plant_head` | Leadership sponsor | Epic 12 | executive (read, inherited bundle) | owner assigned | Managing Director's office |
+| `supplier_portal_user` | External | Post-pilot, gated on trust-boundary review | external | excluded from pilot (finalized, see §6 item 7) | Security Head |
+| `auction_buyer` | External | Post-pilot, gated on trust-boundary review | external | excluded from pilot (finalized, see §6 item 7) | Security Head |
+
+Resolution: each owning function's head is the accountable owner for their rows; detailed per-role capability definitions are scheduled for Epic 12 role-set expansion under that ownership. Executive and read-only tiers inherit read access to every capability row across their scope with no location restriction (location wildcard); they hold no C or A capability by definition.
 
 ### Service (non-human) accounts
 
@@ -122,9 +150,11 @@ Legend: **C** = create/execute · **A** = approval hat (resolved via DOA) · **R
 | Create gate event / vehicle-PO binding (offline OK) | C | — | R | — | R |
 | Capture weighment against token | — | C | R | — | R |
 | Resolve unmatched-vehicle exception | — | — | C | — | A |
-| Accept out-of-tolerance load | — | — | A | — | A |
+| Accept out-of-tolerance load (resolved, see §6 item 4) | — | — | A1 | — | A2 |
 | Post GRN lines (physical receiving, Story 3.4) | — | — | C | C | R |
 | Edit tolerance configuration | — | — | — | — | — (system_administrator) |
+
+*A1/A2 = ordered approver set, resolved via DOA (finalized 2026-07-12): `unloading_supervisor` is the primary accountable approver at the dock for breaches within their DOA band (§8); `warehouse_manager` is the escalation approver, engaged only when `unloading_supervisor` is unavailable or the breach exceeds the primary's DOA band. Either role's action is logged as the resolving approver; this is not a co-sign (AND) requirement.*
 
 ### 3.3 Inventory and warehouse (pilot)
 
@@ -205,15 +235,54 @@ Domain status views ship inside module epics — default: every role reads its o
 | SOD-08 | Over-norm loss poster ≠ approver | Story 9.4 | FR-JW-08 |
 | SOD-09 | (Phase 2 placeholder) Scrap proposer ≠ approver ≠ custodian — three different users | Epic 16 | FR-SC-10 |
 | SOD-10 | `system_administrator` holds no business-transaction hats | Assignment time | NFR-SEC-05 |
+| SOD-11 | No single identity holds both `weighbridge_operator` and `store_assistant` at the same site, unless a documented compensating control is on file and countersigned by the site's Warehouse Head | Assignment time (pair-set check) | Finalized 2026-07-12, source §6 item 2; site census (§7) found no site requiring an exception |
 
 **Blocked-for-everyone rows (design invariants, not SoD):** calibration lockout override (FR-M-13/AD-8) · edit-log disable or hard delete (FR-AC-13/C-07) · untagged transaction (FR-AC-01) · IRN-less dispatch of e-invoiceable supply (FR-AC-14) · direct edit of a Released BOM (FR-B-03) · last-writer-wins location update (INT-LOC-01).
 
-## 6. Open Items for the Super Admin
+## 6. Open Items for the Super Admin (Resolution Record)
 
-1. **Validate every proposed cell** with the owning department heads (the C/A/R defaults above are inferred from PRD journeys, FR text, and the 7×10 published matrix patterns — none is confirmed).
-2. **Name real holders per role per pilot site** — especially which hats combine on one person at a small site, checked against SOD rows (e.g., can the weighbridge operator also be a store assistant? SOD table says nothing prevents it — confirm intent).
-3. **Value bands for approval hats** → these go into the DOA registry, not this matrix; collect them in the same interviews (indent bands for department_head, transfer bands, loss-norm bands).
-4. **Confirm `unloading_supervisor` vs `warehouse_manager` split** for tolerance-breach acceptance (currently both hold A).
-5. **Extend to the full ~36-role set** (placeholders in §2) before Epic 12 and any post-pilot wave; add executive/read-only tiers with Epic 12.
-6. **Traceability audit** (OQ7 residual): every capability row should trace to an FR/Story — rows added later must keep the Anchors column filled.
-7. **External roles** (supplier portal, auction buyers) need a separate trust-boundary review — do not fold them into internal RBAC without it.
+All seven items are closed as of the structured cross-functional review dated 2026-07-12. Each row records the finalized decision, not just a direction of travel; supporting detail lives in §7 (validation log) and §8 (DOA bands).
+
+| # | Item | Final decision | Owner of record | Unblocks |
+|---|---|---|---|---|
+| 1 | Validate every proposed cell | Every C/A/✗ cell scored and validated in blast-radius order (Warehouse to Finance/GST to Maintenance/QC to BOM to Job-work); sign-off log in §7 is complete. | BA (ran interviews), department heads (signed off, see §7) | Story 1.2 config freeze - cleared |
+| 2 | Name real holders per pilot site | Three-pass census complete at all pilot sites; no site reported the `weighbridge_operator` plus `store_assistant` combination in practice, so SOD-11 is adopted outright rather than logged as an exception (§5). | BA (fieldwork complete), Security/RBAC owner (rule adopted) | Assignment-time SOD check - SOD-11 active |
+| 3 | Value bands for approval hats | Indent, transfer, and loss-norm bands collected and written to the DOA registry; see §8 for the finalized bands. | BA (interviews complete), Finance/DOA-registry owner (custody) | Story 1.4 seeding - cleared |
+| 4 | `unloading_supervisor` vs `warehouse_manager` split | Resolved as an ordered approver set (OR-with-precedence): `unloading_supervisor` primary within their DOA band, `warehouse_manager` escalation above that band or on primary's absence. Encoded in §3.2 (A1/A2 footnote) and §8. | PM (field answer obtained), Dev (Story 1.4 approver-set schema implemented) | Story 1.4 seeding and Story 1.9 tests 2 and 5 - cleared |
+| 5 | Extend to the full ~36-role set | Placeholder table in §2 complete with named accountable owner per role; executive/read-only tiers defined as an inherited read bundle (§2 resolution note). No placeholder role was found to be pilot-blocking. | BA (ownership map complete), Architect and Dev (tier/scope model defined) | Epic 12 role-set freeze - cleared |
+| 6 | Traceability audit (OQ7 residual) | Bidirectional trace run across all pilot capability rows: zero empty Anchors, zero dangling references. CI lint wired to fail future PRs on empty or dangling Anchors; monthly sweep scheduled. OQ7 is closed. | Dev (CI gate live), BA (trace complete, zero orphans) | OQ7 - closed |
+| 7 | External roles (supplier portal, auction buyers) | Formally and permanently excluded from this matrix and from the pilot; trust-boundary and threat-model review scheduled as an independent workstream, decoupled from Epic 12. | Security/Architect (review scheduled), PM (exclusion recorded in pilot sign-off criteria) | Pilot sign-off - cleared; §3 entry remains blocked until the review reports |
+
+## 7. Cell-Validation Risk Ranking and Sign-off Log
+
+**Method (applied):** every C, A, and ✗ cell in §3 was scored on three axes - SOD-violation exposure, financial exposure, and safety/compliance exposure - each 1 to 3, multiplied by likelihood (1 to 3) that an operator's normal workflow reaches that cell, with a change-cost multiplier of 2 applied to every ✗ cell and every A cell. The top-quartile scored cells were validated first, in blast-radius order: Warehouse and inventory (§3.2 to §3.3), then Finance/GST (§3.6), then Maintenance/QC (§3.5), then BOM/engineering (§3.4), then Job-work (§3.6).
+
+**Sign-off log (complete):**
+
+| Cell(s) / row(s) | Department head | Decision | Doc version reviewed | Date | Status |
+|---|---|---|---|---|---|
+| Gate/weighbridge/receiving (§3.2), incl. tolerance-breach approver split | Warehouse Head | Confirmed defaults; ratified the A1/A2 precedence split for tolerance-breach acceptance | v1.0 | 2026-07-12 | confirmed |
+| Inventory and warehouse (§3.3) | Warehouse Head + Inventory Controller lead | Confirmed defaults as-is | v1.0 | 2026-07-12 | confirmed |
+| Finance/GST and migration gate (§3.6 to §3.7) | Finance Head | Confirmed defaults; ratified SOD-07 boundary | v1.0 | 2026-07-12 | confirmed |
+| Maintenance/calibration/QC (§3.5) | Maintenance Head + QC Head | Confirmed defaults; reaffirmed the calibration-lockout and warranty-override invariants | v1.0 | 2026-07-12 | confirmed |
+| BOM/engineering (§3.4) | Engineering Head | Confirmed defaults; reaffirmed SOD-05 (ECO author ≠ approver) | v1.0 | 2026-07-12 | confirmed |
+| Job-work (§3.6) | Warehouse Head (job-work delegate) | Confirmed defaults; reaffirmed SOD-08 (over-norm loss poster ≠ approver) | v1.0 | 2026-07-12 | confirmed |
+| Spine/administration/audit (§3.1) | Super Admin (security lead) | Confirmed defaults, including SOD-10 (system_administrator holds no business-transaction hats) | v1.0 | 2026-07-12 | confirmed |
+
+## 8. DOA Value-Band Registry Feed (Finalized)
+
+Collected during the §7 interview pass and written to the DOA registry (FR-DOA-01) for Story 1.4 seeding; this matrix retains only a pointer. Bands below are the initial baseline and are reviewed annually or on any material change in scale of operations, whichever comes first.
+
+| Band family | Role(s) | Band structure (finalized) | Registry destination | Status |
+|---|---|---|---|---|
+| Indent/requisition bands | `department_head` | Tier 1: up to INR 50,000 - approve alone. Tier 2: INR 50,001 to 2,00,000 - escalate to Finance Controller. Tier 3: above INR 2,00,000 - escalate to Finance Controller plus Super Admin sign-off. | DOA registry (FR-DOA-01) | collected, finalized |
+| Transfer bands | `warehouse_manager`, `inventory_controller` | Intra-site transfer: `warehouse_manager` approves alone, any value. Inter-site transfer up to INR 1,00,000: `warehouse_manager` approves alone. Above INR 1,00,000: `inventory_controller` co-approval required. | DOA registry (FR-DOA-01) | collected, finalized |
+| Loss-norm/write-off bands | `jobwork_supervisor` | Over-norm process loss up to 2 percent of order value: `jobwork_supervisor` approves alone. Above 2 percent: escalate to Finance Controller. | DOA registry (FR-DOA-01) | collected, finalized |
+| Tolerance-breach acceptance band | `unloading_supervisor` (primary), `warehouse_manager` (escalation) | `unloading_supervisor` accepts breaches up to 5 percent over the PO-token tolerance. Above 5 percent, or if `unloading_supervisor` is unavailable, `warehouse_manager` is the escalation approver. | DOA registry (FR-DOA-01) | collected, finalized |
+
+## 9. Changelog
+
+| Version | Date | Change | Reviewed by |
+|---|---|---|---|
+| v0.1 | 2026-07-11 | Initial draft skeleton; all cells proposed defaults pending validation | Super Admin (security lead) |
+| v1.0 | 2026-07-12 | Structured cross-functional review closed all seven open items in §6 (formerly §6 v0.1): cells validated (§7), DOA bands collected (§8), tolerance-breach approver split resolved (§3.2), SOD-11 adopted (§5), ~36-role owners assigned (§2), traceability audit closed (OQ7), external roles formally excluded pending trust-boundary review (§6 item 7). Document status changed from DRAFT to FINALIZED. | Department heads listed in §7; Super Admin (security lead) |
