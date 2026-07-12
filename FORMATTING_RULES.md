@@ -1,3 +1,19 @@
+## Before Starting Any Task That Creates or Edits a Markdown File
+
+Read this entire document first, before writing a single line. These rules
+are a precondition for drafting, not a cleanup pass applied afterward. An
+agent must:
+
+1. Load this file into context before creating a new `.md` file or editing
+   an existing one anywhere in this repository.
+2. Apply every rule below while drafting: heading structure, hyphens
+   instead of em dashes, no arrow characters or sequences in prose, table
+   header rows, link formatting, and caption and traceability
+   requirements.
+3. Only use the "Before Finishing" checklist at the end of this document as
+   a final verification pass, not as the first time these rules are
+   applied.
+
 ## Document Format
 
 1. Every document starts with exactly one H1 title as its first line.
