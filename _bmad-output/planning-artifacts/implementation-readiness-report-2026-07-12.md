@@ -237,7 +237,7 @@ These align with PRD §6.1/§6.2, where Tendering, Demand Planning, Logistics/TM
 
 ### Alignment Warnings (minor)
 
-1. **Frontend framework not fully pinned:** Architecture Stack lists "Next.js 16 **(or TanStack Start)**" as an unresolved either/or. UX assumes React + TailwindCSS (compatible with both), so no conflict — but the framework decision should be closed before frontend build.
+1. **Frontend framework** — ✅ **resolved 2026-07-12:** pinned to **Next.js 16** (React-based, consistent with UX's React + TailwindCSS assumption). Architecture and epics also re-conditioned for native-server / cloud-VPS self-hosted deployment.
 2. **Role-scoped dashboards depend on incomplete access matrix:** UX defines role-scoped dashboards (frontline/supervisory/admin tiers), but PRD §14 OQ7 flags the access matrix as covering only 7 of ~36 roles. The `access-matrix-frontline-draft-2026-07-11.md` addresses this (26 roles, 7 capability tables, 10 SoD constraints per project state) — UX dashboards should be reconciled against that matrix once finalized.
 
 ### UX Assessment Verdict
