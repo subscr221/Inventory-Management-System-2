@@ -45,6 +45,10 @@ export const config = {
     database: process.env['DB_NAME'] ?? 'inventory_events',
     user: process.env['DB_USER'] ?? 'app_user',
     password: process.env['DB_PASSWORD'] ?? 'app_password',
+    // DDL-only credentials (migrations, test schema setup) - never used for request-serving
+    // queries. app_user intentionally has no CREATE privilege on the public schema.
+    adminUser: process.env['DB_ADMIN_USER'] ?? 'admin_user',
+    adminPassword: process.env['DB_ADMIN_PASSWORD'] ?? 'admin_password',
     max: Number.isNaN(parsedMax) ? 20 : parsedMax,
     ssl: process.env['DB_SSL'] === 'true',
   },

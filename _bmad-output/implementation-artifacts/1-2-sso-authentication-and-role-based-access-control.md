@@ -278,7 +278,12 @@ Kilo (kilo-auto/frontier)
 - Verified `jose@6.2.3` is current on npm before adding it as a dependency.
 - Confirmed Node 24's built-in `--env-file` flag loads `.env.test` correctly for the test scripts (no `dotenv` dependency needed); validated via a standalone `tsx` config-load smoke test.
 - Verified all three config fail-fast guards fire correctly with targeted one-off `tsx -e` invocations: `AUTH_MODE=local` + `NODE_ENV=production` rejected; `AUTH_MODE=oidc` with missing `AUTH_JWKS_URI`/`AUTH_ISSUER`/`AUTH_AUDIENCE` rejected; missing `SCIM_BEARER_TOKEN` rejected in all modes.
-- Docker/PostgreSQL are not available in this environment (same limitation noted in Story 1.1). Integration tests are written and type/lint-clean but were not executed against a live database; they run via `docker compose up` then `npm run test`.
+- **Docker was subsequently installed and the full stack verified against real PostgreSQL** (Docker Engine 29.3.0 + Compose v5.1.1 inside a WSL2 Ubuntu 24.04 distro; Node 24.18.0 via `nvm`, since the WSL distro's system Node was v18). This surfaced and fixed four real bugs that static analysis (`tsc`/`eslint`) could not catch:
+  1. **`postgres:18.4`'s data-directory convention changed** - the image now requires the volume mounted at `/var/lib/postgresql` (major-version-subdirectory layout), not `/var/lib/postgresql/data` directly, or the container refuses to start. Fixed in `deploy/compose/docker-compose.yml` (both `postgres` and `postgres-standby` services).
+  2. **`archive_command` failed on every WAL segment** because `/var/lib/postgresql/wal_archive` never existed. Added `deploy/compose/init-wal-archive.sh`, mounted as a `docker-entrypoint-initdb.d` script (runs once, on first cluster init, alongside `init-db.sql`).
+  3. **Migrations and test schema setup were running as `app_user`**, which correctly has no CREATE/TRUNCATE privilege on the public schema by design (PostgreSQL 15+ no longer grants `CREATE` on `public` to `PUBLIC`) - every migration failed with `permission denied for schema public`. Added a dedicated `getAdminPool()`/`closeAdminPool()` in `src/config/db.ts` (new `DB_ADMIN_USER`/`DB_ADMIN_PASSWORD` config, defaulting to `admin_user`/`admin_password` to match `init-db.sql`), used by `src/events/migrate.ts` and both integration test suites' `before()`/`after()` hooks for DDL/TRUNCATE. The app's own runtime queries still go through the least-privilege `app_user` pool - unchanged.
+  4. **Idempotency-key conflict detection in `src/events/store.ts` (from Story 1.1) never actually fired** - it checked `err.detail.includes('uq_idempotency')`, but Postgres's unique-violation `detail` field only contains the conflicting key/value (e.g. `Key (idempotency_key)=(...) already exists.`), never the constraint name. The constraint name is in `err.constraint`. This silently degraded every duplicate-idempotency-key submission to a generic 500 instead of the specified 409 `DUPLICATE_EVENT` - caught because Story 1.1's own test for this (`idempotency key deduplication returns 409 with existing event_id`) failed once actually run against real Postgres. Fixed to check `err.constraint` directly.
+- After these fixes, ran the full suite against real Postgres: **all 7 Story 1.1 tests pass, all 8 Story 1.2 tests pass (15/15)**. Also ran a manual end-to-end smoke test of the live server (`node src/server.ts`) via `curl`: SCIM provisioning -> dev-token issuance -> authenticated event write -> authenticated event read, confirming the whole request path works outside the test harness too.
 - **Regression found and fixed:** Story 1.1's integration test suite (`test/integration/story-1-1.test.ts`) called the events endpoints directly with no auth, which now fails under this story's global auth requirement. Updated that test file to provision a wildcard-scoped test user via SCIM and attach a dev-token `Authorization` header to every request, preserving all of its original assertions and coverage.
 
 ### Completion Notes List
@@ -293,10 +298,11 @@ Kilo (kilo-auto/frontier)
 
 - `package.json` (modified - added `jose` dependency, updated `test`/`test:integration` scripts to use `--env-file=.env.test`)
 - `package-lock.json` (modified)
-- `.env.example` (modified - added AUTH_MODE/AUTH_JWKS_URI/AUTH_ISSUER/AUTH_AUDIENCE/AUTH_LOCAL_SECRET/SCIM_BEARER_TOKEN)
-- `.env.test` (new - test-only dummy credentials for `node --env-file`)
+- `.env.example` (modified - added AUTH_MODE/AUTH_JWKS_URI/AUTH_ISSUER/AUTH_AUDIENCE/AUTH_LOCAL_SECRET/SCIM_BEARER_TOKEN/DB_ADMIN_USER/DB_ADMIN_PASSWORD)
+- `.env.test` (new/modified - test-only dummy credentials for `node --env-file`, including admin DB credentials)
 - `.gitignore` (modified - allow `.env.test` through the `.env.*` ignore rule)
-- `src/config/index.ts` (modified - added `auth`/`scim` config sections and startup fail-fast validation)
+- `src/config/index.ts` (modified - added `auth`/`scim` config sections, `db.adminUser`/`db.adminPassword`, and startup fail-fast validation)
+- `src/config/db.ts` (modified - added `getAdminPool()`/`closeAdminPool()` for DDL-only connections, separate from the app's least-privilege runtime pool)
 - `src/middleware/auth.ts` (new)
 - `src/middleware/rbac.ts` (new)
 - `src/middleware/body.ts` (new)
@@ -308,12 +314,16 @@ Kilo (kilo-auto/frontier)
 - `src/api/v1/auth-dev.ts` (new)
 - `src/api/router.ts` (modified - global body-parse + auth interception, public allowlist, `patch()` method)
 - `src/api/v1/events.ts` (modified - use parsed body from request context, wrap handlers with `requireRole`)
-- `src/events/migrate.ts` (modified - runs both `events/domain_events.sql` and `read/projections/users.sql`)
+- `src/events/migrate.ts` (modified - runs both `events/domain_events.sql` and `read/projections/users.sql`, via `getAdminPool()`)
+- `src/events/store.ts` (modified - fixed idempotency/stream-conflict constraint detection to use `err.constraint` instead of the never-matching `err.detail.includes(...)` check)
 - `src/server.ts` (modified - register SCIM and conditional dev-token routes)
+- `deploy/compose/docker-compose.yml` (modified - fixed `postgres`/`postgres-standby` volume mount paths for the `postgres:18` data-directory convention)
 - `deploy/compose/init-db.sql` (modified - added `users`/`user_role_assignments` tables and grants)
+- `deploy/compose/init-wal-archive.sh` (new - creates the WAL archive directory `archive_command` depends on)
 - `test/integration/story-1-2.test.ts` (new)
-- `test/integration/story-1-1.test.ts` (modified - provisions a test user and attaches auth headers to fix the regression introduced by this story's global auth requirement)
+- `test/integration/story-1-1.test.ts` (modified - provisions a test user and attaches auth headers to fix the regression introduced by this story's global auth requirement; DDL/TRUNCATE now run via `getAdminPool()`)
 
 ## Change Log
 
 - 2026-07-12: Implemented SSO authentication (dual-mode: OIDC via `jose` + a gated local dev-token mode) and RBAC (module/function/location precedence) as global middleware in the Router; added SCIM-shaped provisioning/deprovisioning endpoints backed by a new `users`/`user_role_assignments` read-model projection; wired enforcement onto the Story 1.1 events endpoints; fixed a regression in Story 1.1's test suite caused by the new global auth requirement.
+- 2026-07-12: Installed Docker (WSL2 Ubuntu + Docker Engine) and verified the full stack against real PostgreSQL 18.4. Found and fixed 4 real defects only reachable with a live database: `postgres:18` data-directory mount convention, missing WAL archive directory, migrations/tests running DDL as the wrong (least-privilege) DB role, and a dead idempotency-conflict-detection branch inherited from Story 1.1 (`err.detail` vs `err.constraint`). All 15 integration tests (7 from Story 1.1, 8 from Story 1.2) now pass against real PostgreSQL; also manually smoke-tested the live server end-to-end via `curl`.

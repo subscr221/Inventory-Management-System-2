@@ -6,7 +6,7 @@ import { healthHandler } from '../../src/api/v1/health.js';
 import { postEventHandler, getStreamHandler } from '../../src/api/v1/events.js';
 import { provisionUserHandler, patchUserHandler } from '../../src/api/v1/scim.js';
 import { devTokenHandler } from '../../src/api/v1/auth-dev.js';
-import { getPool, closePool } from '../../src/config/db.js';
+import { closePool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
 import { config } from '../../src/config/index.js';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -60,12 +60,14 @@ describe('Story 1.1 Integration Tests', () => {
   let authHeaders: Record<string, string>;
 
   before(async () => {
-    const pool = getPool();
+    // DDL and TRUNCATE require admin_user - app_user has neither CREATE nor TRUNCATE
+    // privilege by design (see src/config/db.ts#getAdminPool).
+    const adminPool = getAdminPool();
     const domainEventsSql = readFileSync(resolve(__dirname, '../../events/domain_events.sql'), 'utf-8');
     const usersSql = readFileSync(resolve(__dirname, '../../read/projections/users.sql'), 'utf-8');
-    await pool.query(domainEventsSql);
-    await pool.query(usersSql);
-    await pool.query('TRUNCATE user_role_assignments, users, domain_events');
+    await adminPool.query(domainEventsSql);
+    await adminPool.query(usersSql);
+    await adminPool.query('TRUNCATE user_role_assignments, users, domain_events');
 
     const router = new Router();
     router.get('/api/v1/health', healthHandler);
@@ -117,6 +119,7 @@ describe('Story 1.1 Integration Tests', () => {
       server.close((err) => (err ? reject(err) : resolvePromise()));
     });
     await closePool();
+    await closeAdminPool();
   });
 
   it('AC1: health endpoint returns 200 with status ok and version 1', async () => {

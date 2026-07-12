@@ -1,21 +1,22 @@
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getPool, closePool } from '../config/db.js';
+import { getAdminPool, closeAdminPool } from '../config/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const MIGRATIONS = ['../../events/domain_events.sql', '../../read/projections/users.sql'];
 
 async function migrate(): Promise<void> {
-  const pool = getPool();
+  // DDL requires admin_user - app_user has no CREATE privilege on the public schema.
+  const pool = getAdminPool();
   for (const migration of MIGRATIONS) {
     const sql = readFileSync(resolve(__dirname, migration), 'utf-8');
     console.log(`Running migration: ${migration}`);
     await pool.query(sql);
   }
   console.log('Migration complete.');
-  await closePool();
+  await closeAdminPool();
 }
 
 migrate().catch((err) => {

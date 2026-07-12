@@ -179,20 +179,24 @@ export async function persistEvent(envelope: EventEnvelope): Promise<PersistedEv
     return mapRowToEvent(result.rows[0]!);
   } catch (err: unknown) {
     await client.query('ROLLBACK');
-    if (err && typeof err === 'object' && 'code' in err) {
-      if (err.code === '23505') {
-        const detail = (err as { detail?: string }).detail || '';
-        if (detail.includes('uq_idempotency')) {
-          // If we hit uq_idempotency, try to get the existing event_id
-          const existing = await client.query(
-            `SELECT event_id FROM domain_events WHERE idempotency_key = $1`,
-            [envelope.idempotency_key]
-          );
-          const existingEventId = existing.rows.length > 0 ? existing.rows[0]!['event_id'] : 'unknown';
-          throw new AppError(409, 'DUPLICATE_EVENT', 'Event with this idempotency_key already exists', { existing_event_id: existingEventId });
-        } else if (detail.includes('uq_stream_version')) {
-          throw new AppError(409, 'STREAM_CONFLICT', 'Event version conflict in stream', { stream_id: envelope.stream_id, event_version: envelope.event_version });
-        }
+    if (err && typeof err === 'object' && 'code' in err && err.code === '23505' && 'constraint' in err) {
+      // Postgres exposes the violated constraint name via err.constraint, not err.detail
+      // (err.detail only contains the conflicting key/value, e.g. "Key (idempotency_key)=(...) already exists.").
+      const constraint = (err as { constraint?: string }).constraint;
+      if (constraint === 'uq_idempotency') {
+        const existing = await client.query(
+          `SELECT event_id FROM domain_events WHERE idempotency_key = $1`,
+          [envelope.idempotency_key],
+        );
+        const existingEventId = existing.rows.length > 0 ? existing.rows[0]!['event_id'] : 'unknown';
+        throw new AppError(409, 'DUPLICATE_EVENT', 'Event with this idempotency_key already exists', {
+          existing_event_id: existingEventId,
+        });
+      } else if (constraint === 'uq_stream_version') {
+        throw new AppError(409, 'STREAM_CONFLICT', 'Event version conflict in stream', {
+          stream_id: envelope.stream_id,
+          event_version: envelope.event_version,
+        });
       }
     }
     throw err;
