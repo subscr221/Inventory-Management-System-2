@@ -183,17 +183,20 @@ graph TD
 
 ## Stack
 
-| Name | Version |
-| --- | --- |
-| Node.js | 24 LTS (Krypton) |
-| PostgreSQL | 18.4 |
-| PowerSync | Service 1.23.x |
-| Next.js (or TanStack Start) | 16 (or 1.x) |
-| TypeScript | 5.x |
-| AWS RDS Aurora PostgreSQL | latest (Multi-AZ) |
-| AWS ECS Fargate | latest |
-| AWS CloudFront | latest |
-| Docker | latest stable |
+| Name | Version | Role |
+| --- | --- | --- |
+| Node.js | 24 LTS (Krypton) | Runtime |
+| PostgreSQL | 18.4 (self-managed) | Event store + read models |
+| PowerSync | Service 1.23.x (self-hosted, Docker) | Edge sync engine |
+| Next.js | 16 (self-hosted: `output: 'standalone'` + Docker) | Frontend PWA + control-plane BFF |
+| TypeScript | 5.x | Language |
+| Docker + Docker Compose | latest stable | Container runtime / orchestration |
+| nginx or Caddy | latest stable | Reverse proxy + TLS termination |
+| pgBackRest (or equivalent) | latest stable | WAL archiving + base backups (RPO 1h) |
+
+**Frontend framework decision (pinned 2026-07-12):** **Next.js 16** — chosen over TanStack Start for a 36-month compliance-critical build: mature ecosystem, first-class PWA/offline support, documented PowerSync integration, and clean self-hosting on a native server / VPS via standalone output behind a reverse proxy. This closes the readiness finding UX-1.
+
+**Deployment-portability rule (conditioning principle):** No component may depend on a cloud-vendor-proprietary managed service. The stack is standard PostgreSQL, self-hostable PowerSync, and a containerized Node runtime, so the identical image set runs on a **native server, a cloud VPS, or (optionally) a managed-cloud profile** without code change. This is consistent with the PRD OQ1 principle ("no region-bound assumptions hard-coded in the data layer").
 
 ## Structural Seed
 
@@ -230,8 +233,10 @@ graph TD
     iam/                   # SSO and SCIM provisioning
   api/                     # REST API gateway
     v1/                    # Versioned API endpoints
-  deploy/                  # Infrastructure as code
-    aws/                   # ECS, RDS, CloudFront, IAM
+  deploy/                  # Infrastructure as code (vendor-neutral)
+    compose/               # Docker Compose stacks (app, PowerSync, Postgres, proxy)
+    provision/             # Host provisioning IaC — native server / cloud VPS
+    backup/                # pgBackRest / WAL-archive config
 ```
 
 ## Capability → Architecture Map
@@ -287,21 +292,27 @@ Every event in the system — edge or central — carries the following shape:
 
 ## Deployment Topology
 
-| Environment | Region | Infrastructure |
-| --- | --- | --- |
-| Production | AWS `ap-south-1` (Mumbai) | RDS Aurora PostgreSQL Multi-AZ, ECS Fargate (2 AZs), CloudFront CDN |
-| DR | AWS `ap-south-2` (Hyderabad) | Aurora Global Database warm standby, ECS service definitions replicated |
-| Staging | AWS `ap-south-1` (Mumbai) | Single-AZ RDS, single-AZ ECS |
-| Development | AWS `ap-south-1` (Mumbai) | Minimal — single-AZ, no CDN |
+**Primary profile — native server or cloud VPS (self-hosted, vendor-neutral):**
 
-**RTO:** 4 hours. **RPO:** 1 hour. The DR region is a failover target, not an active read replica.
+| Environment | Target | Infrastructure |
+| --- | --- | --- |
+| Production | Native server or cloud VPS (single node, or clustered for HA) | Dockerized containers (Next.js, PowerSync service, projection workers, notify) behind nginx/Caddy TLS; self-managed PostgreSQL 18 primary + streaming-replication standby; WAL archiving via pgBackRest; optional CDN/edge cache in front of static assets |
+| DR | Second native server / VPS (separate site or region) | PostgreSQL streaming-replication warm standby + archived WAL; container definitions replicated via IaC; failover target, not an active read replica |
+| Staging | Single VPS / native server | Single-node Docker Compose stack; single Postgres instance |
+| Development | Local workstation or dev VPS | Docker Compose; no CDN; ephemeral Postgres |
+
+**RTO:** 4 hours. **RPO:** 1 hour — met by streaming replication (near-real-time standby) plus WAL archiving with ≤1h archive cadence and daily base backups (NFR-DI-04). Moving off a managed Multi-AZ database makes these the operator's explicit responsibility: HA = primary+standby with automated failover; backups = pgBackRest to off-host storage.
+
+**Optional alternative profile — managed cloud (if the org later elects it):** the same container images and standard PostgreSQL run unchanged on a managed profile (e.g., managed PostgreSQL + a container service + CDN). This is a deployment choice, not an architecture change — no code depends on it.
+
+**Assumption reconciliation (A-07):** the source assumed "cloud-hosted (SaaS or private cloud), not on-premises." A native-server target may be on-premises or private-cloud; this deployment directive (2026-07-12) supersedes the "not on-premises" leaning of A-07. Data-residency and physical-security controls that a managed cloud would have provided become explicit operator responsibilities on a self-hosted native server.
 
 ## Retention Policy
 
 | Data Class | Retention | Storage |
 | --- | --- | --- |
 | Event store (all streams) | 8 financial years online | PostgreSQL |
-| Event store (archived) | Permanent | S3 Glacier; restorable to queryable within 48 hours |
+| Event store (archived) | Permanent | Object-storage cold/archive tier (S3-compatible or equivalent); restorable to queryable within 48 hours |
 | CoA / CoC documents | 7 years | Document store |
 | Gate passes | 8 years | Document store |
 | GST documents | 8 years | Document store |
@@ -335,7 +346,7 @@ The compliance spine is accepted when these five tests pass against a deployed s
 
 | Decision | Reason deferred | Revisit condition |
 | --- | --- | --- |
-| Framework choice (Next.js 16 vs TanStack Start 1.x) | Both are valid; the sync layer is abstracted from the framework | Before first frontend story; decision is reversible |
+| ~~Framework choice (Next.js 16 vs TanStack Start)~~ **DECIDED 2026-07-12: Next.js 16** | — | Resolved (see Stack); the sync layer remains framework-abstracted should it ever need revisiting |
 | Build sourcing (in-house, partner, hybrid) | Sponsor decision, not architecture | Before Phase 1 detailed design |
 | Pilot site selection | Sponsor decision; Ravi recommends ugliest-site-first | Before first go-live planning |
 | Budget envelope | Sponsor + finance decision | Before Phase 1 commitment |

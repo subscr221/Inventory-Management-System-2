@@ -259,8 +259,8 @@ This document provides the complete epic and story breakdown for the Materials &
 Architecture-derived technical requirements that affect implementation:
 
 - **Starter template / greenfield:** No starter template specified. Custom greenfield build on the architecture spine. The compliance spine must be built and acceptance-tested (via the Spine Acceptance Contract) before any module.
-- **Tech stack:** Node.js 24 LTS, PostgreSQL 18.4, PowerSync Service 1.23.x, Next.js 16 or TanStack Start 1.x, TypeScript 5.x, AWS RDS Aurora PostgreSQL (Multi-AZ), AWS ECS Fargate, AWS CloudFront, Docker.
-- **Deployment:** AWS `ap-south-1` Mumbai (production) and `ap-south-2` Hyderabad (DR). RTO 4h, RPO 1h.
+- **Tech stack:** Node.js 24 LTS, PostgreSQL 18.4 (self-managed), PowerSync Service 1.23.x (self-hosted), **Next.js 16** (pinned 2026-07-12; self-hosted standalone), TypeScript 5.x, Docker + Docker Compose, nginx/Caddy reverse proxy, pgBackRest for WAL archiving/backups.
+- **Deployment:** vendor-neutral, targeting a **native server or cloud VPS** (single node, or clustered for HA). Production = primary + streaming-replication standby; DR = warm standby on a second host/site. RTO 4h, RPO 1h. No dependency on any cloud-vendor-proprietary managed service; a managed-cloud profile remains an optional alternative (see architecture Deployment Topology).
 - **Event envelope:** Every event carries `event_id` (UUIDv4), `stream_type`, `stream_id`, `event_version` (monotonic sequence), `payload` (JSONB validated), and metadata (correlation, causation, actor, device, capture method, timestamps). No mutable domain state columns.
 - **Offline sync via PowerSync:** Edge devices write to local SQLite; PowerSync replicates to PostgreSQL central event store. Every edge command must carry an `idempotency_key` to prevent duplicate events (AD-16).
 - **Gate-token event chain (AD-2):** every inbound event chain starts with a gate token. All subsequent events (weighbridge, receiving, putaway) reference it.
@@ -268,12 +268,12 @@ Architecture-derived technical requirements that affect implementation:
 - **Compliance spine as platform layer (AD-12):** the edit log, DOA registry, business-stream tagging, event-sourced location, calibration lockout, and statutory document triggers are the bottom of the dependency graph and must be delivered first.
 - **Spine Acceptance Contract tests:** five tests against a deployed spine with no modules: Edit Log Integrity (FR-AC-13), DOA Registry Resolution (FR-DOA-01), Event-Sourced Location (INT-LOC-01), Calibration Lockout (FR-M-13), Business-Stream Tagging (FR-AC-01).
 - **Consistency conventions:** singular entity names; past-tense dot-separated event names; imperative PascalCase command names; UUIDv4 internal IDs; UTC timestamps with IST `business_date` field; uniform error envelope `{ error_code, message, details, trace_id }`; stable error codes list.
-- **Retention policy:** event store 8 financial years online (PostgreSQL) + permanent S3 Glacier archive; CoA/CoC 7 years; gate passes 8 years; GST documents 8 years; calibration certificates life + 3 years; DPDP PII crypto-shred on erasure.
+- **Retention policy:** event store 8 financial years online (PostgreSQL) + permanent archive to an object-storage cold/archive tier (S3-compatible or equivalent; restorable to queryable within 48h); CoA/CoC 7 years; gate passes 8 years; GST documents 8 years; calibration certificates life + 3 years; DPDP PII crypto-shred on erasure.
 - **API contract:** REST over HTTPS, URL-prefixed `/api/v1/`, SSO-gated, mutating operations logged with `trace_id`.
 - **ERP dual mastership (INT-ERP-01):** BOM structure outbound only; cost rates inbound only. Inbound conflicts create BOM Administrator exceptions, never overwrites.
 - **Data migration hard sequencing:** FR-M instrument records before FR-Q-04 calibration lockout goes live (C-12); BIS licence data in product master before FR-Q-11 (A-13); item-master governance and INT-ERP-01 before FR-B-06 BOM release (A-11); migrated balances signed off before any go-live (FR-DM-03).
 - **Phase 1 first go-live slice (pilot site):** Compliance spine + core inventory + frontline gate edge + job-work services. Remaining Phase 1 items follow in waves of 2 to 3 locations each.
-- **Deferred decisions (not in stories yet):** framework choice (Next.js 16 vs TanStack Start 1.x); build sourcing; pilot site selection; budget envelope; detailed per-module schema; GraphQL vs REST for reporting; meter ingestion automation (INT-MTR-01, Phase 2); EPR portal automation (INT-EPR-01, Phase 2).
+- **Deferred decisions (not in stories yet):** build sourcing; pilot site selection; budget envelope; detailed per-module schema; GraphQL vs REST for reporting; meter ingestion automation (INT-MTR-01, Phase 2); EPR portal automation (INT-EPR-01, Phase 2). _(Frontend framework resolved 2026-07-12: Next.js 16, self-hosted on native server / VPS — no longer deferred.)_
 
 ### UX Design Requirements
 
@@ -340,7 +340,7 @@ No UX design contract documents were found in `_bmad-output/planning-artifacts/u
 
 **NFR foundations delivered:** NFR-U-02 (WCAG 2.1 AA UI standards, Story 1.8), NFR-U-03 (i18n foundation, Story 1.8), NFR-P-04 Tier 1 (offline-first edge availability), NFR-SEC-01/02 (SSO; RBAC to module, function, and location scope); notification and alerting foundation (Story 1.11) consumed by FR-P-04 (UJ-IND-01), FR-M-04, FR-GP-09/10, FR-JW-14
 
-**Architecture delivered:** Node.js 24 LTS / PostgreSQL 18.4 / PowerSync 1.23.x / AWS ECS Fargate + Aurora Multi-AZ, INT-IAM-01/02 (SSO/SCIM), central event store schema (domain_events), offline edge PWA shell (SQLite schema + PowerSync client + "captured, pending sync" status shell), idempotency key infrastructure (AD-16), event envelope schema (AD-1, AD-12), CI/CD pipeline + branch protection (Story 1.10), notification/alerting service (Story 1.11)
+**Architecture delivered:** Node.js 24 LTS / PostgreSQL 18.4 (self-managed, primary + replica) / PowerSync 1.23.x (self-hosted) / Next.js 16 / Docker on a native server or cloud VPS, INT-IAM-01/02 (SSO/SCIM), central event store schema (domain_events), offline edge PWA shell (SQLite schema + PowerSync client + "captured, pending sync" status shell), idempotency key infrastructure (AD-16), event envelope schema (AD-1, AD-12), CI/CD pipeline + branch protection (Story 1.10), notification/alerting service (Story 1.11)
 
 **Depends on:** None (foundation)
 
@@ -579,16 +579,16 @@ Every transaction in the system is compliant by construction from day one. The s
 ### Story 1.1: Core Infrastructure Deployment and Event Store Schema
 
 As a platform engineer,
-I want the core infrastructure (PostgreSQL event store, Node.js API skeleton, Docker containers, AWS ECS + Aurora Multi-AZ deployment) running with a health endpoint and the versioned event envelope schema in place,
+I want the core infrastructure (PostgreSQL event store, Node.js API skeleton, Docker containers, self-hosted deployment on a native server or cloud VPS with primary + streaming-replication standby) running with a health endpoint and the versioned event envelope schema in place,
 So that every subsequent story has a stable, repeatable deployment target and every event persisted from day one carries the correct envelope fields.
 
 **Acceptance Criteria:**
 
-**Given** the IaC deployment pipeline runs against a clean AWS environment
+**Given** the IaC deployment pipeline runs against a clean target host (native server or cloud VPS)
 **When** the deployment completes
 **Then** `GET /api/v1/health` returns HTTP 200 with `{ "status": "ok", "version": "1" }`
 **And** the `domain_events` table exists in PostgreSQL with the full event envelope schema: `event_id` UUID PK, `stream_type`, `stream_id`, `event_type`, `event_version` int (per-stream monotonic), `payload` JSONB, `metadata` JSONB (containing `correlation_id`, `causation_id`, `actor`, `device_id`, `capture_method`, `occurred_at`, `synced_at`), `schema_version` int
-**And** all infrastructure (ECS, Aurora, CloudFront, IAM roles) is in version-controlled IaC under `deploy/aws/`
+**And** all infrastructure (app containers, self-managed PostgreSQL, reverse proxy, WAL archiving/backups) is in version-controlled IaC under `deploy/` — vendor-neutral, targeting a native server or cloud VPS
 
 **Given** a developer submits a test event with all required envelope fields
 **When** the event is persisted
@@ -868,13 +868,13 @@ So that the deployment path Stories 1.1 and 1.9 presuppose exists as repeatable 
 
 **Given** a merge into the main branch
 **When** the CD stage runs
-**Then** the build deploys to the staging environment through the IaC under `deploy/aws/` with zero manual steps, and promotion to production requires an explicit approval recorded with the approver's identity
+**Then** the build deploys to the staging environment through the IaC under `deploy/` with zero manual steps, and promotion to production requires an explicit approval recorded with the approver's identity
 
-**Given** a clean AWS account and the pipeline bootstrap IaC
+**Given** a clean target host (native server or cloud VPS) and the pipeline bootstrap IaC
 **When** the bootstrap is executed
-**Then** the pipeline itself (CI runners, artifact store, deployment roles) is provisioned entirely from version-controlled IaC — reproducible, never hand-built
+**Then** the pipeline itself (CI runners, artifact store, deployment credentials) is provisioned entirely from version-controlled IaC — reproducible, never hand-built
 
-**Requirements:** Additional Requirements (greenfield IaC, AWS deployment, `deploy/aws/`), NFR-E-04 (upgrades under 30 minutes); consumed by Stories 1.1 and 1.9
+**Requirements:** Additional Requirements (greenfield IaC, vendor-neutral native-server/VPS deployment, `deploy/`), NFR-E-04 (upgrades under 30 minutes); consumed by Stories 1.1 and 1.9
 
 ---
 
