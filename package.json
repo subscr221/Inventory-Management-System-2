@@ -10,14 +10,15 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
-    "test": "node --import tsx --test test/**/*.test.ts",
-    "test:integration": "node --import tsx --test test/integration/**/*.test.ts",
+    "test": "node --env-file=.env.test --import tsx --test test/**/*.test.ts",
+    "test:integration": "node --env-file=.env.test --import tsx --test test/integration/**/*.test.ts",
     "lint": "eslint src/ test/",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "db:migrate": "node --import tsx src/events/migrate.ts"
   },
   "dependencies": {
+    "jose": "^6.2.3",
     "pg": "^8.16.0"
   },
   "devDependencies": {

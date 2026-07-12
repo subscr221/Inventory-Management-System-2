@@ -3,12 +3,20 @@ import { config } from './config/index.js';
 import { Router } from './api/router.js';
 import { healthHandler } from './api/v1/health.js';
 import { postEventHandler, getStreamHandler } from './api/v1/events.js';
+import { provisionUserHandler, patchUserHandler } from './api/v1/scim.js';
+import { devTokenHandler } from './api/v1/auth-dev.js';
 
 const router = new Router();
 
 router.get('/api/v1/health', healthHandler);
 router.post('/api/v1/events', postEventHandler);
 router.get('/api/v1/events/:streamType/:streamId', getStreamHandler);
+router.post('/api/v1/scim/v2/Users', provisionUserHandler);
+router.patch('/api/v1/scim/v2/Users/:externalId', patchUserHandler);
+
+if (config.auth.mode === 'local') {
+  router.post('/api/v1/auth/dev-token', devTokenHandler);
+}
 
 const server = createServer((req, res) => {
   router.handle(req, res).catch((err) => {

@@ -1,38 +1,39 @@
 import type { RouteHandler } from '../../middleware/error.js';
-import type { IncomingMessage } from 'node:http';
-import { sendJson, sendError, AppError } from '../../middleware/error.js';
+import { sendJson, sendError } from '../../middleware/error.js';
 import { validateEnvelope, persistEvent, readStream } from '../../events/store.js';
+import { getParsedBody } from '../../middleware/context.js';
+import { requireRole } from '../../middleware/rbac.js';
 
-const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB
-
-async function readBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let totalLength = 0;
-  for await (const chunk of req) {
-    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-    totalLength += buffer.length;
-    if (totalLength > MAX_BODY_SIZE) {
-      throw new AppError(413, 'PAYLOAD_TOO_LARGE', 'Request body too large');
-    }
-    chunks.push(buffer);
+function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
+  if (typeof body === 'object' && body !== null) {
+    const streamType = (body as Record<string, unknown>)['stream_type'];
+    if (typeof streamType === 'string') return streamType;
   }
-  const raw = Buffer.concat(chunks).toString('utf-8');
-  if (!raw) return undefined;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    throw new AppError(400, 'INVALID_JSON', 'Body is not valid JSON');
-  }
+  return '';
 }
 
-export const postEventHandler: RouteHandler = async (req, res, _params) => {
-  const body = await readBody(req);
+function resolveLocationFromBody(_params: Record<string, string>, body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined;
+  const metadata = (body as Record<string, unknown>)['metadata'];
+  if (typeof metadata !== 'object' || metadata === null) return undefined;
+  const actor = (metadata as Record<string, unknown>)['actor'];
+  if (typeof actor !== 'object' || actor === null) return undefined;
+  const locationId = (actor as Record<string, unknown>)['location_id'];
+  return typeof locationId === 'string' ? locationId : undefined;
+}
+
+function resolveModuleFromParams(params: Record<string, string>): string {
+  return params['streamType'] ?? '';
+}
+
+const postEventBase: RouteHandler = async (req, res, _params) => {
+  const body = getParsedBody(req);
   validateEnvelope(body);
   const persisted = await persistEvent(body);
   sendJson(res, 201, persisted);
 };
 
-export const getStreamHandler: RouteHandler = async (_req, res, params) => {
+const getStreamBase: RouteHandler = async (_req, res, params) => {
   const streamType = params['streamType'];
   const streamId = params['streamId'];
 
@@ -49,3 +50,14 @@ export const getStreamHandler: RouteHandler = async (_req, res, params) => {
   const events = await readStream(streamType, streamId);
   sendJson(res, 200, { events });
 };
+
+export const postEventHandler: RouteHandler = requireRole({
+  module: resolveModuleFromBody,
+  functionScope: 'write',
+  locationId: resolveLocationFromBody,
+})(postEventBase);
+
+export const getStreamHandler: RouteHandler = requireRole({
+  module: resolveModuleFromParams,
+  functionScope: 'read',
+})(getStreamBase);

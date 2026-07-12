@@ -4,7 +4,7 @@ baseline_commit: 7c60e010533b8b2cce1874334342041ce80681bc
 
 # Story 1.2: SSO Authentication and Role-Based Access Control
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -40,35 +40,35 @@ so that every operation is attributable to a specific user with a specific role 
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Auth middleware core - JWT verification (AC: 1, 5)
-  - [ ] 1.1 Add `jose` dependency (v6.x) to `package.json` - zero-dependency JWT/JWKS library
-  - [ ] 1.2 Extend `src/config/index.ts` with an `auth` section: `AUTH_MODE` (`oidc` default | `local`), `AUTH_JWKS_URI`, `AUTH_ISSUER`, `AUTH_AUDIENCE` (required when `oidc`), `AUTH_LOCAL_SECRET` (required when `local`, no default value)
-  - [ ] 1.3 Fail fast at startup: if `AUTH_MODE=oidc` and `AUTH_JWKS_URI`/`AUTH_ISSUER`/`AUTH_AUDIENCE` missing, throw and exit; if `NODE_ENV=production` and `AUTH_MODE=local`, throw and exit (dev-only mode must never run in production)
-  - [ ] 1.4 Implement `src/middleware/auth.ts`: verify `Authorization: Bearer <token>` via `jose.createRemoteJWKSet` + `jwtVerify` (oidc mode) or `jose.jwtVerify` with an HMAC secret key (local mode); extract `sub` claim
-  - [ ] 1.5 Implement `src/api/v1/auth-dev.ts`: `POST /api/v1/auth/dev-token` issues an HS256 test JWT for a given `sub` - registered ONLY when `AUTH_MODE=local`
-  - [ ] 1.6 Missing, malformed, or expired token -> 401 `UNAUTHORIZED` via the existing `AppError`/`sendError` envelope
-- [ ] Task 2: User directory projection and lookup (AC: 5, 6)
-  - [ ] 2.1 Create `read/projections/users.sql`: `users` table (`user_id` UUID PK, `external_id` TEXT UNIQUE, `email`, `display_name`, `active` BOOLEAN, `provisioned_at`, `deprovisioned_at`) and `user_role_assignments` table (`assignment_id` UUID PK, `user_id` FK, `role`, `module`, `function_scope` CHECK IN ('read','write'), `location_id`, `created_at`)
-  - [ ] 2.2 Implement `src/read/projections/users.ts`: `upsertUser`, `replaceRoleAssignments`, `deactivateUser`, `lookupActiveUserWithRoles(externalId)`
-  - [ ] 2.3 Extend `src/events/migrate.ts` to also apply `read/projections/users.sql`
-  - [ ] 2.4 Update `deploy/compose/init-db.sql` with the same table definitions and `app_user` grants (INSERT/SELECT/UPDATE on `users` and `user_role_assignments`)
-  - [ ] 2.5 Wire `src/middleware/auth.ts` to look up the user by `sub` fresh on every request (no caching) -> 401 `UNAUTHORIZED` if not found or `active = false`
-- [ ] Task 3: RBAC enforcement middleware (AC: 1, 2, 3, 4)
-  - [ ] 3.1 Implement `src/middleware/rbac.ts`: `requireRole({ module, functionScope, locationId? })` higher-order function checking precedence module -> function -> location, returning `MODULE_ACCESS_DENIED` / `FUNCTION_ACCESS_DENIED` / `LOCATION_ACCESS_DENIED` (403) as appropriate
-  - [ ] 3.2 Implement `src/middleware/body.ts`: shared JSON body parser (extracted from `src/api/v1/events.ts`) with the existing 10MB size limit and malformed-JSON handling
-  - [ ] 3.3 Update `src/api/router.ts`: parse body once for POST/PUT/PATCH and attach to `req`; run global auth check before route dispatch for every path except an explicit public allowlist (`/api/v1/health`, `/api/v1/scim/v2/*`, `/api/v1/auth/dev-token`)
-  - [ ] 3.4 Update `src/api/v1/events.ts`: read parsed body from `req` instead of calling body-reading logic directly; wrap `postEventHandler` with `requireRole({ module: body.stream_type, functionScope: 'write', locationId: body.metadata.actor.location_id })`; wrap `getStreamHandler` with `requireRole({ module: params.streamType, functionScope: 'read' })`
-- [ ] Task 4: SCIM provisioning and deprovisioning (AC: 5, 6)
-  - [ ] 4.1 Implement `src/adapters/iam/scim.ts`: `provisionUser` (create user + role rows, emit `user.provisioned` event via the Story 1.1 event store), `updateUserRoles` (emit `user.roles_updated`), `deprovisionUser` (deactivate, emit `user.deprovisioned`)
-  - [ ] 4.2 Implement `src/api/v1/scim.ts`: `POST /api/v1/scim/v2/Users` (provision) and `PATCH /api/v1/scim/v2/Users/:externalId` (update roles or deactivate); both authenticated via a static `SCIM_BEARER_TOKEN` (required env var, no default)
-  - [ ] 4.3 Register SCIM and dev-token routes in `src/server.ts`
-- [ ] Task 5: Integration tests and verification (AC: 1, 2, 3, 4, 5, 6)
-  - [ ] 5.1 Write integration test: no `Authorization` header -> 401 `UNAUTHORIZED`
-  - [ ] 5.2 Write integration test: valid token, role location-scoped to site-A UUID, write event targeting a different location UUID -> 403 `LOCATION_ACCESS_DENIED`
-  - [ ] 5.3 Write integration test: valid token, zero role assignments for the target module -> 403 `MODULE_ACCESS_DENIED`
-  - [ ] 5.4 Write integration test: valid token, role with `function_scope: 'read'` on the module, POST (write) attempted -> 403 `FUNCTION_ACCESS_DENIED`
-  - [ ] 5.5 Write integration test: SCIM-provisioned user obtains a dev token and successfully writes an event in-scope with no manual admin step
-  - [ ] 5.6 Write integration test: SCIM deprovisions a user; the same previously-valid token now returns 401 `UNAUTHORIZED` on the next request
+- [x] Task 1: Auth middleware core - JWT verification (AC: 1, 5)
+  - [x] 1.1 Add `jose` dependency (v6.x) to `package.json` - zero-dependency JWT/JWKS library
+  - [x] 1.2 Extend `src/config/index.ts` with an `auth` section: `AUTH_MODE` (`oidc` default | `local`), `AUTH_JWKS_URI`, `AUTH_ISSUER`, `AUTH_AUDIENCE` (required when `oidc`), `AUTH_LOCAL_SECRET` (required when `local`, no default value)
+  - [x] 1.3 Fail fast at startup: if `AUTH_MODE=oidc` and `AUTH_JWKS_URI`/`AUTH_ISSUER`/`AUTH_AUDIENCE` missing, throw and exit; if `NODE_ENV=production` and `AUTH_MODE=local`, throw and exit (dev-only mode must never run in production)
+  - [x] 1.4 Implement `src/middleware/auth.ts`: verify `Authorization: Bearer <token>` via `jose.createRemoteJWKSet` + `jwtVerify` (oidc mode) or `jose.jwtVerify` with an HMAC secret key (local mode); extract `sub` claim
+  - [x] 1.5 Implement `src/api/v1/auth-dev.ts`: `POST /api/v1/auth/dev-token` issues an HS256 test JWT for a given `sub` - registered ONLY when `AUTH_MODE=local`
+  - [x] 1.6 Missing, malformed, or expired token -> 401 `UNAUTHORIZED` via the existing `AppError`/`sendError` envelope
+- [x] Task 2: User directory projection and lookup (AC: 5, 6)
+  - [x] 2.1 Create `read/projections/users.sql`: `users` table (`user_id` UUID PK, `external_id` TEXT UNIQUE, `email`, `display_name`, `active` BOOLEAN, `provisioned_at`, `deprovisioned_at`) and `user_role_assignments` table (`assignment_id` UUID PK, `user_id` FK, `role`, `module`, `function_scope` CHECK IN ('read','write'), `location_id`, `created_at`)
+  - [x] 2.2 Implement `src/read/projections/users.ts`: `upsertUser`, `replaceRoleAssignments`, `deactivateUser`, `lookupActiveUserWithRoles(externalId)`
+  - [x] 2.3 Extend `src/events/migrate.ts` to also apply `read/projections/users.sql`
+  - [x] 2.4 Update `deploy/compose/init-db.sql` with the same table definitions and `app_user` grants (INSERT/SELECT/UPDATE on `users` and `user_role_assignments`)
+  - [x] 2.5 Wire `src/middleware/auth.ts` to look up the user by `sub` fresh on every request (no caching) -> 401 `UNAUTHORIZED` if not found or `active = false`
+- [x] Task 3: RBAC enforcement middleware (AC: 1, 2, 3, 4)
+  - [x] 3.1 Implement `src/middleware/rbac.ts`: `requireRole({ module, functionScope, locationId? })` higher-order function checking precedence module -> function -> location, returning `MODULE_ACCESS_DENIED` / `FUNCTION_ACCESS_DENIED` / `LOCATION_ACCESS_DENIED` (403) as appropriate
+  - [x] 3.2 Implement `src/middleware/body.ts`: shared JSON body parser (extracted from `src/api/v1/events.ts`) with the existing 10MB size limit and malformed-JSON handling
+  - [x] 3.3 Update `src/api/router.ts`: parse body once for POST/PUT/PATCH and attach to `req`; run global auth check before route dispatch for every path except an explicit public allowlist (`/api/v1/health`, `/api/v1/scim/v2/*`, `/api/v1/auth/dev-token`)
+  - [x] 3.4 Update `src/api/v1/events.ts`: read parsed body from `req` instead of calling body-reading logic directly; wrap `postEventHandler` with `requireRole({ module: body.stream_type, functionScope: 'write', locationId: body.metadata.actor.location_id })`; wrap `getStreamHandler` with `requireRole({ module: params.streamType, functionScope: 'read' })`
+- [x] Task 4: SCIM provisioning and deprovisioning (AC: 5, 6)
+  - [x] 4.1 Implement `src/adapters/iam/scim.ts`: `provisionUser` (create user + role rows, emit `user.provisioned` event via the Story 1.1 event store), `updateUserRoles` (emit `user.roles_updated`), `deprovisionUser` (deactivate, emit `user.deprovisioned`)
+  - [x] 4.2 Implement `src/api/v1/scim.ts`: `POST /api/v1/scim/v2/Users` (provision) and `PATCH /api/v1/scim/v2/Users/:externalId` (update roles or deactivate); both authenticated via a static `SCIM_BEARER_TOKEN` (required env var, no default)
+  - [x] 4.3 Register SCIM and dev-token routes in `src/server.ts`
+- [x] Task 5: Integration tests and verification (AC: 1, 2, 3, 4, 5, 6)
+  - [x] 5.1 Write integration test: no `Authorization` header -> 401 `UNAUTHORIZED`
+  - [x] 5.2 Write integration test: valid token, role location-scoped to site-A UUID, write event targeting a different location UUID -> 403 `LOCATION_ACCESS_DENIED`
+  - [x] 5.3 Write integration test: valid token, zero role assignments for the target module -> 403 `MODULE_ACCESS_DENIED`
+  - [x] 5.4 Write integration test: valid token, role with `function_scope: 'read'` on the module, POST (write) attempted -> 403 `FUNCTION_ACCESS_DENIED`
+  - [x] 5.5 Write integration test: SCIM-provisioned user obtains a dev token and successfully writes an event in-scope with no manual admin step
+  - [x] 5.6 Write integration test: SCIM deprovisions a user; the same previously-valid token now returns 401 `UNAUTHORIZED` on the next request
 
 ## Dev Notes
 
@@ -271,16 +271,49 @@ No planning document specifies which real IdP (Okta, Entra ID, Google Workspace,
 
 ### Agent Model Used
 
-_(to be filled by dev agent)_
+Kilo (kilo-auto/frontier)
 
 ### Debug Log References
 
-_(to be filled during implementation)_
+- Verified `jose@6.2.3` is current on npm before adding it as a dependency.
+- Confirmed Node 24's built-in `--env-file` flag loads `.env.test` correctly for the test scripts (no `dotenv` dependency needed); validated via a standalone `tsx` config-load smoke test.
+- Verified all three config fail-fast guards fire correctly with targeted one-off `tsx -e` invocations: `AUTH_MODE=local` + `NODE_ENV=production` rejected; `AUTH_MODE=oidc` with missing `AUTH_JWKS_URI`/`AUTH_ISSUER`/`AUTH_AUDIENCE` rejected; missing `SCIM_BEARER_TOKEN` rejected in all modes.
+- Docker/PostgreSQL are not available in this environment (same limitation noted in Story 1.1). Integration tests are written and type/lint-clean but were not executed against a live database; they run via `docker compose up` then `npm run test`.
+- **Regression found and fixed:** Story 1.1's integration test suite (`test/integration/story-1-1.test.ts`) called the events endpoints directly with no auth, which now fails under this story's global auth requirement. Updated that test file to provision a wildcard-scoped test user via SCIM and attach a dev-token `Authorization` header to every request, preserving all of its original assertions and coverage.
 
 ### Completion Notes List
 
-_(to be filled during implementation)_
+- **Task 1:** Added `jose@^6.2.3`. Config (`src/config/index.ts`) now fails fast at import time on three conditions: `AUTH_MODE=local` combined with `NODE_ENV=production`; `AUTH_MODE=oidc` missing any of `AUTH_JWKS_URI`/`AUTH_ISSUER`/`AUTH_AUDIENCE`; and `SCIM_BEARER_TOKEN` unset in any mode - no default values for either secret. `src/middleware/auth.ts` implements both verification paths (`createRemoteJWKSet`+`jwtVerify` for oidc, HMAC `jwtVerify` for local) behind one `authenticateRequest()` function, plus `issueDevToken()` (local-mode only, defensively re-checked at call time). `src/api/v1/auth-dev.ts` exposes `POST /api/v1/auth/dev-token`, registered in `server.ts` only when `config.auth.mode === 'local'`.
+- **Task 2:** `read/projections/users.sql` creates `users` and `user_role_assignments` (function_scope CHECK'd to `'read'`/`'write'`). `src/read/projections/users.ts` provides `upsertUser` (insert-or-reactivate via `ON CONFLICT (external_id)`), `replaceRoleAssignments` (transactional delete+reinsert), `deactivateUser`, `lookupActiveUserWithRoles` (the only read path the auth middleware uses, always fresh, `active = true` filter built into the query), and `getUserIdByExternalId`. `src/events/migrate.ts` now iterates a `MIGRATIONS` array covering both SQL files. `deploy/compose/init-db.sql` mirrors the schema and grants `app_user` INSERT/SELECT/UPDATE on `users` and INSERT/SELECT/DELETE on `user_role_assignments` (matching the delete+reinsert pattern).
+- **Task 3:** `src/middleware/rbac.ts`'s `requireRole()` implements the documented module -> function -> location precedence, reading the auth context and parsed body via the new `src/middleware/context.ts` (a small typed-attachment helper over `IncomingMessage`, avoiding a wider request-augmentation dependency). `src/middleware/body.ts` extracts Story 1.1's inline body-reading logic verbatim (same 10MB limit, same `INVALID_JSON`/`PAYLOAD_TOO_LARGE` codes) for reuse by the router. `src/api/router.ts` now parses the body once for POST/PUT/PATCH and runs the global auth check for every path except the public allowlist (health, SCIM, dev-token) before route dispatch; added a `patch()` registration method alongside the existing `get()`/`post()`. `src/api/v1/events.ts` was refactored to read `getParsedBody(req)` instead of calling body-reading logic itself, and both handlers are now composed with `requireRole()` (module resolved from `stream_type`/route param, function scope from HTTP semantics, location resolved from `metadata.actor.location_id` for the write path only).
+- **Task 4:** `src/adapters/iam/scim.ts` reuses `persistEvent()` directly (`stream_type: 'user'`) to emit `user.provisioned`/`user.roles_updated`/`user.deprovisioned`, using a nil-UUID system-actor sentinel for the envelope's required `metadata.actor` fields (documented in-code) rather than inventing a non-UUID wildcard that would break the established envelope contract. `src/api/v1/scim.ts` implements the minimal `POST /Users` / `PATCH /Users/:externalId` surface with its own static bearer-token check (independent of user JWT auth) and explicit input validation (`INVALID_SCIM_REQUEST` for malformed bodies/roles).
+- **Task 5:** New `test/integration/story-1-2.test.ts` covers all 6 ACs plus two supporting checks (SCIM bearer-token rejection, health endpoint remains public). Also fixed the Story 1.1 test suite regression described above.
 
 ### File List
 
-_(to be filled during implementation)_
+- `package.json` (modified - added `jose` dependency, updated `test`/`test:integration` scripts to use `--env-file=.env.test`)
+- `package-lock.json` (modified)
+- `.env.example` (modified - added AUTH_MODE/AUTH_JWKS_URI/AUTH_ISSUER/AUTH_AUDIENCE/AUTH_LOCAL_SECRET/SCIM_BEARER_TOKEN)
+- `.env.test` (new - test-only dummy credentials for `node --env-file`)
+- `.gitignore` (modified - allow `.env.test` through the `.env.*` ignore rule)
+- `src/config/index.ts` (modified - added `auth`/`scim` config sections and startup fail-fast validation)
+- `src/middleware/auth.ts` (new)
+- `src/middleware/rbac.ts` (new)
+- `src/middleware/body.ts` (new)
+- `src/middleware/context.ts` (new)
+- `read/projections/users.sql` (new)
+- `src/read/projections/users.ts` (new)
+- `src/adapters/iam/scim.ts` (new)
+- `src/api/v1/scim.ts` (new)
+- `src/api/v1/auth-dev.ts` (new)
+- `src/api/router.ts` (modified - global body-parse + auth interception, public allowlist, `patch()` method)
+- `src/api/v1/events.ts` (modified - use parsed body from request context, wrap handlers with `requireRole`)
+- `src/events/migrate.ts` (modified - runs both `events/domain_events.sql` and `read/projections/users.sql`)
+- `src/server.ts` (modified - register SCIM and conditional dev-token routes)
+- `deploy/compose/init-db.sql` (modified - added `users`/`user_role_assignments` tables and grants)
+- `test/integration/story-1-2.test.ts` (new)
+- `test/integration/story-1-1.test.ts` (modified - provisions a test user and attaches auth headers to fix the regression introduced by this story's global auth requirement)
+
+## Change Log
+
+- 2026-07-12: Implemented SSO authentication (dual-mode: OIDC via `jose` + a gated local dev-token mode) and RBAC (module/function/location precedence) as global middleware in the Router; added SCIM-shaped provisioning/deprovisioning endpoints backed by a new `users`/`user_role_assignments` read-model projection; wired enforcement onto the Story 1.1 events endpoints; fixed a regression in Story 1.1's test suite caused by the new global auth requirement.

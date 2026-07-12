@@ -1,12 +1,30 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { RouteHandler } from '../middleware/error.js';
-import { sendError, withErrorHandler } from '../middleware/error.js';
+import { AppError, sendError, withErrorHandler } from '../middleware/error.js';
+import { readJsonBody } from '../middleware/body.js';
+import { authenticateRequest } from '../middleware/auth.js';
+import { setParsedBody, setAuthContext } from '../middleware/context.js';
 
 interface Route {
   method: string;
   pattern: RegExp;
   paramNames: string[];
   handler: RouteHandler;
+}
+
+const BODY_BEARING_METHODS = new Set(['POST', 'PUT', 'PATCH']);
+
+// Paths that do not require a user SSO session. SCIM authenticates via its own static
+// bearer token inside the handler; the dev-token endpoint is how a token is obtained in
+// the first place, so it cannot itself require one.
+const PUBLIC_PATH_PATTERNS: RegExp[] = [
+  /^\/api\/v1\/health$/,
+  /^\/api\/v1\/auth\/dev-token$/,
+  /^\/api\/v1\/scim\/v2\/Users(\/.*)?$/,
+];
+
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
 }
 
 export class Router {
@@ -18,6 +36,10 @@ export class Router {
 
   post(path: string, handler: RouteHandler): void {
     this.addRoute('POST', path, handler);
+  }
+
+  patch(path: string, handler: RouteHandler): void {
+    this.addRoute('PATCH', path, handler);
   }
 
   private addRoute(method: string, path: string, handler: RouteHandler): void {
@@ -43,6 +65,34 @@ export class Router {
       return;
     }
     const method = req.method ?? 'GET';
+
+    if (BODY_BEARING_METHODS.has(method)) {
+      try {
+        const body = await readJsonBody(req);
+        setParsedBody(req, body);
+      } catch (err) {
+        if (err instanceof AppError) {
+          sendError(res, err.statusCode, err.errorCode, err.message, err.details);
+          return;
+        }
+        sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
+        return;
+      }
+    }
+
+    if (!isPublicPath(url.pathname)) {
+      try {
+        const authContext = await authenticateRequest(req);
+        setAuthContext(req, authContext);
+      } catch (err) {
+        if (err instanceof AppError) {
+          sendError(res, err.statusCode, err.errorCode, err.message, err.details);
+          return;
+        }
+        sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
+        return;
+      }
+    }
 
     for (const route of this.routes) {
       if (route.method !== method) continue;

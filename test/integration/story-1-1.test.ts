@@ -4,7 +4,10 @@ import { createServer, request as httpRequest, type Server, type IncomingMessage
 import { Router } from '../../src/api/router.js';
 import { healthHandler } from '../../src/api/v1/health.js';
 import { postEventHandler, getStreamHandler } from '../../src/api/v1/events.js';
+import { provisionUserHandler, patchUserHandler } from '../../src/api/v1/scim.js';
+import { devTokenHandler } from '../../src/api/v1/auth-dev.js';
 import { getPool, closePool } from '../../src/config/db.js';
+import { config } from '../../src/config/index.js';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,8 +19,9 @@ function makeRequest(
   method: string,
   path: string,
   body?: unknown,
+  headers?: Record<string, string>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
       {
@@ -28,6 +32,7 @@ function makeRequest(
         headers: {
           'Content-Type': 'application/json',
           ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+          ...headers,
         },
       },
       (res: IncomingMessage) => {
@@ -35,7 +40,7 @@ function makeRequest(
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('end', () => {
           const raw = Buffer.concat(chunks).toString('utf-8');
-          resolve({
+          resolvePromise({
             status: res.statusCode ?? 0,
             body: raw ? JSON.parse(raw) : {},
           });
@@ -52,17 +57,23 @@ const TEST_PORT = 3999;
 
 describe('Story 1.1 Integration Tests', () => {
   let server: Server;
+  let authHeaders: Record<string, string>;
 
   before(async () => {
     const pool = getPool();
-    const sql = readFileSync(resolve(__dirname, '../../events/domain_events.sql'), 'utf-8');
-    await pool.query(sql);
-    await pool.query('TRUNCATE domain_events');
+    const domainEventsSql = readFileSync(resolve(__dirname, '../../events/domain_events.sql'), 'utf-8');
+    const usersSql = readFileSync(resolve(__dirname, '../../read/projections/users.sql'), 'utf-8');
+    await pool.query(domainEventsSql);
+    await pool.query(usersSql);
+    await pool.query('TRUNCATE user_role_assignments, users, domain_events');
 
     const router = new Router();
     router.get('/api/v1/health', healthHandler);
     router.post('/api/v1/events', postEventHandler);
     router.get('/api/v1/events/:streamType/:streamId', getStreamHandler);
+    router.post('/api/v1/scim/v2/Users', provisionUserHandler);
+    router.patch('/api/v1/scim/v2/Users/:externalId', patchUserHandler);
+    router.post('/api/v1/auth/dev-token', devTokenHandler);
 
     server = createServer((req, res) => {
       router.handle(req, res).catch(() => {
@@ -73,14 +84,37 @@ describe('Story 1.1 Integration Tests', () => {
       });
     });
 
-    await new Promise<void>((resolve) => {
-      server.listen(TEST_PORT, () => resolve());
+    await new Promise<void>((resolvePromise) => {
+      server.listen(TEST_PORT, () => resolvePromise());
     });
+
+    // Story 1.2 gates every endpoint behind SSO auth + RBAC. These tests exercise the
+    // Story 1.1 event write/read path itself, so provision a wildcard-scoped test user
+    // (all modules, write, all locations) to keep this suite focused on event-store behavior.
+    const scimHeaders = { Authorization: `Bearer ${config.scim.bearerToken}` };
+    const provisionRes = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/scim/v2/Users',
+      {
+        externalId: 'story-1-1-test-user',
+        email: 'story-1-1-test-user@example.test',
+        roles: [{ role: 'test_all_access', module: '*', functionScope: 'write', locationId: '*' }],
+      },
+      scimHeaders,
+    );
+    assert.equal(provisionRes.status, 201, `test user provisioning failed: ${JSON.stringify(provisionRes.body)}`);
+
+    const tokenRes = await makeRequest(TEST_PORT, 'POST', '/api/v1/auth/dev-token', {
+      sub: 'story-1-1-test-user',
+    });
+    assert.equal(tokenRes.status, 201, `dev-token issuance failed: ${JSON.stringify(tokenRes.body)}`);
+    authHeaders = { Authorization: `Bearer ${tokenRes.body['token'] as string}` };
   });
 
   after(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.close((err) => (err ? reject(err) : resolve()));
+    await new Promise<void>((resolvePromise, reject) => {
+      server.close((err) => (err ? reject(err) : resolvePromise()));
     });
     await closePool();
   });
@@ -110,7 +144,7 @@ describe('Story 1.1 Integration Tests', () => {
       },
     };
 
-    const postRes = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', event);
+    const postRes = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', event, authHeaders);
     assert.equal(postRes.status, 201);
     assert.ok(postRes.body['event_id']);
     assert.equal(postRes.body['event_version'], 1);
@@ -126,11 +160,11 @@ describe('Story 1.1 Integration Tests', () => {
       },
     };
 
-    const postRes2 = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', event2);
+    const postRes2 = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', event2, authHeaders);
     assert.equal(postRes2.status, 201);
     assert.equal(postRes2.body['event_version'], 2);
 
-    const getRes = await makeRequest(TEST_PORT, 'GET', `/api/v1/events/inventory/${streamId}`);
+    const getRes = await makeRequest(TEST_PORT, 'GET', `/api/v1/events/inventory/${streamId}`, undefined, authHeaders);
     assert.equal(getRes.status, 200);
     const events = getRes.body['events'] as Array<Record<string, unknown>>;
     assert.equal(events.length, 2);
@@ -139,44 +173,62 @@ describe('Story 1.1 Integration Tests', () => {
   });
 
   it('AC3: invalid envelope rejected with INVALID_EVENT_ENVELOPE', async () => {
-    const res = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', {
-      stream_type: 'inventory',
-    });
+    const res = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'inventory',
+      },
+      authHeaders,
+    );
     assert.equal(res.status, 400);
     assert.equal(res.body['error_code'], 'INVALID_EVENT_ENVELOPE');
     assert.ok(res.body['trace_id']);
   });
 
   it('AC3: missing actor rejected with INVALID_EVENT_ENVELOPE', async () => {
-    const res = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', {
-      stream_type: 'inventory',
-      stream_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      event_type: 'stock.received',
-      payload: { sku: 'RM-0042' },
-      metadata: {
-        correlation_id: '11111111-2222-3333-4444-555555555555',
-        occurred_at: new Date().toISOString(),
+    const res = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'inventory',
+        stream_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        event_type: 'stock.received',
+        payload: { sku: 'RM-0042' },
+        metadata: {
+          correlation_id: '11111111-2222-3333-4444-555555555555',
+          occurred_at: new Date().toISOString(),
+        },
       },
-    });
+      authHeaders,
+    );
     assert.equal(res.status, 400);
     assert.equal(res.body['error_code'], 'INVALID_EVENT_ENVELOPE');
   });
 
   it('AC3: missing correlation_id rejected with INVALID_EVENT_ENVELOPE', async () => {
-    const res = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', {
-      stream_type: 'inventory',
-      stream_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      event_type: 'stock.received',
-      payload: { sku: 'RM-0042' },
-      metadata: {
-        actor: {
-          user_id: '66666666-7777-8888-9999-aaaaaaaaaaaa',
-          role: 'store_assistant',
-          location_id: 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff',
+    const res = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'inventory',
+        stream_id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        event_type: 'stock.received',
+        payload: { sku: 'RM-0042' },
+        metadata: {
+          actor: {
+            user_id: '66666666-7777-8888-9999-aaaaaaaaaaaa',
+            role: 'store_assistant',
+            location_id: 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff',
+          },
+          occurred_at: new Date().toISOString(),
         },
-        occurred_at: new Date().toISOString(),
       },
-    });
+      authHeaders,
+    );
     assert.equal(res.status, 400);
     assert.equal(res.body['error_code'], 'INVALID_EVENT_ENVELOPE');
   });
@@ -199,11 +251,11 @@ describe('Story 1.1 Integration Tests', () => {
       idempotency_key: 'unique-key-001',
     };
 
-    const first = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', event);
+    const first = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', event, authHeaders);
     assert.equal(first.status, 201);
     const firstEventId = first.body['event_id'];
 
-    const second = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', event);
+    const second = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', event, authHeaders);
     assert.equal(second.status, 409);
     assert.equal(second.body['error_code'], 'DUPLICATE_EVENT');
     assert.equal(
@@ -230,19 +282,25 @@ describe('Story 1.1 Integration Tests', () => {
       },
     };
 
-    const r1 = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', baseEvent);
+    const r1 = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', baseEvent, authHeaders);
     assert.equal(r1.status, 201);
     assert.equal(r1.body['event_version'], 1);
 
-    const r2 = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', baseEvent);
+    const r2 = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', baseEvent, authHeaders);
     assert.equal(r2.status, 201);
     assert.equal(r2.body['event_version'], 2);
 
-    const r3 = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', baseEvent);
+    const r3 = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', baseEvent, authHeaders);
     assert.equal(r3.status, 201);
     assert.equal(r3.body['event_version'], 3);
 
-    const getRes = await makeRequest(TEST_PORT, 'GET', `/api/v1/events/version_test/${streamId}`);
+    const getRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/events/version_test/${streamId}`,
+      undefined,
+      authHeaders,
+    );
     const events = getRes.body['events'] as Array<Record<string, unknown>>;
     assert.equal(events.length, 3);
     const versions = events.map((e) => e['event_version']);
