@@ -22,12 +22,24 @@ function getLocalSecretKey(): KeyObject {
   return localSecretKey;
 }
 
+// Asymmetric signature algorithms accepted from an OIDC identity provider. Pinning the set
+// (rather than accepting whatever the token header claims) is defense in depth against
+// algorithm-substitution; jose already rejects `alg:none`.
+const OIDC_ALGORITHMS = ['RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512', 'PS256', 'PS384', 'PS512', 'EdDSA'];
+// Small allowance for clock drift between this server and the token issuer.
+const CLOCK_TOLERANCE = '30s';
+
 function extractBearerToken(req: IncomingMessage): string {
   const header = req.headers['authorization'];
-  if (!header || Array.isArray(header) || !header.startsWith('Bearer ')) {
+  if (!header || Array.isArray(header)) {
     throw new AppError(401, 'UNAUTHORIZED', 'Missing or malformed Authorization header');
   }
-  const token = header.slice('Bearer '.length).trim();
+  // The auth scheme is case-insensitive per RFC 7235; the token itself is not.
+  const match = /^bearer[ \t]+(\S.*)$/i.exec(header.trim());
+  if (!match) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Missing or malformed Authorization header');
+  }
+  const token = match[1]!.trim();
   if (!token) {
     throw new AppError(401, 'UNAUTHORIZED', 'Missing bearer token');
   }
@@ -41,18 +53,23 @@ async function verifyTokenSubject(token: string): Promise<string> {
       const { payload } = await jwtVerify(token, getRemoteJwks(), {
         issuer: config.auth.issuer,
         audience: config.auth.audience,
+        algorithms: OIDC_ALGORITHMS,
+        clockTolerance: CLOCK_TOLERANCE,
       });
       sub = payload.sub;
     } else {
-      const { payload } = await jwtVerify(token, getLocalSecretKey());
+      const { payload } = await jwtVerify(token, getLocalSecretKey(), {
+        algorithms: ['HS256'],
+        clockTolerance: CLOCK_TOLERANCE,
+      });
       sub = payload.sub;
     }
   } catch {
     throw new AppError(401, 'UNAUTHORIZED', 'Invalid or expired token');
   }
 
-  if (!sub) {
-    throw new AppError(401, 'UNAUTHORIZED', 'Token is missing a subject claim');
+  if (typeof sub !== 'string' || !sub) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Token is missing a valid subject claim');
   }
   return sub;
 }

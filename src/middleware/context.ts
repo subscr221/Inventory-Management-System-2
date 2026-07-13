@@ -10,6 +10,7 @@ export interface AuthContext {
 interface RequestContext extends IncomingMessage {
   parsedBody?: unknown;
   authContext?: AuthContext;
+  authorizedRole?: string;
 }
 
 /** Attaches the once-parsed JSON body to the request for downstream handlers/middleware to read. */
@@ -30,4 +31,18 @@ export function setAuthContext(req: IncomingMessage, ctx: AuthContext): void {
 /** Reads the auth context attached by the router's global auth check. Undefined on public paths. */
 export function getAuthContext(req: IncomingMessage): AuthContext | undefined {
   return (req as RequestContext).authContext;
+}
+
+/**
+ * Records the role assignment that authorized the request (the one RBAC matched on
+ * module + function + location). Handlers use it to stamp the audit actor's role from
+ * the server's own authorization decision rather than trusting a client-supplied value.
+ */
+export function setAuthorizedRole(req: IncomingMessage, role: string): void {
+  (req as RequestContext).authorizedRole = role;
+}
+
+/** Reads the role RBAC authorized this request under, if any. */
+export function getAuthorizedRole(req: IncomingMessage): string | undefined {
+  return (req as RequestContext).authorizedRole;
 }

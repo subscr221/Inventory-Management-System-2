@@ -66,6 +66,26 @@ export class Router {
     }
     const method = req.method ?? 'GET';
 
+    // Normalize a trailing slash (except root) so `/api/v1/health/` matches routes and the
+    // public allowlist the same as `/api/v1/health`.
+    const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
+
+    // Authenticate BEFORE reading the body: an unauthenticated caller must receive 401 for any
+    // protected endpoint and must not be able to make the server buffer a request body first.
+    if (!isPublicPath(pathname)) {
+      try {
+        const authContext = await authenticateRequest(req);
+        setAuthContext(req, authContext);
+      } catch (err) {
+        if (err instanceof AppError) {
+          sendError(res, err.statusCode, err.errorCode, err.message, err.details);
+          return;
+        }
+        sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
+        return;
+      }
+    }
+
     if (BODY_BEARING_METHODS.has(method)) {
       try {
         const body = await readJsonBody(req);
@@ -80,23 +100,9 @@ export class Router {
       }
     }
 
-    if (!isPublicPath(url.pathname)) {
-      try {
-        const authContext = await authenticateRequest(req);
-        setAuthContext(req, authContext);
-      } catch (err) {
-        if (err instanceof AppError) {
-          sendError(res, err.statusCode, err.errorCode, err.message, err.details);
-          return;
-        }
-        sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
-        return;
-      }
-    }
-
     for (const route of this.routes) {
       if (route.method !== method) continue;
-      const match = url.pathname.match(route.pattern);
+      const match = pathname.match(route.pattern);
       if (!match) continue;
 
       const params: Record<string, string> = {};
@@ -112,6 +118,6 @@ export class Router {
       return;
     }
 
-    sendError(res, 404, 'NOT_FOUND', `No route for ${method} ${url.pathname}`);
+    sendError(res, 404, 'NOT_FOUND', `No route for ${method} ${pathname}`);
   }
 }

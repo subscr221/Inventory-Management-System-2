@@ -25,24 +25,47 @@ export interface ProvisionUserInput {
 }
 
 /**
- * Creates a new user directory row, or reactivates + refreshes an existing one
- * (matched by external_id) if it was previously deprovisioned. Returns the internal user_id.
+ * Provisions a user and their role assignments atomically in a single transaction: creates a new
+ * directory row (or reactivates + refreshes an existing one matched by external_id) and replaces
+ * all role rows. Doing both in one transaction removes the concurrent delete/insert role race and
+ * the partial-directory-state window that separate calls would leave. Returns the internal user_id.
  */
-export async function upsertUser(input: ProvisionUserInput): Promise<string> {
+export async function upsertUserWithRoles(input: ProvisionUserInput): Promise<string> {
   const pool = getPool();
+  const client = await pool.connect();
   const newUserId = randomUUID();
-  const result = await pool.query(
-    `INSERT INTO users (user_id, external_id, email, display_name, active)
-     VALUES ($1, $2, $3, $4, true)
-     ON CONFLICT (external_id) DO UPDATE
-       SET email = EXCLUDED.email,
-           display_name = EXCLUDED.display_name,
-           active = true,
-           deprovisioned_at = NULL
-     RETURNING user_id`,
-    [newUserId, input.externalId, input.email, input.displayName ?? null],
-  );
-  return result.rows[0]!['user_id'] as string;
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `INSERT INTO users (user_id, external_id, email, display_name, active)
+       VALUES ($1, $2, $3, $4, true)
+       ON CONFLICT (external_id) DO UPDATE
+         SET email = EXCLUDED.email,
+             display_name = EXCLUDED.display_name,
+             active = true,
+             deprovisioned_at = NULL
+       RETURNING user_id`,
+      [newUserId, input.externalId, input.email, input.displayName ?? null],
+    );
+    const userId = result.rows[0]!['user_id'] as string;
+
+    await client.query('DELETE FROM user_role_assignments WHERE user_id = $1', [userId]);
+    for (const role of input.roles) {
+      await client.query(
+        `INSERT INTO user_role_assignments (user_id, role, module, function_scope, location_id)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [userId, role.role, role.module, role.functionScope, role.locationId],
+      );
+    }
+
+    await client.query('COMMIT');
+    return userId;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** Replaces all role assignments for a user with the provided list (delete + insert, transactional). */
@@ -68,11 +91,29 @@ export async function replaceRoleAssignments(userId: string, roles: RoleAssignme
   }
 }
 
-/** Deactivates a user by external_id. Returns false if no matching user was found. */
+/**
+ * Deactivates an active user by external_id. Returns false if no matching ACTIVE user was found
+ * (already deprovisioned or absent), which lets callers stay idempotent and avoid emitting a
+ * duplicate `user.deprovisioned` event on a repeat/concurrent deprovision.
+ */
 export async function deactivateUser(externalId: string): Promise<boolean> {
   const pool = getPool();
   const result = await pool.query(
-    `UPDATE users SET active = false, deprovisioned_at = now() WHERE external_id = $1 RETURNING user_id`,
+    `UPDATE users SET active = false, deprovisioned_at = now() WHERE external_id = $1 AND active = true RETURNING user_id`,
+    [externalId],
+  );
+  return result.rows.length > 0;
+}
+
+/**
+ * Reactivates a previously deprovisioned user by external_id. Returns false if no matching
+ * INACTIVE user was found (already active or absent), so callers avoid emitting a duplicate
+ * `user.reactivated` event on a repeat reactivation.
+ */
+export async function reactivateUser(externalId: string): Promise<boolean> {
+  const pool = getPool();
+  const result = await pool.query(
+    `UPDATE users SET active = true, deprovisioned_at = NULL WHERE external_id = $1 AND active = false RETURNING user_id`,
     [externalId],
   );
   return result.rows.length > 0;

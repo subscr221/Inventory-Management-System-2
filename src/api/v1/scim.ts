@@ -1,15 +1,28 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendError } from '../../middleware/error.js';
 import { getParsedBody } from '../../middleware/context.js';
 import { config } from '../../config/index.js';
-import { provisionUser, updateUserRoles, deprovisionUser } from '../../adapters/iam/scim.js';
+import { provisionUser, updateUserRoles, deprovisionUser, reactivateUser } from '../../adapters/iam/scim.js';
 import type { RoleAssignment } from '../../read/projections/users.js';
+
+/** Constant-time string compare. Returns false on length mismatch (length is not secret). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, 'utf-8');
+  const bb = Buffer.from(b, 'utf-8');
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
 
 function requireScimAuth(req: IncomingMessage): void {
   const header = req.headers['authorization'];
-  const expected = `Bearer ${config.scim.bearerToken}`;
-  if (!header || Array.isArray(header) || header !== expected) {
+  if (!header || Array.isArray(header)) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Missing or invalid SCIM bearer token');
+  }
+  // Scheme is case-insensitive (RFC 7235); the token is compared in constant time.
+  const match = /^bearer[ \t]+(\S.*)$/i.exec(header.trim());
+  if (!match || !safeEqual(match[1]!.trim(), config.scim.bearerToken)) {
     throw new AppError(401, 'UNAUTHORIZED', 'Missing or invalid SCIM bearer token');
   }
 }
@@ -89,6 +102,18 @@ export const patchUserHandler: RouteHandler = async (req, res, params) => {
     throw new AppError(400, 'INVALID_SCIM_REQUEST', 'Request body must be a JSON object');
   }
   const obj = body as Record<string, unknown>;
+  const hasActive = obj['active'] !== undefined;
+  const hasRoles = obj['roles'] !== undefined;
+
+  // `active` must be a real boolean - do not silently ignore `"false"` or `0`.
+  if (hasActive && typeof obj['active'] !== 'boolean') {
+    throw new AppError(400, 'INVALID_SCIM_REQUEST', 'active must be a boolean');
+  }
+  // A single PATCH must not both change activation and replace roles - that would let one of the
+  // two intents be silently dropped. Require separate requests.
+  if (hasActive && hasRoles) {
+    throw new AppError(400, 'INVALID_SCIM_REQUEST', 'Provide either "active" or "roles", not both in one request');
+  }
 
   if (obj['active'] === false) {
     await deprovisionUser(externalId);
@@ -96,12 +121,18 @@ export const patchUserHandler: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  if (obj['roles'] !== undefined) {
+  if (obj['active'] === true) {
+    await reactivateUser(externalId);
+    sendJson(res, 200, { externalId, active: true });
+    return;
+  }
+
+  if (hasRoles) {
     const roles = parseRoles(obj['roles']);
     await updateUserRoles(externalId, roles);
     sendJson(res, 200, { externalId, roles });
     return;
   }
 
-  throw new AppError(400, 'INVALID_SCIM_REQUEST', 'PATCH body must include "active: false" or "roles"');
+  throw new AppError(400, 'INVALID_SCIM_REQUEST', 'PATCH body must include "active" (boolean) or "roles"');
 };

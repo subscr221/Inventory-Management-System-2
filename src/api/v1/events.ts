@@ -1,8 +1,8 @@
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendError } from '../../middleware/error.js';
 import { validateEnvelope, persistEvent, readStream } from '../../events/store.js';
-import { getParsedBody } from '../../middleware/context.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { getParsedBody, getAuthContext, getAuthorizedRole } from '../../middleware/context.js';
+import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
   if (typeof body === 'object' && body !== null) {
@@ -29,11 +29,25 @@ function resolveModuleFromParams(params: Record<string, string>): string {
 const postEventBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req);
   validateEnvelope(body);
+
+  // Bind the audit actor to the authenticated caller. The client-supplied user_id/role are
+  // identity claims and must never be trusted in the immutable event log: overwrite user_id
+  // with the token identity and role with the assignment RBAC actually authorized this request
+  // under. The location is already enforced against the caller's grants by requireRole.
+  const authContext = getAuthContext(req);
+  if (authContext) {
+    body.metadata.actor.user_id = authContext.userId;
+    const authorizedRole = getAuthorizedRole(req);
+    if (authorizedRole) {
+      body.metadata.actor.role = authorizedRole;
+    }
+  }
+
   const persisted = await persistEvent(body);
   sendJson(res, 201, persisted);
 };
 
-const getStreamBase: RouteHandler = async (_req, res, params) => {
+const getStreamBase: RouteHandler = async (req, res, params) => {
   const streamType = params['streamType'];
   const streamId = params['streamId'];
 
@@ -48,7 +62,20 @@ const getStreamBase: RouteHandler = async (_req, res, params) => {
   }
 
   const events = await readStream(streamType, streamId);
-  sendJson(res, 200, { events });
+
+  // Location-scope the read: a caller only sees events that occurred at a location their role
+  // grants them (module already checked by requireRole). A '*' location grant sees everything.
+  // Note: filtering by location can return a non-contiguous slice of a stream's versions.
+  const authContext = getAuthContext(req);
+  const scoped = authContext
+    ? (() => {
+        const { wildcard, locations } = permittedLocationsForModule(authContext.roles, streamType);
+        if (wildcard) return events;
+        return events.filter((e) => locations.has(e.metadata.actor.location_id));
+      })()
+    : events;
+
+  sendJson(res, 200, { events: scoped });
 };
 
 export const postEventHandler: RouteHandler = requireRole({

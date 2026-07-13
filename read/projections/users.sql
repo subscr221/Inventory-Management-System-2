@@ -1,3 +1,5 @@
+-- Canonical source for the users / user_role_assignments schema. deploy/compose/init-db.sql
+-- mirrors these table definitions (plus grants) for first-time cluster init; keep the two in sync.
 CREATE TABLE IF NOT EXISTS users (
   user_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   external_id      TEXT NOT NULL UNIQUE,

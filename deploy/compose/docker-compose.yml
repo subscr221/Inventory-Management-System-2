@@ -17,6 +17,14 @@ services:
       DB_USER: app_user
       DB_PASSWORD: ${DB_PASSWORD:-app_password}
       DB_SSL: "false"
+      # Auth + SCIM are validated at startup (src/config/index.ts). Under NODE_ENV=production the
+      # app requires OIDC config and a SCIM bearer token; ${VAR:?...} makes `docker compose up`
+      # fail with a clear message when one is missing instead of the container crash-looping.
+      AUTH_MODE: oidc
+      AUTH_JWKS_URI: ${AUTH_JWKS_URI:?set AUTH_JWKS_URI to the IdP JWKS endpoint}
+      AUTH_ISSUER: ${AUTH_ISSUER:?set AUTH_ISSUER to the IdP issuer}
+      AUTH_AUDIENCE: ${AUTH_AUDIENCE:?set AUTH_AUDIENCE to this API's audience}
+      SCIM_BEARER_TOKEN: ${SCIM_BEARER_TOKEN:?set SCIM_BEARER_TOKEN to a long random secret}
     ports:
       - "3000:3000"
     networks:

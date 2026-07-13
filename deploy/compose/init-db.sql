@@ -27,6 +27,10 @@ GRANT SELECT ON domain_events TO readonly_user;
 
 CREATE PUBLICATION powersync_publication FOR TABLE domain_events;
 
+-- The users / user_role_assignments table definitions below MUST stay identical to the canonical
+-- source in read/projections/users.sql (applied by src/events/migrate.ts and the test harness).
+-- This file additionally issues the app_user / readonly_user grants that the migrate path does not
+-- need (migrate runs as an admin role). Change both files together.
 CREATE TABLE IF NOT EXISTS users (
   user_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   external_id      TEXT NOT NULL UNIQUE,

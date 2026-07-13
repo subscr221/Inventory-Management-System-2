@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { persistEvent } from '../../events/store.js';
 import {
-  upsertUser,
+  upsertUserWithRoles,
   replaceRoleAssignments,
   deactivateUser,
+  reactivateUser as reactivateUserRow,
   getUserIdByExternalId,
 } from '../../read/projections/users.js';
 import type { RoleAssignment } from '../../read/projections/users.js';
@@ -35,13 +36,16 @@ function systemActorMetadata() {
 
 /** Provisions (or reactivates) a user with the given role assignments. Emits `user.provisioned`. */
 export async function provisionUser(input: ProvisionUserRequest): Promise<string> {
-  const userId = await upsertUser({
+  // Directory row + role assignments are written in one transaction (see upsertUserWithRoles).
+  // The audit event is emitted after that transaction commits; if it fails the caller gets a 500
+  // and the directory is already updated - acceptable for now, tracked as a follow-up to bring
+  // the event into the same transaction as the directory write.
+  const userId = await upsertUserWithRoles({
     externalId: input.externalId,
     email: input.email,
     displayName: input.displayName ?? null,
     roles: input.roles,
   });
-  await replaceRoleAssignments(userId, input.roles);
 
   await persistEvent({
     stream_type: 'user',
@@ -57,6 +61,26 @@ export async function provisionUser(input: ProvisionUserRequest): Promise<string
   });
 
   return userId;
+}
+
+/** Reactivates a previously deprovisioned user. Emits `user.reactivated` only on a real change. */
+export async function reactivateUser(externalId: string): Promise<void> {
+  const userId = await getUserIdByExternalId(externalId);
+  if (!userId) {
+    throw new AppError(404, 'NOT_FOUND', `No user found with externalId "${externalId}"`);
+  }
+
+  const reactivated = await reactivateUserRow(externalId);
+  if (reactivated) {
+    await persistEvent({
+      stream_type: 'user',
+      stream_id: userId,
+      event_type: 'user.reactivated',
+      payload: { external_id: externalId },
+      metadata: systemActorMetadata(),
+    });
+  }
+  // Already active: idempotent no-op, no duplicate event.
 }
 
 /** Replaces a user's role assignments. Emits `user.roles_updated`. */
@@ -85,15 +109,14 @@ export async function deprovisionUser(externalId: string): Promise<void> {
   }
 
   const deactivated = await deactivateUser(externalId);
-  if (!deactivated) {
-    throw new AppError(404, 'NOT_FOUND', `No user found with externalId "${externalId}"`);
+  if (deactivated) {
+    await persistEvent({
+      stream_type: 'user',
+      stream_id: userId,
+      event_type: 'user.deprovisioned',
+      payload: { external_id: externalId },
+      metadata: systemActorMetadata(),
+    });
   }
-
-  await persistEvent({
-    stream_type: 'user',
-    stream_id: userId,
-    event_type: 'user.deprovisioned',
-    payload: { external_id: externalId },
-    metadata: systemActorMetadata(),
-  });
+  // Already inactive: idempotent no-op, no duplicate event.
 }

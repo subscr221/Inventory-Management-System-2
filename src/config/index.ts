@@ -1,5 +1,6 @@
 const parsedPort = Number(process.env['PORT'] ?? 3000);
 const parsedMax = Number(process.env['DB_POOL_MAX'] ?? 20);
+const parsedDbPort = Number(process.env['DB_PORT'] ?? 5432);
 
 type AuthMode = 'oidc' | 'local';
 
@@ -11,12 +12,18 @@ function resolveAuthMode(): AuthMode {
   return raw;
 }
 
-const nodeEnv = process.env['NODE_ENV'] ?? 'development';
+const rawNodeEnv = process.env['NODE_ENV'];
+const nodeEnv = rawNodeEnv ?? 'development';
 const authMode = resolveAuthMode();
 
-if (authMode === 'local' && nodeEnv === 'production') {
+// Local auth mode (which exposes the unauthenticated dev-token endpoint) is only permitted when
+// NODE_ENV is EXPLICITLY a dev/test value. Fail closed for every other case - including NODE_ENV
+// unset - so a misconfigured host (e.g. a copied env file with NODE_ENV absent) cannot silently
+// run the insecure path.
+const LOCAL_AUTH_ALLOWED_ENVS = new Set(['development', 'test']);
+if (authMode === 'local' && !LOCAL_AUTH_ALLOWED_ENVS.has(rawNodeEnv ?? '')) {
   throw new Error(
-    'AUTH_MODE=local (dev/test only) must never be used when NODE_ENV=production. Configure AUTH_MODE=oidc with a real identity provider.',
+    'AUTH_MODE=local (dev/test only) requires NODE_ENV to be explicitly "development" or "test"; refusing to start. Configure AUTH_MODE=oidc with a real identity provider for staging/production.',
   );
 }
 
@@ -41,7 +48,7 @@ export const config = {
   nodeEnv,
   db: {
     host: process.env['DB_HOST'] ?? 'localhost',
-    port: Number(process.env['DB_PORT'] ?? 5432),
+    port: Number.isNaN(parsedDbPort) ? 5432 : parsedDbPort,
     database: process.env['DB_NAME'] ?? 'inventory_events',
     user: process.env['DB_USER'] ?? 'app_user',
     password: process.env['DB_PASSWORD'] ?? 'app_password',
