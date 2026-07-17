@@ -51,6 +51,8 @@ last_updated: 2026-07-13
 # story 1-1 created 2026-07-12 via create-story workflow
 # story 1-2 created 2026-07-12 via create-story workflow
 # story 1-2 code review 2026-07-13: 4 decisions + 14 patches applied, moved to done
+# story 1-3 created 2026-07-13 via create-story workflow
+# story 1-3 validated 2026-07-13: 3 critical + 4 enhancement fixes applied
 project: Inventory Management System_2
 project_key: NOKEY
 tracking_system: file-system
@@ -61,7 +63,7 @@ development_status:
   epic-1: in-progress
   1-1-core-infrastructure-deployment-and-event-store-schema: done   # PILOT
   1-2-sso-authentication-and-role-based-access-control: done   # PILOT
-  1-3-statutory-edit-log: backlog   # PILOT
+  1-3-statutory-edit-log: review   # PILOT
   1-4-enterprise-doa-registry: backlog   # PILOT
   1-5-business-stream-tagging-enforcement: backlog   # PILOT
   1-6-event-sourced-location-with-asserted-expected-separation: backlog   # PILOT

@@ -1,3 +1,7 @@
+import './audit.js';
+
+export { auditConfig } from './audit.js';
+
 const parsedPort = Number(process.env['PORT'] ?? 3000);
 const parsedMax = Number(process.env['DB_POOL_MAX'] ?? 20);
 const parsedDbPort = Number(process.env['DB_PORT'] ?? 5432);

@@ -57,3 +57,75 @@ GRANT INSERT, SELECT, UPDATE ON users TO app_user;
 GRANT INSERT, SELECT, DELETE ON user_role_assignments TO app_user;
 GRANT SELECT ON users TO readonly_user;
 GRANT SELECT ON user_role_assignments TO readonly_user;
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  log_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  trace_id          TEXT NOT NULL,
+  user_id           UUID NOT NULL,
+  role              TEXT NOT NULL,
+  location_id       TEXT NOT NULL,
+  timestamp         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  endpoint          TEXT NOT NULL,
+  method            TEXT NOT NULL CHECK (method IN ('GET','POST','PUT','PATCH','DELETE')),
+  event_id          UUID,
+  http_status       INT,
+  error_code        TEXT,
+  details           JSONB,
+  archived          BOOLEAN DEFAULT false,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_log_archive (
+  archive_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  original_log_id   UUID NOT NULL,
+  archive_path      TEXT NOT NULL,
+  archived_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_log_tamper_attempt_log (
+  attempt_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  timestamp         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id           UUID,
+  role              TEXT,
+  location_id       TEXT,
+  endpoint          TEXT,
+  method            TEXT,
+  error_code        TEXT NOT NULL,
+  details           JSONB,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_timestamp ON audit_log (user_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_log_trace_id ON audit_log (trace_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_tamper_created_at ON audit_log_tamper_attempt_log (created_at DESC);
+
+GRANT INSERT, SELECT ON audit_log TO app_user;
+GRANT INSERT, SELECT ON audit_log_archive TO app_user;
+GRANT INSERT, SELECT ON audit_log_tamper_attempt_log TO app_user;
+GRANT SELECT ON audit_log TO readonly_user;
+GRANT SELECT ON audit_log_tamper_attempt_log TO readonly_user;
+
+CREATE OR REPLACE FUNCTION audit_log_tamper_protection()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'AUDIT_LOG_TAMPER_ATTEMPT: Modification of audit log is forbidden';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_log_tamper_protection
+BEFORE UPDATE OR DELETE ON audit_log
+FOR EACH ROW
+EXECUTE FUNCTION audit_log_tamper_protection();
+
+CREATE OR REPLACE FUNCTION audit_log_tamper_attempt_protection()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'AUDIT_LOG_TAMPER_ATTEMPT: Modification of tamper attempt log is forbidden';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_log_tamper_attempt_protection
+BEFORE UPDATE OR DELETE ON audit_log_tamper_attempt_log
+FOR EACH ROW
+EXECUTE FUNCTION audit_log_tamper_attempt_protection();

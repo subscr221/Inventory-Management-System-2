@@ -11,6 +11,7 @@ interface RequestContext extends IncomingMessage {
   parsedBody?: unknown;
   authContext?: AuthContext;
   authorizedRole?: string;
+  traceId?: string;
 }
 
 /** Attaches the once-parsed JSON body to the request for downstream handlers/middleware to read. */
@@ -45,4 +46,14 @@ export function setAuthorizedRole(req: IncomingMessage, role: string): void {
 /** Reads the role RBAC authorized this request under, if any. */
 export function getAuthorizedRole(req: IncomingMessage): string | undefined {
   return (req as RequestContext).authorizedRole;
+}
+
+/** Attaches a per-request trace_id for audit log and error envelope correlation. */
+export function setTraceId(req: IncomingMessage, traceId: string): void {
+  (req as RequestContext).traceId = traceId;
+}
+
+/** Reads the per-request trace_id, if set. */
+export function getTraceId(req: IncomingMessage): string | undefined {
+  return (req as RequestContext).traceId;
 }

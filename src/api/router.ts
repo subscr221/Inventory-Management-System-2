@@ -1,9 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../middleware/error.js';
 import { AppError, sendError, withErrorHandler } from '../middleware/error.js';
 import { readJsonBody } from '../middleware/body.js';
 import { authenticateRequest } from '../middleware/auth.js';
-import { setParsedBody, setAuthContext } from '../middleware/context.js';
+import { setParsedBody, setAuthContext, setTraceId } from '../middleware/context.js';
 
 interface Route {
   method: string;
@@ -42,6 +43,10 @@ export class Router {
     this.addRoute('PATCH', path, handler);
   }
 
+  put(path: string, handler: RouteHandler): void {
+    this.addRoute('PUT', path, handler);
+  }
+
   private addRoute(method: string, path: string, handler: RouteHandler): void {
     const paramNames: string[] = [];
     const pattern = path.replace(/:([^/]+)/g, (_match, paramName: string) => {
@@ -57,6 +62,8 @@ export class Router {
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    setTraceId(req, randomUUID());
+
     let url: URL;
     try {
       url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);

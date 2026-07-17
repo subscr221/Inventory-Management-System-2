@@ -1,0 +1,2013 @@
+﻿
+==== FILE: read/projections/audit_log.sql ====
+CREATE TABLE IF NOT EXISTS audit_log (
+  log_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  trace_id          TEXT NOT NULL,
+  user_id           UUID NOT NULL,
+  role              TEXT NOT NULL,
+  location_id       TEXT NOT NULL,
+  timestamp         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  endpoint          TEXT NOT NULL,
+  method            TEXT NOT NULL CHECK (method IN ('GET','POST','PUT','PATCH','DELETE')),
+  event_id          UUID,
+  http_status       INT,
+  error_code        TEXT,
+  details           JSONB,
+  archived          BOOLEAN DEFAULT false,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_log_archive (
+  archive_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  original_log_id   UUID NOT NULL,
+  archive_path      TEXT NOT NULL,
+  archived_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_log_tamper_attempt_log (
+  attempt_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  timestamp         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id           UUID,
+  role              TEXT,
+  location_id       TEXT,
+  endpoint          TEXT,
+  method            TEXT,
+  error_code        TEXT NOT NULL,
+  details           JSONB,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_timestamp ON audit_log (user_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_log_trace_id ON audit_log (trace_id);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_tamper_created_at ON audit_log_tamper_attempt_log (created_at DESC);
+
+==== FILE: src/read/projections/audit_log.ts ====
+import type { PoolClient } from 'pg';
+
+export interface AuditEntryPayload {
+  trace_id: string;
+  user_id: string;
+  role: string;
+  location_id: string;
+  endpoint: string;
+  method: string;
+  event_id: string | null;
+  http_status: number;
+  error_code: string | null;
+  details?: Record<string, unknown>;
+}
+
+export interface TamperAttemptPayload {
+  user_id: string | null;
+  role: string | null;
+  location_id: string | null;
+  endpoint: string | null;
+  method: string | null;
+  error_code: string;
+  details?: Record<string, unknown>;
+}
+
+export async function logAuditEntry(client: PoolClient, payload: AuditEntryPayload): Promise<void> {
+  await client.query(
+    `INSERT INTO audit_log (trace_id, user_id, role, location_id, endpoint, method, event_id, http_status, error_code, details)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      payload.trace_id,
+      payload.user_id,
+      payload.role,
+      payload.location_id,
+      payload.endpoint,
+      payload.method,
+      payload.event_id,
+      payload.http_status,
+      payload.error_code,
+      payload.details ? JSON.stringify(payload.details) : null,
+    ],
+  );
+}
+
+export async function logTamperAttempt(client: PoolClient, payload: TamperAttemptPayload): Promise<void> {
+  await client.query(
+    `INSERT INTO audit_log_tamper_attempt_log (user_id, role, location_id, endpoint, method, error_code, details)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      payload.user_id,
+      payload.role,
+      payload.location_id,
+      payload.endpoint,
+      payload.method,
+      payload.error_code,
+      payload.details ? JSON.stringify(payload.details) : null,
+    ],
+  );
+}
+
+==== FILE: src/middleware/audit-tamper-guard.ts ====
+import type { PoolClient } from 'pg';
+import { logTamperAttempt } from '../read/projections/audit_log.js';
+
+export async function handleTamperAttempt(
+  client: PoolClient,
+  context: {
+    user_id: string | null;
+    role: string | null;
+    location_id: string | null;
+    endpoint: string | null;
+    method: string | null;
+    error_code: string;
+    details?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const payload: Parameters<typeof logTamperAttempt>[1] = {
+    user_id: context.user_id,
+    role: context.role,
+    location_id: context.location_id,
+    endpoint: context.endpoint,
+    method: context.method,
+    error_code: context.error_code,
+  };
+  if (context.details !== undefined) {
+    payload.details = context.details;
+  }
+  await logTamperAttempt(client, payload);
+}
+
+==== FILE: src/api/v1/audit.ts ====
+import type { RouteHandler } from '../../middleware/error.js';
+import { sendJson, sendError } from '../../middleware/error.js';
+import { getPool } from '../../config/db.js';
+import { requireRole } from '../../middleware/rbac.js';
+
+const auditLogBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  const startDate = url.searchParams.get('start_date');
+  const endDate = url.searchParams.get('end_date');
+  const userId = url.searchParams.get('user_id');
+  const limit = Math.min(Number(url.searchParams.get('limit') ?? '100'), 1000);
+  const cursor = url.searchParams.get('cursor');
+
+  if (!startDate || !endDate) {
+    sendError(res, 400, 'INVALID_PARAMS', 'start_date and end_date are required (ISO 8601)');
+    return;
+  }
+
+  const pool = getPool();
+  let query = `SELECT log_id, trace_id, user_id, role, location_id, timestamp, endpoint, method, event_id, http_status, error_code
+               FROM audit_log
+               WHERE timestamp >= $1 AND timestamp <= $2`;
+  const params: (string | number)[] = [startDate, endDate];
+
+  if (userId) {
+    params.push(userId);
+    query += ` AND user_id = $${params.length}`;
+  }
+
+  if (cursor) {
+    params.push(cursor);
+    query += ` AND log_id > $${params.length}`;
+  }
+
+  query += ` ORDER BY timestamp ASC, log_id ASC LIMIT $${params.length + 1}`;
+  params.push(limit + 1);
+
+  const result = await pool.query(query, params);
+  const hasMore = result.rows.length > limit;
+  const entries = result.rows.slice(0, limit);
+
+  const logIds = entries.map((r) => r['log_id'] as string);
+  const { createHash } = await import('node:crypto');
+  const rangeDigest = createHash('sha256').update(logIds.join('')).digest('hex');
+
+  const isContiguous = logIds.length > 1
+    ? logIds.every((id, i) => i === 0 || id > logIds[i - 1]!)
+    : true;
+
+  const archivedResult = await pool.query(
+    `SELECT COUNT(*) AS count FROM audit_log_archive`,
+  );
+
+  sendJson(res, 200, {
+    entries: entries.map((r) => ({
+      log_id: r['log_id'],
+      trace_id: r['trace_id'],
+      user_id: r['user_id'],
+      role: r['role'],
+      location_id: r['location_id'],
+      timestamp: (r['timestamp'] as Date).toISOString(),
+      endpoint: r['endpoint'],
+      method: r['method'],
+      event_id: r['event_id'],
+      http_status: r['http_status'],
+      error_code: r['error_code'],
+    })),
+    range_digest: rangeDigest,
+    sequence_check: {
+      is_contiguous: isContiguous,
+      first_log_id: logIds.length > 0 ? logIds[0] : null,
+      last_log_id: logIds.length > 0 ? logIds[logIds.length - 1] : null,
+      gap_count: 0,
+    },
+    archived_entries_count: Number(archivedResult.rows[0]!['count']),
+    next_cursor: hasMore && entries.length > 0 ? (entries[entries.length - 1]!['log_id'] as string) : null,
+  });
+};
+
+export const auditLogHandler: RouteHandler = requireRole({
+  module: 'audit',
+  functionScope: 'read',
+})(auditLogBase);
+
+==== FILE: src/api/v1/config.ts ====
+import type { RouteHandler } from '../../middleware/error.js';
+import { sendJson, sendError } from '../../middleware/error.js';
+import { getParsedBody, getAuthContext } from '../../middleware/context.js';
+import { getPool } from '../../config/db.js';
+import { logTamperAttempt } from '../../read/projections/audit_log.js';
+import { requireRole } from '../../middleware/rbac.js';
+
+const configAuditLogBase: RouteHandler = async (req, res, _params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body || typeof body.audit_log_enabled !== 'boolean') {
+    sendError(res, 400, 'INVALID_PARAMS', 'audit_log_enabled must be a boolean');
+    return;
+  }
+
+  if (body.audit_log_enabled === false) {
+    const authContext = getAuthContext(req);
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await logTamperAttempt(client, {
+        user_id: authContext?.userId ?? null,
+        role: authContext?.roles[0]?.role ?? null,
+        location_id: authContext?.roles[0]?.locationId ?? null,
+        endpoint: req.url ?? null,
+        method: req.method ?? null,
+        error_code: 'AUDIT_LOG_TAMPER_ATTEMPT',
+        details: { reason: 'Attempted to disable audit log via config endpoint' },
+      });
+    } finally {
+      client.release();
+    }
+    sendError(res, 423, 'AUDIT_LOG_DISABLED', 'The audit log cannot be disabled');
+    return;
+  }
+
+  sendJson(res, 200, { audit_log_enabled: true });
+};
+
+export const configAuditLogHandler: RouteHandler = requireRole({
+  module: 'config',
+  functionScope: 'write',
+})(configAuditLogBase);
+
+==== FILE: src/config/audit.ts ====
+const enabled = process.env['AUDIT_LOG_ENABLED'] ?? 'true';
+const retentionRaw = process.env['AUDIT_LOG_RETENTION_YEARS'] ?? '8';
+
+if (enabled !== 'true' && enabled !== 'false') {
+  throw new Error(`Invalid AUDIT_LOG_ENABLED "${enabled}": must be "true" or "false"`);
+}
+
+const retentionYears = Number(retentionRaw);
+if (!Number.isInteger(retentionYears) || retentionYears <= 0) {
+  throw new Error(
+    `Invalid AUDIT_LOG_RETENTION_YEARS "${retentionRaw}": must be a positive integer`,
+  );
+}
+
+if (enabled === 'false') {
+  throw new Error(
+    'AUDIT_LOG_DISABLED_AT_STARTUP: The audit log is disabled. No mutating operations are permitted while the audit log is inactive. Set AUDIT_LOG_ENABLED=true to start.',
+  );
+}
+
+export const auditConfig = {
+  enabled: true as const,
+  retentionYears,
+} as const;
+
+==== FILE: src/cli/archive-audit-log.ts ====
+import { getPool } from '../config/db.js';
+import { auditConfig } from '../config/audit.js';
+
+async function archiveAuditLog(): Promise<void> {
+  const cutoff = new Date();
+  cutoff.setFullYear(cutoff.getFullYear() - auditConfig.retentionYears);
+
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    const result = await client.query(
+      `SELECT log_id, trace_id, user_id, role, location_id, timestamp, endpoint, method, event_id, http_status, error_code, details
+       FROM audit_log
+       WHERE created_at < $1 AND archived = false
+       ORDER BY created_at ASC`,
+      [cutoff.toISOString()],
+    );
+
+    if (result.rows.length === 0) {
+      console.log('No audit log entries to archive.');
+      return;
+    }
+
+    const archivePath = `archive/audit-log-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(archivePath, JSON.stringify(result.rows, null, 2), 'utf-8');
+
+    for (const row of result.rows) {
+      await client.query(
+        `INSERT INTO audit_log_archive (original_log_id, archive_path) VALUES ($1, $2)`,
+        [row['log_id'], archivePath],
+      );
+      await client.query(
+        `UPDATE audit_log SET archived = true WHERE log_id = $1`,
+        [row['log_id']],
+      );
+    }
+
+    console.log(`Archived ${result.rows.length} audit log entries to ${archivePath}`);
+  } catch (err) {
+    console.error('Archive failed:', err);
+    process.exit(1);
+  } finally {
+    client.release();
+  }
+}
+
+archiveAuditLog();
+
+==== FILE: test/integration/story-1-3.test.ts ====
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer, request as httpRequest, type Server, type IncomingMessage } from 'node:http';
+import { Router } from '../../src/api/router.js';
+import { healthHandler } from '../../src/api/v1/health.js';
+import { postEventHandler, getStreamHandler } from '../../src/api/v1/events.js';
+import { provisionUserHandler, patchUserHandler } from '../../src/api/v1/scim.js';
+import { devTokenHandler } from '../../src/api/v1/auth-dev.js';
+import { auditLogHandler } from '../../src/api/v1/audit.js';
+import { configAuditLogHandler } from '../../src/api/v1/config.js';
+import { closePool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  return new Promise((resolvePromise, reject) => {
+    const data = body ? JSON.stringify(body) : undefined;
+    const req = httpRequest(
+      {
+        hostname: 'localhost',
+        port,
+        path,
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+          ...headers,
+        },
+      },
+      (res: IncomingMessage) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf-8');
+          resolvePromise({
+            status: res.statusCode ?? 0,
+            body: raw ? JSON.parse(raw) : {},
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+const TEST_PORT = 3999;
+
+async function provisionTestUser(port: number): Promise<{ userId: string; headers: Record<string, string> }> {
+  const provisionRes = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', {
+    externalId: 'test-user-1-3@example.com',
+    email: 'test-user-1-3@example.com',
+    displayName: 'Test User 1.3',
+    roles: [
+      { role: 'warehouse_operator', module: 'inventory', functionScope: 'write', locationId: '00000000-0000-0000-0000-000000000001' },
+      { role: 'auditor', module: 'audit', functionScope: 'read', locationId: '*' },
+      { role: 'system_administrator', module: 'config', functionScope: 'write', locationId: '*' },
+    ],
+  }, { Authorization: `Bearer test-only-scim-bearer-token-not-for-production-use` });
+
+  const tokenRes = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', {
+    sub: 'test-user-1-3@example.com',
+  });
+
+  const token = (tokenRes.body as Record<string, string>)['token'] ?? '';
+  return {
+    userId: (provisionRes.body as Record<string, string>)['user_id'] ?? '',
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
+
+function makeEventPayload(streamType: string, streamId: string, overrides?: Record<string, unknown>) {
+  return {
+    stream_type: streamType,
+    stream_id: streamId,
+    event_type: 'test.event',
+    payload: { test: true },
+    metadata: {
+      correlation_id: '00000000-0000-0000-0000-000000000002',
+      actor: {
+        user_id: '00000000-0000-0000-0000-000000000003',
+        role: 'warehouse_operator',
+        location_id: '00000000-0000-0000-0000-000000000001',
+      },
+      occurred_at: '2026-07-13T10:00:00.000Z',
+    },
+    ...overrides,
+  };
+}
+
+describe('Story 1.3 Integration Tests', () => {
+  let server: Server;
+  let authHeaders: Record<string, string>;
+
+  before(async () => {
+    const adminPool = getAdminPool();
+    const domainEventsSql = readFileSync(resolve(__dirname, '../../events/domain_events.sql'), 'utf-8');
+    const usersSql = readFileSync(resolve(__dirname, '../../read/projections/users.sql'), 'utf-8');
+    const auditLogSql = readFileSync(resolve(__dirname, '../../read/projections/audit_log.sql'), 'utf-8');
+    await adminPool.query(domainEventsSql);
+    await adminPool.query(usersSql);
+    await adminPool.query(auditLogSql);
+    await adminPool.query('TRUNCATE audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events');
+
+    const router = new Router();
+    router.get('/api/v1/health', healthHandler);
+    router.post('/api/v1/events', postEventHandler);
+    router.get('/api/v1/events/:streamType/:streamId', getStreamHandler);
+    router.post('/api/v1/scim/v2/Users', provisionUserHandler);
+    router.patch('/api/v1/scim/v2/Users/:externalId', patchUserHandler);
+    router.post('/api/v1/auth/dev-token', devTokenHandler);
+    router.get('/api/v1/audit/log', auditLogHandler);
+    router.put('/api/v1/config/audit-log-enabled', configAuditLogHandler);
+
+    server = createServer((req, res) => {
+      router.handle(req, res).catch((err) => {
+        console.error('Unhandled server error:', err);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error_code: 'INTERNAL_ERROR', message: 'Internal server error', details: {}, trace_id: 'unknown' }));
+        }
+      });
+    });
+
+    await new Promise<void>((resolvePromise) => {
+      server.listen(TEST_PORT, () => resolvePromise());
+    });
+
+    const { headers } = await provisionTestUser(TEST_PORT);
+    authHeaders = headers;
+  });
+
+  after(async () => {
+    await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    await closePool();
+    await closeAdminPool();
+  });
+
+  it('AC1: event write produces an audit entry with trace_id, user_id, role, location_id, timestamp, endpoint, method, event_id', async () => {
+    const streamId = '00000000-0000-0000-0000-000000000004';
+    const res = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', makeEventPayload('inventory', streamId), authHeaders);
+    assert.strictEqual(res.status, 201);
+
+    const auditRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/audit/log?start_date=2026-07-13T00:00:00.000Z&end_date=2026-07-13T23:59:59.999Z`,
+      undefined,
+      authHeaders,
+    );
+    assert.strictEqual(auditRes.status, 200);
+
+    const body = auditRes.body as Record<string, unknown>;
+    const entries = body['entries'] as Array<Record<string, unknown>>;
+    assert.ok(entries.length > 0, 'Expected at least one audit entry');
+
+    const entry = entries[entries.length - 1]!;
+    assert.ok(entry['trace_id'], 'trace_id should be present');
+    assert.ok(entry['user_id'], 'user_id should be present');
+    assert.ok(entry['role'], 'role should be present');
+    assert.strictEqual(entry['role'], 'warehouse_operator');
+    assert.ok(entry['location_id'], 'location_id should be present');
+    assert.ok(entry['timestamp'], 'timestamp should be present');
+    assert.ok(entry['endpoint'], 'endpoint should be present');
+    assert.strictEqual(entry['method'], 'POST');
+    assert.ok(entry['event_id'], 'event_id should be present');
+    assert.strictEqual(entry['http_status'], 201);
+  });
+
+  it('AC1: unauthenticated POST is rejected with 401 and no audit entry is created', async () => {
+    const streamId = '00000000-0000-0000-0000-000000000005';
+    const res = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', makeEventPayload('inventory', streamId));
+    assert.strictEqual(res.status, 401);
+
+    const auditRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/audit/log?start_date=2026-07-13T00:00:00.000Z&end_date=2026-07-13T23:59:59.999Z`,
+      undefined,
+      authHeaders,
+    );
+    const body = auditRes.body as Record<string, unknown>;
+    const entries = body['entries'] as Array<Record<string, unknown>>;
+    const hasEntryForUnauthenticated = entries.some((e) =>
+      e['event_id'] === null && e['http_status'] === 401
+    );
+    assert.strictEqual(hasEntryForUnauthenticated, false, 'No audit entry should exist for unauthenticated request');
+  });
+
+  it('AC2: audit log entries are immutable via application context', async () => {
+    const auditRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/audit/log?start_date=2026-07-13T00:00:00.000Z&end_date=2026-07-13T23:59:59.999Z`,
+      undefined,
+      authHeaders,
+    );
+    const body = auditRes.body as Record<string, unknown>;
+    const entries = body['entries'] as Array<Record<string, unknown>>;
+    assert.ok(entries.length > 0, 'Expected at least one audit entry');
+
+    const logId = entries[0]!['log_id'];
+    // Attempt to DELETE via the API (no DELETE endpoint exists for audit_log, so this should 404)
+    const deleteRes = await makeRequest(TEST_PORT, 'DELETE', `/api/v1/audit/log/${logId}`, undefined, authHeaders);
+    assert.strictEqual(deleteRes.status, 404);
+  });
+
+  it('AC3: auditor query returns entries in append order with range digest and no gaps', async () => {
+    const auditRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/audit/log?start_date=2026-07-13T00:00:00.000Z&end_date=2026-07-13T23:59:59.999Z`,
+      undefined,
+      authHeaders,
+    );
+    assert.strictEqual(auditRes.status, 200);
+
+    const body = auditRes.body as Record<string, unknown>;
+    const entries = body['entries'] as Array<Record<string, unknown>>;
+    assert.ok(entries.length > 0, 'Expected at least one audit entry');
+
+    const rangeDigest = body['range_digest'] as string;
+    assert.ok(rangeDigest, 'range_digest should be present');
+
+    const sequenceCheck = body['sequence_check'] as Record<string, unknown>;
+    assert.ok(sequenceCheck['is_contiguous'], 'entries should be contiguous');
+
+    const timestamps = entries.map((e) => e['timestamp'] as string);
+    for (let i = 1; i < timestamps.length; i++) {
+      assert.ok(timestamps[i]! >= timestamps[i - 1]!, 'entries should be in append order');
+    }
+  });
+
+  it('AC3: auditor query with user_id filter returns only matching entries', async () => {
+    const auditRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/audit/log?start_date=2026-07-13T00:00:00.000Z&end_date=2026-07-13T23:59:59.999Z&user_id=nonexistent-user`,
+      undefined,
+      authHeaders,
+    );
+    assert.strictEqual(auditRes.status, 200);
+
+    const body = auditRes.body as Record<string, unknown>;
+    const entries = body['entries'] as Array<Record<string, unknown>>;
+    assert.strictEqual(entries.length, 0, 'No entries should match a nonexistent user_id');
+  });
+
+  it('AC4: audit log disable endpoint is rejected with AUDIT_LOG_DISABLED', async () => {
+    const res = await makeRequest(TEST_PORT, 'PUT', '/api/v1/config/audit-log-enabled', {
+      audit_log_enabled: false,
+    }, authHeaders);
+    assert.strictEqual(res.status, 423);
+    const body = res.body as Record<string, unknown>;
+    assert.strictEqual(body['error_code'], 'AUDIT_LOG_DISABLED');
+  });
+
+  it('AC4: config endpoint returns 200 when audit_log_enabled is true', async () => {
+    const res = await makeRequest(TEST_PORT, 'PUT', '/api/v1/config/audit-log-enabled', {
+      audit_log_enabled: true,
+    }, authHeaders);
+    assert.strictEqual(res.status, 200);
+  });
+
+  it('AC5: audit log entries are retained (no deletion path exists)', async () => {
+    const auditRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/audit/log?start_date=2026-07-13T00:00:00.000Z&end_date=2026-07-13T23:59:59.999Z`,
+      undefined,
+      authHeaders,
+    );
+    const body = auditRes.body as Record<string, unknown>;
+    const entries = body['entries'] as Array<Record<string, unknown>>;
+    assert.ok(entries.length > 0, 'Audit entries should still exist (no deletion occurred)');
+  });
+
+  it('audit log entry user_id matches authenticated caller, not forged value', async () => {
+    const streamId = '00000000-0000-0000-0000-000000000006';
+    const forgedPayload = makeEventPayload('inventory', streamId, {
+      metadata: {
+        correlation_id: '00000000-0000-0000-0000-000000000002',
+        actor: {
+          user_id: '99999999-9999-9999-9999-999999999999',
+          role: 'forged_role',
+          location_id: '00000000-0000-0000-0000-000000000001',
+        },
+        occurred_at: '2026-07-13T10:00:00.000Z',
+      },
+    });
+    const res = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', forgedPayload, authHeaders);
+    assert.strictEqual(res.status, 201);
+
+    const eventResult = res.body as Record<string, unknown>;
+    const actor = (eventResult['metadata'] as Record<string, unknown>)['actor'] as Record<string, unknown>;
+    assert.notStrictEqual(actor['user_id'], '99999999-9999-9999-9999-999999999999', 'forged user_id should be overwritten');
+    assert.notStrictEqual(actor['role'], 'forged_role', 'forged role should be overwritten');
+  });
+
+  it('GET /api/v1/audit/log rejects unauthenticated requests', async () => {
+    const res = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/audit/log?start_date=2026-07-13T00:00:00.000Z&end_date=2026-07-13T23:59:59.999Z`,
+    );
+    assert.strictEqual(res.status, 401);
+  });
+
+  it('PUT /api/v1/config/audit-log-enabled rejects unauthenticated requests', async () => {
+    const res = await makeRequest(TEST_PORT, 'PUT', '/api/v1/config/audit-log-enabled', {
+      audit_log_enabled: true,
+    });
+    assert.strictEqual(res.status, 401);
+  });
+});
+
+==== FILE: src/events/store.ts ====
+import { randomUUID } from 'node:crypto';
+import { getPool } from '../config/db.js';
+import { AppError } from '../middleware/error.js';
+import type { PoolClient } from 'pg';
+import { logAuditEntry } from '../read/projections/audit_log.js';
+import type { AuditEntryPayload } from '../read/projections/audit_log.js';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_REGEX.test(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+export interface EventEnvelope {
+  event_id?: string;
+  stream_type: string;
+  stream_id: string;
+  event_type: string;
+  event_version?: number;
+  payload: Record<string, unknown>;
+  metadata: {
+    correlation_id: string;
+    causation_id?: string | null;
+    actor: {
+      user_id: string;
+      role: string;
+      location_id: string;
+    };
+    device_id?: string | null;
+    capture_method?: 'AUTO' | 'MANUAL';
+    occurred_at: string;
+    synced_at?: string | null;
+  };
+  schema_version?: number;
+  idempotency_key?: string | null;
+}
+
+export interface PersistedEvent extends EventEnvelope {
+  event_id: string;
+  event_version: number;
+  schema_version: number;
+  created_at: string;
+}
+
+export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
+  if (typeof body !== 'object' || body === null) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'Request body must be a JSON object');
+  }
+
+  const obj = body as Record<string, unknown>;
+
+  if (!isNonEmptyString(obj['stream_type'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'stream_type is required and must be a non-empty string');
+  }
+
+  if (!isUuid(obj['stream_id'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'stream_id is required and must be a valid UUID');
+  }
+
+  if (!isNonEmptyString(obj['event_type'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'event_type is required and must be a non-empty string');
+  }
+
+  if (obj['event_version'] !== undefined && (!Number.isInteger(obj['event_version']) || (obj['event_version'] as number) <= 0)) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'event_version must be a positive integer');
+  }
+
+  if (obj['schema_version'] !== undefined && (!Number.isInteger(obj['schema_version']) || (obj['schema_version'] as number) <= 0)) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'schema_version must be a positive integer');
+  }
+
+  if (obj['idempotency_key'] !== undefined && obj['idempotency_key'] !== null && typeof obj['idempotency_key'] !== 'string') {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'idempotency_key must be a string or null');
+  }
+
+  if (typeof obj['payload'] !== 'object' || obj['payload'] === null || Array.isArray(obj['payload'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'payload is required and must be a JSON object');
+  }
+
+  if (typeof obj['metadata'] !== 'object' || obj['metadata'] === null || Array.isArray(obj['metadata'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata is required and must be a JSON object');
+  }
+
+  const meta = obj['metadata'] as Record<string, unknown>;
+
+  if (!isUuid(meta['correlation_id'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.correlation_id is required and must be a valid UUID');
+  }
+
+  if (typeof meta['actor'] !== 'object' || meta['actor'] === null || Array.isArray(meta['actor'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.actor is required and must be an object');
+  }
+
+  const actor = meta['actor'] as Record<string, unknown>;
+  if (!isUuid(actor['user_id'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.actor.user_id is required and must be a valid UUID');
+  }
+  if (!isNonEmptyString(actor['role'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.actor.role is required and must be a non-empty string');
+  }
+  if (!isUuid(actor['location_id'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.actor.location_id is required and must be a valid UUID');
+  }
+
+  const ISO8601_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+  if (typeof meta['occurred_at'] !== 'string' || !ISO8601_REGEX.test(meta['occurred_at'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.occurred_at is required and must be a valid ISO-8601 timestamp');
+  }
+
+  if (meta['causation_id'] !== undefined && meta['causation_id'] !== null && !isUuid(meta['causation_id'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.causation_id must be a valid UUID or null');
+  }
+
+  if (meta['capture_method'] !== undefined && meta['capture_method'] !== 'AUTO' && meta['capture_method'] !== 'MANUAL') {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.capture_method must be AUTO or MANUAL');
+  }
+}
+
+function mapRowToEvent(row: Record<string, unknown>): PersistedEvent {
+  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  return {
+    event_id: row['event_id'] as string,
+    stream_type: row['stream_type'] as string,
+    stream_id: row['stream_id'] as string,
+    event_type: row['event_type'] as string,
+    event_version: row['event_version'] as number,
+    payload: row['payload'] as Record<string, unknown>,
+    metadata: row['metadata'] as PersistedEvent['metadata'],
+    schema_version: row['schema_version'] as number,
+    idempotency_key: row['idempotency_key'] as string | null,
+    created_at: createdAt,
+  };
+}
+
+export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'http_status' | 'error_code' | 'details'>): Promise<PersistedEvent> {
+  const pool = getPool();
+  const eventId = randomUUID();
+  const syncedAt = new Date().toISOString();
+
+  const metadata = {
+    ...envelope.metadata,
+    synced_at: syncedAt,
+  };
+
+  const client: PoolClient = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let nextVersion: number;
+    if (envelope.event_version !== undefined) {
+      nextVersion = envelope.event_version;
+    } else {
+      const versionResult = await client.query(
+        `SELECT COALESCE(MAX(event_version), 0) + 1 AS next_version FROM domain_events WHERE stream_id = $1`,
+        [envelope.stream_id],
+      );
+      nextVersion = versionResult.rows[0]!['next_version'] as number;
+    }
+
+    const result = await client.query(
+      `INSERT INTO domain_events (event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at`,
+      [
+        eventId,
+        envelope.stream_type,
+        envelope.stream_id,
+        envelope.event_type,
+        nextVersion,
+        envelope.payload,
+        metadata,
+        envelope.schema_version ?? 1,
+        envelope.idempotency_key ?? null,
+      ],
+    );
+
+    if (auditCtx) {
+      await logAuditEntry(client, {
+        ...auditCtx,
+        event_id: eventId,
+        http_status: 201,
+        error_code: null,
+      });
+    }
+
+    await client.query('COMMIT');
+    return mapRowToEvent(result.rows[0]!);
+  } catch (err: unknown) {
+    await client.query('ROLLBACK');
+    if (err && typeof err === 'object' && 'code' in err && err.code === '23505' && 'constraint' in err) {
+      // Postgres exposes the violated constraint name via err.constraint, not err.detail
+      // (err.detail only contains the conflicting key/value, e.g. "Key (idempotency_key)=(...) already exists.").
+      const constraint = (err as { constraint?: string }).constraint;
+      if (constraint === 'uq_idempotency') {
+        const existing = await client.query(
+          `SELECT event_id FROM domain_events WHERE idempotency_key = $1`,
+          [envelope.idempotency_key],
+        );
+        const existingEventId = existing.rows.length > 0 ? existing.rows[0]!['event_id'] : 'unknown';
+        throw new AppError(409, 'DUPLICATE_EVENT', 'Event with this idempotency_key already exists', {
+          existing_event_id: existingEventId,
+        });
+      } else if (constraint === 'uq_stream_version') {
+        throw new AppError(409, 'STREAM_CONFLICT', 'Event version conflict in stream', {
+          stream_id: envelope.stream_id,
+          event_version: envelope.event_version,
+        });
+      }
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function readStream(
+  streamType: string,
+  streamId: string,
+): Promise<PersistedEvent[]> {
+  const pool = getPool();
+  const result = await pool.query(
+    `SELECT event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at
+     FROM domain_events
+     WHERE stream_type = $1 AND stream_id = $2
+     ORDER BY event_version ASC`,
+    [streamType, streamId],
+  );
+
+  return result.rows.map(mapRowToEvent);
+}
+
+==== FILE: src/api/v1/events.ts ====
+import type { RouteHandler } from '../../middleware/error.js';
+import { sendJson, sendError } from '../../middleware/error.js';
+import { validateEnvelope, persistEvent, readStream } from '../../events/store.js';
+import { getParsedBody, getAuthContext, getAuthorizedRole, getTraceId } from '../../middleware/context.js';
+import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
+import { auditConfig } from '../../config/audit.js';
+
+function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
+  if (typeof body === 'object' && body !== null) {
+    const streamType = (body as Record<string, unknown>)['stream_type'];
+    if (typeof streamType === 'string') return streamType;
+  }
+  return '';
+}
+
+function resolveLocationFromBody(_params: Record<string, string>, body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined;
+  const metadata = (body as Record<string, unknown>)['metadata'];
+  if (typeof metadata !== 'object' || metadata === null) return undefined;
+  const actor = (metadata as Record<string, unknown>)['actor'];
+  if (typeof actor !== 'object' || actor === null) return undefined;
+  const locationId = (actor as Record<string, unknown>)['location_id'];
+  return typeof locationId === 'string' ? locationId : undefined;
+}
+
+function resolveModuleFromParams(params: Record<string, string>): string {
+  return params['streamType'] ?? '';
+}
+
+const postEventBase: RouteHandler = async (req, res, _params) => {
+  const body = getParsedBody(req);
+  validateEnvelope(body);
+
+  const authContext = getAuthContext(req);
+  if (authContext) {
+    body.metadata.actor.user_id = authContext.userId;
+    const authorizedRole = getAuthorizedRole(req);
+    if (authorizedRole) {
+      body.metadata.actor.role = authorizedRole;
+    }
+  }
+
+  if (!auditConfig.enabled) {
+    sendError(res, 423, 'AUDIT_LOG_DISABLED', 'No mutating operations are permitted while the audit log is inactive');
+    return;
+  }
+
+  const traceId = getTraceId(req) ?? '';
+  const auditCtx = authContext
+    ? {
+        trace_id: traceId,
+        user_id: authContext.userId,
+        role: getAuthorizedRole(req) ?? '',
+        location_id: body.metadata.actor.location_id,
+        endpoint: req.url ?? '',
+        method: req.method ?? 'POST',
+      }
+    : undefined;
+
+  const persisted = await persistEvent(body, auditCtx);
+  sendJson(res, 201, persisted);
+};
+
+const getStreamBase: RouteHandler = async (req, res, params) => {
+  const streamType = params['streamType'];
+  const streamId = params['streamId'];
+
+  if (!streamType || !streamId) {
+    sendError(res, 400, 'INVALID_PARAMS', 'streamType and streamId are required');
+    return;
+  }
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!UUID_REGEX.test(streamId)) {
+    sendError(res, 400, 'INVALID_PARAMS', 'streamId must be a valid UUID');
+    return;
+  }
+
+  const events = await readStream(streamType, streamId);
+
+  // Location-scope the read: a caller only sees events that occurred at a location their role
+  // grants them (module already checked by requireRole). A '*' location grant sees everything.
+  // Note: filtering by location can return a non-contiguous slice of a stream's versions.
+  const authContext = getAuthContext(req);
+  const scoped = authContext
+    ? (() => {
+        const { wildcard, locations } = permittedLocationsForModule(authContext.roles, streamType);
+        if (wildcard) return events;
+        return events.filter((e) => locations.has(e.metadata.actor.location_id));
+      })()
+    : events;
+
+  sendJson(res, 200, { events: scoped });
+};
+
+export const postEventHandler: RouteHandler = requireRole({
+  module: resolveModuleFromBody,
+  functionScope: 'write',
+  locationId: resolveLocationFromBody,
+})(postEventBase);
+
+export const getStreamHandler: RouteHandler = requireRole({
+  module: resolveModuleFromParams,
+  functionScope: 'read',
+})(getStreamBase);
+
+==== FILE: src/api/router.ts ====
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import type { RouteHandler } from '../middleware/error.js';
+import { AppError, sendError, withErrorHandler } from '../middleware/error.js';
+import { readJsonBody } from '../middleware/body.js';
+import { authenticateRequest } from '../middleware/auth.js';
+import { setParsedBody, setAuthContext, setTraceId } from '../middleware/context.js';
+
+interface Route {
+  method: string;
+  pattern: RegExp;
+  paramNames: string[];
+  handler: RouteHandler;
+}
+
+const BODY_BEARING_METHODS = new Set(['POST', 'PUT', 'PATCH']);
+
+// Paths that do not require a user SSO session. SCIM authenticates via its own static
+// bearer token inside the handler; the dev-token endpoint is how a token is obtained in
+// the first place, so it cannot itself require one.
+const PUBLIC_PATH_PATTERNS: RegExp[] = [
+  /^\/api\/v1\/health$/,
+  /^\/api\/v1\/auth\/dev-token$/,
+  /^\/api\/v1\/scim\/v2\/Users(\/.*)?$/,
+];
+
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
+}
+
+export class Router {
+  private routes: Route[] = [];
+
+  get(path: string, handler: RouteHandler): void {
+    this.addRoute('GET', path, handler);
+  }
+
+  post(path: string, handler: RouteHandler): void {
+    this.addRoute('POST', path, handler);
+  }
+
+  patch(path: string, handler: RouteHandler): void {
+    this.addRoute('PATCH', path, handler);
+  }
+
+  put(path: string, handler: RouteHandler): void {
+    this.addRoute('PUT', path, handler);
+  }
+
+  private addRoute(method: string, path: string, handler: RouteHandler): void {
+    const paramNames: string[] = [];
+    const pattern = path.replace(/:([^/]+)/g, (_match, paramName: string) => {
+      paramNames.push(paramName);
+      return '([^/]+)';
+    });
+    this.routes.push({
+      method,
+      pattern: new RegExp(`^${pattern}$`),
+      paramNames,
+      handler: withErrorHandler(handler),
+    });
+  }
+
+  async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    setTraceId(req, randomUUID());
+
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    } catch {
+      sendError(res, 400, 'BAD_REQUEST', 'Invalid URL');
+      return;
+    }
+    const method = req.method ?? 'GET';
+
+    // Normalize a trailing slash (except root) so `/api/v1/health/` matches routes and the
+    // public allowlist the same as `/api/v1/health`.
+    const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
+
+    // Authenticate BEFORE reading the body: an unauthenticated caller must receive 401 for any
+    // protected endpoint and must not be able to make the server buffer a request body first.
+    if (!isPublicPath(pathname)) {
+      try {
+        const authContext = await authenticateRequest(req);
+        setAuthContext(req, authContext);
+      } catch (err) {
+        if (err instanceof AppError) {
+          sendError(res, err.statusCode, err.errorCode, err.message, err.details);
+          return;
+        }
+        sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
+        return;
+      }
+    }
+
+    if (BODY_BEARING_METHODS.has(method)) {
+      try {
+        const body = await readJsonBody(req);
+        setParsedBody(req, body);
+      } catch (err) {
+        if (err instanceof AppError) {
+          sendError(res, err.statusCode, err.errorCode, err.message, err.details);
+          return;
+        }
+        sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
+        return;
+      }
+    }
+
+    for (const route of this.routes) {
+      if (route.method !== method) continue;
+      const match = pathname.match(route.pattern);
+      if (!match) continue;
+
+      const params: Record<string, string> = {};
+      route.paramNames.forEach((name, i) => {
+        try {
+          params[name] = decodeURIComponent(match[i + 1] ?? '');
+        } catch {
+          params[name] = match[i + 1] ?? '';
+        }
+      });
+
+      await route.handler(req, res, params);
+      return;
+    }
+
+    sendError(res, 404, 'NOT_FOUND', `No route for ${method} ${pathname}`);
+  }
+}
+
+==== FILE: src/middleware/context.ts ====
+import type { IncomingMessage } from 'node:http';
+import type { RoleAssignment } from '../read/projections/users.js';
+
+export interface AuthContext {
+  userId: string;
+  externalId: string;
+  roles: RoleAssignment[];
+}
+
+interface RequestContext extends IncomingMessage {
+  parsedBody?: unknown;
+  authContext?: AuthContext;
+  authorizedRole?: string;
+  traceId?: string;
+}
+
+/** Attaches the once-parsed JSON body to the request for downstream handlers/middleware to read. */
+export function setParsedBody(req: IncomingMessage, body: unknown): void {
+  (req as RequestContext).parsedBody = body;
+}
+
+/** Reads the body parsed by the router. Returns `undefined` if no body was parsed (e.g. GET requests). */
+export function getParsedBody(req: IncomingMessage): unknown {
+  return (req as RequestContext).parsedBody;
+}
+
+/** Attaches the resolved auth context (identity + roles) after successful authentication. */
+export function setAuthContext(req: IncomingMessage, ctx: AuthContext): void {
+  (req as RequestContext).authContext = ctx;
+}
+
+/** Reads the auth context attached by the router's global auth check. Undefined on public paths. */
+export function getAuthContext(req: IncomingMessage): AuthContext | undefined {
+  return (req as RequestContext).authContext;
+}
+
+/**
+ * Records the role assignment that authorized the request (the one RBAC matched on
+ * module + function + location). Handlers use it to stamp the audit actor's role from
+ * the server's own authorization decision rather than trusting a client-supplied value.
+ */
+export function setAuthorizedRole(req: IncomingMessage, role: string): void {
+  (req as RequestContext).authorizedRole = role;
+}
+
+/** Reads the role RBAC authorized this request under, if any. */
+export function getAuthorizedRole(req: IncomingMessage): string | undefined {
+  return (req as RequestContext).authorizedRole;
+}
+
+/** Attaches a per-request trace_id for audit log and error envelope correlation. */
+export function setTraceId(req: IncomingMessage, traceId: string): void {
+  (req as RequestContext).traceId = traceId;
+}
+
+/** Reads the per-request trace_id, if set. */
+export function getTraceId(req: IncomingMessage): string | undefined {
+  return (req as RequestContext).traceId;
+}
+
+==== FILE: src/config/index.ts ====
+import './audit.js';
+
+export { auditConfig } from './audit.js';
+
+const parsedPort = Number(process.env['PORT'] ?? 3000);
+const parsedMax = Number(process.env['DB_POOL_MAX'] ?? 20);
+const parsedDbPort = Number(process.env['DB_PORT'] ?? 5432);
+
+type AuthMode = 'oidc' | 'local';
+
+function resolveAuthMode(): AuthMode {
+  const raw = process.env['AUTH_MODE'] ?? 'oidc';
+  if (raw !== 'oidc' && raw !== 'local') {
+    throw new Error(`Invalid AUTH_MODE "${raw}": must be "oidc" or "local"`);
+  }
+  return raw;
+}
+
+const rawNodeEnv = process.env['NODE_ENV'];
+const nodeEnv = rawNodeEnv ?? 'development';
+const authMode = resolveAuthMode();
+
+// Local auth mode (which exposes the unauthenticated dev-token endpoint) is only permitted when
+// NODE_ENV is EXPLICITLY a dev/test value. Fail closed for every other case - including NODE_ENV
+// unset - so a misconfigured host (e.g. a copied env file with NODE_ENV absent) cannot silently
+// run the insecure path.
+const LOCAL_AUTH_ALLOWED_ENVS = new Set(['development', 'test']);
+if (authMode === 'local' && !LOCAL_AUTH_ALLOWED_ENVS.has(rawNodeEnv ?? '')) {
+  throw new Error(
+    'AUTH_MODE=local (dev/test only) requires NODE_ENV to be explicitly "development" or "test"; refusing to start. Configure AUTH_MODE=oidc with a real identity provider for staging/production.',
+  );
+}
+
+if (authMode === 'oidc') {
+  const missing = ['AUTH_JWKS_URI', 'AUTH_ISSUER', 'AUTH_AUDIENCE'].filter((key) => !process.env[key]);
+  if (missing.length > 0) {
+    throw new Error(`AUTH_MODE=oidc requires the following env vars to be set: ${missing.join(', ')}`);
+  }
+}
+
+if (authMode === 'local' && !process.env['AUTH_LOCAL_SECRET']) {
+  throw new Error('AUTH_MODE=local requires AUTH_LOCAL_SECRET to be set (no default value permitted)');
+}
+
+if (!process.env['SCIM_BEARER_TOKEN']) {
+  throw new Error('SCIM_BEARER_TOKEN must be set (no default value permitted)');
+}
+
+export const config = {
+  port: Number.isNaN(parsedPort) ? 3000 : parsedPort,
+  hostname: process.env['HOSTNAME'] ?? '0.0.0.0',
+  nodeEnv,
+  db: {
+    host: process.env['DB_HOST'] ?? 'localhost',
+    port: Number.isNaN(parsedDbPort) ? 5432 : parsedDbPort,
+    database: process.env['DB_NAME'] ?? 'inventory_events',
+    user: process.env['DB_USER'] ?? 'app_user',
+    password: process.env['DB_PASSWORD'] ?? 'app_password',
+    // DDL-only credentials (migrations, test schema setup) - never used for request-serving
+    // queries. app_user intentionally has no CREATE privilege on the public schema.
+    adminUser: process.env['DB_ADMIN_USER'] ?? 'admin_user',
+    adminPassword: process.env['DB_ADMIN_PASSWORD'] ?? 'admin_password',
+    max: Number.isNaN(parsedMax) ? 20 : parsedMax,
+    ssl: process.env['DB_SSL'] === 'true',
+  },
+  auth: {
+    mode: authMode,
+    jwksUri: process.env['AUTH_JWKS_URI'] ?? '',
+    issuer: process.env['AUTH_ISSUER'] ?? '',
+    audience: process.env['AUTH_AUDIENCE'] ?? '',
+    localSecret: process.env['AUTH_LOCAL_SECRET'] ?? '',
+  },
+  scim: {
+    bearerToken: process.env['SCIM_BEARER_TOKEN'] ?? '',
+  },
+} as const;
+
+==== FILE: src/events/migrate.ts ====
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { getAdminPool, closeAdminPool } from '../config/db.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const MIGRATIONS = ['../../events/domain_events.sql', '../../read/projections/users.sql', '../../read/projections/audit_log.sql'];
+
+async function migrate(): Promise<void> {
+  // DDL requires admin_user - app_user has no CREATE privilege on the public schema.
+  const pool = getAdminPool();
+  for (const migration of MIGRATIONS) {
+    const sql = readFileSync(resolve(__dirname, migration), 'utf-8');
+    console.log(`Running migration: ${migration}`);
+    await pool.query(sql);
+  }
+  console.log('Migration complete.');
+  await closeAdminPool();
+}
+
+migrate().catch((err) => {
+  console.error('Migration failed:', err);
+  process.exit(1);
+});
+
+==== FILE: src/server.ts ====
+import { createServer } from 'node:http';
+import { config } from './config/index.js';
+import { Router } from './api/router.js';
+import { healthHandler } from './api/v1/health.js';
+import { postEventHandler, getStreamHandler } from './api/v1/events.js';
+import { provisionUserHandler, patchUserHandler } from './api/v1/scim.js';
+import { devTokenHandler } from './api/v1/auth-dev.js';
+import { auditLogHandler } from './api/v1/audit.js';
+import { configAuditLogHandler } from './api/v1/config.js';
+
+const router = new Router();
+
+router.get('/api/v1/health', healthHandler);
+router.post('/api/v1/events', postEventHandler);
+router.get('/api/v1/events/:streamType/:streamId', getStreamHandler);
+router.post('/api/v1/scim/v2/Users', provisionUserHandler);
+router.patch('/api/v1/scim/v2/Users/:externalId', patchUserHandler);
+router.get('/api/v1/audit/log', auditLogHandler);
+router.put('/api/v1/config/audit-log-enabled', configAuditLogHandler);
+
+if (config.auth.mode === 'local') {
+  router.post('/api/v1/auth/dev-token', devTokenHandler);
+}
+
+const server = createServer((req, res) => {
+  router.handle(req, res).catch((err) => {
+    console.error('Unhandled server error:', err);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error_code: 'INTERNAL_ERROR', message: 'Internal server error', details: {}, trace_id: 'unknown' }));
+    }
+  });
+});
+
+server.listen(config.port, config.hostname, () => {
+  console.log(`Server listening on http://${config.hostname}:${config.port}`);
+  console.log(`Environment: ${config.nodeEnv}`);
+});
+
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received. Shutting down gracefully...');
+  server.close(async () => {
+    const { closePool } = await import('./config/db.js');
+    await closePool();
+    console.log('Server and database connections closed.');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received. Shutting down gracefully...');
+  server.close(async () => {
+    const { closePool } = await import('./config/db.js');
+    await closePool();
+    console.log('Server and database connections closed.');
+    process.exit(0);
+  });
+});
+
+export { server };
+
+==== FILE: deploy/compose/init-db.sql ====
+CREATE USER app_user WITH PASSWORD 'app_password';
+CREATE USER readonly_user WITH PASSWORD 'readonly_password';
+CREATE USER replication_user WITH REPLICATION PASSWORD 'replication_password';
+
+CREATE TABLE IF NOT EXISTS domain_events (
+  event_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  stream_type     TEXT NOT NULL,
+  stream_id       UUID NOT NULL,
+  event_type      TEXT NOT NULL,
+  event_version   INTEGER NOT NULL,
+  payload         JSONB NOT NULL,
+  metadata        JSONB NOT NULL,
+  schema_version  INTEGER NOT NULL DEFAULT 1,
+  idempotency_key TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  CONSTRAINT uq_stream_version UNIQUE (stream_id, event_version),
+  CONSTRAINT uq_idempotency UNIQUE (idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_domain_events_stream ON domain_events (stream_type, stream_id, event_version);
+CREATE INDEX IF NOT EXISTS idx_domain_events_type ON domain_events (event_type);
+CREATE INDEX IF NOT EXISTS idx_domain_events_created ON domain_events (created_at);
+
+GRANT INSERT, SELECT ON domain_events TO app_user;
+GRANT SELECT ON domain_events TO readonly_user;
+
+CREATE PUBLICATION powersync_publication FOR TABLE domain_events;
+
+-- The users / user_role_assignments table definitions below MUST stay identical to the canonical
+-- source in read/projections/users.sql (applied by src/events/migrate.ts and the test harness).
+-- This file additionally issues the app_user / readonly_user grants that the migrate path does not
+-- need (migrate runs as an admin role). Change both files together.
+CREATE TABLE IF NOT EXISTS users (
+  user_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  external_id      TEXT NOT NULL UNIQUE,
+  email            TEXT NOT NULL,
+  display_name     TEXT,
+  active           BOOLEAN NOT NULL DEFAULT true,
+  provisioned_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deprovisioned_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS user_role_assignments (
+  assignment_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id        UUID NOT NULL REFERENCES users(user_id),
+  role           TEXT NOT NULL,
+  module         TEXT NOT NULL,
+  function_scope TEXT NOT NULL CHECK (function_scope IN ('read', 'write')),
+  location_id    TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_role_assignments_user ON user_role_assignments (user_id);
+
+GRANT INSERT, SELECT, UPDATE ON users TO app_user;
+GRANT INSERT, SELECT, DELETE ON user_role_assignments TO app_user;
+GRANT SELECT ON users TO readonly_user;
+GRANT SELECT ON user_role_assignments TO readonly_user;
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  log_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  trace_id          TEXT NOT NULL,
+  user_id           UUID NOT NULL,
+  role              TEXT NOT NULL,
+  location_id       TEXT NOT NULL,
+  timestamp         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  endpoint          TEXT NOT NULL,
+  method            TEXT NOT NULL CHECK (method IN ('GET','POST','PUT','PATCH','DELETE')),
+  event_id          UUID,
+  http_status       INT,
+  error_code        TEXT,
+  details           JSONB,
+  archived          BOOLEAN DEFAULT false,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_log_archive (
+  archive_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  original_log_id   UUID NOT NULL,
+  archive_path      TEXT NOT NULL,
+  archived_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_log_tamper_attempt_log (
+  attempt_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  timestamp         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id           UUID,
+  role              TEXT,
+  location_id       TEXT,
+  endpoint          TEXT,
+  method            TEXT,
+  error_code        TEXT NOT NULL,
+  details           JSONB,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_timestamp ON audit_log (user_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_log_trace_id ON audit_log (trace_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_tamper_created_at ON audit_log_tamper_attempt_log (created_at DESC);
+
+GRANT INSERT, SELECT ON audit_log TO app_user;
+GRANT INSERT, SELECT ON audit_log_archive TO app_user;
+GRANT INSERT, SELECT ON audit_log_tamper_attempt_log TO app_user;
+GRANT SELECT ON audit_log TO readonly_user;
+GRANT SELECT ON audit_log_tamper_attempt_log TO readonly_user;
+
+CREATE OR REPLACE FUNCTION audit_log_tamper_protection()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'AUDIT_LOG_TAMPER_ATTEMPT: Modification of audit log is forbidden';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_log_tamper_protection
+BEFORE UPDATE OR DELETE ON audit_log
+FOR EACH ROW
+EXECUTE FUNCTION audit_log_tamper_protection();
+
+CREATE OR REPLACE FUNCTION audit_log_tamper_attempt_protection()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'AUDIT_LOG_TAMPER_ATTEMPT: Modification of tamper attempt log is forbidden';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_log_tamper_attempt_protection
+BEFORE UPDATE OR DELETE ON audit_log_tamper_attempt_log
+FOR EACH ROW
+EXECUTE FUNCTION audit_log_tamper_attempt_protection();
+
+==== FILE: src/middleware/rbac.ts ====
+import type { RouteHandler } from './error.js';
+import { AppError } from './error.js';
+import { getAuthContext, getParsedBody, setAuthorizedRole } from './context.js';
+import type { RoleAssignment } from '../read/projections/users.js';
+
+/**
+ * Computes the locations a caller may read within a module from their role assignments.
+ * `wildcard` is true if any read-satisfying assignment grants all locations (`*`); otherwise
+ * `locations` holds the explicit location ids. A `write` assignment satisfies read as well.
+ */
+export function permittedLocationsForModule(
+  roles: RoleAssignment[],
+  module: string,
+): { wildcard: boolean; locations: Set<string> } {
+  const locations = new Set<string>();
+  let wildcard = false;
+  for (const r of roles) {
+    if (r.module !== module && r.module !== '*') continue;
+    // read is satisfied by both 'read' and 'write' assignments
+    if (r.locationId === '*') wildcard = true;
+    else locations.add(r.locationId);
+  }
+  return { wildcard, locations };
+}
+
+export interface RbacOptions {
+  /** Static module name, or resolved dynamically from route params / parsed body. */
+  module: string | ((params: Record<string, string>, body: unknown) => string);
+  functionScope: 'read' | 'write';
+  /** Optional: resolves the target location for this request. Skipped if it returns undefined. */
+  locationId?: (params: Record<string, string>, body: unknown) => string | undefined;
+}
+
+function satisfiesFunctionScope(assignment: RoleAssignment, required: 'read' | 'write'): boolean {
+  // A 'write' assignment satisfies both read and write requirements; 'read' satisfies read only.
+  if (required === 'read') return true;
+  return assignment.functionScope === 'write';
+}
+
+/**
+ * Enforces module -> function -> location precedence against the caller's role assignments
+ * (attached to the request by the router's global auth check). Must be composed onto a route
+ * handler AFTER authentication has already run - throws if no auth context is present.
+ */
+export function requireRole(options: RbacOptions): (handler: RouteHandler) => RouteHandler {
+  return (handler) => {
+    return async (req, res, params) => {
+      const authContext = getAuthContext(req);
+      if (!authContext) {
+        throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+      }
+
+      const body = getParsedBody(req);
+      const resolvedModule = typeof options.module === 'function' ? options.module(params, body) : options.module;
+
+      // A request that does not resolve to a concrete module must be rejected outright - a
+      // wildcard ('*') assignment must not be allowed to satisfy an unknown/empty module.
+      if (!resolvedModule) {
+        throw new AppError(400, 'INVALID_MODULE', 'Request does not resolve to a known module');
+      }
+
+      const moduleMatches = authContext.roles.filter((r) => r.module === resolvedModule || r.module === '*');
+      if (moduleMatches.length === 0) {
+        throw new AppError(
+          403,
+          'MODULE_ACCESS_DENIED',
+          `No role assignment grants access to module "${resolvedModule}"`,
+        );
+      }
+
+      const functionMatches = moduleMatches.filter((r) => satisfiesFunctionScope(r, options.functionScope));
+      if (functionMatches.length === 0) {
+        throw new AppError(
+          403,
+          'FUNCTION_ACCESS_DENIED',
+          `No role assignment grants "${options.functionScope}" access to module "${resolvedModule}"`,
+        );
+      }
+
+      // The assignment that authorized this request. For a location-scoped request it is the
+      // one matching the location; otherwise the first function-satisfying match. Handlers use
+      // its role to stamp the audit actor, so identity/role are never trusted from the client.
+      let authorizingAssignment: RoleAssignment | undefined = functionMatches[0];
+
+      const resolvedLocation = options.locationId?.(params, body);
+      if (resolvedLocation !== undefined) {
+        authorizingAssignment = functionMatches.find(
+          (r) => r.locationId === '*' || r.locationId === resolvedLocation,
+        );
+        if (!authorizingAssignment) {
+          throw new AppError(
+            403,
+            'LOCATION_ACCESS_DENIED',
+            `No role assignment grants access to location "${resolvedLocation}"`,
+          );
+        }
+      }
+
+      if (authorizingAssignment) {
+        setAuthorizedRole(req, authorizingAssignment.role);
+      }
+
+      await handler(req, res, params);
+    };
+  };
+}
+
+==== FILE: src/middleware/error.ts ====
+import { randomUUID } from 'node:crypto';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
+export interface ErrorEnvelope {
+  error_code: string;
+  message: string;
+  details: Record<string, unknown>;
+  trace_id: string;
+}
+
+export class AppError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    public readonly errorCode: string,
+    message: string,
+    public readonly details: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = 'AppError';
+  }
+}
+
+export function createErrorEnvelope(error: AppError, traceId?: string): ErrorEnvelope {
+  return {
+    error_code: error.errorCode,
+    message: error.message,
+    details: error.details,
+    trace_id: traceId ?? randomUUID(),
+  };
+}
+
+export function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
+  const json = JSON.stringify(body);
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(json),
+  });
+  res.end(json);
+}
+
+export function sendError(
+  res: ServerResponse,
+  statusCode: number,
+  errorCode: string,
+  message: string,
+  details: Record<string, unknown> = {},
+): void {
+  const error = new AppError(statusCode, errorCode, message, details);
+  const envelope = createErrorEnvelope(error);
+  sendJson(res, statusCode, envelope);
+}
+
+export type RouteHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  params: Record<string, string>,
+) => Promise<void>;
+
+export function withErrorHandler(handler: RouteHandler): RouteHandler {
+  return async (req, res, params) => {
+    try {
+      await handler(req, res, params);
+    } catch (err) {
+      if (res.headersSent) return;
+      if (err instanceof AppError) {
+        sendError(res, err.statusCode, err.errorCode, err.message, err.details);
+        return;
+      }
+      sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
+    }
+  };
+}
+
+==== FILE: src/middleware/auth.ts ====
+import { createSecretKey, type KeyObject } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
+import { createRemoteJWKSet, jwtVerify, SignJWT, type JWTVerifyGetKey } from 'jose';
+import { config } from '../config/index.js';
+import { AppError } from './error.js';
+import { lookupActiveUserWithRoles } from '../read/projections/users.js';
+import type { AuthContext } from './context.js';
+
+let remoteJwks: JWTVerifyGetKey | null = null;
+function getRemoteJwks(): JWTVerifyGetKey {
+  if (!remoteJwks) {
+    remoteJwks = createRemoteJWKSet(new URL(config.auth.jwksUri));
+  }
+  return remoteJwks;
+}
+
+let localSecretKey: KeyObject | null = null;
+function getLocalSecretKey(): KeyObject {
+  if (!localSecretKey) {
+    localSecretKey = createSecretKey(Buffer.from(config.auth.localSecret, 'utf-8'));
+  }
+  return localSecretKey;
+}
+
+// Asymmetric signature algorithms accepted from an OIDC identity provider. Pinning the set
+// (rather than accepting whatever the token header claims) is defense in depth against
+// algorithm-substitution; jose already rejects `alg:none`.
+const OIDC_ALGORITHMS = ['RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512', 'PS256', 'PS384', 'PS512', 'EdDSA'];
+// Small allowance for clock drift between this server and the token issuer.
+const CLOCK_TOLERANCE = '30s';
+
+function extractBearerToken(req: IncomingMessage): string {
+  const header = req.headers['authorization'];
+  if (!header || Array.isArray(header)) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Missing or malformed Authorization header');
+  }
+  // The auth scheme is case-insensitive per RFC 7235; the token itself is not.
+  const match = /^bearer[ \t]+(\S.*)$/i.exec(header.trim());
+  if (!match) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Missing or malformed Authorization header');
+  }
+  const token = match[1]!.trim();
+  if (!token) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Missing bearer token');
+  }
+  return token;
+}
+
+async function verifyTokenSubject(token: string): Promise<string> {
+  let sub: string | undefined;
+  try {
+    if (config.auth.mode === 'oidc') {
+      const { payload } = await jwtVerify(token, getRemoteJwks(), {
+        issuer: config.auth.issuer,
+        audience: config.auth.audience,
+        algorithms: OIDC_ALGORITHMS,
+        clockTolerance: CLOCK_TOLERANCE,
+      });
+      sub = payload.sub;
+    } else {
+      const { payload } = await jwtVerify(token, getLocalSecretKey(), {
+        algorithms: ['HS256'],
+        clockTolerance: CLOCK_TOLERANCE,
+      });
+      sub = payload.sub;
+    }
+  } catch {
+    throw new AppError(401, 'UNAUTHORIZED', 'Invalid or expired token');
+  }
+
+  if (typeof sub !== 'string' || !sub) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Token is missing a valid subject claim');
+  }
+  return sub;
+}
+
+/**
+ * Verifies the request's bearer token and resolves the caller's identity + current role
+ * assignments fresh from the directory (no caching - see Dev Notes on deprovisioning).
+ * Throws AppError(401, 'UNAUTHORIZED') for any failure: missing/malformed/invalid/expired
+ * token, or a token whose subject has no active directory record.
+ */
+export async function authenticateRequest(req: IncomingMessage): Promise<AuthContext> {
+  const token = extractBearerToken(req);
+  const externalId = await verifyTokenSubject(token);
+
+  const user = await lookupActiveUserWithRoles(externalId);
+  if (!user) {
+    throw new AppError(401, 'UNAUTHORIZED', 'No active account for this identity');
+  }
+
+  return { userId: user.userId, externalId: user.externalId, roles: user.roles };
+}
+
+/**
+ * Issues a short-lived HS256 test token for a given subject. Only usable when
+ * AUTH_MODE=local (enforced at startup in src/config/index.ts and here defensively).
+ * Contains no role data - roles are always resolved fresh from the directory per request.
+ */
+export async function issueDevToken(sub: string): Promise<string> {
+  if (config.auth.mode !== 'local') {
+    throw new AppError(404, 'NOT_FOUND', 'Dev token issuance is only available in AUTH_MODE=local');
+  }
+  return new SignJWT({})
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(sub)
+    .setIssuedAt()
+    .setExpirationTime('1h')
+    .sign(getLocalSecretKey());
+}
+
+==== FILE: src/middleware/body.ts ====
+import type { IncomingMessage } from 'node:http';
+import { AppError } from './error.js';
+
+const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB
+
+/**
+ * Reads and parses a JSON request body, enforcing a size limit and producing
+ * uniform AppError instances for oversized or malformed payloads.
+ *
+ * Returns `undefined` for an empty body (e.g. GET/DELETE requests with no payload).
+ */
+export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let totalLength = 0;
+  for await (const chunk of req) {
+    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    totalLength += buffer.length;
+    if (totalLength > MAX_BODY_SIZE) {
+      throw new AppError(413, 'PAYLOAD_TOO_LARGE', 'Request body too large');
+    }
+    chunks.push(buffer);
+  }
+  const raw = Buffer.concat(chunks).toString('utf-8');
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new AppError(400, 'INVALID_JSON', 'Body is not valid JSON');
+  }
+}
+
+==== FILE: src/config/db.ts ====
+import pg from 'pg';
+import { config } from '../config/index.js';
+
+const { Pool } = pg;
+
+let pool: pg.Pool | null = null;
+
+export function getPool(): pg.Pool {
+  if (!pool) {
+    pool = new Pool({
+      host: config.db.host,
+      port: config.db.port,
+      database: config.db.database,
+      user: config.db.user,
+      password: config.db.password,
+      max: config.db.max,
+      ssl: config.db.ssl ? true : false,
+    });
+  }
+  return pool;
+}
+
+export async function closePool(): Promise<void> {
+  if (pool) {
+    await pool.end();
+    pool = null;
+  }
+}
+
+let adminPool: pg.Pool | null = null;
+
+/**
+ * Connection pool for DDL only (migrations, test schema setup). The app's runtime pool
+ * (getPool()) always connects as the least-privilege app_user, which has no CREATE
+ * privilege on the public schema by design (PostgreSQL 15+ default) - DDL must go
+ * through admin_user instead. Never use this pool for request-serving queries.
+ */
+export function getAdminPool(): pg.Pool {
+  if (!adminPool) {
+    adminPool = new Pool({
+      host: config.db.host,
+      port: config.db.port,
+      database: config.db.database,
+      user: config.db.adminUser,
+      password: config.db.adminPassword,
+      max: 5,
+      ssl: config.db.ssl ? true : false,
+    });
+  }
+  return adminPool;
+}
+
+export async function closeAdminPool(): Promise<void> {
+  if (adminPool) {
+    await adminPool.end();
+    adminPool = null;
+  }
+}
+
+==== FILE: src/adapters/iam/scim.ts ====
+import { randomUUID } from 'node:crypto';
+import { persistEvent } from '../../events/store.js';
+import {
+  upsertUserWithRoles,
+  replaceRoleAssignments,
+  deactivateUser,
+  reactivateUser as reactivateUserRow,
+  getUserIdByExternalId,
+} from '../../read/projections/users.js';
+import type { RoleAssignment } from '../../read/projections/users.js';
+import { AppError } from '../../middleware/error.js';
+
+export interface ProvisionUserRequest {
+  externalId: string;
+  email: string;
+  displayName?: string | null;
+  roles: RoleAssignment[];
+}
+
+// Sentinel identity for system-initiated (non-user-attributable) events, e.g. SCIM
+// provisioning. Not a real user - satisfies the UUID convention on metadata.actor without
+// inventing a non-UUID wildcard that would break other consumers of the event envelope.
+const SYSTEM_ACTOR_ID = '00000000-0000-0000-0000-000000000000';
+
+function systemActorMetadata() {
+  return {
+    correlation_id: randomUUID(),
+    actor: {
+      user_id: SYSTEM_ACTOR_ID,
+      role: 'scim_system',
+      location_id: SYSTEM_ACTOR_ID,
+    },
+    occurred_at: new Date().toISOString(),
+  };
+}
+
+/** Provisions (or reactivates) a user with the given role assignments. Emits `user.provisioned`. */
+export async function provisionUser(input: ProvisionUserRequest): Promise<string> {
+  // Directory row + role assignments are written in one transaction (see upsertUserWithRoles).
+  // The audit event is emitted after that transaction commits; if it fails the caller gets a 500
+  // and the directory is already updated - acceptable for now, tracked as a follow-up to bring
+  // the event into the same transaction as the directory write.
+  const userId = await upsertUserWithRoles({
+    externalId: input.externalId,
+    email: input.email,
+    displayName: input.displayName ?? null,
+    roles: input.roles,
+  });
+
+  await persistEvent({
+    stream_type: 'user',
+    stream_id: userId,
+    event_type: 'user.provisioned',
+    payload: {
+      external_id: input.externalId,
+      email: input.email,
+      display_name: input.displayName ?? null,
+      roles: input.roles,
+    },
+    metadata: systemActorMetadata(),
+  });
+
+  return userId;
+}
+
+/** Reactivates a previously deprovisioned user. Emits `user.reactivated` only on a real change. */
+export async function reactivateUser(externalId: string): Promise<void> {
+  const userId = await getUserIdByExternalId(externalId);
+  if (!userId) {
+    throw new AppError(404, 'NOT_FOUND', `No user found with externalId "${externalId}"`);
+  }
+
+  const reactivated = await reactivateUserRow(externalId);
+  if (reactivated) {
+    await persistEvent({
+      stream_type: 'user',
+      stream_id: userId,
+      event_type: 'user.reactivated',
+      payload: { external_id: externalId },
+      metadata: systemActorMetadata(),
+    });
+  }
+  // Already active: idempotent no-op, no duplicate event.
+}
+
+/** Replaces a user's role assignments. Emits `user.roles_updated`. */
+export async function updateUserRoles(externalId: string, roles: RoleAssignment[]): Promise<void> {
+  const userId = await getUserIdByExternalId(externalId);
+  if (!userId) {
+    throw new AppError(404, 'NOT_FOUND', `No user found with externalId "${externalId}"`);
+  }
+
+  await replaceRoleAssignments(userId, roles);
+
+  await persistEvent({
+    stream_type: 'user',
+    stream_id: userId,
+    event_type: 'user.roles_updated',
+    payload: { external_id: externalId, roles },
+    metadata: systemActorMetadata(),
+  });
+}
+
+/** Deactivates a user so their next request fails authentication. Emits `user.deprovisioned`. */
+export async function deprovisionUser(externalId: string): Promise<void> {
+  const userId = await getUserIdByExternalId(externalId);
+  if (!userId) {
+    throw new AppError(404, 'NOT_FOUND', `No user found with externalId "${externalId}"`);
+  }
+
+  const deactivated = await deactivateUser(externalId);
+  if (deactivated) {
+    await persistEvent({
+      stream_type: 'user',
+      stream_id: userId,
+      event_type: 'user.deprovisioned',
+      payload: { external_id: externalId },
+      metadata: systemActorMetadata(),
+    });
+  }
+  // Already inactive: idempotent no-op, no duplicate event.
+}

@@ -1,8 +1,9 @@
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendError } from '../../middleware/error.js';
 import { validateEnvelope, persistEvent, readStream } from '../../events/store.js';
-import { getParsedBody, getAuthContext, getAuthorizedRole } from '../../middleware/context.js';
+import { getParsedBody, getAuthContext, getAuthorizedRole, getTraceId } from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
+import { auditConfig } from '../../config/audit.js';
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
   if (typeof body === 'object' && body !== null) {
@@ -30,10 +31,6 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req);
   validateEnvelope(body);
 
-  // Bind the audit actor to the authenticated caller. The client-supplied user_id/role are
-  // identity claims and must never be trusted in the immutable event log: overwrite user_id
-  // with the token identity and role with the assignment RBAC actually authorized this request
-  // under. The location is already enforced against the caller's grants by requireRole.
   const authContext = getAuthContext(req);
   if (authContext) {
     body.metadata.actor.user_id = authContext.userId;
@@ -43,7 +40,24 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     }
   }
 
-  const persisted = await persistEvent(body);
+  if (!auditConfig.enabled) {
+    sendError(res, 423, 'AUDIT_LOG_DISABLED', 'No mutating operations are permitted while the audit log is inactive');
+    return;
+  }
+
+  const traceId = getTraceId(req) ?? '';
+  const auditCtx = authContext
+    ? {
+        trace_id: traceId,
+        user_id: authContext.userId,
+        role: getAuthorizedRole(req) ?? '',
+        location_id: body.metadata.actor.location_id,
+        endpoint: req.url ?? '',
+        method: req.method ?? 'POST',
+      }
+    : undefined;
+
+  const persisted = await persistEvent(body, auditCtx);
   sendJson(res, 201, persisted);
 };
 

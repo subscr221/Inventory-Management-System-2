@@ -5,6 +5,8 @@ import { healthHandler } from './api/v1/health.js';
 import { postEventHandler, getStreamHandler } from './api/v1/events.js';
 import { provisionUserHandler, patchUserHandler } from './api/v1/scim.js';
 import { devTokenHandler } from './api/v1/auth-dev.js';
+import { auditLogHandler } from './api/v1/audit.js';
+import { configAuditLogHandler } from './api/v1/config.js';
 
 const router = new Router();
 
@@ -13,6 +15,8 @@ router.post('/api/v1/events', postEventHandler);
 router.get('/api/v1/events/:streamType/:streamId', getStreamHandler);
 router.post('/api/v1/scim/v2/Users', provisionUserHandler);
 router.patch('/api/v1/scim/v2/Users/:externalId', patchUserHandler);
+router.get('/api/v1/audit/log', auditLogHandler);
+router.put('/api/v1/config/audit-log-enabled', configAuditLogHandler);
 
 if (config.auth.mode === 'local') {
   router.post('/api/v1/auth/dev-token', devTokenHandler);

@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { getPool } from '../config/db.js';
 import { AppError } from '../middleware/error.js';
+import type { PoolClient } from 'pg';
+import { logAuditEntry } from '../read/projections/audit_log.js';
+import type { AuditEntryPayload } from '../read/projections/audit_log.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -133,7 +136,7 @@ function mapRowToEvent(row: Record<string, unknown>): PersistedEvent {
   };
 }
 
-export async function persistEvent(envelope: EventEnvelope): Promise<PersistedEvent> {
+export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'http_status' | 'error_code' | 'details'>): Promise<PersistedEvent> {
   const pool = getPool();
   const eventId = randomUUID();
   const syncedAt = new Date().toISOString();
@@ -143,7 +146,7 @@ export async function persistEvent(envelope: EventEnvelope): Promise<PersistedEv
     synced_at: syncedAt,
   };
 
-  const client = await pool.connect();
+  const client: PoolClient = await pool.connect();
   try {
     await client.query('BEGIN');
 
@@ -174,6 +177,15 @@ export async function persistEvent(envelope: EventEnvelope): Promise<PersistedEv
         envelope.idempotency_key ?? null,
       ],
     );
+
+    if (auditCtx) {
+      await logAuditEntry(client, {
+        ...auditCtx,
+        event_id: eventId,
+        http_status: 201,
+        error_code: null,
+      });
+    }
 
     await client.query('COMMIT');
     return mapRowToEvent(result.rows[0]!);
