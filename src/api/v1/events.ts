@@ -1,9 +1,11 @@
 import type { RouteHandler } from '../../middleware/error.js';
-import { sendJson, sendError } from '../../middleware/error.js';
+import { sendJson, sendRequestError } from '../../middleware/error.js';
 import { validateEnvelope, persistEvent, readStream } from '../../events/store.js';
 import { getParsedBody, getAuthContext, getAuthorizedRole, getTraceId } from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
 import { auditConfig } from '../../config/audit.js';
+import { getPool } from '../../config/db.js';
+import { logTamperAttempt } from '../../read/projections/audit_log.js';
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
   if (typeof body === 'object' && body !== null) {
@@ -40,8 +42,27 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     }
   }
 
+  // Defense-in-depth guard (Story 1.3, Decision 2). The audit log is startup-immutable, so the
+  // process cannot normally be running with it disabled - this branch is unreachable in practice.
+  // But `auditConfig.enabled` is a real boolean, so if the log is ever observed inactive at request
+  // time we record the attempt to mutate without it and block, mirroring the config-endpoint path.
   if (!auditConfig.enabled) {
-    sendError(res, 423, 'AUDIT_LOG_DISABLED', 'No mutating operations are permitted while the audit log is inactive');
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await logTamperAttempt(client, {
+        user_id: authContext?.userId ?? null,
+        role: getAuthorizedRole(req) ?? null,
+        location_id: body.metadata.actor.location_id,
+        endpoint: req.url ?? null,
+        method: req.method ?? null,
+        error_code: 'AUDIT_LOG_DISABLED',
+        details: { reason: 'Mutating request attempted while audit log inactive' },
+      });
+    } finally {
+      client.release();
+    }
+    sendRequestError(req, res, 423, 'AUDIT_LOG_DISABLED', 'No mutating operations are permitted while the audit log is inactive');
     return;
   }
 
@@ -54,6 +75,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
         location_id: body.metadata.actor.location_id,
         endpoint: req.url ?? '',
         method: req.method ?? 'POST',
+        http_status: 201,
       }
     : undefined;
 
@@ -66,12 +88,12 @@ const getStreamBase: RouteHandler = async (req, res, params) => {
   const streamId = params['streamId'];
 
   if (!streamType || !streamId) {
-    sendError(res, 400, 'INVALID_PARAMS', 'streamType and streamId are required');
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'streamType and streamId are required');
     return;
   }
   const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!UUID_REGEX.test(streamId)) {
-    sendError(res, 400, 'INVALID_PARAMS', 'streamId must be a valid UUID');
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'streamId must be a valid UUID');
     return;
   }
 

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { getTraceId } from './context.js';
 
 export interface ErrorEnvelope {
   error_code: string;
@@ -44,10 +45,27 @@ export function sendError(
   errorCode: string,
   message: string,
   details: Record<string, unknown> = {},
+  traceId?: string,
 ): void {
   const error = new AppError(statusCode, errorCode, message, details);
-  const envelope = createErrorEnvelope(error);
+  const envelope = createErrorEnvelope(error, traceId);
   sendJson(res, statusCode, envelope);
+}
+
+/**
+ * Convenience wrapper that stamps the error envelope with the request's own trace_id so a
+ * client-visible error correlates with its audit-log entry. Handlers that have the request in
+ * scope should prefer this over the bare `sendError` (which would otherwise mint a fresh id).
+ */
+export function sendRequestError(
+  req: IncomingMessage,
+  res: ServerResponse,
+  statusCode: number,
+  errorCode: string,
+  message: string,
+  details: Record<string, unknown> = {},
+): void {
+  sendError(res, statusCode, errorCode, message, details, getTraceId(req));
 }
 
 export type RouteHandler = (
@@ -62,11 +80,12 @@ export function withErrorHandler(handler: RouteHandler): RouteHandler {
       await handler(req, res, params);
     } catch (err) {
       if (res.headersSent) return;
+      const traceId = getTraceId(req);
       if (err instanceof AppError) {
-        sendError(res, err.statusCode, err.errorCode, err.message, err.details);
+        sendError(res, err.statusCode, err.errorCode, err.message, err.details, traceId);
         return;
       }
-      sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
+      sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error', {}, traceId);
     }
   };
 }

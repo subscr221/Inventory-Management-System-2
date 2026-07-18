@@ -1,6 +1,6 @@
 import type { RouteHandler } from './error.js';
 import { AppError } from './error.js';
-import { getAuthContext, getParsedBody, setAuthorizedRole } from './context.js';
+import { getAuthContext, getParsedBody, setAuthorizedRole, setAuthorizedAssignment } from './context.js';
 import type { RoleAssignment } from '../read/projections/users.js';
 
 /**
@@ -98,6 +98,7 @@ export function requireRole(options: RbacOptions): (handler: RouteHandler) => Ro
 
       if (authorizingAssignment) {
         setAuthorizedRole(req, authorizingAssignment.role);
+        setAuthorizedAssignment(req, authorizingAssignment);
       }
 
       await handler(req, res, params);

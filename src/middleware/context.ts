@@ -11,6 +11,7 @@ interface RequestContext extends IncomingMessage {
   parsedBody?: unknown;
   authContext?: AuthContext;
   authorizedRole?: string;
+  authorizedAssignment?: RoleAssignment;
   traceId?: string;
 }
 
@@ -46,6 +47,20 @@ export function setAuthorizedRole(req: IncomingMessage, role: string): void {
 /** Reads the role RBAC authorized this request under, if any. */
 export function getAuthorizedRole(req: IncomingMessage): string | undefined {
   return (req as RequestContext).authorizedRole;
+}
+
+/**
+ * Records the FULL role assignment that authorized the request (role, module, functionScope,
+ * locationId), so handlers never have to re-derive it from the roles array - a by-name lookup
+ * can pick a different assignment than the one RBAC actually matched.
+ */
+export function setAuthorizedAssignment(req: IncomingMessage, assignment: RoleAssignment): void {
+  (req as RequestContext).authorizedAssignment = assignment;
+}
+
+/** Reads the exact role assignment RBAC authorized this request under, if any. */
+export function getAuthorizedAssignment(req: IncomingMessage): RoleAssignment | undefined {
+  return (req as RequestContext).authorizedAssignment;
 }
 
 /** Attaches a per-request trace_id for audit log and error envelope correlation. */

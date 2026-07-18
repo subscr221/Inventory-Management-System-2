@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../middleware/error.js';
-import { AppError, sendError, withErrorHandler } from '../middleware/error.js';
+import { AppError, sendRequestError, withErrorHandler } from '../middleware/error.js';
 import { readJsonBody } from '../middleware/body.js';
 import { authenticateRequest } from '../middleware/auth.js';
 import { setParsedBody, setAuthContext, setTraceId } from '../middleware/context.js';
@@ -68,7 +68,7 @@ export class Router {
     try {
       url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     } catch {
-      sendError(res, 400, 'BAD_REQUEST', 'Invalid URL');
+      sendRequestError(req, res, 400, 'BAD_REQUEST', 'Invalid URL');
       return;
     }
     const method = req.method ?? 'GET';
@@ -85,10 +85,10 @@ export class Router {
         setAuthContext(req, authContext);
       } catch (err) {
         if (err instanceof AppError) {
-          sendError(res, err.statusCode, err.errorCode, err.message, err.details);
+          sendRequestError(req, res, err.statusCode, err.errorCode, err.message, err.details);
           return;
         }
-        sendError(res, 401, 'UNAUTHORIZED', 'Authentication required');
+        sendRequestError(req, res, 401, 'UNAUTHORIZED', 'Authentication required');
         return;
       }
     }
@@ -99,10 +99,10 @@ export class Router {
         setParsedBody(req, body);
       } catch (err) {
         if (err instanceof AppError) {
-          sendError(res, err.statusCode, err.errorCode, err.message, err.details);
+          sendRequestError(req, res, err.statusCode, err.errorCode, err.message, err.details);
           return;
         }
-        sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
+        sendRequestError(req, res, 500, 'INTERNAL_ERROR', 'Internal server error');
         return;
       }
     }
@@ -125,6 +125,6 @@ export class Router {
       return;
     }
 
-    sendError(res, 404, 'NOT_FOUND', `No route for ${method} ${pathname}`);
+    sendRequestError(req, res, 404, 'NOT_FOUND', `No route for ${method} ${pathname}`);
   }
 }

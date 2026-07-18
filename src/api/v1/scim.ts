@@ -1,8 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
-import { AppError, sendJson, sendError } from '../../middleware/error.js';
-import { getParsedBody } from '../../middleware/context.js';
+import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
+import { getParsedBody, getTraceId } from '../../middleware/context.js';
 import { config } from '../../config/index.js';
 import { provisionUser, updateUserRoles, deprovisionUser, reactivateUser } from '../../adapters/iam/scim.js';
 import type { RoleAssignment } from '../../read/projections/users.js';
@@ -78,12 +78,15 @@ export const provisionUserHandler: RouteHandler = async (req, res, _params) => {
   }
   const roles = parseRoles(obj['roles'] ?? []);
 
-  const userId = await provisionUser({
-    externalId,
-    email,
-    displayName: typeof displayName === 'string' ? displayName : null,
-    roles,
-  });
+  const userId = await provisionUser(
+    {
+      externalId,
+      email,
+      displayName: typeof displayName === 'string' ? displayName : null,
+      roles,
+    },
+    getTraceId(req),
+  );
 
   sendJson(res, 201, { userId, externalId, email, roles });
 };
@@ -93,7 +96,7 @@ export const patchUserHandler: RouteHandler = async (req, res, params) => {
 
   const externalId = params['externalId'];
   if (!externalId) {
-    sendError(res, 400, 'INVALID_PARAMS', 'externalId is required');
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'externalId is required');
     return;
   }
 
@@ -115,21 +118,23 @@ export const patchUserHandler: RouteHandler = async (req, res, params) => {
     throw new AppError(400, 'INVALID_SCIM_REQUEST', 'Provide either "active" or "roles", not both in one request');
   }
 
+  const traceId = getTraceId(req);
+
   if (obj['active'] === false) {
-    await deprovisionUser(externalId);
+    await deprovisionUser(externalId, traceId);
     sendJson(res, 200, { externalId, active: false });
     return;
   }
 
   if (obj['active'] === true) {
-    await reactivateUser(externalId);
+    await reactivateUser(externalId, traceId);
     sendJson(res, 200, { externalId, active: true });
     return;
   }
 
   if (hasRoles) {
     const roles = parseRoles(obj['roles']);
-    await updateUserRoles(externalId, roles);
+    await updateUserRoles(externalId, roles, traceId);
     sendJson(res, 200, { externalId, roles });
     return;
   }

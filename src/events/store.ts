@@ -4,6 +4,7 @@ import { AppError } from '../middleware/error.js';
 import type { PoolClient } from 'pg';
 import { logAuditEntry } from '../read/projections/audit_log.js';
 import type { AuditEntryPayload } from '../read/projections/audit_log.js';
+import { isAuditTamperError, recordTamperAttempt } from '../middleware/audit-tamper-guard.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -136,7 +137,7 @@ function mapRowToEvent(row: Record<string, unknown>): PersistedEvent {
   };
 }
 
-export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'http_status' | 'error_code' | 'details'>): Promise<PersistedEvent> {
+export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>): Promise<PersistedEvent> {
   const pool = getPool();
   const eventId = randomUUID();
   const syncedAt = new Date().toISOString();
@@ -179,10 +180,11 @@ export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<Audi
     );
 
     if (auditCtx) {
+      // http_status comes from the caller (201 for POST-created resources, 200 for PUT/PATCH
+      // flows) so the statutory row records the status the client actually received.
       await logAuditEntry(client, {
         ...auditCtx,
         event_id: eventId,
-        http_status: 201,
         error_code: null,
       });
     }
@@ -191,6 +193,24 @@ export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<Audi
     return mapRowToEvent(result.rows[0]!);
   } catch (err: unknown) {
     await client.query('ROLLBACK');
+    // Defense-in-depth: the audit write here is an INSERT, which the tamper trigger (BEFORE
+    // UPDATE/DELETE/TRUNCATE) does not fire on - so this is normally unreachable. But if the trigger
+    // ever rejects a write on this path, record the attempt on a fresh connection (the transaction
+    // client is aborted) rather than letting it surface as a bare 500 with no tamper record.
+    if (isAuditTamperError(err)) {
+      await recordTamperAttempt({
+        user_id: auditCtx?.user_id ?? null,
+        role: auditCtx?.role ?? null,
+        location_id: auditCtx?.location_id ?? null,
+        endpoint: auditCtx?.endpoint ?? null,
+        method: auditCtx?.method ?? null,
+        error_code: 'AUDIT_LOG_TAMPER_ATTEMPT',
+        details: { reason: 'Audit-log tamper trigger fired during event persistence' },
+      }).catch(() => {
+        // Never let the tamper-recording failure mask the original error.
+      });
+      throw new AppError(500, 'AUDIT_LOG_TAMPER_ATTEMPT', 'Audit log modification was rejected by the database');
+    }
     if (err && typeof err === 'object' && 'code' in err && err.code === '23505' && 'constraint' in err) {
       // Postgres exposes the violated constraint name via err.constraint, not err.detail
       // (err.detail only contains the conflicting key/value, e.g. "Key (idempotency_key)=(...) already exists.").
