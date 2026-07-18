@@ -85,7 +85,8 @@ function eventBody(streamType: string, locationId: string) {
     stream_type: streamType,
     stream_id: 'bbbbbbbb-0000-0000-0000-000000000001',
     event_type: 'test.event',
-    payload: { data: 'test' },
+    // business_stream required on inventory streams since Story 1.5 (FR-AC-01); harmless on others
+    payload: { data: 'test', business_stream: 'production' },
     metadata: {
       correlation_id: 'cccccccc-0000-0000-0000-000000000001',
       actor: {
@@ -107,8 +108,12 @@ describe('Story 1.2 Integration Tests', () => {
     const adminPool = getAdminPool();
     const domainEventsSql = readFileSync(resolve(__dirname, '../../events/domain_events.sql'), 'utf-8');
     const usersSql = readFileSync(resolve(__dirname, '../../read/projections/users.sql'), 'utf-8');
+    // Story 1.5: business-stream tagging is enforced on the central write path for inventory
+    // events, so the vocabulary table must exist before any inventory event is posted.
+    const businessStreamSql = readFileSync(resolve(__dirname, '../../read/projections/business_stream_config.sql'), 'utf-8');
     await adminPool.query(domainEventsSql);
     await adminPool.query(usersSql);
+    await adminPool.query(businessStreamSql);
     // CASCADE so that tables added by later stories which reference users (e.g. Story 1.4's
     // doa_vacation_delegations) are reset too - a shared-DB harness must not break when a later
     // migration adds a foreign key into users.
@@ -253,7 +258,7 @@ describe('Story 1.2 Integration Tests', () => {
       stream_type: 'inventory',
       stream_id: 'e1e1e1e1-0000-0000-0000-000000000001',
       event_type: 'test.event',
-      payload: { data: 'x' },
+      payload: { data: 'x', business_stream: 'production' },
       metadata: {
         correlation_id: 'cccccccc-0000-0000-0000-000000000002',
         actor: {
@@ -284,7 +289,7 @@ describe('Story 1.2 Integration Tests', () => {
       stream_type: 'inventory',
       stream_id: streamId,
       event_type: 'test.event',
-      payload: { data: 'x' },
+      payload: { data: 'x', business_stream: 'production' },
       metadata: {
         correlation_id: 'cccccccc-0000-0000-0000-000000000003',
         actor: { user_id: 'dddddddd-0000-0000-0000-00000000000a', role: 'x', location_id: loc },

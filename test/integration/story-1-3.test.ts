@@ -95,7 +95,8 @@ function makeEventPayload(streamType: string, streamId: string, overrides?: Reco
     stream_type: streamType,
     stream_id: streamId,
     event_type: 'test.event',
-    payload: { test: true },
+    // business_stream required on inventory streams since Story 1.5 (FR-AC-01); harmless on others
+    payload: { test: true, business_stream: 'production' },
     metadata: {
       correlation_id: '00000000-0000-0000-0000-000000000002',
       actor: {
@@ -119,9 +120,13 @@ describe('Story 1.3 Integration Tests', () => {
     const domainEventsSql = readFileSync(resolve(__dirname, '../../events/domain_events.sql'), 'utf-8');
     const usersSql = readFileSync(resolve(__dirname, '../../read/projections/users.sql'), 'utf-8');
     const auditLogSql = readFileSync(resolve(__dirname, '../../read/projections/audit_log.sql'), 'utf-8');
+    // Story 1.5: business-stream tagging is enforced on the central write path for inventory
+    // events, so the vocabulary table must exist before any inventory event is posted.
+    const businessStreamSql = readFileSync(resolve(__dirname, '../../read/projections/business_stream_config.sql'), 'utf-8');
     await adminPool.query(domainEventsSql);
     await adminPool.query(usersSql);
     await adminPool.query(auditLogSql);
+    await adminPool.query(businessStreamSql);
     // The audit tables now carry unconditional TRUNCATE protection; harness cleanup uses the
     // explicit superuser-only escape hatch (DISABLE TRIGGER ALL) - the same documented path a
     // disaster-recovery operator would use. The finally guarantees the triggers are re-enabled

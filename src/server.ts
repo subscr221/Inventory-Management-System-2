@@ -14,6 +14,11 @@ import {
   resolveDoaHandler,
   workflowConfigHandler,
 } from './api/v1/doa.js';
+import {
+  createTaggingRuleHandler,
+  getTaggingRuleHandler,
+  listBusinessStreamsHandler,
+} from './api/v1/business-stream.js';
 
 const router = new Router();
 
@@ -29,6 +34,9 @@ router.patch('/api/v1/doa/entries/:entryId', updateDoaEntryHandler);
 router.post('/api/v1/doa/delegations', createDelegationHandler);
 router.post('/api/v1/doa/resolve', resolveDoaHandler);
 router.post('/api/v1/doa/workflow-config', workflowConfigHandler);
+router.post('/api/v1/business-streams/rules', createTaggingRuleHandler);
+router.get('/api/v1/business-streams/rules', getTaggingRuleHandler);
+router.get('/api/v1/business-streams', listBusinessStreamsHandler);
 
 if (config.auth.mode === 'local') {
   router.post('/api/v1/auth/dev-token', devTokenHandler);

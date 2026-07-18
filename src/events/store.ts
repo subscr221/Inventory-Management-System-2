@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg';
 import { logAuditEntry } from '../read/projections/audit_log.js';
 import type { AuditEntryPayload } from '../read/projections/audit_log.js';
 import { isAuditTamperError, recordTamperAttempt } from '../middleware/audit-tamper-guard.js';
+import { assertInventoryTagging } from '../compliance/business-stream.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -142,6 +143,15 @@ export async function persistEvent(
   auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
   externalClient?: PoolClient,
 ): Promise<PersistedEvent> {
+  // FR-AC-01 (Story 1.5): business-stream tagging is enforced HERE, on the central write path,
+  // not in the HTTP handler - so the public POST /api/v1/events, the Story 1.8 edge sync
+  // replication, and any future internal adapter are all gated by construction. The check runs
+  // BEFORE any DB write (and before the transaction below), so an untagged inventory movement is
+  // rejected without consuming an idempotency key or touching domain_events. Non-inventory
+  // stream types (DOA registry, SCIM users, audit, tagging config itself) return immediately
+  // inside assertInventoryTagging - byte-for-byte unaffected.
+  await assertInventoryTagging(envelope);
+
   const pool = getPool();
   const eventId = randomUUID();
   const syncedAt = new Date().toISOString();

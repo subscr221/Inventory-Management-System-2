@@ -288,3 +288,51 @@ BEGIN
     GRANT SELECT ON doa_vacation_delegations TO readonly_user;
   END IF;
 END $$;
+
+
+-- ---------------------------------------------------------------------------
+-- Business-stream tagging configuration (Story 1.5). The section below MUST stay identical to
+-- the canonical read/projections/business_stream_config.sql (applied by src/events/migrate.ts
+-- and the test harness); that file is the source of truth for tables, seeds, indexes, AND
+-- grants. Change both together.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS business_streams (
+  stream_code   TEXT PRIMARY KEY,
+  display_name  TEXT NOT NULL,
+  active        BOOLEAN NOT NULL DEFAULT true,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO business_streams (stream_code, display_name) VALUES
+  ('production', 'Production'),
+  ('research',   'R&D'),
+  ('maker_hub',  'Maker-Hub'),
+  ('job_work',   'Job-Work')
+ON CONFLICT (stream_code) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS transaction_tagging_rules (
+  rule_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transaction_type      TEXT NOT NULL,
+  cost_centre_required  BOOLEAN NOT NULL DEFAULT false,
+  project_code_required BOOLEAN NOT NULL DEFAULT false,
+  effective_from        DATE NOT NULL,
+  effective_to          DATE,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_transaction_tagging_rules_type_from UNIQUE (transaction_type, effective_from)
+);
+
+CREATE INDEX IF NOT EXISTS idx_transaction_tagging_rules_lookup
+  ON transaction_tagging_rules (transaction_type, effective_from);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT SELECT ON business_streams TO app_user;
+    GRANT INSERT, SELECT ON transaction_tagging_rules TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON business_streams TO readonly_user;
+    GRANT SELECT ON transaction_tagging_rules TO readonly_user;
+  END IF;
+END $$;

@@ -65,8 +65,12 @@ describe('Story 1.1 Integration Tests', () => {
     const adminPool = getAdminPool();
     const domainEventsSql = readFileSync(resolve(__dirname, '../../events/domain_events.sql'), 'utf-8');
     const usersSql = readFileSync(resolve(__dirname, '../../read/projections/users.sql'), 'utf-8');
+    // Story 1.5: business-stream tagging is enforced on the central write path for inventory
+    // events, so the vocabulary table must exist before any inventory event is posted.
+    const businessStreamSql = readFileSync(resolve(__dirname, '../../read/projections/business_stream_config.sql'), 'utf-8');
     await adminPool.query(domainEventsSql);
     await adminPool.query(usersSql);
+    await adminPool.query(businessStreamSql);
     // CASCADE so that tables added by later stories which reference users (e.g. Story 1.4's
     // doa_vacation_delegations) are reset too - a shared-DB harness must not break when a later
     // migration adds a foreign key into users.
@@ -142,7 +146,8 @@ describe('Story 1.1 Integration Tests', () => {
       stream_type: 'inventory',
       stream_id: streamId,
       event_type: 'stock.received',
-      payload: { sku: 'RM-0042', quantity: 100 },
+      // business_stream required on inventory streams since Story 1.5 (FR-AC-01)
+      payload: { sku: 'RM-0042', quantity: 100, business_stream: 'production' },
       metadata: {
         correlation_id: correlationId,
         actor: { user_id: userId, role: 'store_assistant', location_id: locationId },
@@ -159,7 +164,7 @@ describe('Story 1.1 Integration Tests', () => {
     const event2 = {
       ...event,
       event_type: 'stock.allocated',
-      payload: { sku: 'RM-0042', quantity: 10 },
+      payload: { sku: 'RM-0042', quantity: 10, business_stream: 'production' },
       metadata: {
         ...event.metadata,
         causation_id: postRes.body['event_id'],
