@@ -137,7 +137,11 @@ function mapRowToEvent(row: Record<string, unknown>): PersistedEvent {
   };
 }
 
-export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>): Promise<PersistedEvent> {
+export async function persistEvent(
+  envelope: EventEnvelope,
+  auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
+  externalClient?: PoolClient,
+): Promise<PersistedEvent> {
   const pool = getPool();
   const eventId = randomUUID();
   const syncedAt = new Date().toISOString();
@@ -147,9 +151,14 @@ export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<Audi
     synced_at: syncedAt,
   };
 
-  const client: PoolClient = await pool.connect();
+  // When the caller supplies a transaction client, this write joins the caller's transaction so the
+  // caller's own row (e.g. a DOA registry entry - Story 1.4) and this domain event + audit entry
+  // commit atomically. Otherwise persistEvent owns a fresh connection with its own BEGIN/COMMIT,
+  // exactly as before - fully backward compatible with every existing caller.
+  const ownsTransaction = externalClient === undefined;
+  const client: PoolClient = externalClient ?? (await pool.connect());
   try {
-    await client.query('BEGIN');
+    if (ownsTransaction) await client.query('BEGIN');
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {
@@ -189,10 +198,10 @@ export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<Audi
       });
     }
 
-    await client.query('COMMIT');
+    if (ownsTransaction) await client.query('COMMIT');
     return mapRowToEvent(result.rows[0]!);
   } catch (err: unknown) {
-    await client.query('ROLLBACK');
+    if (ownsTransaction) await client.query('ROLLBACK');
     // Defense-in-depth: the audit write here is an INSERT, which the tamper trigger (BEFORE
     // UPDATE/DELETE/TRUNCATE) does not fire on - so this is normally unreachable. But if the trigger
     // ever rejects a write on this path, record the attempt on a fresh connection (the transaction
@@ -216,11 +225,18 @@ export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<Audi
       // (err.detail only contains the conflicting key/value, e.g. "Key (idempotency_key)=(...) already exists.").
       const constraint = (err as { constraint?: string }).constraint;
       if (constraint === 'uq_idempotency') {
-        const existing = await client.query(
-          `SELECT event_id FROM domain_events WHERE idempotency_key = $1`,
-          [envelope.idempotency_key],
-        );
-        const existingEventId = existing.rows.length > 0 ? existing.rows[0]!['event_id'] : 'unknown';
+        // The existing-id lookup needs a usable connection. When persistEvent owns the transaction
+        // it has already ROLLed BACK above (leaving this client clean and queryable); when the
+        // caller owns it, the transaction is aborted and must not be queried here - the caller
+        // will roll back, so we report the conflict without the existing id.
+        let existingEventId: string = 'unknown';
+        if (ownsTransaction) {
+          const existing = await client.query(
+            `SELECT event_id FROM domain_events WHERE idempotency_key = $1`,
+            [envelope.idempotency_key],
+          );
+          existingEventId = existing.rows.length > 0 ? (existing.rows[0]!['event_id'] as string) : 'unknown';
+        }
         throw new AppError(409, 'DUPLICATE_EVENT', 'Event with this idempotency_key already exists', {
           existing_event_id: existingEventId,
         });
@@ -233,7 +249,7 @@ export async function persistEvent(envelope: EventEnvelope, auditCtx?: Omit<Audi
     }
     throw err;
   } finally {
-    client.release();
+    if (ownsTransaction) client.release();
   }
 }
 

@@ -67,7 +67,10 @@ describe('Story 1.1 Integration Tests', () => {
     const usersSql = readFileSync(resolve(__dirname, '../../read/projections/users.sql'), 'utf-8');
     await adminPool.query(domainEventsSql);
     await adminPool.query(usersSql);
-    await adminPool.query('TRUNCATE user_role_assignments, users, domain_events');
+    // CASCADE so that tables added by later stories which reference users (e.g. Story 1.4's
+    // doa_vacation_delegations) are reset too - a shared-DB harness must not break when a later
+    // migration adds a foreign key into users.
+    await adminPool.query('TRUNCATE user_role_assignments, users, domain_events CASCADE');
 
     const router = new Router();
     router.get('/api/v1/health', healthHandler);

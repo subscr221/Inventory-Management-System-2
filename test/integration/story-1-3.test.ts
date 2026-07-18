@@ -130,7 +130,10 @@ describe('Story 1.3 Integration Tests', () => {
     await adminPool.query('ALTER TABLE audit_log_tamper_attempt_log DISABLE TRIGGER ALL');
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
-      await adminPool.query('TRUNCATE audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events');
+      // CASCADE so that tables added by later stories which reference users (e.g. Story 1.4's
+      // doa_vacation_delegations) are reset too - a shared-DB harness must not break when a later
+      // migration adds a foreign key into users.
+      await adminPool.query('TRUNCATE audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE');
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');
       await adminPool.query('ALTER TABLE audit_log_tamper_attempt_log ENABLE TRIGGER ALL');

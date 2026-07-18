@@ -230,3 +230,46 @@ BEGIN
     GRANT SELECT ON audit_log_tamper_attempt_log TO readonly_user;
   END IF;
 END $$;
+
+
+-- ---------------------------------------------------------------------------
+-- Enterprise DOA registry (Story 1.4). The section below MUST stay identical to the canonical
+-- read/projections/doa_registry.sql (applied by src/events/migrate.ts and the test harness);
+-- that file is the source of truth for tables, indexes, AND grants. Change both together.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS doa_registry_entries (
+  entry_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  role              TEXT NOT NULL,
+  transaction_type  TEXT NOT NULL,
+  -- value_min is an EXCLUSIVE lower bound, value_max an INCLUSIVE upper bound; NULL = unbounded.
+  value_min         NUMERIC,
+  value_max         NUMERIC,
+  active            BOOLEAN NOT NULL DEFAULT true,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS doa_vacation_delegations (
+  delegation_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  delegator_user_id UUID NOT NULL REFERENCES users(user_id),
+  delegate_user_id  UUID NOT NULL REFERENCES users(user_id),
+  start_date        DATE NOT NULL,
+  end_date          DATE NOT NULL,
+  active            BOOLEAN NOT NULL DEFAULT true,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_doa_registry_entries_lookup ON doa_registry_entries (transaction_type, active);
+CREATE INDEX IF NOT EXISTS idx_doa_vacation_delegations_delegator ON doa_vacation_delegations (delegator_user_id, active, start_date, end_date);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON doa_registry_entries TO app_user;
+    GRANT INSERT, SELECT ON doa_vacation_delegations TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON doa_registry_entries TO readonly_user;
+    GRANT SELECT ON doa_vacation_delegations TO readonly_user;
+  END IF;
+END $$;

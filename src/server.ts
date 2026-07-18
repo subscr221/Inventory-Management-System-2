@@ -7,6 +7,13 @@ import { provisionUserHandler, patchUserHandler } from './api/v1/scim.js';
 import { devTokenHandler } from './api/v1/auth-dev.js';
 import { auditLogHandler } from './api/v1/audit.js';
 import { configAuditLogHandler } from './api/v1/config.js';
+import {
+  createDoaEntryHandler,
+  updateDoaEntryHandler,
+  createDelegationHandler,
+  resolveDoaHandler,
+  workflowConfigHandler,
+} from './api/v1/doa.js';
 
 const router = new Router();
 
@@ -17,6 +24,11 @@ router.post('/api/v1/scim/v2/Users', provisionUserHandler);
 router.patch('/api/v1/scim/v2/Users/:externalId', patchUserHandler);
 router.get('/api/v1/audit/log', auditLogHandler);
 router.put('/api/v1/config/audit-log-enabled', configAuditLogHandler);
+router.post('/api/v1/doa/entries', createDoaEntryHandler);
+router.patch('/api/v1/doa/entries/:entryId', updateDoaEntryHandler);
+router.post('/api/v1/doa/delegations', createDelegationHandler);
+router.post('/api/v1/doa/resolve', resolveDoaHandler);
+router.post('/api/v1/doa/workflow-config', workflowConfigHandler);
 
 if (config.auth.mode === 'local') {
   router.post('/api/v1/auth/dev-token', devTokenHandler);
