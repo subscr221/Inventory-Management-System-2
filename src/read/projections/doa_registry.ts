@@ -151,11 +151,11 @@ export async function updateDoaEntry(
   return result.rows.length > 0 ? mapEntry(result.rows[0]!) : null;
 }
 
-/** Returns a single active DOA entry by primary key, or null. */
+/** Returns a single DOA entry by primary key, or null, locking it when called in a transaction. */
 export async function getDoaEntry(entryId: string, client?: PoolClient): Promise<DoaRegistryEntry | null> {
   const result = await runner(client).query(
     `SELECT entry_id, role, transaction_type, value_min, value_max, active, created_at, updated_at
-     FROM doa_registry_entries WHERE entry_id = $1`,
+     FROM doa_registry_entries WHERE entry_id = $1${client ? ' FOR UPDATE' : ''}`,
     [entryId],
   );
   return result.rows.length > 0 ? mapEntry(result.rows[0]!) : null;
@@ -179,7 +179,7 @@ export async function findMatchingDoaEntry(
        AND active = true
        AND (value_min IS NULL OR $2 > value_min)
        AND (value_max IS NULL OR $2 <= value_max)
-     ORDER BY created_at ASC
+     ORDER BY created_at ASC, entry_id ASC
      LIMIT 1`,
     [transactionType, value],
   );
@@ -229,7 +229,7 @@ export async function findActiveDelegation(
        AND u.active = true
        AND d.start_date <= $2::date
        AND d.end_date >= $2::date
-     ORDER BY d.created_at ASC
+     ORDER BY d.created_at ASC, d.delegation_id ASC
      LIMIT 1`,
     [delegatorUserId, asOfDate],
   );
@@ -252,7 +252,7 @@ export async function findRoleHolder(role: string, client?: PoolClient): Promise
      FROM user_role_assignments a
      JOIN users u ON u.user_id = a.user_id
      WHERE a.role = $1 AND u.active = true
-     ORDER BY a.created_at ASC
+     ORDER BY a.created_at ASC, a.assignment_id ASC
      LIMIT 1`,
     [role],
   );

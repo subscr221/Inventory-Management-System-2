@@ -13,6 +13,7 @@ import {
 } from '../../src/api/v1/doa.js';
 import { readStream } from '../../src/events/store.js';
 import { closePool, getPool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
+import { findActiveDelegation, findMatchingDoaEntry, findRoleHolder } from '../../src/read/projections/doa_registry.js';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -376,5 +377,116 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
     );
     assert.strictEqual(res.status, 400);
     assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+  });
+
+  it('enforces the value-band invariant at the database boundary', async () => {
+    await assert.rejects(
+      getPool().query(
+        `INSERT INTO doa_registry_entries (role, transaction_type, value_min, value_max)
+         VALUES ($1, $2, $3, $4)`,
+        ['procurement_head', 'invalid_direct_write', 500, 400],
+      ),
+      (error: unknown) => (error as { constraint?: string }).constraint === 'chk_doa_registry_entries_value_band',
+    );
+  });
+
+  it('serializes concurrent PATCH requests before validating their merged value bands', async () => {
+    const createRes = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/doa/entries',
+      { role: 'procurement_head', transaction_type: 'concurrent_patch', value_min: 100, value_max: null },
+      adminHeaders,
+    );
+    assert.strictEqual(createRes.status, 201, JSON.stringify(createRes.body));
+    const concurrentEntryId = createRes.body['entry_id'] as string;
+    const adminPool = getAdminPool();
+
+    // The delay makes both HTTP requests overlap deterministically. With SELECT FOR UPDATE, one
+    // request commits and the other re-reads that committed state before returning INVALID_PARAMS.
+    await adminPool.query(`
+      CREATE OR REPLACE FUNCTION test_delay_doa_update() RETURNS trigger AS $$
+      BEGIN
+        PERFORM pg_sleep(0.2);
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER test_delay_doa_update
+        BEFORE UPDATE ON doa_registry_entries
+        FOR EACH ROW EXECUTE FUNCTION test_delay_doa_update();
+    `);
+    try {
+      const responses = await Promise.all([
+        makeRequest(TEST_PORT, 'PATCH', `/api/v1/doa/entries/${concurrentEntryId}`, { value_max: 150 }, adminHeaders),
+        makeRequest(TEST_PORT, 'PATCH', `/api/v1/doa/entries/${concurrentEntryId}`, { value_min: 200 }, adminHeaders),
+      ]);
+      assert.deepStrictEqual(
+        responses.map((response) => response.status).sort((a, b) => a - b),
+        [200, 400],
+        responses.map((response) => JSON.stringify(response.body)).join('\n'),
+      );
+      assert.strictEqual(responses.find((response) => response.status === 400)?.body['error_code'], 'INVALID_PARAMS');
+
+      const row = await getPool().query(
+        `SELECT value_min, value_max FROM doa_registry_entries WHERE entry_id = $1`,
+        [concurrentEntryId],
+      );
+      const valueMin = row.rows[0]!['value_min'] === null ? null : Number(row.rows[0]!['value_min']);
+      const valueMax = row.rows[0]!['value_max'] === null ? null : Number(row.rows[0]!['value_max']);
+      assert.ok(valueMin === null || valueMax === null || valueMin < valueMax, 'the committed value band must remain valid');
+    } finally {
+      await adminPool.query('DROP TRIGGER IF EXISTS test_delay_doa_update ON doa_registry_entries');
+      await adminPool.query('DROP FUNCTION IF EXISTS test_delay_doa_update()');
+    }
+  });
+
+  it('uses UUID tie-breakers when DOA records have identical timestamps', async () => {
+    const client = await getAdminPool().connect();
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    const firstUserId = '10000000-0000-0000-0000-000000000001';
+    const secondUserId = '10000000-0000-0000-0000-000000000002';
+    const firstAssignmentId = '20000000-0000-0000-0000-000000000001';
+    const secondAssignmentId = '20000000-0000-0000-0000-000000000002';
+    const firstEntryId = '30000000-0000-0000-0000-000000000001';
+    const secondEntryId = '30000000-0000-0000-0000-000000000002';
+    const firstDelegationId = '40000000-0000-0000-0000-000000000001';
+    const secondDelegationId = '40000000-0000-0000-0000-000000000002';
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO users (user_id, external_id, email, active, provisioned_at)
+         VALUES ($1, 'tie-holder-1', 'tie-holder-1@example.com', true, $3),
+                ($2, 'tie-holder-2', 'tie-holder-2@example.com', true, $3)`,
+        [firstUserId, secondUserId, timestamp],
+      );
+      await client.query(
+        `INSERT INTO user_role_assignments
+           (assignment_id, user_id, role, module, function_scope, location_id, created_at)
+         VALUES ($1, $2, 'tie_role', 'procurement', 'write', '*', $5),
+                ($3, $4, 'tie_role', 'procurement', 'write', '*', $5)`,
+        [firstAssignmentId, firstUserId, secondAssignmentId, secondUserId, timestamp],
+      );
+      await client.query(
+        `INSERT INTO doa_registry_entries
+           (entry_id, role, transaction_type, value_min, value_max, created_at, updated_at)
+         VALUES ($1, 'tie_role', 'tie_approval', NULL, NULL, $3, $3),
+                ($2, 'tie_role', 'tie_approval', NULL, NULL, $3, $3)`,
+        [firstEntryId, secondEntryId, timestamp],
+      );
+      await client.query(
+        `INSERT INTO doa_vacation_delegations
+           (delegation_id, delegator_user_id, delegate_user_id, start_date, end_date, created_at)
+         VALUES ($1, $3, $4, '2026-08-01', '2026-08-10', $6),
+                ($2, $3, $5, '2026-08-01', '2026-08-10', $6)`,
+        [firstDelegationId, secondDelegationId, userAId, firstUserId, secondUserId, timestamp],
+      );
+
+      assert.strictEqual((await findMatchingDoaEntry('tie_approval', 1, client))?.entry_id, firstEntryId);
+      assert.strictEqual((await findActiveDelegation(userAId, '2026-08-05', client))?.delegation_id, firstDelegationId);
+      assert.strictEqual((await findRoleHolder('tie_role', client))?.user_id, firstUserId);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
   });
 });

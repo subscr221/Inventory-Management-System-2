@@ -4,7 +4,7 @@ baseline_commit: 6dce31a
 
 # Story 1.4: Enterprise DOA Registry
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -80,7 +80,15 @@ So that approval routing is always current without any workflow code change, and
   - [x] 8.5 AC4: `POST /api/v1/doa/workflow-config` for `transaction_type: 'po_approval'` (which has an active entry from 8.2) results in 409 `DOA_OVERRIDE_BLOCKED`; assert a row was written to `audit_log_tamper_attempt_log` with that `error_code` (reuse the query pattern from `test/integration/story-1-3.test.ts`'s tamper-attempt assertions). Also test the non-governed branch: a `transaction_type` with no DOA entry results in 200 `{ accepted: true }`.
   - [x] 8.6 RBAC boundary: a caller with no role assignment for module `compliance` gets 403 `MODULE_ACCESS_DENIED` on all five endpoints.
   - [x] 8.7 Not-found paths: `resolve` with an unrecognized `transaction_type` returns `NO_DOA_ENTRY_MATCH`; a `transaction_type` whose matching entry's role has zero active holders returns `NO_APPROVER_FOUND`.
-  - [x] 8.8 Run `npm run lint`, `tsc --noEmit`, and `npm run test:integration` - all clean. Confirm the full aggregate suite (Stories 1.1-1.4) still passes with no regressions (55 tests were green across 1.1-1.3 as of this story's baseline commit `6dce31a`).
+- [x] 8.8 Run `npm run lint`, `tsc --noEmit`, and `npm run test:integration` - all clean. Confirm the full aggregate suite (Stories 1.1-1.4) still passes with no regressions (55 tests were green across 1.1-1.3 as of this story's baseline commit `6dce31a`).
+
+### Review Findings
+
+- [x] [Review][Patch] TOCTOU race in `PATCH /api/v1/doa/entries/:entryId` allows invalid value bands [`src/api/v1/doa.ts:182-192`]
+- [x] [Review][Patch] ESLint rule `no-hardcoded-role-in-workflow` can be bypassed with template literals [`eslint-rules/no-hardcoded-role-in-workflow.js:21-23`]
+- [x] [Review][Patch] Tie-breaker queries rely on `created_at` alone, so identical timestamps produce non-deterministic ordering [`src/read/projections/doa_registry.ts:182,232,255`]
+- [x] [Review][Patch] Concurrent `PATCH` serialization lacks a regression test for the `FOR UPDATE` lock [`test/integration/story-1-4.test.ts:381-390`]
+- [x] [Review][Patch] Same-timestamp resolution tie-breakers lack deterministic winner coverage [`test/integration/story-1-4.test.ts:381-390`]
 
 ## Dev Notes
 
@@ -191,7 +199,7 @@ Claude Opus 4.8 (1M context)
 - `npx tsc --noEmit`, `npm run lint`, and `npm test` all pass clean.
 - PostgreSQL 18.4 was brought up via Docker inside WSL (the `postgres` service from `deploy/compose/docker-compose.yml`, roles + `init-db.sql` applied at container init). Windows-side Node reaches it on `localhost:5432`.
 - **WSL VM lifecycle gotcha (environment, not code):** the WSL2 VM (and its Docker daemon + Postgres container) idles down whenever no WSL process is running, so Windows-side test runs intermittently hit `ECONNREFUSED` and the container log shows a periodic "fast shutdown request". Holding the VM up with a long-lived background WSL process for the duration of the run makes `localhost:5432` stable. This is a local-environment note for anyone re-running the suite here, not a product issue.
-- **Test-harness parallelism fix:** `node --test` runs the per-story integration files concurrently by default, and their `before()` hooks each apply migrations (`CREATE OR REPLACE TRIGGER`, `ALTER TABLE`, `TRUNCATE`) against the one shared database, which deadlocks (reproduced on the pre-change baseline, so it predates this story). Integration tests that share a single database must run serially, so `package.json`'s `test` and `test:integration` scripts now pass `--test-concurrency=1`. With that, `npm test` is 64 passing, 0 failing; `npm run test:integration` is 58 passing.
+- **Test-harness parallelism fix:** `node --test` runs the per-story integration files concurrently by default, and their `before()` hooks each apply migrations (`CREATE OR REPLACE TRIGGER`, `ALTER TABLE`, `TRUNCATE`) against the one shared database, which deadlocks (reproduced on the pre-change baseline, so it predates this story). Integration tests that share a single database must run serially, so `package.json`'s `test` and `test:integration` scripts now pass `--test-concurrency=1`. The post-review aggregate suite is 65 passing, 0 failing.
 - **Timezone bug found and fixed during test:** node-postgres parses a `DATE` column into a JS `Date` at local midnight; formatting it with `toISOString()` shifted the calendar day back one in this UTC+8 environment (`2026-08-01` surfaced as `2026-07-31` in the delegation event payload). `mapDelegation` now formats from local Y-M-D components.
 
 ### Completion Notes List
@@ -205,6 +213,8 @@ Claude Opus 4.8 (1M context)
 - **Task 7:** Registered all five routes in `src/server.ts` (no `router.ts` change needed).
 - **Task 8:** `test/integration/story-1-4.test.ts` covers all four ACs plus RBAC denial, both not-found paths, the invalid value band, and the deprovisioned-delegate fallback. AC2 also asserts the delegation is replayable via `readStream`; AC3 asserts the PATCH is edit-logged to the admin's identity; AC4 asserts the tamper-log row.
 - **Cross-story fix:** the new `doa_vacation_delegations` foreign key into `users` broke the `TRUNCATE ... users` resets in the Story 1.1/1.2/1.3 `before()` hooks; added `CASCADE` to those three (future-proofs the shared-DB harness against later FK-bearing tables). No product behavior of those stories changed; all their tests still pass.
+- **Code review remediation:** added a database value-band `CHECK` constraint and row locking for concurrent PATCH safety, recognized static template literals in the hard-coded-role lint rule, and added unique secondary keys to all DOA resolution tie-breakers. Added regression coverage for the database constraint and template-literal cases.
+- **Code re-review remediation:** added a deterministic concurrent HTTP PATCH test using a short-lived PostgreSQL delay trigger to prove row-lock serialization, plus rollback-only same-timestamp fixtures covering entry, delegation, and role-holder UUID tie-breakers. The post-review aggregate suite is 67 passing, 0 failing.
 
 ### File List
 
@@ -228,3 +238,5 @@ Claude Opus 4.8 (1M context)
 ## Change Log
 
 - 2026-07-18: Implemented Story 1.4 (Enterprise DOA Registry). Delivered the DOA entry/delegation/resolution/override-blocked endpoints, the DOA registry schema with self-sufficient guarded grants, an atomic `persistEvent` transaction-client extension, and the `no-hardcoded-role-in-workflow` ESLint rule (AC1's CI static check). Found and fixed a `DATE` timezone-formatting bug and a pre-existing shared-DB test-parallelism deadlock (serialized the test scripts). Full suite: 64 passing, 0 failing; `tsc --noEmit` and `eslint` clean.
+- 2026-07-19: Adversarial code review resolved all three findings. Added database-enforced value-band integrity with concurrent PATCH serialization, closed the template-literal lint bypass, and made resolution tie-breaks strictly deterministic. Full suite: 65 passing, 0 failing; TypeScript and ESLint clean. Story moved to done.
+- 2026-07-19: Adversarial re-review resolved two test-coverage findings. Added direct regression tests for concurrent PATCH serialization and all three same-timestamp tie-breakers. Full suite: 67 passing, 0 failing; TypeScript and ESLint clean. Story remains done.

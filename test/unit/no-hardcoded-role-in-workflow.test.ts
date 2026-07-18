@@ -42,6 +42,14 @@ describe('no-hardcoded-role-in-workflow ESLint rule (FR-DOA-01)', () => {
           code: `const ok = 'procurement_head' === role;`,
           errors: [{ messageId: 'hardcodedRole' }],
         },
+        {
+          code: 'if (role === `procurement_head`) { approve(); }',
+          errors: [{ messageId: 'hardcodedRole' }],
+        },
+        {
+          code: 'switch (user.role) { case `system_administrator`: grant(); break; }',
+          errors: [{ messageId: 'hardcodedRole' }],
+        },
       ],
     });
   });

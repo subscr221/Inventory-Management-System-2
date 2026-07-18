@@ -246,8 +246,23 @@ CREATE TABLE IF NOT EXISTS doa_registry_entries (
   value_max         NUMERIC,
   active            BOOLEAN NOT NULL DEFAULT true,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_doa_registry_entries_value_band
+    CHECK (value_min IS NULL OR value_max IS NULL OR value_min < value_max)
 );
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_doa_registry_entries_value_band'
+      AND conrelid = 'doa_registry_entries'::regclass
+  ) THEN
+    ALTER TABLE doa_registry_entries
+      ADD CONSTRAINT chk_doa_registry_entries_value_band
+      CHECK (value_min IS NULL OR value_max IS NULL OR value_min < value_max);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS doa_vacation_delegations (
   delegation_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),

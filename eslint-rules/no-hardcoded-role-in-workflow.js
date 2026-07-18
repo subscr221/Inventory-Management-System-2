@@ -19,7 +19,11 @@ const MESSAGE =
   '(POST /api/v1/doa/resolve) instead of hard-coding role names. [FR-DOA-01]';
 
 function isStringLiteral(node) {
-  return node && node.type === 'Literal' && typeof node.value === 'string';
+  return (
+    node &&
+    ((node.type === 'Literal' && typeof node.value === 'string') ||
+      (node.type === 'TemplateLiteral' && node.expressions.length === 0))
+  );
 }
 
 function isRoleLike(node) {

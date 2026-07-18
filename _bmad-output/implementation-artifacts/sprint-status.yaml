@@ -47,7 +47,9 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: 2026-07-18
+last_updated: 2026-07-19
+# story 1-4 code re-review 2026-07-19: 2 test patches resolved; concurrent PATCH serialization + all deterministic tie-breakers directly covered; 67/67 tests green; remains done
+# story 1-4 code review 2026-07-19: 3 patches resolved; database value-band integrity + concurrent PATCH locking; template-literal lint coverage; deterministic tie-breakers; 65/65 tests green; moved to done
 # story 1-4 dev-story 2026-07-18: implemented all 8 tasks; 5 DOA endpoints + registry schema + no-hardcoded-role lint rule; atomic persistEvent client param; 64/64 tests green on PostgreSQL 18.4; tsc + eslint clean; moved to review
 # story 1-1 created 2026-07-12 via create-story workflow
 # story 1-2 created 2026-07-12 via create-story workflow
@@ -69,7 +71,7 @@ development_status:
   1-1-core-infrastructure-deployment-and-event-store-schema: done   # PILOT
   1-2-sso-authentication-and-role-based-access-control: done   # PILOT
   1-3-statutory-edit-log: done   # PILOT
-  1-4-enterprise-doa-registry: review   # PILOT
+  1-4-enterprise-doa-registry: done   # PILOT
   1-5-business-stream-tagging-enforcement: backlog   # PILOT
   1-6-event-sourced-location-with-asserted-expected-separation: backlog   # PILOT
   1-7-calibration-lockout-enforcement: backlog   # PILOT
