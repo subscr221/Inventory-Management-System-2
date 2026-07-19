@@ -56,6 +56,13 @@ function depsWith(validStreams: string[], rule: TransactionTaggingRule | null): 
   };
 }
 
+function depsWithDateSensitiveRule(validStreams: string[], effectiveFrom: string): TaggingDeps {
+  return {
+    isValidBusinessStream: (code) => Promise.resolve(validStreams.includes(code)),
+    findActiveTaggingRule: (_transactionType, asOfDate) => Promise.resolve(asOfDate && asOfDate >= effectiveFrom ? makeRule({ effective_from: effectiveFrom, cost_centre_required: true }) : null),
+  };
+}
+
 async function expectAppError(
   fn: () => Promise<void>,
   errorCode: string,
@@ -119,6 +126,23 @@ describe('assertInventoryTagging (Story 1.5, FR-AC-01)', () => {
     await assertInventoryTagging(
       makeEnvelope({ payload: { business_stream: 'production' } }),
       depsWith(['production'], null),
+    );
+  });
+
+  it('uses occurred_at date, not server now, when resolving dated applicability rules', async () => {
+    const deps = depsWithDateSensitiveRule(['production'], '2026-08-01');
+    await assertInventoryTagging(
+      makeEnvelope({ payload: { business_stream: 'production' }, metadata: { ...makeEnvelope().metadata, occurred_at: '2026-07-31T23:30:00+05:30' } }),
+      deps,
+    );
+    await expectAppError(
+      () =>
+        assertInventoryTagging(
+          makeEnvelope({ payload: { business_stream: 'production' }, metadata: { ...makeEnvelope().metadata, occurred_at: '2026-08-01T00:00:00+05:30' } }),
+          deps,
+        ),
+      'UNTAGGED_TRANSACTION',
+      { missing_tag: 'cost_centre', transaction_type: 'stock.moved' },
     );
   });
 

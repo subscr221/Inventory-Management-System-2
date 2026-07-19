@@ -305,7 +305,7 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
     assert.strictEqual(tagged.status, 201, JSON.stringify(tagged.body));
   });
 
-  it('AC4 support: rule applicability is dated - an event before effective_from is not gated', async () => {
+  it('AC4 support: rule applicability is dated from occurred_at, not server now', async () => {
     const ruleRes = await makeRequest(
       TEST_PORT,
       'POST',
@@ -315,16 +315,21 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
     );
     assert.strictEqual(ruleRes.status, 201, JSON.stringify(ruleRes.body));
 
-    // The rule starts in 2099; today's event of that type needs no cost_centre yet.
-    const streamId = randomUUID();
-    const res = await makeRequest(
-      TEST_PORT,
-      'POST',
-      '/api/v1/events',
-      inventoryEnvelope(streamId, inventoryUserId, { business_stream: 'production' }, 'stock.counted'),
-      inventoryHeaders,
-    );
-    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const beforeStreamId = randomUUID();
+    const beforeRule = inventoryEnvelope(beforeStreamId, inventoryUserId, { business_stream: 'production' }, 'stock.counted');
+    beforeRule.metadata.occurred_at = '2098-12-31T23:30:00+05:30';
+    const beforeRes = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', beforeRule, inventoryHeaders);
+    assert.strictEqual(beforeRes.status, 201, JSON.stringify(beforeRes.body));
+
+    const afterStreamId = randomUUID();
+    const afterRule = inventoryEnvelope(afterStreamId, inventoryUserId, { business_stream: 'production' }, 'stock.counted');
+    afterRule.metadata.occurred_at = '2099-01-01T00:00:00+05:30';
+    const afterRes = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', afterRule, inventoryHeaders);
+    assert.strictEqual(afterRes.status, 400, JSON.stringify(afterRes.body));
+    assert.strictEqual(afterRes.body['error_code'], 'UNTAGGED_TRANSACTION');
+    const details = afterRes.body['details'] as Record<string, unknown>;
+    assert.strictEqual(details['missing_tag'], 'cost_centre');
+    assert.strictEqual(await domainEventCount(afterStreamId), 0);
   });
 
   it('rejects an overlapping tagging rule with TAGGING_RULE_CONFLICT', async () => {

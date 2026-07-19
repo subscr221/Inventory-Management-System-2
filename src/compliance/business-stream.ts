@@ -25,20 +25,16 @@ const INVENTORY_MOVEMENT_STREAM_TYPES = new Set(['inventory']);
  */
 export interface TaggingDeps {
   isValidBusinessStream: (streamCode: string) => Promise<boolean>;
-  findActiveTaggingRule: (transactionType: string) => Promise<TransactionTaggingRule | null>;
+  findActiveTaggingRule: (transactionType: string, asOfDate?: string) => Promise<TransactionTaggingRule | null>;
 }
 
 const defaultDeps: TaggingDeps = {
   isValidBusinessStream: (streamCode) => isValidBusinessStream(streamCode),
-  findActiveTaggingRule: (transactionType) => findActiveTaggingRule(transactionType),
+  findActiveTaggingRule: (transactionType, asOfDate) => findActiveTaggingRule(transactionType, asOfDate),
 };
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
-}
-
-function isValidStringLength(value: string, maxLength: number = 256): boolean {
-  return value.length <= maxLength;
 }
 
 /**
@@ -67,8 +63,11 @@ export async function assertInventoryTagging(envelope: EventEnvelope, deps: Tagg
 
   // The transaction type is the envelope event_type (past-tense dot-separated, e.g. stock.moved).
   // If no tagging rule is effective for it, no cost_centre/project_code is required (the default
-  // until an admin configures otherwise - FR-AC-01's "where applicable").
-  const rule = await deps.findActiveTaggingRule(envelope.event_type);
+  // until an admin configures otherwise - FR-AC-01's "where applicable"). Applicability is based
+  // on the event's occurred_at date so edge-synced and backdated events are checked against the
+  // transaction date, not the sync date.
+  const asOfDate = envelope.metadata.occurred_at.slice(0, 10);
+  const rule = await deps.findActiveTaggingRule(envelope.event_type, asOfDate);
   if (!rule) return;
 
   if (rule.cost_centre_required && !isNonEmptyString(envelope.payload['cost_centre'])) {
@@ -77,22 +76,10 @@ export async function assertInventoryTagging(envelope: EventEnvelope, deps: Tagg
       transaction_type: envelope.event_type,
     });
   }
-  if (rule.cost_centre_required && isNonEmptyString(envelope.payload['cost_centre']) && !isValidStringLength(envelope.payload['cost_centre'], 256)) {
-    throw new AppError(400, 'INVALID_TAG_VALUE', 'cost_centre must not exceed 256 characters', {
-      invalid_value: envelope.payload['cost_centre'],
-      transaction_type: envelope.event_type,
-    });
-  }
 
   if (rule.project_code_required && !isNonEmptyString(envelope.payload['project_code'])) {
     throw new AppError(400, 'UNTAGGED_TRANSACTION', 'Transaction type requires a project_code tag', {
       missing_tag: 'project_code',
-      transaction_type: envelope.event_type,
-    });
-  }
-  if (rule.project_code_required && isNonEmptyString(envelope.payload['project_code']) && !isValidStringLength(envelope.payload['project_code'], 256)) {
-    throw new AppError(400, 'INVALID_TAG_VALUE', 'project_code must not exceed 256 characters', {
-      invalid_value: envelope.payload['project_code'],
       transaction_type: envelope.event_type,
     });
   }

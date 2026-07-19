@@ -122,7 +122,9 @@ const createTaggingRuleBase: RouteHandler = async (req, res, _params) => {
   try {
     await client.query('BEGIN');
 
-    const conflict = await findConflictingRule(transactionType, effectiveFrom, effectiveTo);
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`transaction_tagging_rules:${transactionType}`]);
+
+    const conflict = await findConflictingRule(transactionType, effectiveFrom, effectiveTo, client);
     if (conflict) {
       await client.query('ROLLBACK');
       sendRequestError(
@@ -133,7 +135,6 @@ const createTaggingRuleBase: RouteHandler = async (req, res, _params) => {
         `An existing rule (${conflict.rule_id}) for "${transactionType}" overlaps the requested date range`,
         { conflicting_rule_id: conflict.rule_id, effective_from: conflict.effective_from, effective_to: conflict.effective_to },
       );
-      client.release();
       return;
     }
 
