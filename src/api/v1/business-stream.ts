@@ -58,11 +58,18 @@ function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: numb
 }
 
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isValidStringLength(value: string, maxLength: number = 256): boolean {
+  return value.length <= maxLength;
 }
 
 function isValidDateString(value: string): boolean {
-  return DATE_REGEX.test(value) && !Number.isNaN(Date.parse(value));
+  if (!DATE_REGEX.test(value)) return false;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return parsed.toISOString().startsWith(value);
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -78,6 +85,10 @@ const createTaggingRuleBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!body || !isNonEmptyString(body['transaction_type'])) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transaction_type is required and must be a non-empty string');
+    return;
+  }
+  if (!isValidStringLength(body['transaction_type'], 256)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transaction_type must not exceed 256 characters');
     return;
   }
   const costCentreRequired = body['cost_centre_required'] ?? false;
@@ -105,24 +116,27 @@ const createTaggingRuleBase: RouteHandler = async (req, res, _params) => {
   }
   const transactionType = body['transaction_type'];
 
-  const conflict = await findConflictingRule(transactionType, effectiveFrom, effectiveTo);
-  if (conflict) {
-    sendRequestError(
-      req,
-      res,
-      409,
-      'TAGGING_RULE_CONFLICT',
-      `An existing rule (${conflict.rule_id}) for "${transactionType}" overlaps the requested date range`,
-      { conflicting_rule_id: conflict.rule_id, effective_from: conflict.effective_from, effective_to: conflict.effective_to },
-    );
-    return;
-  }
-
   const actor = actorContext(req);
   const pool = getPool();
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    const conflict = await findConflictingRule(transactionType, effectiveFrom, effectiveTo);
+    if (conflict) {
+      await client.query('ROLLBACK');
+      sendRequestError(
+        req,
+        res,
+        409,
+        'TAGGING_RULE_CONFLICT',
+        `An existing rule (${conflict.rule_id}) for "${transactionType}" overlaps the requested date range`,
+        { conflicting_rule_id: conflict.rule_id, effective_from: conflict.effective_from, effective_to: conflict.effective_to },
+      );
+      client.release();
+      return;
+    }
+
     const rule = await createTaggingRule(
       {
         transaction_type: transactionType,

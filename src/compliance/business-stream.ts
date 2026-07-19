@@ -34,7 +34,11 @@ const defaultDeps: TaggingDeps = {
 };
 
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isValidStringLength(value: string, maxLength: number = 256): boolean {
+  return value.length <= maxLength;
 }
 
 /**
@@ -73,10 +77,22 @@ export async function assertInventoryTagging(envelope: EventEnvelope, deps: Tagg
       transaction_type: envelope.event_type,
     });
   }
+  if (rule.cost_centre_required && isNonEmptyString(envelope.payload['cost_centre']) && !isValidStringLength(envelope.payload['cost_centre'], 256)) {
+    throw new AppError(400, 'INVALID_TAG_VALUE', 'cost_centre must not exceed 256 characters', {
+      invalid_value: envelope.payload['cost_centre'],
+      transaction_type: envelope.event_type,
+    });
+  }
 
   if (rule.project_code_required && !isNonEmptyString(envelope.payload['project_code'])) {
     throw new AppError(400, 'UNTAGGED_TRANSACTION', 'Transaction type requires a project_code tag', {
       missing_tag: 'project_code',
+      transaction_type: envelope.event_type,
+    });
+  }
+  if (rule.project_code_required && isNonEmptyString(envelope.payload['project_code']) && !isValidStringLength(envelope.payload['project_code'], 256)) {
+    throw new AppError(400, 'INVALID_TAG_VALUE', 'project_code must not exceed 256 characters', {
+      invalid_value: envelope.payload['project_code'],
       transaction_type: envelope.event_type,
     });
   }
