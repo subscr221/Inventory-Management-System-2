@@ -4,7 +4,7 @@ baseline_commit: b9188aa17408bd88d45e5f1f54ababe61a9ab01a
 
 # Story 1.6: Event-Sourced Location with Asserted/Expected Separation
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -80,6 +80,13 @@ So that location data is trustworthy, every discrepancy is auditable, and stock 
   - [x] 5.5 RBAC boundary: a caller with no role assignment for module `inventory` gets 403 `MODULE_ACCESS_DENIED` on both `GET /api/v1/locations/:lotId` and `POST /api/v1/locations/:lotId/expected`.
   - [x] 5.6 Non-location passthrough regression guard: submit `POST /api/v1/events` with `stream_type: 'doa_registry_entry'` (no `business_stream`, no `lot_id`) and assert it still succeeds - proving `assertLocationInvariant`'s stream-type guard did not break Stories 1.1 through 1.5, exactly as `story-1-5.test.ts:5.8` guards tagging. Also assert a plain `inventory` non-location event (`event_type: 'stock.allocated'`, `business_stream: 'production'`) succeeds and does NOT touch the location tables.
   - [x] 5.7 Run `npm run lint`, `npx tsc --noEmit`, and `npm run test:integration`; all clean. Confirm the full aggregate suite (Stories 1.1 through 1.5) still passes with no regressions.
+
+### Review Findings
+
+- [x] [Review][Patch] Guard current-location projection with central `event_version` ordering so an older replayed `location.asserted` cannot become current after a newer assertion. [`src/read/projections/location.ts:138`, `src/read/projections/location.ts:176`, `src/compliance/location.ts:125`]
+- [x] [Review][Patch] Emit system-generated `location.disputed` via a narrow internal write path on the same transaction client so operator tagging rules cannot reject and roll back a valid assertion. [`src/compliance/location.ts:66`, `src/compliance/location.ts:151`, `src/compliance/business-stream.ts:73`]
+- [x] [Review][Patch] Validate location confidence vocabulary and stop defaulting omitted confidence to `certain` [`src/compliance/location.ts:125`]
+- [x] [Review][Patch] Read `device_id` from the documented `location.asserted` payload field, with metadata fallback if desired [`src/compliance/location.ts:126`]
 
 ## Dev Notes
 
@@ -212,6 +219,14 @@ fugu (Kilo)
 - `node --env-file=.env.test --import tsx src/events/migrate.ts` - passed after keeping the WSL-hosted Postgres container alive.
 - `npm test` - passed 101/101.
 - `git diff --check` - clean; Windows line-ending conversion warnings only.
+- Code review: 4 patch findings resolved after decision to use central `event_version` ordering and a narrow internal write path for generated `location.disputed` events.
+- `npx tsc --noEmit` - passed clean after review patches.
+- `node --env-file=.env.test --import tsx --test test/unit/location.test.ts` - passed 6/6 after review patches.
+- `node --env-file=.env.test --import tsx --test --test-concurrency=1 test/integration/story-1-6.test.ts` - passed 12/12 after review patches.
+- `npm run lint` - passed clean after review patches.
+- `node --env-file=.env.test --import tsx src/events/migrate.ts` - passed after review patches.
+- `node --env-file=.env.test --import tsx --test test/unit/*.test.ts` - passed 21/21 after review patches.
+- `npm test` - passed 105/105 after review patches.
 
 ### Completion Notes List
 
@@ -221,6 +236,8 @@ fugu (Kilo)
 - Wired location processing into `persistEvent` after the triggering event insert, using the same transaction client so the domain event, projection update, and any `location.disputed` event commit atomically.
 - Added `GET /api/v1/locations/:lotId` and synthetic `POST /api/v1/locations/:lotId/expected` spine-test seeding endpoints with inventory RBAC.
 - Added DB-free unit tests for location branching and integration tests covering all ACs, idempotency, RBAC, malformed payload rollback, and non-location regression guards.
+- Review patches added central `event_version` ordering to prevent stale asserted events from becoming current, replaced re-entrant dispute persistence with a narrow internal write, validated confidence vocabulary with `none` as the omitted default, and read `device_id` from the documented payload field.
+- Review regression coverage added stale-version projection protection, payload `device_id`, default/invalid confidence, and generated dispute resilience when a tagging rule exists for `location.disputed`.
 
 ### File List
 
@@ -240,4 +257,5 @@ fugu (Kilo)
 ## Change Log
 
 - 2026-07-19: Implemented Story 1.6 (Event-Sourced Location with Asserted/Expected Separation). Delivered canonical location projection schema, read/write projection functions, central write-path location invariant enforcement, `location.disputed` event emission, current-location API, synthetic expected-fact seeding endpoint, route registration, and full unit + integration coverage. Validation passed: migration, `npm test` 101/101, `npx tsc --noEmit`, `npm run lint`, and `git diff --check`.
+- 2026-07-19: Resolved all 4 code-review patch findings. Added `event_version`-guarded current-location projection writes, internal generated-dispute persistence that bypasses operator tagging gates, confidence validation/defaulting, payload `device_id` handling, and review regression tests. Validation passed: migration, `npm test` 105/105, `npx tsc --noEmit`, `npm run lint`, and `git diff --check`.
 

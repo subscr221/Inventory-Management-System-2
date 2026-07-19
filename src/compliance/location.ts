@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { EventEnvelope, PersistedEvent } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
@@ -28,8 +29,8 @@ const EVENT_DISPUTED = 'location.disputed';
 
 /**
  * The DB-touching operations, injectable so unit tests exercise the branching logic without a
- * database. Production callers use the default (real projection functions + the persistEvent
- * re-entry for the dispute event), bound to the caller's transaction client.
+ * database. Production callers use the default real projection functions and an internal dispute
+ * event write, bound to the caller's transaction client.
  */
 export interface LocationDeps {
   getExpectedLocation: (lotId: string, client?: PoolClient) => Promise<ExpectedLocationFact | null>;
@@ -45,16 +46,18 @@ export interface LocationDeps {
       device_id: string | null;
       confidence: string;
       source_event_id: string;
+      source_event_version: number;
     },
     client?: PoolClient,
-  ) => Promise<AssertedLocationFact>;
+  ) => Promise<AssertedLocationFact | null>;
   updateCurrentLocation: (
     lotId: string,
     location: string,
     confidence: string,
     assertedFactId: string,
+    sourceEventVersion: number,
     client?: PoolClient,
-  ) => Promise<CurrentLocation>;
+  ) => Promise<CurrentLocation | null>;
   emitDisputeEvent: (envelope: EventEnvelope, client?: PoolClient) => Promise<void>;
 }
 
@@ -64,17 +67,27 @@ const defaultDeps: LocationDeps = {
   recordAssertedLocation,
   updateCurrentLocation,
   emitDisputeEvent: async (envelope, client) => {
-    // Dynamic import avoids a static circular dependency (store.ts imports this module). The
-    // dispute event joins the SAME transaction as the triggering asserted event via `client`, so
-    // the asserted fact, the current projection, and the dispute event commit together (AD-16:
-    // exactly once; NFR-DI-01 atomicity). The dispute event carries no idempotency_key of its own.
-    const { persistEvent } = await import('../events/store.js');
-    await persistEvent(envelope, undefined, client);
+    if (!client) throw new Error('location.disputed requires a transaction client');
+    const versionResult = await client.query(
+      `SELECT COALESCE(MAX(event_version), 0) + 1 AS next_version FROM domain_events WHERE stream_id = $1`,
+      [envelope.stream_id],
+    );
+    const nextVersion = versionResult.rows[0]!['next_version'] as number;
+    const metadata = { ...envelope.metadata, synced_at: new Date().toISOString() };
+    await client.query(
+      `INSERT INTO domain_events (event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
+      [randomUUID(), envelope.stream_type, envelope.stream_id, envelope.event_type, nextVersion, envelope.payload, metadata, envelope.schema_version ?? 1],
+    );
   },
 };
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isConfidence(value: unknown): value is 'none' | 'low' | 'certain' {
+  return value === 'none' || value === 'low' || value === 'certain';
 }
 
 /**
@@ -122,8 +135,19 @@ export async function assertLocationInvariant(
       missing_field: 'asserted_location',
     });
   }
-  const confidence = isNonEmptyString(envelope.payload['confidence']) ? envelope.payload['confidence'] : 'certain';
-  const deviceId = isNonEmptyString(envelope.metadata.device_id) ? envelope.metadata.device_id : null;
+  const confidenceInput = envelope.payload['confidence'];
+  if (confidenceInput !== undefined && !isConfidence(confidenceInput)) {
+    throw new AppError(400, 'INVALID_PARAMS', 'location.asserted payload has invalid confidence', {
+      invalid_field: 'confidence',
+      allowed_values: ['none', 'low', 'certain'],
+    });
+  }
+  const confidence = isConfidence(confidenceInput) ? confidenceInput : 'none';
+  const deviceId = isNonEmptyString(envelope.payload['device_id'])
+    ? envelope.payload['device_id']
+    : isNonEmptyString(envelope.metadata.device_id)
+      ? envelope.metadata.device_id
+      : null;
 
   const asserted = await deps.recordAssertedLocation(
     {
@@ -133,12 +157,14 @@ export async function assertLocationInvariant(
       device_id: deviceId,
       confidence,
       source_event_id: persisted.event_id,
+      source_event_version: persisted.event_version,
     },
     client,
   );
+  if (!asserted) return;
 
   // The asserted location becomes the current location projection (AC1).
-  await deps.updateCurrentLocation(lotId, assertedLocation, confidence, asserted.fact_id, client);
+  await deps.updateCurrentLocation(lotId, assertedLocation, confidence, asserted.fact_id, persisted.event_version, client);
 
   // A divergence from the recorded expected fact raises a location.disputed event referencing both
   // facts with actor provenance. The expected fact is preserved - neither deleted nor overwritten.
@@ -149,8 +175,6 @@ export async function assertLocationInvariant(
       stream_id: envelope.stream_id,
       event_type: EVENT_DISPUTED,
       payload: {
-        // business_stream is carried forward so the dispute event satisfies FR-AC-01 tagging on
-        // the re-entrant persistEvent call (it is an inventory-stream event too).
         business_stream: envelope.payload['business_stream'],
         lot_id: lotId,
         asserted_location: assertedLocation,

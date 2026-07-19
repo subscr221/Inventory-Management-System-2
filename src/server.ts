@@ -20,6 +20,11 @@ import {
   listBusinessStreamsHandler,
 } from './api/v1/business-stream.js';
 import { getCurrentLocationHandler, seedExpectedLocationHandler } from './api/v1/location.js';
+import {
+  updateCalibrationStatusHandler,
+  createQcResultHandler,
+  createCalibrationEscalationHandler,
+} from './api/v1/instruments.js';
 
 const router = new Router();
 
@@ -40,6 +45,9 @@ router.get('/api/v1/business-streams/rules', getTaggingRuleHandler);
 router.get('/api/v1/business-streams', listBusinessStreamsHandler);
 router.get('/api/v1/locations/:lotId', getCurrentLocationHandler);
 router.post('/api/v1/locations/:lotId/expected', seedExpectedLocationHandler);
+router.put('/api/v1/instruments/:id/calibration-status', updateCalibrationStatusHandler);
+router.post('/api/v1/qc/results', createQcResultHandler);
+router.post('/api/v1/instruments/:id/calibration-escalations', createCalibrationEscalationHandler);
 
 if (config.auth.mode === 'local') {
   router.post('/api/v1/auth/dev-token', devTokenHandler);

@@ -353,6 +353,7 @@ CREATE TABLE IF NOT EXISTS location_asserted_facts (
   recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   confidence         TEXT NOT NULL DEFAULT 'none',
   source_event_id    UUID NOT NULL,
+  source_event_version INTEGER NOT NULL DEFAULT 0,
   CONSTRAINT uq_location_asserted_lot UNIQUE (lot_id)
 );
 
@@ -371,8 +372,31 @@ CREATE TABLE IF NOT EXISTS location_current (
   location          TEXT,
   confidence        TEXT NOT NULL DEFAULT 'none',
   asserted_fact_id  UUID,
+  source_event_version INTEGER NOT NULL DEFAULT 0,
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE IF EXISTS location_asserted_facts
+  ADD COLUMN IF NOT EXISTS source_event_version INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE IF EXISTS location_current
+  ADD COLUMN IF NOT EXISTS source_event_version INTEGER NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_location_asserted_confidence'
+  ) THEN
+    ALTER TABLE location_asserted_facts
+      ADD CONSTRAINT chk_location_asserted_confidence CHECK (confidence IN ('none', 'low', 'certain'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_location_current_confidence'
+  ) THEN
+    ALTER TABLE location_current
+      ADD CONSTRAINT chk_location_current_confidence CHECK (confidence IN ('none', 'low', 'certain'));
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_location_asserted_lot ON location_asserted_facts (lot_id);
 CREATE INDEX IF NOT EXISTS idx_location_expected_lot ON location_expected_facts (lot_id);
@@ -388,5 +412,44 @@ BEGIN
     GRANT SELECT ON location_asserted_facts TO readonly_user;
     GRANT SELECT ON location_expected_facts TO readonly_user;
     GRANT SELECT ON location_current TO readonly_user;
+  END IF;
+END $$;
+
+
+-- Story 1.7: Calibration lockout enforcement.
+CREATE TABLE IF NOT EXISTS instrument_calibration_statuses (
+  instrument_uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  instrument_id TEXT NOT NULL UNIQUE,
+  calibration_status TEXT NOT NULL,
+  status_event_id UUID,
+  status_event_version INTEGER,
+  status_changed_by UUID NOT NULL,
+  status_changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reason TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_instrument_calibration_status CHECK (calibration_status IN ('calibrated', 'out_of_calibration'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_instrument_calibration_status'
+      AND conrelid = 'instrument_calibration_statuses'::regclass
+  ) THEN
+    ALTER TABLE instrument_calibration_statuses
+      ADD CONSTRAINT chk_instrument_calibration_status CHECK (calibration_status IN ('calibrated', 'out_of_calibration'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_instrument_calibration_statuses_instrument_id ON instrument_calibration_statuses (instrument_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON instrument_calibration_statuses TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON instrument_calibration_statuses TO readonly_user;
   END IF;
 END $$;

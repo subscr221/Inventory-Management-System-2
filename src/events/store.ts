@@ -6,6 +6,7 @@ import { logAuditEntry } from '../read/projections/audit_log.js';
 import type { AuditEntryPayload } from '../read/projections/audit_log.js';
 import { isAuditTamperError, recordTamperAttempt } from '../middleware/audit-tamper-guard.js';
 import { assertInventoryTagging } from '../compliance/business-stream.js';
+import { assertCalibrationLockout } from '../compliance/calibration.js';
 import { assertLocationInvariant } from '../compliance/location.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -152,6 +153,7 @@ export async function persistEvent(
   // stream types (DOA registry, SCIM users, audit, tagging config itself) return immediately
   // inside assertInventoryTagging - byte-for-byte unaffected.
   await assertInventoryTagging(envelope);
+  await assertCalibrationLockout(envelope);
 
   const pool = getPool();
   const eventId = randomUUID();

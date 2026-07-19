@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS location_asserted_facts (
   recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   confidence         TEXT NOT NULL DEFAULT 'none',
   source_event_id    UUID NOT NULL,
+  source_event_version INTEGER NOT NULL DEFAULT 0,
   CONSTRAINT uq_location_asserted_lot UNIQUE (lot_id)
 );
 
@@ -33,8 +34,31 @@ CREATE TABLE IF NOT EXISTS location_current (
   location          TEXT,
   confidence        TEXT NOT NULL DEFAULT 'none',
   asserted_fact_id  UUID,
+  source_event_version INTEGER NOT NULL DEFAULT 0,
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE IF EXISTS location_asserted_facts
+  ADD COLUMN IF NOT EXISTS source_event_version INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE IF EXISTS location_current
+  ADD COLUMN IF NOT EXISTS source_event_version INTEGER NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_location_asserted_confidence'
+  ) THEN
+    ALTER TABLE location_asserted_facts
+      ADD CONSTRAINT chk_location_asserted_confidence CHECK (confidence IN ('none', 'low', 'certain'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_location_current_confidence'
+  ) THEN
+    ALTER TABLE location_current
+      ADD CONSTRAINT chk_location_current_confidence CHECK (confidence IN ('none', 'low', 'certain'));
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_location_asserted_lot ON location_asserted_facts (lot_id);
 CREATE INDEX IF NOT EXISTS idx_location_expected_lot ON location_expected_facts (lot_id);

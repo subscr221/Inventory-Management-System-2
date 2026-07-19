@@ -7,6 +7,7 @@ import { provisionUserHandler, patchUserHandler } from '../../src/api/v1/scim.js
 import { devTokenHandler } from '../../src/api/v1/auth-dev.js';
 import { postEventHandler, getStreamHandler } from '../../src/api/v1/events.js';
 import { getCurrentLocationHandler, seedExpectedLocationHandler } from '../../src/api/v1/location.js';
+import { createTaggingRuleHandler } from '../../src/api/v1/business-stream.js';
 import { closePool, getPool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -89,19 +90,22 @@ function assertedEnvelope(
   lotId: string,
   userId: string,
   assertedLocation: string,
-  extra: { idempotency_key?: string } = {},
+  extra: { idempotency_key?: string; confidence?: string; deviceId?: string | null; event_version?: number } = {},
 ) {
+  const payload: Record<string, unknown> = { business_stream: 'production', lot_id: lotId, asserted_location: assertedLocation };
+  if (extra.confidence !== undefined) payload['confidence'] = extra.confidence;
+  if (extra.deviceId !== null) payload['device_id'] = extra.deviceId ?? 'rugged-01';
   return {
     stream_type: 'inventory',
     stream_id: lotId,
     event_type: 'location.asserted',
-    payload: { business_stream: 'production', lot_id: lotId, asserted_location: assertedLocation },
+    payload,
     metadata: {
       correlation_id: randomUUID(),
       actor: { user_id: userId, role: 'warehouse_operator', location_id: ACTOR_LOCATION },
-      device_id: 'rugged-01',
       occurred_at: new Date().toISOString(),
     },
+    ...(extra.event_version ? { event_version: extra.event_version } : {}),
     ...(extra.idempotency_key ? { idempotency_key: extra.idempotency_key } : {}),
   };
 }
@@ -122,6 +126,7 @@ async function disputeEventsFor(lotId: string): Promise<Array<Record<string, unk
 describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
   let server: Server;
   let inventoryHeaders: Record<string, string>;
+  let complianceHeaders: Record<string, string>;
   let deniedHeaders: Record<string, string>;
   let inventoryUserId: string;
 
@@ -161,6 +166,7 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     router.get('/api/v1/events/:streamType/:streamId', getStreamHandler);
     router.get('/api/v1/locations/:lotId', getCurrentLocationHandler);
     router.post('/api/v1/locations/:lotId/expected', seedExpectedLocationHandler);
+    router.post('/api/v1/business-streams/rules', createTaggingRuleHandler);
 
     server = createServer((req, res) => {
       router.handle(req, res).catch((err) => {
@@ -176,11 +182,15 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     inventoryUserId = await provisionUser(TEST_PORT, 'loc-inventory@example.com', [
       { role: 'warehouse_operator', module: 'inventory', functionScope: 'write', locationId: '*' },
     ]);
+    await provisionUser(TEST_PORT, 'loc-compliance@example.com', [
+      { role: 'compliance_admin', module: 'compliance', functionScope: 'write', locationId: '*' },
+    ]);
     await provisionUser(TEST_PORT, 'loc-denied@example.com', [
       { role: 'qc_inspector', module: 'quality', functionScope: 'write', locationId: '*' },
     ]);
 
     inventoryHeaders = await authFor(TEST_PORT, 'loc-inventory@example.com');
+    complianceHeaders = await authFor(TEST_PORT, 'loc-compliance@example.com');
     deniedHeaders = await authFor(TEST_PORT, 'loc-denied@example.com');
   });
 
@@ -206,7 +216,7 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
       TEST_PORT,
       'POST',
       '/api/v1/events',
-      assertedEnvelope(lotId, inventoryUserId, 'BIN-A43'),
+      assertedEnvelope(lotId, inventoryUserId, 'BIN-A43', { confidence: 'certain' }),
       inventoryHeaders,
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
@@ -305,6 +315,99 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
     assert.strictEqual((await disputeEventsFor(lotId)).length, 0, 'matching assertion raises no dispute');
+  });
+
+  it('keeps the newer current location when an older explicit event_version arrives later', async () => {
+    const lotId = randomUUID();
+    const newer = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      assertedEnvelope(lotId, inventoryUserId, 'BIN-NEW', { event_version: 2, confidence: 'certain' }),
+      inventoryHeaders,
+    );
+    assert.strictEqual(newer.status, 201, JSON.stringify(newer.body));
+
+    const older = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      assertedEnvelope(lotId, inventoryUserId, 'BIN-OLD', { event_version: 1, confidence: 'low' }),
+      inventoryHeaders,
+    );
+    assert.strictEqual(older.status, 201, JSON.stringify(older.body));
+
+    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/locations/${lotId}`, undefined, inventoryHeaders);
+    assert.strictEqual(current.body['location'], 'BIN-NEW');
+    assert.strictEqual(current.body['confidence'], 'certain');
+  });
+
+  it('stores payload device_id and defaults omitted confidence to none', async () => {
+    const lotId = randomUUID();
+    const asserted = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      assertedEnvelope(lotId, inventoryUserId, 'BIN-PAYLOAD-DEVICE', { deviceId: 'payload-scanner-9' }),
+      inventoryHeaders,
+    );
+    assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
+
+    const row = await getPool().query(
+      `SELECT device_id, confidence FROM location_asserted_facts WHERE lot_id = $1`,
+      [lotId],
+    );
+    assert.strictEqual(row.rows[0]!['device_id'], 'payload-scanner-9');
+    assert.strictEqual(row.rows[0]!['confidence'], 'none');
+  });
+
+  it('rejects invalid confidence values with INVALID_PARAMS', async () => {
+    const lotId = randomUUID();
+    const res = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      assertedEnvelope(lotId, inventoryUserId, 'BIN-BAD-CONFIDENCE', { confidence: 'banana' }),
+      inventoryHeaders,
+    );
+    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+  });
+
+  it('emits location.disputed even when a tagging rule would require tags on that generated event', async () => {
+    const rule = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/business-streams/rules',
+      {
+        transaction_type: 'location.disputed',
+        cost_centre_required: true,
+        project_code_required: false,
+        effective_from: new Date().toISOString().slice(0, 10),
+      },
+      complianceHeaders,
+    );
+    assert.strictEqual(rule.status, 201, JSON.stringify(rule.body));
+
+    const lotId = randomUUID();
+    const seed = await makeRequest(
+      TEST_PORT,
+      'POST',
+      `/api/v1/locations/${lotId}/expected`,
+      { expected_location: 'BIN-TAG-EXPECTED', source: 'seed' },
+      inventoryHeaders,
+    );
+    assert.strictEqual(seed.status, 201, JSON.stringify(seed.body));
+
+    const asserted = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      assertedEnvelope(lotId, inventoryUserId, 'BIN-TAG-ACTUAL'),
+      inventoryHeaders,
+    );
+    assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
+    assert.strictEqual((await disputeEventsFor(lotId)).length, 1);
   });
 
   it('RBAC boundary: module access is denied for the location endpoints without the inventory role', async () => {

@@ -66,8 +66,9 @@ function makeDeps(expected: ExpectedLocationFact | null, calls: string[]): Locat
         recorded_by: '44444444-4444-4444-8444-444444444444',
         device_id: 'rugged-01',
         recorded_at: '2026-07-19T00:00:00.000Z',
-        confidence: 'certain',
+        confidence: 'none',
         source_event_id: EVENT_ID,
+        source_event_version: 1,
       } satisfies AssertedLocationFact;
     },
     updateCurrentLocation: async () => {
@@ -75,8 +76,9 @@ function makeDeps(expected: ExpectedLocationFact | null, calls: string[]): Locat
       return {
         lot_id: LOT_ID,
         location: 'BIN-A43',
-        confidence: 'certain',
+        confidence: 'none',
         asserted_fact_id: '88888888-8888-4888-8888-888888888888',
+        source_event_version: 1,
         updated_at: '2026-07-19T00:00:00.000Z',
       } satisfies CurrentLocation;
     },

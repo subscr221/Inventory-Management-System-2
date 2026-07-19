@@ -22,6 +22,7 @@ export interface AssertedLocationFact {
   recorded_at: string;
   confidence: string;
   source_event_id: string;
+  source_event_version: number;
 }
 
 export interface ExpectedLocationFact {
@@ -38,6 +39,7 @@ export interface CurrentLocation {
   location: string | null;
   confidence: string;
   asserted_fact_id: string | null;
+  source_event_version: number;
   updated_at: string;
 }
 
@@ -48,6 +50,7 @@ export interface RecordAssertedInput {
   device_id: string | null;
   confidence: string;
   source_event_id: string;
+  source_event_version: number;
 }
 
 export interface RecordExpectedInput {
@@ -79,6 +82,7 @@ function mapAsserted(row: Record<string, unknown>): AssertedLocationFact {
     recorded_at: recordedAt,
     confidence: row['confidence'] as string,
     source_event_id: row['source_event_id'] as string,
+    source_event_version: row['source_event_version'] as number,
   };
 }
 
@@ -101,6 +105,7 @@ function mapCurrent(row: Record<string, unknown>): CurrentLocation {
     location: (row['location'] as string | null) ?? null,
     confidence: row['confidence'] as string,
     asserted_fact_id: (row['asserted_fact_id'] as string | null) ?? null,
+    source_event_version: row['source_event_version'] as number,
     updated_at: updatedAt,
   };
 }
@@ -122,7 +127,7 @@ export async function getExpectedLocation(lotId: string, client?: PoolClient): P
  */
 export async function getCurrentLocation(lotId: string, client?: PoolClient): Promise<CurrentLocation | null> {
   const result = await runner(client).query(
-    `SELECT lot_id, location, confidence, asserted_fact_id, updated_at
+    `SELECT lot_id, location, confidence, asserted_fact_id, source_event_version, updated_at
      FROM location_current WHERE lot_id = $1`,
     [lotId],
   );
@@ -135,21 +140,23 @@ export async function getCurrentLocation(lotId: string, client?: PoolClient): Pr
  * a mutable domain column - every assertion is also an immutable `location.asserted` event in
  * domain_events, and a divergence from the expected fact raises `location.disputed`.
  */
-export async function recordAssertedLocation(input: RecordAssertedInput, client?: PoolClient): Promise<AssertedLocationFact> {
+export async function recordAssertedLocation(input: RecordAssertedInput, client?: PoolClient): Promise<AssertedLocationFact | null> {
   const result = await runner(client).query(
-    `INSERT INTO location_asserted_facts (lot_id, asserted_location, recorded_by, device_id, confidence, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO location_asserted_facts (lot_id, asserted_location, recorded_by, device_id, confidence, source_event_id, source_event_version)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (lot_id) DO UPDATE SET
        asserted_location = EXCLUDED.asserted_location,
        recorded_by = EXCLUDED.recorded_by,
        device_id = EXCLUDED.device_id,
        confidence = EXCLUDED.confidence,
        source_event_id = EXCLUDED.source_event_id,
+       source_event_version = EXCLUDED.source_event_version,
        recorded_at = now()
-     RETURNING fact_id, lot_id, asserted_location, recorded_by, device_id, recorded_at, confidence, source_event_id`,
-    [input.lot_id, input.asserted_location, input.recorded_by, input.device_id, input.confidence, input.source_event_id],
+     WHERE EXCLUDED.source_event_version > location_asserted_facts.source_event_version
+     RETURNING fact_id, lot_id, asserted_location, recorded_by, device_id, recorded_at, confidence, source_event_id, source_event_version`,
+    [input.lot_id, input.asserted_location, input.recorded_by, input.device_id, input.confidence, input.source_event_id, input.source_event_version],
   );
-  return mapAsserted(result.rows[0]!);
+  return result.rows.length > 0 ? mapAsserted(result.rows[0]!) : null;
 }
 
 /**
@@ -178,18 +185,21 @@ export async function updateCurrentLocation(
   location: string,
   confidence: string,
   assertedFactId: string,
+  sourceEventVersion: number,
   client?: PoolClient,
-): Promise<CurrentLocation> {
+): Promise<CurrentLocation | null> {
   const result = await runner(client).query(
-    `INSERT INTO location_current (lot_id, location, confidence, asserted_fact_id, updated_at)
-     VALUES ($1, $2, $3, $4, now())
+    `INSERT INTO location_current (lot_id, location, confidence, asserted_fact_id, source_event_version, updated_at)
+     VALUES ($1, $2, $3, $4, $5, now())
      ON CONFLICT (lot_id) DO UPDATE SET
        location = EXCLUDED.location,
        confidence = EXCLUDED.confidence,
        asserted_fact_id = EXCLUDED.asserted_fact_id,
+       source_event_version = EXCLUDED.source_event_version,
        updated_at = now()
-     RETURNING lot_id, location, confidence, asserted_fact_id, updated_at`,
-    [lotId, location, confidence, assertedFactId],
+     WHERE EXCLUDED.source_event_version > location_current.source_event_version
+     RETURNING lot_id, location, confidence, asserted_fact_id, source_event_version, updated_at`,
+    [lotId, location, confidence, assertedFactId, sourceEventVersion],
   );
-  return mapCurrent(result.rows[0]!);
+  return result.rows.length > 0 ? mapCurrent(result.rows[0]!) : null;
 }
