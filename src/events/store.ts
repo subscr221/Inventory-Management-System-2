@@ -6,6 +6,7 @@ import { logAuditEntry } from '../read/projections/audit_log.js';
 import type { AuditEntryPayload } from '../read/projections/audit_log.js';
 import { isAuditTamperError, recordTamperAttempt } from '../middleware/audit-tamper-guard.js';
 import { assertInventoryTagging } from '../compliance/business-stream.js';
+import { assertLocationInvariant } from '../compliance/location.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -198,6 +199,10 @@ export async function persistEvent(
       ],
     );
 
+    const persisted = mapRowToEvent(result.rows[0]!);
+
+    await assertLocationInvariant(envelope, persisted, client);
+
     if (auditCtx) {
       // http_status comes from the caller (201 for POST-created resources, 200 for PUT/PATCH
       // flows) so the statutory row records the status the client actually received.
@@ -209,7 +214,7 @@ export async function persistEvent(
     }
 
     if (ownsTransaction) await client.query('COMMIT');
-    return mapRowToEvent(result.rows[0]!);
+    return persisted;
   } catch (err: unknown) {
     if (ownsTransaction) await client.query('ROLLBACK');
     // Defense-in-depth: the audit write here is an INSERT, which the tamper trigger (BEFORE

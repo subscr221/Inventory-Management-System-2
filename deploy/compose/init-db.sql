@@ -336,3 +336,57 @@ BEGIN
     GRANT SELECT ON transaction_tagging_rules TO readonly_user;
   END IF;
 END $$;
+
+
+-- ---------------------------------------------------------------------------
+-- Event-sourced location schema (Story 1.6). The section below MUST stay identical to
+-- the canonical read/projections/location.sql (applied by src/events/migrate.ts and the
+-- test harness); that file is the source of truth for tables, indexes, AND grants.
+-- Change both together.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS location_asserted_facts (
+  fact_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lot_id             UUID NOT NULL,
+  asserted_location  TEXT NOT NULL,
+  recorded_by        UUID NOT NULL,
+  device_id          TEXT,
+  recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  confidence         TEXT NOT NULL DEFAULT 'none',
+  source_event_id    UUID NOT NULL,
+  CONSTRAINT uq_location_asserted_lot UNIQUE (lot_id)
+);
+
+CREATE TABLE IF NOT EXISTS location_expected_facts (
+  fact_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lot_id             UUID NOT NULL,
+  expected_location  TEXT NOT NULL,
+  source             TEXT NOT NULL,
+  source_event_id    UUID NOT NULL,
+  recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_location_expected_lot UNIQUE (lot_id)
+);
+
+CREATE TABLE IF NOT EXISTS location_current (
+  lot_id            UUID PRIMARY KEY,
+  location          TEXT,
+  confidence        TEXT NOT NULL DEFAULT 'none',
+  asserted_fact_id  UUID,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_location_asserted_lot ON location_asserted_facts (lot_id);
+CREATE INDEX IF NOT EXISTS idx_location_expected_lot ON location_expected_facts (lot_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON location_asserted_facts TO app_user;
+    GRANT INSERT, SELECT, UPDATE ON location_expected_facts TO app_user;
+    GRANT INSERT, SELECT, UPDATE ON location_current TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON location_asserted_facts TO readonly_user;
+    GRANT SELECT ON location_expected_facts TO readonly_user;
+    GRANT SELECT ON location_current TO readonly_user;
+  END IF;
+END $$;

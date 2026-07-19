@@ -50,6 +50,7 @@ generated: 2026-07-12
 last_updated: 2026-07-19
 # story 1-5 code review 2026-07-19: 5 review patches resolved; applicability uses occurred_at, overlapping-rule creation serialized with advisory lock, conflict path releases client once, undocumented INVALID_TAG_VALUE removed, stray patch report removed; tsc + eslint + unit test + diff-check clean; moved to done
 # story 1-5 dev-story 2026-07-19: implemented all 5 tasks; tagging schema + assertInventoryTagging in persistEvent + 3 admin endpoints; 9 anticipated cross-story test fixes (1.1-1.3 inventory payloads now tagged); 86/86 tests green; tsc + eslint clean; moved to review
+# story 1-6 dev-story 2026-07-19: implemented all 5 tasks; location schema + projections, assertLocationInvariant in persistEvent transaction, location.disputed event, GET + synthetic expected endpoints; 101/101 tests green; tsc + eslint + diff-check clean; moved to review
 # story 1-6 created 2026-07-19 via create-story workflow: event-sourced location with asserted/expected separation (AD-15, AD-16, INT-LOC-01); location_asserted_facts + location_expected_facts + location_current projection, assertLocationInvariant at persistEvent write path gated by stream_type, location.disputed event on mismatch, GET + synthetic expected-fact seeding endpoints; ready-for-dev
 # story 1-5 created 2026-07-19 via create-story workflow: business-stream tagging enforcement (FR-AC-01); business_streams + transaction_tagging_rules tables, assertInventoryTagging at top of persistEvent gated by stream_type, admin rule endpoints; ready-for-dev
 # story 1-4 code re-review 2026-07-19: 2 test patches resolved; concurrent PATCH serialization + all deterministic tie-breakers directly covered; 67/67 tests green; remains done
@@ -77,7 +78,7 @@ development_status:
   1-3-statutory-edit-log: done   # PILOT
   1-4-enterprise-doa-registry: done   # PILOT
   1-5-business-stream-tagging-enforcement: done   # PILOT
-  1-6-event-sourced-location-with-asserted-expected-separation: ready-for-dev   # PILOT
+  1-6-event-sourced-location-with-asserted-expected-separation: review   # PILOT
   1-7-calibration-lockout-enforcement: backlog   # PILOT
   1-8-offline-edge-pwa-shell-and-powersync-sync-layer: backlog   # PILOT
   1-9-spine-acceptance-contract-ci-gate: backlog   # PILOT

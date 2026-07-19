@@ -19,6 +19,7 @@ import {
   getTaggingRuleHandler,
   listBusinessStreamsHandler,
 } from './api/v1/business-stream.js';
+import { getCurrentLocationHandler, seedExpectedLocationHandler } from './api/v1/location.js';
 
 const router = new Router();
 
@@ -37,6 +38,8 @@ router.post('/api/v1/doa/workflow-config', workflowConfigHandler);
 router.post('/api/v1/business-streams/rules', createTaggingRuleHandler);
 router.get('/api/v1/business-streams/rules', getTaggingRuleHandler);
 router.get('/api/v1/business-streams', listBusinessStreamsHandler);
+router.get('/api/v1/locations/:lotId', getCurrentLocationHandler);
+router.post('/api/v1/locations/:lotId/expected', seedExpectedLocationHandler);
 
 if (config.auth.mode === 'local') {
   router.post('/api/v1/auth/dev-token', devTokenHandler);
