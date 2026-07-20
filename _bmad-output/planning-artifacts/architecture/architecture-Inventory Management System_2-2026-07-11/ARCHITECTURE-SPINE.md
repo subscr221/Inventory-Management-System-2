@@ -163,6 +163,12 @@ graph TD
 - **Prevents:** duplicate events from multiple devices capturing the same physical fact; double-counting stock movements
 - **Rule:** every command that can be issued from multiple devices carries an `idempotency_key` — the task ID or source document ID. The central plane deduplicates by `idempotency_key`. A duplicate submission returns HTTP 409 with the existing event ID. The stock balance is updated exactly once. [ADOPTED]
 
+### AD-17 - Notification Emission Coupling Is the Caller's Explicit Choice
+
+- **Binds:** every module that emits notifications, notification foundation (`src/notify/`)
+- **Prevents:** a notification-emission failure aborting a business write that already succeeded; business-critical decisions committing without the notification record that is part of the decision itself
+- **Rule:** modules emit through exactly two entry points. `emitNotification()` is the default: decoupled, never throws, never joins the caller's transaction (Story 1.11 AC4). `emitNotificationInTransaction()` is the transactional-outbox opt-in: the notification event commits atomically with the caller's business write. Flows where the notification is part of the business fact (approval and rejection decisions, DOA delegation notices, statutory communications) MUST use the transactional entry point. Full decision record, consequences, and dissent: [ADR-001](../../../../docs/adr/ADR-001-notification-emission-coupling.md). [ADOPTED]
+
 ## Consistency Conventions
 
 | Concern | Convention |

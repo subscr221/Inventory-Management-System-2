@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { config } from '../config/index.js';
 import { getPool } from '../config/db.js';
 import {
   insertNotification,
@@ -7,8 +8,29 @@ import {
   isOptedIn,
   listPushSubscriptionsForUser,
   claimEventForDispatch,
+  recordDispatchFailure,
+  clearDispatchAttempts,
 } from '../read/projections/notification.js';
+import { emitNotification } from './emit.js';
 import { sendPushNotification } from './push.js';
+
+// Retry policy for events whose dispatch transaction failed (P2): exponential backoff starting
+// at BACKOFF_BASE_SECONDS, doubling per attempt up to BACKOFF_CAP_SECONDS, dead-lettered after
+// config.notify.dispatchMaxAttempts attempts.
+const BACKOFF_BASE_SECONDS = 2;
+const BACKOFF_CAP_SECONDS = 60;
+
+// event_type of the operator alert raised when an event is dead-lettered. Also the recursion
+// guard: a dead-letter alert that itself dies never raises another one.
+const DEAD_LETTER_EVENT_TYPE = 'dispatch_dead_letter';
+
+// Dead-lettering is a system observation, not a user action - same fixed system-identity pattern
+// as the escalation and expiry clocks (src/notify/escalate.ts, src/notify/expire.ts).
+const SYSTEM_ACTOR = {
+  user_id: '00000000-0000-0000-0000-000000000000',
+  role: 'system_notification_dispatch',
+  location_id: '00000000-0000-0000-0000-000000000000',
+};
 
 interface NotificationCreatedEventRow {
   event_id: string;
@@ -58,13 +80,20 @@ interface NotificationCreatedPayload {
  * append-only, matching every other stream in this system, and makes the dispatcher resumable:
  * a crash between fan-out and markEventDispatched simply reprocesses the same event next cycle -
  * safe because insertNotification (unique on source_event_id + target_user_id) is idempotent.
+ *
+ * The second LEFT JOIN (notification_dispatch_attempts) is the P2 poison-pill guard: an event
+ * whose dispatch has failed is skipped until its backoff elapses (next_attempt_at) and excluded
+ * permanently once dead-lettered - so a permanently-failing event cannot sit at the front of
+ * this oldest-first queue forever, occupying a batch slot and starving every event behind it.
  */
 async function findUndispatchedEvents(limit: number): Promise<NotificationCreatedEventRow[]> {
   const result = await getPool().query(
     `SELECT e.event_id, e.payload, e.metadata, e.created_at
      FROM domain_events e
      LEFT JOIN notification_dispatch_log d ON d.source_event_id = e.event_id
+     LEFT JOIN notification_dispatch_attempts a ON a.source_event_id = e.event_id
      WHERE e.stream_type = 'notification' AND e.event_type = 'notification.created' AND d.source_event_id IS NULL
+       AND (a.source_event_id IS NULL OR (a.dead = false AND a.next_attempt_at <= now()))
      ORDER BY e.created_at ASC
      LIMIT $1`,
     [limit],
@@ -102,8 +131,13 @@ export interface DispatchCycleResult {
  * before COMMIT rolls the whole event back (claim included), so it reprocesses cleanly with no
  * duplicate `notification_deliveries`. Web push is an external side-effect and is therefore sent
  * AFTER the commit (never holding a DB transaction open across a network call); on a crash between
- * commit and push it is at-most-once (a lost push), never a duplicate. A failure on one event is
- * logged and left for the next cycle rather than aborting the batch.
+ * commit and push it is at-most-once (a lost push), never a duplicate.
+ *
+ * A failure on one event never aborts the batch: the event's transaction rolls back, the failure
+ * is recorded with exponential backoff (recordFailedAttempt), and the event retries once its
+ * backoff elapses. After config.notify.dispatchMaxAttempts failures it is dead-lettered -
+ * excluded from dispatch and surfaced to the fallback-escalation role as an operator alert -
+ * so one poison event can never starve the oldest-first queue behind it.
  */
 export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult> {
   const events = await findUndispatchedEvents(limit);
@@ -123,6 +157,11 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
         await client.query('ROLLBACK');
         continue;
       }
+
+      // Successful dispatch retires any retry bookkeeping from earlier failed attempts, keeping
+      // notification_dispatch_attempts a list of only currently-failing events. In-transaction so
+      // the clear commits (or rolls back) with the claim.
+      await clearDispatchAttempts(event.event_id, client);
 
       const payload = event.payload;
       const occurredAt = resolveOccurredAt(event);
@@ -171,7 +210,13 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
       // and abort the whole event (leaving it forever unclaimed on rollback - a poison pill). Skip
       // the escalation def for an invalid window; the notification itself still delivers.
       if (payload.escalation && payload.escalation.acknowledgment_window_seconds > 0) {
-        const deadlineAt = new Date(new Date(occurredAt).getTime() + payload.escalation.acknowledgment_window_seconds * 1000).toISOString();
+        // Deadline anchoring (AC2): the acknowledgment window is a human-response SLA, so its
+        // clock must not start before the alert could reach a human. Anchored at
+        // max(occurred_at, now) - an event fanned out late (dispatcher outage, backlog) still
+        // gives its recipients the full window, instead of arriving already past its deadline
+        // and storming the escalation tier the moment the dispatcher recovers.
+        const deadlineBaseMs = Math.max(new Date(occurredAt).getTime(), Date.now());
+        const deadlineAt = new Date(deadlineBaseMs + payload.escalation.acknowledgment_window_seconds * 1000).toISOString();
         await upsertEscalationDef(
           {
             source_event_id: event.event_id,
@@ -187,8 +232,9 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => undefined);
-      console.error(`Notification dispatch failed for event ${event.event_id} - will retry next cycle:`, err);
+      console.error(`Notification dispatch failed for event ${event.event_id} - will retry with backoff:`, err);
       client.release();
+      await recordFailedAttempt(event, err);
       continue;
     }
     client.release();
@@ -219,4 +265,46 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
   }
 
   return { eventsProcessed: events.length, notificationsCreated };
+}
+
+/**
+ * Failure bookkeeping for one event, on the pool (autocommit) AFTER the dispatch transaction
+ * rolled back - it must survive that rollback to count. Records the attempt with exponential
+ * backoff; on the attempt that crosses the cap (dead flips true exactly once - a dead event is
+ * never fetched, so it never fails again) it raises a dead-letter alert to the fallback
+ * escalation role, because a dead event means notifications someone was meant to receive are NOT
+ * being delivered and a human must intervene (fix the cause, then clear the
+ * notification_dispatch_attempts row to re-drive). Never throws: bookkeeping failure must not
+ * abort the batch loop, and the event stays due for retry regardless.
+ */
+async function recordFailedAttempt(event: NotificationCreatedEventRow, err: unknown): Promise<void> {
+  try {
+    const failure = await recordDispatchFailure(event.event_id, err instanceof Error ? err.message : String(err), {
+      maxAttempts: config.notify.dispatchMaxAttempts,
+      baseBackoffSeconds: BACKOFF_BASE_SECONDS,
+      maxBackoffSeconds: BACKOFF_CAP_SECONDS,
+    });
+    if (!failure.dead) return;
+
+    console.error(`Notification event ${event.event_id} dead-lettered after ${failure.attempts} failed dispatch attempts`);
+    // Recursion guard: a dead-letter alert that itself dead-letters (systemic failure - e.g. the
+    // DB rejecting all fan-out) never raises another alert, bounding the chain at one hop.
+    const failedEventType = (event.payload as Partial<NotificationCreatedPayload> | null)?.event_type;
+    if (failedEventType === DEAD_LETTER_EVENT_TYPE) return;
+
+    await emitNotification({
+      target: { role: config.notify.fallbackEscalationRole, location_id: null },
+      event_type: DEAD_LETTER_EVENT_TYPE,
+      status_verb: 'Undeliverable',
+      object_type: 'notification_event',
+      object_id: event.event_id,
+      actor_label: 'Notification Foundation',
+      next_step: 'Investigate the dispatch failure, fix the cause, then clear its notification_dispatch_attempts row to re-drive',
+      actor: SYSTEM_ACTOR,
+      causation_id: event.event_id,
+      ...(event.metadata.correlation_id ? { correlation_id: event.metadata.correlation_id } : {}),
+    });
+  } catch (bookkeepingErr) {
+    console.error(`Recording dispatch failure for event ${event.event_id} failed:`, bookkeepingErr);
+  }
 }

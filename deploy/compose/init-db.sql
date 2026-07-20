@@ -547,6 +547,15 @@ CREATE TABLE IF NOT EXISTS notification_dispatch_log (
   dispatched_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS notification_dispatch_attempts (
+  source_event_id   UUID PRIMARY KEY,
+  attempts          INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  dead              BOOLEAN NOT NULL DEFAULT false,
+  last_error        TEXT,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS notification_escalation_defs (
   source_event_id                UUID PRIMARY KEY,
   origin_target_role             TEXT NOT NULL,
@@ -611,6 +620,7 @@ BEGIN
     GRANT INSERT, SELECT, UPDATE ON notifications TO app_user;
     GRANT INSERT, SELECT ON notification_deliveries TO app_user;
     GRANT INSERT, SELECT ON notification_dispatch_log TO app_user;
+    GRANT INSERT, SELECT, UPDATE, DELETE ON notification_dispatch_attempts TO app_user;
     GRANT INSERT, SELECT, UPDATE ON notification_escalation_defs TO app_user;
     GRANT INSERT, SELECT ON notification_escalations TO app_user;
     GRANT INSERT, SELECT, UPDATE, DELETE ON push_subscriptions TO app_user;
@@ -620,6 +630,7 @@ BEGIN
     GRANT SELECT ON notifications TO readonly_user;
     GRANT SELECT ON notification_deliveries TO readonly_user;
     GRANT SELECT ON notification_dispatch_log TO readonly_user;
+    GRANT SELECT ON notification_dispatch_attempts TO readonly_user;
     GRANT SELECT ON notification_escalation_defs TO readonly_user;
     GRANT SELECT ON notification_escalations TO readonly_user;
     GRANT SELECT ON push_subscriptions TO readonly_user;

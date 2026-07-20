@@ -115,7 +115,7 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE notification_preferences, push_subscriptions, notification_escalations, notification_escalation_defs, notification_dispatch_log, notification_deliveries, notifications, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE notification_preferences, push_subscriptions, notification_escalations, notification_escalation_defs, notification_dispatch_attempts, notification_dispatch_log, notification_deliveries, notifications, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');
@@ -595,6 +595,232 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     const after1 = await runDispatchCycle();
     assert.strictEqual(after1.eventsProcessed, 0, 'a non-notification stream must never be picked up by the dispatcher');
     assert.strictEqual(before.eventsProcessed, before.eventsProcessed);
+  });
+
+  it('P1: a failure mid-escalation-hop rolls back the claim, so the escalation retries instead of being silently lost', async () => {
+    const emitted = await emitNotification({
+      target: { role: 'maintenance_supervisor', location_id: LOCATION_A },
+      event_type: 'fault_reported',
+      status_verb: 'Reported',
+      object_type: 'fault',
+      object_id: 'FLT-ATOMIC-01',
+      actor: SYSTEM_ACTOR,
+      escalation: { target_role: 'compliance_admin', acknowledgment_window_seconds: 1 },
+    });
+    assert.strictEqual(emitted.ok, true);
+    const sourceEventId = emitted.ok ? emitted.event.event_id : '';
+    await runDispatchCycle();
+    await sleep(1100);
+
+    // Fault injection: fail the hop-record INSERT inside the escalation transaction - the exact
+    // crash window that previously (claim-then-act, autocommit) lost the escalation forever.
+    const adminPool = getAdminPool();
+    await adminPool.query(
+      `CREATE OR REPLACE FUNCTION test_inject_escalation_failure() RETURNS trigger AS $$
+       BEGIN RAISE EXCEPTION 'injected escalation failure'; END $$ LANGUAGE plpgsql`,
+    );
+    await adminPool.query(
+      `CREATE TRIGGER test_inject_escalation_failure_trg BEFORE INSERT ON notification_escalations
+       FOR EACH ROW EXECUTE FUNCTION test_inject_escalation_failure()`,
+    );
+    try {
+      const failedCycle = await runEscalationCycle();
+      assert.strictEqual(failedCycle.escalated, 0, 'a hop whose transaction failed must not count as escalated');
+
+      const def = await getPool().query(`SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`, [sourceEventId]);
+      assert.strictEqual(def.rows[0]!['resolved'], false, 'a failed hop must release its claim so the escalation retries');
+
+      const orphanNotifications = await getPool().query(
+        `SELECT count(*)::int AS c FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.created'
+         AND payload->>'event_type' = 'escalation' AND metadata->>'causation_id' = $1`,
+        [sourceEventId],
+      );
+      assert.strictEqual(orphanNotifications.rows[0]!['c'], 0, 'no escalation notification may survive the rolled-back hop');
+      const orphanHopEvents = await getPool().query(
+        `SELECT count(*)::int AS c FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.escalated'
+         AND payload->>'source_event_id' = $1`,
+        [sourceEventId],
+      );
+      assert.strictEqual(orphanHopEvents.rows[0]!['c'], 0, 'no notification.escalated event may survive the rolled-back hop');
+    } finally {
+      await adminPool.query(`DROP TRIGGER IF EXISTS test_inject_escalation_failure_trg ON notification_escalations`);
+      await adminPool.query(`DROP FUNCTION IF EXISTS test_inject_escalation_failure()`);
+    }
+
+    // At-least-once: with the failure gone, the next cycle picks the released claim back up.
+    const recovered = await runEscalationCycle();
+    assert.ok(recovered.escalated >= 1, 'the escalation must fire on the next cycle after the failure clears');
+    const defAfter = await getPool().query(`SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`, [sourceEventId]);
+    assert.strictEqual(defAfter.rows[0]!['resolved'], true);
+    const hop = await getPool().query(`SELECT count(*)::int AS c FROM notification_escalations WHERE source_event_id = $1`, [sourceEventId]);
+    assert.strictEqual(hop.rows[0]!['c'], 1, 'exactly one hop must be recorded once the escalation succeeds');
+    const hopEvent = await getPool().query(
+      `SELECT count(*)::int AS c FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.escalated'
+       AND payload->>'source_event_id' = $1`,
+      [sourceEventId],
+    );
+    assert.strictEqual(hopEvent.rows[0]!['c'], 1, 'the hop and its domain event must commit together');
+  });
+
+  it('P1b: an escalation deadline anchors to dispatch time, not a stale occurred_at, so a late-dispatched alert keeps its full acknowledgment window', async () => {
+    // A 2-hour-stale event with a 1-hour window: under occurred_at anchoring the deadline would
+    // be an hour in the past at first delivery - instantly due, an escalation storm after any
+    // dispatcher outage. Anchoring at max(occurred_at, dispatch time) preserves the SLA.
+    const staleOccurredAt = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+    const emitted = await emitNotification({
+      target: { role: 'maintenance_supervisor', location_id: LOCATION_A },
+      event_type: 'fault_reported',
+      status_verb: 'Reported',
+      object_type: 'fault',
+      object_id: 'FLT-STALE-01',
+      actor: SYSTEM_ACTOR,
+      occurred_at: staleOccurredAt,
+      escalation: { target_role: 'compliance_admin', acknowledgment_window_seconds: 3600 },
+    });
+    assert.strictEqual(emitted.ok, true);
+    await runDispatchCycle();
+
+    const def = await getPool().query(
+      `SELECT deadline_at > now() AS in_future, deadline_at > now() + interval '55 minutes' AS full_window
+       FROM notification_escalation_defs WHERE source_event_id = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
+    assert.strictEqual(def.rows[0]!['in_future'], true, 'a late-dispatched alert must not be born already past its deadline');
+    assert.strictEqual(def.rows[0]!['full_window'], true, 'recipients must get the full acknowledgment window from delivery time');
+
+    // The notification content still preserves the original business timestamp (AC3) - only the
+    // escalation clock anchors to delivery.
+    const notif = await getPool().query(`SELECT occurred_at FROM notifications WHERE source_event_id = $1`, [
+      emitted.ok ? emitted.event.event_id : '',
+    ]);
+    assert.strictEqual(new Date(notif.rows[0]!['occurred_at'] as Date | string).toISOString(), staleOccurredAt);
+  });
+
+  it('P2: a poison event backs off, dead-letters after the attempt cap, and never starves the healthy events behind it', async () => {
+    // Poison by construction: payload.target is missing, so fan-out throws inside the dispatch
+    // transaction on every attempt.
+    const poisonId = randomUUID();
+    await getPool().query(
+      `INSERT INTO domain_events (event_id, stream_type, stream_id, event_type, event_version, payload, metadata)
+       VALUES ($1, 'notification', $2, 'notification.created', 1, $3::jsonb, $4::jsonb)`,
+      [
+        poisonId,
+        randomUUID(),
+        JSON.stringify({ event_type: 'fault_reported', status_verb: 'Reported', object_type: 'fault', object_id: 'FLT-POISON-01' }),
+        JSON.stringify({ correlation_id: randomUUID(), actor: SYSTEM_ACTOR, occurred_at: new Date().toISOString() }),
+      ],
+    );
+    // A healthy event emitted AFTER the poison one (so it sits behind it in the oldest-first queue).
+    const healthy = await emitNotification({
+      target: { role: 'maintenance_supervisor', location_id: LOCATION_A },
+      event_type: 'fault_reported',
+      status_verb: 'Reported',
+      object_type: 'fault',
+      object_id: 'FLT-HEALTHY-01',
+      actor: SYSTEM_ACTOR,
+    });
+    assert.strictEqual(healthy.ok, true);
+
+    await runDispatchCycle();
+    const delivered = await getPool().query(`SELECT count(*)::int AS c FROM notifications WHERE object_id = 'FLT-HEALTHY-01'`);
+    assert.strictEqual(delivered.rows[0]!['c'], 1, 'a failing event must never block the healthy event behind it');
+    const firstAttempt = await getPool().query(
+      `SELECT attempts, dead, next_attempt_at > now() AS backed_off FROM notification_dispatch_attempts WHERE source_event_id = $1`,
+      [poisonId],
+    );
+    assert.strictEqual(firstAttempt.rows[0]!['attempts'], 1);
+    assert.strictEqual(firstAttempt.rows[0]!['dead'], false);
+    assert.strictEqual(firstAttempt.rows[0]!['backed_off'], true, 'a failed event must be rescheduled with backoff, not retried hot');
+
+    // While backed off, the dispatcher must skip it entirely (no attempt increment).
+    await runDispatchCycle();
+    const whileBackedOff = await getPool().query(`SELECT attempts FROM notification_dispatch_attempts WHERE source_event_id = $1`, [poisonId]);
+    assert.strictEqual(whileBackedOff.rows[0]!['attempts'], 1, 'an event still in backoff must not be fetched');
+
+    // Drive it to the attempt cap, forcing each backoff due (same direct-UPDATE pattern the AC2
+    // tests use to fast-forward deadlines).
+    for (let attempt = 2; attempt <= 5; attempt++) {
+      await getPool().query(`UPDATE notification_dispatch_attempts SET next_attempt_at = now() - interval '1 second' WHERE source_event_id = $1`, [
+        poisonId,
+      ]);
+      await runDispatchCycle();
+    }
+    const capped = await getPool().query(`SELECT attempts, dead FROM notification_dispatch_attempts WHERE source_event_id = $1`, [poisonId]);
+    assert.strictEqual(capped.rows[0]!['attempts'], 5);
+    assert.strictEqual(capped.rows[0]!['dead'], true, 'after the attempt cap the event must be dead-lettered, not retried forever');
+
+    // Dead-lettering is loud: exactly one operator alert raised to the fallback escalation role.
+    const alert = await getPool().query(
+      `SELECT count(*)::int AS c FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.created'
+       AND payload->>'event_type' = 'dispatch_dead_letter' AND payload->>'object_id' = $1`,
+      [poisonId],
+    );
+    assert.strictEqual(alert.rows[0]!['c'], 1, 'dead-lettering must raise exactly one operator alert');
+
+    // And dead means dead: even when "due", the event is never fetched again.
+    await getPool().query(`UPDATE notification_dispatch_attempts SET next_attempt_at = now() - interval '1 second' WHERE source_event_id = $1`, [
+      poisonId,
+    ]);
+    await runDispatchCycle();
+    const afterDead = await getPool().query(`SELECT attempts FROM notification_dispatch_attempts WHERE source_event_id = $1`, [poisonId]);
+    assert.strictEqual(afterDead.rows[0]!['attempts'], 5, 'a dead event must never be retried again');
+  });
+
+  it('P3: expiry row transitions and their notification.expired events commit atomically - a failed event insert rolls the expiry back', async () => {
+    const emitted = await emitNotification({
+      target: { role: 'maintenance_supervisor', location_id: LOCATION_B },
+      event_type: 'fault_reported',
+      status_verb: 'Reported',
+      object_type: 'fault',
+      object_id: 'FLT-EXPATOMIC-01',
+      actor: SYSTEM_ACTOR,
+    });
+    assert.strictEqual(emitted.ok, true);
+    const sourceEventId = emitted.ok ? emitted.event.event_id : '';
+    await runDispatchCycle();
+    await getPool().query(`UPDATE notifications SET created_at = now() - interval '60 days' WHERE source_event_id = $1`, [sourceEventId]);
+
+    // Fault injection: fail exactly the notification.expired event insert - previously the row
+    // UPDATE had already committed, so the event was lost forever (idempotency guaranteed it was
+    // never re-emitted). Now the whole sweep must roll back instead.
+    const adminPool = getAdminPool();
+    await adminPool.query(
+      `CREATE OR REPLACE FUNCTION test_inject_expiry_failure() RETURNS trigger AS $$
+       BEGIN
+         IF NEW.event_type = 'notification.expired' THEN RAISE EXCEPTION 'injected expiry failure'; END IF;
+         RETURN NEW;
+       END $$ LANGUAGE plpgsql`,
+    );
+    await adminPool.query(
+      `CREATE TRIGGER test_inject_expiry_failure_trg BEFORE INSERT ON domain_events
+       FOR EACH ROW EXECUTE FUNCTION test_inject_expiry_failure()`,
+    );
+    try {
+      const failedCycle = await runExpiryCycle();
+      assert.strictEqual(failedCycle.expired, 0, 'a sweep whose event insert failed must report nothing expired');
+
+      const row = await getPool().query(`SELECT status FROM notifications WHERE source_event_id = $1`, [sourceEventId]);
+      assert.strictEqual(row.rows[0]!['status'], 'created', 'the row transition must roll back with the failed event insert');
+      const orphanEvents = await getPool().query(
+        `SELECT count(*)::int AS c FROM domain_events WHERE event_type = 'notification.expired' AND payload->>'source_event_id' = $1`,
+        [sourceEventId],
+      );
+      assert.strictEqual(orphanEvents.rows[0]!['c'], 0);
+    } finally {
+      await adminPool.query(`DROP TRIGGER IF EXISTS test_inject_expiry_failure_trg ON domain_events`);
+      await adminPool.query(`DROP FUNCTION IF EXISTS test_inject_expiry_failure()`);
+    }
+
+    // At-least-once: the next sweep picks the rows back up and commits both sides together.
+    const recovered = await runExpiryCycle();
+    assert.ok(recovered.expired >= 1, 'the sweep must succeed once the failure clears');
+    const rowAfter = await getPool().query(`SELECT status FROM notifications WHERE source_event_id = $1`, [sourceEventId]);
+    assert.strictEqual(rowAfter.rows[0]!['status'], 'expired');
+    const eventAfter = await getPool().query(
+      `SELECT count(*)::int AS c FROM domain_events WHERE event_type = 'notification.expired' AND payload->>'source_event_id' = $1`,
+      [sourceEventId],
+    );
+    assert.strictEqual(eventAfter.rows[0]!['c'], 1, 'the expiry and its event must commit together, exactly once');
   });
 
   async function putPreferences(headers: Record<string, string>, eventType: string, optedIn: boolean): Promise<HttpResult> {

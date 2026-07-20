@@ -134,6 +134,10 @@ export const config = {
     vapidPrivateKey: process.env['VAPID_PRIVATE_KEY'] ?? '',
     vapidSubject: process.env['VAPID_SUBJECT'] ?? 'mailto:platform@example.com',
     dispatchIntervalMs: parsePositiveIntEnv('NOTIFY_DISPATCH_INTERVAL_MS', 5000),
+    // Dispatch attempts before an event is dead-lettered (excluded from dispatch and surfaced to
+    // operators) instead of retrying forever at the front of the oldest-first queue - a single
+    // permanently-failing event must never starve the events behind it.
+    dispatchMaxAttempts: parsePositiveIntEnv('NOTIFY_DISPATCH_MAX_ATTEMPTS', 5),
     escalationIntervalMs: parsePositiveIntEnv('NOTIFY_ESCALATION_INTERVAL_MS', 15000),
     // The stale-notification expiry sweep runs far less often than dispatch/escalation - default
     // hourly - since the Expired transition is a 30-day lifecycle boundary, not a real-time one.

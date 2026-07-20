@@ -81,6 +81,21 @@ CREATE TABLE IF NOT EXISTS notification_dispatch_log (
   dispatched_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Retry bookkeeping for events the dispatcher FAILED to fan out. A row exists only while an
+-- event is failing (deleted again on successful dispatch), so the table stays tiny. Failed
+-- events retry with exponential backoff via next_attempt_at (the dispatcher's fetch skips rows
+-- not yet due), and after the configured attempt cap they are marked dead - excluded from
+-- dispatch entirely and surfaced to operators via a dead-letter alert - instead of retrying
+-- forever at the front of the oldest-first queue and starving every event behind them.
+CREATE TABLE IF NOT EXISTS notification_dispatch_attempts (
+  source_event_id   UUID PRIMARY KEY,
+  attempts          INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  dead              BOOLEAN NOT NULL DEFAULT false,
+  last_error        TEXT,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- One row per ALERT (source_event_id - the original notification.created event, which may fan
 -- out to several recipients) that carries an escalation definition. Keyed by source_event_id
 -- rather than notification_id because acknowledgment by ANY one recipient resolves the whole
@@ -154,6 +169,7 @@ BEGIN
     GRANT INSERT, SELECT, UPDATE ON notifications TO app_user;
     GRANT INSERT, SELECT ON notification_deliveries TO app_user;
     GRANT INSERT, SELECT ON notification_dispatch_log TO app_user;
+    GRANT INSERT, SELECT, UPDATE, DELETE ON notification_dispatch_attempts TO app_user;
     GRANT INSERT, SELECT, UPDATE ON notification_escalation_defs TO app_user;
     GRANT INSERT, SELECT ON notification_escalations TO app_user;
     GRANT INSERT, SELECT, UPDATE, DELETE ON push_subscriptions TO app_user;
@@ -163,6 +179,7 @@ BEGIN
     GRANT SELECT ON notifications TO readonly_user;
     GRANT SELECT ON notification_deliveries TO readonly_user;
     GRANT SELECT ON notification_dispatch_log TO readonly_user;
+    GRANT SELECT ON notification_dispatch_attempts TO readonly_user;
     GRANT SELECT ON notification_escalation_defs TO readonly_user;
     GRANT SELECT ON notification_escalations TO readonly_user;
     GRANT SELECT ON push_subscriptions TO readonly_user;

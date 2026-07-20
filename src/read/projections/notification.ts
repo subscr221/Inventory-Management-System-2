@@ -320,6 +320,54 @@ export async function claimEventForDispatch(sourceEventId: string, client: PoolC
   return result.rows.length > 0;
 }
 
+export interface DispatchFailureOptions {
+  /** Attempts after which the event is marked dead and excluded from dispatch (P2 cap). */
+  maxAttempts: number;
+  /** First-retry delay; doubles per attempt (exponential backoff). */
+  baseBackoffSeconds: number;
+  /** Ceiling on the computed backoff delay. */
+  maxBackoffSeconds: number;
+}
+
+/**
+ * Records one failed dispatch attempt for an event, computing the next retry time with
+ * exponential backoff (base * 2^attempts, capped) and flipping `dead` once the attempt cap is
+ * reached. Runs OUTSIDE the (rolled-back) dispatch transaction - the failure bookkeeping must
+ * survive the rollback that undid the fan-out. Returns the updated counters so the caller can
+ * raise a dead-letter alert exactly once: `dead` transitions to true on a single call, and a
+ * dead event is never fetched (and so never fails) again.
+ */
+export async function recordDispatchFailure(
+  sourceEventId: string,
+  lastError: string,
+  opts: DispatchFailureOptions,
+  client?: PoolClient,
+): Promise<{ attempts: number; dead: boolean }> {
+  const result = await runner(client).query(
+    `INSERT INTO notification_dispatch_attempts (source_event_id, attempts, next_attempt_at, dead, last_error)
+     VALUES ($1, 1, now() + make_interval(secs => $3::float8), 1 >= $5::int, $2)
+     ON CONFLICT (source_event_id) DO UPDATE SET
+       attempts = notification_dispatch_attempts.attempts + 1,
+       next_attempt_at = now() + make_interval(secs => LEAST($3::float8 * power(2, notification_dispatch_attempts.attempts), $4::float8)),
+       dead = notification_dispatch_attempts.attempts + 1 >= $5::int,
+       last_error = $2,
+       updated_at = now()
+     RETURNING attempts, dead`,
+    [sourceEventId, lastError, opts.baseBackoffSeconds, opts.maxBackoffSeconds, opts.maxAttempts],
+  );
+  const row = result.rows[0]!;
+  return { attempts: row['attempts'] as number, dead: row['dead'] as boolean };
+}
+
+/**
+ * Clears retry bookkeeping once an event finally dispatches, keeping the attempts table a list
+ * of only currently-failing events. Called inside the dispatch transaction so the clear commits
+ * (or rolls back) together with the claim it belongs to.
+ */
+export async function clearDispatchAttempts(sourceEventId: string, client?: PoolClient): Promise<void> {
+  await runner(client).query(`DELETE FROM notification_dispatch_attempts WHERE source_event_id = $1`, [sourceEventId]);
+}
+
 function mapEscalationDef(row: Record<string, unknown>): EscalationDefRecord {
   return {
     source_event_id: row['source_event_id'] as string,
