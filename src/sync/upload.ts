@@ -19,6 +19,7 @@ const PERMANENT_ERROR_CODES = new Set([
   'UNTAGGED_TRANSACTION',
   'STREAM_CONFLICT',
   'CALIBRATION_LOCKOUT',
+  'INSUFFICIENT_STOCK',
 ]);
 
 function isAppError(error: unknown): error is AppError {

@@ -31,6 +31,7 @@
   "errors.UNTAGGED_TRANSACTION": "The event is missing required business tags.",
   "errors.STREAM_CONFLICT": "This event conflicts with the latest central state.",
   "errors.CALIBRATION_LOCKOUT": "The referenced instrument is locked by calibration status.",
+  "errors.INSUFFICIENT_STOCK": "Not enough available stock at that location for this allocation.",
   "errors.UNAUTHORIZED": "Sign in again before syncing.",
   "errors.LOCATION_ACCESS_DENIED": "This device is not authorized for that site.",
   "errors.DUPLICATE_EVENT": "This event was already synced."

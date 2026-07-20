@@ -9,6 +9,7 @@ import { assertInventoryTagging } from '../compliance/business-stream.js';
 import { assertCalibrationLockout } from '../compliance/calibration.js';
 import { assertLocationInvariant } from '../compliance/location.js';
 import { assertInventoryMasterReferences } from '../compliance/inventory-master.js';
+import { assertStockBalanceShape, applyStockBalanceProjection } from '../compliance/stock-balance.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -164,6 +165,10 @@ export async function persistEvent(
   // events that actually reference master fields. May throw ZoneIncompatibleWarning (not an
   // AppError) - the movement HTTP handlers translate it into a 200 warning envelope.
   await assertInventoryMasterReferences(envelope);
+  // Story 2.2: stock-balance shape validation is non-DB and runs with the other pre-transaction
+  // asserts, so a malformed stock event never consumes an idempotency key. The balance itself is
+  // applied inside the transaction below.
+  assertStockBalanceShape(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();
@@ -182,6 +187,15 @@ export async function persistEvent(
   const client: PoolClient = externalClient ?? (await pool.connect());
   try {
     if (ownsTransaction) await client.query('BEGIN');
+
+    // Story 2.2: apply the stock-balance projection INSIDE the event transaction and BEFORE the
+    // domain_events insert. The allocation path locks the balance rows FOR UPDATE and re-checks
+    // availability under the lock, so two writers racing for the last unit have exactly one
+    // winner; the loser throws 409 INSUFFICIENT_STOCK, the transaction rolls back, and no event
+    // row, audit row, or idempotency key is consumed. A DUPLICATE_EVENT retry likewise rolls the
+    // re-applied balance back, so the projection reflects each event exactly once. Non-stock
+    // events (and legacy stock shapes without master refs) are untouched.
+    await applyStockBalanceProjection(envelope, client);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {

@@ -165,6 +165,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/notifications',
       'GET /api/v1/notifications/preferences',
       'GET /api/v1/notifications/unread-count',
+      'GET /api/v1/stock/:sku',
       'PATCH /api/v1/doa/entries/:entryId',
       'PATCH /api/v1/items/:sku',
       'PATCH /api/v1/locations/:locationId',

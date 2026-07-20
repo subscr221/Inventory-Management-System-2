@@ -22,6 +22,7 @@ import {
 } from './api/v1/business-stream.js';
 import { getCurrentLocationHandler, seedExpectedLocationHandler } from './api/v1/location.js';
 import { createItemHandler, updateItemHandler, getItemHandler } from './api/v1/items.js';
+import { getStockHandler } from './api/v1/stock.js';
 import { createLocationHandler, updateLocationHandler, getLocationHandler } from './api/v1/location-register.js';
 import {
   updateCalibrationStatusHandler,
@@ -76,6 +77,7 @@ export function createAppRouter(): Router {
   router.post('/api/v1/locations', createLocationHandler);
   router.patch('/api/v1/locations/:locationId', updateLocationHandler);
   router.get('/api/v1/locations/:locationId', getLocationHandler);
+  router.get('/api/v1/stock/:sku', getStockHandler);
   router.put('/api/v1/instruments/:id/calibration-status', updateCalibrationStatusHandler);
   router.post('/api/v1/qc/results', createQcResultHandler);
   router.post('/api/v1/instruments/:id/calibration-escalations', createCalibrationEscalationHandler);

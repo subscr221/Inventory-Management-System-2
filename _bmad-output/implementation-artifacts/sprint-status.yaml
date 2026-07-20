@@ -48,6 +48,13 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-21
+# story 2-2 dev-story 2026-07-21: implemented all 5 tasks; stock_balance projection (sku+location+lot grain,
+#   NULLS NOT DISTINCT, generated available column) with canonical SQL + compose mirror + migration entry,
+#   central enforcement in persistEvent (shape assert pre-transaction, FOR UPDATE availability re-check inside the
+#   event transaction, 409 INSUFFICIENT_STOCK before any event/audit/idempotency write), GET /api/v1/stock/:sku with
+#   RBAC + location scoping, edge INSUFFICIENT_STOCK classification + i18n, schema-drift + route-surface guardrails,
+#   deterministic last-unit concurrency proof; legacy sku-only and spine-shape stock events preserved by gating;
+#   tsc/eslint/build clean, 209/209 tests (22 new), spine gate 6/6, edge 14/14, migrations + diff-check clean; moved to review
 # story 2-2 dev-story 2026-07-21: implementation started from baseline c354746; moved to in-progress
 # story 2-2 created 2026-07-21 via create-story workflow: Real-Time Multi-Location Stock Balances; stock_balance projection, central INSUFFICIENT_STOCK enforcement, GET /api/v1/stock/:sku, direct stock.received and stock.allocated event contracts, concurrency/idempotency, edge sync, schema drift, migration mirror, RBAC, and regression guardrails; ready-for-dev
 # story 2-1 code review 2026-07-21: 3 decisions resolved to patch + 5 patch findings fixed; edge uploads auto-confirm
@@ -146,7 +153,7 @@ development_status:
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---
   epic-2: in-progress
   2-1-item-master-and-location-register: done   # PILOT
-  2-2-real-time-multi-location-stock-balances: in-progress   # PILOT
+  2-2-real-time-multi-location-stock-balances: review   # PILOT
   2-3-lot-batch-and-serial-traceability: backlog   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: backlog   # PILOT
   2-5-inter-location-transfer-requests: backlog   # PILOT

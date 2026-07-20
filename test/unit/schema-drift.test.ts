@@ -50,6 +50,17 @@ const EXPECTED = [
     ],
     indexes: ['idx_location_register_parent', 'idx_location_register_site'],
   },
+  {
+    canonical: 'read/projections/stock_balance.sql',
+    table: 'stock_balance',
+    constraints: [
+      'chk_stock_balance_on_hand_non_negative',
+      'chk_stock_balance_allocated_non_negative',
+      'chk_stock_balance_allocated_within_on_hand',
+      'chk_stock_balance_in_transit_non_negative',
+    ],
+    indexes: [] as string[],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

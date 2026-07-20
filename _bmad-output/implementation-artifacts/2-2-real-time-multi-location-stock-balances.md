@@ -4,7 +4,7 @@ baseline_commit: c3547462f9ff58317a48df268d46b32b060ac27f
 
 # Story 2.2: Real-Time Multi-Location Stock Balances
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -21,52 +21,52 @@ so that I can answer "what do we hold and where" without a phone call, at any mo
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add the stock balance projection and helper module (AC: 1, 2, 3, 4)
-  - [ ] 1.1 Add `read/projections/stock_balance.sql` as the canonical projection DDL with `CREATE TABLE IF NOT EXISTS`, idempotent guarded constraints, indexes, and guarded grants for `app_user` and `readonly_user`.
-  - [ ] 1.2 Add a byte-for-byte-equivalent compose mirror in `deploy/compose/init-db.sql` and add the canonical file to `src/events/migrate.ts`.
-  - [ ] 1.3 Model the projection at SKU plus location grain with `on_hand`, `allocated`, `in_transit`, and an available quantity derived as `on_hand - allocated`.
-  - [ ] 1.4 Include fields that preserve downstream extensibility: `sku`, `location_id`, optional `location_code`, optional `lot_id`, optional `stock_class` defaulting to `owned`, and `updated_at`.
-  - [ ] 1.5 Create `src/read/projections/stock_balance.ts` with helper functions that accept an optional `PoolClient`, follow the existing `runner(client)` pattern, convert dates to ISO strings, and expose read and apply functions for receipt and allocation events.
-  - [ ] 1.6 Use row-level locking with `SELECT ... FOR UPDATE` or an equivalent transaction-local lock while applying an allocation so concurrent last-unit allocation has one winner.
-  - [ ] 1.7 Do not store domain state as mutable source-of-truth columns outside projections. Balances must be rebuildable from `stock.*` events.
+- [x] Task 1: Add the stock balance projection and helper module (AC: 1, 2, 3, 4)
+  - [x] 1.1 Add `read/projections/stock_balance.sql` as the canonical projection DDL with `CREATE TABLE IF NOT EXISTS`, idempotent guarded constraints, indexes, and guarded grants for `app_user` and `readonly_user`.
+  - [x] 1.2 Add a byte-for-byte-equivalent compose mirror in `deploy/compose/init-db.sql` and add the canonical file to `src/events/migrate.ts`.
+  - [x] 1.3 Model the projection at SKU plus location grain with `on_hand`, `allocated`, `in_transit`, and an available quantity derived as `on_hand - allocated`.
+  - [x] 1.4 Include fields that preserve downstream extensibility: `sku`, `location_id`, optional `location_code`, optional `lot_id`, optional `stock_class` defaulting to `owned`, and `updated_at`.
+  - [x] 1.5 Create `src/read/projections/stock_balance.ts` with helper functions that accept an optional `PoolClient`, follow the existing `runner(client)` pattern, convert dates to ISO strings, and expose read and apply functions for receipt and allocation events.
+  - [x] 1.6 Use row-level locking with `SELECT ... FOR UPDATE` or an equivalent transaction-local lock while applying an allocation so concurrent last-unit allocation has one winner.
+  - [x] 1.7 Do not store domain state as mutable source-of-truth columns outside projections. Balances must be rebuildable from `stock.*` events.
 
-- [ ] Task 2: Add central stock-balance enforcement on the write path (AC: 2, 3, 4)
-  - [ ] 2.1 Add a narrow compliance seam such as `src/compliance/stock-balance.ts` and invoke it from `persistEvent()` in `src/events/store.ts` before the `domain_events` insert.
-  - [ ] 2.2 Gate enforcement to `stream_type: "inventory"` and stock balance event types only, such as `stock.received`, `stock.allocated`, and a future `stock.allocation_released` event. Non-stock streams must remain unaffected.
-  - [ ] 2.3 For allocation, validate the requested quantity is positive, the location and SKU references resolve through Story 2.1 masters, and available stock is sufficient before any event row or audit row is written.
-  - [ ] 2.4 Reject insufficient or duplicate allocation with `AppError(409, "INSUFFICIENT_STOCK", ...)` and include `sku`, `location_id`, `lot_id` when supplied, `requested_quantity`, and `available_quantity` in `details`.
-  - [ ] 2.5 Preserve existing `persistEvent()` behavior for `DUPLICATE_EVENT`, `STREAM_CONFLICT`, business-stream tagging, calibration lockout, inventory master checks, location invariant checks, and audit logging.
-  - [ ] 2.6 Apply the stock balance projection inside the same database transaction as the successful `stock.*` event insert so an event and its projection update commit or roll back together.
-  - [ ] 2.7 Ensure rejected allocations do not consume an idempotency key and do not write `domain_events`.
-  - [ ] 2.8 Ensure idempotent retry of a successful receipt or allocation returns `DUPLICATE_EVENT` and does not double-apply the balance change.
+- [x] Task 2: Add central stock-balance enforcement on the write path (AC: 2, 3, 4)
+  - [x] 2.1 Add a narrow compliance seam such as `src/compliance/stock-balance.ts` and invoke it from `persistEvent()` in `src/events/store.ts` before the `domain_events` insert.
+  - [x] 2.2 Gate enforcement to `stream_type: "inventory"` and stock balance event types only, such as `stock.received`, `stock.allocated`, and a future `stock.allocation_released` event. Non-stock streams must remain unaffected.
+  - [x] 2.3 For allocation, validate the requested quantity is positive, the location and SKU references resolve through Story 2.1 masters, and available stock is sufficient before any event row or audit row is written.
+  - [x] 2.4 Reject insufficient or duplicate allocation with `AppError(409, "INSUFFICIENT_STOCK", ...)` and include `sku`, `location_id`, `lot_id` when supplied, `requested_quantity`, and `available_quantity` in `details`.
+  - [x] 2.5 Preserve existing `persistEvent()` behavior for `DUPLICATE_EVENT`, `STREAM_CONFLICT`, business-stream tagging, calibration lockout, inventory master checks, location invariant checks, and audit logging.
+  - [x] 2.6 Apply the stock balance projection inside the same database transaction as the successful `stock.*` event insert so an event and its projection update commit or roll back together.
+  - [x] 2.7 Ensure rejected allocations do not consume an idempotency key and do not write `domain_events`.
+  - [x] 2.8 Ensure idempotent retry of a successful receipt or allocation returns `DUPLICATE_EVENT` and does not double-apply the balance change.
 
-- [ ] Task 3: Add stock query and direct stock-event API contracts (AC: 1, 4)
-  - [ ] 3.1 Add `src/api/v1/stock.ts` and register `GET /api/v1/stock/:sku` in `src/server.ts`.
-  - [ ] 3.2 Protect the query with `requireRole({ module: 'inventory', functionScope: 'read' })` and apply location scoping with `permittedLocationsForModule` so non-wildcard users see only authorized locations.
-  - [ ] 3.3 Return a response containing the requested `sku`, a `locations` array with each authorized location balance, and a `consolidated` object summing `on_hand`, `allocated`, `available`, and `in_transit`.
-  - [ ] 3.4 Sort per-location results deterministically by `location_code` when available, otherwise by `location_id`.
-  - [ ] 3.5 Keep the direct write path through existing `POST /api/v1/events` and `POST /api/v1/edge/events`; do not create a second private event ingestion path for stock events.
-  - [ ] 3.6 Define a minimal `stock.received` payload for AC4: `sku`, `target_location_id` or `target_location_code`, `quantity`, `unit_cost`, `lot_id`, `po_line_ref`, `stock_class: "owned"`, `business_stream`, and optional `cost_centre` or `project_code` when tagging rules require them.
-  - [ ] 3.7 Define a minimal `stock.allocated` payload for AC2 and AC3: `sku`, `target_location_id` or `target_location_code`, `quantity`, optional `lot_id`, `allocation_ref`, `business_stream`, and optional `cost_centre` or `project_code` when tagging rules require them.
-  - [ ] 3.8 Keep `available` computed from projection quantities, not accepted from client payloads.
+- [x] Task 3: Add stock query and direct stock-event API contracts (AC: 1, 4)
+  - [x] 3.1 Add `src/api/v1/stock.ts` and register `GET /api/v1/stock/:sku` in `src/server.ts`.
+  - [x] 3.2 Protect the query with `requireRole({ module: 'inventory', functionScope: 'read' })` and apply location scoping with `permittedLocationsForModule` so non-wildcard users see only authorized locations.
+  - [x] 3.3 Return a response containing the requested `sku`, a `locations` array with each authorized location balance, and a `consolidated` object summing `on_hand`, `allocated`, `available`, and `in_transit`.
+  - [x] 3.4 Sort per-location results deterministically by `location_code` when available, otherwise by `location_id`.
+  - [x] 3.5 Keep the direct write path through existing `POST /api/v1/events` and `POST /api/v1/edge/events`; do not create a second private event ingestion path for stock events.
+  - [x] 3.6 Define a minimal `stock.received` payload for AC4: `sku`, `target_location_id` or `target_location_code`, `quantity`, `unit_cost`, `lot_id`, `po_line_ref`, `stock_class: "owned"`, `business_stream`, and optional `cost_centre` or `project_code` when tagging rules require them.
+  - [x] 3.7 Define a minimal `stock.allocated` payload for AC2 and AC3: `sku`, `target_location_id` or `target_location_code`, `quantity`, optional `lot_id`, `allocation_ref`, `business_stream`, and optional `cost_centre` or `project_code` when tagging rules require them.
+  - [x] 3.8 Keep `available` computed from projection quantities, not accepted from client payloads.
 
-- [ ] Task 4: Wire schema, route, sync, and migration guardrails (AC: 1, 2, 3, 4)
-  - [ ] 4.1 Extend `test/unit/schema-drift.test.ts` to guard `stock_balance` canonical SQL, compose mirror SQL, constraints, indexes, and grants.
-  - [ ] 4.2 Update `test/integration/story-1-9.test.ts` route-surface allowlist with `GET /api/v1/stock/:sku` only if that route is added.
-  - [ ] 4.3 Review integration test harness setup and truncation lists for `stock_balance`, using `CASCADE` where foreign-key relationships require it.
-  - [ ] 4.4 If `INSUFFICIENT_STOCK` should be displayed as a named edge sync failure, add it to `src/sync/upload.ts`, `edge/src/sync/connector.ts`, and `edge/src/messages/en.json`. The current 4xx classification already moves it to `needs_attention`, but the explicit code improves user-facing copy.
-  - [ ] 4.5 Do not change PowerSync download rules unless the implementation intentionally exposes stock balances on the edge client. The central projection remains server-side for this story.
+- [x] Task 4: Wire schema, route, sync, and migration guardrails (AC: 1, 2, 3, 4)
+  - [x] 4.1 Extend `test/unit/schema-drift.test.ts` to guard `stock_balance` canonical SQL, compose mirror SQL, constraints, indexes, and grants.
+  - [x] 4.2 Update `test/integration/story-1-9.test.ts` route-surface allowlist with `GET /api/v1/stock/:sku` only if that route is added.
+  - [x] 4.3 Review integration test harness setup and truncation lists for `stock_balance`, using `CASCADE` where foreign-key relationships require it.
+  - [x] 4.4 If `INSUFFICIENT_STOCK` should be displayed as a named edge sync failure, add it to `src/sync/upload.ts`, `edge/src/sync/connector.ts`, and `edge/src/messages/en.json`. The current 4xx classification already moves it to `needs_attention`, but the explicit code improves user-facing copy.
+  - [x] 4.5 Do not change PowerSync download rules unless the implementation intentionally exposes stock balances on the edge client. The central projection remains server-side for this story.
 
-- [ ] Task 5: Add complete test coverage and preserve previous behavior (AC: 1, 2, 3, 4)
-  - [ ] 5.1 Add `test/integration/story-2-2.test.ts` against the real `createAppRouter()` with real auth, RBAC, SCIM provisioning, and PostgreSQL.
-  - [ ] 5.2 Cover receipt events across three locations and assert `GET /api/v1/stock/RM-0042` returns per-location and consolidated balances in under 1 second.
-  - [ ] 5.3 Cover allocation reducing `available` while leaving `on_hand` unchanged.
-  - [ ] 5.4 Cover double allocation and prove the rejected write returns `INSUFFICIENT_STOCK` before any domain event is inserted.
-  - [ ] 5.5 Cover two overlapping transactions or an equivalent deterministic concurrency harness for last-unit allocation. Do not rely on the test runner to execute tests in parallel because `npm test` uses `--test-concurrency=1`.
-  - [ ] 5.6 Cover idempotent retry for receipt and allocation: the duplicate returns `DUPLICATE_EVENT` and the projection changes only once.
-  - [ ] 5.7 Cover location-scoped read access and wildcard read access.
-  - [ ] 5.8 Cover owned receipt with `unit_cost`, `lot_id`, and `po_line_ref` recorded on the event even though GRN workflows are not yet present.
-  - [ ] 5.9 Run `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm test`, `npm run spine-acceptance-contract`, and `git diff --check` before moving this story beyond implementation.
+- [x] Task 5: Add complete test coverage and preserve previous behavior (AC: 1, 2, 3, 4)
+  - [x] 5.1 Add `test/integration/story-2-2.test.ts` against the real `createAppRouter()` with real auth, RBAC, SCIM provisioning, and PostgreSQL.
+  - [x] 5.2 Cover receipt events across three locations and assert `GET /api/v1/stock/RM-0042` returns per-location and consolidated balances in under 1 second.
+  - [x] 5.3 Cover allocation reducing `available` while leaving `on_hand` unchanged.
+  - [x] 5.4 Cover double allocation and prove the rejected write returns `INSUFFICIENT_STOCK` before any domain event is inserted.
+  - [x] 5.5 Cover two overlapping transactions or an equivalent deterministic concurrency harness for last-unit allocation. Do not rely on the test runner to execute tests in parallel because `npm test` uses `--test-concurrency=1`.
+  - [x] 5.6 Cover idempotent retry for receipt and allocation: the duplicate returns `DUPLICATE_EVENT` and the projection changes only once.
+  - [x] 5.7 Cover location-scoped read access and wildcard read access.
+  - [x] 5.8 Cover owned receipt with `unit_cost`, `lot_id`, and `po_line_ref` recorded on the event even though GRN workflows are not yet present.
+  - [x] 5.9 Run `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm test`, `npm run spine-acceptance-contract`, and `git diff --check` before moving this story beyond implementation.
 
 ## Dev Notes
 
@@ -187,9 +187,19 @@ Recent git history confirms Story 2.1 was finalized in commits `7bdce10`, `00ea6
 
 ### Agent Model Used
 
-fugu-ultra-20260615
+- Story creation: fugu-ultra-20260615
+- Implementation (dev-story): claude-fable-5
 
 ### Debug Log References
+
+- `npx tsc --noEmit`: clean (backend and test sources).
+- `npm run lint`: clean.
+- `npm run build`: clean.
+- `npm test`: 209/209 pass (187 pre-story plus 22 new: 11 story-2-2 integration, 10 stock-balance seam unit, 1 extended schema-drift guard).
+- `npm run spine-acceptance-contract`: 6/6 pass with `GET /api/v1/stock/:sku` added to the route-surface allowlist.
+- `git diff --check`: clean.
+- Edge workspace after `INSUFFICIENT_STOCK` classification change: `npm run edge:typecheck`, `npm run edge:lint`, `npm run edge:test` (14/14) all clean.
+- `node --env-file=.env.test --import tsx src/events/migrate.ts`: full ordered migration list applies cleanly including `read/projections/stock_balance.sql` (UNIQUE NULLS NOT DISTINCT and the generated `available` column verified on PostgreSQL 18.4).
 
 ### Completion Notes List
 
@@ -198,12 +208,35 @@ fugu-ultra-20260615
 - Persistent facts glob `**/project-context.md` matched no files in this workspace.
 - Artifact discovery loaded sprint status, epics, PRD archive, architecture spine, UX design and experience specs, previous Story 2.1, current code update seams, package scripts, and recent git history.
 - Web research was not required: the story uses the repository's pinned Node.js, TypeScript, PostgreSQL, `pg`, and existing edge sync stack with no new library.
+- Implementation plan executed as designed. Projection grain is `(sku, location_id, lot_id)` with `UNIQUE NULLS NOT DISTINCT` so un-lotted stock holds one row per sku and location while lots stay isolated (AC3 names "the last unit of a lot"); the stock query aggregates rows per location for the AC1 response. `available` is a database-generated column (`on_hand - allocated`), so it is structurally impossible to post or drift.
+- Seam gating decision: enforcement fires only for `inventory` stream `stock.received`/`stock.allocated` events whose payload carries BOTH `sku` and a target location. This mirrors the Story 2.1 master seam and is what preserves the Story 1.1 fixtures (sku without location, expects 201) and the Story 1.9 spine events (no refs at all) byte-for-byte. A dedicated regression test plus a seam unit test pin this behavior.
+- `assertStockBalanceShape` runs pre-transaction beside the other compliance asserts (malformed stock events consume nothing); `applyStockBalanceProjection` runs inside the event transaction BEFORE the `domain_events` insert, locking balance rows with `SELECT ... FOR UPDATE` and re-checking availability under the lock. A shortfall throws `AppError(409, "INSUFFICIENT_STOCK")` with `sku`, `location_id`, `lot_id` when supplied, `requested_quantity`, and `available_quantity`; rollback means no event row, no audit row, and no consumed idempotency key. A `DUPLICATE_EVENT` retry rolls the re-applied balance back, so the projection changes exactly once per event.
+- Concurrency proof is deterministic (Task 5.5): two explicit transactions on two pool clients; the test asserts the second allocation is still pending while the first holds the row lock, then asserts it rejects with `INSUFFICIENT_STOCK` and `available_quantity: 0` after the first commits. Exactly one `stock.allocated` event persists for the contested lot.
+- `stock.allocation_released` is documented in the seam as reserved and intentionally not accepted yet; nothing in the ACs requires it and accepting an unapplied event type would corrupt balances.
+- Edge path enforcement is inherited by construction (persistEvent), proven by an edge-upload test; `INSUFFICIENT_STOCK` was also added to both PERMANENT_ERROR_CODES sets and the edge message catalog so the failure lands as an actionable `needs_attention` message instead of a raw code.
+- No new dependencies. No PowerSync download-rule changes (the projection stays server-side). Story 1.6 location projections untouched.
 
 ### File List
 
-- `_bmad-output/implementation-artifacts/2-2-real-time-multi-location-stock-balances.md` (new)
+- `read/projections/stock_balance.sql` (new - canonical stock balance projection DDL with guarded constraints and grants)
+- `src/read/projections/stock_balance.ts` (new - projection helpers: read, receipt upsert, locked allocation apply)
+- `src/compliance/stock-balance.ts` (new - central seam: shape assert plus in-transaction projection apply)
+- `src/api/v1/stock.ts` (new - `GET /api/v1/stock/:sku` with RBAC and location scoping)
+- `test/unit/stock-balance.test.ts` (new - seam gating and shape validation unit tests)
+- `test/integration/story-2-2.test.ts` (new - 11-test acceptance suite against the production router)
+- `deploy/compose/init-db.sql` (modified - byte-identical stock_balance mirror appended)
+- `src/events/migrate.ts` (modified - stock_balance.sql appended to the ordered migration list)
+- `src/events/store.ts` (modified - stock shape assert pre-transaction; projection applied inside the event transaction before insert)
+- `src/server.ts` (modified - stock route registered in `createAppRouter()`)
+- `src/sync/upload.ts` (modified - INSUFFICIENT_STOCK added to permanent error codes)
+- `edge/src/sync/connector.ts` (modified - INSUFFICIENT_STOCK added to permanent error codes)
+- `edge/src/messages/en.json` (modified - localized INSUFFICIENT_STOCK message)
+- `test/unit/schema-drift.test.ts` (modified - stock_balance added to the drift guard EXPECTED list)
+- `test/integration/story-1-9.test.ts` (modified - route-surface allowlist gains `GET /api/v1/stock/:sku`)
+- `_bmad-output/implementation-artifacts/2-2-real-time-multi-location-stock-balances.md` (modified - tasks, record, status)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified - tracking status)
 
 ## Change Log
 
 - 2026-07-21: Created Story 2.2 as ready-for-dev with stock-balance projection, central allocation enforcement, stock query API, direct receipt event, concurrency, edge sync, schema drift, and regression guardrails.
+- 2026-07-21: Implemented all 5 tasks from baseline `c354746`: stock_balance projection (canonical SQL, compose mirror, migration entry, helpers), central enforcement in `persistEvent()` (in-transaction apply with row locks, 409 INSUFFICIENT_STOCK before event insert), `GET /api/v1/stock/:sku` with location scoping, edge sync classification and i18n, schema-drift and route-surface guardrails, and a deterministic last-unit concurrency proof. Verification: tsc, ESLint, build, 209/209 tests, spine gate 6/6, edge checks 14/14, migrations, and `git diff --check` all clean. Status moved to review.
