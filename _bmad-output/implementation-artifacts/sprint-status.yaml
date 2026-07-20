@@ -47,7 +47,8 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: 2026-07-20
+last_updated: 2026-07-21
+# story 2-1 created 2026-07-21 via create-story workflow: Item Master and Location Register; item and location master APIs, central ITEM_NOT_FOUND validation, ZONE_INCOMPATIBLE warning contract, Story 1.6 location-route collision guardrails, migration mirror, RBAC, audit, and regression requirements; ready-for-dev
 # story 1-11 code review 2026-07-20: 3 decision-needed + 12 patch findings resolved to code (transactional dispatch with
 #   atomic claim + re-entrancy guard, claim-then-act escalation, configurable fallback admin tier so no alert closes silently,
 #   Task 5.3 Expired lifecycle wired, acknowledged/escalated/expired domain events persisted, delivery trace_id=correlation_id,
@@ -129,8 +130,8 @@ development_status:
   epic-1-retrospective: optional
 
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---
-  epic-2: backlog
-  2-1-item-master-and-location-register: backlog   # PILOT
+  epic-2: in-progress
+  2-1-item-master-and-location-register: ready-for-dev   # PILOT
   2-2-real-time-multi-location-stock-balances: backlog   # PILOT
   2-3-lot-batch-and-serial-traceability: backlog   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: backlog   # PILOT
