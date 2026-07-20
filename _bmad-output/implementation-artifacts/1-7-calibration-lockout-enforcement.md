@@ -4,7 +4,7 @@ baseline_commit: bd9c3a14fa5798e9bddbf8ba52f5b678cbdff600
 
 # Story 1.7: Calibration Lockout Enforcement
 
-Status: review
+Status: done
 
 ## Story
 
@@ -239,6 +239,25 @@ fugu-ultra-20260615
 - `test/integration/story-1-7.test.ts`
 - `test/unit/calibration.test.ts`
 
+## Review Findings
+
+### decision-needed
+
+- [x] [Review][Decision] Admin status endpoint implicitly creates an unknown instrument as `calibrated` - resolved by recording `previous_status: 'unknown'` for first-time status writes.
+
+### patch
+
+- [x] [Review][Patch] Escalation DOA resolution fails for `value_min: 0` bands - fixed with `findFirstActiveDoaEntry('calibration.escalation')` and an integration regression covering the exclusive-bound boundary.
+- [x] [Review][Patch] Escalation read-then-persist is not transactional/locked - fixed by wrapping status read, DOA lookup, approver lookup, and event persistence in one transaction using the same client.
+- [x] [Review][Patch] Location confidence constraint guards omit `conrelid` - fixed in both `deploy/compose/init-db.sql` and `read/projections/location.sql` by qualifying the constraint existence checks with `conrelid`.
+
+### defer
+
+- [x] [Review][Defer] `location.disputed` generated event bypasses the central `persistEvent` write path - closed as by-design because this narrow internal write was the explicit Story 1.6 review decision to prevent operator tagging rules from rejecting generated dispute events; reverting to `persistEvent` re-broke the existing Story 1.6 regression test.
+- [x] [Review][Defer] Calibration lockout is a non-transactional TOCTOU read - `src/compliance/calibration.ts:32` reads status on a separate connection before the domain-event insert in `src/events/store.ts`; a status flip after the check but before insert could let a result persist. Pre-existing architectural pattern shared with tagging/location assertions; tiny admin-write window.
+- [x] [Review][Defer] Duplicated DDL and redundant inline-plus-guard constraint blocks - `read/projections/instrument_calibration.sql` and `deploy/compose/init-db.sql` duplicate the same table/index/grants and define `chk_instrument_calibration_status` both inline and in a `DO $$` guard. Mirror duplication is required by the story; drift risk noted for future maintenance.
+
 ## Change Log
 
 - 2026-07-19: Implemented Story 1.7 (Calibration Lockout Enforcement). Delivered minimal instrument calibration registry, central non-overridable QC result lockout, maintenance status endpoint, synthetic QC result endpoint, DOA-routed escalation endpoint, route registration, and full unit plus integration coverage. Validation passed: migration, `npm test` 119/119, `npx tsc --noEmit`, `npm run lint`, and `git diff --check`.
+- 2026-07-19: Resolved code-review findings. Added honest first-time `previous_status: 'unknown'` provenance, DOA escalation routing that handles `value_min: 0` bands, transactional escalation persistence, scoped location confidence constraint guards, and new regression coverage. Validation passed: migration, `npm test` 121/121, `npx tsc --noEmit`, `npm run lint`, and `git diff --check`.

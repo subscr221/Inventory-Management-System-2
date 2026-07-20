@@ -218,6 +218,10 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
       maintenanceHeaders,
     );
     assert.strictEqual(setLocked.status, 200, JSON.stringify(setLocked.body));
+    const statusEvent = await getPool().query(
+      `SELECT payload FROM domain_events WHERE event_type = 'instrument.calibration_status_updated' AND payload->>'instrument_id' = 'INS-0042' ORDER BY created_at ASC LIMIT 1`,
+    );
+    assert.strictEqual((statusEvent.rows[0]!['payload'] as Record<string, unknown>)['previous_status'], 'unknown');
 
     const blocked = await makeRequest(TEST_PORT, 'POST', '/api/v1/qc/results', qcBody(), qcHeaders);
     assert.strictEqual(blocked.status, 423, JSON.stringify(blocked.body));
@@ -311,6 +315,36 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
 
     const stillBlocked = await makeRequest(TEST_PORT, 'POST', '/api/v1/qc/results', qcBody('INS-DIRECT'), qcHeaders);
     assert.strictEqual(stillBlocked.status, 423, JSON.stringify(stillBlocked.body));
+  });
+
+  it('AC4 regression: escalation still routes when the DOA band has value_min 0 (exclusive-bound boundary)', async () => {
+    const setLocked = await makeRequest(
+      TEST_PORT,
+      'PUT',
+      '/api/v1/instruments/INS-BOUND/calibration-status',
+      { calibration_status: 'out_of_calibration' },
+      maintenanceHeaders,
+    );
+    assert.strictEqual(setLocked.status, 200, JSON.stringify(setLocked.body));
+
+    const doa = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/doa/entries',
+      { role: 'calibration_scheduler', transaction_type: 'calibration.escalation', value_min: 0, value_max: null },
+      complianceHeaders,
+    );
+    assert.strictEqual(doa.status, 201, JSON.stringify(doa.body));
+
+    const escalation = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/instruments/INS-BOUND/calibration-escalations',
+      { reason: 'boundary band routing' },
+      qcHeaders,
+    );
+    assert.strictEqual(escalation.status, 201, JSON.stringify(escalation.body));
+    assert.strictEqual(await eventCount('calibration.escalation_requested', 'INS-BOUND'), 1);
   });
 
   it('RBAC: wrong modules cannot update status, submit QC results, or request escalations', async () => {

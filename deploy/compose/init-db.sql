@@ -385,13 +385,17 @@ ALTER TABLE IF EXISTS location_current
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'chk_location_asserted_confidence'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_location_asserted_confidence'
+      AND conrelid = 'location_asserted_facts'::regclass
   ) THEN
     ALTER TABLE location_asserted_facts
       ADD CONSTRAINT chk_location_asserted_confidence CHECK (confidence IN ('none', 'low', 'certain'));
   END IF;
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'chk_location_current_confidence'
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_location_current_confidence'
+      AND conrelid = 'location_current'::regclass
   ) THEN
     ALTER TABLE location_current
       ADD CONSTRAINT chk_location_current_confidence CHECK (confidence IN ('none', 'low', 'certain'));

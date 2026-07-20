@@ -195,6 +195,18 @@ export async function transactionTypeIsGoverned(transactionType: string, client?
   return result.rows.length > 0;
 }
 
+export async function findFirstActiveDoaEntry(transactionType: string, client?: PoolClient): Promise<DoaRegistryEntry | null> {
+  const result = await runner(client).query(
+    `SELECT entry_id, role, transaction_type, value_min, value_max, active, created_at, updated_at
+     FROM doa_registry_entries
+     WHERE transaction_type = $1 AND active = true
+     ORDER BY created_at ASC, entry_id ASC
+     LIMIT 1`,
+    [transactionType],
+  );
+  return result.rows.length > 0 ? mapEntry(result.rows[0]!) : null;
+}
+
 /** Inserts a vacation delegation and returns it. Participates in `client`'s transaction if given. */
 export async function createVacationDelegation(
   input: CreateVacationDelegationInput,
