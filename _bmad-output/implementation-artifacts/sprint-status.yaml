@@ -124,7 +124,7 @@ development_status:
   1-7-calibration-lockout-enforcement: done   # PILOT
   1-8-offline-edge-pwa-shell-and-powersync-sync-layer: done   # PILOT
   1-9-spine-acceptance-contract-ci-gate: done   # PILOT
-  1-10-ci-cd-pipeline-construction: review   # PILOT
+   1-10-ci-cd-pipeline-construction: done   # PILOT
   1-11-notification-and-alerting-foundation: done   # PILOT
   epic-1-retrospective: optional
 
