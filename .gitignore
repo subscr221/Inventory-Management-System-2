@@ -4,6 +4,7 @@ dist/
 playwright-report/
 test-results/
 *.tsbuildinfo
+spine-acceptance-contract-results.xml
 .env
 .env.*
 !.env.example

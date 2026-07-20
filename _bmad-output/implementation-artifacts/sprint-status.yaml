@@ -48,6 +48,8 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-20
+# story 1-9 dev-story 2026-07-20: added 6-test spine-acceptance-contract suite (test/integration/story-1-9.test.ts) and `spine-acceptance-contract` npm script (junit artifact); npm test 143/143, tsc + eslint + diff-check clean; moved to review
+# story 1-9 dev-story 2026-07-20: implementation started from baseline 34304a3; moved to in-progress
 # story 1-9 created 2026-07-20 via create-story workflow: Spine Acceptance Contract CI gate; five spine invariants in CI with required status check `spine-acceptance-contract`; ready-for-dev
 # story 1-8 done 2026-07-20: `npm run sync:smoke` re-verified against review-fix wiring with Docker Desktop 4.82.0 (six containers up, smoke passed); AC6 keyboard-only pass and screen-reader pass both documented against the running production build (Windows Narrator plus UIA and Chromium AX trees for all three screens); review item 3A resolved; edge Playwright 9/9; moved to done
 # story 1-8 follow-up 2026-07-20: Docker Desktop 4.82.0 smoke recheck passed (`npm run sync:smoke`); AC6 keyboard-only pass documented; screen-reader pass still pending at that point
@@ -92,7 +94,7 @@ development_status:
   1-6-event-sourced-location-with-asserted-expected-separation: done   # PILOT
   1-7-calibration-lockout-enforcement: done   # PILOT
   1-8-offline-edge-pwa-shell-and-powersync-sync-layer: done   # PILOT
-   1-9-spine-acceptance-contract-ci-gate: ready-for-dev   # PILOT
+  1-9-spine-acceptance-contract-ci-gate: review   # PILOT
   1-10-ci-cd-pipeline-construction: backlog   # PILOT
   1-11-notification-and-alerting-foundation: backlog   # PILOT
   epic-1-retrospective: optional

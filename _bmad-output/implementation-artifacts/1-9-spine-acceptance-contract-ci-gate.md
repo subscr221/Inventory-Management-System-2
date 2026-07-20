@@ -1,6 +1,10 @@
+---
+baseline_commit: 34304a3b2b244e8ab3cd7184871d83227e051ca6
+---
+
 # Story 1.9: Spine Acceptance Contract CI Gate
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -23,22 +27,22 @@ so that the compliance spine is formally accepted as the build substrate and any
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create the Spine Acceptance Contract test suite (AC: 1)
-  - [ ] 1.1 Add `test/integration/story-1-9.test.ts` using the existing Node test runner and Router harness pattern from Stories 1.1-1.8.
-  - [ ] 1.2 Implement test 1 (Edit Log Integrity): submit events through the public `/api/v1/events` path, verify every transaction appears in `audit_log`, verify the log is append-only, verify auditor-readable format, verify disable attempt is blocked.
-  - [ ] 1.3 Implement test 2 (DOA Registry Resolution): seed a DOA registry entry, submit an approval workflow, verify approver resolution comes from the registry, verify no hard-coded role path survives.
-  - [ ] 1.4 Implement test 3 (Event-Sourced Location): submit `location.asserted` and `location.expected` events, verify expected location is computed, verify mismatches raise `location.disputed`, verify last-writer-wins does not occur.
-  - [ ] 1.5 Implement test 4 (Calibration Lockout): seed an out-of-calibration instrument record, submit a `qc.result_recorded` event referencing it, verify the write is rejected with `CALIBRATION_LOCKOUT`, verify no role can override the rejection.
-  - [ ] 1.6 Implement test 5 (Business-Stream Tagging): submit an inventory movement without `business_stream`, verify the write is blocked with `UNTAGGED_TRANSACTION`, verify the rejection message identifies the missing tag.
+- [x] Task 1: Create the Spine Acceptance Contract test suite (AC: 1)
+  - [x] 1.1 Add `test/integration/story-1-9.test.ts` using the existing Node test runner and Router harness pattern from Stories 1.1-1.8.
+  - [x] 1.2 Implement test 1 (Edit Log Integrity): submit events through the public `/api/v1/events` path, verify every transaction appears in `audit_log`, verify the log is append-only, verify auditor-readable format, verify disable attempt is blocked.
+  - [x] 1.3 Implement test 2 (DOA Registry Resolution): seed a DOA registry entry, submit an approval workflow, verify approver resolution comes from the registry, verify no hard-coded role path survives.
+  - [x] 1.4 Implement test 3 (Event-Sourced Location): submit `location.asserted` and `location.expected` events, verify expected location is computed, verify mismatches raise `location.disputed`, verify last-writer-wins does not occur.
+  - [x] 1.5 Implement test 4 (Calibration Lockout): seed an out-of-calibration instrument record, submit a `qc.result_recorded` event referencing it, verify the write is rejected with `CALIBRATION_LOCKOUT`, verify no role can override the rejection.
+  - [x] 1.6 Implement test 5 (Business-Stream Tagging): submit an inventory movement without `business_stream`, verify the write is blocked with `UNTAGGED_TRANSACTION`, verify the rejection message identifies the missing tag.
 
-- [ ] Task 2: Wire CI execution and required status check (AC: 1, 2)
-  - [ ] 2.1 Add a CI workflow or script entry point that runs the spine contract suite against a deployed spine with no modules loaded.
-  - [ ] 2.2 Publish results as a CI artifact.
-  - [ ] 2.3 Ensure the suite exit code and status check name `spine-acceptance-contract` are deterministic: any failing test produces a failing check that blocks merges per Story 1.10 branch protection.
+- [x] Task 2: Wire CI execution and required status check (AC: 1, 2)
+  - [x] 2.1 Add a CI workflow or script entry point that runs the spine contract suite against a deployed spine with no modules loaded.
+  - [x] 2.2 Publish results as a CI artifact.
+  - [x] 2.3 Ensure the suite exit code and status check name `spine-acceptance-contract` are deterministic: any failing test produces a failing check that blocks merges per Story 1.10 branch protection.
 
-- [ ] Task 3: Regression and validation (AC: 1, 2)
-  - [ ] 3.1 Run backend validation: `npx tsc --noEmit`, `npm run lint`, `node --env-file=.env.test --import tsx --test test/unit/*.test.ts`, `node --env-file=.env.test --import tsx --test --test-concurrency=1 test/integration/story-1-9.test.ts`, `npm test`, and `git diff --check`.
-  - [ ] 3.2 Confirm all five acceptance criteria are covered by at least one automated test.
+- [x] Task 3: Regression and validation (AC: 1, 2)
+  - [x] 3.1 Run backend validation: `npx tsc --noEmit`, `npm run lint`, `node --env-file=.env.test --import tsx --test test/unit/*.test.ts`, `node --env-file=.env.test --import tsx --test --test-concurrency=1 test/integration/story-1-9.test.ts`, `npm test`, and `git diff --check`.
+  - [x] 3.2 Confirm all five acceptance criteria are covered by at least one automated test.
 
 ## Dev Notes
 
@@ -126,4 +130,18 @@ fugu-ultra-20260615
 
 ### Completion Notes List
 
+- Added `test/integration/story-1-9.test.ts`, the Spine Acceptance Contract suite: one test per invariant (Edit Log Integrity, DOA Registry Resolution, Event-Sourced Location, Calibration Lockout, Business-Stream Tagging), exercised through the real public API routes (`/api/v1/events`, `/api/v1/audit/log`, `/api/v1/config/audit-log-enabled`, `/api/v1/doa/entries|resolve|workflow-config`, `/api/v1/locations/:lotId[/expected]`, `/api/v1/instruments/:id/calibration-status`, `/api/v1/qc/results`) with zero module-specific routes wired, matching AC1's "zero module code present".
+- Reused the Stories 1.3/1.4/1.6/1.7 pattern (Router harness, SCIM provisioning, dev-token auth, admin-pool schema load and `DISABLE TRIGGER ALL`/`TRUNCATE`/`ENABLE TRIGGER ALL` cleanup) rather than introducing a new harness.
+- The DOA test's "no hard-coded role path survives" clause is proved two ways: functionally, the registry-resolved approver equals the seeded role holder (not a literal), and structurally, a `workflow-config` override attempt against the same governed transaction type is rejected with `DOA_OVERRIDE_BLOCKED` (Story 1.4's existing gate); the `no-hardcoded-role-in-workflow` ESLint rule continues to run as part of `npm run lint`.
+- Added the `spine-acceptance-contract` npm script (Task 2) as the CI entry point: runs only `test/integration/story-1-9.test.ts` with a `spec` reporter to stdout and a `junit` reporter to `spine-acceptance-contract-results.xml` (gitignored, regenerated per run) as the CI artifact. Deliberately did not add `.github/workflows/*.yml` or touch branch protection - Story 1.10 owns the CI pipeline and required-status-check wiring; this story only had to make the script name, exit code, and artifact deterministic.
+- Full regression: `npx tsc --noEmit` clean, `npm run lint` clean, `npm test` 143/143 (33 unit + 110 integration, including the 6 new spine tests), `git diff --check` clean.
+
 ### File List
+
+- `test/integration/story-1-9.test.ts`
+- `package.json`
+- `.gitignore`
+
+## Change Log
+
+- 2026-07-20: Implemented Story 1.9 (Spine Acceptance Contract CI Gate). Added the five-invariant integration suite (`test/integration/story-1-9.test.ts`) exercising the real API routes with zero module code wired, and the `spine-acceptance-contract` npm script as the deterministic CI entry point publishing a JUnit artifact. Validation passed: `npx tsc --noEmit`, `npm run lint`, `npm test` 143/143, and `git diff --check`.
