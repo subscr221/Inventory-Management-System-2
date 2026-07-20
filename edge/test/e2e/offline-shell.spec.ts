@@ -25,6 +25,9 @@ async function provision(page: Page) {
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
       }
+      if (url.endsWith('/api/v1/edge/events')) {
+        throw new TypeError('offline');
+      }
       return nativeFetch(input, init);
     };
   });

@@ -21,3 +21,14 @@ CREATE TABLE IF NOT EXISTS user_role_assignments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_role_assignments_user ON user_role_assignments (user_id);
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON users TO app_user;
+    GRANT INSERT, SELECT, DELETE ON user_role_assignments TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON users TO readonly_user;
+    GRANT SELECT ON user_role_assignments TO readonly_user;
+  END IF;
+END $$;
