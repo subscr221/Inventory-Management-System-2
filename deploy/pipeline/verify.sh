@@ -11,10 +11,12 @@ if ! command -v gh &>/dev/null || ! command -v jq &>/dev/null; then
   exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_JSON="$(gh repo view --json owner,name,defaultBranchRef)"
 OWNER="$(echo "$REPO_JSON" | jq -r '.owner.login')"
 REPO="$(echo "$REPO_JSON" | jq -r '.name')"
 DEFAULT_BRANCH="$(echo "$REPO_JSON" | jq -r '.defaultBranchRef.name')"
+ENCODED_DEFAULT_BRANCH="$(jq -rn --arg value "$DEFAULT_BRANCH" '$value|@uri')"
 
 echo "=== Verifying pipeline bootstrap state for ${OWNER}/${REPO} (branch: ${DEFAULT_BRANCH}) ==="
 
@@ -24,7 +26,7 @@ fail() {
   FAILURES=$((FAILURES + 1))
 }
 
-PROTECTION_JSON="$(gh api "repos/${OWNER}/${REPO}/branches/${DEFAULT_BRANCH}/protection" 2>/dev/null || echo '{}')"
+PROTECTION_JSON="$(gh api "repos/${OWNER}/${REPO}/branches/${ENCODED_DEFAULT_BRANCH}/protection" 2>/dev/null || echo '{}')"
 
 if [ "$(echo "$PROTECTION_JSON" | jq -r 'has("required_status_checks")')" != "true" ]; then
   fail "no branch protection is configured on '${DEFAULT_BRANCH}'"
@@ -66,10 +68,30 @@ for env_name in staging production; do
     fail "environment '${env_name}' does not exist"
     continue
   fi
+
+  if [ "$(echo "$ENV_JSON" | jq -r '.deployment_branch_policy.protected_branches // false')" != "true" ]; then
+    fail "environment '${env_name}' is not restricted to protected branches"
+  fi
+  if [ "$(echo "$ENV_JSON" | jq -r '.deployment_branch_policy.custom_branch_policies // true')" != "false" ]; then
+    fail "environment '${env_name}' allows custom branch policies - expected protected branches only"
+  fi
+
+  if [ "$env_name" = "staging" ]; then
+    STAGING_REVIEWER_COUNT="$(echo "$ENV_JSON" | jq '(.protection_rules // []) | map(select(.type == "required_reviewers")) | length')"
+    if [ "$STAGING_REVIEWER_COUNT" != "0" ]; then
+      fail "environment 'staging' has required reviewers - expected zero-manual-step deployment"
+    fi
+  fi
+
   if [ "$env_name" = "production" ]; then
-    REVIEWER_COUNT="$(echo "$ENV_JSON" | jq '(.protection_rules // []) | map(select(.type == "required_reviewers")) | length')"
-    if [ "$REVIEWER_COUNT" = "0" ]; then
-      fail "environment 'production' has no required reviewer protection rule"
+    REVIEWER_RULE_COUNT="$(echo "$ENV_JSON" | jq '(.protection_rules // []) | map(select(.type == "required_reviewers")) | length')"
+    REVIEWER_COUNT="$(echo "$ENV_JSON" | jq '(.protection_rules // []) | map(select(.type == "required_reviewers") | (.reviewers // []) | length) | add // 0')"
+    PREVENT_SELF_REVIEW="$(echo "$ENV_JSON" | jq -r '(.protection_rules // []) | map(select(.type == "required_reviewers") | (.prevent_self_review // false)) | any')"
+    if [ "$REVIEWER_RULE_COUNT" = "0" ] || [ "$REVIEWER_COUNT" = "0" ]; then
+      fail "environment 'production' has no required reviewer protection rule with at least one reviewer"
+    fi
+    if [ "$PREVENT_SELF_REVIEW" != "true" ]; then
+      fail "environment 'production' does not prevent self-review for required reviewers"
     fi
     if [ "$(echo "$ENV_JSON" | jq -r '.can_admins_bypass // true')" != "false" ]; then
       fail "environment 'production' allows administrator bypass of required reviewers"

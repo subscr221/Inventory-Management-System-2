@@ -21,6 +21,7 @@ permissions:
 
 env:
   REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
+  REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE || github.repository }}
 
 jobs:
   build-and-push:
@@ -45,7 +46,7 @@ jobs:
       - name: Compute image references
         id: image-refs
         run: |
-          NAMESPACE="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          NAMESPACE="$(echo "${REGISTRY_NAMESPACE}" | tr '[:upper:]' '[:lower:]')"
           SHA="${{ github.event.workflow_run.head_sha }}"
           echo "app-image=${REGISTRY}/${NAMESPACE}-app:${SHA}" >>"$GITHUB_OUTPUT"
           echo "edge-image=${REGISTRY}/${NAMESPACE}-edge:${SHA}" >>"$GITHUB_OUTPUT"
@@ -55,8 +56,8 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
 
       - name: Build and push app image
         id: build-app
@@ -132,8 +133,8 @@ jobs:
         if: steps.branch-tip.outputs.deploy == 'true'
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
       - if: steps.branch-tip.outputs.deploy == 'true'
         run: bash deploy/pipeline/deploy.sh staging
 
@@ -141,7 +142,9 @@ jobs:
     name: promote-production
     needs: [build-and-push, deploy-staging]
     if: needs.deploy-staging.outputs.deployed == 'true'
-    runs-on: [self-hosted, production]
+    runs-on:
+      group: production-deploy
+      labels: [self-hosted, production]
     permissions:
       contents: read
       packages: read
@@ -186,6 +189,6 @@ jobs:
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
       - run: bash deploy/pipeline/deploy.sh production

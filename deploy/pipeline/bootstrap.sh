@@ -63,11 +63,13 @@ echo "Repository: ${OWNER}/${REPO}"
 echo "Protected branch (detected from platform, not hard-coded): ${DEFAULT_BRANCH}"
 echo ""
 
+ENCODED_DEFAULT_BRANCH="$(jq -rn --arg value "$DEFAULT_BRANCH" '$value|@uri')"
+
 echo "--- Branch protection ---"
 gh api \
   --method PUT \
   -H "Accept: application/vnd.github+json" \
-  "repos/${OWNER}/${REPO}/branches/${DEFAULT_BRANCH}/protection" \
+  "repos/${OWNER}/${REPO}/branches/${ENCODED_DEFAULT_BRANCH}/protection" \
   --input "${SCRIPT_DIR}/branch-protection.json" >/dev/null
 echo "Branch protection applied to '${DEFAULT_BRANCH}' with required checks, enforce_admins=true, no bypass restrictions."
 
@@ -116,6 +118,9 @@ echo "Environment 'production' created/updated (required reviewer: ${PRODUCTION_
 echo ""
 echo "=== Bootstrap complete ==="
 echo "Next steps (secrets are never committed - set them per environment):"
+echo "  gh variable set REGISTRY --body ghcr.io"
+echo "  gh variable set REGISTRY_NAMESPACE --body ${OWNER}/${REPO}"
+echo "  # For non-GHCR registries, also set REGISTRY_USERNAME and REGISTRY_PASSWORD repository secrets."
 echo "  gh secret set POSTGRES_ADMIN_PASSWORD --env staging"
 echo "  gh secret set AUTH_JWKS_URI --env staging"
 echo "  gh secret set AUTH_ISSUER --env staging"
@@ -123,6 +128,7 @@ echo "  gh secret set AUTH_AUDIENCE --env staging"
 echo "  gh secret set SCIM_BEARER_TOKEN --env staging"
 echo "  gh secret set POWERSYNC_TOKEN_SECRET --env staging"
 echo "  ...and the same set again with --env production for the production environment."
-echo "  Then register a self-hosted runner on each host: deploy/pipeline/runner/bootstrap-runner.sh <staging|production>"
+echo "  Then register the staging runner: deploy/pipeline/runner/bootstrap-runner.sh staging"
+echo "  Create and restrict the organization runner group 'production-deploy' to .github/workflows/cd.yml, then register production: deploy/pipeline/runner/bootstrap-runner.sh production"
 echo ""
 echo "Run deploy/pipeline/verify.sh to read back and confirm this configuration."

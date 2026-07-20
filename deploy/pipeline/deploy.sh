@@ -53,6 +53,43 @@ echo "=== Deploying ${ENVIRONMENT}: app=${APP_IMAGE} edge=${EDGE_IMAGE} (commit 
 export APP_IMAGE EDGE_IMAGE POSTGRES_ADMIN_PASSWORD AUTH_JWKS_URI AUTH_ISSUER AUTH_AUDIENCE \
   SCIM_BEARER_TOKEN POWERSYNC_TOKEN_SECRET
 
+PREVIOUS_APP_IMAGE=""
+PREVIOUS_EDGE_IMAGE=""
+APP_CONTAINER_ID="$(docker compose "${COMPOSE_FILES[@]}" ps -q app 2>/dev/null || true)"
+EDGE_CONTAINER_ID="$(docker compose "${COMPOSE_FILES[@]}" ps -q edge 2>/dev/null || true)"
+if [ -n "$APP_CONTAINER_ID" ]; then
+  PREVIOUS_APP_IMAGE="$(docker inspect --format '{{.Config.Image}}' "$APP_CONTAINER_ID" 2>/dev/null || true)"
+fi
+if [ -n "$EDGE_CONTAINER_ID" ]; then
+  PREVIOUS_EDGE_IMAGE="$(docker inspect --format '{{.Config.Image}}' "$EDGE_CONTAINER_ID" 2>/dev/null || true)"
+fi
+
+wait_for_health() {
+  local label="$1"
+  local max_retries=30
+  echo "Waiting for ${HEALTH_URL} (${label}) ..."
+  for ((i = 1; i <= max_retries; i++)); do
+    if curl -sf "$HEALTH_URL" >/dev/null 2>&1; then
+      echo "Health check passed (${label})."
+      return 0
+    fi
+    echo "Waiting for app (${label})... (${i}/${max_retries})"
+    sleep 2
+  done
+  return 1
+}
+
+rollback_after_failed_health() {
+  if [ -z "$PREVIOUS_APP_IMAGE" ] || [ -z "$PREVIOUS_EDGE_IMAGE" ]; then
+    echo "ERROR: health check failed and no previous app/edge image pair is available for rollback." >&2
+    return 1
+  fi
+  echo "Health check failed. Rolling back to previous images: app=${PREVIOUS_APP_IMAGE} edge=${PREVIOUS_EDGE_IMAGE}"
+  APP_IMAGE="$PREVIOUS_APP_IMAGE" EDGE_IMAGE="$PREVIOUS_EDGE_IMAGE" \
+    docker compose "${COMPOSE_FILES[@]}" up -d --remove-orphans
+  wait_for_health "rollback"
+}
+
 docker compose "${COMPOSE_FILES[@]}" pull app edge
 
 echo "Applying migrations against the new image, before cutover..."
@@ -69,18 +106,15 @@ docker compose "${COMPOSE_FILES[@]}" run --rm \
 echo "Migrations applied. Cutting over to the new images..."
 docker compose "${COMPOSE_FILES[@]}" up -d --remove-orphans
 
-echo "Waiting for ${HEALTH_URL} ..."
-MAX_RETRIES=30
-for ((i = 1; i <= MAX_RETRIES; i++)); do
-  if curl -sf "$HEALTH_URL" >/dev/null 2>&1; then
-    echo "Health check passed."
-    END_TIME=$(date +%s)
-    echo "UPGRADE_TIMING: environment=${ENVIRONMENT} commit=${IMAGE_TAG} seconds=$((END_TIME - START_TIME))"
-    exit 0
-  fi
-  echo "Waiting for app... (${i}/${MAX_RETRIES})"
-  sleep 2
-done
+if wait_for_health "new release"; then
+  END_TIME=$(date +%s)
+  echo "UPGRADE_TIMING: environment=${ENVIRONMENT} commit=${IMAGE_TAG} seconds=$((END_TIME - START_TIME))"
+  exit 0
+fi
 
-echo "ERROR: health check did not pass within timeout. Check: docker compose ${COMPOSE_FILES[*]} logs" >&2
+if rollback_after_failed_health; then
+  echo "ERROR: new release failed health check and rollback completed. Check: docker compose ${COMPOSE_FILES[*]} logs" >&2
+else
+  echo "ERROR: new release failed health check and rollback did not complete. Check: docker compose ${COMPOSE_FILES[*]} logs" >&2
+fi
 exit 1
