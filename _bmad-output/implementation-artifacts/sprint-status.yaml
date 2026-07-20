@@ -48,6 +48,12 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-20
+# story 1-10 code review 2026-07-20: 1 decision-needed + 12 patches resolved (required PR review added to branch
+#   protection; CD secrets wired into cd.yml/deploy.sh; CD concurrency split so a stuck production approval no longer
+#   blocks staging; deploy.sh migrates before cutover; packages:write scoped down; Compose version guard added;
+#   provision.sh v1-only false-pass fixed; CD default-branch detection made dynamic; Playwright e2e wired into CI;
+#   Task 6 checklist corrected to stop claiming unexecuted live verification; dead environments.json field removed;
+#   bootstrap.sh Team-reviewer lookup fixed; .env.test CI loader hardened); 3 defers logged; moved to done
 # story 1-10 dev-story 2026-07-20: CI workflow (5 required checks), CI DB role provisioning, branch-protection/environment
 #   bootstrap IaC, CD workflow with self-hosted-runner immutable image promotion, and 3 preexisting-bug fixes (Dockerfile
 #   migration-asset paths, provision.sh Compose v2 detection, package.json start script) implemented; backend 143/143,
@@ -104,7 +110,7 @@ development_status:
   1-7-calibration-lockout-enforcement: done   # PILOT
   1-8-offline-edge-pwa-shell-and-powersync-sync-layer: done   # PILOT
   1-9-spine-acceptance-contract-ci-gate: done   # PILOT
-  1-10-ci-cd-pipeline-construction: review   # PILOT
+  1-10-ci-cd-pipeline-construction: done   # PILOT
   1-11-notification-and-alerting-foundation: backlog   # PILOT
   epic-1-retrospective: optional
 

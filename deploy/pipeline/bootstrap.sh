@@ -80,9 +80,10 @@ gh api \
   --input - <<<"$STAGING_BODY" >/dev/null
 echo "Environment 'staging' created/updated (no required reviewers, deployment restricted to protected branches)."
 
-REVIEWER_ID="$(gh api "users/${PRODUCTION_REVIEWER}" --jq '.id' 2>/dev/null || true)"
 if [ "$PRODUCTION_REVIEWER_TYPE" = "Team" ]; then
-  REVIEWER_ID="$(gh api "orgs/${OWNER}/teams/${PRODUCTION_REVIEWER}" --jq '.id')"
+  REVIEWER_ID="$(gh api "orgs/${OWNER}/teams/${PRODUCTION_REVIEWER}" --jq '.id' 2>/dev/null || true)"
+else
+  REVIEWER_ID="$(gh api "users/${PRODUCTION_REVIEWER}" --jq '.id' 2>/dev/null || true)"
 fi
 if [ -z "$REVIEWER_ID" ]; then
   echo "ERROR: could not resolve PRODUCTION_REVIEWER='${PRODUCTION_REVIEWER}' (type=${PRODUCTION_REVIEWER_TYPE}) to an id." >&2
@@ -113,7 +114,7 @@ echo "  gh secret set AUTH_ISSUER --env staging"
 echo "  gh secret set AUTH_AUDIENCE --env staging"
 echo "  gh secret set SCIM_BEARER_TOKEN --env staging"
 echo "  gh secret set POWERSYNC_TOKEN_SECRET --env staging"
-echo "  gh secret set STAGING_SSH_HOST / STAGING_SSH_USER / STAGING_SSH_KEY (or your runner's equivalent)"
 echo "  ...and the same set again with --env production for the production environment."
+echo "  Then register a self-hosted runner on each host: deploy/pipeline/runner/bootstrap-runner.sh <staging|production>"
 echo ""
 echo "Run deploy/pipeline/verify.sh to read back and confirm this configuration."

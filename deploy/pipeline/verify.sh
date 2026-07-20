@@ -41,6 +41,16 @@ else
     fail "enforce_admins is not enabled - administrators could bypass required checks"
   fi
 
+  REQUIRED_REVIEW_COUNT="$(echo "$PROTECTION_JSON" | jq -r '.required_pull_request_reviews.required_approving_review_count // 0')"
+  if [ "$REQUIRED_REVIEW_COUNT" -lt 1 ]; then
+    fail "required_pull_request_reviews is missing or requires zero approvals - a PR review is required to merge"
+  fi
+
+  BYPASS_COUNT="$(echo "$PROTECTION_JSON" | jq '((.required_pull_request_reviews.bypass_pull_request_allowances.users // []) | length) + ((.required_pull_request_reviews.bypass_pull_request_allowances.teams // []) | length) + ((.required_pull_request_reviews.bypass_pull_request_allowances.apps // []) | length)')"
+  if [ "$BYPASS_COUNT" != "0" ] && [ "$BYPASS_COUNT" != "null" ]; then
+    fail "required_pull_request_reviews names specific bypass users/teams/apps - expected none"
+  fi
+
   RESTRICTIONS="$(echo "$PROTECTION_JSON" | jq -c '.restrictions')"
   if [ "$RESTRICTIONS" != "null" ]; then
     USERS_AND_TEAMS="$(echo "$PROTECTION_JSON" | jq '((.restrictions.users // []) | length) + ((.restrictions.teams // []) | length) + ((.restrictions.apps // []) | length)')"

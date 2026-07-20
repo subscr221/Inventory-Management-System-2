@@ -2,7 +2,6 @@
   "staging": {
     "wait_timer": 0,
     "prevent_self_review": false,
-    "reviewers_required": false,
     "deployment_branch_policy": {
       "protected_branches": true,
       "custom_branch_policies": false
@@ -11,7 +10,6 @@
   "production": {
     "wait_timer": 0,
     "prevent_self_review": true,
-    "reviewers_required": true,
     "deployment_branch_policy": {
       "protected_branches": true,
       "custom_branch_policies": false

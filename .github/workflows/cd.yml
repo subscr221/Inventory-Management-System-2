@@ -5,27 +5,21 @@ name: CD
 # or `pull_request_target`) so it only ever runs after CI has already succeeded on a real push to
 # the protected default branch (AC3, Task 4.1, Task 4.10) - it cannot be triggered from a fork PR.
 #
-# Update DEFAULT_BRANCH below (and the `branches:` filter) if the repository's default branch ever
-# changes from `master` - see deploy/pipeline/bootstrap.sh, which detects it dynamically for
-# branch-protection purposes; `workflow_run` trigger filters must be static, so this workflow
-# hard-codes the branch deploy/pipeline/bootstrap.sh currently reports.
+# The default branch is detected dynamically via `github.event.repository.default_branch` in the
+# job condition below, matching whatever deploy/pipeline/bootstrap.sh currently protects - no
+# branch name is hard-coded. The `on.workflow_run` trigger itself has no `branches:` filter because
+# GitHub Actions only supports static literals there (no expressions), so this workflow accepts
+# every completed CI run and lets the dynamic job condition below do the real filtering.
 
 on:
   workflow_run:
     workflows: ['CI']
     types: [completed]
-    branches: [master]
 
 permissions:
   contents: read
-  packages: write
-
-concurrency:
-  group: cd-deploy
-  cancel-in-progress: false
 
 env:
-  DEFAULT_BRANCH: master
   REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
 
 jobs:
@@ -34,7 +28,10 @@ jobs:
     if: >
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'master'
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-latest
     outputs:
       app-image: ${{ steps.image-refs.outputs.app-image }}
@@ -82,11 +79,19 @@ jobs:
     needs: build-and-push
     runs-on: [self-hosted, staging]
     environment: staging
+    concurrency:
+      group: cd-deploy-staging
+      cancel-in-progress: false
     env:
       APP_IMAGE: ${{ needs.build-and-push.outputs.app-image }}
       EDGE_IMAGE: ${{ needs.build-and-push.outputs.edge-image }}
       IMAGE_TAG: ${{ needs.build-and-push.outputs.commit-sha }}
       POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      AUTH_JWKS_URI: ${{ secrets.AUTH_JWKS_URI }}
+      AUTH_ISSUER: ${{ secrets.AUTH_ISSUER }}
+      AUTH_AUDIENCE: ${{ secrets.AUTH_AUDIENCE }}
+      SCIM_BEARER_TOKEN: ${{ secrets.SCIM_BEARER_TOKEN }}
+      POWERSYNC_TOKEN_SECRET: ${{ secrets.POWERSYNC_TOKEN_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,13 +105,23 @@ jobs:
     # GitHub's `production` environment protection rule (deploy/pipeline/environments.json,
     # applied by deploy/pipeline/bootstrap.sh) pauses this job until a required reviewer approves.
     # The approval and the approver's identity are recorded on the resulting deployment; secrets
-    # scoped to `production` are withheld from this job until that approval happens (AC3).
+    # scoped to `production` are withheld from this job until that approval happens (AC3). This
+    # job's own concurrency group is scoped separately from build-and-push/deploy-staging so a
+    # pending production approval never blocks the next commit's automatic staging deploy.
     environment: production
+    concurrency:
+      group: cd-deploy-production
+      cancel-in-progress: false
     env:
       APP_IMAGE: ${{ needs.build-and-push.outputs.app-image }}
       EDGE_IMAGE: ${{ needs.build-and-push.outputs.edge-image }}
       IMAGE_TAG: ${{ needs.build-and-push.outputs.commit-sha }}
       POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      AUTH_JWKS_URI: ${{ secrets.AUTH_JWKS_URI }}
+      AUTH_ISSUER: ${{ secrets.AUTH_ISSUER }}
+      AUTH_AUDIENCE: ${{ secrets.AUTH_AUDIENCE }}
+      SCIM_BEARER_TOKEN: ${{ secrets.SCIM_BEARER_TOKEN }}
+      POWERSYNC_TOKEN_SECRET: ${{ secrets.POWERSYNC_TOKEN_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:

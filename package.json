@@ -21,6 +21,7 @@
     "edge:typecheck": "npm --workspace @inventory/edge run typecheck",
     "edge:lint": "npm --workspace @inventory/edge run lint",
     "edge:test": "npm --workspace @inventory/edge test",
+    "edge:test:e2e": "npm --workspace @inventory/edge run test:e2e",
     "edge:accessibility": "npm --workspace @inventory/edge run accessibility",
     "sync:smoke": "powershell -ExecutionPolicy Bypass -File sync/smoke-test.ps1"
   },

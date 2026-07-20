@@ -9,7 +9,7 @@
     "lint": "eslint app src test",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/unit/*.test.ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test test/e2e",
     "accessibility": "playwright test test/accessibility/shell-accessibility.spec.ts",
     "i18n:check": "node --import tsx test/unit/i18n-literals.test.ts",
     "start": "next start",
