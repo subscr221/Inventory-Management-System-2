@@ -10,6 +10,8 @@ RUN npm ci --workspaces=false
 COPY tsconfig.json ./
 COPY src/ ./src/
 COPY events/ ./events/
+COPY read/ ./read/
+COPY sync/migrations/ ./sync/migrations/
 RUN npm run build
 
 FROM node:24-alpine AS runner
@@ -20,7 +22,14 @@ RUN addgroup -g 1001 nodejs && adduser -u 1001 -G nodejs -S appuser
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/events ./events
+# src/events/migrate.ts (compiled to dist/src/events/migrate.js) resolves its migration SQL
+# sources relative to itself with '../../events/...' and '../../read/...' - i.e. dist/events and
+# dist/read, not the repo-root events/ and read/ directories. tsc never copies these non-.ts
+# assets on its own, so they are placed here explicitly; without this, `node dist/src/events/
+# migrate.js` (the deploy path used by deploy/pipeline/deploy.sh) fails with ENOENT.
+COPY --from=build /app/events ./dist/events
+COPY --from=build /app/read ./dist/read
+COPY --from=build /app/sync/migrations ./dist/sync/migrations
 COPY package.json ./
 
 USER appuser

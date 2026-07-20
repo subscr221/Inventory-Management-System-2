@@ -5,17 +5,27 @@ echo "=== Vendor-Neutral Host Provisioning ==="
 echo "Target: native server or cloud VPS"
 echo ""
 
-REQUIRED_CMDS=("docker" "docker-compose")
-for cmd in "${REQUIRED_CMDS[@]}"; do
-  if ! command -v "$cmd" &>/dev/null; then
-    echo "ERROR: $cmd is not installed."
-    echo "Install Docker and Docker Compose before running this script."
-    exit 1
-  fi
-done
+if ! command -v docker &>/dev/null; then
+  echo "ERROR: docker is not installed."
+  echo "Install Docker before running this script."
+  exit 1
+fi
+
+# Docker Compose ships as the `docker compose` CLI plugin on current hosts; the standalone
+# `docker-compose` binary is optional and increasingly absent. Require at least one, and prefer
+# the v2 plugin form (used everywhere else in this script) when both are present.
+if docker compose version &>/dev/null; then
+  COMPOSE_VERSION="$(docker compose version)"
+elif command -v docker-compose &>/dev/null; then
+  COMPOSE_VERSION="$(docker-compose --version)"
+else
+  echo "ERROR: neither 'docker compose' (v2 plugin) nor 'docker-compose' (standalone) is available."
+  echo "Install the Docker Compose plugin before running this script."
+  exit 1
+fi
 
 echo "Docker: $(docker --version)"
-echo "Compose: $(docker-compose --version 2>/dev/null || docker compose version)"
+echo "Compose: ${COMPOSE_VERSION}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_DIR="${SCRIPT_DIR}/../compose"

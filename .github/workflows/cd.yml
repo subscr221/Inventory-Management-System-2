@@ -1,0 +1,114 @@
+name: CD
+
+# Story 1.10: builds and pushes immutable images once per commit and promotes the SAME digests
+# through staging and production. Deliberately triggered by `workflow_run` (never `pull_request`
+# or `pull_request_target`) so it only ever runs after CI has already succeeded on a real push to
+# the protected default branch (AC3, Task 4.1, Task 4.10) - it cannot be triggered from a fork PR.
+#
+# Update DEFAULT_BRANCH below (and the `branches:` filter) if the repository's default branch ever
+# changes from `master` - see deploy/pipeline/bootstrap.sh, which detects it dynamically for
+# branch-protection purposes; `workflow_run` trigger filters must be static, so this workflow
+# hard-codes the branch deploy/pipeline/bootstrap.sh currently reports.
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: cd-deploy
+  cancel-in-progress: false
+
+env:
+  DEFAULT_BRANCH: master
+  REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
+
+jobs:
+  build-and-push:
+    name: build-and-push
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'master'
+    runs-on: ubuntu-latest
+    outputs:
+      app-image: ${{ steps.image-refs.outputs.app-image }}
+      edge-image: ${{ steps.image-refs.outputs.edge-image }}
+      commit-sha: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Compute image references
+        id: image-refs
+        run: |
+          NAMESPACE="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          echo "app-image=${REGISTRY}/${NAMESPACE}-app:${SHA}" >>"$GITHUB_OUTPUT"
+          echo "edge-image=${REGISTRY}/${NAMESPACE}-edge:${SHA}" >>"$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.image-refs.outputs.app-image }}
+
+      - name: Build and push edge image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: edge/Dockerfile
+          push: true
+          tags: ${{ steps.image-refs.outputs.edge-image }}
+
+  deploy-staging:
+    name: deploy-staging
+    needs: build-and-push
+    runs-on: [self-hosted, staging]
+    environment: staging
+    env:
+      APP_IMAGE: ${{ needs.build-and-push.outputs.app-image }}
+      EDGE_IMAGE: ${{ needs.build-and-push.outputs.edge-image }}
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.commit-sha }}
+      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-and-push.outputs.commit-sha }}
+      - run: deploy/pipeline/deploy.sh staging
+
+  promote-production:
+    name: promote-production
+    needs: [build-and-push, deploy-staging]
+    runs-on: [self-hosted, production]
+    # GitHub's `production` environment protection rule (deploy/pipeline/environments.json,
+    # applied by deploy/pipeline/bootstrap.sh) pauses this job until a required reviewer approves.
+    # The approval and the approver's identity are recorded on the resulting deployment; secrets
+    # scoped to `production` are withheld from this job until that approval happens (AC3).
+    environment: production
+    env:
+      APP_IMAGE: ${{ needs.build-and-push.outputs.app-image }}
+      EDGE_IMAGE: ${{ needs.build-and-push.outputs.edge-image }}
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.commit-sha }}
+      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-and-push.outputs.commit-sha }}
+      - run: deploy/pipeline/deploy.sh production
