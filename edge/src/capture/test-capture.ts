@@ -1,5 +1,8 @@
-import { randomUUID } from 'node:crypto';
 import type { EdgeLocalStatus } from '../local-db/schema';
+
+function randomUUID(): string {
+  return globalThis.crypto.randomUUID();
+}
 
 export interface EdgeEventRecord {
   event_id: string;

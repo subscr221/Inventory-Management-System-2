@@ -57,6 +57,10 @@ export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
 
   const obj = body as Record<string, unknown>;
 
+  if (obj['event_id'] !== undefined && !isUuid(obj['event_id'])) {
+    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'event_id must be a valid UUID');
+  }
+
   if (!isNonEmptyString(obj['stream_type'])) {
     throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'stream_type is required and must be a non-empty string');
   }

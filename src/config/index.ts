@@ -16,6 +16,23 @@ function resolveAuthMode(): AuthMode {
   return raw;
 }
 
+function parsePowerSyncTokenTtlSeconds(raw: string): number {
+  const match = /^(\d+)(s|m|h|d)?$/.exec(raw.trim());
+  if (!match) {
+    throw new Error(
+      `Invalid POWERSYNC_TOKEN_TTL "${raw}": must be a positive integer number of seconds or a value like "15m", "1h", "7d".`,
+    );
+  }
+  const value = Number(match[1]);
+  const unit = match[2] ?? 's';
+  const multiplier = unit === 's' ? 1 : unit === 'm' ? 60 : unit === 'h' ? 3600 : 86400;
+  const seconds = value * multiplier;
+  if (!Number.isInteger(seconds) || seconds <= 0) {
+    throw new Error(`Invalid POWERSYNC_TOKEN_TTL "${raw}": must resolve to a positive number of seconds.`);
+  }
+  return seconds;
+}
+
 const rawNodeEnv = process.env['NODE_ENV'];
 const nodeEnv = rawNodeEnv ?? 'development';
 const authMode = resolveAuthMode();
@@ -50,9 +67,8 @@ if (!process.env['POWERSYNC_TOKEN_SECRET']) {
   throw new Error('POWERSYNC_TOKEN_SECRET must be set (no default value permitted)');
 }
 
-if (!process.env['POWERSYNC_URL']) {
-  throw new Error('POWERSYNC_URL must be set (no default value permitted)');
-}
+const powerSyncTokenTtl = process.env['POWERSYNC_TOKEN_TTL'] ?? '15m';
+const powerSyncTokenTtlSeconds = parsePowerSyncTokenTtlSeconds(powerSyncTokenTtl);
 
 export const config = {
   port: Number.isNaN(parsedPort) ? 3000 : parsedPort,
@@ -85,10 +101,11 @@ export const config = {
     siteName: process.env['EDGE_SITE_NAME'] ?? 'Pilot Gate Site',
   },
   powerSync: {
-    url: process.env['POWERSYNC_URL'] ?? '',
+    url: process.env['POWERSYNC_URL'] ?? '/powersync',
     tokenIssuer: process.env['POWERSYNC_TOKEN_ISSUER'] ?? 'inventory-edge',
     tokenAudience: process.env['POWERSYNC_TOKEN_AUDIENCE'] ?? 'powersync',
     tokenSecret: process.env['POWERSYNC_TOKEN_SECRET'] ?? '',
-    tokenTtl: process.env['POWERSYNC_TOKEN_TTL'] ?? '15m',
+    tokenTtl: powerSyncTokenTtl,
+    tokenTtlSeconds: powerSyncTokenTtlSeconds,
   },
 } as const;

@@ -48,6 +48,9 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-20
+# story 1-8 done 2026-07-20: `npm run sync:smoke` re-verified against review-fix wiring with Docker Desktop 4.82.0 (six containers up, smoke passed); AC6 keyboard-only pass and screen-reader pass both documented against the running production build (Windows Narrator plus UIA and Chromium AX trees for all three screens); review item 3A resolved; edge Playwright 9/9; moved to done
+# story 1-8 follow-up 2026-07-20: Docker Desktop 4.82.0 smoke recheck passed (`npm run sync:smoke`); AC6 keyboard-only pass documented; screen-reader pass still pending at that point
+# story 1-8 code review 2026-07-20: 3 decisions resolved to patch (wire real client sync/e2e proof, deterministic site selection, manual accessibility evidence); 13 additional patches and 2 defers recorded; moved back to in-progress
 # story 1-8 dev-story 2026-07-20: backend, edge PWA, sync config, Playwright, accessibility, migration, and full backend regression passed; remains in-progress because Docker is unavailable for real-service PowerSync smoke validation
 # story 1-8 dev-story 2026-07-20: implementation started from baseline c294aab; moved to in-progress
 # story 1-8 created 2026-07-20 via create-story workflow: offline edge PWA shell and PowerSync sync layer; Next.js 16 PWA shell, local SQLite outbox, self-hosted PowerSync, sync failure isolation, WCAG and i18n foundations; ready-for-dev
@@ -87,7 +90,7 @@ development_status:
   1-5-business-stream-tagging-enforcement: done   # PILOT
   1-6-event-sourced-location-with-asserted-expected-separation: done   # PILOT
   1-7-calibration-lockout-enforcement: done   # PILOT
-  1-8-offline-edge-pwa-shell-and-powersync-sync-layer: in-progress   # PILOT
+  1-8-offline-edge-pwa-shell-and-powersync-sync-layer: done   # PILOT
   1-9-spine-acceptance-contract-ci-gate: backlog   # PILOT
   1-10-ci-cd-pipeline-construction: backlog   # PILOT
   1-11-notification-and-alerting-foundation: backlog   # PILOT

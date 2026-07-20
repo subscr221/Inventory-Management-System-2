@@ -26,7 +26,7 @@ services:
       AUTH_AUDIENCE: ${AUTH_AUDIENCE:?set AUTH_AUDIENCE to this API's audience}
       SCIM_BEARER_TOKEN: ${SCIM_BEARER_TOKEN:?set SCIM_BEARER_TOKEN to a long random secret}
       EDGE_SITE_NAME: ${EDGE_SITE_NAME:-Pilot Gate Site}
-      POWERSYNC_URL: ${POWERSYNC_URL:-http://localhost/powersync}
+      POWERSYNC_URL: ${POWERSYNC_URL:-/powersync}
       POWERSYNC_TOKEN_ISSUER: ${POWERSYNC_TOKEN_ISSUER:-inventory-edge}
       POWERSYNC_TOKEN_AUDIENCE: ${POWERSYNC_TOKEN_AUDIENCE:-powersync}
       POWERSYNC_TOKEN_SECRET: ${POWERSYNC_TOKEN_SECRET:?set POWERSYNC_TOKEN_SECRET to a long random secret}
@@ -58,11 +58,18 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      POWERSYNC_SOURCE_URI: postgresql://svc_powersync:${POWERSYNC_SOURCE_PASSWORD:-svc_powersync_password}@postgres:5432/inventory_events
-      POWERSYNC_STORAGE_URI: postgresql://app_user:${DB_PASSWORD:-app_password}@postgres:5432/inventory_events
-      POWERSYNC_TOKEN_ISSUER: ${POWERSYNC_TOKEN_ISSUER:-inventory-edge}
-      POWERSYNC_TOKEN_AUDIENCE: ${POWERSYNC_TOKEN_AUDIENCE:-powersync}
-      POWERSYNC_TOKEN_SECRET: ${POWERSYNC_TOKEN_SECRET:?set POWERSYNC_TOKEN_SECRET to a long random secret}
+      # powersync-service only substitutes YAML `!env` tags for vars prefixed "PS_" (see
+      # sync/powersync.yaml) - these are deliberately separate from the app service's own
+      # POWERSYNC_* vars below, which src/config/index.ts reads directly via process.env.
+      PS_SOURCE_URI: postgresql://svc_powersync:${POWERSYNC_SOURCE_PASSWORD:-svc_powersync_password}@postgres:5432/inventory_events
+      # PowerSync's storage backend creates and manages its own bookkeeping tables (locks,
+      # migrations), which needs schema-level CREATE - app_user's narrow per-table grants
+      # (init-db.sql) aren't enough. admin_user is this repo's existing DDL-privileged role
+      # (already used for app migrations), so reuse it here instead of widening app_user.
+      PS_STORAGE_URI: postgresql://admin_user:${POSTGRES_ADMIN_PASSWORD:-admin_password}@postgres:5432/inventory_events
+      PS_TOKEN_ISSUER: ${POWERSYNC_TOKEN_ISSUER:-inventory-edge}
+      PS_TOKEN_AUDIENCE: ${POWERSYNC_TOKEN_AUDIENCE:-powersync}
+      PS_TOKEN_SECRET: ${POWERSYNC_TOKEN_SECRET:?set POWERSYNC_TOKEN_SECRET to a long random secret}
     volumes:
       - ../../sync/powersync.yaml:/config/powersync.yaml:ro
       - ../../sync/sync-rules.yaml:/config/sync-rules.yaml:ro
@@ -84,6 +91,7 @@ services:
       - pg_data:/var/lib/postgresql
       - ./init-wal-archive.sh:/docker-entrypoint-initdb.d/00-init-wal-archive.sh
       - ./init-db.sql:/docker-entrypoint-initdb.d/01-init-db.sql
+      - ./init-pg-hba.sh:/docker-entrypoint-initdb.d/02-init-pg-hba.sh
     command:
       - "postgres"
       - "-c"
@@ -137,6 +145,12 @@ services:
         condition: service_healthy
     environment:
       PGUSER: replication_user
+      PGPASSWORD: ${REPLICATION_PASSWORD:-replication_password}
+      # postgres:18+ images default PGDATA to /var/lib/postgresql/18/docker, not the
+      # /var/lib/postgresql/data path pg_basebackup -D writes to below and the volume mounts at.
+      # Without this override docker-entrypoint.sh looks in the (empty) default dir and thinks
+      # the cluster is uninitialized.
+      PGDATA: /var/lib/postgresql/data
     volumes:
       - pg_standby_data:/var/lib/postgresql/data
     entrypoint: |

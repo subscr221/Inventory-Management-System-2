@@ -7,10 +7,11 @@ export interface SyncStatusInput {
   pendingCount: number;
   syncing: boolean;
   failedCount: number;
+  authRequiredCount?: number;
 }
 
 export function deriveSyncUiState(input: SyncStatusInput): SyncUiState {
-  if (input.failedCount > 0) return 'error';
+  if ((input.authRequiredCount ?? 0) > 0 || input.failedCount > 0) return 'error';
   if (input.syncing) return 'syncing';
   if (input.pendingCount > 0) return input.online ? 'captured' : 'offline';
   return input.online ? 'online' : 'offline';

@@ -19,25 +19,34 @@ export const edgeOutbox = new Table(
   { indexes: { status: ['local_status'], idempotency: ['idempotency_key'] } },
 );
 
-export const cachedUserContext = new Table({
-  user_id: column.text,
-  user_name: column.text,
-  role: column.text,
-  updated_at: column.text,
-});
+export const cachedUserContext = new Table(
+  {
+    user_id: column.text,
+    user_name: column.text,
+    role: column.text,
+    updated_at: column.text,
+  },
+  { localOnly: true },
+);
 
-export const cachedSiteContext = new Table({
-  site_id: column.text,
-  site_name: column.text,
-  updated_at: column.text,
-});
+export const cachedSiteContext = new Table(
+  {
+    site_id: column.text,
+    site_name: column.text,
+    updated_at: column.text,
+  },
+  { localOnly: true },
+);
 
-export const syncFailures = new Table({
-  event_id: column.text,
-  server_error_code: column.text,
-  server_error_details: column.text,
-  failed_at: column.text,
-});
+export const syncFailures = new Table(
+  {
+    event_id: column.text,
+    server_error_code: column.text,
+    server_error_details: column.text,
+    failed_at: column.text,
+  },
+  { localOnly: true },
+);
 
 export const EdgeSchema = new Schema({
   edge_outbox: edgeOutbox,

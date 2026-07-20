@@ -1,6 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { createServer, request as httpRequest, type Server, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -13,12 +14,14 @@ import {
   edgeEventUploadHandler,
   powerSyncCredentialsHandler,
 } from '../../src/api/v1/edge.js';
+import { postEventHandler } from '../../src/api/v1/events.js';
 import { closePool, getPool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_PORT = 3995;
 const SCIM_HEADERS = { Authorization: 'Bearer test-only-scim-bearer-token-not-for-production-use' };
 const EDGE_LOCATION = '55555555-5555-4555-8555-555555555555';
+const SECOND_EDGE_LOCATION = '66666666-6666-4666-8666-666666666666';
 
 interface HttpResult {
   status: number;
@@ -150,6 +153,7 @@ describe('Story 1.8 backend edge sync contract', () => {
     router.get('/api/v1/edge/bootstrap', edgeBootstrapHandler);
     router.get('/api/v1/edge/powersync-credentials', powerSyncCredentialsHandler);
     router.post('/api/v1/edge/events', edgeEventUploadHandler);
+    router.post('/api/v1/events', postEventHandler);
 
     server = createServer((req, res) => {
       router.handle(req, res).catch((err) => {
@@ -219,6 +223,73 @@ describe('Story 1.8 backend edge sync contract', () => {
     assert.strictEqual(res.body['endpoint'], 'http://localhost:8080/powersync');
     assert.equal(typeof res.body['token'], 'string');
     assert.ok((res.body['token'] as string).length > 20);
+    assert.strictEqual(res.body['expires_in_seconds'], 900);
+  });
+
+  it('bootstrap and PowerSync token select the same concrete operating location', async () => {
+    const bootstrap = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/edge/bootstrap',
+      undefined,
+      edgeHeaders,
+    );
+    assert.strictEqual(bootstrap.status, 200, JSON.stringify(bootstrap.body));
+    assert.strictEqual(bootstrap.body['site_id'], EDGE_LOCATION);
+
+    const creds = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/edge/powersync-credentials',
+      undefined,
+      edgeHeaders,
+    );
+    const [, payloadB64] = (creds.body['token'] as string).split('.');
+    const claims = JSON.parse(Buffer.from(payloadB64!, 'base64url').toString('utf-8')) as Record<
+      string,
+      unknown
+    >;
+    assert.strictEqual(claims['site_id'], EDGE_LOCATION);
+    assert.strictEqual(claims['role'], bootstrap.body['role']);
+  });
+
+  it('rejects a user with two concrete operating locations with a stable 409', async () => {
+    await provisionUser(TEST_PORT, 'edge-ambiguous@example.com', [
+      { role: 'gate_officer', module: 'maintenance', functionScope: 'write', locationId: EDGE_LOCATION },
+      {
+        role: 'gate_officer',
+        module: 'maintenance',
+        functionScope: 'write',
+        locationId: SECOND_EDGE_LOCATION,
+      },
+    ]);
+    const headers = await authFor(TEST_PORT, 'edge-ambiguous@example.com');
+    const res = await makeRequest(TEST_PORT, 'GET', '/api/v1/edge/bootstrap', undefined, headers);
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'EDGE_AMBIGUOUS_SITE');
+  });
+
+  it('rejects a wildcard-only user with a stable 403 (no concrete site)', async () => {
+    await provisionUser(TEST_PORT, 'edge-wildcard@example.com', [
+      { role: 'admin', module: '*', functionScope: 'write', locationId: '*' },
+    ]);
+    const headers = await authFor(TEST_PORT, 'edge-wildcard@example.com');
+    const res = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/edge/powersync-credentials',
+      undefined,
+      headers,
+    );
+    assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'EDGE_NO_CONCRETE_SITE');
+  });
+
+  it('rejects a malformed event_id on the public events path with 400 instead of 500', async () => {
+    const envelope = edgeEnvelope(edgeUserId, { event_id: 'not-a-uuid' });
+    const res = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', envelope, edgeHeaders);
+    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'INVALID_EVENT_ENVELOPE');
   });
 
   it('uploads edge events through the central event path and preserves event_id', async () => {
@@ -289,5 +360,41 @@ describe('Story 1.8 backend edge sync contract', () => {
       [envelope.idempotency_key],
     );
     assert.strictEqual(count.rows[0]!['count'], 1);
+  });
+});
+
+describe('Story 1.8 PowerSync config validation', () => {
+  function loadConfig(envOverrides: NodeJS.ProcessEnv): {
+    status: number | null;
+    stdout: string;
+    stderr: string;
+  } {
+    const env = { ...process.env, ...envOverrides };
+    if (envOverrides['POWERSYNC_URL'] === undefined) delete env['POWERSYNC_URL'];
+    const code =
+      "try { const { config } = await import('./src/config/index.ts'); console.log(JSON.stringify(config.powerSync)); } catch (e) { console.error(e && e.message ? e.message : String(e)); process.exit(1); }";
+    const res = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '--eval', code],
+      {
+        cwd: resolve(__dirname, '../..'),
+        env,
+        encoding: 'utf-8',
+      },
+    );
+    return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
+  }
+
+  it('defaults the browser PowerSync endpoint to same-origin /powersync', () => {
+    const result = loadConfig({ POWERSYNC_URL: undefined });
+    assert.strictEqual(result.status, 0, result.stderr);
+    const powerSync = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    assert.strictEqual(powerSync['url'], '/powersync');
+  });
+
+  it('fails config load for malformed POWERSYNC_TOKEN_TTL', () => {
+    const result = loadConfig({ POWERSYNC_TOKEN_TTL: 'tomorrow' });
+    assert.strictEqual(result.status, 1);
+    assert.match(result.stderr, /Invalid POWERSYNC_TOKEN_TTL/);
   });
 });

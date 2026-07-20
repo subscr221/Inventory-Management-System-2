@@ -1,10 +1,11 @@
 import type { MetadataRoute } from 'next';
+import { t } from '../src/i18n/locale';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Inventory Edge Shell',
-    short_name: 'Inventory Edge',
-    description: 'Offline-first frontline edge shell for inventory capture',
+    name: t('app.title'),
+    short_name: t('app.shortTitle'),
+    description: t('app.subtitle'),
     start_url: '/',
     scope: '/',
     display: 'standalone',

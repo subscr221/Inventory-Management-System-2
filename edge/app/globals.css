@@ -107,6 +107,22 @@ a:focus-visible {
   color: white;
 }
 
+.edge-nav {
+  display: flex;
+  gap: 8px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--neutral-500);
+  background: white;
+}
+
+.edge-nav a {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  color: var(--primary-strong);
+  font-weight: 700;
+}
+
 .edge-main {
   width: min(100%, 1280px);
   margin: 0 auto;
@@ -125,6 +141,33 @@ a:focus-visible {
   border: 1px solid var(--neutral-500);
   border-radius: 12px;
   box-shadow: 0 1px 2px 0 rgb(0 0 0 / 5%);
+}
+
+.sync-counts {
+  display: flex;
+  gap: 24px;
+  margin: 24px 0 0;
+}
+
+.sync-counts div {
+  display: flex;
+  flex-direction: column;
+}
+
+.sync-counts dd {
+  margin: 4px 0 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.auth-required {
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 2px solid var(--error-strong);
+  border-radius: 8px;
+  background: white;
+  color: var(--error-strong);
+  font-weight: 700;
 }
 
 .edge-actions {

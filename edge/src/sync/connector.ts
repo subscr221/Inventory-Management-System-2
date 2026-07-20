@@ -1,7 +1,8 @@
-import type {
-  AbstractPowerSyncDatabase,
-  PowerSyncBackendConnector,
-  PowerSyncCredentials,
+import {
+  UpdateType,
+  type AbstractPowerSyncDatabase,
+  type PowerSyncBackendConnector,
+  type PowerSyncCredentials,
 } from '@powersync/web';
 import type { EdgeLocalStatus } from '../local-db/schema';
 
@@ -24,6 +25,13 @@ const PERMANENT_ERROR_CODES = new Set([
   'STREAM_CONFLICT',
   'CALIBRATION_LOCKOUT',
 ]);
+
+const TRANSIENT_STATUS_CODES = new Set([408, 425, 429]);
+const SETTLED_STATUSES = new Set<EdgeLocalStatus>(['synced', 'needs_attention']);
+
+interface OutboxStatusRow {
+  local_status: EdgeLocalStatus;
+}
 
 function withErrorCode(
   classification: Omit<UploadFailureClassification, 'serverErrorCode'>,
@@ -54,6 +62,13 @@ export function classifyServerUploadFailure(
   if (status === 401 || status === 403) {
     return withErrorCode(
       { action: 'halt', localStatus: 'auth_required', retryable: false },
+      errorCode,
+    );
+  }
+
+  if (TRANSIENT_STATUS_CODES.has(status)) {
+    return withErrorCode(
+      { action: 'retry', localStatus: 'pending_sync', retryable: true },
       errorCode,
     );
   }
@@ -91,6 +106,36 @@ async function recordUploadOutcome(
   );
 }
 
+async function markOutboxSynced(
+  database: AbstractPowerSyncDatabase,
+  eventId: string,
+  existingEventId?: string,
+): Promise<void> {
+  await database.execute(
+    `UPDATE edge_outbox
+     SET local_status = ?, server_error_code = ?, server_error_details = ?, updated_at = ?
+     WHERE id = ?`,
+    [
+      'synced',
+      null,
+      existingEventId ? JSON.stringify({ existing_event_id: existingEventId }) : null,
+      new Date().toISOString(),
+      eventId,
+    ],
+  );
+}
+
+async function currentLocalStatus(
+  database: AbstractPowerSyncDatabase,
+  eventId: string,
+): Promise<EdgeLocalStatus | null> {
+  const row = await database.getOptional<OutboxStatusRow>(
+    `SELECT local_status FROM edge_outbox WHERE id = ?`,
+    [eventId],
+  );
+  return row ? row.local_status : null;
+}
+
 export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
   constructor(private readonly apiBaseUrl = '') {}
 
@@ -108,21 +153,31 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
     if (!transaction) return;
 
     for (const op of transaction.crud) {
-      if (op.table !== 'edge_outbox') continue;
-      const body = { event_id: op.id, ...op.opData };
+      if (op.table !== 'edge_outbox' || op.op !== UpdateType.PUT) continue;
+
+      const localStatus = await currentLocalStatus(database, op.id);
+      if (localStatus === 'auth_required') return;
+      if (localStatus && SETTLED_STATUSES.has(localStatus)) continue;
+
       const response = await fetch(`${this.apiBaseUrl}/api/v1/edge/events`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...op.opData, event_id: op.id }),
       });
-      if (!response.ok) {
-        const errorBody = (await response.json().catch(() => ({}))) as ErrorEnvelope;
-        const classification = classifyServerUploadFailure(response.status, errorBody);
-        if (classification.action === 'retry')
-          throw new Error(classification.serverErrorCode ?? 'retryable upload failure');
-        await recordUploadOutcome(database, op.id, classification, errorBody);
+      if (response.ok) {
+        await markOutboxSynced(database, op.id);
+        continue;
       }
+
+      const errorBody = (await response.json().catch(() => ({}))) as ErrorEnvelope;
+      const classification = classifyServerUploadFailure(response.status, errorBody);
+      if (classification.action === 'retry') {
+        throw new Error(classification.serverErrorCode ?? 'retryable upload failure');
+      }
+
+      await recordUploadOutcome(database, op.id, classification, errorBody);
+      if (classification.action === 'halt') return;
     }
     await transaction.complete();
   }

@@ -7,7 +7,13 @@ export interface SyncFailureItem {
   failedAt: string;
 }
 
-export function SyncFailureList({ failures }: { failures: SyncFailureItem[] }) {
+export function SyncFailureList({
+  failures,
+  onRetry,
+}: {
+  failures: SyncFailureItem[];
+  onRetry?: () => void;
+}) {
   if (failures.length === 0) return null;
   return (
     <section className="edge-card" aria-labelledby="sync-failure-heading">
@@ -20,7 +26,7 @@ export function SyncFailureList({ failures }: { failures: SyncFailureItem[] }) {
           </li>
         ))}
       </ul>
-      <button className="secondary-action" type="button">
+      <button className="secondary-action" type="button" onClick={onRetry}>
         {t('sync.retry')}
       </button>
     </section>

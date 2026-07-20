@@ -2,7 +2,7 @@ param(
   [string]$ComposeFile = "deploy/compose/docker-compose.yml",
   [string]$HealthUrl = "http://localhost/api/v1/health",
   [string]$EdgeUrl = "http://localhost/",
-  [string]$PowerSyncUrl = "http://localhost/powersync/"
+  [string]$PowerSyncUrl = "http://localhost/powersync/probes/liveness"
 )
 
 $ErrorActionPreference = "Stop"

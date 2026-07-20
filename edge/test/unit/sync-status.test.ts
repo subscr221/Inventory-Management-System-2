@@ -28,6 +28,16 @@ describe('edge sync status model', () => {
       deriveSyncUiState({ online: true, pendingCount: 1, syncing: true, failedCount: 1 }),
       'error',
     );
+    assert.equal(
+      deriveSyncUiState({
+        online: true,
+        pendingCount: 0,
+        syncing: false,
+        failedCount: 0,
+        authRequiredCount: 1,
+      }),
+      'error',
+    );
   });
 
   it('keeps permanent failures out of pending counts', () => {

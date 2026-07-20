@@ -1,7 +1,9 @@
 CREATE USER app_user WITH PASSWORD 'app_password';
 CREATE USER readonly_user WITH PASSWORD 'readonly_password';
 CREATE USER replication_user WITH REPLICATION PASSWORD 'replication_password';
-CREATE USER svc_powersync WITH PASSWORD 'svc_powersync_password';
+-- REPLICATION is required for PowerSync's logical-replication (pgoutput) source connection,
+-- separate from the SELECT grant below (which alone is insufficient for CDC streaming).
+CREATE USER svc_powersync WITH REPLICATION PASSWORD 'svc_powersync_password';
 
 CREATE TABLE IF NOT EXISTS domain_events (
   event_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),

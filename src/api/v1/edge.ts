@@ -12,9 +12,7 @@ import { requireRole } from '../../middleware/rbac.js';
 import { validateEnvelope, persistEvent } from '../../events/store.js';
 import { validateEdgeEnvelope } from '../../sync/upload.js';
 import { config } from '../../config/index.js';
-
-const DEFAULT_TOKEN_TTL = '15m';
-const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 900;
+import type { AuthContext } from '../../middleware/context.js';
 
 function edgeSiteName(): string {
   return config.edge.siteName;
@@ -22,6 +20,39 @@ function edgeSiteName(): string {
 
 function powerSyncSecretKey(): ReturnType<typeof createSecretKey> {
   return createSecretKey(Buffer.from(config.powerSync.tokenSecret, 'utf-8'));
+}
+
+interface OperatingAssignment {
+  role: string;
+  locationId: string;
+}
+
+function selectOperatingAssignment(authContext: AuthContext): OperatingAssignment {
+  const concrete = authContext.roles.filter((r) => r.locationId !== '*');
+  const distinctLocations = new Set(concrete.map((r) => r.locationId));
+
+  if (distinctLocations.size === 0) {
+    throw new AppError(
+      403,
+      'EDGE_NO_CONCRETE_SITE',
+      'No concrete operating location is assigned to this user; edge sync requires a specific site assignment',
+    );
+  }
+  if (distinctLocations.size > 1) {
+    throw new AppError(
+      409,
+      'EDGE_AMBIGUOUS_SITE',
+      'Multiple concrete operating locations are assigned to this user; edge sync requires a single site',
+    );
+  }
+
+  const locationId = [...distinctLocations][0]!;
+  const assignment = concrete
+    .filter((r) => r.locationId === locationId)
+    .sort((a, b) =>
+      [a.role, a.module, a.functionScope].join('\0').localeCompare([b.role, b.module, b.functionScope].join('\0')),
+    )[0]!;
+  return { role: assignment.role, locationId };
 }
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
@@ -47,9 +78,9 @@ function resolveLocationFromBody(
 
 const edgeBootstrapBase: RouteHandler = async (req, res) => {
   const authContext = getAuthContext(req);
-  const assignment = authContext?.roles[0];
-  if (!authContext || !assignment)
-    throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+
+  const assignment = selectOperatingAssignment(authContext);
 
   sendJson(res, 200, {
     user_id: authContext.userId,
@@ -64,10 +95,11 @@ const edgeBootstrapBase: RouteHandler = async (req, res) => {
 
 const powerSyncCredentialsBase: RouteHandler = async (req, res) => {
   const authContext = getAuthContext(req);
-  const assignment = authContext?.roles[0];
-  if (!authContext || !assignment)
-    throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
 
+  const assignment = selectOperatingAssignment(authContext);
+
+  const issuedAt = Math.floor(Date.now() / 1000);
   const token = await new SignJWT({
     user_id: authContext.userId,
     role: assignment.role,
@@ -78,14 +110,14 @@ const powerSyncCredentialsBase: RouteHandler = async (req, res) => {
     .setSubject(authContext.externalId)
     .setIssuer(config.powerSync.tokenIssuer)
     .setAudience(config.powerSync.tokenAudience)
-    .setIssuedAt()
-    .setExpirationTime(config.powerSync.tokenTtl ?? DEFAULT_TOKEN_TTL)
+    .setIssuedAt(issuedAt)
+    .setExpirationTime(issuedAt + config.powerSync.tokenTtlSeconds)
     .sign(powerSyncSecretKey());
 
   sendJson(res, 200, {
     endpoint: config.powerSync.url,
     token,
-    expires_in_seconds: DEFAULT_TOKEN_EXPIRES_IN_SECONDS,
+    expires_in_seconds: config.powerSync.tokenTtlSeconds,
   });
 };
 
