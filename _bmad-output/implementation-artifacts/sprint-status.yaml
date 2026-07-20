@@ -48,6 +48,7 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-20
+# story 1-9 code review 2026-07-20: 10 review patches resolved; production router surface asserted, gate script now includes ESLint, harness errors/ports deterministic, audit coverage broadened, AGENTS.md out-of-scope change removed; spine gate 6/6, npm test 143/143, tsc + eslint + diff-check clean; moved to done
 # story 1-9 dev-story 2026-07-20: added 6-test spine-acceptance-contract suite (test/integration/story-1-9.test.ts) and `spine-acceptance-contract` npm script (junit artifact); npm test 143/143, tsc + eslint + diff-check clean; moved to review
 # story 1-9 dev-story 2026-07-20: implementation started from baseline 34304a3; moved to in-progress
 # story 1-9 created 2026-07-20 via create-story workflow: Spine Acceptance Contract CI gate; five spine invariants in CI with required status check `spine-acceptance-contract`; ready-for-dev
@@ -94,7 +95,7 @@ development_status:
   1-6-event-sourced-location-with-asserted-expected-separation: done   # PILOT
   1-7-calibration-lockout-enforcement: done   # PILOT
   1-8-offline-edge-pwa-shell-and-powersync-sync-layer: done   # PILOT
-  1-9-spine-acceptance-contract-ci-gate: review   # PILOT
+  1-9-spine-acceptance-contract-ci-gate: done   # PILOT
   1-10-ci-cd-pipeline-construction: backlog   # PILOT
   1-11-notification-and-alerting-foundation: backlog   # PILOT
   epic-1-retrospective: optional

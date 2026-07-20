@@ -6,8 +6,14 @@ import { readJsonBody } from '../middleware/body.js';
 import { authenticateRequest } from '../middleware/auth.js';
 import { setParsedBody, setAuthContext, setTraceId } from '../middleware/context.js';
 
+export interface RouteSummary {
+  method: string;
+  path: string;
+}
+
 interface Route {
   method: string;
+  path: string;
   pattern: RegExp;
   paramNames: string[];
   handler: RouteHandler;
@@ -55,10 +61,15 @@ export class Router {
     });
     this.routes.push({
       method,
+      path,
       pattern: new RegExp(`^${pattern}$`),
       paramNames,
       handler: withErrorHandler(handler),
     });
+  }
+
+  listRoutes(): RouteSummary[] {
+    return this.routes.map(({ method, path }) => ({ method, path }));
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

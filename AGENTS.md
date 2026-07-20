@@ -29,8 +29,3 @@ including export, page-setup, captioning, and traceability requirements.
 That file's "Before Starting" section is a precondition for drafting; its
 "Before Finishing" checklist is a final verification pass only, not the
 first time these rules should be applied.
-
-All agents are to apply the following skills
-
-1. /ponytail
-2. /stop-slop

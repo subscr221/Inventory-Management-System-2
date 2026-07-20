@@ -4,7 +4,7 @@ baseline_commit: 34304a3b2b244e8ab3cd7184871d83227e051ca6
 
 # Story 1.9: Spine Acceptance Contract CI Gate
 
-Status: review
+Status: done
 
 ## Story
 
@@ -43,6 +43,19 @@ so that the compliance spine is formally accepted as the build substrate and any
 - [x] Task 3: Regression and validation (AC: 1, 2)
   - [x] 3.1 Run backend validation: `npx tsc --noEmit`, `npm run lint`, `node --env-file=.env.test --import tsx --test test/unit/*.test.ts`, `node --env-file=.env.test --import tsx --test --test-concurrency=1 test/integration/story-1-9.test.ts`, `npm test`, and `git diff --check`.
   - [x] 3.2 Confirm all five acceptance criteria are covered by at least one automated test.
+
+### Review Findings
+
+- [x] [Review][Patch] Gate may not validate the deployed spine artifact - resolved by exporting the production router/server bootstrap and asserting the production route surface is limited to platform-spine routes before the suite starts.
+- [x] [Review][Patch] Repo-wide AGENTS.md change is outside the story trace - resolved by removing the out-of-scope governance change from this story's diff.
+- [x] [Review][Patch] `spine-acceptance-contract` does not run the DOA hard-coded-role lint guard [package.json:15]
+- [x] [Review][Patch] HTTP test helper can crash or hang instead of producing deterministic failures [test/integration/story-1-9.test.ts:44]
+- [x] [Review][Patch] `authFor` can hide token-generation failures behind later authorization errors [test/integration/story-1-9.test.ts:92]
+- [x] [Review][Patch] Fixed test port and listen promise can hang on port collision [test/integration/story-1-9.test.ts:26]
+- [x] [Review][Patch] Audit log response shape is not guarded before `.find` [test/integration/story-1-9.test.ts:230]
+- [x] [Review][Patch] Edit-log integrity is sampled with one submitted event only [test/integration/story-1-9.test.ts:210]
+- [x] [Review][Patch] Tamper assertions share state with the rest of the suite [test/integration/story-1-9.test.ts:121]
+- [x] [Review][Patch] Completion notes say one test per invariant while the suite has six tests for five invariants [_bmad-output/implementation-artifacts/1-9-spine-acceptance-contract-ci-gate.md:133]
 
 ## Dev Notes
 
@@ -130,18 +143,21 @@ fugu-ultra-20260615
 
 ### Completion Notes List
 
-- Added `test/integration/story-1-9.test.ts`, the Spine Acceptance Contract suite: one test per invariant (Edit Log Integrity, DOA Registry Resolution, Event-Sourced Location, Calibration Lockout, Business-Stream Tagging), exercised through the real public API routes (`/api/v1/events`, `/api/v1/audit/log`, `/api/v1/config/audit-log-enabled`, `/api/v1/doa/entries|resolve|workflow-config`, `/api/v1/locations/:lotId[/expected]`, `/api/v1/instruments/:id/calibration-status`, `/api/v1/qc/results`) with zero module-specific routes wired, matching AC1's "zero module code present".
-- Reused the Stories 1.3/1.4/1.6/1.7 pattern (Router harness, SCIM provisioning, dev-token auth, admin-pool schema load and `DISABLE TRIGGER ALL`/`TRUNCATE`/`ENABLE TRIGGER ALL` cleanup) rather than introducing a new harness.
-- The DOA test's "no hard-coded role path survives" clause is proved two ways: functionally, the registry-resolved approver equals the seeded role holder (not a literal), and structurally, a `workflow-config` override attempt against the same governed transaction type is rejected with `DOA_OVERRIDE_BLOCKED` (Story 1.4's existing gate); the `no-hardcoded-role-in-workflow` ESLint rule continues to run as part of `npm run lint`.
-- Added the `spine-acceptance-contract` npm script (Task 2) as the CI entry point: runs only `test/integration/story-1-9.test.ts` with a `spec` reporter to stdout and a `junit` reporter to `spine-acceptance-contract-results.xml` (gitignored, regenerated per run) as the CI artifact. Deliberately did not add `.github/workflows/*.yml` or touch branch protection - Story 1.10 owns the CI pipeline and required-status-check wiring; this story only had to make the script name, exit code, and artifact deterministic.
-- Full regression: `npx tsc --noEmit` clean, `npm run lint` clean, `npm test` 143/143 (33 unit + 110 integration, including the 6 new spine tests), `git diff --check` clean.
+- Added `test/integration/story-1-9.test.ts`, the Spine Acceptance Contract suite: five invariants covered across six tests (Edit Log Integrity split into logging and disable-attempt checks, plus DOA Registry Resolution, Event-Sourced Location, Calibration Lockout, and Business-Stream Tagging).
+- Exported `createAppRouter` and `createAppServer` from `src/server.ts` and added route introspection to `src/api/router.ts`, so the suite exercises the production route surface and fails if module routes enter the spine gate.
+- Hardened the suite for deterministic CI failures: dynamic port binding, listen and response error handling, non-JSON response reporting, explicit dev-token assertions, guarded audit response shape, multi-event audit coverage, and transaction-scoped tamper assertions.
+- The DOA test's "no hard-coded role path survives" clause is proved two ways: functionally, the registry-resolved approver equals the seeded role holder, and structurally, the `spine-acceptance-contract` script now runs ESLint before the integration suite so the `no-hardcoded-role-in-workflow` rule is inside the required status check.
+- Added the `spine-acceptance-contract` npm script (Task 2) as the CI entry point: runs ESLint, then `test/integration/story-1-9.test.ts` with a `spec` reporter to stdout and a `junit` reporter to `spine-acceptance-contract-results.xml` (gitignored, regenerated per run) as the CI artifact. Deliberately did not add `.github/workflows/*.yml` or touch branch protection - Story 1.10 owns the CI pipeline and required-status-check wiring.
+- Full regression: `npx tsc --noEmit` clean, `npm run lint` clean, `npm run spine-acceptance-contract` 6/6, `npm test` 143/143, and `git diff --check` clean.
 
 ### File List
 
 - `test/integration/story-1-9.test.ts`
+- `src/api/router.ts`
+- `src/server.ts`
 - `package.json`
 - `.gitignore`
 
 ## Change Log
 
-- 2026-07-20: Implemented Story 1.9 (Spine Acceptance Contract CI Gate). Added the five-invariant integration suite (`test/integration/story-1-9.test.ts`) exercising the real API routes with zero module code wired, and the `spine-acceptance-contract` npm script as the deterministic CI entry point publishing a JUnit artifact. Validation passed: `npx tsc --noEmit`, `npm run lint`, `npm test` 143/143, and `git diff --check`.
+- 2026-07-20: Implemented Story 1.9 (Spine Acceptance Contract CI Gate). Added the five-invariant integration suite (`test/integration/story-1-9.test.ts`) exercising the production route surface with no module routes admitted, and the `spine-acceptance-contract` npm script as the deterministic CI entry point running ESLint plus JUnit artifact publication. Validation passed: `npx tsc --noEmit`, `npm run lint`, `npm run spine-acceptance-contract` 6/6, `npm test` 143/143, and `git diff --check`.
