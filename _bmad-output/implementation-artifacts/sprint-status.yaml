@@ -48,6 +48,8 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-21
+# story 2-2 dev-story 2026-07-21: implementation started from baseline c354746; moved to in-progress
+# story 2-2 created 2026-07-21 via create-story workflow: Real-Time Multi-Location Stock Balances; stock_balance projection, central INSUFFICIENT_STOCK enforcement, GET /api/v1/stock/:sku, direct stock.received and stock.allocated event contracts, concurrency/idempotency, edge sync, schema drift, migration mirror, RBAC, and regression guardrails; ready-for-dev
 # story 2-1 code review 2026-07-21: 3 decisions resolved to patch + 5 patch findings fixed; edge uploads auto-confirm
 #   zone-incompatible placements so outbox rows cannot sync without persistence, HTTP master-referencing events stamp actor
 #   location from auth, inactive item/location/actor/parent masters reject, location hierarchy validation moved into the projection
@@ -144,7 +146,7 @@ development_status:
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---
   epic-2: in-progress
   2-1-item-master-and-location-register: done   # PILOT
-  2-2-real-time-multi-location-stock-balances: backlog   # PILOT
+  2-2-real-time-multi-location-stock-balances: in-progress   # PILOT
   2-3-lot-batch-and-serial-traceability: backlog   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: backlog   # PILOT
   2-5-inter-location-transfer-requests: backlog   # PILOT
