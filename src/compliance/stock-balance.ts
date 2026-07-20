@@ -38,6 +38,12 @@ const STOCK_BALANCE_EVENT_KINDS: Record<string, StockBalanceEventKind> = {
   'stock.allocated': 'allocation',
 };
 
+/** ponytail: known set, extend when new stock classes are introduced (Story 2.8, etc.) */
+const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work']);
+
+/** ponytail: NUMERIC(18,6) ceiling, prevents Postgres overflow on insert/update */
+const MAX_QUANTITY = 1e12;
+
 /** The DB-touching lookups, injectable so unit tests can exercise branching without a database. */
 export interface StockBalanceDeps {
   getLocationById: (locationId: string, client?: PoolClient) => Promise<LocationRegisterEntry | null>;
@@ -78,6 +84,24 @@ export function assertStockBalanceShape(envelope: EventEnvelope): void {
       quantity: envelope.payload['quantity'] ?? null,
     });
   }
+  if (envelope.payload['quantity'] > MAX_QUANTITY) {
+    throw new AppError(400, 'INVALID_PARAMS', `quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`, {
+      event_type: envelope.event_type,
+      quantity: envelope.payload['quantity'],
+    });
+  }
+  const targetLocationId = envelope.payload['target_location_id'];
+  const targetLocationCode = envelope.payload['target_location_code'];
+  if (targetLocationId !== undefined && typeof targetLocationId !== 'string') {
+    throw new AppError(400, 'INVALID_PARAMS', 'target_location_id must be a string when supplied', {
+      event_type: envelope.event_type,
+    });
+  }
+  if (targetLocationCode !== undefined && typeof targetLocationCode !== 'string') {
+    throw new AppError(400, 'INVALID_PARAMS', 'target_location_code must be a string when supplied', {
+      event_type: envelope.event_type,
+    });
+  }
   if (envelope.payload['available'] !== undefined) {
     throw new AppError(400, 'INVALID_PARAMS', 'available is derived from the projection (on_hand - allocated) and must not be supplied', {
       event_type: envelope.event_type,
@@ -96,6 +120,15 @@ export function assertStockBalanceShape(envelope: EventEnvelope): void {
       });
     }
   }
+  if (envelope.payload['stock_class'] !== undefined) {
+    const stockClass = envelope.payload['stock_class'];
+    if (typeof stockClass !== 'string' || !VALID_STOCK_CLASSES.has(stockClass)) {
+      throw new AppError(400, 'INVALID_PARAMS', `stock_class must be one of: ${[...VALID_STOCK_CLASSES].join(', ')}`, {
+        event_type: envelope.event_type,
+        stock_class: stockClass,
+      });
+    }
+  }
 }
 
 /**
@@ -111,6 +144,19 @@ export async function applyStockBalanceProjection(
 ): Promise<void> {
   const kind = stockBalanceEventKind(envelope);
   if (!kind) return;
+
+  // ponytail: idempotency guard — the projection runs before the domain_events INSERT that
+  // would trigger the uq_idempotency constraint, so an allocation retry after stock depletion
+  // would see available=0 and throw INSUFFICIENT_STOCK before reaching DUPLICATE_EVENT.
+  // Check the idempotency key and event_id here so the projection is a no-op on retry,
+  // letting the subsequent INSERT produce the correct DUPLICATE_EVENT.
+  if (envelope.idempotency_key || envelope.event_id) {
+    const existing = await client.query(
+      `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 LIMIT 1`,
+      [envelope.idempotency_key ?? null, envelope.event_id ?? null],
+    );
+    if (existing.rows.length > 0) return;
+  }
 
   const targetLocationId = envelope.payload['target_location_id'];
   const targetLocationCode = envelope.payload['target_location_code'];

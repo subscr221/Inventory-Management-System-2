@@ -48,6 +48,7 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-21
+# story 2-2 code review 2026-07-21: 6 patches applied (idempotent retry guard, SQL-based NUMERIC precision, grain constraint migration, type validation, quantity bound, locale sort) + 2 decisions converted to patches (stock_class in grain, stock_class validation) + 2 decisions kept as-is (sku-only gating, INSUFFICIENT_STOCK edge permanence) + 3 deferred; 209/209 tests; moved to done
 # story 2-2 dev-story 2026-07-21: implemented all 5 tasks; stock_balance projection (sku+location+lot grain,
 #   NULLS NOT DISTINCT, generated available column) with canonical SQL + compose mirror + migration entry,
 #   central enforcement in persistEvent (shape assert pre-transaction, FOR UPDATE availability re-check inside the
@@ -153,7 +154,7 @@ development_status:
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---
   epic-2: in-progress
   2-1-item-master-and-location-register: done   # PILOT
-  2-2-real-time-multi-location-stock-balances: review   # PILOT
+  2-2-real-time-multi-location-stock-balances: done   # PILOT
   2-3-lot-batch-and-serial-traceability: backlog   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: backlog   # PILOT
   2-5-inter-location-transfer-requests: backlog   # PILOT

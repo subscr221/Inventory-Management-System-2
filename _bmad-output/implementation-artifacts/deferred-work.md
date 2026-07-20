@@ -54,3 +54,9 @@
 - Notification schema is duplicated across `deploy/compose/init-db.sql` and `read/projections/notification.sql` with only a "change both together" comment and no drift-guard test, unlike Story 1.9's route-surface guard [deploy/compose/init-db.sql, read/projections/notification.sql] - deferred, add a mirror-assertion test later (this file was already silently reverted once during a concurrent Story 1.10 edit).
 - Task 6.1's non-blocking guarantee is tested at the function level (`emitNotification()` called directly) rather than through a real emitting HTTP handler returning 200/201 with a broken dispatcher [test/integration/story-1-11.test.ts] - deferred, tighten when a real emitting consumer (e.g. an approval-card decision) exists to wrap it.
 - Value-band and vacation-delegation escalation resolution (Task 4.3) is not wired; only `findRoleHolder` is used, `findFirstActiveDoaEntry`/`findActiveDelegation` are unused [src/notify/escalate.ts] - deferred, documented scope decision in Completion Notes; no current or near-term consumer defines a value-banded or delegated escalation target.
+
+## Deferred from: code review of 2-2-real-time-multi-location-stock-balances (2026-07-21)
+
+- `in_transit` column never written by any code path [src/read/projections/stock_balance.ts] -- deferred, Story 2.5 will add inter-location transfers that populate this field.
+- Consolidated API response merges across `stock_class` [src/api/v1/stock.ts:47-63] -- deferred, class breakdown is a future feature (Story 2.8 consignment segregation).
+- Zero permitted locations returns 200 empty instead of 403 [src/api/v1/stock.ts:42-45] -- deferred, consistent with existing RBAC handler patterns in the codebase.

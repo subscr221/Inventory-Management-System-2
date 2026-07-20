@@ -54,6 +54,7 @@ const EXPECTED = [
     canonical: 'read/projections/stock_balance.sql',
     table: 'stock_balance',
     constraints: [
+      'uq_stock_balance_grain',
       'chk_stock_balance_on_hand_non_negative',
       'chk_stock_balance_allocated_non_negative',
       'chk_stock_balance_allocated_within_on_hand',

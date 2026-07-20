@@ -4,7 +4,7 @@ baseline_commit: c3547462f9ff58317a48df268d46b32b060ac27f
 
 # Story 2.2: Real-Time Multi-Location Stock Balances
 
-Status: review
+Status: done
 
 ## Story
 
@@ -235,6 +235,22 @@ Recent git history confirms Story 2.1 was finalized in commits `7bdce10`, `00ea6
 - `test/integration/story-1-9.test.ts` (modified - route-surface allowlist gains `GET /api/v1/stock/:sku`)
 - `_bmad-output/implementation-artifacts/2-2-real-time-multi-location-stock-balances.md` (modified - tasks, record, status)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified - tracking status)
+
+### Review Findings
+
+- [x] [Review][Decision] **Gating mismatch: sku-only stock events bypass enforcement** -- kept as-is: intentional design to preserve legacy sku-only and spine-shape stock events. Tests explicitly validate this behavior.
+- [x] [Review][Decision] **INSUFFICIENT_STOCK classified as permanent edge error** -- kept as-is: intentional design per Task 4.4. Offline allocations that fail require manual re-entry.
+- [x] [Review][Decision] **stock_class excluded from grain; owned/consignment merge silently** -- resolved: `stock_class` added to grain key (`uq_stock_balance_grain`), ON CONFLICT target updated, and a guarded migration DO block added.
+- [x] [Review][Decision] **stock_class is unvalidated free text** -- resolved: `stock_class` validated against `owned`, `consignment`, `vmi`, `job_work` in `assertStockBalanceShape`.
+- [x] [Review][Patch] **Idempotent allocation retry returns INSUFFICIENT_STOCK, not DUPLICATE_EVENT** [src/events/store.ts:198, src/read/projections/stock_balance.ts:109] -- fixed: idempotency guard added in `applyStockBalanceProjection` before allocation re-check.
+- [x] [Review][Patch] **Float precision on NUMERIC(18,6) ledger quantities** [src/read/projections/stock_balance.ts:64-67, 119-139] -- fixed: availability sum and drain moved to SQL (windowed cumulative sum) preserving NUMERIC precision.
+- [x] [Review][Patch] **Migration DO block doesn't guard grain uniqueness constraint** [read/projections/stock_balance.sql:37-71] -- fixed: guarded `ALTER TABLE ADD CONSTRAINT` DO block added in both canonical SQL and compose mirror.
+- [x] [Review][Patch] **target_location_id type not validated; non-string falls through to code lookup** [src/compliance/stock-balance.ts:117-120] -- fixed: type assertions added for `target_location_id` and `target_location_code` in `assertStockBalanceShape`.
+- [x] [Review][Patch] **Quantity has no upper bound vs NUMERIC(18,6) capacity** [src/compliance/stock-balance.ts:75-80] -- fixed: `MAX_QUANTITY = 1e12` ceiling added in `assertStockBalanceShape`.
+- [x] [Review][Patch] **Per-location sort uses locale-dependent localeCompare** [src/api/v1/stock.ts:66-67] -- fixed: explicit `'en'` locale with `sensitivity: 'base'` added.
+- [x] [Review][Defer] **in_transit column never written by any code path** [src/read/projections/stock_balance.ts] -- deferred, pre-existing (Story 2.5 will add inter-location transfers)
+- [x] [Review][Defer] **Consolidated API response merges across stock_class** [src/api/v1/stock.ts:47-63] -- deferred, pre-existing (class breakdown is future feature)
+- [x] [Review][Defer] **Zero permitted locations returns 200 empty (not 403)** [src/api/v1/stock.ts:42-45] -- deferred, pre-existing (consistent with existing RBAC patterns)
 
 ## Change Log
 

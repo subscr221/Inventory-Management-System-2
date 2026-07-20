@@ -84,58 +84,75 @@ export async function getStockBalancesBySku(sku: string, client?: PoolClient): P
  * the same grain serialize. Must run on the SAME client/transaction as the domain event insert.
  */
 export async function applyStockReceipt(input: StockReceiptInput, client: PoolClient): Promise<StockBalance> {
+  const stockClass = input.stock_class ?? 'owned';
   const result = await client.query(
     `INSERT INTO stock_balance (sku, location_id, location_code, lot_id, stock_class, on_hand)
      VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (sku, location_id, lot_id)
+     ON CONFLICT (sku, location_id, lot_id, stock_class)
      DO UPDATE SET on_hand = stock_balance.on_hand + EXCLUDED.on_hand,
                    location_code = COALESCE(EXCLUDED.location_code, stock_balance.location_code),
                    updated_at = now()
      RETURNING ${BALANCE_COLUMNS}`,
-    [input.sku, input.location_id, input.location_code ?? null, input.lot_id ?? null, input.stock_class ?? 'owned', input.quantity],
+    [input.sku, input.location_id, input.location_code ?? null, input.lot_id ?? null, stockClass, input.quantity],
   );
   return mapRow(result.rows[0]!);
 }
 
 /**
  * Applies a stock.allocated event with a transaction-local row lock (Task 1.6): the matching
- * balance rows are locked FOR UPDATE, availability is re-read under the lock, and the allocation
- * is rejected with 409 INSUFFICIENT_STOCK before any event row exists when available stock does
- * not cover the request. Two transactions racing for the last unit therefore have exactly one
- * winner - the loser blocks on the lock, re-reads available = 0, and rejects. When lot_id is
- * given only that lot's row is eligible; otherwise the allocation drains rows for the
- * sku+location in deterministic order (un-lotted first, then by lot). on_hand never changes.
+ * balance rows are locked FOR UPDATE, availability is summed in SQL (NUMERIC precision, not
+ * JS float), and the allocation is rejected with 409 INSUFFICIENT_STOCK before any event row
+ * exists when available stock does not cover the request. The drain runs in SQL via a windowed
+ * cumulative sum so every row update preserves NUMERIC(18,6) precision. Two transactions racing
+ * for the last unit therefore have exactly one winner.
  */
 export async function applyStockAllocation(input: StockAllocationInput, client: PoolClient): Promise<void> {
   const lotId = input.lot_id ?? null;
-  const locked = await client.query(
-    `SELECT ${BALANCE_COLUMNS} FROM stock_balance
+  // Lock the matching rows first - FOR UPDATE cannot be combined with aggregate/window
+  // functions, so we lock separately and then compute under the held lock.
+  await client.query(
+    `SELECT balance_id FROM stock_balance
      WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
-     ORDER BY lot_id NULLS FIRST, balance_id
      FOR UPDATE`,
     [input.sku, input.location_id, lotId],
   );
-  const rows = locked.rows.map(mapRow);
-  const availableQuantity = rows.reduce((sum, row) => sum + row.available, 0);
-  if (availableQuantity < input.quantity) {
+
+  // Sum available in SQL to preserve NUMERIC precision (rows are already locked by the
+  // transaction, no FOR UPDATE needed).
+  const checkResult = await client.query(
+    `SELECT COALESCE(SUM(available), 0)::text AS total_available
+     FROM stock_balance
+     WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)`,
+    [input.sku, input.location_id, lotId],
+  );
+  // pg returns NUMERIC as string; parseFloat is exact for integers and the DB CHECK
+  // constraint backstops any fractional false-positive from IEEE-754 comparison.
+  const totalAvailable = parseFloat(checkResult.rows[0]!['total_available'] as string);
+  if (totalAvailable < input.quantity) {
     throw new AppError(409, 'INSUFFICIENT_STOCK', 'Available stock does not cover the requested allocation', {
       sku: input.sku,
       location_id: input.location_id,
       ...(lotId !== null ? { lot_id: lotId } : {}),
       requested_quantity: input.quantity,
-      available_quantity: availableQuantity,
+      available_quantity: totalAvailable,
     });
   }
 
-  let remaining = input.quantity;
-  for (const row of rows) {
-    if (remaining <= 0) break;
-    const take = Math.min(row.available, remaining);
-    if (take <= 0) continue;
-    await client.query(`UPDATE stock_balance SET allocated = allocated + $1, updated_at = now() WHERE balance_id = $2`, [
-      take,
-      row.balance_id,
-    ]);
-    remaining -= take;
-  }
+  // Drain rows in SQL: a windowed cumulative sum distributes the allocation across rows in
+  // deterministic order, preserving NUMERIC precision for every row update.
+  await client.query(
+    `WITH ranked AS (
+       SELECT balance_id, available AS available_qty,
+              SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
+       FROM stock_balance
+       WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
+     )
+     UPDATE stock_balance
+     SET allocated = allocated + LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
+         updated_at = now()
+     FROM ranked
+     WHERE stock_balance.balance_id = ranked.balance_id
+       AND ranked.cumulative - ranked.available_qty < $4`,
+    [input.sku, input.location_id, lotId, input.quantity],
+  );
 }

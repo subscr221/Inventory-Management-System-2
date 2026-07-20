@@ -64,7 +64,7 @@ const getStockBase: RouteHandler = async (req, res, params) => {
 
   // Task 3.4: deterministic ordering - location_code when available, otherwise location_id.
   const locations = [...byLocation.values()].sort((a, b) =>
-    (a.location_code ?? a.location_id).localeCompare(b.location_code ?? b.location_id),
+    (a.location_code ?? a.location_id).localeCompare(b.location_code ?? b.location_id, 'en', { sensitivity: 'base' }),
   );
 
   const consolidated = locations.reduce(

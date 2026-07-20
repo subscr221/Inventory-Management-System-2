@@ -786,7 +786,7 @@ CREATE TABLE IF NOT EXISTS stock_balance (
   in_transit    NUMERIC(18, 6) NOT NULL DEFAULT 0,
   available     NUMERIC(18, 6) GENERATED ALWAYS AS (on_hand - allocated) STORED,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT uq_stock_balance_grain UNIQUE NULLS NOT DISTINCT (sku, location_id, lot_id),
+  CONSTRAINT uq_stock_balance_grain UNIQUE NULLS NOT DISTINCT (sku, location_id, lot_id, stock_class),
   CONSTRAINT chk_stock_balance_on_hand_non_negative CHECK (on_hand >= 0),
   CONSTRAINT chk_stock_balance_allocated_non_negative CHECK (allocated >= 0),
   CONSTRAINT chk_stock_balance_allocated_within_on_hand CHECK (allocated <= on_hand),
@@ -826,6 +826,25 @@ BEGIN
   ) THEN
     ALTER TABLE stock_balance
       ADD CONSTRAINT chk_stock_balance_in_transit_non_negative CHECK (in_transit >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_stock_balance_grain'
+      AND conrelid = 'stock_balance'::regclass
+  ) THEN
+    ALTER TABLE stock_balance DROP CONSTRAINT uq_stock_balance_grain;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_stock_balance_grain'
+      AND conrelid = 'stock_balance'::regclass
+  ) THEN
+    ALTER TABLE stock_balance
+      ADD CONSTRAINT uq_stock_balance_grain UNIQUE NULLS NOT DISTINCT (sku, location_id, lot_id, stock_class);
   END IF;
 END $$;
 
