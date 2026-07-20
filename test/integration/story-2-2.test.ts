@@ -166,6 +166,9 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       '../../read/projections/item_master.sql',
       '../../read/projections/location_register.sql',
       '../../read/projections/stock_balance.sql',
+      '../../read/projections/lot_master.sql',
+      '../../read/projections/serial_master.sql',
+      '../../read/projections/lot_trace.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
@@ -174,7 +177,7 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');

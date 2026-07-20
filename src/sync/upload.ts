@@ -20,6 +20,13 @@ const PERMANENT_ERROR_CODES = new Set([
   'STREAM_CONFLICT',
   'CALIBRATION_LOCKOUT',
   'INSUFFICIENT_STOCK',
+  'LOT_EXPIRED',
+  'LOT_ON_HOLD',
+  'DUPLICATE_SERIAL',
+  'SERIAL_REQUIRED',
+  'NO_AVAILABLE_LOT',
+  'LOT_NOT_FOUND',
+  'SERIAL_NOT_FOUND',
 ]);
 
 function isAppError(error: unknown): error is AppError {

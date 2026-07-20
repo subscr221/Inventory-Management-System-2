@@ -857,3 +857,119 @@ BEGIN
     GRANT SELECT ON stock_balance TO readonly_user;
   END IF;
 END $$;
+
+
+-- -------------------------------------------------------------------------------------------
+-- Lot master (Story 2.3). The section below MUST stay identical to the canonical
+-- read/projections/lot_master.sql (applied by src/events/migrate.ts and the
+-- integration-test harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS lot_master (
+  lot_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lot_number           TEXT NOT NULL,
+  sku                  TEXT NOT NULL,
+  expiry_date          DATE,
+  quality_hold_status  TEXT NOT NULL DEFAULT 'none',
+  quality_hold_reason  TEXT,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_lot_master_lot_number_sku_expiry UNIQUE (lot_number, sku, expiry_date),
+  CONSTRAINT chk_lot_master_quality_hold_status CHECK (quality_hold_status IN ('none', 'held'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_lot_master_quality_hold_status'
+      AND conrelid = 'lot_master'::regclass
+  ) THEN
+    ALTER TABLE lot_master
+      ADD CONSTRAINT chk_lot_master_quality_hold_status CHECK (quality_hold_status IN ('none', 'held'));
+  END IF;
+END $$;
+
+-- Index for SKU + expiry lookups (used in FEFO/FIFO selection)
+CREATE INDEX IF NOT EXISTS idx_lot_master_sku_expiry ON lot_master (sku, expiry_date);
+
+-- Index for lot_id lookups
+CREATE INDEX IF NOT EXISTS idx_lot_master_lot_id ON lot_master (lot_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON lot_master TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON lot_master TO readonly_user;
+  END IF;
+END $$;
+
+
+-- -------------------------------------------------------------------------------------------
+-- Serial master (Story 2.3). The section below MUST stay identical to the canonical
+-- read/projections/serial_master.sql (applied by src/events/migrate.ts and the
+-- integration-test harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS serial_master (
+  serial_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  serial_number        TEXT NOT NULL,
+  sku                  TEXT NOT NULL,
+  current_location_id  UUID,
+  current_location_code TEXT,
+  current_quantity     NUMERIC(18, 6) NOT NULL DEFAULT 1,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_serial_master_sku_serial_number UNIQUE (sku, serial_number)
+);
+
+-- Index for SKU + serial_number lookups
+CREATE INDEX IF NOT EXISTS idx_serial_master_sku_serial ON serial_master (sku, serial_number);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON serial_master TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON serial_master TO readonly_user;
+  END IF;
+END $$;
+
+
+-- -------------------------------------------------------------------------------------------
+-- Lot trace (Story 2.3). The section below MUST stay identical to the canonical
+-- read/projections/lot_trace.sql (applied by src/events/migrate.ts and the
+-- integration-test harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS lot_trace (
+  trace_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lot_id            UUID NOT NULL,
+  event_id          UUID NOT NULL,
+  event_type        TEXT NOT NULL,
+  sku               TEXT NOT NULL,
+  location_id       UUID,
+  location_code     TEXT,
+  quantity_change   NUMERIC(18, 6) NOT NULL,
+  business_stream   TEXT NOT NULL,
+  timestamp         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Index on lot_id + timestamp for recall reporting
+CREATE INDEX IF NOT EXISTS idx_lot_trace_lot_timestamp ON lot_trace (lot_id, timestamp);
+
+-- Index on event_id for deduplication
+CREATE INDEX IF NOT EXISTS idx_lot_trace_event_id ON lot_trace (event_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON lot_trace TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON lot_trace TO readonly_user;
+  END IF;
+END $$;

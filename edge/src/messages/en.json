@@ -32,6 +32,13 @@
   "errors.STREAM_CONFLICT": "This event conflicts with the latest central state.",
   "errors.CALIBRATION_LOCKOUT": "The referenced instrument is locked by calibration status.",
   "errors.INSUFFICIENT_STOCK": "Not enough available stock at that location for this allocation.",
+  "errors.LOT_EXPIRED": "The selected lot has expired and cannot be issued without an override.",
+  "errors.LOT_ON_HOLD": "The selected lot is on quality hold and cannot be issued.",
+  "errors.DUPLICATE_SERIAL": "This serial number already exists in the system for this item.",
+  "errors.SERIAL_REQUIRED": "This item requires serial numbers to be specified.",
+  "errors.NO_AVAILABLE_LOT": "No lot is available for selection with the requested quantity.",
+  "errors.LOT_NOT_FOUND": "The specified lot was not found in the system.",
+  "errors.SERIAL_NOT_FOUND": "One or more serial numbers were not found in the system.",
   "errors.UNAUTHORIZED": "Sign in again before syncing.",
   "errors.LOCATION_ACCESS_DENIED": "This device is not authorized for that site.",
   "errors.DUPLICATE_EVENT": "This event was already synced."

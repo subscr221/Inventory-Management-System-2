@@ -44,6 +44,12 @@ import {
   createPushSubscriptionHandler,
   deletePushSubscriptionHandler,
 } from './api/v1/notification.js';
+import {
+  getLotTraceHandler,
+  selectLotHandler,
+  placeQualityHoldHandler,
+  clearQualityHoldHandler,
+} from './api/v1/lots.js';
 import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
 import { runExpiryCycle } from './notify/expire.js';
@@ -78,6 +84,10 @@ export function createAppRouter(): Router {
   router.patch('/api/v1/locations/:locationId', updateLocationHandler);
   router.get('/api/v1/locations/:locationId', getLocationHandler);
   router.get('/api/v1/stock/:sku', getStockHandler);
+  router.get('/api/v1/lots/:lotNumber/trace', getLotTraceHandler);
+  router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
+  router.put('/api/v1/lots/:lotNumber/quality-hold', placeQualityHoldHandler);
+  router.delete('/api/v1/lots/:lotNumber/quality-hold', clearQualityHoldHandler);
   router.put('/api/v1/instruments/:id/calibration-status', updateCalibrationStatusHandler);
   router.post('/api/v1/qc/results', createQcResultHandler);
   router.post('/api/v1/instruments/:id/calibration-escalations', createCalibrationEscalationHandler);

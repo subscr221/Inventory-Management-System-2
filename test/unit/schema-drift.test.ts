@@ -62,6 +62,24 @@ const EXPECTED = [
     ],
     indexes: [] as string[],
   },
+  {
+    canonical: 'read/projections/lot_master.sql',
+    table: 'lot_master',
+    constraints: ['chk_lot_master_quality_hold_status'],
+    indexes: ['idx_lot_master_sku_expiry', 'idx_lot_master_lot_id'],
+  },
+  {
+    canonical: 'read/projections/serial_master.sql',
+    table: 'serial_master',
+    constraints: [] as string[],
+    indexes: ['idx_serial_master_sku_serial'],
+  },
+  {
+    canonical: 'read/projections/lot_trace.sql',
+    table: 'lot_trace',
+    constraints: [] as string[],
+    indexes: ['idx_lot_trace_lot_timestamp', 'idx_lot_trace_event_id'],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

@@ -10,6 +10,7 @@ import { assertCalibrationLockout } from '../compliance/calibration.js';
 import { assertLocationInvariant } from '../compliance/location.js';
 import { assertInventoryMasterReferences } from '../compliance/inventory-master.js';
 import { assertStockBalanceShape, applyStockBalanceProjection } from '../compliance/stock-balance.js';
+import { assertLotSerialShape, applyLotSerialValidation } from '../compliance/lot-serial-validation.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -169,6 +170,9 @@ export async function persistEvent(
   // asserts, so a malformed stock event never consumes an idempotency key. The balance itself is
   // applied inside the transaction below.
   assertStockBalanceShape(envelope);
+  // Story 2.3: lot/serial shape validation is non-DB and runs with the other pre-transaction
+  // asserts, so a malformed lot/serial event never consumes an idempotency key.
+  assertLotSerialShape(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();
@@ -196,6 +200,10 @@ export async function persistEvent(
     // re-applied balance back, so the projection reflects each event exactly once. Non-stock
     // events (and legacy stock shapes without master refs) are untouched.
     await applyStockBalanceProjection(envelope, client);
+    // Story 2.3: apply the lot/serial validation INSIDE the event transaction and BEFORE the
+    // domain_events insert. This ensures that lot/serial validations are atomic with the event
+    // insertion, so invalid lot/serial operations are rejected without consuming an idempotency key.
+    await applyLotSerialValidation(envelope, client);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {
