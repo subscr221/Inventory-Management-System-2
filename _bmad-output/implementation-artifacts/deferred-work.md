@@ -32,3 +32,9 @@
 
 - `svc_powersync` (WITH REPLICATION) is created only in `deploy/compose/init-db.sql`; the guarded grant in `sync/migrations/powersync.sql` silently skips on a migrate-only, non-compose database - deferred, consistent with this repo's established role-provisioning pattern (all roles are created in init-db.sql; migrations only guard grants).
 - AC4 "related balance or state updated exactly once" is not exercised because the duplicate test uses an inert `maintenance` stream with no projection [test/integration/story-1-8.test.ts] - deferred, acceptable under the test-capture scope.
+
+## Deferred from: code review of 1-10-ci-cd-pipeline-construction (2026-07-20)
+
+- `deploy/pipeline/verify.sh` (Task 3.6's dry-run mode) is never invoked automatically by any CI/CD job or schedule, so there is no automated drift detection if branch protection or environment settings are later changed through the GitHub UI [deploy/pipeline/verify.sh] - deferred, not required by Task 3.6's literal ask
+- `bootstrap-runner.sh` is not idempotent against a partially-provisioned host: a corrupt cached runner package is not re-verified, and re-running against a host with the runner service already installed aborts under `set -e` [deploy/pipeline/runner/bootstrap-runner.sh:52-58,71-77] - deferred, script's own docstring scopes reproducibility to a clean host only
+- `backend-tests` and `spine-acceptance-contract` CI jobs duplicate the entire postgres provisioning block verbatim [.github/workflows/ci.yml:44-57,72-90] - deferred, correct per Task 2.5's per-job database isolation requirement, but a third copy of provisioning knowledge to keep in sync
