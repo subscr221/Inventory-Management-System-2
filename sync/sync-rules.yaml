@@ -1,0 +1,5 @@
+bucket_definitions:
+  edge_site_events:
+    parameters: SELECT request.jwt() ->> 'site_id' AS site_id
+    data:
+      - SELECT event_id AS id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at FROM domain_events WHERE metadata -> 'actor' ->> 'location_id' = bucket.site_id

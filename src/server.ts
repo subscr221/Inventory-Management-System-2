@@ -25,6 +25,11 @@ import {
   createQcResultHandler,
   createCalibrationEscalationHandler,
 } from './api/v1/instruments.js';
+import {
+  edgeBootstrapHandler,
+  powerSyncCredentialsHandler,
+  edgeEventUploadHandler,
+} from './api/v1/edge.js';
 
 const router = new Router();
 
@@ -48,6 +53,9 @@ router.post('/api/v1/locations/:lotId/expected', seedExpectedLocationHandler);
 router.put('/api/v1/instruments/:id/calibration-status', updateCalibrationStatusHandler);
 router.post('/api/v1/qc/results', createQcResultHandler);
 router.post('/api/v1/instruments/:id/calibration-escalations', createCalibrationEscalationHandler);
+router.get('/api/v1/edge/bootstrap', edgeBootstrapHandler);
+router.get('/api/v1/edge/powersync-credentials', powerSyncCredentialsHandler);
+router.post('/api/v1/edge/events', edgeEventUploadHandler);
 
 if (config.auth.mode === 'local') {
   router.post('/api/v1/auth/dev-token', devTokenHandler);

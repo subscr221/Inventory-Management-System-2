@@ -25,8 +25,48 @@ services:
       AUTH_ISSUER: ${AUTH_ISSUER:?set AUTH_ISSUER to the IdP issuer}
       AUTH_AUDIENCE: ${AUTH_AUDIENCE:?set AUTH_AUDIENCE to this API's audience}
       SCIM_BEARER_TOKEN: ${SCIM_BEARER_TOKEN:?set SCIM_BEARER_TOKEN to a long random secret}
+      EDGE_SITE_NAME: ${EDGE_SITE_NAME:-Pilot Gate Site}
+      POWERSYNC_URL: ${POWERSYNC_URL:-http://localhost/powersync}
+      POWERSYNC_TOKEN_ISSUER: ${POWERSYNC_TOKEN_ISSUER:-inventory-edge}
+      POWERSYNC_TOKEN_AUDIENCE: ${POWERSYNC_TOKEN_AUDIENCE:-powersync}
+      POWERSYNC_TOKEN_SECRET: ${POWERSYNC_TOKEN_SECRET:?set POWERSYNC_TOKEN_SECRET to a long random secret}
+      POWERSYNC_TOKEN_TTL: ${POWERSYNC_TOKEN_TTL:-15m}
     ports:
       - "3000:3000"
+    networks:
+      - backend
+
+  edge:
+    build:
+      context: ../..
+      dockerfile: edge/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    networks:
+      - backend
+
+  powersync:
+    image: journeyapps/powersync-service:1.23.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POWERSYNC_SOURCE_URI: postgresql://svc_powersync:${POWERSYNC_SOURCE_PASSWORD:-svc_powersync_password}@postgres:5432/inventory_events
+      POWERSYNC_STORAGE_URI: postgresql://app_user:${DB_PASSWORD:-app_password}@postgres:5432/inventory_events
+      POWERSYNC_TOKEN_ISSUER: ${POWERSYNC_TOKEN_ISSUER:-inventory-edge}
+      POWERSYNC_TOKEN_AUDIENCE: ${POWERSYNC_TOKEN_AUDIENCE:-powersync}
+      POWERSYNC_TOKEN_SECRET: ${POWERSYNC_TOKEN_SECRET:?set POWERSYNC_TOKEN_SECRET to a long random secret}
+    volumes:
+      - ../../sync/powersync.yaml:/config/powersync.yaml:ro
+      - ../../sync/sync-rules.yaml:/config/sync-rules.yaml:ro
+    command: ["start", "-c", "/config/powersync.yaml"]
     networks:
       - backend
 

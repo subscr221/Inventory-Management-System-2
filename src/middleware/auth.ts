@@ -89,7 +89,7 @@ export async function authenticateRequest(req: IncomingMessage): Promise<AuthCon
     throw new AppError(401, 'UNAUTHORIZED', 'No active account for this identity');
   }
 
-  return { userId: user.userId, externalId: user.externalId, roles: user.roles };
+  return { userId: user.userId, externalId: user.externalId, displayName: user.displayName, roles: user.roles };
 }
 
 /**

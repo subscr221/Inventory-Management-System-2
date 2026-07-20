@@ -1,0 +1,17 @@
+source:
+  type: postgresql
+  uri: ${POWERSYNC_SOURCE_URI}
+  publication: powersync_publication
+
+storage:
+  type: postgresql
+  uri: ${POWERSYNC_STORAGE_URI}
+
+jwt:
+  issuer: ${POWERSYNC_TOKEN_ISSUER}
+  audience: ${POWERSYNC_TOKEN_AUDIENCE}
+  algorithm: HS256
+  secret: ${POWERSYNC_TOKEN_SECRET}
+
+sync_rules:
+  path: /config/sync-rules.yaml

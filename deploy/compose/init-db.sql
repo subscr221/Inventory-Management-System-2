@@ -1,6 +1,7 @@
 CREATE USER app_user WITH PASSWORD 'app_password';
 CREATE USER readonly_user WITH PASSWORD 'readonly_password';
 CREATE USER replication_user WITH REPLICATION PASSWORD 'replication_password';
+CREATE USER svc_powersync WITH PASSWORD 'svc_powersync_password';
 
 CREATE TABLE IF NOT EXISTS domain_events (
   event_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -24,8 +25,14 @@ CREATE INDEX IF NOT EXISTS idx_domain_events_created ON domain_events (created_a
 
 GRANT INSERT, SELECT ON domain_events TO app_user;
 GRANT SELECT ON domain_events TO readonly_user;
+GRANT SELECT ON domain_events TO svc_powersync;
 
-CREATE PUBLICATION powersync_publication FOR TABLE domain_events;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync_publication') THEN
+    CREATE PUBLICATION powersync_publication FOR TABLE domain_events;
+  END IF;
+END $$;
 
 -- The users / user_role_assignments table definitions below MUST stay identical to the canonical
 -- source in read/projections/users.sql (applied by src/events/migrate.ts and the test harness).

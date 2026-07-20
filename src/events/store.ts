@@ -156,7 +156,7 @@ export async function persistEvent(
   await assertCalibrationLockout(envelope);
 
   const pool = getPool();
-  const eventId = randomUUID();
+  const eventId = envelope.event_id ?? randomUUID();
   const syncedAt = new Date().toISOString();
 
   const metadata = {
@@ -241,20 +241,16 @@ export async function persistEvent(
       // Postgres exposes the violated constraint name via err.constraint, not err.detail
       // (err.detail only contains the conflicting key/value, e.g. "Key (idempotency_key)=(...) already exists.").
       const constraint = (err as { constraint?: string }).constraint;
-      if (constraint === 'uq_idempotency') {
-        // The existing-id lookup needs a usable connection. When persistEvent owns the transaction
-        // it has already ROLLed BACK above (leaving this client clean and queryable); when the
-        // caller owns it, the transaction is aborted and must not be queried here - the caller
-        // will roll back, so we report the conflict without the existing id.
+      if (constraint === 'uq_idempotency' || constraint === 'domain_events_pkey') {
         let existingEventId: string = 'unknown';
         if (ownsTransaction) {
           const existing = await client.query(
-            `SELECT event_id FROM domain_events WHERE idempotency_key = $1`,
-            [envelope.idempotency_key],
+            `SELECT event_id FROM domain_events WHERE idempotency_key = $1 OR event_id = $2 LIMIT 1`,
+            [envelope.idempotency_key, eventId],
           );
           existingEventId = existing.rows.length > 0 ? (existing.rows[0]!['event_id'] as string) : 'unknown';
         }
-        throw new AppError(409, 'DUPLICATE_EVENT', 'Event with this idempotency_key already exists', {
+        throw new AppError(409, 'DUPLICATE_EVENT', 'Event already exists', {
           existing_event_id: existingEventId,
         });
       } else if (constraint === 'uq_stream_version') {

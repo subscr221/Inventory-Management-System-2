@@ -4,6 +4,7 @@ import type { RoleAssignment } from '../read/projections/users.js';
 export interface AuthContext {
   userId: string;
   externalId: string;
+  displayName: string | null;
   roles: RoleAssignment[];
 }
 

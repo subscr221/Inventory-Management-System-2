@@ -46,6 +46,14 @@ if (!process.env['SCIM_BEARER_TOKEN']) {
   throw new Error('SCIM_BEARER_TOKEN must be set (no default value permitted)');
 }
 
+if (!process.env['POWERSYNC_TOKEN_SECRET']) {
+  throw new Error('POWERSYNC_TOKEN_SECRET must be set (no default value permitted)');
+}
+
+if (!process.env['POWERSYNC_URL']) {
+  throw new Error('POWERSYNC_URL must be set (no default value permitted)');
+}
+
 export const config = {
   port: Number.isNaN(parsedPort) ? 3000 : parsedPort,
   hostname: process.env['HOSTNAME'] ?? '0.0.0.0',
@@ -72,5 +80,15 @@ export const config = {
   },
   scim: {
     bearerToken: process.env['SCIM_BEARER_TOKEN'] ?? '',
+  },
+  edge: {
+    siteName: process.env['EDGE_SITE_NAME'] ?? 'Pilot Gate Site',
+  },
+  powerSync: {
+    url: process.env['POWERSYNC_URL'] ?? '',
+    tokenIssuer: process.env['POWERSYNC_TOKEN_ISSUER'] ?? 'inventory-edge',
+    tokenAudience: process.env['POWERSYNC_TOKEN_AUDIENCE'] ?? 'powersync',
+    tokenSecret: process.env['POWERSYNC_TOKEN_SECRET'] ?? '',
+    tokenTtl: process.env['POWERSYNC_TOKEN_TTL'] ?? '15m',
   },
 } as const;

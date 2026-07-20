@@ -57,7 +57,9 @@ fi
 
 echo ""
 echo "=== Provisioning complete ==="
-echo "API: http://localhost:3000/api/v1/health"
+echo "API: http://localhost/api/v1/health"
+echo "Edge PWA: http://localhost/"
+echo "PowerSync: http://localhost/powersync/"
 echo "PostgreSQL: localhost:5432"
 echo "Standby: localhost:5433"
 echo "Nginx: http://localhost:80"
