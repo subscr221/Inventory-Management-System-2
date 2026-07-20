@@ -159,11 +159,15 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/edge/powersync-credentials',
       'GET /api/v1/events/:streamType/:streamId',
       'GET /api/v1/health',
-      'GET /api/v1/locations/:lotId',
+      'GET /api/v1/items/:sku',
+      'GET /api/v1/locations/:locationId',
+      'GET /api/v1/lots/:lotId/location',
       'GET /api/v1/notifications',
       'GET /api/v1/notifications/preferences',
       'GET /api/v1/notifications/unread-count',
       'PATCH /api/v1/doa/entries/:entryId',
+      'PATCH /api/v1/items/:sku',
+      'PATCH /api/v1/locations/:locationId',
       'PATCH /api/v1/notifications/:id',
       'PATCH /api/v1/scim/v2/Users/:externalId',
       'POST /api/v1/auth/dev-token',
@@ -175,7 +179,9 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/edge/events',
       'POST /api/v1/events',
       'POST /api/v1/instruments/:id/calibration-escalations',
-      'POST /api/v1/locations/:lotId/expected',
+      'POST /api/v1/items',
+      'POST /api/v1/locations',
+      'POST /api/v1/lots/:lotId/location/expected',
       'POST /api/v1/notifications/:id/acknowledge',
       'POST /api/v1/notifications/push-subscription',
       'POST /api/v1/qc/results',
@@ -344,7 +350,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     const seed = await makeRequest(
       testPort,
       'POST',
-      `/api/v1/locations/${lotId}/expected`,
+      `/api/v1/lots/${lotId}/location/expected`,
       { expected_location: 'BIN-SPINE-EXPECTED', source: 'spine-test' },
       operatorHeaders,
     );
@@ -364,7 +370,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
 
-    const current = await makeRequest(testPort, 'GET', `/api/v1/locations/${lotId}`, undefined, operatorHeaders);
+    const current = await makeRequest(testPort, 'GET', `/api/v1/lots/${lotId}/location`, undefined, operatorHeaders);
     assert.strictEqual(current.body['location'], 'BIN-SPINE-ACTUAL', 'the asserted fact becomes the current location');
 
     const disputeRows = await getPool().query(

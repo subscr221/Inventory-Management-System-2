@@ -68,13 +68,30 @@ describe('Story 1.1 Integration Tests', () => {
     // Story 1.5: business-stream tagging is enforced on the central write path for inventory
     // events, so the vocabulary table must exist before any inventory event is posted.
     const businessStreamSql = readFileSync(resolve(__dirname, '../../read/projections/business_stream_config.sql'), 'utf-8');
+    // Story 2.1: inventory master validation is also enforced on the central write path, so the
+    // item master and location register must exist - and the fixture's sku/actor location must
+    // be seeded - before an inventory event referencing them is posted.
+    const itemMasterSql = readFileSync(resolve(__dirname, '../../read/projections/item_master.sql'), 'utf-8');
+    const locationRegisterSql = readFileSync(resolve(__dirname, '../../read/projections/location_register.sql'), 'utf-8');
     await adminPool.query(domainEventsSql);
     await adminPool.query(usersSql);
     await adminPool.query(businessStreamSql);
+    await adminPool.query(itemMasterSql);
+    await adminPool.query(locationRegisterSql);
     // CASCADE so that tables added by later stories which reference users (e.g. Story 1.4's
     // doa_vacation_delegations) are reset too - a shared-DB harness must not break when a later
     // migration adds a foreign key into users.
     await adminPool.query('TRUNCATE user_role_assignments, users, domain_events CASCADE');
+    await adminPool.query(
+      `INSERT INTO item_master (sku, uom, valuation_method, business_stream)
+       VALUES ('RM-0042', 'ea', 'fifo', 'production')
+       ON CONFLICT (sku) DO NOTHING`,
+    );
+    await adminPool.query(
+      `INSERT INTO location_register (location_id, location_code, level, site_id)
+       VALUES ('bbbbbbbb-cccc-dddd-eeee-ffffffffffff', 'SITE-STORY-1-1', 'site', 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff')
+       ON CONFLICT DO NOTHING`,
+    );
 
     const router = new Router();
     router.get('/api/v1/health', healthHandler);

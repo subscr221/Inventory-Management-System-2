@@ -21,6 +21,8 @@ import {
   listBusinessStreamsHandler,
 } from './api/v1/business-stream.js';
 import { getCurrentLocationHandler, seedExpectedLocationHandler } from './api/v1/location.js';
+import { createItemHandler, updateItemHandler, getItemHandler } from './api/v1/items.js';
+import { createLocationHandler, updateLocationHandler, getLocationHandler } from './api/v1/location-register.js';
 import {
   updateCalibrationStatusHandler,
   createQcResultHandler,
@@ -63,8 +65,17 @@ export function createAppRouter(): Router {
   router.post('/api/v1/business-streams/rules', createTaggingRuleHandler);
   router.get('/api/v1/business-streams/rules', getTaggingRuleHandler);
   router.get('/api/v1/business-streams', listBusinessStreamsHandler);
-  router.get('/api/v1/locations/:lotId', getCurrentLocationHandler);
-  router.post('/api/v1/locations/:lotId/expected', seedExpectedLocationHandler);
+  // Story 2.1: /api/v1/locations/* now belongs to the location register (warehouse topology
+  // master). The Story 1.6 current-lot-location API moved to explicit /api/v1/lots/* routes -
+  // keeping both under /locations would be ambiguous (router matching ignores parameter names).
+  router.get('/api/v1/lots/:lotId/location', getCurrentLocationHandler);
+  router.post('/api/v1/lots/:lotId/location/expected', seedExpectedLocationHandler);
+  router.post('/api/v1/items', createItemHandler);
+  router.patch('/api/v1/items/:sku', updateItemHandler);
+  router.get('/api/v1/items/:sku', getItemHandler);
+  router.post('/api/v1/locations', createLocationHandler);
+  router.patch('/api/v1/locations/:locationId', updateLocationHandler);
+  router.get('/api/v1/locations/:locationId', getLocationHandler);
   router.put('/api/v1/instruments/:id/calibration-status', updateCalibrationStatusHandler);
   router.post('/api/v1/qc/results', createQcResultHandler);
   router.post('/api/v1/instruments/:id/calibration-escalations', createCalibrationEscalationHandler);

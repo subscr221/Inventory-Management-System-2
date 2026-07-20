@@ -1,6 +1,10 @@
+---
+baseline_commit: 7bdce1003ab19087c8cba536f6900c3d12658a9f
+---
+
 # Story 2.1: Item Master and Location Register
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -16,54 +20,54 @@ so that every subsequent transaction references validated items and locations an
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add item master read model and API (AC: 1, 2)
-  - [ ] 1.1 Add `read/projections/item_master.sql` with `CREATE TABLE IF NOT EXISTS`, idempotent constraint blocks, indexes, and guarded grants for `app_user` and `readonly_user`.
-  - [ ] 1.2 Model items with internal `item_id UUID` plus unique API-facing `sku TEXT`; do not use SKU as `stream_id` because `EventEnvelope.stream_id` must remain UUID.
-  - [ ] 1.3 Persist fields required by this story and downstream Epic 2: `sku`, `uom`, `lot_controlled`, `serial_controlled`, `hazmat`, `quarantine_required`, `bis_licence_required`, `valuation_method`, `business_stream`, `status`, `created_at`, and `updated_at`.
-  - [ ] 1.4 Block invalid valuation methods, especially `lifo`; allowed initial values are `fifo`, `weighted_average`, and `specific_identification`.
-  - [ ] 1.5 Validate `business_stream` against the existing business-stream vocabulary from Story 1.5; do not create a second enum or CHECK constraint.
-  - [ ] 1.6 Add `src/read/projections/item_master.ts` with create, update, read-by-SKU, read-by-ID, and existence helpers that accept an optional `PoolClient`.
-  - [ ] 1.7 Add `src/api/v1/items.ts` and register `POST /api/v1/items`, `PATCH /api/v1/items/:sku`, and `GET /api/v1/items/:sku` in `src/server.ts`.
-  - [ ] 1.8 Wrap create and update in one caller-owned transaction: projection row write, `persistEvent()`, and audit entry must commit or roll back together.
-  - [ ] 1.9 Emit dot-separated past-tense events such as `item.created` and `item.updated` with `stream_type: "item_master"`.
+- [x] Task 1: Add item master read model and API (AC: 1, 2)
+  - [x] 1.1 Add `read/projections/item_master.sql` with `CREATE TABLE IF NOT EXISTS`, idempotent constraint blocks, indexes, and guarded grants for `app_user` and `readonly_user`.
+  - [x] 1.2 Model items with internal `item_id UUID` plus unique API-facing `sku TEXT`; do not use SKU as `stream_id` because `EventEnvelope.stream_id` must remain UUID.
+  - [x] 1.3 Persist fields required by this story and downstream Epic 2: `sku`, `uom`, `lot_controlled`, `serial_controlled`, `hazmat`, `quarantine_required`, `bis_licence_required`, `valuation_method`, `business_stream`, `status`, `created_at`, and `updated_at`.
+  - [x] 1.4 Block invalid valuation methods, especially `lifo`; allowed initial values are `fifo`, `weighted_average`, and `specific_identification`.
+  - [x] 1.5 Validate `business_stream` against the existing business-stream vocabulary from Story 1.5; do not create a second enum or CHECK constraint.
+  - [x] 1.6 Add `src/read/projections/item_master.ts` with create, update, read-by-SKU, read-by-ID, and existence helpers that accept an optional `PoolClient`.
+  - [x] 1.7 Add `src/api/v1/items.ts` and register `POST /api/v1/items`, `PATCH /api/v1/items/:sku`, and `GET /api/v1/items/:sku` in `src/server.ts`.
+  - [x] 1.8 Wrap create and update in one caller-owned transaction: projection row write, `persistEvent()`, and audit entry must commit or roll back together.
+  - [x] 1.9 Emit dot-separated past-tense events such as `item.created` and `item.updated` with `stream_type: "item_master"`.
 
-- [ ] Task 2: Add location register read model and API (AC: 3)
-  - [ ] 2.1 Add `read/projections/location_register.sql` for warehouse topology master data, separate from the existing Story 1.6 lot-location projection.
-  - [ ] 2.2 Model `location_id UUID` plus unique human-readable `location_code TEXT` such as `BIN-A43`; existing Story 1.6 `asserted_location` and `expected_location` text values must remain readable.
-  - [ ] 2.3 Support hierarchy levels `site`, `zone`, `aisle`, `rack`, and `bin`, with parent-child validation. A child must not be created unless its parent exists.
-  - [ ] 2.4 Persist attributes needed by this story and Epic 3: `zone_type`, `temperature_class`, `hazmat_allowed`, `quarantine`, `site_id`, `status`, `created_at`, and `updated_at`.
-  - [ ] 2.5 Add `src/read/projections/location_register.ts` with create, update, read-by-ID, read-by-code, parent validation, and compatibility lookup helpers.
-  - [ ] 2.6 Add location-register handlers and register `POST /api/v1/locations`, `PATCH /api/v1/locations/:locationId`, and `GET /api/v1/locations/:locationId`.
-  - [ ] 2.7 Preserve the Story 1.6 current-lot-location API by moving it to an explicit route such as `GET /api/v1/lots/:lotId/location` and `POST /api/v1/lots/:lotId/location/expected`; update tests and the spine route allowlist accordingly.
-  - [ ] 2.8 Do not keep both `GET /api/v1/locations/:lotId` and `GET /api/v1/locations/:locationId`; parameter names do not affect router matching.
-  - [ ] 2.9 Emit `location_register.created` and `location_register.updated` events with `stream_type: "location_register"`.
+- [x] Task 2: Add location register read model and API (AC: 3)
+  - [x] 2.1 Add `read/projections/location_register.sql` for warehouse topology master data, separate from the existing Story 1.6 lot-location projection.
+  - [x] 2.2 Model `location_id UUID` plus unique human-readable `location_code TEXT` such as `BIN-A43`; existing Story 1.6 `asserted_location` and `expected_location` text values must remain readable.
+  - [x] 2.3 Support hierarchy levels `site`, `zone`, `aisle`, `rack`, and `bin`, with parent-child validation. A child must not be created unless its parent exists.
+  - [x] 2.4 Persist attributes needed by this story and Epic 3: `zone_type`, `temperature_class`, `hazmat_allowed`, `quarantine`, `site_id`, `status`, `created_at`, and `updated_at`.
+  - [x] 2.5 Add `src/read/projections/location_register.ts` with create, update, read-by-ID, read-by-code, parent validation, and compatibility lookup helpers.
+  - [x] 2.6 Add location-register handlers and register `POST /api/v1/locations`, `PATCH /api/v1/locations/:locationId`, and `GET /api/v1/locations/:locationId`.
+  - [x] 2.7 Preserve the Story 1.6 current-lot-location API by moving it to an explicit route such as `GET /api/v1/lots/:lotId/location` and `POST /api/v1/lots/:lotId/location/expected`; update tests and the spine route allowlist accordingly.
+  - [x] 2.8 Do not keep both `GET /api/v1/locations/:lotId` and `GET /api/v1/locations/:locationId`; parameter names do not affect router matching.
+  - [x] 2.9 Emit `location_register.created` and `location_register.updated` events with `stream_type: "location_register"`.
 
-- [ ] Task 3: Add central inventory master validation at `persistEvent()` (AC: 2, 3)
-  - [ ] 3.1 Add `src/compliance/inventory-master.ts` as the single validation seam for SKU existence, location existence, and zone compatibility.
-  - [ ] 3.2 Invoke the validator from `src/events/store.ts` near the existing business-stream, calibration, and location checks so HTTP events, edge uploads, and future adapters are covered.
-  - [ ] 3.3 Gate validation narrowly to inventory movement events that actually reference `sku`, target location, or placement location fields; DOA, SCIM, audit, notification, business-stream config, item-master, and location-register streams must pass through untouched.
-  - [ ] 3.4 Reject unknown SKU with `AppError(400, "ITEM_NOT_FOUND", ...)` before consuming an idempotency key or writing `domain_events`.
-  - [ ] 3.5 Reject unknown target location with a stable error code such as `LOCATION_NOT_FOUND`; include the supplied location identifier in `details`.
-  - [ ] 3.6 Implement `ZONE_INCOMPATIBLE` as a non-blocking warning response, not as an error. Persist the event only after the caller confirms placement with the warning.
-  - [ ] 3.7 If the current backend cannot return warnings from `persistEvent()` directly, implement a small success envelope or two-step confirmation command for inventory movements instead of hiding the warning in an error response.
-  - [ ] 3.8 Validate actor `location_id` against the new register where the actor is site-scoped; close the deferred Story 1.6 gap where wildcard users can stamp arbitrary audit locations.
+- [x] Task 3: Add central inventory master validation at `persistEvent()` (AC: 2, 3)
+  - [x] 3.1 Add `src/compliance/inventory-master.ts` as the single validation seam for SKU existence, location existence, and zone compatibility.
+  - [x] 3.2 Invoke the validator from `src/events/store.ts` near the existing business-stream, calibration, and location checks so HTTP events, edge uploads, and future adapters are covered.
+  - [x] 3.3 Gate validation narrowly to inventory movement events that actually reference `sku`, target location, or placement location fields; DOA, SCIM, audit, notification, business-stream config, item-master, and location-register streams must pass through untouched.
+  - [x] 3.4 Reject unknown SKU with `AppError(400, "ITEM_NOT_FOUND", ...)` before consuming an idempotency key or writing `domain_events`.
+  - [x] 3.5 Reject unknown target location with a stable error code such as `LOCATION_NOT_FOUND`; include the supplied location identifier in `details`.
+  - [x] 3.6 Implement `ZONE_INCOMPATIBLE` as a non-blocking warning response, not as an error. Persist the event only after the caller confirms placement with the warning.
+  - [x] 3.7 If the current backend cannot return warnings from `persistEvent()` directly, implement a small success envelope or two-step confirmation command for inventory movements instead of hiding the warning in an error response.
+  - [x] 3.8 Validate actor `location_id` against the new register where the actor is site-scoped; close the deferred Story 1.6 gap where wildcard users can stamp arbitrary audit locations.
 
-- [ ] Task 4: Wire migrations, deployment mirror, and route-surface guards (AC: 1, 2, 3)
-  - [ ] 4.1 Add `item_master.sql` and `location_register.sql` to the fixed migration list in `src/events/migrate.ts`.
-  - [ ] 4.2 Mirror both schemas and all guarded grants in `deploy/compose/init-db.sql`; each file must be self-sufficient for a fresh database.
-  - [ ] 4.3 Update all integration test truncation lists that need the new tables, using `CASCADE` where FK relationships are present.
-  - [ ] 4.4 Update Story 1.9 route-surface tests for every deliberate route addition or route move.
-  - [ ] 4.5 Add a lightweight drift guard if practical, asserting the canonical migration files and compose mirror both contain the expected table and grant names.
+- [x] Task 4: Wire migrations, deployment mirror, and route-surface guards (AC: 1, 2, 3)
+  - [x] 4.1 Add `item_master.sql` and `location_register.sql` to the fixed migration list in `src/events/migrate.ts`.
+  - [x] 4.2 Mirror both schemas and all guarded grants in `deploy/compose/init-db.sql`; each file must be self-sufficient for a fresh database.
+  - [x] 4.3 Update all integration test truncation lists that need the new tables, using `CASCADE` where FK relationships are present.
+  - [x] 4.4 Update Story 1.9 route-surface tests for every deliberate route addition or route move.
+  - [x] 4.5 Add a lightweight drift guard if practical, asserting the canonical migration files and compose mirror both contain the expected table and grant names.
 
-- [ ] Task 5: Add complete tests and preserve existing behavior (AC: 1, 2, 3)
-  - [ ] 5.1 Add `test/integration/story-2-1.test.ts` covering item create, item read, duplicate SKU, invalid valuation method, invalid business stream, and audit rollback on failure.
-  - [ ] 5.2 Cover location create, location read, hierarchy parent validation, duplicate location code, and zone and temperature attribute retrieval.
-  - [ ] 5.3 Cover unknown item rejection through `POST /api/v1/events` and through `POST /api/v1/edge/events` if the edge path accepts an inventory movement shape in tests.
-  - [ ] 5.4 Cover non-inventory events remaining unaffected by item and location validation.
-  - [ ] 5.5 Cover `ZONE_INCOMPATIBLE` as a warning that precedes confirmed placement, and verify confirmation persists only once.
-  - [ ] 5.6 Update existing Story 1.6 tests after moving the current-lot-location route; keep asserted-vs-expected, stale-event guarding, and `location.disputed` behavior green.
-  - [ ] 5.7 Cover RBAC for module `inventory`, read versus write function scopes, and location-scoped access.
-  - [ ] 5.8 Run the full verification battery: `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm test`, `npm run spine-acceptance-contract`, and `git diff --check`.
+- [x] Task 5: Add complete tests and preserve existing behavior (AC: 1, 2, 3)
+  - [x] 5.1 Add `test/integration/story-2-1.test.ts` covering item create, item read, duplicate SKU, invalid valuation method, invalid business stream, and audit rollback on failure.
+  - [x] 5.2 Cover location create, location read, hierarchy parent validation, duplicate location code, and zone and temperature attribute retrieval.
+  - [x] 5.3 Cover unknown item rejection through `POST /api/v1/events` and through `POST /api/v1/edge/events` if the edge path accepts an inventory movement shape in tests.
+  - [x] 5.4 Cover non-inventory events remaining unaffected by item and location validation.
+  - [x] 5.5 Cover `ZONE_INCOMPATIBLE` as a warning that precedes confirmed placement, and verify confirmation persists only once.
+  - [x] 5.6 Update existing Story 1.6 tests after moving the current-lot-location route; keep asserted-vs-expected, stale-event guarding, and `location.disputed` behavior green.
+  - [x] 5.7 Cover RBAC for module `inventory`, read versus write function scopes, and location-scoped access.
+  - [x] 5.8 Run the full verification battery: `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm test`, `npm run spine-acceptance-contract`, and `git diff --check`.
 
 ## Dev Notes
 
@@ -175,6 +179,9 @@ fugu-ultra-20260615
 
 ### Debug Log References
 
+- 2026-07-21 dev-story: first full-suite run failed 184/185. `test/integration/story-1-1.test.ts` AC2 posted an inventory event with `payload.sku: "RM-0042"`; the new central validator queried `item_master`, which that harness never creates, producing a 500. Fixed by applying `item_master.sql` and `location_register.sql` in the Story 1.1 harness and seeding the fixture item plus a register row for the fixture actor location, keeping the original envelope untouched. Re-run: 185/185.
+- 2026-07-21 dev-story: verification battery all green - `npx tsc --noEmit` clean, `npm run lint` clean, `npm run build` clean, `npm test` 185/185, `npm run spine-acceptance-contract` 6/6, `git diff --check` clean.
+
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
@@ -182,9 +189,39 @@ fugu-ultra-20260615
 - Persistent facts glob `**/project-context.md` matched no files in this workspace.
 - Artifact discovery loaded the sprint status, epics, architecture spine, PRD archive, UX design, UX experience specification, previous story, and repository source patterns.
 - Web research was not required: Story 2.1 uses only the repository's existing Node.js, TypeScript, PostgreSQL, and `pg` stack, with no new external library.
+- Task 1: `item_master` projection (canonical SQL plus mirrored compose init), projection helpers with optional `PoolClient`, and `POST/PATCH/GET /api/v1/items(/:sku)` handlers. Internal `item_id` UUID is the `item_master` stream id; `sku` is the unique API-facing key. Create and update run in one caller-owned transaction: projection row, `item.created`/`item.updated` domain event, and audit entry commit or roll back together (proven by a forced-failure trigger test). `lifo` is rejected with `INVALID_VALUATION_METHOD`; `business_stream` is validated through Story 1.5's `isValidBusinessStream`, never redeclared. Duplicate SKU maps to 409 `DUPLICATE_SKU`.
+- Task 2: `location_register` projection (separate from the Story 1.6 lot-location projection, which is untouched), hierarchy `site > zone > aisle > rack > bin` with strict immediate-parent validation (`PARENT_LOCATION_NOT_FOUND`, `INVALID_HIERARCHY`), `site_id` derived from the parent chain (a site references itself), and `POST/PATCH/GET /api/v1/locations(/:locationId)` with `location_register.created`/`location_register.updated` events. The Story 1.6 current-lot-location API moved to `GET /api/v1/lots/:lotId/location` and `POST /api/v1/lots/:lotId/location/expected`; the ambiguous `/api/v1/locations/:lotId` routes were removed, not kept alongside.
+- Task 3: `src/compliance/inventory-master.ts` is the single validation seam, invoked from `persistEvent()` alongside the tagging and calibration checks, before any DB write. Gating is narrow: only `inventory` stream events whose payload carries `sku`, `target_location_id`, or `target_location_code`. Unknown SKU rejects 400 `ITEM_NOT_FOUND` before any idempotency-key consumption or `domain_events` write; unknown target location rejects 400 `LOCATION_NOT_FOUND` echoing the supplied identifier; a master-referencing movement whose actor location is not registered rejects 400 `ACTOR_LOCATION_NOT_REGISTERED` (closes the deferred Story 1.6 wildcard-actor gap, scoped so legacy shapes keep working).
+- Task 3 warning contract: `ZONE_INCOMPATIBLE` is a non-blocking warning implemented as a two-step confirmation. An incompatible unconfirmed placement returns HTTP 200 with `warning_code: "ZONE_INCOMPATIBLE"`, `confirmation_required: true`, `persisted: false`, the reason list, and actionable copy telling the caller to resubmit with `payload.placement_confirmed: true`; nothing is persisted and the idempotency key is not consumed. The confirmed resubmission persists once; a retry with the same key returns 409 `DUPLICATE_EVENT`. Both `POST /api/v1/events` and `POST /api/v1/edge/events` translate the warning identically. Compatibility rules: hazmat item into a non-hazmat-allowed location, non-hazmat item into a `hazmat` zone, quarantine-required item into a non-quarantine location.
+- Task 4: both SQL files added to the fixed migration list, mirrored byte-for-byte-equivalent in `deploy/compose/init-db.sql` with guarded grants, Story 1.9 route-surface allowlist updated for all six new routes plus the two moved lot routes, and a `test/unit/schema-drift.test.ts` guard asserts the canonical files, migration list, and compose mirror agree on table, grant, and constraint names.
+- Task 5: 18-test integration suite `test/integration/story-2-1.test.ts` runs against the production router (`createAppRouter`), covering AC1 create/read-back with `created_at`, duplicate SKU, invalid valuation methods including `lifo`, invalid business stream, transaction rollback atomicity, AC3 zone/temperature attribute retrieval, hierarchy violations, duplicate location code, location PATCH with events, AC2 unknown-SKU rejection with idempotency-key preservation through both HTTP and edge paths, `LOCATION_NOT_FOUND`, `ACTOR_LOCATION_NOT_REGISTERED`, legacy and non-inventory pass-through, the full ZONE_INCOMPATIBLE warn-confirm-dedupe cycle, compatible placement without warning, id/code mismatch rejection, and RBAC module/function/location scoping with distinct business-role fixture names.
+- Open clarifications resolved by dev judgment: separate `lot_controlled` and `serial_controlled` booleans; minimal create/update payloads matching the fields this story and downstream Epic 2 stories need; the warning envelope shape defined and tested here as the stable contract; movement payloads may reference the target by `target_location_id`, `target_location_code`, or both (a mismatch between the two is a 400 `INVALID_PARAMS`), and Story 1.6 opaque TEXT locations remain valid for legacy `location.*` events.
+- No new dependencies were added. The web push, PowerSync, and notification surfaces are untouched.
 
 ### File List
+
+- `read/projections/item_master.sql` (new)
+- `read/projections/location_register.sql` (new)
+- `src/read/projections/item_master.ts` (new)
+- `src/read/projections/location_register.ts` (new)
+- `src/compliance/inventory-master.ts` (new)
+- `src/api/v1/items.ts` (new)
+- `src/api/v1/location-register.ts` (new)
+- `test/integration/story-2-1.test.ts` (new)
+- `test/unit/schema-drift.test.ts` (new)
+- `src/events/store.ts` (modified - central validation hook)
+- `src/events/migrate.ts` (modified - migration list)
+- `src/server.ts` (modified - new routes, lot-location route move)
+- `src/api/v1/events.ts` (modified - ZONE_INCOMPATIBLE warning envelope)
+- `src/api/v1/edge.ts` (modified - ZONE_INCOMPATIBLE warning envelope)
+- `deploy/compose/init-db.sql` (modified - schema mirror)
+- `test/integration/story-1-9.test.ts` (modified - route-surface allowlist, moved lot routes)
+- `test/integration/story-1-6.test.ts` (modified - moved lot routes)
+- `test/integration/story-1-1.test.ts` (modified - harness applies new schemas, seeds fixture masters)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified - tracking)
+- `_bmad-output/implementation-artifacts/2-1-item-master-and-location-register.md` (modified - this story file)
 
 ## Change Log
 
 - 2026-07-21: Created Story 2.1 as ready-for-dev with item master, location register, central inventory master validation, route collision, migration, test, and regression guardrails.
+- 2026-07-21: Implemented all 5 tasks (item master API, location register API with hierarchy validation, central inventory-master validation seam with the ZONE_INCOMPATIBLE two-step confirmation contract, migration and compose mirror wiring with a drift guard, and the Story 2.1 integration suite). Moved the Story 1.6 lot-location API to `/api/v1/lots/:lotId/location` routes and updated the Story 1.9 route-surface allowlist. Fixed the anticipated Story 1.1 cross-story regression by seeding fixture masters in its harness. Verification: tsc, ESLint, build, 185/185 tests, spine gate 6/6, `git diff --check` all clean. Status moved to review.

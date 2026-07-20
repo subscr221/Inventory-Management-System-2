@@ -637,3 +637,118 @@ BEGIN
     GRANT SELECT ON notification_preferences TO readonly_user;
   END IF;
 END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- Item master (Story 2.1). The section below MUST stay identical to the canonical
+-- read/projections/item_master.sql (applied by src/events/migrate.ts and the integration-test
+-- harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS item_master (
+  item_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku                  TEXT NOT NULL,
+  uom                  TEXT NOT NULL,
+  lot_controlled       BOOLEAN NOT NULL DEFAULT false,
+  serial_controlled    BOOLEAN NOT NULL DEFAULT false,
+  hazmat               BOOLEAN NOT NULL DEFAULT false,
+  quarantine_required  BOOLEAN NOT NULL DEFAULT false,
+  bis_licence_required BOOLEAN NOT NULL DEFAULT false,
+  valuation_method     TEXT NOT NULL,
+  business_stream      TEXT NOT NULL,
+  status               TEXT NOT NULL DEFAULT 'active',
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_item_master_sku UNIQUE (sku),
+  CONSTRAINT chk_item_master_valuation_method CHECK (valuation_method IN ('fifo', 'weighted_average', 'specific_identification')),
+  CONSTRAINT chk_item_master_status CHECK (status IN ('active', 'inactive'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_item_master_valuation_method'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT chk_item_master_valuation_method CHECK (valuation_method IN ('fifo', 'weighted_average', 'specific_identification'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_item_master_status'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT chk_item_master_status CHECK (status IN ('active', 'inactive'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_item_master_sku ON item_master (sku);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON item_master TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON item_master TO readonly_user;
+  END IF;
+END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- Location register (Story 2.1). The section below MUST stay identical to the canonical
+-- read/projections/location_register.sql (applied by src/events/migrate.ts and the
+-- integration-test harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS location_register (
+  location_id        UUID PRIMARY KEY,
+  location_code      TEXT NOT NULL,
+  level              TEXT NOT NULL,
+  parent_location_id UUID REFERENCES location_register(location_id),
+  site_id            UUID NOT NULL,
+  zone_type          TEXT NOT NULL DEFAULT 'general',
+  temperature_class  TEXT NOT NULL DEFAULT 'ambient',
+  hazmat_allowed     BOOLEAN NOT NULL DEFAULT false,
+  quarantine         BOOLEAN NOT NULL DEFAULT false,
+  status             TEXT NOT NULL DEFAULT 'active',
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_location_register_code UNIQUE (location_code),
+  CONSTRAINT chk_location_register_level CHECK (level IN ('site', 'zone', 'aisle', 'rack', 'bin')),
+  CONSTRAINT chk_location_register_status CHECK (status IN ('active', 'inactive'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_location_register_level'
+      AND conrelid = 'location_register'::regclass
+  ) THEN
+    ALTER TABLE location_register
+      ADD CONSTRAINT chk_location_register_level CHECK (level IN ('site', 'zone', 'aisle', 'rack', 'bin'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_location_register_status'
+      AND conrelid = 'location_register'::regclass
+  ) THEN
+    ALTER TABLE location_register
+      ADD CONSTRAINT chk_location_register_status CHECK (status IN ('active', 'inactive'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_location_register_code ON location_register (location_code);
+CREATE INDEX IF NOT EXISTS idx_location_register_parent ON location_register (parent_location_id);
+CREATE INDEX IF NOT EXISTS idx_location_register_site ON location_register (site_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON location_register TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON location_register TO readonly_user;
+  END IF;
+END $$;

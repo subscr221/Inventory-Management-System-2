@@ -11,6 +11,7 @@ import {
 import { requireRole } from '../../middleware/rbac.js';
 import { validateEnvelope, persistEvent } from '../../events/store.js';
 import { validateEdgeEnvelope } from '../../sync/upload.js';
+import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
 import { config } from '../../config/index.js';
 import type { AuthContext } from '../../middleware/context.js';
 
@@ -135,16 +136,27 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   body.metadata.actor.role = assignment.role;
   body.metadata.actor.location_id = assignment.locationId;
 
-  const persisted = await persistEvent(body, {
-    trace_id: getTraceId(req) ?? '',
-    user_id: authContext.userId,
-    role: assignment.role,
-    location_id: assignment.locationId,
-    endpoint: req.url ?? '',
-    method: req.method ?? 'POST',
-    http_status: 201,
-  });
-  sendJson(res, 201, persisted);
+  // Story 2.1 (AC3): a zone-incompatible placement is a WARNING, not an error - same two-step
+  // confirmation contract as POST /api/v1/events, so the edge outbox never misreads it as a
+  // permanent failure. The event was NOT persisted (no idempotency key consumed).
+  try {
+    const persisted = await persistEvent(body, {
+      trace_id: getTraceId(req) ?? '',
+      user_id: authContext.userId,
+      role: assignment.role,
+      location_id: assignment.locationId,
+      endpoint: req.url ?? '',
+      method: req.method ?? 'POST',
+      http_status: 201,
+    });
+    sendJson(res, 201, persisted);
+  } catch (err) {
+    if (err instanceof ZoneIncompatibleWarning) {
+      sendJson(res, 200, zoneWarningEnvelope(err, getTraceId(req) ?? ''));
+      return;
+    }
+    throw err;
+  }
 };
 
 export const edgeBootstrapHandler: RouteHandler = edgeBootstrapBase;

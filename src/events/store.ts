@@ -8,6 +8,7 @@ import { isAuditTamperError, recordTamperAttempt } from '../middleware/audit-tam
 import { assertInventoryTagging } from '../compliance/business-stream.js';
 import { assertCalibrationLockout } from '../compliance/calibration.js';
 import { assertLocationInvariant } from '../compliance/location.js';
+import { assertInventoryMasterReferences } from '../compliance/inventory-master.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -158,6 +159,11 @@ export async function persistEvent(
   // inside assertInventoryTagging - byte-for-byte unaffected.
   await assertInventoryTagging(envelope);
   await assertCalibrationLockout(envelope);
+  // Story 2.1: inventory master validation (SKU existence, target-location existence, actor
+  // location registration, zone compatibility) also runs BEFORE any DB write, gated to inventory
+  // events that actually reference master fields. May throw ZoneIncompatibleWarning (not an
+  // AppError) - the movement HTTP handlers translate it into a 200 warning envelope.
+  await assertInventoryMasterReferences(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();

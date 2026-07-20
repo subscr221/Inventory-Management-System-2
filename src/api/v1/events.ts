@@ -6,6 +6,7 @@ import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.
 import { auditConfig } from '../../config/audit.js';
 import { getPool } from '../../config/db.js';
 import { logTamperAttempt } from '../../read/projections/audit_log.js';
+import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
   if (typeof body === 'object' && body !== null) {
@@ -79,8 +80,18 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
       }
     : undefined;
 
-  const persisted = await persistEvent(body, auditCtx);
-  sendJson(res, 201, persisted);
+  // Story 2.1 (AC3): a zone-incompatible placement is a WARNING, not an error. The event was NOT
+  // persisted; the 200 envelope tells the caller to resubmit with payload.placement_confirmed: true.
+  try {
+    const persisted = await persistEvent(body, auditCtx);
+    sendJson(res, 201, persisted);
+  } catch (err) {
+    if (err instanceof ZoneIncompatibleWarning) {
+      sendJson(res, 200, zoneWarningEnvelope(err, traceId));
+      return;
+    }
+    throw err;
+  }
 };
 
 const getStreamBase: RouteHandler = async (req, res, params) => {

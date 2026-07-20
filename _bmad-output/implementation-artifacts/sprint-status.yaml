@@ -48,6 +48,13 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-21
+# story 2-1 dev-story 2026-07-21: implemented all 5 tasks; item_master + location_register projections and APIs,
+#   central assertInventoryMasterReferences in persistEvent (ITEM_NOT_FOUND / LOCATION_NOT_FOUND /
+#   ACTOR_LOCATION_NOT_REGISTERED before any DB write), ZONE_INCOMPATIBLE as a 200 two-step confirmation warning on
+#   both HTTP and edge paths, Story 1.6 lot-location API moved to /api/v1/lots/:lotId/location, migration list +
+#   compose mirror + schema drift guard, 18-test story suite; fixed anticipated story-1-1 cross-story fixture
+#   regression (seeded masters); tsc/eslint/build clean, 185/185 tests, spine gate 6/6, diff-check clean; moved to review
+# story 2-1 dev-story 2026-07-21: implementation started from baseline 7bdce10; moved to in-progress
 # story 2-1 created 2026-07-21 via create-story workflow: Item Master and Location Register; item and location master APIs, central ITEM_NOT_FOUND validation, ZONE_INCOMPATIBLE warning contract, Story 1.6 location-route collision guardrails, migration mirror, RBAC, audit, and regression requirements; ready-for-dev
 # story 1-11 code review 2026-07-20: 3 decision-needed + 12 patch findings resolved to code (transactional dispatch with
 #   atomic claim + re-entrancy guard, claim-then-act escalation, configurable fallback admin tier so no alert closes silently,
@@ -125,13 +132,13 @@ development_status:
   1-7-calibration-lockout-enforcement: done   # PILOT
   1-8-offline-edge-pwa-shell-and-powersync-sync-layer: done   # PILOT
   1-9-spine-acceptance-contract-ci-gate: done   # PILOT
-   1-10-ci-cd-pipeline-construction: done   # PILOT
+  1-10-ci-cd-pipeline-construction: done   # PILOT
   1-11-notification-and-alerting-foundation: done   # PILOT
   epic-1-retrospective: optional
 
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---
   epic-2: in-progress
-  2-1-item-master-and-location-register: ready-for-dev   # PILOT
+  2-1-item-master-and-location-register: review   # PILOT
   2-2-real-time-multi-location-stock-balances: backlog   # PILOT
   2-3-lot-batch-and-serial-traceability: backlog   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: backlog   # PILOT

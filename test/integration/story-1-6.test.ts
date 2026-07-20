@@ -164,8 +164,10 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     router.post('/api/v1/auth/dev-token', devTokenHandler);
     router.post('/api/v1/events', postEventHandler);
     router.get('/api/v1/events/:streamType/:streamId', getStreamHandler);
-    router.get('/api/v1/locations/:lotId', getCurrentLocationHandler);
-    router.post('/api/v1/locations/:lotId/expected', seedExpectedLocationHandler);
+    // Story 2.1 moved the current-lot-location API to explicit /api/v1/lots/* routes; the
+    // /api/v1/locations/* surface now belongs to the location register master.
+    router.get('/api/v1/lots/:lotId/location', getCurrentLocationHandler);
+    router.post('/api/v1/lots/:lotId/location/expected', seedExpectedLocationHandler);
     router.post('/api/v1/business-streams/rules', createTaggingRuleHandler);
 
     server = createServer((req, res) => {
@@ -206,7 +208,7 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     const seed = await makeRequest(
       TEST_PORT,
       'POST',
-      `/api/v1/locations/${lotId}/expected`,
+      `/api/v1/lots/${lotId}/location/expected`,
       { expected_location: 'BIN-A47', source: 'seed' },
       inventoryHeaders,
     );
@@ -221,7 +223,7 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
 
-    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/locations/${lotId}`, undefined, inventoryHeaders);
+    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, inventoryHeaders);
     assert.strictEqual(current.status, 200, JSON.stringify(current.body));
     assert.strictEqual(current.body['location'], 'BIN-A43', 'asserted location becomes current');
     assert.notStrictEqual(current.body['confidence'], 'none');
@@ -273,7 +275,7 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
 
   it('AC3: querying a lot with no location events returns null location and confidence none', async () => {
     const lotId = randomUUID();
-    const res = await makeRequest(TEST_PORT, 'GET', `/api/v1/locations/${lotId}`, undefined, inventoryHeaders);
+    const res = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, inventoryHeaders);
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.deepStrictEqual(res.body, { location: null, confidence: 'none' });
     assert.strictEqual(await countRows('location_current', lotId), 0, 'no current row invented');
@@ -290,7 +292,7 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
 
-    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/locations/${lotId}`, undefined, inventoryHeaders);
+    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, inventoryHeaders);
     assert.strictEqual(current.body['location'], 'BIN-C55');
     assert.strictEqual((await disputeEventsFor(lotId)).length, 0, 'no dispute without an expected fact');
   });
@@ -300,7 +302,7 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     const seed = await makeRequest(
       TEST_PORT,
       'POST',
-      `/api/v1/locations/${lotId}/expected`,
+      `/api/v1/lots/${lotId}/location/expected`,
       { expected_location: 'BIN-D01', source: 'seed' },
       inventoryHeaders,
     );
@@ -337,7 +339,7 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     );
     assert.strictEqual(older.status, 201, JSON.stringify(older.body));
 
-    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/locations/${lotId}`, undefined, inventoryHeaders);
+    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, inventoryHeaders);
     assert.strictEqual(current.body['location'], 'BIN-NEW');
     assert.strictEqual(current.body['confidence'], 'certain');
   });
@@ -393,7 +395,7 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     const seed = await makeRequest(
       TEST_PORT,
       'POST',
-      `/api/v1/locations/${lotId}/expected`,
+      `/api/v1/lots/${lotId}/location/expected`,
       { expected_location: 'BIN-TAG-EXPECTED', source: 'seed' },
       inventoryHeaders,
     );
@@ -412,14 +414,14 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
 
   it('RBAC boundary: module access is denied for the location endpoints without the inventory role', async () => {
     const lotId = randomUUID();
-    const getRes = await makeRequest(TEST_PORT, 'GET', `/api/v1/locations/${lotId}`, undefined, deniedHeaders);
+    const getRes = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, deniedHeaders);
     assert.strictEqual(getRes.status, 403, JSON.stringify(getRes.body));
     assert.strictEqual(getRes.body['error_code'], 'MODULE_ACCESS_DENIED');
 
     const postRes = await makeRequest(
       TEST_PORT,
       'POST',
-      `/api/v1/locations/${lotId}/expected`,
+      `/api/v1/lots/${lotId}/location/expected`,
       { expected_location: 'BIN-A47' },
       deniedHeaders,
     );
