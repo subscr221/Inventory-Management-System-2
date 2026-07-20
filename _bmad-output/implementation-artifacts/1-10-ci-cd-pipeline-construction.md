@@ -122,6 +122,16 @@ so that the deployment path Stories 1.1 and 1.9 presuppose exists as repeatable 
 - [x] [Review/Defer] bootstrap-runner.sh is not idempotent against a partially-provisioned host (corrupt cached package, already-installed runner service). [deploy/pipeline/runner/bootstrap-runner.sh:52-58,71-77] - deferred, script's own docstring scopes reproducibility to a clean host only
 - [x] [Review/Defer] backend-tests and spine-acceptance-contract CI jobs duplicate the entire postgres provisioning block verbatim. [.github/workflows/ci.yml:44-57,72-90] - deferred, correct per Task 2.5's per-job database isolation requirement, but a third copy of provisioning knowledge to keep in sync
 
+- [ ] [Review][Decision] Production self-hosted runner isolation is underspecified - The production runner is registered as a repository-level runner with labels `self-hosted,production`, so any workflow that can run in this repository can target the production host without declaring the protected `production` environment. This may violate AC3's production approval intent, but the correct fix depends on available GitHub plan features and deployment preference: runner groups restricted to selected workflows, an isolated deployment repository, or a just-in-time ephemeral runner pattern. [deploy/pipeline/runner/bootstrap-runner.sh:63-68, .github/workflows/cd.yml:140-154]
+- [ ] [Review][Decision] Clean-host bootstrap scope is ambiguous - AC4 says a clean native server or VPS plus bootstrap IaC should provision the pipeline, runner, artifact store references, and deployment credentials reproducibly. The checked-in scripts currently fail if Docker, Docker Compose, gh, jq, curl, tar, sudo, or runner service prerequisites are absent, and `deploy/provision/provision.sh` tells the operator to install Docker first. This may be acceptable as documented prerequisites or may require full OS-level provisioning; the story needs a scope decision. [deploy/provision/provision.sh:8-20, deploy/pipeline/bootstrap.sh:20-28, deploy/pipeline/runner/bootstrap-runner.sh:26-58]
+- [ ] [Review][Patch] Custom OCI registry support is incomplete [.github/workflows/cd.yml:22-59, .github/workflows/cd.yml:131-190]
+- [ ] [Review][Patch] Production environment verification does not check all protection invariants [deploy/pipeline/verify.sh:63-77]
+- [ ] [Review][Patch] Failed post-cutover health check leaves the bad release serving [deploy/pipeline/deploy.sh:69-86]
+- [ ] [Review][Patch] Default branch API paths are not URL-encoded [deploy/pipeline/bootstrap.sh:66-71, deploy/pipeline/verify.sh:27]
+- [ ] [Review][Patch] Runner bootstrap lacks required prerequisite checks [deploy/pipeline/runner/bootstrap-runner.sh:26-58]
+- [x] [Review][Defer] GitHub Actions and Docker actions are referenced by mutable version tags rather than commit SHAs [.github/workflows/ci.yml, .github/workflows/cd.yml] - deferred, supply-chain hardening beyond Story 1.10's acceptance criteria
+- [x] [Review][Defer] Runner binary download is not integrity-verified before installation [deploy/pipeline/runner/bootstrap-runner.sh:52-58] - deferred, hardening should be handled with the broader runner-provisioning story
+
 ## Dev Notes
 
 ### Current Repository State

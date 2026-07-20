@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import type { PoolClient } from 'pg';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { getPool } from '../../config/db.js';
+import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { logAuditEntry } from '../../read/projections/audit_log.js';
 import {
@@ -58,6 +61,34 @@ function isValidStatus(value: string | null): value is NotificationStatus {
   return value === 'created' || value === 'read' || value === 'acted_upon' || value === 'expired';
 }
 
+/**
+ * Runs a write plus its statutory audit entry in one transaction. Consent/opt-in and push
+ * subscription changes are DPDP/GDPR-relevant state (EXPERIENCE.md section 10) and must leave an
+ * audit trail like every other write path in this system - so the mutation and its audit row
+ * commit together or not at all.
+ */
+async function withAudit<T>(
+  req: IncomingMessage,
+  actor: ActorContext,
+  httpStatus: number,
+  details: Record<string, unknown>,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await logAuditEntry(client, { ...auditCtxFor(req, actor, httpStatus), event_id: null, error_code: null, details });
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 const listNotificationsBase: RouteHandler = async (req, res) => {
   const actor = actorContext(req);
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -86,12 +117,25 @@ const listNotificationsBase: RouteHandler = async (req, res) => {
     }
     offset = parsed;
   }
+  // Validate the date-range filters before they reach SQL: an unparseable `since`/`until` would
+  // otherwise be bound straight into an `occurred_at` comparison and surface as an unhandled 500
+  // instead of a 400 (the status/limit/offset params above are already validated).
+  const since = url.searchParams.get('since');
+  if (since !== null && Number.isNaN(Date.parse(since))) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'since must be a valid ISO 8601 timestamp');
+    return;
+  }
+  const until = url.searchParams.get('until');
+  if (until !== null && Number.isNaN(Date.parse(until))) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'until must be a valid ISO 8601 timestamp');
+    return;
+  }
 
   const notifications = await listNotificationsForUser(actor.userId, {
     eventType: url.searchParams.get('type') ?? undefined,
     status: status ?? undefined,
-    since: url.searchParams.get('since') ?? undefined,
-    until: url.searchParams.get('until') ?? undefined,
+    since: since ?? undefined,
+    until: until ?? undefined,
     limit,
     offset,
   });
@@ -120,17 +164,38 @@ const updateNotificationBase: RouteHandler = async (req, res, params) => {
   }
 
   const actor = actorContext(req);
-  const existing = await getNotification(notificationId);
-  if (!existing || existing.target_user_id !== actor.userId) {
-    throw new AppError(404, 'NOT_FOUND', `No notification "${notificationId}" for this user`);
-  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await getNotification(notificationId, client);
+    if (!existing || existing.target_user_id !== actor.userId) {
+      throw new AppError(404, 'NOT_FOUND', `No notification "${notificationId}" for this user`);
+    }
 
-  const updated =
-    action === 'read' ? await markNotificationRead(notificationId, actor.userId) : await markNotificationActedUpon(notificationId, actor.userId);
-  if (!updated) {
-    throw new AppError(409, 'INVALID_STATE_TRANSITION', `Notification "${notificationId}" cannot transition to "${action}" from its current status`);
+    const updated =
+      action === 'read'
+        ? await markNotificationRead(notificationId, actor.userId, client)
+        : await markNotificationActedUpon(notificationId, actor.userId, client);
+    if (!updated) {
+      throw new AppError(409, 'INVALID_STATE_TRANSITION', `Notification "${notificationId}" cannot transition to "${action}" from its current status`);
+    }
+
+    // Resolved decision: acting on a notification is a stop signal, same as an explicit
+    // acknowledge - so `acted_upon` resolves the escalation clock for the whole alert. A mere
+    // `read` does not (the recipient has seen it but not handled it).
+    if (action === 'acted_upon') {
+      await resolveEscalationDef(existing.source_event_id, client);
+    }
+
+    await client.query('COMMIT');
+    sendJson(res, 200, updated);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
-  sendJson(res, 200, updated);
 };
 
 const acknowledgeNotificationBase: RouteHandler = async (req, res, params) => {
@@ -153,6 +218,26 @@ const acknowledgeNotificationBase: RouteHandler = async (req, res, params) => {
     // Acknowledgment resolves the escalation clock for the WHOLE alert (any one recipient
     // acknowledging is sufficient - AC2), not just this recipient's own notification row.
     const escalationResolved = await resolveEscalationDef(existing.source_event_id, client);
+
+    // Task 4.1: acknowledgment is event-sourced (a notification.acknowledged domain event on the
+    // notification stream), joined to this transaction so the read-model update, the escalation
+    // resolution, the audit row, and the event all commit atomically.
+    await persistEvent(
+      {
+        stream_type: 'notification',
+        stream_id: randomUUID(),
+        event_type: 'notification.acknowledged',
+        payload: { notification_id: notificationId, source_event_id: existing.source_event_id, escalation_resolved: escalationResolved },
+        metadata: {
+          correlation_id: getTraceId(req) ?? randomUUID(),
+          causation_id: existing.source_event_id,
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.auditLocationId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      undefined,
+      client,
+    );
 
     await logAuditEntry(client, {
       ...auditCtxFor(req, actor, 200),
@@ -195,8 +280,12 @@ const putPreferencesBase: RouteHandler = async (req, res) => {
     return;
   }
   const actor = actorContext(req);
-  await setPreference(actor.userId, body['event_type'], body['opted_in']);
-  sendJson(res, 200, { event_type: body['event_type'], opted_in: body['opted_in'] });
+  const eventType = body['event_type'];
+  const optedIn = body['opted_in'];
+  await withAudit(req, actor, 200, { action: 'set_notification_preference', event_type: eventType, opted_in: optedIn }, (client) =>
+    setPreference(actor.userId, eventType, optedIn, client),
+  );
+  sendJson(res, 200, { event_type: eventType, opted_in: optedIn });
 };
 
 const createPushSubscriptionBase: RouteHandler = async (req, res) => {
@@ -207,7 +296,11 @@ const createPushSubscriptionBase: RouteHandler = async (req, res) => {
     return;
   }
   const actor = actorContext(req);
-  const subscription = await upsertPushSubscription(actor.userId, body['endpoint'], keys['p256dh'] as string, keys['auth'] as string);
+  const endpoint = body['endpoint'];
+  // Audit the subscription registration but NOT the key material (p256dh/auth are secrets).
+  const subscription = await withAudit(req, actor, 201, { action: 'register_push_subscription', endpoint }, (client) =>
+    upsertPushSubscription(actor.userId, endpoint, keys['p256dh'] as string, keys['auth'] as string, client),
+  );
   sendJson(res, 201, subscription);
 };
 
@@ -219,7 +312,9 @@ const deletePushSubscriptionBase: RouteHandler = async (req, res) => {
     return;
   }
   const actor = actorContext(req);
-  const deleted = await deletePushSubscription(actor.userId, endpoint);
+  const deleted = await withAudit(req, actor, 200, { action: 'unregister_push_subscription', endpoint }, (client) =>
+    deletePushSubscription(actor.userId, endpoint, client),
+  );
   sendJson(res, 200, { deleted });
 };
 

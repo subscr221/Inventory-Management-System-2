@@ -43,6 +43,7 @@ import {
 } from './api/v1/notification.js';
 import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
+import { runExpiryCycle } from './notify/expire.js';
 
 export function createAppRouter(): Router {
   const router = new Router();
@@ -100,13 +101,34 @@ export function createAppServer(router: Router = createAppRouter()): Server {
 
 const server = createAppServer();
 
-// Story 1.11: the notification dispatcher and escalation clock run as in-process intervals
-// rather than a separate `notify` container/CD job - see Dev Notes Task 6.2. They only start
-// inside startServer() (the real running process), never when a test builds its own Router/Server
-// directly, so tests control dispatch/escalation timing explicitly via runDispatchCycle()/
-// runEscalationCycle() instead of racing a background timer.
+// Story 1.11: the notification dispatcher, escalation clock, and expiry sweep run as in-process
+// intervals rather than a separate `notify` container/CD job - see Dev Notes Task 6.2. They only
+// start inside startServer() (the real running process), never when a test builds its own
+// Router/Server directly, so tests control cycle timing explicitly via runDispatchCycle()/
+// runEscalationCycle()/runExpiryCycle() instead of racing a background timer.
 let dispatchTimer: ReturnType<typeof setInterval> | undefined;
 let escalationTimer: ReturnType<typeof setInterval> | undefined;
+let expiryTimer: ReturnType<typeof setInterval> | undefined;
+
+/**
+ * Wraps a poll-cycle in a re-entrancy guard: setInterval does NOT skip a tick while the async
+ * callback from the previous tick is still pending, so a cycle slower than its interval would
+ * otherwise overlap itself and double-process. The guard drops a tick that fires while the
+ * previous run is still in flight. (Cross-process overlap - a second app instance - is separately
+ * bounded by the atomic claim in the dispatcher and the claim-then-act in the escalator.)
+ */
+function guarded(name: string, cycle: () => Promise<unknown>): () => void {
+  let running = false;
+  return () => {
+    if (running) return;
+    running = true;
+    cycle()
+      .catch((err) => console.error(`Notification ${name} cycle failed:`, err))
+      .finally(() => {
+        running = false;
+      });
+  };
+}
 
 function startServer(): void {
   server.listen(config.port, config.hostname, () => {
@@ -114,18 +136,19 @@ function startServer(): void {
     console.log(`Environment: ${config.nodeEnv}`);
   });
 
-  dispatchTimer = setInterval(() => {
-    runDispatchCycle().catch((err) => console.error('Notification dispatch cycle failed:', err));
-  }, config.notify.dispatchIntervalMs);
+  dispatchTimer = setInterval(guarded('dispatch', () => runDispatchCycle()), config.notify.dispatchIntervalMs);
+  escalationTimer = setInterval(guarded('escalation', () => runEscalationCycle()), config.notify.escalationIntervalMs);
+  expiryTimer = setInterval(guarded('expiry', () => runExpiryCycle()), config.notify.expiryIntervalMs);
 
-  escalationTimer = setInterval(() => {
-    runEscalationCycle().catch((err) => console.error('Notification escalation cycle failed:', err));
-  }, config.notify.escalationIntervalMs);
+  const stopTimers = (): void => {
+    clearInterval(dispatchTimer);
+    clearInterval(escalationTimer);
+    clearInterval(expiryTimer);
+  };
 
   process.on('SIGTERM', () => {
     console.log('SIGTERM received. Shutting down gracefully...');
-    clearInterval(dispatchTimer);
-    clearInterval(escalationTimer);
+    stopTimers();
     server.close(async () => {
       const { closePool } = await import('./config/db.js');
       await closePool();
@@ -136,8 +159,7 @@ function startServer(): void {
 
   process.on('SIGINT', () => {
     console.log('SIGINT received. Shutting down gracefully...');
-    clearInterval(dispatchTimer);
-    clearInterval(escalationTimer);
+    stopTimers();
     server.close(async () => {
       const { closePool } = await import('./config/db.js');
       await closePool();

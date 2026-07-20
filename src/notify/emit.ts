@@ -35,6 +35,24 @@ export interface EmitNotificationInput {
 export type EmitNotificationResult = { ok: true; event: PersistedEvent } | { ok: false; error: unknown };
 
 /**
+ * Normalizes an escalation definition into the persisted payload shape, dropping it entirely if
+ * the acknowledgment window is not a positive integer. The DB has a
+ * chk_notification_escalation_defs_window CHECK (> 0); catching an invalid window here means a
+ * caller's programming error (window <= 0) degrades to "notification without escalation" plus a
+ * warning, rather than a poison-pill event the dispatcher can never mark dispatched.
+ */
+function normalizeEscalation(escalation: EscalationDefinition | undefined): { target_role: string; acknowledgment_window_seconds: number } | null {
+  if (!escalation) return null;
+  if (!Number.isInteger(escalation.acknowledgment_window_seconds) || escalation.acknowledgment_window_seconds <= 0) {
+    console.warn(
+      `emitNotification: dropping escalation with non-positive acknowledgment_window_seconds (${escalation.acknowledgment_window_seconds}) for role ${escalation.target_role}`,
+    );
+    return null;
+  }
+  return { target_role: escalation.target_role, acknowledgment_window_seconds: escalation.acknowledgment_window_seconds };
+}
+
+/**
  * Single emission entry point every module calls instead of building its own notification
  * channel (Story 1.11 AC1/AC4). Writes a `notification.created` domain event on the `notification`
  * stream; the dispatcher (src/notify/dispatch.ts) fans it out to recipients asynchronously.
@@ -58,9 +76,7 @@ export async function emitNotification(input: EmitNotificationInput): Promise<Em
         object_id: input.object_id,
         actor_label: input.actor_label ?? null,
         next_step: input.next_step ?? null,
-        escalation: input.escalation
-          ? { target_role: input.escalation.target_role, acknowledgment_window_seconds: input.escalation.acknowledgment_window_seconds }
-          : null,
+        escalation: normalizeEscalation(input.escalation),
       },
       metadata: {
         correlation_id: input.correlation_id ?? randomUUID(),
@@ -98,9 +114,7 @@ export async function emitNotificationInTransaction(input: EmitNotificationInput
         object_id: input.object_id,
         actor_label: input.actor_label ?? null,
         next_step: input.next_step ?? null,
-        escalation: input.escalation
-          ? { target_role: input.escalation.target_role, acknowledgment_window_seconds: input.escalation.acknowledgment_window_seconds }
-          : null,
+        escalation: normalizeEscalation(input.escalation),
       },
       metadata: {
         correlation_id: input.correlation_id ?? randomUUID(),

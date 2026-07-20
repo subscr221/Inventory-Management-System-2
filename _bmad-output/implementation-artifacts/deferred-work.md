@@ -43,6 +43,11 @@
 
 - Runtime database role passwords (`app_user`, `readonly_user`, `replication_user`, `svc_powersync`) are created with committed default passwords rather than deployment secrets [deploy/compose/init-db.sql, deploy/compose/docker-compose.yml] - deferred, pre-existing (predates Story 1.10) and lives in Story 1.11's active working files, so out of Story 1.10's diff scope. A fail-closed attempt during the second review pass was reverted because it broke `deploy/compose/.env`-driven flows (`sync:smoke`, `provision.sh`), which define no `READONLY_PASSWORD`. Needs a dedicated secrets-hardening story that also updates `.env.example`, `deploy/compose/.env`, and the smoke harness together.
 
+## Deferred from: code review of 1-10-ci-cd-pipeline-construction (2026-07-20, fourth pass)
+
+- GitHub Actions and Docker actions are referenced by mutable version tags rather than commit SHAs [.github/workflows/ci.yml, .github/workflows/cd.yml] - deferred, supply-chain hardening beyond Story 1.10's acceptance criteria
+- Runner binary download is not integrity-verified before installation [deploy/pipeline/runner/bootstrap-runner.sh:52-58] - deferred, hardening should be handled with the broader runner-provisioning story
+
 ## Deferred from: code review of 1-11-notification-and-alerting-foundation (2026-07-20)
 
 - Unbounded sequential per-event fan-out: `resolveTargetUserIds` is uncapped and each recipient triggers serial insert/delivery/opt-in/subscription/push round-trips, so a role held by hundreds of users can overrun the dispatch interval [src/notify/dispatch.ts:85-139] - deferred, acceptable at pilot single-site scale and mitigated by the dispatch re-entrancy guard patch.

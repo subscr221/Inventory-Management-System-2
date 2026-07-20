@@ -21,6 +21,7 @@ import {
 import { emitNotification } from '../../src/notify/emit.js';
 import { runDispatchCycle } from '../../src/notify/dispatch.js';
 import { runEscalationCycle } from '../../src/notify/escalate.js';
+import { runExpiryCycle } from '../../src/notify/expire.js';
 import { closePool, getPool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -274,7 +275,7 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
   });
 
   it('AC2: an unacknowledged escalating alert escalates to the DOA-resolved role after its window elapses, and every hop is recorded', async () => {
-    await emitNotification({
+    const emitted = await emitNotification({
       target: { role: 'maintenance_supervisor', location_id: LOCATION_A },
       event_type: 'fault_reported',
       status_verb: 'Reported',
@@ -283,6 +284,8 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
       actor: SYSTEM_ACTOR,
       escalation: { target_role: 'compliance_admin', acknowledgment_window_seconds: 1 },
     });
+    assert.strictEqual(emitted.ok, true);
+    const sourceEventId = emitted.ok ? emitted.event.event_id : '';
     await runDispatchCycle();
     await sleep(1100);
 
@@ -290,23 +293,38 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     assert.strictEqual(cycle.escalated, 1);
 
     const escalationRows = await getPool().query(
-      `SELECT from_target, to_target, resolved_via FROM notification_escalations e
-       JOIN notification_escalation_defs d ON d.source_event_id = e.source_event_id
-       WHERE e.escalated_source_event_id IS NOT NULL
-       ORDER BY e.escalated_at DESC LIMIT 1`,
+      `SELECT from_target, to_target, resolved_via FROM notification_escalations WHERE source_event_id = $1 ORDER BY escalated_at DESC LIMIT 1`,
+      [sourceEventId],
     );
     assert.strictEqual(escalationRows.rows.length, 1);
     assert.strictEqual(escalationRows.rows[0]!['to_target'], 'role:compliance_admin');
     assert.strictEqual(escalationRows.rows[0]!['resolved_via'], 'doa_role_holder');
+
+    // Task 4.4: the hop is event-sourced, not only a read-model row.
+    const escalatedEvents = await getPool().query(
+      `SELECT payload FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.escalated' AND payload->>'source_event_id' = $1`,
+      [sourceEventId],
+    );
+    assert.strictEqual(escalatedEvents.rows.length, 1, 'a notification.escalated domain event must be persisted for the hop');
+
+    // The original def is now resolved (claimed by this escalation), so it never re-fires.
+    const originalDef = await getPool().query(`SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`, [sourceEventId]);
+    assert.strictEqual(originalDef.rows[0]!['resolved'], true, 'the original escalation def must be resolved after escalating');
 
     await runDispatchCycle();
     const complianceList = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, complianceHeaders);
     const escalated = (complianceList.body['notifications'] as Array<Record<string, unknown>>).find((n) => n['object_id'] === 'FLT-ESC-01');
     assert.ok(escalated, 'the escalation target must receive their own notification through the same delivery path');
 
-    // A second escalation cycle must be a no-op - the def is now resolved, so it never re-fires.
-    const secondCycle = await runEscalationCycle();
-    assert.strictEqual(secondCycle.defsProcessed, 0);
+    // No-silent-expiry chain (AC2 / Task 4.5): the escalation notification to compliance_admin
+    // itself carries a follow-on escalation to the configured fallback role, so an unacknowledged
+    // escalation keeps climbing to a guaranteed-staffed tier instead of just stopping.
+    const fallbackDef = await getPool().query(
+      `SELECT escalation_target_role FROM notification_escalation_defs WHERE source_event_id = $1`,
+      [escalated!['source_event_id']],
+    );
+    assert.strictEqual(fallbackDef.rows.length, 1, 'the escalated alert must schedule a further escalation to the fallback tier');
+    assert.strictEqual(fallbackDef.rows[0]!['escalation_target_role'], 'system_admin');
   });
 
   it('AC2: acknowledging before the window elapses stops the alert from ever escalating', async () => {
@@ -339,6 +357,128 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     );
     const cycle = await runEscalationCycle();
     assert.strictEqual(cycle.defsProcessed, 0, 'an acknowledged alert must never escalate, no matter how far past its deadline');
+
+    // Task 4.1: acknowledgment is event-sourced.
+    const ackEvents = await getPool().query(
+      `SELECT payload FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.acknowledged'
+       AND payload->>'source_event_id' = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
+    assert.strictEqual(ackEvents.rows.length, 1, 'a notification.acknowledged domain event must be persisted');
+  });
+
+  it('AC2: marking a notification acted_upon via PATCH also stops escalation (resolved decision)', async () => {
+    const emitted = await emitNotification({
+      target: { role: 'maintenance_supervisor', location_id: LOCATION_A },
+      event_type: 'fault_reported',
+      status_verb: 'Reported',
+      object_type: 'fault',
+      object_id: 'FLT-ACTED-01',
+      actor: SYSTEM_ACTOR,
+      escalation: { target_role: 'compliance_admin', acknowledgment_window_seconds: 3600 },
+    });
+    assert.strictEqual(emitted.ok, true);
+    await runDispatchCycle();
+
+    const list = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, supervisorAHeaders);
+    const own = (list.body['notifications'] as Array<Record<string, unknown>>).find((n) => n['object_id'] === 'FLT-ACTED-01')!;
+
+    const patch = await makeRequest(TEST_PORT, 'PATCH', `/api/v1/notifications/${own['notification_id'] as string}`, { action: 'acted_upon' }, supervisorAHeaders);
+    assert.strictEqual(patch.status, 200, JSON.stringify(patch.body));
+    assert.strictEqual(patch.body['status'], 'acted_upon');
+
+    const def = await getPool().query(`SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`, [
+      emitted.ok ? emitted.event.event_id : '',
+    ]);
+    assert.strictEqual(def.rows[0]!['resolved'], true, 'acting on a notification must resolve its escalation clock');
+
+    await getPool().query(`UPDATE notification_escalation_defs SET deadline_at = now() - interval '1 second' WHERE source_event_id = $1`, [
+      emitted.ok ? emitted.event.event_id : '',
+    ]);
+    const cycle = await runEscalationCycle();
+    assert.strictEqual(cycle.defsProcessed, 0, 'an acted-upon alert must never escalate');
+  });
+
+  it('Task 5.3: notifications past the retention window transition to expired and emit a notification.expired event', async () => {
+    const emitted = await emitNotification({
+      target: { role: 'maintenance_supervisor', location_id: LOCATION_B },
+      event_type: 'fault_reported',
+      status_verb: 'Reported',
+      object_type: 'fault',
+      object_id: 'FLT-EXP-01',
+      actor: SYSTEM_ACTOR,
+    });
+    assert.strictEqual(emitted.ok, true);
+    await runDispatchCycle();
+
+    // Backdate the row past the 30-day (default) retention window.
+    await getPool().query(
+      `UPDATE notifications SET created_at = now() - interval '60 days' WHERE source_event_id = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
+
+    const result = await runExpiryCycle();
+    assert.ok(result.expired >= 1);
+
+    const expiredRow = await getPool().query(`SELECT status FROM notifications WHERE source_event_id = $1`, [emitted.ok ? emitted.event.event_id : '']);
+    assert.strictEqual(expiredRow.rows[0]!['status'], 'expired');
+
+    const expiredEvents = await getPool().query(
+      `SELECT 1 FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.expired' AND payload->>'source_event_id' = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
+    assert.strictEqual(expiredEvents.rows.length, 1, 'an expired notification must emit a notification.expired event');
+
+    // Idempotent: a second sweep does not re-expire or re-emit for the same row.
+    const before = await getPool().query(
+      `SELECT count(*)::int AS c FROM domain_events WHERE event_type = 'notification.expired' AND payload->>'source_event_id' = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
+    await runExpiryCycle();
+    const after = await getPool().query(
+      `SELECT count(*)::int AS c FROM domain_events WHERE event_type = 'notification.expired' AND payload->>'source_event_id' = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
+    assert.strictEqual(after.rows[0]!['c'], before.rows[0]!['c'], 'a second expiry sweep must be a no-op for already-expired rows');
+  });
+
+  it('P8: an escalation with a non-positive window is dropped, not persisted as a poison-pill def', async () => {
+    const emitted = await emitNotification({
+      target: { role: 'maintenance_supervisor', location_id: LOCATION_A },
+      event_type: 'fault_reported',
+      status_verb: 'Reported',
+      object_type: 'fault',
+      object_id: 'FLT-BADWIN-01',
+      actor: SYSTEM_ACTOR,
+      escalation: { target_role: 'compliance_admin', acknowledgment_window_seconds: 0 },
+    });
+    assert.strictEqual(emitted.ok, true);
+
+    const dispatch = await runDispatchCycle();
+    assert.ok(dispatch.eventsProcessed >= 1);
+
+    // The notification still delivered, but no escalation def was created (window was invalid).
+    const delivered = await getPool().query(`SELECT count(*)::int AS c FROM notifications WHERE object_id = 'FLT-BADWIN-01'`);
+    assert.strictEqual(delivered.rows[0]!['c'], 1);
+    const def = await getPool().query(`SELECT count(*)::int AS c FROM notification_escalation_defs WHERE source_event_id = $1`, [
+      emitted.ok ? emitted.event.event_id : '',
+    ]);
+    assert.strictEqual(def.rows[0]!['c'], 0, 'a non-positive window must not create an escalation def');
+
+    // And the event is not a poison pill: it is marked dispatched exactly once.
+    const dispatchLog = await getPool().query(`SELECT count(*)::int AS c FROM notification_dispatch_log WHERE source_event_id = $1`, [
+      emitted.ok ? emitted.event.event_id : '',
+    ]);
+    assert.strictEqual(dispatchLog.rows[0]!['c'], 1);
+  });
+
+  it('P5: malformed since/until list filters are rejected with 400, not a 500', async () => {
+    const badSince = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications?since=notadate', undefined, supervisorAHeaders);
+    assert.strictEqual(badSince.status, 400, JSON.stringify(badSince.body));
+    const badUntil = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications?until=2026-13-99', undefined, supervisorAHeaders);
+    assert.strictEqual(badUntil.status, 400, JSON.stringify(badUntil.body));
+    const good = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications?since=2026-01-01T00:00:00.000Z', undefined, supervisorAHeaders);
+    assert.strictEqual(good.status, 200, JSON.stringify(good.body));
   });
 
   it('preferences default to opted-out and PUT updates them per event type', async () => {

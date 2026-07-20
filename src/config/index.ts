@@ -37,6 +37,22 @@ const rawNodeEnv = process.env['NODE_ENV'];
 const nodeEnv = rawNodeEnv ?? 'development';
 const authMode = resolveAuthMode();
 
+/**
+ * Parses a positive-integer operational knob from the environment, falling back to `fallback`
+ * for an unset, non-numeric, non-integer, or non-positive value. Without this guard,
+ * `Number('oops')` yields NaN, and `setInterval(fn, NaN)` coerces the delay to 0 ms - turning a
+ * mistyped `NOTIFY_*_MS` env var into a tight, unthrottled loop that hammers the database.
+ */
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name} "${raw}": must be a positive integer.`);
+  }
+  return parsed;
+}
+
 // Local auth mode (which exposes the unauthenticated dev-token endpoint) is only permitted when
 // NODE_ENV is EXPLICITLY a dev/test value. Fail closed for every other case - including NODE_ENV
 // unset - so a misconfigured host (e.g. a copied env file with NODE_ENV absent) cannot silently
@@ -117,8 +133,15 @@ export const config = {
     vapidPublicKey: process.env['VAPID_PUBLIC_KEY'] ?? '',
     vapidPrivateKey: process.env['VAPID_PRIVATE_KEY'] ?? '',
     vapidSubject: process.env['VAPID_SUBJECT'] ?? 'mailto:platform@example.com',
-    dispatchIntervalMs: Number(process.env['NOTIFY_DISPATCH_INTERVAL_MS'] ?? 5000),
-    escalationIntervalMs: Number(process.env['NOTIFY_ESCALATION_INTERVAL_MS'] ?? 15000),
-    notificationRetentionDays: Number(process.env['NOTIFY_RETENTION_DAYS'] ?? 30),
+    dispatchIntervalMs: parsePositiveIntEnv('NOTIFY_DISPATCH_INTERVAL_MS', 5000),
+    escalationIntervalMs: parsePositiveIntEnv('NOTIFY_ESCALATION_INTERVAL_MS', 15000),
+    // The stale-notification expiry sweep runs far less often than dispatch/escalation - default
+    // hourly - since the Expired transition is a 30-day lifecycle boundary, not a real-time one.
+    expiryIntervalMs: parsePositiveIntEnv('NOTIFY_EXPIRY_INTERVAL_MS', 3_600_000),
+    notificationRetentionDays: parsePositiveIntEnv('NOTIFY_RETENTION_DAYS', 30),
+    // Terminal escalation tier (AC2 "no alert expires silently"): when an escalation target has no
+    // active holder, or an escalated alert is itself never acknowledged, the chain escalates once
+    // more to this guaranteed-staffed role and then stops. Operations must keep it staffed.
+    fallbackEscalationRole: process.env['NOTIFY_FALLBACK_ESCALATION_ROLE'] ?? 'system_admin',
   },
 } as const;

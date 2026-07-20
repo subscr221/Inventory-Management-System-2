@@ -242,13 +242,36 @@ export async function markNotificationActedUpon(notificationId: string, userId: 
   return result.rows.length > 0 ? mapNotification(result.rows[0]!) : null;
 }
 
-export async function expireStaleNotifications(olderThanDays: number, client?: PoolClient): Promise<number> {
+export interface ExpiredNotification {
+  notification_id: string;
+  source_event_id: string;
+  target_user_id: string;
+  event_type: string;
+  object_type: string;
+  object_id: string;
+}
+
+/**
+ * Transitions notifications past the retention window to `expired` (the fourth lifecycle state -
+ * EXPERIENCE.md section 13.3). Returns the rows it expired (RETURNING) so the caller can emit one
+ * `notification.expired` domain event per row; a bulk UPDATE alone would leave the event stream
+ * blind to the transition.
+ */
+export async function expireStaleNotifications(olderThanDays: number, client?: PoolClient): Promise<ExpiredNotification[]> {
   const result = await runner(client).query(
     `UPDATE notifications SET status = 'expired', expired_at = now()
-     WHERE status IN ('created', 'read') AND created_at < now() - ($1 || ' days')::interval`,
+     WHERE status IN ('created', 'read') AND created_at < now() - ($1 || ' days')::interval
+     RETURNING notification_id, source_event_id, target_user_id, event_type, object_type, object_id`,
     [olderThanDays],
   );
-  return result.rowCount ?? 0;
+  return result.rows.map((row) => ({
+    notification_id: row['notification_id'] as string,
+    source_event_id: row['source_event_id'] as string,
+    target_user_id: row['target_user_id'] as string,
+    event_type: row['event_type'] as string,
+    object_type: row['object_type'] as string,
+    object_id: row['object_id'] as string,
+  }));
 }
 
 export async function recordDelivery(input: RecordDeliveryInput, client?: PoolClient): Promise<NotificationDeliveryRecord> {
@@ -280,6 +303,21 @@ export async function markEventDispatched(sourceEventId: string, client?: PoolCl
     `INSERT INTO notification_dispatch_log (source_event_id) VALUES ($1) ON CONFLICT (source_event_id) DO NOTHING`,
     [sourceEventId],
   );
+}
+
+/**
+ * Atomically claims an event for dispatch: inserts the dispatch-log row and returns true only if
+ * THIS caller won the insert. A concurrent cycle (overlapping timer or second instance) that races
+ * on the same event loses the `ON CONFLICT DO NOTHING` and gets false, so it skips fan-out instead
+ * of duplicating deliveries. Must be called inside the same transaction as the fan-out writes so
+ * the claim and the deliveries commit together (or roll back together on failure).
+ */
+export async function claimEventForDispatch(sourceEventId: string, client: PoolClient): Promise<boolean> {
+  const result = await client.query(
+    `INSERT INTO notification_dispatch_log (source_event_id) VALUES ($1) ON CONFLICT (source_event_id) DO NOTHING RETURNING source_event_id`,
+    [sourceEventId],
+  );
+  return result.rows.length > 0;
 }
 
 function mapEscalationDef(row: Record<string, unknown>): EscalationDefRecord {

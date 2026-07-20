@@ -48,6 +48,11 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-20
+# story 1-11 code review 2026-07-20: 3 decision-needed + 12 patch findings resolved to code (transactional dispatch with
+#   atomic claim + re-entrancy guard, claim-then-act escalation, configurable fallback admin tier so no alert closes silently,
+#   Task 5.3 Expired lifecycle wired, acknowledged/escalated/expired domain events persisted, delivery trace_id=correlation_id,
+#   acted_upon stops escalation, since/until 400 validation, occurred_at/window poison-pill guards, NOTIFY_* env validation,
+#   audited consent writes); 4 deferred, 4 dismissed; backend 157/157, spine gate 6/6, tsc/eslint/build/diff-check clean; moved to done
 # story 1-11 dev-story 2026-07-20: notification schema + notification domain event stream, non-blocking emitNotification(),
 #   resumable poll-based dispatcher (in-app + web push), DOA-registry-resolved escalation clock, and full in-app REST API
 #   implemented; backend 153/153 (10 new), spine gate 6/6, edge unit 14/14, edge typecheck/lint/build clean, tsc/eslint/
@@ -120,7 +125,7 @@ development_status:
   1-8-offline-edge-pwa-shell-and-powersync-sync-layer: done   # PILOT
   1-9-spine-acceptance-contract-ci-gate: done   # PILOT
   1-10-ci-cd-pipeline-construction: review   # PILOT
-  1-11-notification-and-alerting-foundation: review   # PILOT
+  1-11-notification-and-alerting-foundation: done   # PILOT
   epic-1-retrospective: optional
 
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---
