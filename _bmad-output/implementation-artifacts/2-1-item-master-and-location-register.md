@@ -4,7 +4,7 @@ baseline_commit: 7bdce1003ab19087c8cba536f6900c3d12658a9f
 
 # Story 2.1: Item Master and Location Register
 
-Status: review
+Status: done
 
 ## Story
 
@@ -225,3 +225,16 @@ fugu-ultra-20260615
 
 - 2026-07-21: Created Story 2.1 as ready-for-dev with item master, location register, central inventory master validation, route collision, migration, test, and regression guardrails.
 - 2026-07-21: Implemented all 5 tasks (item master API, location register API with hierarchy validation, central inventory-master validation seam with the ZONE_INCOMPATIBLE two-step confirmation contract, migration and compose mirror wiring with a drift guard, and the Story 2.1 integration suite). Moved the Story 1.6 lot-location API to `/api/v1/lots/:lotId/location` routes and updated the Story 1.9 route-surface allowlist. Fixed the anticipated Story 1.1 cross-story regression by seeding fixture masters in its harness. Verification: tsc, ESLint, build, 185/185 tests, spine gate 6/6, `git diff --check` all clean. Status moved to review.
+
+### Review Findings
+
+Adversarial code review 2026-07-21 (Blind Hunter, Edge Case Hunter, Acceptance Auditor). 0 decision-needed, 8 patch, 0 deferred, 4 dismissed as noise. Decisions resolved by user: auto-confirm edge uploads for zone-incompatible placements, derive HTTP event actor location from auth, and enforce inactive master status. All patch findings resolved.
+
+- [x] [Review][Patch] Edge outbox silently drops a zone-incompatible movement (data loss) - Resolved: edge uploads now auto-confirm inventory placements that reference a target location, persist once, and have regression coverage proving no warning 200 can be treated as a synced-but-unpersisted upload.
+- [x] [Review][Patch] HTTP `/api/v1/events` trusts request-body `actor.location_id` for audit and validation - Resolved: concrete authorized assignments stamp actor location from auth; wildcard master-referencing writes use the enterprise sentinel while legacy non-master inventory events preserve body location for existing read scoping.
+- [x] [Review][Patch] Inactive items and locations are still accepted on the write path - Resolved: master-referencing inventory writes reject inactive items, target locations, actor locations, and inactive topology parents.
+- [x] [Review][Patch] Add CHECK constraints for `zone_type` and `temperature_class` [read/projections/location_register.sql:16-32]
+- [x] [Review][Patch] Strengthen the schema-drift guard to detect definition-level drift (constraint bodies, CHECK value lists, columns, indexes, FKs), not just name substrings [test/unit/schema-drift.test.ts:35-49]
+- [x] [Review][Patch] Relocate parent/hierarchy and `site_id` validation into a `location_register` projection helper so non-HTTP writers cannot bypass it (Task 2.5) [src/read/projections/location_register.ts:88-109]
+- [x] [Review][Patch] Close test coverage gaps: edge-path ZONE_INCOMPATIBLE warn/confirm cycle, AC1 read-back of all fields (`hazmat`, `quarantine_required`, `bis_licence_required`, `updated_at`), and a positive non-inventory pass-through assertion (Tasks 5.4, 5.5, 5.1) [test/integration/story-2-1.test.ts]
+- [x] [Review][Patch] Remove redundant secondary indexes duplicating the unique constraints on `sku` and `location_code` [read/projections/item_master.sql:28; read/projections/location_register.sql:29]

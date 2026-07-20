@@ -135,10 +135,13 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   body.metadata.actor.user_id = authContext.userId;
   body.metadata.actor.role = assignment.role;
   body.metadata.actor.location_id = assignment.locationId;
+  if (
+    body.stream_type === 'inventory' &&
+    (body.payload['target_location_id'] !== undefined || body.payload['target_location_code'] !== undefined)
+  ) {
+    body.payload['placement_confirmed'] = true;
+  }
 
-  // Story 2.1 (AC3): a zone-incompatible placement is a WARNING, not an error - same two-step
-  // confirmation contract as POST /api/v1/events, so the edge outbox never misreads it as a
-  // permanent failure. The event was NOT persisted (no idempotency key consumed).
   try {
     const persisted = await persistEvent(body, {
       trace_id: getTraceId(req) ?? '',

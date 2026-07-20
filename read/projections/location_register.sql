@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS location_register (
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_location_register_code UNIQUE (location_code),
   CONSTRAINT chk_location_register_level CHECK (level IN ('site', 'zone', 'aisle', 'rack', 'bin')),
+  CONSTRAINT chk_location_register_zone_type CHECK (zone_type IN ('general', 'hazmat', 'quarantine', 'staging')),
+  CONSTRAINT chk_location_register_temperature_class CHECK (temperature_class IN ('ambient', 'cold', 'frozen')),
   CONSTRAINT chk_location_register_status CHECK (status IN ('active', 'inactive'))
 );
 
@@ -43,6 +45,22 @@ BEGIN
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_location_register_zone_type'
+      AND conrelid = 'location_register'::regclass
+  ) THEN
+    ALTER TABLE location_register
+      ADD CONSTRAINT chk_location_register_zone_type CHECK (zone_type IN ('general', 'hazmat', 'quarantine', 'staging'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_location_register_temperature_class'
+      AND conrelid = 'location_register'::regclass
+  ) THEN
+    ALTER TABLE location_register
+      ADD CONSTRAINT chk_location_register_temperature_class CHECK (temperature_class IN ('ambient', 'cold', 'frozen'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_location_register_status'
       AND conrelid = 'location_register'::regclass
   ) THEN
@@ -51,7 +69,6 @@ BEGIN
   END IF;
 END $$;
 
-CREATE INDEX IF NOT EXISTS idx_location_register_code ON location_register (location_code);
 CREATE INDEX IF NOT EXISTS idx_location_register_parent ON location_register (parent_location_id);
 CREATE INDEX IF NOT EXISTS idx_location_register_site ON location_register (site_id);
 

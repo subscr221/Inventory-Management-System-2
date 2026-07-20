@@ -1,12 +1,14 @@
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendRequestError } from '../../middleware/error.js';
 import { validateEnvelope, persistEvent, readStream } from '../../events/store.js';
-import { getParsedBody, getAuthContext, getAuthorizedRole, getTraceId } from '../../middleware/context.js';
+import { getParsedBody, getAuthContext, getAuthorizedRole, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
 import { auditConfig } from '../../config/audit.js';
 import { getPool } from '../../config/db.js';
 import { logTamperAttempt } from '../../read/projections/audit_log.js';
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
+
+const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
   if (typeof body === 'object' && body !== null) {
@@ -30,16 +32,32 @@ function resolveModuleFromParams(params: Record<string, string>): string {
   return params['streamType'] ?? '';
 }
 
+function referencesInventoryMasters(body: { stream_type: string; payload: Record<string, unknown> }): boolean {
+  return (
+    body.stream_type === 'inventory' &&
+    (body.payload['sku'] !== undefined || body.payload['target_location_id'] !== undefined || body.payload['target_location_code'] !== undefined)
+  );
+}
+
 const postEventBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req);
   validateEnvelope(body);
 
   const authContext = getAuthContext(req);
+  const authorizedAssignment = getAuthorizedAssignment(req);
+  const auditLocationId = authorizedAssignment?.locationId ?? body.metadata.actor.location_id;
   if (authContext) {
     body.metadata.actor.user_id = authContext.userId;
     const authorizedRole = getAuthorizedRole(req);
     if (authorizedRole) {
       body.metadata.actor.role = authorizedRole;
+    }
+    if (authorizedAssignment) {
+      if (authorizedAssignment.locationId !== '*') {
+        body.metadata.actor.location_id = authorizedAssignment.locationId;
+      } else if (referencesInventoryMasters(body)) {
+        body.metadata.actor.location_id = NO_LOCATION_UUID;
+      }
     }
   }
 
@@ -54,7 +72,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
       await logTamperAttempt(client, {
         user_id: authContext?.userId ?? null,
         role: getAuthorizedRole(req) ?? null,
-        location_id: body.metadata.actor.location_id,
+        location_id: auditLocationId,
         endpoint: req.url ?? null,
         method: req.method ?? null,
         error_code: 'AUDIT_LOG_DISABLED',
@@ -73,7 +91,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
         trace_id: traceId,
         user_id: authContext.userId,
         role: getAuthorizedRole(req) ?? '',
-        location_id: body.metadata.actor.location_id,
+        location_id: auditLocationId,
         endpoint: req.url ?? '',
         method: req.method ?? 'POST',
         http_status: 201,

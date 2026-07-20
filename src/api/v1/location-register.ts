@@ -141,18 +141,7 @@ const createLocationBase: RouteHandler = async (req, res, _params) => {
     return;
   }
 
-  // Hierarchy validation (Task 2.3): a site is a root (no parent); every other level requires an
-  // existing parent whose level is the immediately enclosing one (site > zone > aisle > rack > bin).
   const parentIdRaw = body['parent_location_id'];
-  if (level === 'site') {
-    if (parentIdRaw !== undefined && parentIdRaw !== null) {
-      sendRequestError(req, res, 400, 'INVALID_HIERARCHY', 'A site is a hierarchy root and must not have parent_location_id');
-      return;
-    }
-  } else if (!isNonEmptyString(parentIdRaw) || !UUID_REGEX.test(parentIdRaw)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', `parent_location_id is required for level "${level}" and must be a valid UUID`);
-    return;
-  }
 
   const actor = actorContext(req);
   const pool = getPool();
@@ -160,36 +149,13 @@ const createLocationBase: RouteHandler = async (req, res, _params) => {
   try {
     await client.query('BEGIN');
 
-    let parentLocationId: string | null = null;
-    let siteId: string;
     const locationId = randomUUID();
-    if (level === 'site') {
-      siteId = locationId;
-    } else {
-      const parent = await getLocationById(parentIdRaw as string, client);
-      if (!parent) {
-        throw new AppError(404, 'PARENT_LOCATION_NOT_FOUND', `No location register record exists for parent_location_id "${parentIdRaw as string}"`, {
-          parent_location_id: parentIdRaw,
-        });
-      }
-      const expectedParentLevel = LOCATION_LEVELS[LOCATION_LEVELS.indexOf(level) - 1]!;
-      if (parent.level !== expectedParentLevel) {
-        throw new AppError(400, 'INVALID_HIERARCHY', `A "${level}" must have a "${expectedParentLevel}" parent, not "${parent.level}"`, {
-          level,
-          expected_parent_level: expectedParentLevel,
-          actual_parent_level: parent.level,
-        });
-      }
-      parentLocationId = parent.location_id;
-      siteId = parent.site_id;
-    }
 
     const input: CreateLocationInput = {
       location_id: locationId,
       location_code: locationCode,
       level,
-      parent_location_id: parentLocationId,
-      site_id: siteId,
+      parent_location_id: parentIdRaw === undefined || parentIdRaw === null ? null : String(parentIdRaw),
       zone_type: isZoneType(body['zone_type']) ? body['zone_type'] : 'general',
       temperature_class: isTemperatureClass(body['temperature_class']) ? body['temperature_class'] : 'ambient',
       hazmat_allowed: parseBooleanField(body, 'hazmat_allowed', false),

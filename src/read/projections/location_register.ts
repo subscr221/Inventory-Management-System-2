@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
+import { AppError } from '../../middleware/error.js';
 
 /**
  * Location register read model (Story 2.1) - warehouse topology master data, separate from the
@@ -40,8 +41,8 @@ export interface CreateLocationInput {
   location_id: string;
   location_code: string;
   level: LocationLevel;
-  parent_location_id: string | null;
-  site_id: string;
+  parent_location_id?: string | null;
+  site_id?: string;
   zone_type: ZoneType;
   temperature_class: TemperatureClass;
   hazmat_allowed: boolean;
@@ -58,6 +59,8 @@ export interface UpdateLocationPatch {
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function runner(client?: PoolClient): Queryable {
   return client ?? getPool();
@@ -85,8 +88,47 @@ function mapRow(row: Record<string, unknown>): LocationRegisterEntry {
   };
 }
 
+export async function resolveLocationHierarchy(
+  input: Pick<CreateLocationInput, 'location_id' | 'level' | 'parent_location_id'>,
+  client?: PoolClient,
+): Promise<{ parent_location_id: string | null; site_id: string }> {
+  if (input.level === 'site') {
+    if (input.parent_location_id !== undefined && input.parent_location_id !== null) {
+      throw new AppError(400, 'INVALID_HIERARCHY', 'A site is a hierarchy root and must not have parent_location_id');
+    }
+    return { parent_location_id: null, site_id: input.location_id };
+  }
+
+  if (typeof input.parent_location_id !== 'string' || !UUID_REGEX.test(input.parent_location_id)) {
+    throw new AppError(400, 'INVALID_PARAMS', `parent_location_id is required for level "${input.level}" and must be a valid UUID`);
+  }
+
+  const parent = await getLocationById(input.parent_location_id, client);
+  if (!parent) {
+    throw new AppError(404, 'PARENT_LOCATION_NOT_FOUND', `No location register record exists for parent_location_id "${input.parent_location_id}"`, {
+      parent_location_id: input.parent_location_id,
+    });
+  }
+  if (parent.status !== 'active') {
+    throw new AppError(400, 'INACTIVE_LOCATION', 'parent_location_id references an inactive location', {
+      parent_location_id: input.parent_location_id,
+    });
+  }
+  const expectedParentLevel = LOCATION_LEVELS[LOCATION_LEVELS.indexOf(input.level) - 1]!;
+  if (parent.level !== expectedParentLevel) {
+    throw new AppError(400, 'INVALID_HIERARCHY', `A "${input.level}" must have a "${expectedParentLevel}" parent, not "${parent.level}"`, {
+      level: input.level,
+      expected_parent_level: expectedParentLevel,
+      actual_parent_level: parent.level,
+    });
+  }
+
+  return { parent_location_id: parent.location_id, site_id: parent.site_id };
+}
+
 /** Inserts a location row and returns it. Participates in `client`'s transaction when given. */
 export async function createLocation(input: CreateLocationInput, client?: PoolClient): Promise<LocationRegisterEntry> {
+  const hierarchy = await resolveLocationHierarchy(input, client);
   const result = await runner(client).query(
     `INSERT INTO location_register
        (location_id, location_code, level, parent_location_id, site_id, zone_type, temperature_class,
@@ -97,8 +139,8 @@ export async function createLocation(input: CreateLocationInput, client?: PoolCl
       input.location_id,
       input.location_code,
       input.level,
-      input.parent_location_id,
-      input.site_id,
+      hierarchy.parent_location_id,
+      hierarchy.site_id,
       input.zone_type,
       input.temperature_class,
       input.hazmat_allowed,
