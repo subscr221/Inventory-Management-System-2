@@ -40,6 +40,13 @@ if [ -z "${PRODUCTION_REVIEWER:-}" ]; then
   exit 1
 fi
 PRODUCTION_REVIEWER_TYPE="${PRODUCTION_REVIEWER_TYPE:-User}"
+case "$PRODUCTION_REVIEWER_TYPE" in
+  User | Team) ;;
+  *)
+    echo "ERROR: PRODUCTION_REVIEWER_TYPE must be 'User' or 'Team', got '${PRODUCTION_REVIEWER_TYPE}'." >&2
+    exit 1
+    ;;
+esac
 
 REPO_JSON="$(gh repo view --json owner,name,defaultBranchRef)"
 OWNER="$(echo "$REPO_JSON" | jq -r '.owner.login')"
@@ -94,6 +101,7 @@ PRODUCTION_BODY="$(jq -c --argjson reviewer_id "$REVIEWER_ID" --arg reviewer_typ
   '.production | {
     wait_timer: .wait_timer,
     prevent_self_review: .prevent_self_review,
+    can_admins_bypass: .can_admins_bypass,
     reviewers: [{type: $reviewer_type, id: $reviewer_id}],
     deployment_branch_policy: .deployment_branch_policy
   }' "${SCRIPT_DIR}/environments.json")"

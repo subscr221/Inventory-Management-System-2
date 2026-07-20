@@ -108,4 +108,17 @@ export const config = {
     tokenTtl: powerSyncTokenTtl,
     tokenTtlSeconds: powerSyncTokenTtlSeconds,
   },
+  notify: {
+    // Web push (VAPID) is optional, not fail-closed like the auth/SCIM/PowerSync secrets above:
+    // an environment with no push provider configured still gets full in-app notification
+    // delivery (AC1's in-app channel and AC4's durable-queue guarantee do not depend on it).
+    // Unset keys mean web_push deliveries are recorded as 'failed' with reason
+    // 'push_not_configured' rather than being silently skipped or crashing the dispatcher.
+    vapidPublicKey: process.env['VAPID_PUBLIC_KEY'] ?? '',
+    vapidPrivateKey: process.env['VAPID_PRIVATE_KEY'] ?? '',
+    vapidSubject: process.env['VAPID_SUBJECT'] ?? 'mailto:platform@example.com',
+    dispatchIntervalMs: Number(process.env['NOTIFY_DISPATCH_INTERVAL_MS'] ?? 5000),
+    escalationIntervalMs: Number(process.env['NOTIFY_ESCALATION_INTERVAL_MS'] ?? 15000),
+    notificationRetentionDays: Number(process.env['NOTIFY_RETENTION_DAYS'] ?? 30),
+  },
 } as const;

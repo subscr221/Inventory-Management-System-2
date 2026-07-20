@@ -5,7 +5,7 @@ import { getAdminPool, closeAdminPool } from '../config/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const MIGRATIONS = ['../../events/domain_events.sql', '../../sync/migrations/powersync.sql', '../../read/projections/users.sql', '../../read/projections/audit_log.sql', '../../read/projections/doa_registry.sql', '../../read/projections/business_stream_config.sql', '../../read/projections/location.sql', '../../read/projections/instrument_calibration.sql'];
+const MIGRATIONS = ['../../events/domain_events.sql', '../../sync/migrations/powersync.sql', '../../read/projections/users.sql', '../../read/projections/audit_log.sql', '../../read/projections/doa_registry.sql', '../../read/projections/business_stream_config.sql', '../../read/projections/location.sql', '../../read/projections/instrument_calibration.sql', '../../read/projections/notification.sql'];
 
 async function migrate(): Promise<void> {
   // DDL requires admin_user - app_user has no CREATE privilege on the public schema.

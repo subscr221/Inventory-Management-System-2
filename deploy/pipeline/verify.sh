@@ -71,6 +71,9 @@ for env_name in staging production; do
     if [ "$REVIEWER_COUNT" = "0" ]; then
       fail "environment 'production' has no required reviewer protection rule"
     fi
+    if [ "$(echo "$ENV_JSON" | jq -r '.can_admins_bypass // true')" != "false" ]; then
+      fail "environment 'production' allows administrator bypass of required reviewers"
+    fi
   fi
 done
 

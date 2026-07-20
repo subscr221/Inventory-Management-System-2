@@ -62,7 +62,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Load test environment
-        run: grep -vE '^[[:space:]]*(#|$)' .env.test >> "$GITHUB_ENV"
+        run: sed -e 's/^[[:space:]]*//' .env.test | grep -vE '^(#|$)' >> "$GITHUB_ENV"
       - run: npm ci
       - name: Provision CI database roles
         run: PGPASSWORD="$DB_ADMIN_PASSWORD" psql -h localhost -U "$DB_ADMIN_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f deploy/pipeline/ci/db-roles.sql
@@ -95,7 +95,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - name: Load test environment
-        run: grep -vE '^[[:space:]]*(#|$)' .env.test >> "$GITHUB_ENV"
+        run: sed -e 's/^[[:space:]]*//' .env.test | grep -vE '^(#|$)' >> "$GITHUB_ENV"
       - run: npm ci
       - name: Provision CI database roles
         run: PGPASSWORD="$DB_ADMIN_PASSWORD" psql -h localhost -U "$DB_ADMIN_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f deploy/pipeline/ci/db-roles.sql

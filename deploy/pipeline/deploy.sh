@@ -42,6 +42,7 @@ START_TIME=$(date +%s)
 # rather than silently rebuilding from source on an older host.
 MIN_COMPOSE_VERSION="2.24.0"
 ACTUAL_COMPOSE_VERSION="$(docker compose version --short 2>/dev/null || echo "0.0.0")"
+ACTUAL_COMPOSE_VERSION="${ACTUAL_COMPOSE_VERSION#v}"
 if [ "$(printf '%s\n%s\n' "$MIN_COMPOSE_VERSION" "$ACTUAL_COMPOSE_VERSION" | sort -V | head -n1)" != "$MIN_COMPOSE_VERSION" ]; then
   echo "ERROR: Docker Compose ${MIN_COMPOSE_VERSION}+ is required (found ${ACTUAL_COMPOSE_VERSION}) for the immutable-image !reset merge tag in docker-compose.images.yml." >&2
   exit 1

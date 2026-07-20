@@ -53,6 +53,10 @@ export class Router {
     this.addRoute('PUT', path, handler);
   }
 
+  delete(path: string, handler: RouteHandler): void {
+    this.addRoute('DELETE', path, handler);
+  }
+
   private addRoute(method: string, path: string, handler: RouteHandler): void {
     const paramNames: string[] = [];
     const pattern = path.replace(/:([^/]+)/g, (_match, paramName: string) => {

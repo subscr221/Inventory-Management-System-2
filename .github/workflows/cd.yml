@@ -34,8 +34,8 @@ jobs:
       packages: write
     runs-on: ubuntu-latest
     outputs:
-      app-image: ${{ steps.image-refs.outputs.app-image }}
-      edge-image: ${{ steps.image-refs.outputs.edge-image }}
+      app-image: ${{ steps.app-digest.outputs.image }}
+      edge-image: ${{ steps.edge-digest.outputs.image }}
       commit-sha: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +59,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push app image
+        id: build-app
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -66,7 +67,12 @@ jobs:
           push: true
           tags: ${{ steps.image-refs.outputs.app-image }}
 
+      - name: Export app digest reference
+        id: app-digest
+        run: echo "image=${{ steps.image-refs.outputs.app-image }}@${{ steps.build-app.outputs.digest }}" >>"$GITHUB_OUTPUT"
+
       - name: Build and push edge image
+        id: build-edge
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -74,11 +80,20 @@ jobs:
           push: true
           tags: ${{ steps.image-refs.outputs.edge-image }}
 
+      - name: Export edge digest reference
+        id: edge-digest
+        run: echo "image=${{ steps.image-refs.outputs.edge-image }}@${{ steps.build-edge.outputs.digest }}" >>"$GITHUB_OUTPUT"
+
   deploy-staging:
     name: deploy-staging
     needs: build-and-push
     runs-on: [self-hosted, staging]
     environment: staging
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      deployed: ${{ steps.branch-tip.outputs.deploy }}
     concurrency:
       group: cd-deploy-staging
       cancel-in-progress: false
@@ -96,12 +111,40 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.build-and-push.outputs.commit-sha }}
-      - run: deploy/pipeline/deploy.sh staging
+      - name: Confirm commit is still default-branch tip
+        id: branch-tip
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          COMMIT_SHA: ${{ needs.build-and-push.outputs.commit-sha }}
+        run: |
+          LATEST_SHA="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | cut -f1)"
+          if [ -z "$LATEST_SHA" ]; then
+            echo "ERROR: could not resolve default-branch tip for ${DEFAULT_BRANCH}." >&2
+            exit 1
+          fi
+          if [ "$LATEST_SHA" != "$COMMIT_SHA" ]; then
+            echo "Skipping stale deploy for ${COMMIT_SHA}; ${LATEST_SHA} is now the default-branch tip."
+            echo "deploy=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "deploy=true" >>"$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        if: steps.branch-tip.outputs.deploy == 'true'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - if: steps.branch-tip.outputs.deploy == 'true'
+        run: bash deploy/pipeline/deploy.sh staging
 
   promote-production:
     name: promote-production
     needs: [build-and-push, deploy-staging]
+    if: needs.deploy-staging.outputs.deployed == 'true'
     runs-on: [self-hosted, production]
+    permissions:
+      contents: read
+      packages: read
     # GitHub's `production` environment protection rule (deploy/pipeline/environments.json,
     # applied by deploy/pipeline/bootstrap.sh) pauses this job until a required reviewer approves.
     # The approval and the approver's identity are recorded on the resulting deployment; secrets
@@ -126,4 +169,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.build-and-push.outputs.commit-sha }}
-      - run: deploy/pipeline/deploy.sh production
+      - name: Confirm commit is still default-branch tip
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          COMMIT_SHA: ${{ needs.build-and-push.outputs.commit-sha }}
+        run: |
+          LATEST_SHA="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | cut -f1)"
+          if [ -z "$LATEST_SHA" ]; then
+            echo "ERROR: could not resolve default-branch tip for ${DEFAULT_BRANCH}." >&2
+            exit 1
+          fi
+          if [ "$LATEST_SHA" != "$COMMIT_SHA" ]; then
+            echo "ERROR: refusing stale production promotion for ${COMMIT_SHA}; ${LATEST_SHA} is now the default-branch tip." >&2
+            exit 1
+          fi
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: bash deploy/pipeline/deploy.sh production

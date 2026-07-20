@@ -48,12 +48,21 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-20
+# story 1-11 dev-story 2026-07-20: notification schema + notification domain event stream, non-blocking emitNotification(),
+#   resumable poll-based dispatcher (in-app + web push), DOA-registry-resolved escalation clock, and full in-app REST API
+#   implemented; backend 153/153 (10 new), spine gate 6/6, edge unit 14/14, edge typecheck/lint/build clean, tsc/eslint/
+#   diff-check clean; fixed a pre-existing missing-CASCADE regression in Story 1.4's test harness and updated Story 1.9's
+#   spine-gate route allowlist; web push VAPID keys optional/unconfigured in this env (in-app delivery unaffected); moved to review
+# story 1-11 dev-story 2026-07-20: implementation started from baseline 58514a6; moved to in-progress
+# story 1-11 created 2026-07-20 via create-story workflow: shared notification and alerting service (in-app, web push, escalating
+#   alerts with acknowledgment tracking) that every module consumes instead of inventing its own; targets AC1-4 (role/location
+#   delivery with trace_id, DOA-registry-resolved escalation, offline queuing, non-blocking durable emission); ready-for-dev
 # story 1-10 code review 2026-07-20: 1 decision-needed + 12 patches resolved (required PR review added to branch
 #   protection; CD secrets wired into cd.yml/deploy.sh; CD concurrency split so a stuck production approval no longer
 #   blocks staging; deploy.sh migrates before cutover; packages:write scoped down; Compose version guard added;
 #   provision.sh v1-only false-pass fixed; CD default-branch detection made dynamic; Playwright e2e wired into CI;
 #   Task 6 checklist corrected to stop claiming unexecuted live verification; dead environments.json field removed;
-#   bootstrap.sh Team-reviewer lookup fixed; .env.test CI loader hardened); 3 defers logged; moved to done
+#   bootstrap.sh Team-reviewer lookup fixed; .env.test CI loader hardened); 3 defers logged; remains in review pending live verification
 # story 1-10 dev-story 2026-07-20: CI workflow (5 required checks), CI DB role provisioning, branch-protection/environment
 #   bootstrap IaC, CD workflow with self-hosted-runner immutable image promotion, and 3 preexisting-bug fixes (Dockerfile
 #   migration-asset paths, provision.sh Compose v2 detection, package.json start script) implemented; backend 143/143,
@@ -110,8 +119,8 @@ development_status:
   1-7-calibration-lockout-enforcement: done   # PILOT
   1-8-offline-edge-pwa-shell-and-powersync-sync-layer: done   # PILOT
   1-9-spine-acceptance-contract-ci-gate: done   # PILOT
-  1-10-ci-cd-pipeline-construction: done   # PILOT
-  1-11-notification-and-alerting-foundation: backlog   # PILOT
+  1-10-ci-cd-pipeline-construction: review   # PILOT
+  1-11-notification-and-alerting-foundation: review   # PILOT
   epic-1-retrospective: optional
 
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---

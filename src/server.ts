@@ -31,6 +31,18 @@ import {
   powerSyncCredentialsHandler,
   edgeEventUploadHandler,
 } from './api/v1/edge.js';
+import {
+  listNotificationsHandler,
+  getUnreadCountHandler,
+  updateNotificationHandler,
+  acknowledgeNotificationHandler,
+  getPreferencesHandler,
+  putPreferencesHandler,
+  createPushSubscriptionHandler,
+  deletePushSubscriptionHandler,
+} from './api/v1/notification.js';
+import { runDispatchCycle } from './notify/dispatch.js';
+import { runEscalationCycle } from './notify/escalate.js';
 
 export function createAppRouter(): Router {
   const router = new Router();
@@ -58,6 +70,14 @@ export function createAppRouter(): Router {
   router.get('/api/v1/edge/bootstrap', edgeBootstrapHandler);
   router.get('/api/v1/edge/powersync-credentials', powerSyncCredentialsHandler);
   router.post('/api/v1/edge/events', edgeEventUploadHandler);
+  router.get('/api/v1/notifications', listNotificationsHandler);
+  router.get('/api/v1/notifications/unread-count', getUnreadCountHandler);
+  router.patch('/api/v1/notifications/:id', updateNotificationHandler);
+  router.post('/api/v1/notifications/:id/acknowledge', acknowledgeNotificationHandler);
+  router.get('/api/v1/notifications/preferences', getPreferencesHandler);
+  router.put('/api/v1/notifications/preferences', putPreferencesHandler);
+  router.post('/api/v1/notifications/push-subscription', createPushSubscriptionHandler);
+  router.delete('/api/v1/notifications/push-subscription', deletePushSubscriptionHandler);
 
   if (config.auth.mode === 'local') {
     router.post('/api/v1/auth/dev-token', devTokenHandler);
@@ -80,14 +100,32 @@ export function createAppServer(router: Router = createAppRouter()): Server {
 
 const server = createAppServer();
 
+// Story 1.11: the notification dispatcher and escalation clock run as in-process intervals
+// rather than a separate `notify` container/CD job - see Dev Notes Task 6.2. They only start
+// inside startServer() (the real running process), never when a test builds its own Router/Server
+// directly, so tests control dispatch/escalation timing explicitly via runDispatchCycle()/
+// runEscalationCycle() instead of racing a background timer.
+let dispatchTimer: ReturnType<typeof setInterval> | undefined;
+let escalationTimer: ReturnType<typeof setInterval> | undefined;
+
 function startServer(): void {
   server.listen(config.port, config.hostname, () => {
     console.log(`Server listening on http://${config.hostname}:${config.port}`);
     console.log(`Environment: ${config.nodeEnv}`);
   });
 
+  dispatchTimer = setInterval(() => {
+    runDispatchCycle().catch((err) => console.error('Notification dispatch cycle failed:', err));
+  }, config.notify.dispatchIntervalMs);
+
+  escalationTimer = setInterval(() => {
+    runEscalationCycle().catch((err) => console.error('Notification escalation cycle failed:', err));
+  }, config.notify.escalationIntervalMs);
+
   process.on('SIGTERM', () => {
     console.log('SIGTERM received. Shutting down gracefully...');
+    clearInterval(dispatchTimer);
+    clearInterval(escalationTimer);
     server.close(async () => {
       const { closePool } = await import('./config/db.js');
       await closePool();
@@ -98,6 +136,8 @@ function startServer(): void {
 
   process.on('SIGINT', () => {
     console.log('SIGINT received. Shutting down gracefully...');
+    clearInterval(dispatchTimer);
+    clearInterval(escalationTimer);
     server.close(async () => {
       const { closePool } = await import('./config/db.js');
       await closePool();

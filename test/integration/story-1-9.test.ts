@@ -151,6 +151,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     const router = createAppRouter();
     const routeSurface = router.listRoutes().map((route) => `${route.method} ${route.path}`).sort();
     const allowedSpineRoutes = [
+      'DELETE /api/v1/notifications/push-subscription',
       'GET /api/v1/audit/log',
       'GET /api/v1/business-streams',
       'GET /api/v1/business-streams/rules',
@@ -159,7 +160,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/events/:streamType/:streamId',
       'GET /api/v1/health',
       'GET /api/v1/locations/:lotId',
+      'GET /api/v1/notifications',
+      'GET /api/v1/notifications/preferences',
+      'GET /api/v1/notifications/unread-count',
       'PATCH /api/v1/doa/entries/:entryId',
+      'PATCH /api/v1/notifications/:id',
       'PATCH /api/v1/scim/v2/Users/:externalId',
       'POST /api/v1/auth/dev-token',
       'POST /api/v1/business-streams/rules',
@@ -171,10 +176,13 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/events',
       'POST /api/v1/instruments/:id/calibration-escalations',
       'POST /api/v1/locations/:lotId/expected',
+      'POST /api/v1/notifications/:id/acknowledge',
+      'POST /api/v1/notifications/push-subscription',
       'POST /api/v1/qc/results',
       'POST /api/v1/scim/v2/Users',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
+      'PUT /api/v1/notifications/preferences',
     ].sort();
     assert.deepStrictEqual(routeSurface, allowedSpineRoutes, 'production route surface must stay limited to the platform spine');
 
