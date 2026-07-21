@@ -15,6 +15,8 @@ import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/i
 import { config } from '../../config/index.js';
 import type { AuthContext } from '../../middleware/context.js';
 
+const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
+
 function edgeSiteName(): string {
   return config.edge.siteName;
 }
@@ -134,7 +136,11 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
 
   body.metadata.actor.user_id = authContext.userId;
   body.metadata.actor.role = assignment.role;
-  body.metadata.actor.location_id = assignment.locationId;
+  if (assignment.locationId !== '*') {
+    body.metadata.actor.location_id = assignment.locationId;
+  } else if (body.stream_type === 'inventory') {
+    body.metadata.actor.location_id = NO_LOCATION_UUID;
+  }
   if (
     body.stream_type === 'inventory' &&
     (body.payload['target_location_id'] !== undefined || body.payload['target_location_code'] !== undefined)

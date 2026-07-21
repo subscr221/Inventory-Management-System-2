@@ -8,8 +8,8 @@
 --
 -- lot_id is the internal UUID used as the lot_master event stream_id (EventEnvelope.stream_id
 -- must remain UUID); lot_number is the unique API-facing identifier. expiry_date is used for
--- FEFO/FIFO selection. quality_hold_status and quality_hold_reason track quality holds.
--- sku is used to link to the item_master.
+-- FEFO/FIFO selection. quality_hold_status and quality_hold_reason are derived read-model state
+-- from quality hold events.
 
 CREATE TABLE IF NOT EXISTS lot_master (
   lot_id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -20,12 +20,20 @@ CREATE TABLE IF NOT EXISTS lot_master (
   quality_hold_reason  TEXT,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT uq_lot_master_lot_number_sku_expiry UNIQUE (lot_number, sku, expiry_date),
+  CONSTRAINT uq_lot_master_lot_number UNIQUE (lot_number),
   CONSTRAINT chk_lot_master_quality_hold_status CHECK (quality_hold_status IN ('none', 'held'))
 );
 
 DO $$
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_lot_master_lot_number'
+      AND conrelid = 'lot_master'::regclass
+  ) THEN
+    ALTER TABLE lot_master
+      ADD CONSTRAINT uq_lot_master_lot_number UNIQUE (lot_number);
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_lot_master_quality_hold_status'
@@ -36,10 +44,7 @@ BEGIN
   END IF;
 END $$;
 
--- Index for SKU + expiry lookups (used in FEFO/FIFO selection)
 CREATE INDEX IF NOT EXISTS idx_lot_master_sku_expiry ON lot_master (sku, expiry_date);
-
--- Index for lot_id lookups
 CREATE INDEX IF NOT EXISTS idx_lot_master_lot_id ON lot_master (lot_id);
 
 DO $$

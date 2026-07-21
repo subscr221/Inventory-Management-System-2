@@ -48,6 +48,14 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-21
+# story 2-3 code re-review 2026-07-21: independent second adversarial pass over baseline->working-tree; tsc + npm test
+#   reproduced clean (222/222) but green suite did not cover a confirmed torn-write. Fixed 1 (locationless stock.issued
+#   torn write now requires a resolvable target location). 17 further patch findings + 1 decision (expired-lot override
+#   role-substring auth) + 2 defers logged; unresolved high/medium findings remain (un-lotted balance drain, serial/quantity
+#   reconciliation, FEFO concurrency fallthrough); status corrected review->in-progress
+# story 2-3 code review 2026-07-21: 22 patch findings resolved; central lot/serial validation, trace population,
+#   quality-hold audit atomicity, FEFO/FIFO selection, serial availability, route/schema guards, stable errors,
+#   and integration coverage patched; verification battery clean; moved to done
 # story 2-3 dev-story 2026-07-21: implemented all 7 tasks; lot_master/serial_master/lot_trace projections and API routes,
 #   central lot/serial validation in persistEvent (shape assert pre-transaction, projection apply inside event
 #   transaction), FEFO/FIFO selection endpoint, quality-hold management API, schema drift and route guards,
@@ -159,7 +167,7 @@ development_status:
   epic-2: in-progress
   2-1-item-master-and-location-register: done   # PILOT
   2-2-real-time-multi-location-stock-balances: done   # PILOT
-  2-3-lot-batch-and-serial-traceability: review   # PILOT
+  2-3-lot-batch-and-serial-traceability: in-progress   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: backlog   # PILOT
   2-5-inter-location-transfer-requests: backlog   # PILOT
   2-6-cycle-counting-and-physical-inventory: backlog   # PILOT

@@ -192,18 +192,8 @@ export async function persistEvent(
   try {
     if (ownsTransaction) await client.query('BEGIN');
 
-    // Story 2.2: apply the stock-balance projection INSIDE the event transaction and BEFORE the
-    // domain_events insert. The allocation path locks the balance rows FOR UPDATE and re-checks
-    // availability under the lock, so two writers racing for the last unit have exactly one
-    // winner; the loser throws 409 INSUFFICIENT_STOCK, the transaction rolls back, and no event
-    // row, audit row, or idempotency key is consumed. A DUPLICATE_EVENT retry likewise rolls the
-    // re-applied balance back, so the projection reflects each event exactly once. Non-stock
-    // events (and legacy stock shapes without master refs) are untouched.
+    await applyLotSerialValidation(envelope, client, eventId);
     await applyStockBalanceProjection(envelope, client);
-    // Story 2.3: apply the lot/serial validation INSIDE the event transaction and BEFORE the
-    // domain_events insert. This ensures that lot/serial validations are atomic with the event
-    // insertion, so invalid lot/serial operations are rejected without consuming an idempotency key.
-    await applyLotSerialValidation(envelope, client);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {
@@ -289,6 +279,15 @@ export async function persistEvent(
         throw new AppError(409, 'STREAM_CONFLICT', 'Event version conflict in stream', {
           stream_id: envelope.stream_id,
           event_version: envelope.event_version,
+        });
+      } else if (constraint === 'uq_lot_master_lot_number') {
+        throw new AppError(400, 'DUPLICATE_LOT', 'Lot already exists', {
+          lot_id: typeof envelope.payload['lot_id'] === 'string' ? envelope.payload['lot_id'] : null,
+          sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
+        });
+      } else if (constraint === 'uq_serial_master_sku_serial_number') {
+        throw new AppError(400, 'DUPLICATE_SERIAL', 'Serial number already exists for this SKU', {
+          sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
         });
       }
     }

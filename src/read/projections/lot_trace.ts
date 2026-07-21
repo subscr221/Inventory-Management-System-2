@@ -1,12 +1,6 @@
 import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
 
-/**
- * Lot trace auxiliary table (Story 2.3). This table captures every transaction touching a lot
- * for fast recall traces. Columns: lot_id, event_id, event_type, sku, location_id, quantity_change,
- * business_stream, timestamp.
- */
-
 export interface LotTrace {
   trace_id: string;
   lot_id: string;
@@ -29,6 +23,7 @@ export interface CreateLotTraceInput {
   location_code: string | null;
   quantity_change: string;
   business_stream: string;
+  timestamp?: string;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -55,12 +50,11 @@ function mapRow(row: Record<string, unknown>): LotTrace {
   };
 }
 
-/** Appends a trace entry for a lot. Participates in `client`'s transaction when given. */
 export async function appendTraceEntry(input: CreateLotTraceInput, client?: PoolClient): Promise<LotTrace> {
   const result = await runner(client).query(
     `INSERT INTO lot_trace
-       (lot_id, event_id, event_type, sku, location_id, location_code, quantity_change, business_stream)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (lot_id, event_id, event_type, sku, location_id, location_code, quantity_change, business_stream, timestamp)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamptz, now()))
      RETURNING ${TRACE_COLUMNS}`,
     [
       input.lot_id,
@@ -71,24 +65,23 @@ export async function appendTraceEntry(input: CreateLotTraceInput, client?: Pool
       input.location_code,
       input.quantity_change,
       input.business_stream,
+      input.timestamp ?? null,
     ],
   );
   return mapRow(result.rows[0]!);
 }
 
-/** Gets the trace for a lot, ordered by timestamp. */
 export async function getTraceForLot(lotId: string, client?: PoolClient): Promise<LotTrace[]> {
   const result = await runner(client).query(
-    `SELECT ${TRACE_COLUMNS} 
-     FROM lot_trace 
-     WHERE lot_id = $1 
-     ORDER BY timestamp ASC`,
+    `SELECT ${TRACE_COLUMNS}
+     FROM lot_trace
+     WHERE lot_id = $1
+     ORDER BY timestamp ASC, event_id ASC`,
     [lotId],
   );
   return result.rows.map(mapRow);
 }
 
-/** Checks if a trace entry already exists for an event to prevent duplicates. */
 export async function traceEntryExists(eventId: string, client?: PoolClient): Promise<boolean> {
   const result = await runner(client).query(`SELECT 1 FROM lot_trace WHERE event_id = $1 LIMIT 1`, [eventId]);
   return result.rows.length > 0;

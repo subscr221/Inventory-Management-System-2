@@ -152,7 +152,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     const routeSurface = router.listRoutes().map((route) => `${route.method} ${route.path}`).sort();
     const allowedSpineRoutes = [
       'DELETE /api/v1/notifications/push-subscription',
-      'DELETE /api/v1/lots/:lotNumber/quality-hold',
+      'DELETE /api/v1/lots/:lot_id/quality-hold',
       'GET /api/v1/audit/log',
       'GET /api/v1/business-streams',
       'GET /api/v1/business-streams/rules',
@@ -163,7 +163,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/items/:sku',
       'GET /api/v1/locations/:locationId',
       'GET /api/v1/lots/:lotId/location',
-      'GET /api/v1/lots/:lotNumber/trace',
+      'GET /api/v1/lots/:lot_id/trace',
       'GET /api/v1/notifications',
       'GET /api/v1/notifications/preferences',
       'GET /api/v1/notifications/unread-count',
@@ -192,7 +192,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/scim/v2/Users',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
-      'PUT /api/v1/lots/:lotNumber/quality-hold',
+      'PUT /api/v1/lots/:lot_id/quality-hold',
       'PUT /api/v1/notifications/preferences',
     ].sort();
     assert.deepStrictEqual(routeSurface, allowedSpineRoutes, 'production route surface must stay limited to the platform spine');

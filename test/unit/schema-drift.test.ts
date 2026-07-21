@@ -65,13 +65,13 @@ const EXPECTED = [
   {
     canonical: 'read/projections/lot_master.sql',
     table: 'lot_master',
-    constraints: ['chk_lot_master_quality_hold_status'],
+    constraints: ['uq_lot_master_lot_number', 'chk_lot_master_quality_hold_status'],
     indexes: ['idx_lot_master_sku_expiry', 'idx_lot_master_lot_id'],
   },
   {
     canonical: 'read/projections/serial_master.sql',
     table: 'serial_master',
-    constraints: [] as string[],
+    constraints: ['uq_serial_master_sku_serial_number'],
     indexes: ['idx_serial_master_sku_serial'],
   },
   {

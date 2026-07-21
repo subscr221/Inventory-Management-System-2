@@ -330,11 +330,11 @@ Every event in the system — edge or central — carries the following shape:
 | Concern | Convention |
 | --- | --- |
 | Protocol | REST over HTTPS |
-| Versioning | URL-prefixed — `/api/v1/` |
+| Versioning | URL-prefixed - `/api/v1/` |
 | Auth | SSO-gated (SAML 2.0/OIDC); every request authenticated |
 | Mutating operations | Logged to edit log with `trace_id` |
 | Error envelope | `{ error_code, message, details, trace_id }` |
-| Stable error codes | `CALIBRATION_LOCKOUT`, `INSUFFICIENT_STOCK`, `APPROVAL_REQUIRED`, `DUPLICATE_EVENT`, `STREAM_CONFLICT`, `UNTAGGED_TRANSACTION`, `GATE_PASS_REQUIRED`, `SOURCE_DOCUMENT_REQUIRED`, `CROSS_ISSUE_BLOCKED`, `CUSTODY_NOT_ZERO` |
+| Stable error codes | `CALIBRATION_LOCKOUT`, `INSUFFICIENT_STOCK`, `APPROVAL_REQUIRED`, `DUPLICATE_EVENT`, `STREAM_CONFLICT`, `UNTAGGED_TRANSACTION`, `GATE_PASS_REQUIRED`, `SOURCE_DOCUMENT_REQUIRED`, `CROSS_ISSUE_BLOCKED`, `CUSTODY_NOT_ZERO`, `LOT_EXPIRED`, `LOT_ON_HOLD`, `DUPLICATE_LOT`, `DUPLICATE_SERIAL`, `SERIAL_REQUIRED`, `SERIAL_NOT_ALLOWED`, `SERIAL_NOT_AVAILABLE`, `NO_AVAILABLE_LOT`, `LOT_NOT_FOUND`, `SERIAL_NOT_FOUND` |
 
 ## Spine Acceptance Contract
 

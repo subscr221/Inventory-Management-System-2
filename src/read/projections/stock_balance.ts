@@ -42,6 +42,13 @@ export interface StockAllocationInput {
   quantity: number;
 }
 
+export interface StockIssueInput {
+  sku: string;
+  location_id: string;
+  lot_id?: string | null;
+  quantity: number;
+}
+
 type Queryable = Pick<PoolClient, 'query'>;
 
 function runner(client?: PoolClient): Queryable {
@@ -108,8 +115,6 @@ export async function applyStockReceipt(input: StockReceiptInput, client: PoolCl
  */
 export async function applyStockAllocation(input: StockAllocationInput, client: PoolClient): Promise<void> {
   const lotId = input.lot_id ?? null;
-  // Lock the matching rows first - FOR UPDATE cannot be combined with aggregate/window
-  // functions, so we lock separately and then compute under the held lock.
   await client.query(
     `SELECT balance_id FROM stock_balance
      WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
@@ -117,16 +122,12 @@ export async function applyStockAllocation(input: StockAllocationInput, client: 
     [input.sku, input.location_id, lotId],
   );
 
-  // Sum available in SQL to preserve NUMERIC precision (rows are already locked by the
-  // transaction, no FOR UPDATE needed).
   const checkResult = await client.query(
     `SELECT COALESCE(SUM(available), 0)::text AS total_available
      FROM stock_balance
      WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)`,
     [input.sku, input.location_id, lotId],
   );
-  // pg returns NUMERIC as string; parseFloat is exact for integers and the DB CHECK
-  // constraint backstops any fractional false-positive from IEEE-754 comparison.
   const totalAvailable = parseFloat(checkResult.rows[0]!['total_available'] as string);
   if (totalAvailable < input.quantity) {
     throw new AppError(409, 'INSUFFICIENT_STOCK', 'Available stock does not cover the requested allocation', {
@@ -138,8 +139,6 @@ export async function applyStockAllocation(input: StockAllocationInput, client: 
     });
   }
 
-  // Drain rows in SQL: a windowed cumulative sum distributes the allocation across rows in
-  // deterministic order, preserving NUMERIC precision for every row update.
   await client.query(
     `WITH ranked AS (
        SELECT balance_id, available AS available_qty,
@@ -149,6 +148,49 @@ export async function applyStockAllocation(input: StockAllocationInput, client: 
      )
      UPDATE stock_balance
      SET allocated = allocated + LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
+         updated_at = now()
+     FROM ranked
+     WHERE stock_balance.balance_id = ranked.balance_id
+       AND ranked.cumulative - ranked.available_qty < $4`,
+    [input.sku, input.location_id, lotId, input.quantity],
+  );
+}
+
+export async function applyStockIssue(input: StockIssueInput, client: PoolClient): Promise<void> {
+  const lotId = input.lot_id ?? null;
+  await client.query(
+    `SELECT balance_id FROM stock_balance
+     WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
+     FOR UPDATE`,
+    [input.sku, input.location_id, lotId],
+  );
+
+  const checkResult = await client.query(
+    `SELECT COALESCE(SUM(available), 0)::text AS total_available
+     FROM stock_balance
+     WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)`,
+    [input.sku, input.location_id, lotId],
+  );
+  const totalAvailable = parseFloat(checkResult.rows[0]!['total_available'] as string);
+  if (totalAvailable < input.quantity) {
+    throw new AppError(409, 'INSUFFICIENT_STOCK', 'Available stock does not cover the requested issue', {
+      sku: input.sku,
+      location_id: input.location_id,
+      ...(lotId !== null ? { lot_id: lotId } : {}),
+      requested_quantity: input.quantity,
+      available_quantity: totalAvailable,
+    });
+  }
+
+  await client.query(
+    `WITH ranked AS (
+       SELECT balance_id, available AS available_qty,
+              SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
+       FROM stock_balance
+       WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
+     )
+     UPDATE stock_balance
+     SET on_hand = on_hand - LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
          updated_at = now()
      FROM ranked
      WHERE stock_balance.balance_id = ranked.balance_id

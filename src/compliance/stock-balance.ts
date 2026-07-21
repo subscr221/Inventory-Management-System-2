@@ -3,7 +3,7 @@ import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { getLocationById, getLocationByCode } from '../read/projections/location_register.js';
 import type { LocationRegisterEntry } from '../read/projections/location_register.js';
-import { applyStockReceipt, applyStockAllocation } from '../read/projections/stock_balance.js';
+import { applyStockReceipt, applyStockAllocation, applyStockIssue } from '../read/projections/stock_balance.js';
 
 /**
  * Central stock-balance seam (Story 2.2), split in two because the two halves run at different
@@ -31,11 +31,12 @@ import { applyStockReceipt, applyStockAllocation } from '../read/projections/sto
 
 const STOCK_BALANCE_STREAM_TYPES = new Set(['inventory']);
 
-type StockBalanceEventKind = 'receipt' | 'allocation';
+type StockBalanceEventKind = 'receipt' | 'allocation' | 'issue';
 
 const STOCK_BALANCE_EVENT_KINDS: Record<string, StockBalanceEventKind> = {
   'stock.received': 'receipt',
   'stock.allocated': 'allocation',
+  'stock.issued': 'issue',
 };
 
 /** ponytail: known set, extend when new stock classes are introduced (Story 2.8, etc.) */
@@ -193,5 +194,10 @@ export async function applyStockBalanceProjection(
     return;
   }
 
-  await applyStockAllocation({ sku, location_id: location.location_id, lot_id: lotId, quantity }, client);
+  if (kind === 'allocation') {
+    await applyStockAllocation({ sku, location_id: location.location_id, lot_id: lotId, quantity }, client);
+    return;
+  }
+
+  await applyStockIssue({ sku, location_id: location.location_id, lot_id: lotId, quantity }, client);
 }

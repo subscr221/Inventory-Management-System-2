@@ -4,7 +4,7 @@ baseline_commit: 12a931f97bbf9fa299856a2dbcc2aa88f13be78e
 
 # Story 2.3: Lot, Batch, and Serial Traceability
 
-Status: review
+Status: in-progress
 
 ## Story
 
@@ -57,7 +57,7 @@ So that a recall can be traced to all affected locations within 15 minutes and e
   - [x] 4.1 Extend `stock.received` payload to include optional `lot_id` and optional array `serials: [{ serial_number, initial_quantity }]`. Keep `sku`, `target_location_id`, `quantity`, `unit_cost`, `po_line_ref`, `business_stream` as before.
   - [x] 4.2 Extend `stock.allocated` and `stock.issued` payloads to include optional `lot_id` and optional array `serials`. For `stock.issued`, allow an optional `fefo_mode: "fefo" | "fifo"` flag to indicate lot selection mode; if not provided, the caller supplies the `lot_id` explicitly.
   - [x] 4.3 Preserve backward compatibility: events without `lot_id` or serials remain valid and post to the `NULL` lot and `NULL` serial rows (allowing pre-Story-2-3 test data to continue working, but new writes to lots/serials are validated).
-  - [x] 4.4 Add `LOT_EXPIRED`, `LOT_ON_HOLD`, `DUPLICATE_SERIAL`, `SERIAL_REQUIRED`, `NO_AVAILABLE_LOT` to the stable error-code list in the architecture. Map them to i18n keys in `src/sync/upload.ts`, `edge/src/sync/connector.ts`, and `edge/src/messages/en.json`.
+  - [x] 4.4 Add `LOT_EXPIRED`, `LOT_ON_HOLD`, `DUPLICATE_LOT`, `DUPLICATE_SERIAL`, `SERIAL_REQUIRED`, `SERIAL_NOT_ALLOWED`, `SERIAL_NOT_AVAILABLE`, `NO_AVAILABLE_LOT`, `LOT_NOT_FOUND`, and `SERIAL_NOT_FOUND` to the stable error-code list in the architecture. Map them to i18n keys in `src/sync/upload.ts`, `edge/src/sync/connector.ts`, and `edge/src/messages/en.json`.
   - [x] 4.5 Ensure edge uploads cannot bypass lot/serial validation. Validation happens in the central write path, same as stock-balance validation.
 
 - [x] Task 5: Add quality-hold management API (AC: 3)
@@ -86,6 +86,56 @@ So that a recall can be traced to all affected locations within 15 minutes and e
   - [x] 7.11 Cover idempotent retry of a lot receipt: the duplicate returns `DUPLICATE_EVENT` and projections are unchanged.
   - [x] 7.12 Run `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm test`, `npm run spine-acceptance-contract`, and `git diff --check` before completion.
 
+### Review Findings
+
+- [x] [Review][Patch] Align quality-hold documentation with derived projection columns retained by decision [read/projections/lot_master.sql:1]
+- [x] [Review][Patch] Amend the stable error-code list to include `LOT_NOT_FOUND` and `SERIAL_NOT_FOUND` by decision [src/compliance/lot-serial-validation.ts:117]
+- [x] [Review][Patch] TypeScript compilation is broken by duplicate declarations and an unused constant [src/api/v1/lots.ts:12]
+- [x] [Review][Patch] `lot_trace` is never populated, so AC4 recall traces are empty [src/read/projections/lot_trace.ts:59]
+- [x] [Review][Patch] Trace endpoint queries trace and balances with the route lot number instead of the resolved lot UUID [src/api/v1/lots.ts:59]
+- [x] [Review][Patch] Quality-hold endpoints mutate state before writing an audit event that uses an invalid stream id and can fail [src/api/v1/lots.ts:242]
+- [x] [Review][Patch] FEFO and FIFO availability lookup mixes lot UUIDs with lot numbers, so available lots are missed [src/api/v1/lots.ts:183]
+- [x] [Review][Patch] `select-lot` ignores `location_id`, lacks location-scoped RBAC, can select expired lots, and cannot report held or expired breakdowns [src/api/v1/lots.ts:127]
+- [x] [Review][Patch] Trace endpoint returns unfiltered trace entries across locations [src/api/v1/lots.ts:98]
+- [x] [Review][Patch] Serial issue validation does not prove availability, issuing location, or lot membership [src/compliance/lot-serial-validation.ts:194]
+- [x] [Review][Patch] `stock.issued` with `fefo_mode` does not select or persist the chosen lot, and issue events do not update stock balance [src/compliance/lot-serial-validation.ts:293]
+- [x] [Review][Patch] Duplicate-lot validation uses the wrong grain, wrong error code, and allows NULL-expiry duplicate rows at the database layer [src/compliance/lot-serial-validation.ts:83]
+- [x] [Review][Patch] Lot and serial shape validation lets malformed SKU, expiry date, non-finite quantities, and duplicate serials reach database paths [src/compliance/lot-serial-validation.ts:229]
+- [x] [Review][Patch] Projection duplicate checks are check-then-insert races that can surface raw unique violations instead of stable errors [src/read/projections/serial_master.ts:78]
+- [x] [Review][Patch] Expiry comparison uses UTC date formatting instead of local Y-M-D components [src/compliance/lot-serial-validation.ts:135]
+- [x] [Review][Patch] Expired-lot override is payload-controlled without an authorization check [src/compliance/lot-serial-validation.ts:308]
+- [x] [Review][Patch] `getLotById` falls back to an ambiguous lot-number lookup across SKUs [src/read/projections/lot_master.ts:154]
+- [x] [Review][Patch] Required integration assertions are missing or vacuous for AC1 through AC4, FIFO, batch serials, edge validation, and performance [test/integration/story-2-3.test.ts:245]
+- [x] [Review][Patch] Schema drift guard omits new unique constraints [test/unit/schema-drift.test.ts:65]
+- [x] [Review][Patch] Debug `console.log` calls remain in production and test code [src/api/v1/lots.ts:148]
+- [x] [Review][Patch] Route parameter names and route-surface allowlist use `:lotNumber` instead of the specified `:lot_id` [src/server.ts:87]
+- [x] [Review][Patch] Unrelated `.kilo/kilo.jsonc` is included in the story diff without story-file justification [.kilo/kilo.jsonc:1]
+
+### Review Findings (Re-Review 2026-07-21)
+
+Second independent adversarial pass over the full baseline-to-working-tree change. All three review layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor) ran fresh. Verification battery reproduced independently: `npx tsc --noEmit` clean and `npm test` 222/222. The green suite is not sufficient assurance; the highest-severity finding below is not exercised by any test.
+
+- [x] [Review][Patch] Locationless `stock.issued` with serials commits a torn write: serials are zeroed and lot-trace rows written while `stock_balance.on_hand` is never decremented and `quantity` is never validated [src/compliance/lot-serial-validation.ts:299] - FIXED this pass by requiring a resolvable target location for any lot/serial/FEFO issue before mutation.
+- [ ] [Review][Decision] Expired-lot override is authorized by a substring match on the free-text actor role (`role.includes('quality') || role.includes('admin')`), not by RBAC function-scope; any role string containing `quality` (e.g. `quality_viewer`) bypasses `LOT_EXPIRED` (AC2) [src/compliance/lot-serial-validation.ts:251] - decide the override permission model (dedicated function-scope vs role convention) before patching.
+- [ ] [Review][Patch] Serial-controlled issue never reconciles `serials.length` (or summed `initial_quantity`) against payload `quantity`; N serials can be zeroed while `on_hand` drops by a different amount [src/compliance/lot-serial-validation.ts:299]
+- [ ] [Review][Patch] Un-lotted `stock.issued` (null `lot_id`) drains lotted balance rows via `($3::text IS NULL OR lot_id = $3)`, destroying the lot traceability the story exists to guarantee [src/read/projections/stock_balance.ts:161]
+- [ ] [Review][Patch] FEFO/FIFO selection reads balances without a lock and does not fall through to the next lot when `applyStockIssue`'s `FOR UPDATE` recheck finds the chosen lot drained; a concurrent issue 409s even when a later lot had stock [src/compliance/lot-serial-validation.ts:99]
+- [ ] [Review][Patch] Concurrent first-time receipt of the same new `lot_number` is a check-then-insert race; the loser hits `uq_lot_master_lot_number` and returns a spurious `DUPLICATE_LOT` 400 for a legitimate receipt [src/compliance/lot-serial-validation.ts:148]
+- [ ] [Review][Patch] FEFO same-expiry tie-break orders by random `lot_id` UUID instead of `created_at`, so equal-expiry lots are selected non-deterministically [src/read/projections/lot_master.ts:167]
+- [ ] [Review][Patch] Event write path reads `fefo_mode` while the select-lot API reads `fifo_mode`; an issue carrying the HTTP-contract `fifo_mode` key selects no lot, writes no trace, and raises no error [src/compliance/lot-serial-validation.ts:93]
+- [ ] [Review][Patch] Absent `business_stream` on a traced event writes the literal string `"undefined"` into the NOT NULL `lot_trace.business_stream` column, corrupting recall grouping [src/compliance/lot-serial-validation.ts:135]
+- [ ] [Review][Patch] `stock.allocated` accepts serials but never validates or records serial state; only lot state is checked on the allocation branch [src/compliance/lot-serial-validation.ts:358]
+- [ ] [Review][Patch] Null-expiry lot receipt skips `validateLotForReceipt` entirely and silently reuses an existing (possibly held/expired) lot with no duplicate/hold check [src/compliance/lot-serial-validation.ts:327]
+- [ ] [Review][Patch] `lot_trace(event_id)` dedup relies on a non-unique index plus a check-then-insert existence probe; concurrent inserts both pass and duplicate the trace row [read/projections/lot_trace.sql:29]
+- [ ] [Review][Patch] `NO_AVAILABLE_LOT` on the direct write path omits the held/expired/insufficient breakdown that Task 3.7 requires and the HTTP handler already produces [src/compliance/lot-serial-validation.ts:110]
+- [ ] [Review][Patch] Lot-trace endpoint returns `404 LOT_NOT_FOUND` before applying location scoping, acting as an existence oracle for out-of-scope callers [src/api/v1/lots.ts:70]
+- [ ] [Review][Patch] Malformed or missing `sku` returns `ITEM_NOT_FOUND` instead of a request-shape `INVALID_PARAMS` [src/compliance/lot-serial-validation.ts:242]
+- [ ] [Review][Patch] Stable error-code list in ARCHITECTURE-SPINE.md omits codes the Story 2.3 paths actually return (`ITEM_NOT_FOUND`, `FUNCTION_ACCESS_DENIED`, `LOCATION_ACCESS_DENIED`, `SERIAL_NOT_AVAILABLE` on some paths); reconcile list and edge i18n [_bmad-output/planning-artifacts/architecture/architecture-Inventory Management System_2-2026-07-11/ARCHITECTURE-SPINE.md:337]
+- [ ] [Review][Patch] Required AC tests remain vacuous: override retry uses direct `persistEvent` (bypassing API/RBAC) with no assertion, AC3 never tests allocation rejection, AC4 asserts one timing sample not p95, AC6 never asserts current holding location, idempotent-retry never proves projections unchanged [test/integration/story-2-3.test.ts:283]
+- [ ] [Review][Patch] `lot_id` is `TEXT` (lot number) in `stock_balance`/`serial_master` but `UUID` in `lot_trace`; a single wrong field silently returns empty balances or trace with no error - rename for unambiguous semantics [read/projections/lot_trace.sql:15]
+- [x] [Review][Defer] Unrelated `.kilocode/skills/caveman*` and `skills-lock.json` committed in `af37828` on top of the Story 2.3 impl commit - out of story scope [skills-lock.json:1] - deferred, unrelated commit not produced by this story's dev work
+- [x] [Review][Defer] Quality-hold audit events fabricate a zero-UUID `correlation_id` and default `business_stream` to `production` on lookup miss [src/api/v1/lots.ts:216] - deferred, low-severity integrity hardening
+
 ## Dev Notes
 
 ### Epic Context
@@ -108,8 +158,8 @@ Story 2.3 implements FR-I-04 only. The binding performance numbers are the lot-t
 
 - Lot, serial, and lot-trace are shared read-model projections under `read/projections/`, not private module tables. [Source: `_bmad-output/planning-artifacts/architecture/architecture-Inventory Management System_2-2026-07-11/ARCHITECTURE-SPINE.md` lines 24-33, 148-152]
 - Event payloads carry `lot_id` and `serials` as optional fields. New event types `stock.received`, `stock.allocated`, `stock.issued` already exist from Story 2.2 and are extended, not created. [Source: `_bmad-output/planning-artifacts/architecture/architecture-Inventory Management System_2-2026-07-11/ARCHITECTURE-SPINE.md` lines 172-188]
-- Lot-hold operations (placing and clearing a hold) are themselves audit-logged events. Quality holds are not stored as mutable state columns in the lot_master table; the hold status is derived from the most-recent hold/clear event. [Source: `_bmad-output/planning-artifacts/architecture/architecture-Inventory Management System_2-2026-07-11/ARCHITECTURE-SPINE.md` lines 182-184]
-- Quality-hold rejection and lot-expired rejection use the uniform `{ error_code, message, details, trace_id }` envelope. `LOT_EXPIRED`, `LOT_ON_HOLD`, `DUPLICATE_SERIAL`, `SERIAL_REQUIRED` are stable error codes added to the architecture list. [Source: `_bmad-output/planning-artifacts/architecture/architecture-Inventory Management System_2-2026-07-11/ARCHITECTURE-SPINE.md` lines 328-337]
+- Lot-hold operations (placing and clearing a hold) are themselves audit-logged events. Quality hold status is retained in `lot_master` as derived read-model state updated atomically with hold and clear events.
+- Quality-hold rejection and lot-expired rejection use the uniform `{ error_code, message, details, trace_id }` envelope. `LOT_EXPIRED`, `LOT_ON_HOLD`, `DUPLICATE_LOT`, `DUPLICATE_SERIAL`, `SERIAL_REQUIRED`, `SERIAL_NOT_ALLOWED`, `SERIAL_NOT_AVAILABLE`, `NO_AVAILABLE_LOT`, `LOT_NOT_FOUND`, and `SERIAL_NOT_FOUND` are stable error codes added to the architecture list. [Source: `_bmad-output/planning-artifacts/architecture/architecture-Inventory Management System_2-2026-07-11/ARCHITECTURE-SPINE.md` lines 328-337]
 - The implementation is compatible with Node.js 24, PostgreSQL 18.4, TypeScript 5.x, and existing `pg` usage. Do not add dependencies.
 
 ### Current Code State and Required Update Files
@@ -178,7 +228,7 @@ Important learnings from 2.1 and 2.2:
 ### Anti-Patterns to Avoid
 
 - Do not build lot traces by replaying the event stream on every trace query. Use the pre-computed `lot_trace` table.
-- Do not store lot holds as mutable columns in `lot_master`. Holds are derived from hold/clear events.
+- Do not mutate quality-hold status outside the hold/clear event transaction. `lot_master` stores only derived read-model state from those events.
 - Do not validate lot/serial only at the route level. Validation must be in `src/compliance/lot-serial-validation.ts` so edge uploads are covered.
 - Do not let a duplicate serial create a row and repair it later. Reject before event insert.
 - Do not implement lot merge, split, or reclassification transactions in this story. Lots are immutable.
@@ -253,7 +303,7 @@ Story 2.3 was implemented in a single continuous session following the red-green
 
 **Task 4: Event Payloads and Integration**
 - Extended event payload handling to support optional `lot_id` and `serials` arrays
-- Added new error codes to architecture: LOT_EXPIRED, LOT_ON_HOLD, DUPLICATE_SERIAL, SERIAL_REQUIRED, NO_AVAILABLE_LOT
+- Added new error codes to architecture: LOT_EXPIRED, LOT_ON_HOLD, DUPLICATE_LOT, DUPLICATE_SERIAL, SERIAL_REQUIRED, SERIAL_NOT_ALLOWED, SERIAL_NOT_AVAILABLE, NO_AVAILABLE_LOT, LOT_NOT_FOUND, SERIAL_NOT_FOUND
 - Updated `src/sync/upload.ts` and `edge/src/sync/connector.ts` with permanent error code classifications
 - Added i18n mappings in `edge/src/messages/en.json`
 
@@ -275,7 +325,7 @@ Story 2.3 was implemented in a single continuous session following the red-green
 
 1. **Lot master uses lot_number as unique identifier** - The API-facing identifier is `lot_number` (not lot_id UUID), matching the story's acceptance criteria which reference `LOT-2026-001` style identifiers.
 
-2. **Quality holds are derived state** - Following the architecture decision, quality holds are not stored as mutable columns but are derived from hold/clear events.
+2. **Quality holds are derived projection state** - Following the review decision, quality hold columns in `lot_master` are retained as read-model state and updated atomically with hold/clear events.
 
 3. **Lot/serial validation is additive** - The validation runs alongside (not replacing) Story 2.2's stock-balance enforcement and Story 2.1's inventory-master checks.
 

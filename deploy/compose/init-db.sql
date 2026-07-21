@@ -874,12 +874,20 @@ CREATE TABLE IF NOT EXISTS lot_master (
   quality_hold_reason  TEXT,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT uq_lot_master_lot_number_sku_expiry UNIQUE (lot_number, sku, expiry_date),
+  CONSTRAINT uq_lot_master_lot_number UNIQUE (lot_number),
   CONSTRAINT chk_lot_master_quality_hold_status CHECK (quality_hold_status IN ('none', 'held'))
 );
 
 DO $$
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_lot_master_lot_number'
+      AND conrelid = 'lot_master'::regclass
+  ) THEN
+    ALTER TABLE lot_master
+      ADD CONSTRAINT uq_lot_master_lot_number UNIQUE (lot_number);
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_lot_master_quality_hold_status'
@@ -890,10 +898,7 @@ BEGIN
   END IF;
 END $$;
 
--- Index for SKU + expiry lookups (used in FEFO/FIFO selection)
 CREATE INDEX IF NOT EXISTS idx_lot_master_sku_expiry ON lot_master (sku, expiry_date);
-
--- Index for lot_id lookups
 CREATE INDEX IF NOT EXISTS idx_lot_master_lot_id ON lot_master (lot_id);
 
 DO $$
@@ -914,18 +919,32 @@ END $$;
 -- -------------------------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS serial_master (
-  serial_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  serial_number        TEXT NOT NULL,
-  sku                  TEXT NOT NULL,
-  current_location_id  UUID,
+  serial_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  serial_number         TEXT NOT NULL,
+  sku                   TEXT NOT NULL,
+  lot_id                TEXT,
+  current_location_id   UUID,
   current_location_code TEXT,
-  current_quantity     NUMERIC(18, 6) NOT NULL DEFAULT 1,
-  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  current_quantity      NUMERIC(18, 6) NOT NULL DEFAULT 1,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_serial_master_sku_serial_number UNIQUE (sku, serial_number)
 );
 
--- Index for SKU + serial_number lookups
+ALTER TABLE serial_master ADD COLUMN IF NOT EXISTS lot_id TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_serial_master_sku_serial_number'
+      AND conrelid = 'serial_master'::regclass
+  ) THEN
+    ALTER TABLE serial_master
+      ADD CONSTRAINT uq_serial_master_sku_serial_number UNIQUE (sku, serial_number);
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_serial_master_sku_serial ON serial_master (sku, serial_number);
 
 DO $$
@@ -958,10 +977,7 @@ CREATE TABLE IF NOT EXISTS lot_trace (
   timestamp         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Index on lot_id + timestamp for recall reporting
 CREATE INDEX IF NOT EXISTS idx_lot_trace_lot_timestamp ON lot_trace (lot_id, timestamp);
-
--- Index on event_id for deduplication
 CREATE INDEX IF NOT EXISTS idx_lot_trace_event_id ON lot_trace (event_id);
 
 DO $$

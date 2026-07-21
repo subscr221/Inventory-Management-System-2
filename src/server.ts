@@ -84,10 +84,10 @@ export function createAppRouter(): Router {
   router.patch('/api/v1/locations/:locationId', updateLocationHandler);
   router.get('/api/v1/locations/:locationId', getLocationHandler);
   router.get('/api/v1/stock/:sku', getStockHandler);
-  router.get('/api/v1/lots/:lotNumber/trace', getLotTraceHandler);
+  router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
-  router.put('/api/v1/lots/:lotNumber/quality-hold', placeQualityHoldHandler);
-  router.delete('/api/v1/lots/:lotNumber/quality-hold', clearQualityHoldHandler);
+  router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);
+  router.delete('/api/v1/lots/:lot_id/quality-hold', clearQualityHoldHandler);
   router.put('/api/v1/instruments/:id/calibration-status', updateCalibrationStatusHandler);
   router.post('/api/v1/qc/results', createQcResultHandler);
   router.post('/api/v1/instruments/:id/calibration-escalations', createCalibrationEscalationHandler);

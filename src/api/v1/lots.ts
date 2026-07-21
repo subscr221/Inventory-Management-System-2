@@ -1,24 +1,28 @@
 import type { IncomingMessage } from 'node:http';
+import type { PoolClient } from 'pg';
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendRequestError } from '../../middleware/error.js';
 import { getAuthContext, getAuthorizedAssignment, getParsedBody, getTraceId } from '../../middleware/context.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { permittedLocationsForModule, requireRole } from '../../middleware/rbac.js';
+import { getPool } from '../../config/db.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
+import { getItemBySku } from '../../read/projections/item_master.js';
 import { getLotById, getLotsForSelection, getLotsForFifoSelection, placeQualityHold, clearQualityHold } from '../../read/projections/lot_master.js';
-import { getTraceForLot } from '../../read/projections/lot_trace.js';
+import { appendTraceEntry, getTraceForLot } from '../../read/projections/lot_trace.js';
 import { getStockBalancesBySku } from '../../read/projections/stock_balance.js';
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 
 type WriteAuditCtx = Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>;
 
 function actorContext(req: IncomingMessage) {
   const authContext = getAuthContext(req);
   const assignment = getAuthorizedAssignment(req);
-  const userId = authContext?.userId ?? '00000000-0000-0000-0000-000000000000';
+  const userId = authContext?.userId ?? NO_LOCATION_UUID;
   const role = assignment?.role ?? '';
-  return { userId, role };
+  const locationId = assignment?.locationId && assignment.locationId !== '*' ? assignment.locationId : NO_LOCATION_UUID;
+  return { userId, role, locationId };
 }
 
 function auditCtxFor(req: IncomingMessage, actor: ReturnType<typeof actorContext>, httpStatus: number): WriteAuditCtx {
@@ -26,7 +30,7 @@ function auditCtxFor(req: IncomingMessage, actor: ReturnType<typeof actorContext
     trace_id: getTraceId(req) ?? '',
     user_id: actor.userId,
     role: actor.role,
-    location_id: '*',
+    location_id: actor.locationId,
     endpoint: req.url ?? '',
     method: req.method ?? 'POST',
     http_status: httpStatus,
@@ -34,44 +38,53 @@ function auditCtxFor(req: IncomingMessage, actor: ReturnType<typeof actorContext
 }
 
 function getLotNumber(params: Record<string, string>): string | null {
-  const lotNumber = params['lotNumber'] || params['lot_id'];
+  const lotNumber = params['lot_id'] || params['lotNumber'];
   return lotNumber && lotNumber.trim().length > 0 ? lotNumber : null;
 }
 
-/**
- * GET /api/v1/lots/:lot_id/trace (Story 2.3, AC4): returns a complete trace of all transactions
- * touching a lot, including all locations it has been in and current balance per location.
- * Must complete within 500ms API p95.
- */
+function bodyLocationId(_params: Record<string, string>, body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined;
+  const locationId = (body as Record<string, unknown>)['location_id'];
+  return typeof locationId === 'string' ? locationId : undefined;
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function localToday(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 const getLotTraceBase: RouteHandler = async (req, res, params) => {
-  const lotId = getLotNumber(params);
-  if (!lotId) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'lot_id must be a valid UUID');
+  const lotNumber = getLotNumber(params);
+  if (!lotNumber) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'lot_id must be provided');
     return;
   }
 
-  const lot = await getLotById(lotId);
+  const lot = await getLotById(lotNumber);
   if (!lot) {
-    sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotId}"`, { lot_id: lotId });
+    sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotNumber}"`, { lot_id: lotNumber });
     return;
   }
 
-  const traceEntries = await getTraceForLot(lotId);
+  const traceEntries = await getTraceForLot(lot.lot_id);
   const balances = await getStockBalancesBySku(lot.sku);
-  
-  // Filter balances for this lot and apply location scoping
   const authContext = getAuthContext(req);
-  let lotBalances = balances.filter(b => b.lot_id === lotId);
-  
-  if (authContext) {
-    const { permittedLocationsForModule } = await import('../../middleware/rbac.js');
-    const { wildcard, locations } = permittedLocationsForModule(authContext.roles, 'inventory');
-    if (!wildcard) {
-      lotBalances = lotBalances.filter(b => locations.has(b.location_id));
-    }
+  const permitted = authContext ? permittedLocationsForModule(authContext.roles, 'inventory') : { wildcard: false, locations: new Set<string>() };
+  const isPermitted = (locationId: string | null): boolean => locationId !== null && (permitted.wildcard || permitted.locations.has(locationId));
+  const scopedTraceEntries = authContext ? traceEntries.filter((entry) => isPermitted(entry.location_id)) : traceEntries;
+  let lotBalances = balances.filter((balance) => balance.lot_id === lot.lot_number);
+
+  if (authContext && !permitted.wildcard) {
+    lotBalances = lotBalances.filter((balance) => permitted.locations.has(balance.location_id));
   }
 
-  // Group balances by location
   const balancesByLocation = new Map<string, { location_id: string; location_code: string | null; on_hand: number; allocated: number; available: number }>();
   for (const balance of lotBalances) {
     const existing = balancesByLocation.get(balance.location_id) ?? {
@@ -88,14 +101,19 @@ const getLotTraceBase: RouteHandler = async (req, res, params) => {
     balancesByLocation.set(balance.location_id, existing);
   }
 
+  if (authContext && scopedTraceEntries.length === 0 && balancesByLocation.size === 0) {
+    sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', 'No role assignment grants access to this lot trace');
+    return;
+  }
+
   sendJson(res, 200, {
-    lot_id: lotId,
+    lot_id: lot.lot_id,
     lot_number: lot.lot_number,
     sku: lot.sku,
     expiry_date: lot.expiry_date,
     quality_hold_status: lot.quality_hold_status,
     quality_hold_reason: lot.quality_hold_reason,
-    trace: traceEntries.map(entry => ({
+    trace: scopedTraceEntries.map((entry) => ({
       event_id: entry.event_id,
       event_type: entry.event_type,
       location_id: entry.location_id,
@@ -110,12 +128,6 @@ const getLotTraceBase: RouteHandler = async (req, res, params) => {
 
 export const getLotTraceHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(getLotTraceBase);
 
-/**
- * POST /api/v1/stock/:sku/select-lot (Story 2.3, AC1, AC4): returns the next lot to issue when
- * FEFO/FIFO is requested. Accepts parameters: sku, location_id, quantity, fifo_mode (fefo | fifo).
- * Returns the lot ID and confirm availability. Idempotent - multiple calls with same parameters
- * return the same lot ID.
- */
 const selectLotBase: RouteHandler = async (req, res, params) => {
   const sku = params['sku'];
   if (!sku) {
@@ -125,209 +137,195 @@ const selectLotBase: RouteHandler = async (req, res, params) => {
 
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   const locationId = typeof body?.['location_id'] === 'string' ? body['location_id'] as string : undefined;
-  const quantity = typeof body?.['quantity'] === 'number' ? (body['quantity'] as number) : undefined;
-  const fifoMode = typeof body?.['fifo_mode'] === 'string' ? (body['fifo_mode'] as 'fefo' | 'fifo') : undefined;
+  const quantity = body?.['quantity'];
+  const fifoMode = typeof body?.['fifo_mode'] === 'string' ? body['fifo_mode'] : 'fefo';
 
-  if (!locationId || typeof locationId !== 'string') {
+  if (!locationId) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'location_id is required in request body');
     return;
   }
-
-  if (typeof quantity !== 'number' || quantity <= 0) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'quantity must be a positive number');
+  if (!isPositiveFiniteNumber(quantity)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'quantity must be a finite positive number');
     return;
   }
-
-  if (fifoMode && fifoMode !== 'fefo' && fifoMode !== 'fifo') {
+  if (fifoMode !== 'fefo' && fifoMode !== 'fifo') {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'fifo_mode must be "fefo" or "fifo"');
     return;
   }
 
-  // Get lots based on selection mode
-  const lots = fifoMode === 'fifo' ? await getLotsForFifoSelection(sku) : await getLotsForSelection(sku);
-  console.log('selectLotHandler lots:', { sku, fifoMode, count: lots.length, lots });
-  
-  // Get current stock balances to check availability
-  const balances = await getStockBalancesBySku(sku);
-  console.log('selectLotHandler balances:', balances);
-  
-  const lotBalances = new Map<string, number>();
-  for (const balance of balances) {
-    if (balance.lot_id) {
-      const current = lotBalances.get(balance.lot_id) ?? 0;
-      lotBalances.set(balance.lot_id, current + balance.available);
-    }
-  }
-  console.log('selectLotHandler lotBalances:', Object.fromEntries(lotBalances));
-  
-  if (lots.length === 0) {
-    sendRequestError(req, res, 404, 'NO_AVAILABLE_LOT', 'No available lots found for this SKU', {
-      sku,
-      reason: 'No lots exist for this SKU',
-    });
-    return;
-  }
-
-  // Get current stock balances to check availability
+  const lots = fifoMode === 'fifo' ? await getLotsForFifoSelection(sku, undefined, true) : await getLotsForSelection(sku, undefined, true);
   const balances = await getStockBalancesBySku(sku);
   const lotBalances = new Map<string, number>();
   for (const balance of balances) {
-    if (balance.lot_id) {
-      const current = lotBalances.get(balance.lot_id) ?? 0;
-      lotBalances.set(balance.lot_id, current + balance.available);
-    }
+    if (balance.location_id !== locationId || !balance.lot_id) continue;
+    lotBalances.set(balance.lot_id, (lotBalances.get(balance.lot_id) ?? 0) + balance.available);
   }
 
-  // Find first lot with sufficient quantity
+  const today = localToday();
+  const breakdown = lots.map((lot) => {
+    const available = lotBalances.get(lot.lot_number) ?? 0;
+    let reason = 'insufficient_quantity';
+    if (lot.quality_hold_status === 'held') reason = 'on_hold';
+    else if (lot.expiry_date && lot.expiry_date < today) reason = 'expired';
+    return { lot_id: lot.lot_id, lot_number: lot.lot_number, available_quantity: available, reason };
+  });
+
   for (const lot of lots) {
-    const available = lotBalances.get(lot.lot_id) ?? 0;
+    const available = lotBalances.get(lot.lot_number) ?? 0;
+    if (lot.quality_hold_status !== 'none') continue;
+    if (lot.expiry_date && lot.expiry_date < today) continue;
     if (available >= quantity) {
       sendJson(res, 200, {
-        lot_id: lot.lot_id,
+        lot_id: lot.lot_number,
+        lot_uuid: lot.lot_id,
         lot_number: lot.lot_number,
         sku: lot.sku,
         expiry_date: lot.expiry_date,
         available_quantity: available,
-        fifo_mode: fifoMode ?? 'fefo',
+        fifo_mode: fifoMode,
       });
       return;
     }
   }
 
-  // No lot has sufficient quantity
-  const breakdown = lots.map(lot => ({
-    lot_id: lot.lot_id,
-    lot_number: lot.lot_number,
-    available_quantity: lotBalances.get(lot.lot_id) ?? 0,
-    reason: (lotBalances.get(lot.lot_id) ?? 0) < quantity ? 'insufficient_quantity' : 'on_hold',
-  }));
-
-  sendRequestError(req, res, 404, 'NO_AVAILABLE_LOT', 'No lot has sufficient quantity available', {
+  sendRequestError(req, res, 409, 'NO_AVAILABLE_LOT', 'No lot has sufficient quantity available', {
     sku,
+    location_id: locationId,
     requested_quantity: quantity,
     available_lots: breakdown,
   });
 };
 
-export const selectLotHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(selectLotBase);
+export const selectLotHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read', locationId: bodyLocationId })(selectLotBase);
 
-/**
- * PUT /api/v1/lots/:lot_id/quality-hold (Story 2.3, AC3): places a quality hold on a lot.
- * Payload: hold_reason (string). Response: updated lot status.
- */
+async function qualityHoldEvent(
+  req: IncomingMessage,
+  client: PoolClient,
+  lot: { lot_id: string; lot_number: string; sku: string; quality_hold_status: string },
+  actor: ReturnType<typeof actorContext>,
+  eventType: 'lot.quality_hold_placed' | 'lot.quality_hold_cleared',
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const item = await getItemBySku(lot.sku, client);
+  const occurredAt = new Date().toISOString();
+  const persisted = await persistEvent({
+    stream_type: 'inventory',
+    stream_id: lot.lot_id,
+    event_type: eventType,
+    payload: {
+      business_stream: item?.business_stream ?? 'production',
+      lot_id: lot.lot_number,
+      lot_number: lot.lot_number,
+      sku: lot.sku,
+      ...payload,
+    },
+    metadata: {
+      correlation_id: getTraceId(req) ?? '00000000-0000-0000-0000-000000000000',
+      actor: {
+        user_id: actor.userId,
+        role: actor.role,
+        location_id: actor.locationId,
+      },
+      occurred_at: occurredAt,
+    },
+  }, auditCtxFor(req, actor, 200), client);
+  await appendTraceEntry({
+    lot_id: lot.lot_id,
+    event_id: persisted.event_id,
+    event_type: eventType,
+    sku: lot.sku,
+    location_id: actor.locationId === NO_LOCATION_UUID ? null : actor.locationId,
+    location_code: null,
+    quantity_change: '0',
+    business_stream: item?.business_stream ?? 'production',
+    timestamp: occurredAt,
+  }, client);
+}
+
 const placeQualityHoldBase: RouteHandler = async (req, res, params) => {
-  const lotId = getLotNumber(params);
-  if (!lotId) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'lot_id must be a valid UUID');
+  const lotNumber = getLotNumber(params);
+  if (!lotNumber) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'lot_id must be provided');
     return;
   }
 
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
-  const holdReason = typeof body?.['hold_reason'] === 'string' ? (body['hold_reason'] as string) : undefined;
-
-  if (!holdReason || typeof holdReason !== 'string' || holdReason.trim().length === 0) {
+  const holdReason = typeof body?.['hold_reason'] === 'string' ? body['hold_reason'].trim() : '';
+  if (holdReason.length === 0) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'hold_reason is required and must be a non-empty string');
     return;
   }
 
   const actor = actorContext(req);
-  
-  // Look up the lot by ID to get lot_number and sku
-  const existingLot = await getLotById(lotId);
-  if (!existingLot) {
-    sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotId}"`, { lot_id: lotId });
-    return;
-  }
-  
-  const lot = await placeQualityHold(existingLot.lot_number, existingLot.sku, holdReason.trim());
-  
-  if (!lot) {
-    sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotId}"`, { lot_id: lotId });
-    return;
-  }
-
-  // Audit the quality hold operation
-  await persistEvent({
-    stream_type: 'inventory',
-    stream_id: lotId,
-    event_type: 'lot.quality_hold_placed',
-    event_version: 1,
-    payload: {
-      lot_id: lotId,
-      lot_number: lot.lot_number,
-      sku: lot.sku,
-      hold_reason: holdReason.trim(),
-      previous_status: 'none',
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const existingLot = await getLotById(lotNumber, client);
+    if (!existingLot) {
+      await client.query('ROLLBACK');
+      sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotNumber}"`, { lot_id: lotNumber });
+      return;
+    }
+    const previousStatus = existingLot.quality_hold_status;
+    const lot = await placeQualityHold(existingLot.lot_number, existingLot.sku, holdReason, client);
+    if (!lot) {
+      await client.query('ROLLBACK');
+      sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotNumber}"`, { lot_id: lotNumber });
+      return;
+    }
+    await qualityHoldEvent(req, client, lot, actor, 'lot.quality_hold_placed', {
+      hold_reason: holdReason,
+      previous_status: previousStatus,
       new_status: 'held',
-    },
-    metadata: {
-      correlation_id: getTraceId(req) ?? '',
-      actor: {
-        user_id: actor.userId,
-        role: actor.role,
-        location_id: '*',
-      },
-      occurred_at: new Date().toISOString(),
-    },
-  }, auditCtxFor(req, actor, 200));
-
-  sendJson(res, 200, lot);
+    });
+    await client.query('COMMIT');
+    sendJson(res, 200, lot);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 export const placeQualityHoldHandler: RouteHandler = requireRole({ module: 'quality', functionScope: 'write' })(placeQualityHoldBase);
 
-/**
- * DELETE /api/v1/lots/:lot_id/quality-hold (Story 2.3, AC3): clears a quality hold on a lot.
- * Audit-log both operations.
- */
 const clearQualityHoldBase: RouteHandler = async (req, res, params) => {
-  const lotId = getLotNumber(params);
-  if (!lotId) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'lot_id must be a valid UUID');
+  const lotNumber = getLotNumber(params);
+  if (!lotNumber) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'lot_id must be provided');
     return;
   }
 
   const actor = actorContext(req);
-  
-  // Look up the lot by ID to get lot_number and sku
-  const existingLot = await getLotById(lotId);
-  if (!existingLot) {
-    sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotId}"`, { lot_id: lotId });
-    return;
-  }
-  
-  const lot = await clearQualityHold(existingLot.lot_number, existingLot.sku);
-  
-  if (!lot) {
-    sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotId}"`, { lot_id: lotId });
-    return;
-  }
-
-  // Audit the quality hold clear operation
-  await persistEvent({
-    stream_type: 'inventory',
-    stream_id: lotId,
-    event_type: 'lot.quality_hold_cleared',
-    event_version: 1,
-    payload: {
-      lot_id: lotId,
-      lot_number: lot.lot_number,
-      sku: lot.sku,
-      previous_status: 'held',
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const existingLot = await getLotById(lotNumber, client);
+    if (!existingLot) {
+      await client.query('ROLLBACK');
+      sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotNumber}"`, { lot_id: lotNumber });
+      return;
+    }
+    const previousStatus = existingLot.quality_hold_status;
+    const lot = await clearQualityHold(existingLot.lot_number, existingLot.sku, client);
+    if (!lot) {
+      await client.query('ROLLBACK');
+      sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotNumber}"`, { lot_id: lotNumber });
+      return;
+    }
+    await qualityHoldEvent(req, client, lot, actor, 'lot.quality_hold_cleared', {
+      previous_status: previousStatus,
       new_status: 'none',
-    },
-    metadata: {
-      correlation_id: getTraceId(req) ?? '',
-      actor: {
-        user_id: actor.userId,
-        role: actor.role,
-        location_id: '*',
-      },
-      occurred_at: new Date().toISOString(),
-    },
-  }, auditCtxFor(req, actor, 200));
-
-  sendJson(res, 200, lot);
+    });
+    await client.query('COMMIT');
+    sendJson(res, 200, lot);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 export const clearQualityHoldHandler: RouteHandler = requireRole({ module: 'quality', functionScope: 'write' })(clearQualityHoldBase);
