@@ -53,6 +53,13 @@ export interface StockIssueInput {
    location_id: string;
    lot_id?: string | null;
    quantity: number;
+   /**
+    * Story 2.7: the event's business timestamp, stamped onto last_issue_at for every balance row at
+    * this (sku, location_id) so the obsolescence scan can read MAX(last_issue_at) across lots. Only
+    * stock.issued resets the obsolescence clock - receipts, allocations, transfers and adjustments do
+    * not pass through here.
+    */
+   occurred_at?: string | null;
  }
 
  export interface StockDeallocationInput {
@@ -216,6 +223,19 @@ await client.query(
       WHERE stock_balance.balance_id = ranked.balance_id
         AND ranked.cumulative - ranked.available_qty < $4`,
      [input.sku, input.location_id, lotId, input.quantity],
+  );
+
+  // Story 2.7: stamp last_issue_at for every balance row at this (sku, location_id) so the
+  // obsolescence scan reads MAX(last_issue_at) across lots. GREATEST keeps the value monotonic - a
+  // late or out-of-order issue never moves the obsolescence clock backwards. Touches only
+  // last_issue_at/updated_at, never on_hand/allocated/available/in_transit (Story 2.2 invariants).
+  const occurredAt = input.occurred_at ?? new Date().toISOString();
+  await client.query(
+    `UPDATE stock_balance
+     SET last_issue_at = GREATEST(COALESCE(last_issue_at, $4::timestamptz), $4::timestamptz),
+         updated_at = now()
+     WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)`,
+    [input.sku, input.location_id, lotId, occurredAt],
   );
 }
 

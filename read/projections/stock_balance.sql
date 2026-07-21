@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS stock_balance (
   allocated     NUMERIC(18, 6) NOT NULL DEFAULT 0,
   in_transit    NUMERIC(18, 6) NOT NULL DEFAULT 0,
   available     NUMERIC(18, 6) GENERATED ALWAYS AS (on_hand - allocated) STORED,
+  last_issue_at TIMESTAMPTZ,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_stock_balance_grain UNIQUE NULLS NOT DISTINCT (sku, location_id, lot_id, stock_class),
   CONSTRAINT chk_stock_balance_on_hand_non_negative CHECK (on_hand >= 0),
@@ -33,6 +34,13 @@ CREATE TABLE IF NOT EXISTS stock_balance (
   CONSTRAINT chk_stock_balance_allocated_within_on_hand CHECK (allocated <= on_hand),
   CONSTRAINT chk_stock_balance_in_transit_non_negative CHECK (in_transit >= 0)
 );
+
+-- Story 2.7: last_issue_at tracks the most recent outbound consumption (stock.issued only) per
+-- (sku, location_id, lot_id, stock_class); the obsolescence scan reads MAX(last_issue_at) across
+-- lots at (sku, location_id). Added idempotently so a live Story 2.2 database gains the column
+-- without a table rebuild. It is nullable and independent of the generated `available` column and
+-- the grain, so the Story 2.2 on_hand/allocated/available/in_transit invariants are unchanged.
+ALTER TABLE stock_balance ADD COLUMN IF NOT EXISTS last_issue_at TIMESTAMPTZ;
 
 DO $$
 BEGIN

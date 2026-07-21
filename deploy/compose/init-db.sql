@@ -949,6 +949,7 @@ CREATE TABLE IF NOT EXISTS stock_balance (
   allocated     NUMERIC(18, 6) NOT NULL DEFAULT 0,
   in_transit    NUMERIC(18, 6) NOT NULL DEFAULT 0,
   available     NUMERIC(18, 6) GENERATED ALWAYS AS (on_hand - allocated) STORED,
+  last_issue_at TIMESTAMPTZ,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_stock_balance_grain UNIQUE NULLS NOT DISTINCT (sku, location_id, lot_id, stock_class),
   CONSTRAINT chk_stock_balance_on_hand_non_negative CHECK (on_hand >= 0),
@@ -956,6 +957,13 @@ CREATE TABLE IF NOT EXISTS stock_balance (
   CONSTRAINT chk_stock_balance_allocated_within_on_hand CHECK (allocated <= on_hand),
   CONSTRAINT chk_stock_balance_in_transit_non_negative CHECK (in_transit >= 0)
 );
+
+-- Story 2.7: last_issue_at tracks the most recent outbound consumption (stock.issued only) per
+-- (sku, location_id, lot_id, stock_class); the obsolescence scan reads MAX(last_issue_at) across
+-- lots at (sku, location_id). Added idempotently so a live Story 2.2 database gains the column
+-- without a table rebuild. It is nullable and independent of the generated `available` column and
+-- the grain, so the Story 2.2 on_hand/allocated/available/in_transit invariants are unchanged.
+ALTER TABLE stock_balance ADD COLUMN IF NOT EXISTS last_issue_at TIMESTAMPTZ;
 
 DO $$
 BEGIN
@@ -1504,5 +1512,191 @@ BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON physical_verification TO readonly_user;
     GRANT SELECT ON physical_verification_line TO readonly_user;
+  END IF;
+END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- Inventory planning parameters (Story 2.7). The section below MUST stay identical to the
+-- canonical read/projections/inventory_planning.sql (applied by src/events/migrate.ts and the
+-- integration-test harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS inventory_planning_params (
+  planning_params_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku                         TEXT NOT NULL,
+  location_id                 UUID NOT NULL,
+  lead_time_days              NUMERIC(9, 3),
+  lead_time_source            TEXT,
+  service_level               NUMERIC(6, 4),
+  avg_daily_demand            NUMERIC(18, 6),
+  demand_std_dev              NUMERIC(18, 6),
+  demand_window_days          INTEGER NOT NULL DEFAULT 90,
+  obsolescence_threshold_days INTEGER,
+  standard_order_qty          NUMERIC(18, 6),
+  safety_stock                NUMERIC(18, 6),
+  reorder_point               NUMERIC(18, 6),
+  last_computed_at            TIMESTAMPTZ,
+  computation_inputs          JSONB,
+  business_stream             TEXT NOT NULL,
+  set_by_actor_id             UUID,
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_inventory_planning_params_grain UNIQUE NULLS NOT DISTINCT (sku, location_id),
+  CONSTRAINT chk_inventory_planning_params_service_level CHECK (service_level IS NULL OR (service_level > 0 AND service_level < 1)),
+  CONSTRAINT chk_inventory_planning_params_lead_time_non_negative CHECK (lead_time_days IS NULL OR lead_time_days >= 0),
+  CONSTRAINT chk_inventory_planning_params_window_positive CHECK (demand_window_days > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_planning_params_location ON inventory_planning_params (location_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_planning_params_sku ON inventory_planning_params (sku);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_inventory_planning_params_grain'
+      AND conrelid = 'inventory_planning_params'::regclass
+  ) THEN
+    ALTER TABLE inventory_planning_params
+      ADD CONSTRAINT uq_inventory_planning_params_grain UNIQUE NULLS NOT DISTINCT (sku, location_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inventory_planning_params_service_level'
+      AND conrelid = 'inventory_planning_params'::regclass
+  ) THEN
+    ALTER TABLE inventory_planning_params
+      ADD CONSTRAINT chk_inventory_planning_params_service_level CHECK (service_level IS NULL OR (service_level > 0 AND service_level < 1));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inventory_planning_params_lead_time_non_negative'
+      AND conrelid = 'inventory_planning_params'::regclass
+  ) THEN
+    ALTER TABLE inventory_planning_params
+      ADD CONSTRAINT chk_inventory_planning_params_lead_time_non_negative CHECK (lead_time_days IS NULL OR lead_time_days >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inventory_planning_params_window_positive'
+      AND conrelid = 'inventory_planning_params'::regclass
+  ) THEN
+    ALTER TABLE inventory_planning_params
+      ADD CONSTRAINT chk_inventory_planning_params_window_positive CHECK (demand_window_days > 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON inventory_planning_params TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inventory_planning_params TO readonly_user;
+  END IF;
+END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- Replenishment recommendation (Story 2.7). The section below MUST stay identical to the
+-- canonical read/projections/replenishment_recommendation.sql (applied by src/events/migrate.ts
+-- and the integration-test harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS replenishment_recommendation (
+  recommendation_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku                   TEXT NOT NULL,
+  location_id           UUID NOT NULL,
+  on_hand_at_check      NUMERIC(18, 6) NOT NULL,
+  reorder_point         NUMERIC(18, 6) NOT NULL,
+  recommended_order_qty NUMERIC(18, 6) NOT NULL,
+  status                TEXT NOT NULL DEFAULT 'open',
+  triggered_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  source_event_id       UUID,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_replenishment_recommendation_status CHECK (status IN ('open', 'superseded', 'fulfilled'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_replenishment_recommendation_sku ON replenishment_recommendation (sku);
+CREATE INDEX IF NOT EXISTS idx_replenishment_recommendation_location ON replenishment_recommendation (location_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_replenishment_recommendation_open ON replenishment_recommendation (sku, location_id) WHERE status = 'open';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_replenishment_recommendation_status'
+      AND conrelid = 'replenishment_recommendation'::regclass
+  ) THEN
+    ALTER TABLE replenishment_recommendation
+      ADD CONSTRAINT chk_replenishment_recommendation_status CHECK (status IN ('open', 'superseded', 'fulfilled'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON replenishment_recommendation TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON replenishment_recommendation TO readonly_user;
+  END IF;
+END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- Obsolescence flag (Story 2.7). The section below MUST stay identical to the canonical
+-- read/projections/obsolescence_flag.sql (applied by src/events/migrate.ts and the
+-- integration-test harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS obsolescence_flag (
+  obsolescence_flag_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku                   TEXT NOT NULL,
+  location_id           UUID NOT NULL,
+  status                TEXT NOT NULL DEFAULT 'active',
+  last_issue_at         TIMESTAMPTZ,
+  days_since_issue      INTEGER,
+  threshold_days        INTEGER,
+  disposition_status    TEXT,
+  nrv_testing_triggered BOOLEAN NOT NULL DEFAULT false,
+  flagged_at            TIMESTAMPTZ,
+  cleared_at            TIMESTAMPTZ,
+  source_event_id       UUID,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_obsolescence_flag_grain UNIQUE NULLS NOT DISTINCT (sku, location_id),
+  CONSTRAINT chk_obsolescence_flag_status CHECK (status IN ('active', 'aging'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_obsolescence_flag_location ON obsolescence_flag (location_id);
+CREATE INDEX IF NOT EXISTS idx_obsolescence_flag_status ON obsolescence_flag (status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_obsolescence_flag_grain'
+      AND conrelid = 'obsolescence_flag'::regclass
+  ) THEN
+    ALTER TABLE obsolescence_flag
+      ADD CONSTRAINT uq_obsolescence_flag_grain UNIQUE NULLS NOT DISTINCT (sku, location_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_obsolescence_flag_status'
+      AND conrelid = 'obsolescence_flag'::regclass
+  ) THEN
+    ALTER TABLE obsolescence_flag
+      ADD CONSTRAINT chk_obsolescence_flag_status CHECK (status IN ('active', 'aging'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON obsolescence_flag TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON obsolescence_flag TO readonly_user;
   END IF;
 END $$;

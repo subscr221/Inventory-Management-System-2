@@ -59,6 +59,26 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-22
+# story 2-7 dev-story 2026-07-22: implemented all 10 tasks from baseline f23c59f; three SKU-location projections
+#   (inventory_planning_params, replenishment_recommendation with partial-unique open guard, obsolescence_flag),
+#   central applyInventoryPlanningProjection seam in persistEvent (5 new inventory event types, narrow-gated), safety-stock =
+#   ceil(z x sigma_daily x sqrt(lead_time_days)) in SQL NUMERIC (AC1 worked example resolves to exactly 20, reorder point 146),
+#   reproducible computation_inputs snapshot, static 4-value z lookup (INVALID_SERVICE_LEVEL/LEAD_TIME_NOT_CONFIGURED/
+#   INSUFFICIENT_DEMAND_HISTORY fail-closed), replenishment check with FOR-UPDATE-serialized single open recommendation and
+#   transactional planner alert, obsolescence scan flag/clear (aging + pending_disposition + nrv_testing_triggered, NRV write-down
+#   stays DOA-gated in Story 2.4 seam), last_issue_at column on stock_balance stamped on stock.issued only (Story 2.2 invariants
+#   preserved), 7 RBAC/location-scoped REST routes, 5 new stable errors across backend+edge sync + i18n, schema-drift + route-surface
+#   + Story 2.2 last_issue_at regression guards; tsc/eslint/build clean, npm test 301/301 (21 new), edge 14/14, spine gate 6/6,
+#   diff-check clean; moved to review
+# story 2-7 code review 2026-07-22: 2 decision-needed resolved to patch + 11 patches applied, 3 defers logged,
+#   8 dismissed. Critical fixes: never-issued owned stock now gets an obsolescence fallback clock, planning payload
+#   location_id is write-scoped on direct event and edge upload paths, safety-stock compute holds the params FOR UPDATE
+#   lock through persistEvent, write-scoped location access is enforced, target_location_code issues count in demand stats,
+#   owned stock only feeds reorder and obsolescence decisions, partial params edits preserve omitted config, obsolescence
+#   scan responses return real days_since_issue, lead_time_days is bounded to NUMERIC(9,3), zero-qty recommendation events
+#   are rejected, and getObsolescenceFlag enforces the forUpdate client contract. tsc/lint/build clean, npm test 308/308,
+#   edge 14/14, spine gate 6/6, diff-check clean; moved to done
+# story 2-7 created 2026-07-22 via create-story workflow: Safety Stock, Reorder Points, and Obsolescence Flagging (FR-I-03/07/08 flagging half); new SKU-location inventory_planning_params projection (safety_stock = ceil(z x sigma_daily x sqrt(lead_time_days)), reorder_point), replenishment_recommendation + obsolescence_flag projections, last_issue_at activity tracking on stock.issued, central inventory-planning seam in persistEvent, three Phase-1 synthetic job cycles (safety-stock compute / replenishment check / obsolescence scan) modeled on src/notify cycles, transactional planner exception alerts via emitNotificationInTransaction, obsolescence NRV trigger hands off to DOA-gated Story 2.4 valuation seam (no write-down posted here), recommendation-only (no PO - Epic 4), disposition deferred (Epic 16), new stable errors + sync/i18n classification, RBAC/location scoping, schema-drift + route-surface guards; ready-for-dev
 # story 2-6 created 2026-07-21 via create-story workflow: Cycle Counting and Physical Inventory; cycle-count tasks, SKU/lot variance calculation, DOA-routed approval-gated adjustments, stock.adjusted central seam, CARO 2020 physical-verification evidence report, period-lock immutability contract, RBAC/location scoping, sync/i18n error classification, schema drift and regression guardrails; ready-for-dev
 # story 2-5 code review 2026-07-21 (3-layer adversarial, baseline a76aa46 -> a5b033f): 4 decisions + 18 patches applied, 4 deferred, 2 dismissed. Critical fixes: missing BEGIN on all write handlers (piecemeal autocommit), deleted powersync_publication restored in init-db.sql, hardcoded pending_approval status (no-approval transfers stranded), ship_event_id 'unknown' UUID crash (every real ship 500'd), FOR UPDATE row locks + in_transit unique constraint (double-ship), serial TEXT[] injection, over-receive cap, source-grain stock ops for lot-less transfers, ship/receive correlation_id reuse (AC3), location+role RBAC on writes, list scoping, escalation-to-fallback approver, client idempotency key, LOT_SKU_MISMATCH split, partially_received state. Added test/integration/story-2-5.test.ts (19 tests) + spine route-surface allowlist. Backend 262/262, edge 14/14, spine 6/6, tsc/eslint clean; moved ready-for-dev->done
 # story 2-5 created 2026-07-21 via create-story workflow: Inter-Location Transfer Requests; DOA-approval routing, transfer request events, pick-ship-receive cycle, allocation enforcement, lot/serial traceability, in-transit state management, correlation ID linking, approval gating, rejection reversal, error codes (APPROVAL_REQUIRED, QUANTITY_EXCEEDS_APPROVED, LOT_MISMATCH), edge sync, RBAC, audit, and comprehensive test coverage; ready-for-dev
@@ -201,7 +221,7 @@ development_status:
   2-4-ind-as-2-compliant-inventory-valuation: done   # PILOT
   2-5-inter-location-transfer-requests: done   # PILOT
   2-6-cycle-counting-and-physical-inventory: done   # PILOT
-  2-7-safety-stock-reorder-points-and-obsolescence-flagging: backlog   # PILOT
+  2-7-safety-stock-reorder-points-and-obsolescence-flagging: done   # PILOT
   2-8-consignment-and-vmi-stock-segregation: backlog   # PILOT
   2-9-erp-inbound-reference-projections: backlog   # PILOT
   epic-2-retrospective: optional

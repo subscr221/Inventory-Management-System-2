@@ -199,5 +199,8 @@ export async function applyStockBalanceProjection(
     return;
   }
 
-  await applyStockIssue({ sku, location_id: location.location_id, lot_id: lotId, quantity }, client);
+  await applyStockIssue(
+    { sku, location_id: location.location_id, lot_id: lotId, quantity, occurred_at: envelope.metadata.occurred_at },
+    client,
+  );
 }

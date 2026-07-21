@@ -651,4 +651,53 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     assert.strictEqual(malformed.status, 400, JSON.stringify(malformed.body));
     assert.strictEqual(malformed.body['error_code'], 'INVALID_PARAMS');
   });
+
+  it('Story 2.7 regression: stock.issued stamps last_issue_at without disturbing the Story 2.2 balance invariants', async () => {
+    const liaSku = 'LIA-2-7-REG';
+    const item = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/items',
+      { sku: liaSku, uom: 'ea', valuation_method: 'weighted_average', business_stream: 'production' },
+      operatorHeaders,
+    );
+    assert.strictEqual(item.status, 201, JSON.stringify(item.body));
+
+    const receive = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope('stock.received', { sku: liaSku, target_location_id: locAId, quantity: 50, unit_cost: 4 }),
+      operatorHeaders,
+    );
+    assert.strictEqual(receive.status, 201, JSON.stringify(receive.body));
+
+    // A receipt is NOT issue activity: last_issue_at must still be null after only receiving.
+    const afterReceipt = await getPool().query(
+      `SELECT last_issue_at FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL AND stock_class = 'owned'`,
+      [liaSku, locAId],
+    );
+    assert.strictEqual(afterReceipt.rows[0]!['last_issue_at'], null, 'a receipt does not stamp last_issue_at');
+
+    const issue = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope('stock.issued', { sku: liaSku, target_location_id: locAId, quantity: 10 }),
+      operatorHeaders,
+    );
+    assert.strictEqual(issue.status, 201, JSON.stringify(issue.body));
+
+    const afterIssue = await getPool().query(
+      `SELECT on_hand, allocated, available, in_transit, last_issue_at
+       FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL AND stock_class = 'owned'`,
+      [liaSku, locAId],
+    );
+    const bal = afterIssue.rows[0]!;
+    assert.ok(bal['last_issue_at'] !== null, 'stock.issued stamps last_issue_at');
+    assert.strictEqual(Number(bal['on_hand']), 40, 'on_hand drops by the issued quantity');
+    assert.strictEqual(Number(bal['allocated']), 0, 'allocated is unchanged by the issue');
+    assert.strictEqual(Number(bal['available']), 40, 'available stays generated as on_hand - allocated');
+    assert.strictEqual(Number(bal['in_transit']), 0, 'in_transit is unchanged by the issue');
+  });
 });

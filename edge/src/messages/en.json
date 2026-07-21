@@ -60,5 +60,10 @@
   "errors.COUNT_ENTERER_CANNOT_APPROVE": "The person who entered the count cannot approve its adjustment.",
   "errors.PERIOD_LOCKED": "This period is locked; the verification record can no longer be changed.",
   "errors.COUNT_VARIANCE_REQUIRES_APPROVAL": "This count variance requires approval before it can be adjusted.",
-  "errors.STOCK_ADJUSTMENT_NEGATIVE_BALANCE": "This adjustment would drive stock below zero or below reserved quantity."
+  "errors.STOCK_ADJUSTMENT_NEGATIVE_BALANCE": "This adjustment would drive stock below zero or below reserved quantity.",
+  "errors.LEAD_TIME_NOT_CONFIGURED": "A lead time must be set for this item and location before safety stock can be computed.",
+  "errors.INSUFFICIENT_DEMAND_HISTORY": "There is not enough demand history to compute safety stock for this item yet.",
+  "errors.INVALID_SERVICE_LEVEL": "That service level is not supported. Choose 90%, 95%, 97.5%, or 99%.",
+  "errors.PLANNING_PARAMS_NOT_FOUND": "No planning parameters are configured for this item and location.",
+  "errors.OBSOLESCENCE_THRESHOLD_NOT_CONFIGURED": "An obsolescence threshold must be set before this item can be scanned for aging."
 }

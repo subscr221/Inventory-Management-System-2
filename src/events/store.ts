@@ -21,6 +21,7 @@ import {
   applyTransferReceiveProjection,
 } from '../compliance/transfer-request.js';
 import { assertCycleCountShape, applyCycleCountProjection } from '../compliance/cycle-count.js';
+import { assertInventoryPlanningShape, applyInventoryPlanningProjection } from '../compliance/inventory-planning.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -196,6 +197,10 @@ export async function persistEvent(
   // Story 2.6: cycle-count / physical-verification shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed count event never consumes an idempotency key.
   assertCycleCountShape(envelope);
+  // Story 2.7: inventory-planning shape validation (params, safety-stock computation, replenishment
+  // recommendation, obsolescence flag/clear) is non-DB and runs with the other pre-transaction
+  // asserts, so a malformed planning event never consumes an idempotency key.
+  assertInventoryPlanningShape(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();
@@ -233,6 +238,12 @@ export async function persistEvent(
       // the projection and the domain_events insert commit or roll back together. The AC2 guard
       // (stock.adjusted requires an approved adjustment) lives in applyCycleCountProjection.
       await applyCycleCountProjection(envelope, client, eventId);
+      // Story 2.7: inventory-planning params, safety-stock/reorder-point computation, replenishment
+      // recommendation, and obsolescence flag/clear run inside this same transaction so the
+      // projection and the domain_events insert commit or roll back together. The reorder-crossing
+      // and obsolescence-transition decisions (and their transactional planner alerts) live in the
+      // planning jobs, which hold the params/flag row lock across read -> decide -> persist.
+      await applyInventoryPlanningProjection(envelope, client, eventId);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {

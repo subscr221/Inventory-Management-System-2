@@ -70,6 +70,12 @@ describe('Story 1.8 sync upload classification', () => {
       'PERIOD_LOCKED',
       'COUNT_VARIANCE_REQUIRES_APPROVAL',
       'STOCK_ADJUSTMENT_NEGATIVE_BALANCE',
+      // Story 2.7 inventory-planning permanent business rejections
+      'LEAD_TIME_NOT_CONFIGURED',
+      'INSUFFICIENT_DEMAND_HISTORY',
+      'INVALID_SERVICE_LEVEL',
+      'PLANNING_PARAMS_NOT_FOUND',
+      'OBSOLESCENCE_THRESHOLD_NOT_CONFIGURED',
     ]) {
       assertClassification(classifyUploadFailure(new AppError(400, code, 'Permanent failure')), {
         action: 'complete',

@@ -37,6 +37,22 @@ function satisfiesFunctionScope(assignment: RoleAssignment, required: 'read' | '
   return assignment.functionScope === 'write';
 }
 
+export function permittedLocationsForModuleScope(
+  roles: RoleAssignment[],
+  module: string,
+  functionScope: 'read' | 'write',
+): { wildcard: boolean; locations: Set<string> } {
+  const locations = new Set<string>();
+  let wildcard = false;
+  for (const r of roles) {
+    if (r.module !== module && r.module !== '*') continue;
+    if (!satisfiesFunctionScope(r, functionScope)) continue;
+    if (r.locationId === '*') wildcard = true;
+    else locations.add(r.locationId);
+  }
+  return { wildcard, locations };
+}
+
 /**
  * Enforces module -> function -> location precedence against the caller's role assignments
  * (attached to the request by the router's global auth check). Must be composed onto a route

@@ -71,6 +71,15 @@ import {
   physicalVerificationReportHandler,
 } from './api/v1/physical-verification.js';
 import {
+  setPlanningParamsHandler,
+  getPlanningParamsHandler,
+  computeSafetyStockHandler,
+  checkReplenishmentHandler,
+  listRecommendationsHandler,
+  scanObsolescenceHandler,
+  obsolescenceReportHandler,
+} from './api/v1/inventory-planning.js';
+import {
   createTransferRequestHandler,
   getTransferRequestHandler,
   listTransferRequestsHandler,
@@ -138,6 +147,14 @@ export function createAppRouter(): Router {
   router.post('/api/v1/physical-verifications', completePhysicalVerificationHandler);
   router.post('/api/v1/physical-verifications/:physical_verification_id/sign-off', signOffPhysicalVerificationHandler);
   router.get('/api/v1/physical-verification/report', physicalVerificationReportHandler);
+  // Story 2.7: Safety Stock, Reorder Points, and Obsolescence Flagging
+  router.post('/api/v1/planning/params', setPlanningParamsHandler);
+  router.get('/api/v1/planning/params/:sku', getPlanningParamsHandler);
+  router.post('/api/v1/planning/safety-stock/compute', computeSafetyStockHandler);
+  router.post('/api/v1/planning/replenishment/check', checkReplenishmentHandler);
+  router.get('/api/v1/planning/replenishment/recommendations', listRecommendationsHandler);
+  router.post('/api/v1/planning/obsolescence/scan', scanObsolescenceHandler);
+  router.get('/api/v1/planning/obsolescence/report', obsolescenceReportHandler);
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
   router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);

@@ -179,6 +179,34 @@ const EXPECTED = [
     // Append-only evidence: app_user gets no UPDATE/DELETE grant.
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 2.7 projections.
+  {
+    canonical: 'read/projections/inventory_planning.sql',
+    table: 'inventory_planning_params',
+    constraints: [
+      'uq_inventory_planning_params_grain',
+      'chk_inventory_planning_params_service_level',
+      'chk_inventory_planning_params_lead_time_non_negative',
+      'chk_inventory_planning_params_window_positive',
+    ],
+    indexes: ['idx_inventory_planning_params_location', 'idx_inventory_planning_params_sku'],
+  },
+  {
+    canonical: 'read/projections/replenishment_recommendation.sql',
+    table: 'replenishment_recommendation',
+    constraints: ['chk_replenishment_recommendation_status'],
+    indexes: [
+      'idx_replenishment_recommendation_sku',
+      'idx_replenishment_recommendation_location',
+      'uq_replenishment_recommendation_open',
+    ],
+  },
+  {
+    canonical: 'read/projections/obsolescence_flag.sql',
+    table: 'obsolescence_flag',
+    constraints: ['uq_obsolescence_flag_grain', 'chk_obsolescence_flag_status'],
+    indexes: ['idx_obsolescence_flag_location', 'idx_obsolescence_flag_status'],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

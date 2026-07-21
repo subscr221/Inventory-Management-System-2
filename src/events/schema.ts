@@ -169,6 +169,111 @@ export interface PhysicalVerificationSignedOffPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Story 2.7: Safety Stock, Reorder Points, and Obsolescence Flagging
+// ---------------------------------------------------------------------------
+
+export interface InventoryPlanningParamsSetPayload {
+  planning_params_id: string;
+  sku: string;
+  location_id: string;
+  lead_time_days?: number;
+  lead_time_source?: string;
+  service_level: number;
+  obsolescence_threshold_days?: number;
+  standard_order_qty?: number;
+  demand_window_days?: number;
+  business_stream: string;
+  set_by_actor_id: string;
+}
+
+export interface InventoryPlanningParamsSetEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'inventory_planning.params_set';
+  payload: InventoryPlanningParamsSetPayload;
+}
+
+export interface SafetyStockComputationInputs {
+  sigma_daily: number;
+  avg_daily_demand: number;
+  z: number;
+  service_level: number;
+  lead_time_days: number;
+  lead_time_source: string;
+  demand_window_days: number;
+  sample_day_count: number;
+}
+
+export interface SafetyStockComputedPayload {
+  computation_id: string;
+  planning_params_id: string;
+  sku: string;
+  location_id: string;
+  safety_stock: number;
+  reorder_point: number;
+  avg_daily_demand: number;
+  demand_std_dev: number;
+  computation_inputs: SafetyStockComputationInputs;
+  computed_at: string;
+  business_date: string;
+  business_stream: string;
+}
+
+export interface SafetyStockComputedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'inventory_planning.safety_stock_computed';
+  payload: SafetyStockComputedPayload;
+}
+
+export interface ReplenishmentRecommendedPayload {
+  recommendation_id: string;
+  sku: string;
+  location_id: string;
+  on_hand_at_check: number;
+  reorder_point: number;
+  recommended_order_qty: number;
+  triggered_at: string;
+  business_date: string;
+  business_stream: string;
+}
+
+export interface ReplenishmentRecommendedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'replenishment.recommended';
+  payload: ReplenishmentRecommendedPayload;
+}
+
+export interface ObsolescenceFlaggedPayload {
+  obsolescence_flag_id: string;
+  sku: string;
+  location_id: string;
+  last_issue_at: string | null;
+  days_since_issue: number;
+  threshold_days: number;
+  disposition_status: string;
+  nrv_testing_triggered: boolean;
+  flagged_at: string;
+  business_date: string;
+  business_stream: string;
+}
+
+export interface ObsolescenceFlaggedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'obsolescence.flagged';
+  payload: ObsolescenceFlaggedPayload;
+}
+
+export interface ObsolescenceClearedPayload {
+  obsolescence_flag_id: string;
+  sku: string;
+  location_id: string;
+  cleared_at: string;
+  reason: string;
+  business_date: string;
+  business_stream: string;
+}
+
+export interface ObsolescenceClearedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'obsolescence.cleared';
+  payload: ObsolescenceClearedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -215,6 +320,27 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: true,
   },
   'physical_verification.signed_off': {
+    streamType: 'inventory',
+    requiresBusinessStream: true,
+  },
+  // Story 2.7: inventory planning, replenishment, and obsolescence events
+  'inventory_planning.params_set': {
+    streamType: 'inventory',
+    requiresBusinessStream: true,
+  },
+  'inventory_planning.safety_stock_computed': {
+    streamType: 'inventory',
+    requiresBusinessStream: true,
+  },
+  'replenishment.recommended': {
+    streamType: 'inventory',
+    requiresBusinessStream: true,
+  },
+  'obsolescence.flagged': {
+    streamType: 'inventory',
+    requiresBusinessStream: true,
+  },
+  'obsolescence.cleared': {
     streamType: 'inventory',
     requiresBusinessStream: true,
   },

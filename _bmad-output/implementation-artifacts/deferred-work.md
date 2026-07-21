@@ -74,3 +74,9 @@
 - Stable error codes `APPROVAL_REQUIRED`, `QUANTITY_EXCEEDS_APPROVED`, `LOT_MISMATCH` not registered in the architecture stable-error list [planning-artifacts/architecture] - deferred, planning-artifact update.
 - Approve/reject mutate `transfer_request.status` via direct `UPDATE`, and the persisted `approval_decided` event has no projection handler, so the read-model status change is a side-write not derived from the event [src/api/v1/transfer-requests.ts] - deferred, architecture-pattern decision (event-vs-amendment was already flagged as an open decision in the spec, Task 4).
 - `in_transit`/`transfer_request` DDL duplicated across `read/projections/*.sql` and `deploy/compose/init-db.sql`, kept in sync only by comment, with no drift-guard test [read/projections/in_transit.sql, read/projections/transfer_request.sql, deploy/compose/init-db.sql] - deferred, mirror-assertion test is test-infra work shared with the same class already tracked for Stories 1.9/1.11.
+
+## Deferred from: code review of 2-7-safety-stock-reorder-points-and-obsolescence-flagging (2026-07-22)
+
+- `reorder_point` = ceil(avg_daily_demand * lead_time_days + safety_stock) is computed and stored into NUMERIC(18,6) with no upper bound, so extreme demand/lead combinations overflow as an uncaught 500 [src/compliance/planning-jobs.ts:169] - deferred, roll into the shared quantity-bound hardening pass tracked across Stories 2.4/2.6.
+- Minimum sample-day guard is hardcoded (DEFAULT_MIN_SAMPLE_DAYS = 2) but Task 5 specifies a *configured* minimum [src/compliance/planning-jobs.ts:45] - deferred, needs a DDL/params-field decision before it is worth wiring.
+- Demand-window anchor and obsolescence aging both use SQL now() rather than the supplied scope.business_date, so a backdated or replayed job decides against wall-clock time [src/compliance/planning-jobs.ts:146, :407] - deferred, revisit when a real scheduler replaces the Phase-1 synthetic HTTP trigger.

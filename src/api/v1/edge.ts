@@ -8,7 +8,7 @@ import {
   getParsedBody,
   getTraceId,
 } from '../../middleware/context.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { requireRole, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
 import { validateEnvelope, persistEvent } from '../../events/store.js';
 import { validateEdgeEnvelope } from '../../sync/upload.js';
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
@@ -16,6 +16,28 @@ import { config } from '../../config/index.js';
 import type { AuthContext } from '../../middleware/context.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
+const PLANNING_EVENT_TYPES = new Set([
+  'inventory_planning.params_set',
+  'inventory_planning.safety_stock_computed',
+  'replenishment.recommended',
+  'obsolescence.flagged',
+  'obsolescence.cleared',
+]);
+
+function planningPayloadLocation(body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): string | null {
+  if (body.stream_type !== 'inventory' || !PLANNING_EVENT_TYPES.has(body.event_type)) return null;
+  const locationId = body.payload['location_id'];
+  return typeof locationId === 'string' ? locationId : null;
+}
+
+function assertPlanningPayloadWriteLocation(authContext: AuthContext, body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): void {
+  const locationId = planningPayloadLocation(body);
+  if (!locationId) return;
+  const { wildcard, locations } = permittedLocationsForModuleScope(authContext.roles, 'inventory', 'write');
+  if (!wildcard && !locations.has(locationId)) {
+    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to planning payload location "${locationId}"`);
+  }
+}
 
 function edgeSiteName(): string {
   return config.edge.siteName;
@@ -133,6 +155,7 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   const assignment = getAuthorizedAssignment(req);
   if (!authContext || !assignment)
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  assertPlanningPayloadWriteLocation(authContext, body);
 
   body.metadata.actor.user_id = authContext.userId;
   body.metadata.actor.role = assignment.role;

@@ -1,14 +1,36 @@
 import type { RouteHandler } from '../../middleware/error.js';
-import { sendJson, sendRequestError } from '../../middleware/error.js';
+import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import { validateEnvelope, persistEvent, readStream } from '../../events/store.js';
 import { getParsedBody, getAuthContext, getAuthorizedRole, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
+import { requireRole, permittedLocationsForModule, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
 import { auditConfig } from '../../config/audit.js';
 import { getPool } from '../../config/db.js';
 import { logTamperAttempt } from '../../read/projections/audit_log.js';
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
+const PLANNING_EVENT_TYPES = new Set([
+  'inventory_planning.params_set',
+  'inventory_planning.safety_stock_computed',
+  'replenishment.recommended',
+  'obsolescence.flagged',
+  'obsolescence.cleared',
+]);
+
+function planningPayloadLocation(body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): string | null {
+  if (body.stream_type !== 'inventory' || !PLANNING_EVENT_TYPES.has(body.event_type)) return null;
+  const locationId = body.payload['location_id'];
+  return typeof locationId === 'string' ? locationId : null;
+}
+
+function assertPlanningPayloadWriteLocation(authContext: NonNullable<ReturnType<typeof getAuthContext>>, body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): void {
+  const locationId = planningPayloadLocation(body);
+  if (!locationId) return;
+  const { wildcard, locations } = permittedLocationsForModuleScope(authContext.roles, 'inventory', 'write');
+  if (!wildcard && !locations.has(locationId)) {
+    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to planning payload location "${locationId}"`);
+  }
+}
 
 function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
   if (typeof body === 'object' && body !== null) {
@@ -47,6 +69,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   const authorizedAssignment = getAuthorizedAssignment(req);
   const auditLocationId = authorizedAssignment?.locationId ?? body.metadata.actor.location_id;
   if (authContext) {
+    assertPlanningPayloadWriteLocation(authContext, body);
     body.metadata.actor.user_id = authContext.userId;
     const authorizedRole = getAuthorizedRole(req);
     if (authorizedRole) {
