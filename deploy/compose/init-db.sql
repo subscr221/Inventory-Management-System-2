@@ -31,8 +31,84 @@ GRANT SELECT ON domain_events TO svc_powersync;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync_publication') THEN
-    CREATE PUBLICATION powersync_publication FOR TABLE domain_events;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inventory_valuation_standard_cost_variance TO readonly_user;
+  END IF;
+END $$;
+
+
+-- -----------------------------------------------------------------------------------------------
+-- Transfer request (Story 2.5). The section below MUST stay identical to the canonical
+-- read/projections/transfer_request.sql (applied by src/events/migrate.ts and the
+-- integration-test harness); that file is the source of truth for tables, indexes, AND grants.
+-- Change both files together.
+-- -----------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS transfer_request (
+  transfer_request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku_id              TEXT NOT NULL,
+  quantity            NUMERIC(18, 6) NOT NULL,
+  from_location_id    UUID NOT NULL,
+  to_location_id      UUID NOT NULL,
+  lot_id              TEXT,
+  serial_ids          TEXT[],
+  business_stream     TEXT NOT NULL,
+  notes               TEXT,
+  status              TEXT NOT NULL DEFAULT 'pending_approval',
+  approver_actor_id   UUID,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  shipped_at          TIMESTAMPTZ,
+  received_at         TIMESTAMPTZ,
+  correlation_id      UUID
+);
+
+CREATE INDEX IF NOT EXISTS idx_transfer_request_status ON transfer_request (status);
+CREATE INDEX IF NOT EXISTS idx_transfer_request_sku ON transfer_request (sku_id);
+CREATE INDEX IF NOT EXISTS idx_transfer_request_from_loc ON transfer_request (from_location_id);
+CREATE INDEX IF NOT EXISTS idx_transfer_request_to_loc ON transfer_request (to_location_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON transfer_request TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON transfer_request TO readonly_user;
+  END IF;
+END $$;
+
+
+-- In-transit projection (Story 2.5). The section below MUST stay identical to the canonical
+-- read/projections/in_transit.sql (applied by src/events/migrate.ts and the
+-- integration-test harness); that file is the source of truth for tables, indexes, AND grants.
+-- Change both files together.
+-- -----------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS in_transit (
+  sku_id                TEXT NOT NULL,
+  location_from         UUID NOT NULL,
+  location_to           UUID NOT NULL,
+  lot_id                TEXT,
+  quantity              NUMERIC(18, 6) NOT NULL,
+  transfer_request_id   UUID NOT NULL,
+  correlation_id        UUID,
+  ship_event_id         UUID,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_in_transit_sku ON in_transit (sku_id);
+CREATE INDEX IF NOT EXISTS idx_in_transit_from ON in_transit (location_from);
+CREATE INDEX IF NOT EXISTS idx_in_transit_to ON in_transit (location_to);
+CREATE INDEX IF NOT EXISTS idx_in_transit_lot ON in_transit (lot_id);
+CREATE INDEX IF NOT EXISTS idx_in_transit_request ON in_transit (transfer_request_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON in_transit TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON in_transit TO readonly_user;
   END IF;
 END $$;
 

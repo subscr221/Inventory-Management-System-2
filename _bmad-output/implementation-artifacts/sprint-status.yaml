@@ -48,6 +48,7 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-21
+# story 2-5 created 2026-07-21 via create-story workflow: Inter-Location Transfer Requests; DOA-approval routing, transfer request events, pick-ship-receive cycle, allocation enforcement, lot/serial traceability, in-transit state management, correlation ID linking, approval gating, rejection reversal, error codes (APPROVAL_REQUIRED, QUANTITY_EXCEEDS_APPROVED, LOT_MISMATCH), edge sync, RBAC, audit, and comprehensive test coverage; ready-for-dev
 # story 2-4 dev-story 2026-07-21: implemented all 8 tasks; SKU-grain inventory_valuation summary +
 #   FIFO layer/serial-cost/NRV-adjustment/standard-cost-variance projections, valuation seam wired
 #   into persistEvent after lot/serial+stock-balance (weighted average, FIFO multi-layer split,
@@ -185,7 +186,7 @@ development_status:
   2-2-real-time-multi-location-stock-balances: done   # PILOT
   2-3-lot-batch-and-serial-traceability: done   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: done   # PILOT
-  2-5-inter-location-transfer-requests: backlog   # PILOT
+  2-5-inter-location-transfer-requests: ready-for-dev   # PILOT
   2-6-cycle-counting-and-physical-inventory: backlog   # PILOT
   2-7-safety-stock-reorder-points-and-obsolescence-flagging: backlog   # PILOT
   2-8-consignment-and-vmi-stock-segregation: backlog   # PILOT

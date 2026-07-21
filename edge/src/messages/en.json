@@ -49,5 +49,8 @@
   "errors.LOCATION_ACCESS_DENIED": "This device is not authorized for that site.",
   "errors.DUPLICATE_EVENT": "This event was already synced.",
   "errors.VALUATION_METHOD_NOT_PERMITTED": "That valuation method is not permitted for this item.",
-  "errors.NRV_RECOVERY_EXCEEDS_ORIGINAL_COST": "This recovery would carry the item above its original cost and cannot be recorded."
+  "errors.NRV_RECOVERY_EXCEEDS_ORIGINAL_COST": "This recovery would carry the item above its original cost and cannot be recorded.",
+  "errors.APPROVAL_REQUIRED": "This transfer requires approval before it can proceed.",
+  "errors.QUANTITY_EXCEEDS_APPROVED": "The requested quantity exceeds the approved amount.",
+  "errors.LOT_MISMATCH": "The received lot does not match the shipped lot."
 }

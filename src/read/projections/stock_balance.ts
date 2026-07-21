@@ -49,11 +49,18 @@ export interface StockAllocationInput {
 }
 
 export interface StockIssueInput {
-  sku: string;
-  location_id: string;
-  lot_id?: string | null;
-  quantity: number;
-}
+   sku: string;
+   location_id: string;
+   lot_id?: string | null;
+   quantity: number;
+ }
+
+ export interface StockDeallocationInput {
+   sku: string;
+   location_id: string;
+   lot_id?: string | null;
+   quantity: number;
+ }
 
 type Queryable = Pick<PoolClient, 'query'>;
 
@@ -195,19 +202,36 @@ export async function applyStockIssue(input: StockIssueInput, client: PoolClient
     });
   }
 
+await client.query(
+     `WITH ranked AS (
+        SELECT balance_id, available AS available_qty,
+               SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
+        FROM stock_balance
+        WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
+      )
+      UPDATE stock_balance
+      SET on_hand = on_hand - LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
+          updated_at = now()
+      FROM ranked
+      WHERE stock_balance.balance_id = ranked.balance_id
+        AND ranked.cumulative - ranked.available_qty < $4`,
+     [input.sku, input.location_id, lotId, input.quantity],
+  );
+}
+
+/**
+ * Reverses a stock allocation: decreases `allocated` by the given quantity. Used when
+ * a previously allocated transfer is shipped (allocation is consumed) or rejected
+ * (allocation is rolled back). Must run on the SAME client/transaction as the caller's
+ * event insert.
+ */
+export async function applyStockDeallocation(input: StockDeallocationInput, client: PoolClient): Promise<void> {
+  const lotId = input.lot_id ?? null;
   await client.query(
-    `WITH ranked AS (
-       SELECT balance_id, available AS available_qty,
-              SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
-       FROM stock_balance
-       WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
-     )
-     UPDATE stock_balance
-     SET on_hand = on_hand - LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
+    `UPDATE stock_balance
+     SET allocated = GREATEST(allocated - $1, 0),
          updated_at = now()
-     FROM ranked
-     WHERE stock_balance.balance_id = ranked.balance_id
-       AND ranked.cumulative - ranked.available_qty < $4`,
-    [input.sku, input.location_id, lotId, input.quantity],
+     WHERE sku = $2 AND location_id = $3 AND ($4::text IS NULL OR lot_id = $4)`,
+    [input.quantity, input.sku, input.location_id, lotId],
   );
 }

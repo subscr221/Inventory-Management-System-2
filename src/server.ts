@@ -57,6 +57,16 @@ import {
   placeQualityHoldHandler,
   clearQualityHoldHandler,
 } from './api/v1/lots.js';
+import {
+  createTransferRequestHandler,
+  getTransferRequestHandler,
+  listTransferRequestsHandler,
+  approveTransferRequestHandler,
+  rejectTransferRequestHandler,
+  shipTransferRequestHandler,
+  receiveTransferRequestHandler,
+  getInTransitHandler,
+} from './api/v1/transfer-requests.js';
 import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
 import { runExpiryCycle } from './notify/expire.js';
@@ -96,6 +106,15 @@ export function createAppRouter(): Router {
   router.post('/api/v1/stock/:sku/valuation/nrv-recovery', nrvRecoveryHandler);
   router.post('/api/v1/stock/:sku/valuation/standard-cost-variance-review', standardCostVarianceReviewHandler);
   router.get('/api/v1/valuation/standard-cost-variance-report', standardCostVarianceReportHandler);
+  // Story 2.5: Inter-Location Transfer Requests
+  router.post('/api/v1/transfer-requests', createTransferRequestHandler);
+  router.get('/api/v1/transfer-requests/:transfer_request_id', getTransferRequestHandler);
+  router.get('/api/v1/transfer-requests', listTransferRequestsHandler);
+  router.patch('/api/v1/transfer-requests/:transfer_request_id/approve', approveTransferRequestHandler);
+  router.patch('/api/v1/transfer-requests/:transfer_request_id/reject', rejectTransferRequestHandler);
+  router.post('/api/v1/transfer-requests/:transfer_request_id/ship', shipTransferRequestHandler);
+  router.post('/api/v1/transfer-requests/:transfer_request_id/receive', receiveTransferRequestHandler);
+  router.get('/api/v1/stock/:sku/in-transit', getInTransitHandler);
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
   router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);

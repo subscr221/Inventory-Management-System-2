@@ -12,6 +12,14 @@ import { assertInventoryMasterReferences } from '../compliance/inventory-master.
 import { assertStockBalanceShape, applyStockBalanceProjection } from '../compliance/stock-balance.js';
 import { assertLotSerialShape, applyLotSerialValidation } from '../compliance/lot-serial-validation.js';
 import { assertValuationShape, applyInventoryValuationProjection } from '../compliance/inventory-valuation.js';
+import {
+  assertTransferRequestShape,
+  assertTransferShipShape,
+  assertTransferReceiveShape,
+  applyTransferRequestProjection,
+  applyTransferShipProjection,
+  applyTransferReceiveProjection,
+} from '../compliance/transfer-request.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -174,11 +182,16 @@ export async function persistEvent(
   // Story 2.3: lot/serial shape validation is non-DB and runs with the other pre-transaction
   // asserts, so a malformed lot/serial event never consumes an idempotency key.
   assertLotSerialShape(envelope);
-  // Story 2.4: valuation shape validation (NRV write-down/recovery/standard-cost-variance payload
+// Story 2.4: valuation shape validation (NRV write-down/recovery/standard-cost-variance payload
   // fields) is non-DB and runs with the other pre-transaction asserts, so a malformed valuation
   // event never consumes an idempotency key. stock.received/stock.issued unit_cost shape is
   // already covered by assertStockBalanceShape above.
   assertValuationShape(envelope);
+  // Story 2.5: transfer-request shape validation is non-DB and runs with the other pre-transaction
+  // asserts, so a malformed transfer-request event never consumes an idempotency key.
+  assertTransferRequestShape(envelope);
+  assertTransferShipShape(envelope);
+  assertTransferReceiveShape(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();
@@ -206,6 +219,11 @@ export async function persistEvent(
     // BEFORE the domain_events insert below - a rejected write-down/recovery therefore writes no
     // event row and consumes no idempotency key (Dev Notes: Valuation Design Guardrails).
     await applyInventoryValuationProjection(envelope, client, eventId);
+// Story 2.5: transfer-request, ship, and receive enforcement run inside the
+      // same transaction as the domain_events insert so that allocation and event commit atomically.
+      await applyTransferRequestProjection(envelope, client);
+      await applyTransferShipProjection(envelope, client);
+      await applyTransferReceiveProjection(envelope, client);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {
