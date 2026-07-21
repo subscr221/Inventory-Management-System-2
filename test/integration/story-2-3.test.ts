@@ -555,6 +555,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       sku: SKU,
       target_location_id: locAId,
       quantity: 2,
+      unit_cost: 1,
       serials: serialNumbers.map((serial_number) => ({ serial_number, initial_quantity: 1 })),
     }, { actor_location_id: locAId }), operatorHeaders);
     assert.strictEqual(receiptRes.status, 201);
@@ -578,11 +579,12 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
     // A mismatched quantity (1 serial worth issued but 2 claimed) must be rejected, not silently
     // applied with stock_balance and serial_master diverging (Story 2.3 re-review).
     const mismatchSerials = [`SN-ISSUE-${Date.now()}-3`];
-    await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
+await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
       sku: SKU,
       target_location_id: locAId,
       quantity: 1,
-      serials: mismatchSerials.map((serial_number) => ({ serial_number, initial_quantity: 1 })),
+      unit_cost: 1,
+      serials: [{ serial_number: mismatchSerials[0], initial_quantity: 1 }],
     }, { actor_location_id: locAId }), operatorHeaders);
     const mismatchRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
       sku: SKU,

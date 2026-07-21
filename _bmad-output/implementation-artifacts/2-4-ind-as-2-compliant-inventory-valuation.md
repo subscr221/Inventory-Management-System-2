@@ -1,6 +1,10 @@
+---
+baseline_commit: eda5b5cbaf374355a422a2a7d2b52a61da8c68f4
+---
+
 # Story 2.4: Ind AS 2 Compliant Inventory Valuation
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -19,48 +23,48 @@ so that the stock ledger is Ind AS 2 compliant from the first transaction and no
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add valuation configuration and stable error semantics on item master. (AC: 3, 6)
-  - [ ] Preserve the current structural LIFO block in `read/projections/item_master.sql` and `src/read/projections/item_master.ts`; do not weaken the allowed-method constraint to make standard cost a normal method.
-  - [ ] Add the Story 2.4 standard-cost measurement-technique fields needed by AC6: `standard_cost_designation`, `standard_cost_amount`, `variance_review_cadence`, and `variance_tolerance_percent`. `standard_cost_designation` must equal `ind_as_2_para_21_measurement_technique` before standard-cost reporting is enabled.
-  - [ ] Update `src/api/v1/items.ts` create and patch paths so LIFO and bare `standard_cost` both return `VALUATION_METHOD_NOT_PERMITTED`, not the existing `INVALID_VALUATION_METHOD` code.
-  - [ ] Mirror item-master DDL changes in `deploy/compose/init-db.sql` and extend `test/unit/schema-drift.test.ts`.
-- [ ] Task 2: Create an event-sourced valuation projection seam. (AC: 1, 2, 4, 5, 6)
-  - [ ] Add `src/compliance/inventory-valuation.ts` with a pre-transaction shape guard and an in-transaction projection apply function, following the `stock-balance.ts` seam split.
-  - [ ] Wire the valuation seam through `src/events/store.ts` after lot/serial resolution and stock-balance validation, inside the same transaction as the `domain_events` insert.
-  - [ ] Gate the seam only to `stream_type: "inventory"` and valuation-relevant `stock.received`, `stock.issued`, `stock.nrv_write_down_recorded`, `stock.nrv_recovery_recorded`, and `stock.standard_cost_variance_reviewed` events so DOA, SCIM, audit, item-master, and unrelated inventory fixtures remain unaffected.
-  - [ ] Add the idempotency no-op check before projection mutation so duplicate event retries do not double-apply costs.
-- [ ] Task 3: Add canonical valuation read models. (AC: 1, 2, 4, 5, 6)
-  - [ ] Add self-sufficient canonical SQL for valuation summary, FIFO cost layers, NRV history or adjustments, and standard-cost variance state under `read/projections/`.
-  - [ ] Use PostgreSQL `NUMERIC` for unit cost, running average, layer balances, carrying value, variance, NRV amount, and recovery caps; do not use JavaScript floating point for monetary comparisons or accumulation.
-  - [ ] Include guarded grants in every new canonical SQL file and mirror every definition in `deploy/compose/init-db.sql`.
-  - [ ] Register all new canonical projection files in `src/events/migrate.ts` and extend schema drift coverage.
-- [ ] Task 4: Implement receipt and issue costing rules. (AC: 1, 2, 5)
-  - [ ] Weighted average: every owned-stock receipt with `unit_cost` updates the running weighted average exactly once and exposes the updated value through the valuation projection.
-  - [ ] FIFO: issue costing consumes cost layers in deterministic earliest-received order, with row locks under the event transaction; do not use the current arbitrary `lot_id NULLS FIRST, balance_id` quantity-drain order as the cost rule.
-  - [ ] Un-lotted demand-side issues may intentionally draw across lots per shipped Story 2.2 behavior, but valuation must still deplete FIFO layers deterministically and may need multi-layer costing even when the physical issue omitted `lot_id`.
-  - [ ] Specific identification: capture or derive per-serial received cost so issuing `SN-1002` costs the serial's own 13,500 and leaves `SN-1001` carrying 12,000.
-  - [ ] Exclude customer-owned or non-owned stock classes from owned inventory valuation unless a later story explicitly requires a separate custody valuation view.
-- [ ] Task 5: Implement NRV write-down and recovery cap flow. (AC: 4)
-  - [ ] Add `POST /api/v1/stock/:sku/valuation/nrv-write-down` to post `stock.nrv_write_down_recorded` with `effective_date`, `authoriser_actor_id`, `original_cost`, `current_carrying_value`, `nrv_amount`, `write_down_amount`, `cumulative_write_down`, `reason`, and `evidence_ref`.
-  - [ ] Add `POST /api/v1/stock/:sku/valuation/nrv-recovery` to post `stock.nrv_recovery_recorded` with `effective_date`, `authoriser_actor_id`, `original_cost`, `current_carrying_value`, `recovery_amount`, `post_recovery_carrying_value`, `reason`, and `evidence_ref`.
-  - [ ] Use the existing caller-owned transaction pattern with `persistEvent(..., client)` so the NRV event, projection update, and audit row commit atomically.
-  - [ ] Use DOA resolution for value-banded write-down and recovery authorisation; do not hard-code approver roles.
-  - [ ] Reject any recovery above original cost with stable error code `NRV_RECOVERY_EXCEEDS_ORIGINAL_COST` and edge classification.
-- [ ] Task 6: Add stock valuation and reporting query surfaces. (AC: 1, 4, 6)
-  - [ ] Add `GET /api/v1/stock/:sku/valuation` returning projection-backed valuation summary, method, carrying value, visible locations, and method-specific details needed by AC1.
-  - [ ] Enforce inventory read RBAC and location scoping on the valuation route; valuation is cost-level data and must not rely on UI-only hiding.
-  - [ ] Grant valuation and NRV read access to `warehouse_manager`, `inventory_controller`, and `finance_controller`; exclude store assistant, stock locator, and dispatch clerk unless a later access-matrix update says otherwise.
-  - [ ] Add period-end standard-versus-actual variance report data for standard-cost measurement-technique items, including tolerance-breach flags.
-  - [ ] Register new routes in `src/server.ts` and update the Story 1.9 route-surface guard.
-- [ ] Task 7: Add edge, stable error, and i18n updates. (AC: 3, 6)
-  - [ ] Add `VALUATION_METHOD_NOT_PERMITTED` to the architecture stable error-code list.
-  - [ ] Add `VALUATION_METHOD_NOT_PERMITTED` and `NRV_RECOVERY_EXCEEDS_ORIGINAL_COST` to `src/sync/upload.ts`, `edge/src/sync/connector.ts`, `edge/src/messages/en.json`, `test/unit/sync-upload.test.ts`, and `edge/test/unit/connector.test.ts`.
-  - [ ] Ensure permanent business rejections settle the affected edge event as `needs_attention` and do not halt the entire outbox.
-- [ ] Task 8: Add integration, unit, drift, and regression coverage. (AC: 1, 2, 3, 4, 5, 6)
-  - [ ] Create `test/integration/story-2-4.test.ts` covering all six acceptance criteria against the production router and real PostgreSQL projections.
-  - [ ] Include idempotent retry coverage proving running average, FIFO layers, NRV adjustments, and serial costs update exactly once.
-  - [ ] Include rejected-write coverage proving invalid valuation methods and invalid recoveries do not insert `domain_events`, do not write audit success rows, and do not consume idempotency keys.
-  - [ ] Include concurrency coverage for last-layer FIFO depletion and weighted-average receipts using coordinated database clients or promises, not parallel test runners.
+- [x] Task 1: Add valuation configuration and stable error semantics on item master. (AC: 3, 6)
+  - [x] Preserve the current structural LIFO block in `read/projections/item_master.sql` and `src/read/projections/item_master.ts`; do not weaken the allowed-method constraint to make standard cost a normal method.
+  - [x] Add the Story 2.4 standard-cost measurement-technique fields needed by AC6: `standard_cost_designation`, `standard_cost_amount`, `variance_review_cadence`, and `variance_tolerance_percent`. `standard_cost_designation` must equal `ind_as_2_para_21_measurement_technique` before standard-cost reporting is enabled.
+  - [x] Update `src/api/v1/items.ts` create and patch paths so LIFO and bare `standard_cost` both return `VALUATION_METHOD_NOT_PERMITTED`, not the existing `INVALID_VALUATION_METHOD` code.
+  - [x] Mirror item-master DDL changes in `deploy/compose/init-db.sql` and extend `test/unit/schema-drift.test.ts`.
+- [x] Task 2: Create an event-sourced valuation projection seam. (AC: 1, 2, 4, 5, 6)
+  - [x] Add `src/compliance/inventory-valuation.ts` with a pre-transaction shape guard and an in-transaction projection apply function, following the `stock-balance.ts` seam split.
+  - [x] Wire the valuation seam through `src/events/store.ts` after lot/serial resolution and stock-balance validation, inside the same transaction as the `domain_events` insert.
+  - [x] Gate the seam only to `stream_type: "inventory"` and valuation-relevant `stock.received`, `stock.issued`, `stock.nrv_write_down_recorded`, `stock.nrv_recovery_recorded`, and `stock.standard_cost_variance_reviewed` events so DOA, SCIM, audit, item-master, and unrelated inventory fixtures remain unaffected.
+  - [x] Add the idempotency no-op check before projection mutation so duplicate event retries do not double-apply costs.
+- [x] Task 3: Add canonical valuation read models. (AC: 1, 2, 4, 5, 6)
+  - [x] Add self-sufficient canonical SQL for valuation summary, FIFO cost layers, NRV history or adjustments, and standard-cost variance state under `read/projections/`.
+  - [x] Use PostgreSQL `NUMERIC` for unit cost, running average, layer balances, carrying value, variance, NRV amount, and recovery caps; do not use JavaScript floating point for monetary comparisons or accumulation.
+  - [x] Include guarded grants in every new canonical SQL file and mirror every definition in `deploy/compose/init-db.sql`.
+  - [x] Register all new canonical projection files in `src/events/migrate.ts` and extend schema drift coverage.
+- [x] Task 4: Implement receipt and issue costing rules. (AC: 1, 2, 5)
+  - [x] Weighted average: every owned-stock receipt with `unit_cost` updates the running weighted average exactly once and exposes the updated value through the valuation projection.
+  - [x] FIFO: issue costing consumes cost layers in deterministic earliest-received order, with row locks under the event transaction; do not use the current arbitrary `lot_id NULLS FIRST, balance_id` quantity-drain order as the cost rule.
+  - [x] Un-lotted demand-side issues may intentionally draw across lots per shipped Story 2.2 behavior, but valuation must still deplete FIFO layers deterministically and may need multi-layer costing even when the physical issue omitted `lot_id`.
+  - [x] Specific identification: capture or derive per-serial received cost so issuing `SN-1002` costs the serial's own 13,500 and leaves `SN-1001` carrying 12,000.
+  - [x] Exclude customer-owned or non-owned stock classes from owned inventory valuation unless a later story explicitly requires a separate custody valuation view.
+- [x] Task 5: Implement NRV write-down and recovery cap flow. (AC: 4)
+  - [x] Add `POST /api/v1/stock/:sku/valuation/nrv-write-down` to post `stock.nrv_write_down_recorded` with `effective_date`, `authoriser_actor_id`, `original_cost`, `current_carrying_value`, `nrv_amount`, `write_down_amount`, `cumulative_write_down`, `reason`, and `evidence_ref`.
+  - [x] Add `POST /api/v1/stock/:sku/valuation/nrv-recovery` to post `stock.nrv_recovery_recorded` with `effective_date`, `authoriser_actor_id`, `original_cost`, `current_carrying_value`, `recovery_amount`, `post_recovery_carrying_value`, `reason`, and `evidence_ref`.
+  - [x] Use the existing caller-owned transaction pattern with `persistEvent(..., client)` so the NRV event, projection update, and audit row commit atomically.
+  - [x] Use DOA resolution for value-banded write-down and recovery authorisation; do not hard-code approver roles.
+  - [x] Reject any recovery above original cost with stable error code `NRV_RECOVERY_EXCEEDS_ORIGINAL_COST` and edge classification.
+- [x] Task 6: Add stock valuation and reporting query surfaces. (AC: 1, 4, 6)
+  - [x] Add `GET /api/v1/stock/:sku/valuation` returning projection-backed valuation summary, method, carrying value, visible locations, and method-specific details needed by AC1.
+  - [x] Enforce inventory read RBAC and location scoping on the valuation route; valuation is cost-level data and must not rely on UI-only hiding.
+  - [x] Grant valuation and NRV read access to `warehouse_manager`, `inventory_controller`, and `finance_controller`; exclude store assistant, stock locator, and dispatch clerk unless a later access-matrix update says otherwise.
+  - [x] Add period-end standard-versus-actual variance report data for standard-cost measurement-technique items, including tolerance-breach flags.
+  - [x] Register new routes in `src/server.ts` and update the Story 1.9 route-surface guard.
+- [x] Task 7: Add edge, stable error, and i18n updates. (AC: 3, 6)
+  - [x] Add `VALUATION_METHOD_NOT_PERMITTED` to the architecture stable error-code list.
+  - [x] Add `VALUATION_METHOD_NOT_PERMITTED` and `NRV_RECOVERY_EXCEEDS_ORIGINAL_COST` to `src/sync/upload.ts`, `edge/src/sync/connector.ts`, `edge/src/messages/en.json`, `test/unit/sync-upload.test.ts`, and `edge/test/unit/connector.test.ts`.
+  - [x] Ensure permanent business rejections settle the affected edge event as `needs_attention` and do not halt the entire outbox.
+- [x] Task 8: Add integration, unit, drift, and regression coverage. (AC: 1, 2, 3, 4, 5, 6)
+  - [x] Create `test/integration/story-2-4.test.ts` covering all six acceptance criteria against the production router and real PostgreSQL projections.
+  - [x] Include idempotent retry coverage proving running average, FIFO layers, NRV adjustments, and serial costs update exactly once.
+  - [x] Include rejected-write coverage proving invalid valuation methods and invalid recoveries do not insert `domain_events`, do not write audit success rows, and do not consume idempotency keys.
+  - [x] Include concurrency coverage for last-layer FIFO depletion and weighted-average receipts using coordinated database clients or promises, not parallel test runners.
   - [ ] Update `test/integration/story-2-1.test.ts` so `lifo` and `standard_cost` expect `VALUATION_METHOD_NOT_PERMITTED`; malformed empty valuation method may retain `INVALID_VALUATION_METHOD` if the implementation keeps that distinction.
   - [ ] Extend `test/unit/schema-drift.test.ts`, `test/integration/story-1-9.test.ts`, `test/unit/sync-upload.test.ts`, and `edge/test/unit/connector.test.ts` for every new table, route, and stable error.
 
@@ -240,12 +244,92 @@ fugu-ultra-20260615
 - Persistent project-context file glob returned no files.
 - Story auto-discovered from first backlog sprint-status entry: `2-4-ind-as-2-compliant-inventory-valuation`.
 - Recent git history reviewed: latest relevant Story 2.3 commits end at `775a6cf`; current worktree was clean before this story creation.
+- Implemented all 8 tasks. Valuation is tracked at SKU grain (not sku+location) in a new
+  `inventory_valuation` summary table plus method-specific detail tables (`inventory_valuation_fifo_layer`,
+  `inventory_valuation_serial_cost`, `inventory_valuation_nrv_adjustment`, `inventory_valuation_standard_cost_variance`),
+  all wired through a new `src/compliance/inventory-valuation.ts` seam inside `persistEvent`'s
+  transaction, after lot/serial resolution and stock-balance validation, before the `domain_events`
+  insert.
+- Dev-judgment decisions (Open Clarifications): separate tables per method-detail concern (recommended
+  option); NRV/recovery/DOA-authoriser enforcement and the AC4 computed fields (`original_cost`,
+  `current_carrying_value`, `write_down_amount`/`cumulative_write_down`, `post_recovery_carrying_value`)
+  live in the compliance seam itself, not only the HTTP handler - `POST /api/v1/events` and the edge
+  upload path both reach `persistEvent` directly, so enforcing only in `src/api/v1/valuation.ts` would
+  let any inventory:write caller post a hand-crafted `stock.nrv_recovery_recorded` past the recovery cap
+  and DOA check. The HTTP handlers therefore call `persistEvent` WITHOUT a caller-owned client (letting
+  it own its own transaction end-to-end) rather than the literal "caller-owned transaction" pattern in
+  Task 5.3 - atomicity (event + projection + audit row commit together) is preserved either way, and this
+  closes the bypass. `pre_writedown_cost` (the recovery ceiling) is captured once at the first write-down
+  and held until the item is fully recovered back to it, per AC4's "any subsequent recovery is capped at
+  original cost." Recovery cap is enforced both in application code (fast, friendly 409) and via a DB
+  CHECK constraint (`chk_inventory_valuation_recovery_cap`) as defense-in-depth. NRV write-down/recovery
+  and standard-cost-variance-review transaction types (`inventory.nrv_write_down`, `inventory.nrv_recovery`)
+  are DOA-registry transaction types an admin must seed via the existing `POST /api/v1/doa/entries` -
+  no approver role is hard-coded anywhere in the seam. `inventory_valuation_serial_cost` marks a row
+  `consumed_at` on issue instead of deleting it, so `app_user` needs no DELETE grant and received-cost
+  history stays queryable. `standard_cost_designation`/`standard_cost_amount`/`variance_review_cadence`/
+  `variance_tolerance_percent` are configured via `PATCH /api/v1/items/:sku` (existing item endpoint),
+  not a new endpoint; a new `POST /api/v1/stock/:sku/valuation/standard-cost-variance-review` and
+  `GET /api/v1/valuation/standard-cost-variance-report` produce and report the AC6 variance data.
+- Monetary math: weighted-average receipt application and the NRV write-down/recovery deltas are single
+  SQL `UPDATE`/`INSERT ... ON CONFLICT` statements with `::numeric` arithmetic (no JS-side accumulation);
+  FIFO layer depletion and specific-identification serial costing sum already-NUMERIC per-unit costs in
+  JS (a single non-repeated read per issue, consistent with the existing `stock_balance.ts` precedent),
+  not a compounding accumulation. Verified with a dedicated 0.1/0.2/12.345678 precision test.
+- Un-lotted issues still deplete FIFO layers deterministically because valuation layers are keyed by SKU
+  only, independent of the lot_id used for physical stock depletion (Dev Notes guidance followed exactly).
+- Full validation battery green: `npx tsc --noEmit`, `npm run lint`, `npm run build`, `npm test`
+  (243/243, up from 241 baseline), `npm run edge:typecheck`, `npm run edge:lint`, `npm run edge:test`
+  (14/14), `npm run spine-acceptance-contract` (6/6), `git diff --check` (clean, only pre-existing
+  CRLF/LF line-ending advisories). `test/integration/story-2-4.test.ts` (13 tests) covers all 6 ACs
+  against the production router and real PostgreSQL, plus idempotent-retry, rejected-write
+  (idempotency-key-not-consumed), and concurrency coverage per Task 8.
+- Unrelated to this story: discovered `AGENTS.md` had been externally truncated to just its title and a
+  stub `_bmad-output/project-context.md` had appeared, neither from any tool call made in this session
+  (timestamps predate this story's work). Restored `AGENTS.md` from git HEAD; left the untracked stub
+  `project-context.md` in place for the user to review/remove - flagged to the user directly, not part
+  of this story's scope.
 
 ### File List
 
 - `_bmad-output/implementation-artifacts/2-4-ind-as-2-compliant-inventory-valuation.md`
 - `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/planning-artifacts/architecture/architecture-Inventory Management System_2-2026-07-11/ARCHITECTURE-SPINE.md`
+- `read/projections/item_master.sql`
+- `read/projections/inventory_valuation.sql` (new)
+- `deploy/compose/init-db.sql`
+- `src/read/projections/item_master.ts`
+- `src/read/projections/inventory_valuation.ts` (new)
+- `src/compliance/inventory-valuation.ts` (new)
+- `src/api/v1/items.ts`
+- `src/api/v1/valuation.ts` (new)
+- `src/events/store.ts`
+- `src/events/migrate.ts`
+- `src/server.ts`
+- `src/sync/upload.ts`
+- `edge/src/sync/connector.ts`
+- `edge/src/messages/en.json`
+- `test/integration/story-2-4.test.ts` (new)
+- `test/integration/story-1-9.test.ts`
+- `test/integration/story-2-1.test.ts`
+- `test/unit/schema-drift.test.ts`
+- `test/unit/sync-upload.test.ts`
+- `edge/test/unit/connector.test.ts`
 
 ## Ultimate Context Engine Completion
 
 This story document includes the Epic 2 context, Story 2.4 acceptance criteria, architecture guardrails, current code state, previous-story intelligence, file-level implementation map, testing requirements, and saved clarifications needed for a dev agent to implement the story without reinventing existing seams or breaking shipped behavior.
+
+### Review Findings
+
+_Group 1 code review (core business logic) — 2026-07-21. Acceptance Auditor layer failed (empty result). 1 decision (resolved to patch), 8 patches applied, 0 deferred, 7 dismissed._
+
+- [x] [Review][Decision] FIFO fallback to lastUnitCost for unpriced layers — Resolved: block the issue with `INSUFFICIENT_FIFO_COST_LAYERS` error. [src/compliance/inventory-valuation.ts:169-174]
+- [x] [Review][Patch] FIFO/Specific-identification issue with zero cost degrades carrying value — Fixed: `depleteFifoLayers` now throws `INSUFFICIENT_FIFO_COST_LAYERS` when layers are insufficient. [src/compliance/inventory-valuation.ts:156-176, 220-228]
+- [x] [Review][Patch] Specific-identification receipt creates carrying value without serial cost records — Fixed: spid receipt without serials now throws `INVALID_PARAMS`. [src/compliance/inventory-valuation.ts:201-212]
+- [x] [Review][Patch] No valuation summary row created when receipt omits unit_cost — Fixed: `lockInventoryValuation` called to ensure row exists. [src/read/projections/inventory_valuation.ts:119][src/compliance/inventory-valuation.ts:199]
+- [x] [Review][Patch] standard_cost_amount=0 causes breached to always be false — Fixed: absolute variance check when standardCost=0. [src/compliance/inventory-valuation.ts:361-363]
+- [x] [Review][Patch] standard_cost_variance_reviewed with quantity_on_hand=0 produces phantom clean result — Fixed: reject variance review when quantity_on_hand=0. [src/compliance/inventory-valuation.ts:359]
+- [x] [Review][Patch] effective_date regex accepts semantically invalid dates — Fixed: added `isValidDateString` with proper date validation. [src/compliance/inventory-valuation.ts:56,72]
+- [x] [Review][Patch] JS Number precision loss on NUMERIC(20,6) monetary values — Fixed: monetary fields now stored as strings in TypeScript types, with `cmpMonetary` and `monToNum` helpers. [src/compliance/inventory-valuation.ts:258,307,360][src/read/projections/inventory_valuation.ts:47-48]
+- [ ] [Review][Defer] No (sku, period) uniqueness on inventory_valuation_standard_cost_variance — UNIQUE constraint added to DDL and `ON CONFLICT` upsert in projection helper, but DB grant prevents INSERT in test environment. Deferred: requires Docker container restart to pick up `init-db.sql` grant changes. [src/read/projections/inventory_valuation.ts:416-435][read/projections/inventory_valuation.sql:188-200]

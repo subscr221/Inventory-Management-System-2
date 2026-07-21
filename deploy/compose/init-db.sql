@@ -645,23 +645,46 @@ END $$;
 -- -------------------------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS item_master (
-  item_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  sku                  TEXT NOT NULL,
-  uom                  TEXT NOT NULL,
-  lot_controlled       BOOLEAN NOT NULL DEFAULT false,
-  serial_controlled    BOOLEAN NOT NULL DEFAULT false,
-  hazmat               BOOLEAN NOT NULL DEFAULT false,
-  quarantine_required  BOOLEAN NOT NULL DEFAULT false,
-  bis_licence_required BOOLEAN NOT NULL DEFAULT false,
-  valuation_method     TEXT NOT NULL,
-  business_stream      TEXT NOT NULL,
-  status               TEXT NOT NULL DEFAULT 'active',
-  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  item_id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku                         TEXT NOT NULL,
+  uom                         TEXT NOT NULL,
+  lot_controlled              BOOLEAN NOT NULL DEFAULT false,
+  serial_controlled           BOOLEAN NOT NULL DEFAULT false,
+  hazmat                      BOOLEAN NOT NULL DEFAULT false,
+  quarantine_required         BOOLEAN NOT NULL DEFAULT false,
+  bis_licence_required        BOOLEAN NOT NULL DEFAULT false,
+  valuation_method            TEXT NOT NULL,
+  business_stream             TEXT NOT NULL,
+  status                      TEXT NOT NULL DEFAULT 'active',
+  -- Story 2.4: standard cost is NOT a fourth valuation_method - it is an Ind AS 2 paragraph 21
+  -- measurement technique layered on top of the actual valuation_method above. It is only
+  -- effective once standard_cost_designation carries the exact literal below (enforced by
+  -- chk_item_master_standard_cost_designation and re-checked in src/api/v1/items.ts).
+  standard_cost_designation   TEXT,
+  standard_cost_amount        NUMERIC(18, 6),
+  variance_review_cadence     TEXT,
+  variance_tolerance_percent  NUMERIC(7, 4),
+  created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_item_master_sku UNIQUE (sku),
   CONSTRAINT chk_item_master_valuation_method CHECK (valuation_method IN ('fifo', 'weighted_average', 'specific_identification')),
-  CONSTRAINT chk_item_master_status CHECK (status IN ('active', 'inactive'))
+  CONSTRAINT chk_item_master_status CHECK (status IN ('active', 'inactive')),
+  CONSTRAINT chk_item_master_standard_cost_designation CHECK (
+    standard_cost_designation IS NULL OR standard_cost_designation = 'ind_as_2_para_21_measurement_technique'
+  ),
+  CONSTRAINT chk_item_master_standard_cost_requires_designation CHECK (
+    standard_cost_amount IS NULL OR standard_cost_designation = 'ind_as_2_para_21_measurement_technique'
+  ),
+  CONSTRAINT chk_item_master_standard_cost_amount_non_negative CHECK (standard_cost_amount IS NULL OR standard_cost_amount >= 0),
+  CONSTRAINT chk_item_master_variance_tolerance_percent CHECK (
+    variance_tolerance_percent IS NULL OR (variance_tolerance_percent >= 0 AND variance_tolerance_percent <= 100)
+  )
 );
+
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS standard_cost_designation TEXT;
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS standard_cost_amount NUMERIC(18, 6);
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS variance_review_cadence TEXT;
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS variance_tolerance_percent NUMERIC(7, 4);
 
 DO $$
 BEGIN
@@ -680,6 +703,44 @@ BEGIN
   ) THEN
     ALTER TABLE item_master
       ADD CONSTRAINT chk_item_master_status CHECK (status IN ('active', 'inactive'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_item_master_standard_cost_designation'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT chk_item_master_standard_cost_designation CHECK (
+        standard_cost_designation IS NULL OR standard_cost_designation = 'ind_as_2_para_21_measurement_technique'
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_item_master_standard_cost_requires_designation'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT chk_item_master_standard_cost_requires_designation CHECK (
+        standard_cost_amount IS NULL OR standard_cost_designation = 'ind_as_2_para_21_measurement_technique'
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_item_master_standard_cost_amount_non_negative'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT chk_item_master_standard_cost_amount_non_negative CHECK (standard_cost_amount IS NULL OR standard_cost_amount >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_item_master_variance_tolerance_percent'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT chk_item_master_variance_tolerance_percent CHECK (
+        variance_tolerance_percent IS NULL OR (variance_tolerance_percent >= 0 AND variance_tolerance_percent <= 100)
+      );
   END IF;
 END $$;
 
@@ -1000,5 +1061,204 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON lot_trace TO readonly_user;
+  END IF;
+END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- Inventory valuation read models (Story 2.4). The section below MUST stay identical to the
+-- canonical read/projections/inventory_valuation.sql (applied by src/events/migrate.ts and the
+-- integration-test harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS inventory_valuation (
+  sku                   TEXT PRIMARY KEY,
+  quantity_on_hand      NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  running_average_cost  NUMERIC(18, 6),
+  carrying_value        NUMERIC(20, 6) NOT NULL DEFAULT 0,
+  pre_writedown_cost    NUMERIC(20, 6),
+  cumulative_write_down NUMERIC(20, 6) NOT NULL DEFAULT 0,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_inventory_valuation_quantity_non_negative CHECK (quantity_on_hand >= 0),
+  CONSTRAINT chk_inventory_valuation_carrying_value_non_negative CHECK (carrying_value >= 0),
+  -- AC4 recovery cap, enforced at the database as a second line of defense independent of the
+  -- compliance seam's own JS-side comparison (src/compliance/inventory-valuation.ts).
+  CONSTRAINT chk_inventory_valuation_recovery_cap CHECK (pre_writedown_cost IS NULL OR carrying_value <= pre_writedown_cost)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inventory_valuation_quantity_non_negative'
+      AND conrelid = 'inventory_valuation'::regclass
+  ) THEN
+    ALTER TABLE inventory_valuation
+      ADD CONSTRAINT chk_inventory_valuation_quantity_non_negative CHECK (quantity_on_hand >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inventory_valuation_carrying_value_non_negative'
+      AND conrelid = 'inventory_valuation'::regclass
+  ) THEN
+    ALTER TABLE inventory_valuation
+      ADD CONSTRAINT chk_inventory_valuation_carrying_value_non_negative CHECK (carrying_value >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inventory_valuation_recovery_cap'
+      AND conrelid = 'inventory_valuation'::regclass
+  ) THEN
+    ALTER TABLE inventory_valuation
+      ADD CONSTRAINT chk_inventory_valuation_recovery_cap CHECK (pre_writedown_cost IS NULL OR carrying_value <= pre_writedown_cost);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON inventory_valuation TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inventory_valuation TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS inventory_valuation_fifo_layer (
+  layer_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku                 TEXT NOT NULL,
+  sequence_no         BIGSERIAL,
+  unit_cost           NUMERIC(18, 6) NOT NULL,
+  original_quantity   NUMERIC(18, 6) NOT NULL,
+  remaining_quantity  NUMERIC(18, 6) NOT NULL,
+  event_id            UUID,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_inventory_valuation_fifo_layer_remaining_bounds CHECK (remaining_quantity >= 0 AND remaining_quantity <= original_quantity)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inventory_valuation_fifo_layer_remaining_bounds'
+      AND conrelid = 'inventory_valuation_fifo_layer'::regclass
+  ) THEN
+    ALTER TABLE inventory_valuation_fifo_layer
+      ADD CONSTRAINT chk_inventory_valuation_fifo_layer_remaining_bounds CHECK (remaining_quantity >= 0 AND remaining_quantity <= original_quantity);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_inventory_valuation_fifo_layer_sku_sequence ON inventory_valuation_fifo_layer (sku, sequence_no);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON inventory_valuation_fifo_layer TO app_user;
+    GRANT USAGE, SELECT ON SEQUENCE inventory_valuation_fifo_layer_sequence_no_seq TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inventory_valuation_fifo_layer TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS inventory_valuation_serial_cost (
+  sku            TEXT NOT NULL,
+  serial_number  TEXT NOT NULL,
+  unit_cost      NUMERIC(18, 6) NOT NULL,
+  consumed_at    TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT pk_inventory_valuation_serial_cost PRIMARY KEY (sku, serial_number)
+);
+
+ALTER TABLE inventory_valuation_serial_cost ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON inventory_valuation_serial_cost TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inventory_valuation_serial_cost TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS inventory_valuation_nrv_adjustment (
+  adjustment_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku                       TEXT NOT NULL,
+  adjustment_type           TEXT NOT NULL,
+  effective_date            DATE NOT NULL,
+  authoriser_actor_id       UUID NOT NULL,
+  original_cost             NUMERIC(20, 6) NOT NULL,
+  carrying_value_before     NUMERIC(20, 6) NOT NULL,
+  carrying_value_after      NUMERIC(20, 6) NOT NULL,
+  amount                    NUMERIC(20, 6) NOT NULL,
+  cumulative_write_down_after NUMERIC(20, 6) NOT NULL,
+  reason                    TEXT NOT NULL,
+  evidence_ref              TEXT,
+  event_id                  UUID NOT NULL,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_inventory_valuation_nrv_adjustment_type CHECK (adjustment_type IN ('write_down', 'recovery'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inventory_valuation_nrv_adjustment_type'
+      AND conrelid = 'inventory_valuation_nrv_adjustment'::regclass
+  ) THEN
+    ALTER TABLE inventory_valuation_nrv_adjustment
+      ADD CONSTRAINT chk_inventory_valuation_nrv_adjustment_type CHECK (adjustment_type IN ('write_down', 'recovery'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_inventory_valuation_nrv_adjustment_sku ON inventory_valuation_nrv_adjustment (sku, created_at);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON inventory_valuation_nrv_adjustment TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inventory_valuation_nrv_adjustment TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS inventory_valuation_standard_cost_variance (
+  variance_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku               TEXT NOT NULL,
+  period            TEXT NOT NULL,
+  standard_cost     NUMERIC(18, 6) NOT NULL,
+  actual_cost       NUMERIC(18, 6) NOT NULL,
+  variance_amount   NUMERIC(18, 6) NOT NULL,
+  variance_percent  NUMERIC(9, 4),
+  tolerance_percent NUMERIC(7, 4),
+  breached          BOOLEAN NOT NULL DEFAULT false,
+  event_id          UUID NOT NULL,
+  reviewed_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_inventory_valuation_standard_cost_variance_sku_period UNIQUE (sku, period)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_valuation_standard_cost_variance_sku ON inventory_valuation_standard_cost_variance (sku, reviewed_at);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_inventory_valuation_standard_cost_variance_sku_period'
+      AND conrelid = 'inventory_valuation_standard_cost_variance'::regclass
+  ) THEN
+    ALTER TABLE inventory_valuation_standard_cost_variance
+      ADD CONSTRAINT uq_inventory_valuation_standard_cost_variance_sku_period UNIQUE (sku, period);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON inventory_valuation_standard_cost_variance TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inventory_valuation_standard_cost_variance TO readonly_user;
   END IF;
 END $$;

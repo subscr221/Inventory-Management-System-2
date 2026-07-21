@@ -11,6 +11,7 @@ import { assertLocationInvariant } from '../compliance/location.js';
 import { assertInventoryMasterReferences } from '../compliance/inventory-master.js';
 import { assertStockBalanceShape, applyStockBalanceProjection } from '../compliance/stock-balance.js';
 import { assertLotSerialShape, applyLotSerialValidation } from '../compliance/lot-serial-validation.js';
+import { assertValuationShape, applyInventoryValuationProjection } from '../compliance/inventory-valuation.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -173,6 +174,11 @@ export async function persistEvent(
   // Story 2.3: lot/serial shape validation is non-DB and runs with the other pre-transaction
   // asserts, so a malformed lot/serial event never consumes an idempotency key.
   assertLotSerialShape(envelope);
+  // Story 2.4: valuation shape validation (NRV write-down/recovery/standard-cost-variance payload
+  // fields) is non-DB and runs with the other pre-transaction asserts, so a malformed valuation
+  // event never consumes an idempotency key. stock.received/stock.issued unit_cost shape is
+  // already covered by assertStockBalanceShape above.
+  assertValuationShape(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();
@@ -194,6 +200,12 @@ export async function persistEvent(
 
     await applyLotSerialValidation(envelope, client, eventId);
     await applyStockBalanceProjection(envelope, client);
+    // Story 2.4: valuation runs AFTER lot/serial resolution (so an auto-selected lot/effective
+    // serial set is settled) and stock-balance validation (so an insufficient-stock rejection
+    // rolls back before valuation ever mutates), but still inside this same transaction and
+    // BEFORE the domain_events insert below - a rejected write-down/recovery therefore writes no
+    // event row and consumes no idempotency key (Dev Notes: Valuation Design Guardrails).
+    await applyInventoryValuationProjection(envelope, client, eventId);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {

@@ -62,6 +62,8 @@ describe('Story 1.8 sync upload classification', () => {
       'UNTAGGED_TRANSACTION',
       'STREAM_CONFLICT',
       'CALIBRATION_LOCKOUT',
+      'VALUATION_METHOD_NOT_PERMITTED',
+      'NRV_RECOVERY_EXCEEDS_ORIGINAL_COST',
     ]) {
       assertClassification(classifyUploadFailure(new AppError(400, code, 'Permanent failure')), {
         action: 'complete',

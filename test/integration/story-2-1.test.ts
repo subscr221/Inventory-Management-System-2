@@ -337,8 +337,11 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     assert.strictEqual(dup.body['error_code'], 'DUPLICATE_SKU');
   });
 
-  it('blocks invalid valuation methods, especially lifo, with INVALID_VALUATION_METHOD', async () => {
-    for (const method of ['lifo', 'standard_cost', '']) {
+  it('blocks lifo and bare standard_cost with VALUATION_METHOD_NOT_PERMITTED, and other malformed values with INVALID_VALUATION_METHOD', async () => {
+    // Story 2.4: lifo and standard_cost are deliberately PROHIBITED values (not merely malformed),
+    // so they get the dedicated VALUATION_METHOD_NOT_PERMITTED code; an empty string is genuinely
+    // malformed input and keeps the original INVALID_VALUATION_METHOD code.
+    for (const method of ['lifo', 'standard_cost']) {
       const res = await makeRequest(
         port,
         'POST',
@@ -347,8 +350,18 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
         adminHeaders,
       );
       assert.strictEqual(res.status, 400, JSON.stringify(res.body));
-      assert.strictEqual(res.body['error_code'], 'INVALID_VALUATION_METHOD');
+      assert.strictEqual(res.body['error_code'], 'VALUATION_METHOD_NOT_PERMITTED');
     }
+
+    const malformed = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/items',
+      { sku: `RM-BAD-${randomUUID().slice(0, 8)}`, uom: 'ea', valuation_method: '', business_stream: 'production' },
+      adminHeaders,
+    );
+    assert.strictEqual(malformed.status, 400, JSON.stringify(malformed.body));
+    assert.strictEqual(malformed.body['error_code'], 'INVALID_VALUATION_METHOD');
   });
 
   it('rejects an unknown business stream with INVALID_BUSINESS_STREAM (Story 1.5 vocabulary reused)', async () => {

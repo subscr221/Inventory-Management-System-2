@@ -23,6 +23,13 @@ import {
 import { getCurrentLocationHandler, seedExpectedLocationHandler } from './api/v1/location.js';
 import { createItemHandler, updateItemHandler, getItemHandler } from './api/v1/items.js';
 import { getStockHandler } from './api/v1/stock.js';
+import {
+  getValuationHandler,
+  nrvWriteDownHandler,
+  nrvRecoveryHandler,
+  standardCostVarianceReviewHandler,
+  standardCostVarianceReportHandler,
+} from './api/v1/valuation.js';
 import { createLocationHandler, updateLocationHandler, getLocationHandler } from './api/v1/location-register.js';
 import {
   updateCalibrationStatusHandler,
@@ -84,6 +91,11 @@ export function createAppRouter(): Router {
   router.patch('/api/v1/locations/:locationId', updateLocationHandler);
   router.get('/api/v1/locations/:locationId', getLocationHandler);
   router.get('/api/v1/stock/:sku', getStockHandler);
+  router.get('/api/v1/stock/:sku/valuation', getValuationHandler);
+  router.post('/api/v1/stock/:sku/valuation/nrv-write-down', nrvWriteDownHandler);
+  router.post('/api/v1/stock/:sku/valuation/nrv-recovery', nrvRecoveryHandler);
+  router.post('/api/v1/stock/:sku/valuation/standard-cost-variance-review', standardCostVarianceReviewHandler);
+  router.get('/api/v1/valuation/standard-cost-variance-report', standardCostVarianceReportHandler);
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
   router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);

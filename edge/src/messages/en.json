@@ -47,5 +47,7 @@
   "errors.FUNCTION_ACCESS_DENIED": "You are not authorized to perform this action.",
   "errors.UNAUTHORIZED": "Sign in again before syncing.",
   "errors.LOCATION_ACCESS_DENIED": "This device is not authorized for that site.",
-  "errors.DUPLICATE_EVENT": "This event was already synced."
+  "errors.DUPLICATE_EVENT": "This event was already synced.",
+  "errors.VALUATION_METHOD_NOT_PERMITTED": "That valuation method is not permitted for this item.",
+  "errors.NRV_RECOVERY_EXCEEDS_ORIGINAL_COST": "This recovery would carry the item above its original cost and cannot be recorded."
 }

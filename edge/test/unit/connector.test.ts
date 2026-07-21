@@ -76,6 +76,14 @@ describe('edge upload failure classification', () => {
       'needs_attention',
     );
     assert.equal(
+      classifyServerUploadFailure(400, { error_code: 'VALUATION_METHOD_NOT_PERMITTED' }).localStatus,
+      'needs_attention',
+    );
+    assert.equal(
+      classifyServerUploadFailure(409, { error_code: 'NRV_RECOVERY_EXCEEDS_ORIGINAL_COST' }).localStatus,
+      'needs_attention',
+    );
+    assert.equal(
       classifyServerUploadFailure(401, { error_code: 'UNAUTHORIZED' }).localStatus,
       'auth_required',
     );

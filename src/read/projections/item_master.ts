@@ -14,6 +14,13 @@ export type ValuationMethod = (typeof ALLOWED_VALUATION_METHODS)[number];
 export const ITEM_STATUSES = ['active', 'inactive'] as const;
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
 
+/**
+ * Story 2.4: the ONLY value standard_cost_designation may carry. Standard cost is accepted
+ * purely as an Ind AS 2 paragraph 21 measurement technique layered on top of the item's real
+ * valuation_method (fifo/weighted_average/specific_identification) - never as a fourth method.
+ */
+export const STANDARD_COST_DESIGNATION = 'ind_as_2_para_21_measurement_technique' as const;
+
 export interface ItemMaster {
   item_id: string;
   sku: string;
@@ -26,6 +33,10 @@ export interface ItemMaster {
   valuation_method: ValuationMethod;
   business_stream: string;
   status: ItemStatus;
+  standard_cost_designation: string | null;
+  standard_cost_amount: number | null;
+  variance_review_cadence: string | null;
+  variance_tolerance_percent: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -41,6 +52,10 @@ export interface CreateItemInput {
   valuation_method: ValuationMethod;
   business_stream: string;
   status: ItemStatus;
+  standard_cost_designation?: string | null;
+  standard_cost_amount?: number | null;
+  variance_review_cadence?: string | null;
+  variance_tolerance_percent?: number | null;
 }
 
 export interface UpdateItemPatch {
@@ -53,6 +68,10 @@ export interface UpdateItemPatch {
   valuation_method?: ValuationMethod;
   business_stream?: string;
   status?: ItemStatus;
+  standard_cost_designation?: string | null;
+  standard_cost_amount?: number | null;
+  variance_review_cadence?: string | null;
+  variance_tolerance_percent?: number | null;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -62,7 +81,16 @@ function runner(client?: PoolClient): Queryable {
 }
 
 const ITEM_COLUMNS = `item_id, sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required,
-       bis_licence_required, valuation_method, business_stream, status, created_at, updated_at`;
+       bis_licence_required, valuation_method, business_stream, status,
+       standard_cost_designation, standard_cost_amount, variance_review_cadence, variance_tolerance_percent,
+       created_at, updated_at`;
+
+// node-postgres returns NUMERIC as a string to avoid precision loss; convert to a JS number (or
+// null) at the projection boundary so callers get the numeric contract the API layer expects.
+function toNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  return Number(value);
+}
 
 function mapRow(row: Record<string, unknown>): ItemMaster {
   const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
@@ -79,6 +107,10 @@ function mapRow(row: Record<string, unknown>): ItemMaster {
     valuation_method: row['valuation_method'] as ValuationMethod,
     business_stream: row['business_stream'] as string,
     status: row['status'] as ItemStatus,
+    standard_cost_designation: (row['standard_cost_designation'] as string | null) ?? null,
+    standard_cost_amount: toNumberOrNull(row['standard_cost_amount']),
+    variance_review_cadence: (row['variance_review_cadence'] as string | null) ?? null,
+    variance_tolerance_percent: toNumberOrNull(row['variance_tolerance_percent']),
     created_at: createdAt,
     updated_at: updatedAt,
   };
@@ -89,8 +121,9 @@ export async function createItem(input: CreateItemInput, client?: PoolClient): P
   const result = await runner(client).query(
     `INSERT INTO item_master
        (sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required, bis_licence_required,
-        valuation_method, business_stream, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        valuation_method, business_stream, status,
+        standard_cost_designation, standard_cost_amount, variance_review_cadence, variance_tolerance_percent)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING ${ITEM_COLUMNS}`,
     [
       input.sku,
@@ -103,6 +136,10 @@ export async function createItem(input: CreateItemInput, client?: PoolClient): P
       input.valuation_method,
       input.business_stream,
       input.status,
+      input.standard_cost_designation ?? null,
+      input.standard_cost_amount ?? null,
+      input.variance_review_cadence ?? null,
+      input.variance_tolerance_percent ?? null,
     ],
   );
   return mapRow(result.rows[0]!);
@@ -125,6 +162,10 @@ export async function updateItem(sku: string, patch: UpdateItemPatch, client?: P
   if (patch.valuation_method !== undefined) push('valuation_method', patch.valuation_method);
   if (patch.business_stream !== undefined) push('business_stream', patch.business_stream);
   if (patch.status !== undefined) push('status', patch.status);
+  if (patch.standard_cost_designation !== undefined) push('standard_cost_designation', patch.standard_cost_designation);
+  if (patch.standard_cost_amount !== undefined) push('standard_cost_amount', patch.standard_cost_amount);
+  if (patch.variance_review_cadence !== undefined) push('variance_review_cadence', patch.variance_review_cadence);
+  if (patch.variance_tolerance_percent !== undefined) push('variance_tolerance_percent', patch.variance_tolerance_percent);
   if (sets.length === 0) return getItemBySku(sku, client);
 
   const result = await runner(client).query(

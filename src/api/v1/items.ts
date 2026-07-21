@@ -8,7 +8,14 @@ import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
 import { isValidBusinessStream } from '../../read/projections/business_stream_config.js';
-import { createItem, updateItem, getItemBySku, ALLOWED_VALUATION_METHODS, ITEM_STATUSES } from '../../read/projections/item_master.js';
+import {
+  createItem,
+  updateItem,
+  getItemBySku,
+  ALLOWED_VALUATION_METHODS,
+  ITEM_STATUSES,
+  STANDARD_COST_DESIGNATION,
+} from '../../read/projections/item_master.js';
 import type { CreateItemInput, UpdateItemPatch, ValuationMethod, ItemStatus } from '../../read/projections/item_master.js';
 
 // Sentinel used ONLY for the domain-event envelope's actor.location_id when the acting admin's
@@ -74,19 +81,108 @@ function parseBooleanField(body: Record<string, unknown>, field: string, fallbac
 }
 
 /**
- * Validates valuation_method with a dedicated stable code. LIFO gets an explicit message because
- * Ind AS 2 prohibits it - it is a deliberate omission, not a missing feature (Task 1.4).
+ * Validates valuation_method with a dedicated stable code. LIFO and bare "standard_cost" are
+ * deliberately PROHIBITED values (Ind AS 2 disallows LIFO; standard cost is only ever a
+ * measurement technique on top of a real method, never a fourth valuation_method - Story 2.4
+ * AC3/AC6) and get VALUATION_METHOD_NOT_PERMITTED. Any other unrecognized value is malformed
+ * input and keeps the original INVALID_VALUATION_METHOD code (Task 1.3).
  */
 function assertValuationMethod(value: unknown): asserts value is ValuationMethod {
   if (isValuationMethod(value)) return;
-  const message =
-    value === 'lifo'
-      ? 'Valuation method "lifo" is not permitted (Ind AS 2 prohibits LIFO)'
-      : 'valuation_method must be one of fifo, weighted_average, specific_identification';
-  throw new AppError(400, 'INVALID_VALUATION_METHOD', message, {
+  if (value === 'lifo' || value === 'standard_cost') {
+    const message =
+      value === 'lifo'
+        ? 'Valuation method "lifo" is not permitted (Ind AS 2 prohibits LIFO)'
+        : 'Valuation method "standard_cost" is not permitted; configure standard_cost_designation on a real valuation_method instead';
+    throw new AppError(400, 'VALUATION_METHOD_NOT_PERMITTED', message, {
+      supplied: value,
+      allowed: [...ALLOWED_VALUATION_METHODS],
+    });
+  }
+  throw new AppError(400, 'INVALID_VALUATION_METHOD', 'valuation_method must be one of fifo, weighted_average, specific_identification', {
     supplied: typeof value === 'string' ? value : null,
     allowed: [...ALLOWED_VALUATION_METHODS],
   });
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** Parses an optional nullable non-empty-string field: absent is `undefined`, `null` clears it. */
+function parseOptionalNullableString(body: Record<string, unknown>, field: string): string | null | undefined {
+  const value = body[field];
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new AppError(400, 'INVALID_PARAMS', `${field} must be a non-empty string or null`);
+  }
+  return value;
+}
+
+/** Parses an optional nullable non-negative-number field: absent is `undefined`, `null` clears it. */
+function parseOptionalNonNegativeNumber(body: Record<string, unknown>, field: string): number | null | undefined {
+  const value = body[field];
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!isFiniteNumber(value) || value < 0) {
+    throw new AppError(400, 'INVALID_PARAMS', `${field} must be a non-negative finite number or null`);
+  }
+  return value;
+}
+
+/** Parses an optional nullable 0-100 percentage field: absent is `undefined`, `null` clears it. */
+function parseOptionalPercent(body: Record<string, unknown>, field: string): number | null | undefined {
+  const value = body[field];
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!isFiniteNumber(value) || value < 0 || value > 100) {
+    throw new AppError(400, 'INVALID_PARAMS', `${field} must be a finite number between 0 and 100, or null`);
+  }
+  return value;
+}
+
+interface StandardCostFields {
+  standard_cost_designation?: string | null;
+  standard_cost_amount?: number | null;
+  variance_review_cadence?: string | null;
+  variance_tolerance_percent?: number | null;
+}
+
+function parseStandardCostFields(body: Record<string, unknown>): StandardCostFields {
+  const fields: StandardCostFields = {};
+  const designation = parseOptionalNullableString(body, 'standard_cost_designation');
+  if (designation !== undefined) fields.standard_cost_designation = designation;
+  const amount = parseOptionalNonNegativeNumber(body, 'standard_cost_amount');
+  if (amount !== undefined) fields.standard_cost_amount = amount;
+  const cadence = parseOptionalNullableString(body, 'variance_review_cadence');
+  if (cadence !== undefined) fields.variance_review_cadence = cadence;
+  const tolerance = parseOptionalPercent(body, 'variance_tolerance_percent');
+  if (tolerance !== undefined) fields.variance_tolerance_percent = tolerance;
+  return fields;
+}
+
+/**
+ * AC6: standard cost is accepted ONLY as an Ind AS 2 paragraph 21 measurement technique - a
+ * standard_cost_amount may never be configured without the exact designation literal alongside
+ * it (whether set in the same request or already present on the item). Evaluated against the
+ * MERGED (existing + patch) state, mirroring how src/api/v1/doa.ts validates a value band.
+ */
+function assertStandardCostConfig(designation: string | null, amount: number | null): void {
+  if (designation !== null && designation !== STANDARD_COST_DESIGNATION) {
+    throw new AppError(400, 'VALUATION_METHOD_NOT_PERMITTED', `standard_cost_designation must be exactly "${STANDARD_COST_DESIGNATION}"`, {
+      supplied: designation,
+      required: STANDARD_COST_DESIGNATION,
+    });
+  }
+  if (amount !== null && designation !== STANDARD_COST_DESIGNATION) {
+    throw new AppError(
+      400,
+      'VALUATION_METHOD_NOT_PERMITTED',
+      'standard_cost_amount may only be configured together with standard_cost_designation set to the Ind AS 2 paragraph 21 measurement technique',
+      { standard_cost_amount: amount, standard_cost_designation: designation, required_designation: STANDARD_COST_DESIGNATION },
+    );
+  }
 }
 
 async function assertBusinessStream(value: string): Promise<void> {
@@ -132,6 +228,8 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'status must be one of active, inactive');
     return;
   }
+  const standardCost = parseStandardCostFields(body);
+  assertStandardCostConfig(standardCost.standard_cost_designation ?? null, standardCost.standard_cost_amount ?? null);
 
   const input: CreateItemInput = {
     sku,
@@ -144,6 +242,7 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
     valuation_method: body['valuation_method'],
     business_stream: body['business_stream'],
     status: isItemStatus(body['status']) ? body['status'] : 'active',
+    ...standardCost,
   };
 
   const actor = actorContext(req);
@@ -231,6 +330,7 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
     }
     patch.status = body['status'];
   }
+  Object.assign(patch, parseStandardCostFields(body));
   if (Object.keys(patch).length === 0) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'At least one updatable field is required');
     return;
@@ -245,6 +345,12 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
     if (!before) {
       throw new AppError(404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, { sku });
     }
+    // AC6 merged validation (mirrors src/api/v1/doa.ts's value-band check): a patch that only
+    // touches standard_cost_amount must still be checked against the EXISTING designation, and
+    // vice versa - neither field alone tells the whole story.
+    const mergedDesignation = patch.standard_cost_designation !== undefined ? patch.standard_cost_designation : before.standard_cost_designation;
+    const mergedAmount = patch.standard_cost_amount !== undefined ? patch.standard_cost_amount : before.standard_cost_amount;
+    assertStandardCostConfig(mergedDesignation, mergedAmount);
     const after = await updateItem(sku, patch, client);
     await persistEvent(
       {

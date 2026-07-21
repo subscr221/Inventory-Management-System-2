@@ -36,7 +36,14 @@ const EXPECTED = [
   {
     canonical: 'read/projections/item_master.sql',
     table: 'item_master',
-    constraints: ['chk_item_master_valuation_method', 'chk_item_master_status'],
+    constraints: [
+      'chk_item_master_valuation_method',
+      'chk_item_master_status',
+      'chk_item_master_standard_cost_designation',
+      'chk_item_master_standard_cost_requires_designation',
+      'chk_item_master_standard_cost_amount_non_negative',
+      'chk_item_master_variance_tolerance_percent',
+    ],
     indexes: [] as string[],
   },
   {
@@ -80,13 +87,51 @@ const EXPECTED = [
     constraints: [] as string[],
     indexes: ['idx_lot_trace_lot_timestamp', 'idx_lot_trace_event_id'],
   },
+  {
+    canonical: 'read/projections/inventory_valuation.sql',
+    table: 'inventory_valuation',
+    constraints: [
+      'chk_inventory_valuation_quantity_non_negative',
+      'chk_inventory_valuation_carrying_value_non_negative',
+      'chk_inventory_valuation_recovery_cap',
+    ],
+    indexes: [] as string[],
+  },
+  {
+    canonical: 'read/projections/inventory_valuation.sql',
+    table: 'inventory_valuation_fifo_layer',
+    constraints: ['chk_inventory_valuation_fifo_layer_remaining_bounds'],
+    indexes: ['idx_inventory_valuation_fifo_layer_sku_sequence'],
+  },
+  {
+    canonical: 'read/projections/inventory_valuation.sql',
+    table: 'inventory_valuation_serial_cost',
+    constraints: [] as string[],
+    indexes: [] as string[],
+  },
+  {
+    canonical: 'read/projections/inventory_valuation.sql',
+    table: 'inventory_valuation_nrv_adjustment',
+    constraints: ['chk_inventory_valuation_nrv_adjustment_type'],
+    indexes: ['idx_inventory_valuation_nrv_adjustment_sku'],
+    // Append-only ledger: app_user gets no UPDATE (or DELETE) grant, unlike every other projection.
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/inventory_valuation.sql',
+    table: 'inventory_valuation_standard_cost_variance',
+    constraints: [] as string[],
+    indexes: ['idx_inventory_valuation_standard_cost_variance_sku'],
+    // Append-only ledger: app_user gets no UPDATE (or DELETE) grant, unlike every other projection.
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
   const migrateSource = read('src/events/migrate.ts');
   const initDb = read('deploy/compose/init-db.sql');
 
-  for (const { canonical, table, constraints, indexes } of EXPECTED) {
+  for (const { canonical, table, constraints, indexes, appUserGrant } of EXPECTED) {
     it(`${table}: canonical definition is in the migration list and mirrored in init-db.sql`, () => {
       const canonicalSql = read(canonical);
       const fileName = canonical.split('/').pop()!;
@@ -100,8 +145,9 @@ describe('Story 2.1 schema drift guard', () => {
         assert.ok(canonicalSql.includes(index), `canonical SQL missing index ${index}`);
         assert.ok(initDb.includes(index), `init-db.sql missing index ${index}`);
       }
-      assert.ok(canonicalSql.includes(`GRANT INSERT, SELECT, UPDATE ON ${table} TO app_user`), `canonical missing app_user grant for ${table}`);
-      assert.ok(initDb.includes(`GRANT INSERT, SELECT, UPDATE ON ${table} TO app_user`), `init-db missing app_user grant for ${table}`);
+      const grant = appUserGrant ?? 'INSERT, SELECT, UPDATE';
+      assert.ok(canonicalSql.includes(`GRANT ${grant} ON ${table} TO app_user`), `canonical missing app_user grant for ${table}`);
+      assert.ok(initDb.includes(`GRANT ${grant} ON ${table} TO app_user`), `init-db missing app_user grant for ${table}`);
       assert.ok(canonicalSql.includes(`GRANT SELECT ON ${table} TO readonly_user`), `canonical missing readonly_user grant for ${table}`);
       assert.ok(initDb.includes(`GRANT SELECT ON ${table} TO readonly_user`), `init-db missing readonly_user grant for ${table}`);
     });

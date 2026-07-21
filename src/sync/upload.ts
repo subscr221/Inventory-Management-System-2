@@ -34,6 +34,8 @@ const PERMANENT_ERROR_CODES = new Set([
   'ITEM_NOT_FOUND',
   'FUNCTION_ACCESS_DENIED',
   'LOCATION_ACCESS_DENIED',
+  'VALUATION_METHOD_NOT_PERMITTED',
+  'NRV_RECOVERY_EXCEEDS_ORIGINAL_COST',
 ]);
 
 function isAppError(error: unknown): error is AppError {
