@@ -752,6 +752,7 @@ CREATE TABLE IF NOT EXISTS item_master (
   standard_cost_amount        NUMERIC(18, 6),
   variance_review_cadence     TEXT,
   variance_tolerance_percent  NUMERIC(7, 4),
+  count_variance_tolerance_percent NUMERIC(7, 4),
   created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_item_master_sku UNIQUE (sku),
@@ -766,6 +767,9 @@ CREATE TABLE IF NOT EXISTS item_master (
   CONSTRAINT chk_item_master_standard_cost_amount_non_negative CHECK (standard_cost_amount IS NULL OR standard_cost_amount >= 0),
   CONSTRAINT chk_item_master_variance_tolerance_percent CHECK (
     variance_tolerance_percent IS NULL OR (variance_tolerance_percent >= 0 AND variance_tolerance_percent <= 100)
+  ),
+  CONSTRAINT chk_item_master_count_variance_tolerance_percent CHECK (
+    count_variance_tolerance_percent IS NULL OR (count_variance_tolerance_percent >= 0 AND count_variance_tolerance_percent <= 100)
   )
 );
 
@@ -773,6 +777,7 @@ ALTER TABLE item_master ADD COLUMN IF NOT EXISTS standard_cost_designation TEXT;
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS standard_cost_amount NUMERIC(18, 6);
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS variance_review_cadence TEXT;
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS variance_tolerance_percent NUMERIC(7, 4);
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS count_variance_tolerance_percent NUMERIC(7, 4);
 
 DO $$
 BEGIN
@@ -828,6 +833,16 @@ BEGIN
     ALTER TABLE item_master
       ADD CONSTRAINT chk_item_master_variance_tolerance_percent CHECK (
         variance_tolerance_percent IS NULL OR (variance_tolerance_percent >= 0 AND variance_tolerance_percent <= 100)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_item_master_count_variance_tolerance_percent'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT chk_item_master_count_variance_tolerance_percent CHECK (
+        count_variance_tolerance_percent IS NULL OR (count_variance_tolerance_percent >= 0 AND count_variance_tolerance_percent <= 100)
       );
   END IF;
 END $$;

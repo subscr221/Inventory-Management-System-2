@@ -43,6 +43,7 @@ const EXPECTED = [
       'chk_item_master_standard_cost_requires_designation',
       'chk_item_master_standard_cost_amount_non_negative',
       'chk_item_master_variance_tolerance_percent',
+      'chk_item_master_count_variance_tolerance_percent',
     ],
     indexes: [] as string[],
   },

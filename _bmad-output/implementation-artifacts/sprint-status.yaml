@@ -1,5 +1,5 @@
 # generated: 2026-07-12
-# last_updated: 2026-07-21
+# last_updated: 2026-07-22
 # story 2-6 dev-story 2026-07-21: implementation started from baseline 3be7fc2; moved to in-progress
 # story 2-6 dev-story 2026-07-21: implemented all 10 tasks; cycle_count + cycle_count_line + physical_verification
 #   (+ append-only physical_verification_line) projections, central cycle-count seam in persistEvent (variance from
@@ -58,7 +58,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: 2026-07-21
+last_updated: 2026-07-22
 # story 2-6 created 2026-07-21 via create-story workflow: Cycle Counting and Physical Inventory; cycle-count tasks, SKU/lot variance calculation, DOA-routed approval-gated adjustments, stock.adjusted central seam, CARO 2020 physical-verification evidence report, period-lock immutability contract, RBAC/location scoping, sync/i18n error classification, schema drift and regression guardrails; ready-for-dev
 # story 2-5 code review 2026-07-21 (3-layer adversarial, baseline a76aa46 -> a5b033f): 4 decisions + 18 patches applied, 4 deferred, 2 dismissed. Critical fixes: missing BEGIN on all write handlers (piecemeal autocommit), deleted powersync_publication restored in init-db.sql, hardcoded pending_approval status (no-approval transfers stranded), ship_event_id 'unknown' UUID crash (every real ship 500'd), FOR UPDATE row locks + in_transit unique constraint (double-ship), serial TEXT[] injection, over-receive cap, source-grain stock ops for lot-less transfers, ship/receive correlation_id reuse (AC3), location+role RBAC on writes, list scoping, escalation-to-fallback approver, client idempotency key, LOT_SKU_MISMATCH split, partially_received state. Added test/integration/story-2-5.test.ts (19 tests) + spine route-surface allowlist. Backend 262/262, edge 14/14, spine 6/6, tsc/eslint clean; moved ready-for-dev->done
 # story 2-5 created 2026-07-21 via create-story workflow: Inter-Location Transfer Requests; DOA-approval routing, transfer request events, pick-ship-receive cycle, allocation enforcement, lot/serial traceability, in-transit state management, correlation ID linking, approval gating, rejection reversal, error codes (APPROVAL_REQUIRED, QUANTITY_EXCEEDS_APPROVED, LOT_MISMATCH), edge sync, RBAC, audit, and comprehensive test coverage; ready-for-dev
@@ -200,7 +200,7 @@ development_status:
   2-3-lot-batch-and-serial-traceability: done   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: done   # PILOT
   2-5-inter-location-transfer-requests: done   # PILOT
-  2-6-cycle-counting-and-physical-inventory: review   # PILOT
+  2-6-cycle-counting-and-physical-inventory: done   # PILOT
   2-7-safety-stock-reorder-points-and-obsolescence-flagging: backlog   # PILOT
   2-8-consignment-and-vmi-stock-segregation: backlog   # PILOT
   2-9-erp-inbound-reference-projections: backlog   # PILOT

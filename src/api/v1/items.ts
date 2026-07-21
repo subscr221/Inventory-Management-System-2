@@ -147,6 +147,7 @@ interface StandardCostFields {
   standard_cost_amount?: number | null;
   variance_review_cadence?: string | null;
   variance_tolerance_percent?: number | null;
+  count_variance_tolerance_percent?: number | null;
 }
 
 function parseStandardCostFields(body: Record<string, unknown>): StandardCostFields {
@@ -159,6 +160,8 @@ function parseStandardCostFields(body: Record<string, unknown>): StandardCostFie
   if (cadence !== undefined) fields.variance_review_cadence = cadence;
   const tolerance = parseOptionalPercent(body, 'variance_tolerance_percent');
   if (tolerance !== undefined) fields.variance_tolerance_percent = tolerance;
+  const countTolerance = parseOptionalPercent(body, 'count_variance_tolerance_percent');
+  if (countTolerance !== undefined) fields.count_variance_tolerance_percent = countTolerance;
   return fields;
 }
 

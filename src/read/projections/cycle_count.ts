@@ -250,7 +250,7 @@ export interface InsertCycleCountLineInput {
   allocated_quantity: number;
   in_transit_quantity: number;
   variance_quantity: number;
-  variance_value: number;
+  variance_value: number | string;
   tolerance_breach: boolean;
   adjustment_id: string | null;
   adjustment_status: string | null;

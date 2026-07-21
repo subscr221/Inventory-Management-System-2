@@ -24,6 +24,13 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
+function localYmd(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 interface ActorContext {
   userId: string;
   role: string;
@@ -148,7 +155,7 @@ const completePhysicalVerificationBase: RouteHandler = async (req, res) => {
           ...(body['period_end'] ? { period_end: body['period_end'] } : {}),
           count_refs: body['count_refs'],
           completed_by_actor_id: actor.userId,
-          business_date: body['business_date'] ?? new Date().toISOString().slice(0, 10),
+          business_date: body['business_date'] ?? localYmd(),
           business_stream: body['business_stream'],
         },
         metadata: {
@@ -210,7 +217,7 @@ const signOffPhysicalVerificationBase: RouteHandler = async (req, res, params) =
           physical_verification_id: id,
           management_signoff_actor_id: actor.userId,
           signed_off_at: new Date().toISOString(),
-          business_date: body?.['business_date'] ?? header.business_date ?? new Date().toISOString().slice(0, 10),
+          business_date: body?.['business_date'] ?? header.business_date ?? localYmd(),
           business_stream: (body?.['business_stream'] as string) ?? 'production',
         },
         metadata: {

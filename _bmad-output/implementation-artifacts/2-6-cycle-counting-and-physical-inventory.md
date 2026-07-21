@@ -4,7 +4,7 @@ baseline_commit: 3be7fc2067d063db7c73365671087a89747dceab
 
 # Story 2.6: Cycle Counting and Physical Inventory
 
-Status: review
+Status: done
 
 ## Story
 
@@ -107,6 +107,41 @@ so that inventory accuracy stays at or above 98% (SM-01) and physical verificati
   - [x] Extend `test/integration/story-1-9.test.ts` for new routes.
   - [x] Extend `test/unit/schema-drift.test.ts` for new projections and the missing Story 2.5 projections.
   - [x] Run the full verification battery listed in this story before marking done.
+
+### Review Findings
+
+- [x] [Review][Patch] Add per-SKU physical-count tolerance source via `item_master.count_variance_tolerance_percent` [src/compliance/cycle-count.ts:375]
+- [x] [Review][Patch] Approved adjustment can mutate a different stock grain or delta [src/compliance/cycle-count.ts:453]
+- [x] [Review][Patch] Null `lot_id` predicates aggregate and update across all lots [src/compliance/cycle-count.ts:356]
+- [x] [Review][Patch] DOA authority is not enforced in the central event seam [src/compliance/cycle-count.ts:422]
+- [x] [Review][Patch] `stock.adjusted` can omit `cycle_count_id` and `approver_actor_id` at runtime [src/compliance/cycle-count.ts:170]
+- [x] [Review][Patch] Physical verification can complete from missing, empty, cross-location, or unresolved counts [src/compliance/cycle-count.ts:596]
+- [x] [Review][Patch] `cycle_count.adjustment_requested` is registered but unvalidated and unprojected [src/events/schema.ts:201]
+- [x] [Review][Patch] Count submission accepts out-of-scope grains before business validation [src/compliance/cycle-count.ts:328]
+- [x] [Review][Patch] Serial-controlled counts allow duplicate serials and fractional quantities [src/compliance/cycle-count.ts:338]
+- [x] [Review][Patch] Fresh conflicting lifecycle events are persisted as projection no-ops [src/compliance/cycle-count.ts:253]
+- [x] [Review][Patch] Unit cost fallback is unvalidated and uses JavaScript number arithmetic for variance value [src/compliance/cycle-count.ts:234]
+- [x] [Review][Patch] Physical verification input validation permits non-UUID refs, impossible coverage, and invalid dates [src/compliance/cycle-count.ts:195]
+- [x] [Review][Patch] Signed-off physical verification does not block later stock adjustment for included counts [src/compliance/cycle-count.ts:453]
+- [x] [Review][Patch] Owned valuation clamp can hide carrying-value underflow [src/compliance/cycle-count.ts:552]
+- [x] [Review][Patch] Count baseline reads do not lock absent stock-balance grains [src/compliance/cycle-count.ts:356]
+
+### Re-Review Findings
+
+- [x] [Review][Patch] Direct event approval trusts forgeable payload approver instead of authenticated actor [src/compliance/cycle-count.ts:541]
+- [x] [Review][Patch] Direct event rejection is not DOA-gated in the central seam [src/compliance/cycle-count.ts:564]
+- [x] [Review][Patch] Direct physical-verification sign-off bypasses central sign-off role authority [src/compliance/cycle-count.ts:817]
+- [x] [Review][Patch] Missing DOA value band falls back to unrelated active entries instead of failing closed [src/compliance/cycle-count.ts:304]
+- [x] [Review][Patch] DOA delegation date uses UTC day instead of local business date [src/compliance/cycle-count.ts:307]
+- [x] [Review][Patch] Serial count validation ignores serial location, lot, and available state [src/compliance/cycle-count.ts:461]
+- [x] [Review][Patch] Lot-controlled counts accept nonexistent or wrong-SKU lots [src/compliance/cycle-count.ts:466]
+- [x] [Review][Patch] Count scope and line SKUs do not require active item-master records [src/compliance/cycle-count.ts:417]
+- [x] [Review][Patch] Physical verification ignores referenced count dates versus declared period [src/compliance/cycle-count.ts:760]
+- [x] [Review][Patch] Impossible ISO timestamps can pass validation by Date normalization [src/compliance/cycle-count.ts:88]
+- [x] [Review][Patch] Variance value still round-trips PostgreSQL numeric through JavaScript number [src/compliance/cycle-count.ts:299]
+- [x] [Review][Patch] Count-level `tolerance_percent` is accepted and echoed but never applied [src/compliance/cycle-count.ts:496]
+- [x] [Review][Patch] Non-owned stock defaults missing unit cost to zero for DOA banding [src/compliance/cycle-count.ts:292]
+- [x] [Review][Patch] Owned valuation and tolerance math still use floating-point arithmetic [src/compliance/cycle-count.ts:720]
 
 ## Dev Notes
 

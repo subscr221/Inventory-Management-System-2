@@ -198,10 +198,6 @@ export const SUPPORTED_EVENT_TYPES = {
     streamType: 'inventory',
     requiresBusinessStream: true,
   },
-  'cycle_count.adjustment_requested': {
-    streamType: 'inventory',
-    requiresBusinessStream: true,
-  },
   'cycle_count.adjustment_approved': {
     streamType: 'inventory',
     requiresBusinessStream: true,
