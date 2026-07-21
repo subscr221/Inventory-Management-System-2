@@ -195,6 +195,23 @@ export async function transactionTypeIsGoverned(transactionType: string, client?
   return result.rows.length > 0;
 }
 
+/**
+ * Returns every active DOA entry for a transaction type, ordered by ascending value band
+ * (lowest authority first, NULLs last). Used by the approver-escalation fallback: when the
+ * band-matched role has no active holder, callers walk this list to the next authority that does
+ * (Story 2.5 review).
+ */
+export async function listActiveDoaEntries(transactionType: string, client?: PoolClient): Promise<DoaRegistryEntry[]> {
+  const result = await runner(client).query(
+    `SELECT entry_id, role, transaction_type, value_min, value_max, active, created_at, updated_at
+     FROM doa_registry_entries
+     WHERE transaction_type = $1 AND active = true
+     ORDER BY value_min ASC NULLS LAST, created_at ASC, entry_id ASC`,
+    [transactionType],
+  );
+  return result.rows.map(mapEntry);
+}
+
 export async function findFirstActiveDoaEntry(transactionType: string, client?: PoolClient): Promise<DoaRegistryEntry | null> {
   const result = await runner(client).query(
     `SELECT entry_id, role, transaction_type, value_min, value_max, active, created_at, updated_at

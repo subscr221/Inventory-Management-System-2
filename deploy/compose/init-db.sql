@@ -31,8 +31,8 @@ GRANT SELECT ON domain_events TO svc_powersync;
 
 DO $$
 BEGIN
-  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
-    GRANT SELECT ON inventory_valuation_standard_cost_variance TO readonly_user;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync_publication') THEN
+    CREATE PUBLICATION powersync_publication FOR TABLE domain_events;
   END IF;
 END $$;
 
@@ -102,10 +102,22 @@ CREATE INDEX IF NOT EXISTS idx_in_transit_to ON in_transit (location_to);
 CREATE INDEX IF NOT EXISTS idx_in_transit_lot ON in_transit (lot_id);
 CREATE INDEX IF NOT EXISTS idx_in_transit_request ON in_transit (transfer_request_id);
 
+-- One in-transit row per transfer request (Story 2.5 review): guards against concurrent
+-- double-ship inserting two rows for the same transfer.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'uq_in_transit_transfer_request'
+      AND conrelid = 'in_transit'::regclass
+  ) THEN
+    ALTER TABLE in_transit ADD CONSTRAINT uq_in_transit_transfer_request UNIQUE (transfer_request_id);
+  END IF;
+END $$;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-    GRANT INSERT, SELECT, UPDATE ON in_transit TO app_user;
+    GRANT INSERT, SELECT, UPDATE, DELETE ON in_transit TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON in_transit TO readonly_user;

@@ -52,5 +52,8 @@
   "errors.NRV_RECOVERY_EXCEEDS_ORIGINAL_COST": "This recovery would carry the item above its original cost and cannot be recorded.",
   "errors.APPROVAL_REQUIRED": "This transfer requires approval before it can proceed.",
   "errors.QUANTITY_EXCEEDS_APPROVED": "The requested quantity exceeds the approved amount.",
-  "errors.LOT_MISMATCH": "The received lot does not match the shipped lot."
+  "errors.LOT_MISMATCH": "The received lot does not match the shipped lot.",
+  "errors.LOT_SKU_MISMATCH": "That lot does not belong to the selected item.",
+  "errors.SERIAL_MISMATCH": "The serials do not match the transfer request.",
+  "errors.APPROVAL_UNRESOLVED": "No approver is available for this transfer. Contact a supervisor."
 }

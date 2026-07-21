@@ -39,6 +39,9 @@ const PERMANENT_ERROR_CODES = new Set([
   'APPROVAL_REQUIRED',
   'QUANTITY_EXCEEDS_APPROVED',
   'LOT_MISMATCH',
+  'LOT_SKU_MISMATCH',
+  'SERIAL_MISMATCH',
+  'APPROVAL_UNRESOLVED',
 ]);
 
 function isAppError(error: unknown): error is AppError {

@@ -67,7 +67,7 @@ export async function decrementInTransit(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
-    `UPDATE in_transit SET quantity = quantity - $1 WHERE transfer_request_id = $2`,
+    `UPDATE in_transit SET quantity = GREATEST(quantity - $1, 0) WHERE transfer_request_id = $2`,
     [quantity, transferRequestId],
   );
 }

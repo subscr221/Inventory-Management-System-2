@@ -222,7 +222,7 @@ export async function persistEvent(
 // Story 2.5: transfer-request, ship, and receive enforcement run inside the
       // same transaction as the domain_events insert so that allocation and event commit atomically.
       await applyTransferRequestProjection(envelope, client);
-      await applyTransferShipProjection(envelope, client);
+      await applyTransferShipProjection(envelope, client, eventId);
       await applyTransferReceiveProjection(envelope, client);
 
     let nextVersion: number;

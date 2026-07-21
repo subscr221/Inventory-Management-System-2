@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS transfer_request (
   business_stream     TEXT NOT NULL,
   notes               TEXT,
   status              TEXT NOT NULL DEFAULT 'pending_approval',
-  -- status values: pending_approval, approved, rejected, pending_shipment, shipped, received
+  -- status values: pending_approval, approved, rejected, pending_shipment, shipped,
+  --                partially_received, received
   approver_actor_id   UUID,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   shipped_at          TIMESTAMPTZ,

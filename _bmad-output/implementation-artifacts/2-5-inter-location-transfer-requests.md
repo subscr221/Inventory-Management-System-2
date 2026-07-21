@@ -4,7 +4,7 @@ baseline_commit: a76aa46
 
 # Story 2.5: Inter-Location Transfer Requests
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -292,7 +292,7 @@ Integration tests must cover:
 
 ## Story Completion Status
 
-**Status:** ready-for-dev
+**Status:** done
 
 This story provides a comprehensive, developer-ready specification for inter-location stock transfers with DOA approval, lot/serial traceability, and full event-sourced tracking. The dev agent has all critical context from Stories 2.1-2.4 patterns, architecture compliance requirements, DOA integration, and acceptance-criteria-driven test coverage expectations.
 
@@ -303,3 +303,47 @@ This story provides a comprehensive, developer-ready specification for inter-loc
 3. Location-scoped receive validation (Task 6)
 4. Partial receipt handling (partial in-transit clearance) — deferred to Task 9 scope decision
 5. Transfer cancellation / reversal after shipment — out of scope for this story
+
+## Review Findings
+
+Adversarial code review 2026-07-21 (3 layers: Blind Hunter, Edge Case Hunter, Acceptance Auditor) over baseline a76aa46 to a5b033f. 4 decision-needed, 18 patch, 4 deferred, 2 dismissed.
+
+### Decision Needed
+
+- [x] [Review][Decision] Partial ship/receive handling — RESOLVED: add a `partially_received` state; keep status `shipped` (allow further receive) until fully received, guard in_transit decrement lower bound. Now a patch.
+- [x] [Review][Decision] Unresolvable approver — RESOLVED: escalate to a fallback authority when no direct role holder resolves (do not freeze the request). Now a patch.
+- [x] [Review][Decision] Client idempotency — RESOLVED: accept a client-supplied idempotency key / `transfer_request_id` on the POST body so retries are no-ops. Now a patch.
+- [x] [Review][Decision] Missing test suite — RESOLVED: write the full test suite now (test/integration/story-2-5.test.ts). Now a patch.
+
+### Patches
+
+- [x] [Review][Patch] Write handlers never issue BEGIN; persistEvent skips its own BEGIN when passed an external client, so allocation/stock/in-transit/status/event writes autocommit independently and the trailing COMMIT/ROLLBACK are no-ops [src/api/v1/transfer-requests.ts: all 5 write handlers]
+- [x] [Review][Patch] `CREATE PUBLICATION powersync_publication` DO-block deleted from init-db.sql (overwritten by standard_cost grant); fresh containers lose CDC replication [deploy/compose/init-db.sql:~33]
+- [x] [Review][Patch] Projection hardcodes `status: 'pending_approval'`, ignoring computed payload status; no-approval transfers reported as `pending_shipment` but persisted `pending_approval` [src/compliance/transfer-request.ts insertTransferRequest]
+- [x] [Review][Patch] Ship and receive each mint a fresh correlation_id; receive must reuse the ship event's id (AC3) [src/api/v1/transfer-requests.ts ship+receive]
+- [x] [Review][Patch] No `SELECT ... FOR UPDATE` on transfer_request during state transitions and no unique constraint on in_transit.transfer_request_id; concurrent double-ship double-issues stock [src/compliance/transfer-request.ts applyTransferShipProjection]
+- [x] [Review][Patch] Postgres TEXT[] literal built by string-interpolating unvalidated serial_ids; embedded `"`/`,`/`\`/`}` corrupts/injects the array literal — pass the JS array as a bound param [src/read/projections/transfer_request.ts insertTransferRequest]
+- [x] [Review][Patch] Receive quantity uncapped and defaults to approved (not shipped) quantity; over-receipt inflates destination on_hand and drives in_transit negative [src/api/v1/transfer-requests.ts receive; src/compliance/transfer-request.ts applyTransferReceiveProjection]
+- [x] [Review][Patch] Lot-less request that ships with a concrete lot can never be received — receive compares strict-equal against the request's null lot and always throws LOT_MISMATCH; persist the shipped lot [src/compliance/transfer-request.ts ship/receive]
+- [x] [Review][Patch] Write handlers enforce no location-scope RBAC (unlike read handlers); any inventory writer moves/ships/receives stock at unassigned sites [src/api/v1/transfer-requests.ts write handlers]
+- [x] [Review][Patch] Role-name allow-list not enforced; spec restricts create to warehouse/logistics-manager/store-assistant and ship/receive to warehouse-manager/store-assistant, code uses generic inventory:write [src/api/v1/transfer-requests.ts]
+- [x] [Review][Patch] Ship/receive accept arbitrary serial_ids with no subset/parity check against the request; serial traceability unenforced on movement events [src/compliance/transfer-request.ts ship/receive]
+- [x] [Review][Patch] Serial existence check guarded by `&& lotId`, so serials supplied without a lot are accepted unvalidated [src/api/v1/transfer-requests.ts create; src/compliance/transfer-request.ts]
+- [x] [Review][Patch] Ship in_transit balance UPDATE matches 0 rows when no lot-grain stock_balance row exists; authoritative in_transit column never incremented though tracking row is inserted [src/compliance/transfer-request.ts applyTransferShipProjection]
+- [x] [Review][Patch] List scoping for non-wildcard actors uses only the first assigned location on from-side and drops to-location entirely; legitimate transfers become invisible [src/api/v1/transfer-requests.ts list]
+- [x] [Review][Patch] getInTransitBalances (the /in-transit API) omits the `quantity > 0` filter; fully-received zero rows still surface as in-transit [src/read/projections/transfer_request.ts]
+- [x] [Review][Patch] shipped/received quantities enforce no MAX_QUANTITY ceiling (only isPositiveFiniteNumber); NUMERIC(18,6) overflow risk [src/compliance/transfer-request.ts ship/receive shape checks]
+- [x] [Review][Patch] catch block unconditionally runs ROLLBACK after a successful COMMIT, masking the real error with a "no transaction in progress" warning [src/api/v1/transfer-requests.ts all handlers]
+- [x] [Review][Patch] LOT_MISMATCH overloaded at create-time (lot-not-belong-to-SKU); spec reserves it for receive-vs-ship lot mismatch — use a distinct code [src/api/v1/transfer-requests.ts create]
+
+### Deferred
+
+- [x] [Review][Defer] SUPPORTED_EVENT_TYPES registry added to schema.ts but never imported/enforced by store.ts — dead safety metadata [src/events/schema.ts] — deferred, cross-cutting enforcement work
+- [x] [Review][Defer] Stable error codes (APPROVAL_REQUIRED, QUANTITY_EXCEEDS_APPROVED, LOT_MISMATCH) not registered in architecture stable-error list [planning-artifacts/architecture] — deferred, planning-artifact update
+- [x] [Review][Defer] Approve/reject mutate transfer_request.status via direct UPDATE; the approval_decided event has no projection handler, so the read-model change is a side-write not derived from the event — deferred, architecture-pattern decision
+- [x] [Review][Defer] in_transit/transfer_request DDL duplicated across three files, kept in sync only by comment; add a schema-drift test — deferred, test-infra work
+
+### Dismissed
+
+- INSUFFICIENT_STOCK "missing on allocation" — false positive; applyStockAllocation runs FOR UPDATE + availability guard and throws it.
+- "Create returns 201 instead of APPROVAL_REQUIRED" — by-design; response is internally consistent with the approval-routing intent.

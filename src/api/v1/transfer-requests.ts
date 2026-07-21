@@ -18,7 +18,9 @@ import {
   findMatchingDoaEntry,
   findRoleHolder,
   findActiveDelegation,
+  listActiveDoaEntries,
 } from '../../read/projections/doa_registry.js';
+import { getInTransitByTransferRequest } from '../../read/projections/in_transit.js';
 import { getItemBySku } from '../../read/projections/item_master.js';
 import { getLocationById } from '../../read/projections/location_register.js';
 
@@ -76,6 +78,87 @@ function auditCtxFor(
   };
 }
 
+// Role allow-lists (Story 2.5 review). requireRole only enforces module+function scope; the story
+// restricts these operations to specific roles.
+const CREATE_ROLES = ['warehouse_manager', 'logistics_manager', 'store_assistant'];
+const SHIP_RECEIVE_ROLES = ['warehouse_manager', 'store_assistant'];
+
+/**
+ * Enforces that the caller holds at least one of `allowedRoles` with inventory write access.
+ * requireRole has already confirmed module+function scope; this narrows to the named roles.
+ */
+function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[]): void {
+  const authContext = getAuthContext(req);
+  const roles = authContext?.roles ?? [];
+  const ok = roles.some(
+    (r) =>
+      (r.module === 'inventory' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      allowedRoles.includes(r.role),
+  );
+  if (!ok) {
+    throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+  }
+}
+
+/**
+ * Enforces that the caller's inventory assignments grant access to `locationId` (or a wildcard).
+ * Write handlers otherwise let any inventory writer move stock between sites they are not assigned
+ * to (Story 2.5 review).
+ */
+function assertWriteLocationAccess(req: IncomingMessage, locationId: string): void {
+  const authContext = getAuthContext(req);
+  if (!authContext) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  }
+  const { wildcard, locations } = permittedLocationsForModule(authContext.roles, 'inventory');
+  if (!wildcard && !locations.has(locationId)) {
+    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No role assignment grants access to location "${locationId}"`);
+  }
+}
+
+/**
+ * Resolves the approver for a transfer of `quantity`. Returns requiresApproval=false when no DOA
+ * band governs it. When approval is required but the band-matched role has no active holder, it
+ * escalates to the next authority in the DOA ladder that does have one (Story 2.5 review decision:
+ * escalate to a fallback rather than freezing the request). If no approver can be resolved at all,
+ * it fails closed with APPROVAL_UNRESOLVED rather than persisting an un-approvable request.
+ */
+async function resolveApprover(
+  transactionType: string,
+  quantity: number,
+): Promise<{ requiresApproval: boolean; approverActorId: string | null }> {
+  const doaEntry = await findMatchingDoaEntry(transactionType, quantity);
+  if (!doaEntry) {
+    return { requiresApproval: false, approverActorId: null };
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const tryHolder = async (role: string): Promise<string | null> => {
+    const holder = await findRoleHolder(role);
+    if (!holder) return null;
+    const delegation = await findActiveDelegation(holder.user_id, today);
+    return delegation?.delegate_user_id ?? holder.user_id;
+  };
+
+  let approver = await tryHolder(doaEntry.role);
+  if (!approver) {
+    const entries = await listActiveDoaEntries(transactionType);
+    for (const e of entries) {
+      if (e.role === doaEntry.role) continue;
+      approver = await tryHolder(e.role);
+      if (approver) break;
+    }
+  }
+
+  if (!approver) {
+    throw new AppError(409, 'APPROVAL_UNRESOLVED', 'Transfer requires approval but no active approver could be resolved', {
+      transaction_type: transactionType,
+    });
+  }
+  return { requiresApproval: true, approverActorId: approver };
+}
+
 // ---------------------------------------------------------------------------
 // Task 3: POST /api/v1/transfer-requests - Create transfer request
 // ---------------------------------------------------------------------------
@@ -122,12 +205,47 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
     return;
   }
 
+  // Optional client-supplied idempotency key so a retried create is a no-op instead of allocating
+  // stock twice (Story 2.5 review). Must be a UUID; defaults to a server-generated id.
+  let transferRequestId: string;
+  if (body['transfer_request_id'] !== undefined) {
+    if (!isNonEmptyString(body['transfer_request_id']) || !UUID_REGEX.test(body['transfer_request_id'] as string)) {
+      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID when supplied');
+      return;
+    }
+    transferRequestId = body['transfer_request_id'] as string;
+  } else {
+    transferRequestId = randomUUID();
+  }
+
+  // Role + location scope (Story 2.5 review): only permitted roles may create, and only for a
+  // source location they are assigned to.
+  assertRoleAllowed(req, CREATE_ROLES);
+  assertWriteLocationAccess(req, fromLocationId);
+
   const actor = actorContext(req);
-  const transferRequestId = randomUUID();
   const pool = getPool();
   const client = await pool.connect();
+  let committed = false;
 
   try {
+    await client.query('BEGIN');
+
+    // Idempotency: a retried create with the same client-supplied id returns the existing request
+    // instead of persisting a second created event / re-allocating stock (Story 2.5 review).
+    const existing = await getTransferRequestById(transferRequestId, client);
+    if (existing) {
+      await client.query('COMMIT');
+      committed = true;
+      sendJson(res, 200, {
+        transfer_request_id: existing.transfer_request_id,
+        status: existing.status,
+        ...(existing.approver_actor_id ? { approver_actor_id: existing.approver_actor_id } : {}),
+        correlation_id: existing.correlation_id,
+      });
+      return;
+    }
+
     // Validate within transaction for consistency
     const fromLocation = await getLocationById(fromLocationId, client);
     if (!fromLocation || fromLocation.status !== 'active') {
@@ -159,7 +277,9 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
         throw new AppError(400, 'LOT_NOT_FOUND', `Lot "${lotId}" not found`, { lot_id: lotId });
       }
       if (lotResult.rows[0].sku !== skuId) {
-        throw new AppError(400, 'LOT_MISMATCH', `Lot "${lotId}" does not belong to SKU "${skuId}"`, {
+        // Distinct from AC6 receive-vs-ship LOT_MISMATCH (Story 2.5 review): this is a lot that
+        // does not belong to the requested SKU at creation time.
+        throw new AppError(400, 'LOT_SKU_MISMATCH', `Lot "${lotId}" does not belong to SKU "${skuId}"`, {
           lot_id: lotId,
           sku_id: skuId,
         });
@@ -172,7 +292,7 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
           [serialIds],
         );
         if (serialResult.rows.length !== serialIds.length) {
-          const foundSet = new Set(serialResult.rows.map((s: any) => s.serial_number));
+          const foundSet = new Set(serialResult.rows.map((s: { serial_number: string }) => s.serial_number));
           const missing = serialIds.filter((s: string) => !foundSet.has(s));
           throw new AppError(400, 'SERIAL_NOT_FOUND', `Serial numbers not found: ${missing.join(', ')}`, {
             serial_ids: missing,
@@ -189,19 +309,8 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
       }
     }
 
-    // DOA resolution
-    const doaEntry = await findMatchingDoaEntry(TRANSFER_REQUEST_DOA_TYPE, quantity);
-    let approverActorId: string | null = null;
-    let requiresApproval = false;
-
-    if (doaEntry) {
-      requiresApproval = true;
-      const holder = await findRoleHolder(doaEntry.role);
-      if (holder) {
-        const delegation = await findActiveDelegation(holder.user_id, new Date().toISOString().slice(0, 10));
-        approverActorId = delegation?.delegate_user_id ?? holder.user_id;
-      }
-    }
+    // DOA resolution with escalation fallback (Story 2.5 review).
+    const { requiresApproval, approverActorId } = await resolveApprover(TRANSFER_REQUEST_DOA_TYPE, quantity);
 
     const status = requiresApproval ? 'pending_approval' : 'pending_shipment';
     const correlationId = randomUUID();
@@ -232,10 +341,11 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
         },
         occurred_at: new Date().toISOString(),
       },
-    } as any;
+    };
 
     await persistEvent(envelope, auditCtxFor(req, actor, 201), client);
     await client.query('COMMIT');
+    committed = true;
 
     sendJson(res, 201, {
       transfer_request_id: transferRequestId,
@@ -244,10 +354,7 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
       correlation_id: correlationId,
     });
   } catch (err: unknown) {
-    await client.query('ROLLBACK');
-    if (err instanceof AppError) {
-      throw err;
-    }
+    if (!committed) await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
@@ -265,7 +372,7 @@ const getTransferRequestBase: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  const authContext = getAuthContext(req) as { roles: any[] } | undefined;
+  const authContext = getAuthContext(req);
   if (!authContext) {
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   }
@@ -289,7 +396,7 @@ const getTransferRequestBase: RouteHandler = async (req, res, params) => {
 // ---------------------------------------------------------------------------
 
 const listTransferRequestsBase: RouteHandler = async (req, res, _params) => {
-  const authContext = getAuthContext(req) as { roles: any[] } | undefined;
+  const authContext = getAuthContext(req);
   if (!authContext) {
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   }
@@ -302,8 +409,9 @@ const listTransferRequestsBase: RouteHandler = async (req, res, _params) => {
 
   const { wildcard, locations } = permittedLocationsForModule(authContext.roles, 'inventory');
 
-  let filteredFrom: string | null = fromLocationId ?? null;
-  let filteredTo: string | null = toLocationId ?? null;
+  const filteredFrom: string | null = fromLocationId ?? null;
+  const filteredTo: string | null = toLocationId ?? null;
+  let locationAny: string[] | null = null;
 
   if (!wildcard) {
     if (fromLocationId && !locations.has(fromLocationId)) {
@@ -315,14 +423,15 @@ const listTransferRequestsBase: RouteHandler = async (req, res, _params) => {
       return;
     }
     if (!fromLocationId && !toLocationId) {
-      filteredFrom = locations.values().next().value ?? null;
-      filteredTo = null;
+      // Scope to every assigned location on EITHER side, not just the first (Story 2.5 review).
+      locationAny = [...locations];
     }
   }
 
 const rows = await getTransferRequests({
      from_location_id: filteredFrom,
      to_location_id: filteredTo,
+     ...(locationAny !== null ? { location_any: locationAny } : {}),
      ...(status !== null ? { status } : {}),
      ...(skuId !== null ? { sku_id: skuId } : {}),
    });
@@ -367,10 +476,12 @@ const approveTransferRequestBase: RouteHandler = async (req, res, params) => {
 
   const pool = getPool();
   const client = await pool.connect();
+  let committed = false;
 
   try {
-    // Read within transaction for consistency
-    const row = await getTransferRequestById(id, client);
+    await client.query('BEGIN');
+    // Read + lock within transaction so concurrent approve/reject serialize (Story 2.5 review)
+    const row = await getTransferRequestById(id, client, true);
     if (!row) {
       throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
     }
@@ -402,6 +513,7 @@ const approveTransferRequestBase: RouteHandler = async (req, res, params) => {
           reason_code: null,
           notes,
           approver_actor_id: actor.userId,
+          business_stream: row.business_stream,
         },
         metadata: {
           correlation_id: correlationId,
@@ -412,12 +524,13 @@ const approveTransferRequestBase: RouteHandler = async (req, res, params) => {
           },
           occurred_at: new Date().toISOString(),
         },
-      } as any,
+      },
       auditCtxFor(req, actor, 200),
       client,
     );
 
     await client.query('COMMIT');
+    committed = true;
 
     sendJson(res, 200, {
       transfer_request_id: id,
@@ -426,10 +539,7 @@ const approveTransferRequestBase: RouteHandler = async (req, res, params) => {
       notes,
     });
   } catch (err: unknown) {
-    await client.query('ROLLBACK');
-    if (err instanceof AppError) {
-      throw err;
-    }
+    if (!committed) await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
@@ -459,10 +569,12 @@ const rejectTransferRequestBase: RouteHandler = async (req, res, params) => {
 
   const pool = getPool();
   const client = await pool.connect();
+  let committed = false;
 
   try {
-    // Read within transaction for consistency
-    const row = await getTransferRequestById(id, client);
+    await client.query('BEGIN');
+    // Read + lock within transaction so concurrent approve/reject serialize (Story 2.5 review)
+    const row = await getTransferRequestById(id, client, true);
     if (!row) {
       throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
     }
@@ -505,6 +617,7 @@ const rejectTransferRequestBase: RouteHandler = async (req, res, params) => {
           reason_code,
           notes,
           approver_actor_id: actor.userId,
+          business_stream: row.business_stream,
         },
         metadata: {
           correlation_id: correlationId,
@@ -515,12 +628,13 @@ const rejectTransferRequestBase: RouteHandler = async (req, res, params) => {
           },
           occurred_at: new Date().toISOString(),
         },
-      } as any,
+      },
       auditCtxFor(req, actor, 200),
       client,
     );
 
     await client.query('COMMIT');
+    committed = true;
 
     sendJson(res, 200, {
       transfer_request_id: id,
@@ -529,10 +643,7 @@ const rejectTransferRequestBase: RouteHandler = async (req, res, params) => {
       notes,
     });
   } catch (err: unknown) {
-    await client.query('ROLLBACK');
-    if (err instanceof AppError) {
-      throw err;
-    }
+    if (!committed) await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
@@ -563,14 +674,21 @@ const shipTransferRequestBase: RouteHandler = async (req, res, params) => {
   const serialIds = body['serial_ids'] !== undefined ? (body['serial_ids'] as string[]) : undefined;
   const notes = body['notes'] !== undefined ? (body['notes'] as string) : undefined;
 
+  assertRoleAllowed(req, SHIP_RECEIVE_ROLES);
+
   const pool = getPool();
   const client = await pool.connect();
+  let committed = false;
 
   try {
-    const row = await getTransferRequestById(id);
+    await client.query('BEGIN');
+    const row = await getTransferRequestById(id, client, true);
     if (!row) {
       throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
     }
+
+    // Ship moves stock out of the source location: caller must be assigned there (Story 2.5 review).
+    assertWriteLocationAccess(req, row.from_location_id);
 
     if (row.status !== 'approved' && row.status !== 'pending_shipment') {
       throw new AppError(403, 'APPROVAL_REQUIRED', 'Transfer request must be approved before shipping', {
@@ -608,6 +726,7 @@ const envelope = {
          ...(serialIds ? { serial_ids: serialIds } : {}),
          ...(notes ? { notes } : {}),
          correlation_id: correlationId,
+         business_stream: row.business_stream,
        },
       metadata: {
         correlation_id: correlationId,
@@ -618,10 +737,11 @@ const envelope = {
         },
         occurred_at: new Date().toISOString(),
       },
-    } as any;
+    };
 
     await persistEvent(envelope, auditCtxFor(req, actor, 201), client);
     await client.query('COMMIT');
+    committed = true;
 
 sendJson(res, 201, {
        transfer_request_id: id,
@@ -631,10 +751,7 @@ sendJson(res, 201, {
        correlation_id: correlationId,
      });
   } catch (err: unknown) {
-    await client.query('ROLLBACK');
-    if (err instanceof AppError) {
-      throw err;
-    }
+    if (!committed) await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
@@ -667,17 +784,24 @@ const receiveTransferRequestBase: RouteHandler = async (req, res, params) => {
   const receivedDate = body['received_date'] !== undefined ? (body['received_date'] as string) : undefined;
   const notes = body['notes'] !== undefined ? (body['notes'] as string) : undefined;
 
+  assertRoleAllowed(req, SHIP_RECEIVE_ROLES);
+
   const pool = getPool();
   const client = await pool.connect();
+  let committed = false;
 
   try {
-    const row = await getTransferRequestById(id);
+    await client.query('BEGIN');
+    const row = await getTransferRequestById(id, client, true);
     if (!row) {
       throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
     }
 
-    if (row.status !== 'shipped') {
-      throw new AppError(400, 'INVALID_STATE', `Transfer request must be in "shipped" status, current status is "${row.status}"`);
+    // Receive brings stock into the destination: caller must be assigned there (Story 2.5 review).
+    assertWriteLocationAccess(req, row.to_location_id);
+
+    if (row.status !== 'shipped' && row.status !== 'partially_received') {
+      throw new AppError(400, 'INVALID_STATE', `Transfer request must be in "shipped" or "partially_received" status, current status is "${row.status}"`);
     }
 
     const receiveLocationId = receivedAtLocationId ?? row.to_location_id;
@@ -695,17 +819,24 @@ const receiveTransferRequestBase: RouteHandler = async (req, res, params) => {
       });
     }
 
-    const receiveQty = receivedQuantity ?? row.quantity;
+    // Default the received quantity to what actually remains in transit (not the originally
+    // requested quantity), so an omitted received_quantity cannot over-receive (Story 2.5 review).
+    const inTransitRow = await getInTransitByTransferRequest(id, client);
+    const receiveQty = receivedQuantity ?? (inTransitRow ? inTransitRow.quantity : row.quantity);
 
-    // AC6: Lot matching
-    if (lotId !== row.lot_id) {
-      throw new AppError(400, 'LOT_MISMATCH', `Receive lot_id "${lotId}" does not match shipped lot_id "${row.lot_id}"`, {
-        ship_lot_id: row.lot_id,
+    // AC6: Lot matching - against the lot actually shipped (from the in-transit row), which for a
+    // lot-less request differs from the (null) request lot (Story 2.5 review).
+    const shippedLot = inTransitRow?.lot_id ?? row.lot_id;
+    if (lotId !== shippedLot) {
+      throw new AppError(400, 'LOT_MISMATCH', `Receive lot_id "${lotId}" does not match shipped lot_id "${shippedLot}"`, {
+        ship_lot_id: shippedLot,
         receive_lot_id: lotId,
       });
     }
 
-    const correlationId = randomUUID();
+    // AC3: reuse the ship event's correlation_id so ship and receive share one trace id
+    // (Story 2.5 review); fall back to a fresh id only if the tracking row is unexpectedly absent.
+    const correlationId = inTransitRow?.correlation_id ?? randomUUID();
 
 const envelope = {
        stream_type: 'inventory',
@@ -720,6 +851,7 @@ const envelope = {
         ...(receivedDate ? { received_date: receivedDate } : {}),
         ...(notes ? { notes } : {}),
         correlation_id: correlationId,
+        business_stream: row.business_stream,
       },
       metadata: {
         correlation_id: correlationId,
@@ -730,23 +862,24 @@ const envelope = {
         },
         occurred_at: new Date().toISOString(),
       },
-    } as any;
+    };
 
     await persistEvent(envelope, auditCtxFor(req, actor, 201), client);
+    // Read the projected status inside the transaction: the receive projection sets it to
+    // 'received' on full receipt or 'partially_received' otherwise (Story 2.5 review).
+    const finalRow = await getTransferRequestById(id, client);
     await client.query('COMMIT');
+    committed = true;
 
 sendJson(res, 201, {
        transfer_request_id: id,
-       status: 'received',
+       status: finalRow?.status ?? 'received',
        lot_id: lotId,
        received_quantity: receiveQty,
        correlation_id: correlationId,
      });
   } catch (err: unknown) {
-    await client.query('ROLLBACK');
-    if (err instanceof AppError) {
-      throw err;
-    }
+    if (!committed) await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
@@ -764,7 +897,7 @@ const getInTransitBase: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  const authContext = getAuthContext(req) as { roles: any[] } | undefined;
+  const authContext = getAuthContext(req);
   if (!authContext) {
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   }

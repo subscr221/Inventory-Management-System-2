@@ -51,17 +51,25 @@ function runner(client?: PoolClient): Queryable {
   return client ?? getPool();
 }
 
-/** Get a single transfer request by ID. */
+/**
+ * Get a single transfer request by ID. When `forUpdate` is true a `client` MUST be supplied and
+ * the row is locked with FOR UPDATE so concurrent state transitions (approve/reject/ship/receive)
+ * serialize on the same request instead of racing (Story 2.5 review).
+ */
 export async function getTransferRequestById(
   transferRequestId: string,
   client?: PoolClient,
+  forUpdate = false,
 ): Promise<TransferRequestRow | null> {
+  if (forUpdate && !client) {
+    throw new Error('getTransferRequestById: forUpdate requires a transaction client');
+  }
   const result = await runner(client).query(
     `SELECT transfer_request_id, sku_id, quantity, from_location_id, to_location_id,
             lot_id, serial_ids, business_stream, notes, status, approver_actor_id,
             correlation_id, created_at, shipped_at, received_at
      FROM transfer_request
-     WHERE transfer_request_id = $1`,
+     WHERE transfer_request_id = $1${forUpdate ? ' FOR UPDATE' : ''}`,
     [transferRequestId],
   );
 
@@ -69,10 +77,28 @@ export async function getTransferRequestById(
   return mapRow(result.rows[0]);
 }
 
+/** Persist the actual shipped lot onto the request so receive can match against it (Story 2.5 review). */
+export async function setTransferRequestLot(
+  transferRequestId: string,
+  lotId: string,
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `UPDATE transfer_request SET lot_id = $1 WHERE transfer_request_id = $2`,
+    [lotId, transferRequestId],
+  );
+}
+
 /** List transfer requests with optional filters. */
 export async function getTransferRequests(filters: {
   from_location_id?: string | null;
   to_location_id?: string | null;
+  /**
+   * Restrict to transfers touching any of these locations on EITHER side. Used for non-wildcard
+   * RBAC scoping so an actor sees transfers where their assigned location is the source OR the
+   * destination, across all their assignments (Story 2.5 review).
+   */
+  location_any?: string[] | null;
   status?: string;
   sku_id?: string;
 }): Promise<TransferRequestRow[]> {
@@ -88,6 +114,11 @@ export async function getTransferRequests(filters: {
   if (filters.to_location_id) {
     conditions.push(`to_location_id = $${paramIndex}`);
     params.push(filters.to_location_id);
+    paramIndex++;
+  }
+  if (filters.location_any && filters.location_any.length > 0) {
+    conditions.push(`(from_location_id = ANY($${paramIndex}) OR to_location_id = ANY($${paramIndex}))`);
+    params.push(filters.location_any);
     paramIndex++;
   }
   if (filters.status) {
@@ -133,7 +164,10 @@ export async function insertTransferRequest(
       input.from_location_id,
       input.to_location_id,
       input.lot_id,
-      input.serial_ids ? `{${input.serial_ids.map((s) => `"${s}"`).join(',')}}` : null,
+      // Pass the JS array directly; node-pg encodes TEXT[] safely. Building the array literal by
+      // string interpolation (previous approach) let a serial containing " , \ or } corrupt or
+      // inject into the literal.
+      input.serial_ids ?? null,
       input.business_stream,
       input.notes,
       input.status,
@@ -149,7 +183,7 @@ export async function updateTransferRequestStatus(
   status: string,
   client: PoolClient,
 ): Promise<void> {
-  const validStatuses = ['pending_approval', 'approved', 'rejected', 'pending_shipment', 'shipped', 'received'];
+  const validStatuses = ['pending_approval', 'approved', 'rejected', 'pending_shipment', 'shipped', 'partially_received', 'received'];
   if (!validStatuses.includes(status)) {
     throw new Error(`Invalid transfer request status: ${status}`);
   }
@@ -181,7 +215,7 @@ export async function getInTransitBalances(sku: string): Promise<InTransitRow[]>
     `SELECT sku_id, location_from, location_to, lot_id, quantity,
             transfer_request_id, correlation_id, ship_event_id, created_at
      FROM in_transit
-     WHERE sku_id = $1
+     WHERE sku_id = $1 AND quantity > 0
      ORDER BY created_at ASC`,
     [sku],
   );

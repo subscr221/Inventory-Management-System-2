@@ -48,6 +48,7 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-21
+# story 2-5 code review 2026-07-21 (3-layer adversarial, baseline a76aa46 -> a5b033f): 4 decisions + 18 patches applied, 4 deferred, 2 dismissed. Critical fixes: missing BEGIN on all write handlers (piecemeal autocommit), deleted powersync_publication restored in init-db.sql, hardcoded pending_approval status (no-approval transfers stranded), ship_event_id 'unknown' UUID crash (every real ship 500'd), FOR UPDATE row locks + in_transit unique constraint (double-ship), serial TEXT[] injection, over-receive cap, source-grain stock ops for lot-less transfers, ship/receive correlation_id reuse (AC3), location+role RBAC on writes, list scoping, escalation-to-fallback approver, client idempotency key, LOT_SKU_MISMATCH split, partially_received state. Added test/integration/story-2-5.test.ts (19 tests) + spine route-surface allowlist. Backend 262/262, edge 14/14, spine 6/6, tsc/eslint clean; moved ready-for-dev->done
 # story 2-5 created 2026-07-21 via create-story workflow: Inter-Location Transfer Requests; DOA-approval routing, transfer request events, pick-ship-receive cycle, allocation enforcement, lot/serial traceability, in-transit state management, correlation ID linking, approval gating, rejection reversal, error codes (APPROVAL_REQUIRED, QUANTITY_EXCEEDS_APPROVED, LOT_MISMATCH), edge sync, RBAC, audit, and comprehensive test coverage; ready-for-dev
 # story 2-4 dev-story 2026-07-21: implemented all 8 tasks; SKU-grain inventory_valuation summary +
 #   FIFO layer/serial-cost/NRV-adjustment/standard-cost-variance projections, valuation seam wired
@@ -186,7 +187,7 @@ development_status:
   2-2-real-time-multi-location-stock-balances: done   # PILOT
   2-3-lot-batch-and-serial-traceability: done   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: done   # PILOT
-  2-5-inter-location-transfer-requests: ready-for-dev   # PILOT
+  2-5-inter-location-transfer-requests: done   # PILOT
   2-6-cycle-counting-and-physical-inventory: backlog   # PILOT
   2-7-safety-stock-reorder-points-and-obsolescence-flagging: backlog   # PILOT
   2-8-consignment-and-vmi-stock-segregation: backlog   # PILOT
