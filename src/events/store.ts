@@ -20,6 +20,7 @@ import {
   applyTransferShipProjection,
   applyTransferReceiveProjection,
 } from '../compliance/transfer-request.js';
+import { assertCycleCountShape, applyCycleCountProjection } from '../compliance/cycle-count.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -192,6 +193,9 @@ export async function persistEvent(
   assertTransferRequestShape(envelope);
   assertTransferShipShape(envelope);
   assertTransferReceiveShape(envelope);
+  // Story 2.6: cycle-count / physical-verification shape validation is non-DB and runs with the
+  // other pre-transaction asserts, so a malformed count event never consumes an idempotency key.
+  assertCycleCountShape(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();
@@ -224,6 +228,11 @@ export async function persistEvent(
       await applyTransferRequestProjection(envelope, client);
       await applyTransferShipProjection(envelope, client, eventId);
       await applyTransferReceiveProjection(envelope, client);
+      // Story 2.6: cycle-count variance computation, DOA-gated adjustment lifecycle, approved
+      // stock adjustments, and physical-verification evidence run inside this same transaction so
+      // the projection and the domain_events insert commit or roll back together. The AC2 guard
+      // (stock.adjusted requires an approved adjustment) lives in applyCycleCountProjection.
+      await applyCycleCountProjection(envelope, client, eventId);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {

@@ -125,6 +125,59 @@ const EXPECTED = [
     // Append-only ledger: app_user gets no UPDATE (or DELETE) grant, unlike every other projection.
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 2.5 projections (drift gap closed by Story 2.6).
+  {
+    canonical: 'read/projections/transfer_request.sql',
+    table: 'transfer_request',
+    constraints: [] as string[],
+    indexes: [
+      'idx_transfer_request_status',
+      'idx_transfer_request_sku',
+      'idx_transfer_request_from_loc',
+      'idx_transfer_request_to_loc',
+    ],
+  },
+  {
+    canonical: 'read/projections/in_transit.sql',
+    table: 'in_transit',
+    constraints: ['uq_in_transit_transfer_request'],
+    indexes: [
+      'idx_in_transit_sku',
+      'idx_in_transit_from',
+      'idx_in_transit_to',
+      'idx_in_transit_lot',
+      'idx_in_transit_request',
+    ],
+    // in_transit rows are cleared on full receipt, so app_user additionally holds DELETE.
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
+  // Story 2.6 projections.
+  {
+    canonical: 'read/projections/cycle_count.sql',
+    table: 'cycle_count',
+    constraints: [] as string[],
+    indexes: ['idx_cycle_count_location', 'idx_cycle_count_status'],
+  },
+  {
+    canonical: 'read/projections/cycle_count.sql',
+    table: 'cycle_count_line',
+    constraints: ['uq_cycle_count_line_grain', 'chk_cycle_count_line_counted_non_negative'],
+    indexes: ['idx_cycle_count_line_count', 'idx_cycle_count_line_adjustment'],
+  },
+  {
+    canonical: 'read/projections/physical_verification.sql',
+    table: 'physical_verification',
+    constraints: [] as string[],
+    indexes: ['idx_physical_verification_location'],
+  },
+  {
+    canonical: 'read/projections/physical_verification.sql',
+    table: 'physical_verification_line',
+    constraints: [] as string[],
+    indexes: ['idx_physical_verification_line_pv'],
+    // Append-only evidence: app_user gets no UPDATE/DELETE grant.
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

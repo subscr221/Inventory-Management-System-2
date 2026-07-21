@@ -1350,3 +1350,144 @@ BEGIN
     GRANT SELECT ON inventory_valuation_standard_cost_variance TO readonly_user;
   END IF;
 END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- Cycle count (Story 2.6). The section below MUST stay identical to the canonical
+-- read/projections/cycle_count.sql (applied by src/events/migrate.ts and the integration-test
+-- harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS cycle_count (
+  cycle_count_id        UUID PRIMARY KEY,
+  location_id           UUID NOT NULL,
+  zone_id               TEXT,
+  sku_scope             TEXT[] NOT NULL,
+  stock_class           TEXT,
+  count_type            TEXT NOT NULL,
+  business_date         DATE NOT NULL,
+  business_stream       TEXT NOT NULL,
+  tolerance_percent     NUMERIC(9, 4) NOT NULL DEFAULT 0,
+  status                TEXT NOT NULL DEFAULT 'open',
+  created_by_actor_id   UUID,
+  submitted_by_actor_id UUID,
+  notes                 TEXT,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cycle_count_location ON cycle_count (location_id);
+CREATE INDEX IF NOT EXISTS idx_cycle_count_status ON cycle_count (status);
+
+CREATE TABLE IF NOT EXISTS cycle_count_line (
+  line_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cycle_count_id     UUID NOT NULL,
+  sku                TEXT NOT NULL,
+  lot_id             TEXT,
+  stock_class        TEXT NOT NULL DEFAULT 'owned',
+  counted_quantity   NUMERIC(18, 6) NOT NULL,
+  book_quantity      NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  allocated_quantity NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  in_transit_quantity NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  variance_quantity  NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  variance_value     NUMERIC(20, 6) NOT NULL DEFAULT 0,
+  tolerance_breach   BOOLEAN NOT NULL DEFAULT false,
+  adjustment_id      UUID,
+  adjustment_status  TEXT,
+  approver_actor_id  UUID,
+  reason_code        TEXT,
+  applied_event_id   UUID,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_cycle_count_line_grain UNIQUE NULLS NOT DISTINCT (cycle_count_id, sku, lot_id, stock_class),
+  CONSTRAINT chk_cycle_count_line_counted_non_negative CHECK (counted_quantity >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cycle_count_line_count ON cycle_count_line (cycle_count_id);
+CREATE INDEX IF NOT EXISTS idx_cycle_count_line_adjustment ON cycle_count_line (adjustment_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_cycle_count_line_grain'
+      AND conrelid = 'cycle_count_line'::regclass
+  ) THEN
+    ALTER TABLE cycle_count_line
+      ADD CONSTRAINT uq_cycle_count_line_grain UNIQUE NULLS NOT DISTINCT (cycle_count_id, sku, lot_id, stock_class);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_cycle_count_line_counted_non_negative'
+      AND conrelid = 'cycle_count_line'::regclass
+  ) THEN
+    ALTER TABLE cycle_count_line
+      ADD CONSTRAINT chk_cycle_count_line_counted_non_negative CHECK (counted_quantity >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON cycle_count TO app_user;
+    GRANT INSERT, SELECT, UPDATE ON cycle_count_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON cycle_count TO readonly_user;
+    GRANT SELECT ON cycle_count_line TO readonly_user;
+  END IF;
+END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- Physical verification (Story 2.6). The section below MUST stay identical to the canonical
+-- read/projections/physical_verification.sql (applied by src/events/migrate.ts and the
+-- integration-test harness) - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS physical_verification (
+  physical_verification_id  UUID PRIMARY KEY,
+  location_id               UUID NOT NULL,
+  coverage_percentage       NUMERIC(9, 4) NOT NULL DEFAULT 0,
+  period_start              DATE,
+  period_end                DATE,
+  business_date             DATE,
+  count_refs                UUID[] NOT NULL DEFAULT '{}',
+  completed_by_actor_id     UUID,
+  management_signoff_actor_id UUID,
+  signed_off_at             TIMESTAMPTZ,
+  period_locked             BOOLEAN NOT NULL DEFAULT false,
+  source_event_id           UUID,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_physical_verification_location ON physical_verification (location_id);
+
+CREATE TABLE IF NOT EXISTS physical_verification_line (
+  pv_line_id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  physical_verification_id  UUID NOT NULL,
+  cycle_count_id            UUID NOT NULL,
+  count_date                DATE,
+  sku                       TEXT NOT NULL,
+  lot_id                    TEXT,
+  stock_class               TEXT NOT NULL DEFAULT 'owned',
+  book_quantity             NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  counted_quantity          NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  variance_quantity         NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  variance_value            NUMERIC(20, 6) NOT NULL DEFAULT 0,
+  adjustment_event_ref      UUID,
+  counter_actor_id          UUID,
+  approver_actor_id         UUID,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_physical_verification_line_pv ON physical_verification_line (physical_verification_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON physical_verification TO app_user;
+    GRANT INSERT, SELECT ON physical_verification_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON physical_verification TO readonly_user;
+    GRANT SELECT ON physical_verification_line TO readonly_user;
+  END IF;
+END $$;

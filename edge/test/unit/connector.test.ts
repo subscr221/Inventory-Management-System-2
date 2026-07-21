@@ -83,6 +83,16 @@ describe('edge upload failure classification', () => {
       classifyServerUploadFailure(409, { error_code: 'NRV_RECOVERY_EXCEEDS_ORIGINAL_COST' }).localStatus,
       'needs_attention',
     );
+    // Story 2.6 cycle-count / physical-verification permanent business rejections
+    for (const code of [
+      'COUNT_TASK_LOCKED',
+      'COUNT_ENTERER_CANNOT_APPROVE',
+      'PERIOD_LOCKED',
+      'COUNT_VARIANCE_REQUIRES_APPROVAL',
+      'STOCK_ADJUSTMENT_NEGATIVE_BALANCE',
+    ]) {
+      assert.equal(classifyServerUploadFailure(409, { error_code: code }).localStatus, 'needs_attention');
+    }
     assert.equal(
       classifyServerUploadFailure(401, { error_code: 'UNAUTHORIZED' }).localStatus,
       'auth_required',

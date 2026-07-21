@@ -64,6 +64,12 @@ describe('Story 1.8 sync upload classification', () => {
       'CALIBRATION_LOCKOUT',
       'VALUATION_METHOD_NOT_PERMITTED',
       'NRV_RECOVERY_EXCEEDS_ORIGINAL_COST',
+      // Story 2.6 cycle-count / physical-verification permanent business rejections
+      'COUNT_TASK_LOCKED',
+      'COUNT_ENTERER_CANNOT_APPROVE',
+      'PERIOD_LOCKED',
+      'COUNT_VARIANCE_REQUIRES_APPROVAL',
+      'STOCK_ADJUSTMENT_NEGATIVE_BALANCE',
     ]) {
       assertClassification(classifyUploadFailure(new AppError(400, code, 'Permanent failure')), {
         action: 'complete',

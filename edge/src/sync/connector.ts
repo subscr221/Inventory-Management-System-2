@@ -47,6 +47,12 @@ const PERMANENT_ERROR_CODES = new Set([
   'LOT_SKU_MISMATCH',
   'SERIAL_MISMATCH',
   'APPROVAL_UNRESOLVED',
+  // Story 2.6: cycle-count / physical-verification permanent business rejections
+  'COUNT_TASK_LOCKED',
+  'COUNT_ENTERER_CANNOT_APPROVE',
+  'PERIOD_LOCKED',
+  'COUNT_VARIANCE_REQUIRES_APPROVAL',
+  'STOCK_ADJUSTMENT_NEGATIVE_BALANCE',
 ]);
 
 const TRANSIENT_STATUS_CODES = new Set([408, 425, 429]);

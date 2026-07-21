@@ -169,6 +169,9 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       '../../read/projections/lot_master.sql',
       '../../read/projections/serial_master.sql',
       '../../read/projections/lot_trace.sql',
+      '../../read/projections/inventory_valuation.sql',
+      '../../read/projections/cycle_count.sql',
+      '../../read/projections/physical_verification.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
@@ -177,7 +180,7 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE physical_verification_line, physical_verification, cycle_count_line, cycle_count, inventory_valuation, lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');
@@ -254,6 +257,59 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     assert.ok(entry, `response missing location ${locationId}: ${JSON.stringify(body)}`);
     return entry;
   }
+
+  it('Story 2.6 regression: an applied count adjustment preserves the on_hand/allocated/available/in_transit invariants', async () => {
+    const adjSku = 'ADJ-REG-2-2';
+    await makeRequest(port, 'POST', '/api/v1/items', { sku: adjSku, uom: 'ea', valuation_method: 'weighted_average', business_stream: 'production' }, operatorHeaders);
+
+    // Seed a balance directly at the (sku, locA, null-lot, owned) grain with reserved and in-transit
+    // quantities that the count adjustment must leave untouched.
+    await getPool().query(
+      `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand, allocated, in_transit) VALUES ($1, $2, NULL, 'owned', 100, 30, 5)`,
+      [adjSku, locAId],
+    );
+
+    // A creator (count roles) and a DOA-resolved approver (warehouse_manager).
+    await provisionUser(port, 'adj-counter-2-2@example.com', [
+      { role: 'inventory_controller', module: 'inventory', functionScope: 'write', locationId: locAId },
+    ]);
+    const counterHeaders = await authFor(port, 'adj-counter-2-2@example.com');
+    const approverUserId = await provisionUser(port, 'adj-approver-2-2@example.com', [
+      { role: 'warehouse_manager', module: 'inventory', functionScope: 'write', locationId: '*' },
+    ]);
+    const approverHeaders = await authFor(port, 'adj-approver-2-2@example.com');
+    await provisionUser(port, 'adj-doa-2-2@example.com', [
+      { role: 'compliance_admin_adj_2_2', module: 'compliance', functionScope: 'write', locationId: '*' },
+    ]);
+    const doaHeaders = await authFor(port, 'adj-doa-2-2@example.com');
+    await makeRequest(port, 'POST', '/api/v1/doa/entries', { transaction_type: 'inventory.count_adjustment', role: 'warehouse_manager', value_min: null, value_max: null }, doaHeaders);
+
+    const create = await makeRequest(port, 'POST', '/api/v1/cycle-counts', {
+      location_id: locAId, sku_scope: [adjSku], count_type: 'cycle', business_date: '2026-07-21', business_stream: 'production',
+    }, counterHeaders);
+    assert.strictEqual(create.status, 201, JSON.stringify(create.body));
+    const countId = create.body['cycle_count_id'] as string;
+
+    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
+      lines: [{ sku: adjSku, counted_quantity: 90 }],
+    }, counterHeaders);
+    assert.strictEqual(submit.status, 201, JSON.stringify(submit.body));
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!['adjustment_id'] as string;
+
+    const approve = await makeRequest(port, 'PATCH', `/api/v1/cycle-counts/${countId}/adjustments/${adjustmentId}/approve`, { reason_code: 'shrinkage' }, approverHeaders);
+    assert.strictEqual(approve.status, 200, JSON.stringify(approve.body));
+    assert.strictEqual(approve.body['approved_by'], approverUserId);
+
+    const row = await getPool().query(
+      `SELECT on_hand, allocated, in_transit, available FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL AND stock_class = 'owned'`,
+      [adjSku, locAId],
+    );
+    const bal = row.rows[0]!;
+    assert.strictEqual(Number(bal['on_hand']), 90, 'on_hand adjusted to the counted quantity');
+    assert.strictEqual(Number(bal['allocated']), 30, 'allocated is preserved by the adjustment');
+    assert.strictEqual(Number(bal['in_transit']), 5, 'in_transit is preserved by the adjustment');
+    assert.strictEqual(Number(bal['available']), 60, 'available stays generated as on_hand - allocated');
+  });
 
   it('AC1 + AC4: receipts across three locations produce per-location and consolidated balances in under 1 second', async () => {
     const receipts = [

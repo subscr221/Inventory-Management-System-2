@@ -58,6 +58,19 @@ import {
   clearQualityHoldHandler,
 } from './api/v1/lots.js';
 import {
+  createCycleCountHandler,
+  submitCycleCountHandler,
+  approveAdjustmentHandler,
+  rejectAdjustmentHandler,
+  getCycleCountHandler,
+  listCycleCountsHandler,
+} from './api/v1/cycle-counts.js';
+import {
+  completePhysicalVerificationHandler,
+  signOffPhysicalVerificationHandler,
+  physicalVerificationReportHandler,
+} from './api/v1/physical-verification.js';
+import {
   createTransferRequestHandler,
   getTransferRequestHandler,
   listTransferRequestsHandler,
@@ -115,6 +128,16 @@ export function createAppRouter(): Router {
   router.post('/api/v1/transfer-requests/:transfer_request_id/ship', shipTransferRequestHandler);
   router.post('/api/v1/transfer-requests/:transfer_request_id/receive', receiveTransferRequestHandler);
   router.get('/api/v1/stock/:sku/in-transit', getInTransitHandler);
+  // Story 2.6: Cycle Counting and Physical Inventory
+  router.post('/api/v1/cycle-counts', createCycleCountHandler);
+  router.get('/api/v1/cycle-counts', listCycleCountsHandler);
+  router.get('/api/v1/cycle-counts/:cycle_count_id', getCycleCountHandler);
+  router.post('/api/v1/cycle-counts/:cycle_count_id/submit', submitCycleCountHandler);
+  router.patch('/api/v1/cycle-counts/:cycle_count_id/adjustments/:adjustment_id/approve', approveAdjustmentHandler);
+  router.patch('/api/v1/cycle-counts/:cycle_count_id/adjustments/:adjustment_id/reject', rejectAdjustmentHandler);
+  router.post('/api/v1/physical-verifications', completePhysicalVerificationHandler);
+  router.post('/api/v1/physical-verifications/:physical_verification_id/sign-off', signOffPhysicalVerificationHandler);
+  router.get('/api/v1/physical-verification/report', physicalVerificationReportHandler);
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
   router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);

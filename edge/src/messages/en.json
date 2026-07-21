@@ -55,5 +55,10 @@
   "errors.LOT_MISMATCH": "The received lot does not match the shipped lot.",
   "errors.LOT_SKU_MISMATCH": "That lot does not belong to the selected item.",
   "errors.SERIAL_MISMATCH": "The serials do not match the transfer request.",
-  "errors.APPROVAL_UNRESOLVED": "No approver is available for this transfer. Contact a supervisor."
+  "errors.APPROVAL_UNRESOLVED": "No approver is available for this transfer. Contact a supervisor.",
+  "errors.COUNT_TASK_LOCKED": "This cycle count has already been submitted and cannot be changed.",
+  "errors.COUNT_ENTERER_CANNOT_APPROVE": "The person who entered the count cannot approve its adjustment.",
+  "errors.PERIOD_LOCKED": "This period is locked; the verification record can no longer be changed.",
+  "errors.COUNT_VARIANCE_REQUIRES_APPROVAL": "This count variance requires approval before it can be adjusted.",
+  "errors.STOCK_ADJUSTMENT_NEGATIVE_BALANCE": "This adjustment would drive stock below zero or below reserved quantity."
 }
