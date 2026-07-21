@@ -1,4 +1,4 @@
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PoolClient } from 'pg';
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendRequestError } from '../../middleware/error.js';
@@ -39,7 +39,11 @@ function auditCtxFor(req: IncomingMessage, actor: ReturnType<typeof actorContext
 
 function getLotNumber(params: Record<string, string>): string | null {
   const lotNumber = params['lot_id'] || params['lotNumber'];
-  return lotNumber && lotNumber.trim().length > 0 ? lotNumber : null;
+  // Return the TRIMMED value, not the raw param: the guard trims but the lookup must query the
+  // trimmed lot number too, or a whitespace-padded lot_id passes the guard and then 404s on a
+  // lookup that never matches (Story 2.3 pass-3).
+  const trimmed = lotNumber?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
 function bodyLocationId(_params: Record<string, string>, body: unknown): string | undefined {
@@ -60,6 +64,10 @@ function localToday(): string {
   return `${year}-${month}-${day}`;
 }
 
+function sendLotNotFound(req: IncomingMessage, res: ServerResponse, lotNumber: string): void {
+  sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotNumber}"`, { lot_id: lotNumber });
+}
+
 const getLotTraceBase: RouteHandler = async (req, res, params) => {
   const lotNumber = getLotNumber(params);
   if (!lotNumber) {
@@ -69,7 +77,7 @@ const getLotTraceBase: RouteHandler = async (req, res, params) => {
 
   const lot = await getLotById(lotNumber);
   if (!lot) {
-    sendRequestError(req, res, 404, 'LOT_NOT_FOUND', `No lot master record exists for lot_id "${lotNumber}"`, { lot_id: lotNumber });
+    sendLotNotFound(req, res, lotNumber);
     return;
   }
 
@@ -77,7 +85,12 @@ const getLotTraceBase: RouteHandler = async (req, res, params) => {
   const balances = await getStockBalancesBySku(lot.sku);
   const authContext = getAuthContext(req);
   const permitted = authContext ? permittedLocationsForModule(authContext.roles, 'inventory') : { wildcard: false, locations: new Set<string>() };
-  const isPermitted = (locationId: string | null): boolean => locationId !== null && (permitted.wildcard || permitted.locations.has(locationId));
+  // A non-location-scoped trace entry (location_id === null) - e.g. a quality hold/clear placed by
+  // a wildcard-scoped actor, stored with a null location - is not secured to any single location,
+  // so it is visible to any authorized reader. Rejecting it before the wildcard check silently
+  // dropped quarantine history from every recall and 404'd a hold-only lot even for a wildcard
+  // admin (Story 2.3 pass-3).
+  const isPermitted = (locationId: string | null): boolean => locationId === null || permitted.wildcard || permitted.locations.has(locationId);
   const scopedTraceEntries = authContext ? traceEntries.filter((entry) => isPermitted(entry.location_id)) : traceEntries;
   let lotBalances = balances.filter((balance) => balance.lot_id === lot.lot_number);
 
@@ -101,8 +114,11 @@ const getLotTraceBase: RouteHandler = async (req, res, params) => {
     balancesByLocation.set(balance.location_id, existing);
   }
 
+  // Out-of-scope callers get the SAME 404 LOT_NOT_FOUND response as a genuinely nonexistent lot
+  // number (not a distinguishing 403) - otherwise a caller with zero visibility into this lot's
+  // locations could enumerate valid lot numbers by observing 404 vs 403 (Story 2.3 re-review).
   if (authContext && scopedTraceEntries.length === 0 && balancesByLocation.size === 0) {
-    sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', 'No role assignment grants access to this lot trace');
+    sendLotNotFound(req, res, lotNumber);
     return;
   }
 

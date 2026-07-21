@@ -82,14 +82,22 @@ export async function createLot(input: CreateLotInput, client?: PoolClient): Pro
   return mapRow(result.rows[0]!);
 }
 
-export async function applyLotEvent(input: { lot_number: string; sku: string; expiry_date: string | null }, client: PoolClient): Promise<LotMaster> {
+/**
+ * INSERT ... ON CONFLICT (lot_number) DO NOTHING RETURNING makes lot creation atomic: two
+ * concurrent stock.received events for the same brand-new lot_number can no longer both pass a
+ * check-then-insert race and surface inconsistent error shapes depending on who wins (Story 2.3
+ * re-review) - the loser simply gets null here and the caller throws the same controlled
+ * DUPLICATE_LOT error it would for a lot that already existed before this call started.
+ */
+export async function applyLotEvent(input: { lot_number: string; sku: string; expiry_date: string | null }, client: PoolClient): Promise<LotMaster | null> {
   const result = await client.query(
     `INSERT INTO lot_master (lot_number, sku, expiry_date, quality_hold_status, quality_hold_reason)
      VALUES ($1, $2, $3, 'none', NULL)
+     ON CONFLICT (lot_number) DO NOTHING
      RETURNING ${LOT_COLUMNS}`,
     [input.lot_number, input.sku, input.expiry_date],
   );
-  return mapRow(result.rows[0]!);
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 export async function updateLot(lotNumber: string, sku: string, patch: UpdateLotPatch, client?: PoolClient): Promise<LotMaster | null> {
@@ -149,11 +157,6 @@ export async function getLotById(lotId: string, client?: PoolClient): Promise<Lo
   return result.rows.length === 1 ? mapRow(result.rows[0]!) : null;
 }
 
-export async function lotExistsByNumber(lotNumber: string, client?: PoolClient): Promise<boolean> {
-  const result = await runner(client).query(`SELECT 1 FROM lot_master WHERE lot_number = $1 LIMIT 1`, [lotNumber]);
-  return result.rows.length > 0;
-}
-
 export async function lotExistsByNumberAndSku(lotNumber: string, sku: string, client?: PoolClient): Promise<boolean> {
   const result = await runner(client).query(`SELECT 1 FROM lot_master WHERE lot_number = $1 AND sku = $2 LIMIT 1`, [lotNumber, sku]);
   return result.rows.length > 0;
@@ -164,7 +167,7 @@ export async function getLotsForSelection(sku: string, client?: PoolClient, incl
     `SELECT ${LOT_COLUMNS}
      FROM lot_master
      WHERE sku = $1${includeUnavailable ? '' : " AND quality_hold_status = 'none' AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)"}
-     ORDER BY expiry_date ASC NULLS LAST, lot_id ASC`,
+     ORDER BY expiry_date ASC NULLS LAST, created_at ASC, lot_id ASC`,
     [sku],
   );
   return result.rows.map(mapRow);

@@ -90,7 +90,9 @@ describe('Story 1.8 sync upload classification', () => {
     });
   });
 
-  it('moves authorization failures to auth_required without discarding local evidence', () => {
+  it('halts only on a genuine authn failure (401), not on a business-rule 403', () => {
+    // A 401 (expired/absent credentials) is an authentication failure: halt the whole outbox and
+    // prompt re-auth, discarding no local evidence.
     assertClassification(classifyUploadFailure(new AppError(401, 'UNAUTHORIZED', 'Expired')), {
       action: 'halt',
       localStatus: 'auth_required',
@@ -98,11 +100,15 @@ describe('Story 1.8 sync upload classification', () => {
       serverErrorCode: 'UNAUTHORIZED',
     });
 
+    // A 403 carrying a permanent business error_code (LOCATION_ACCESS_DENIED / FUNCTION_ACCESS_DENIED /
+    // LOT_REQUIRED) is a per-event authorization rejection, not an authentication failure: it settles
+    // THAT event as needs_attention and lets the rest of the outbox continue, instead of halting all
+    // sync as though the device signed out (Story 2.3 pass-3).
     assertClassification(
       classifyUploadFailure(new AppError(403, 'LOCATION_ACCESS_DENIED', 'Denied')),
       {
-        action: 'halt',
-        localStatus: 'auth_required',
+        action: 'complete',
+        localStatus: 'needs_attention',
         retryable: false,
         serverErrorCode: 'LOCATION_ACCESS_DENIED',
       },

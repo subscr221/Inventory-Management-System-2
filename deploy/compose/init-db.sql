@@ -978,7 +978,20 @@ CREATE TABLE IF NOT EXISTS lot_trace (
 );
 
 CREATE INDEX IF NOT EXISTS idx_lot_trace_lot_timestamp ON lot_trace (lot_id, timestamp);
-CREATE INDEX IF NOT EXISTS idx_lot_trace_event_id ON lot_trace (event_id);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes WHERE indexname = 'idx_lot_trace_event_id' AND schemaname = current_schema()
+  ) AND NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'idx_lot_trace_event_id' AND schemaname = current_schema() AND indexdef ILIKE '%UNIQUE%'
+  ) THEN
+    DROP INDEX idx_lot_trace_event_id;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lot_trace_event_id ON lot_trace (event_id);
 
 DO $$
 BEGIN

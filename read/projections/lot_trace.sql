@@ -26,8 +26,24 @@ CREATE TABLE IF NOT EXISTS lot_trace (
 -- Index on lot_id + timestamp for recall reporting
 CREATE INDEX IF NOT EXISTS idx_lot_trace_lot_timestamp ON lot_trace (lot_id, timestamp);
 
--- Index on event_id for deduplication
-CREATE INDEX IF NOT EXISTS idx_lot_trace_event_id ON lot_trace (event_id);
+-- UNIQUE index on event_id: this is the ON CONFLICT (event_id) DO NOTHING target in
+-- appendTraceEntry, making dedup atomic under concurrent inserts for the same event_id. A
+-- database provisioned before this guard carries idx_lot_trace_event_id as a PLAIN index (`CREATE
+-- INDEX IF NOT EXISTS` below would then no-op forever against that name) - drop it first so the
+-- unique version underneath actually gets created.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes WHERE indexname = 'idx_lot_trace_event_id' AND schemaname = current_schema()
+  ) AND NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'idx_lot_trace_event_id' AND schemaname = current_schema() AND indexdef ILIKE '%UNIQUE%'
+  ) THEN
+    DROP INDEX idx_lot_trace_event_id;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lot_trace_event_id ON lot_trace (event_id);
 
 DO $$
 BEGIN

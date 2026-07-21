@@ -177,8 +177,13 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
     ]);
     operatorHeaders = await authFor(port, 'lot-operator@example.com');
 
+    // quality_officer is on the expired-lot override allowlist (exact-match, Story 2.3
+    // re-review) AND needs inventory:write to reach POST /api/v1/events at all, so this actor
+    // carries both assignments - matching how a real quality officer with override authority
+    // would be provisioned.
     await provisionUser(port, 'quality-officer@example.com', [
       { role: 'quality_officer', module: 'quality', functionScope: 'write', locationId: '*' },
+      { role: 'quality_officer', module: 'inventory', functionScope: 'write', locationId: '*' },
     ]);
     qualityHeaders = await authFor(port, 'quality-officer@example.com');
 
@@ -280,13 +285,31 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
     assert.strictEqual(issueRes.body['error_code'], 'LOT_EXPIRED');
     assert.ok(issueRes.body['details'] && (issueRes.body['details'] as Record<string, unknown>)['expiryDate']);
 
-    await persistEvent(stockEnvelope('stock.issued', {
+    // A role without override authority (lot_operator is not on the exact-match allowlist) must
+    // be rejected even with override_expired_lot: true - proves the allowlist check actually
+    // gates, not just that the flag exists (Story 2.3 re-review: exact-match, not substring).
+    const deniedOverrideRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
       sku: SKU_LOT,
       target_location_id: locAId,
       quantity: 10,
       lot_id: expiredLotNumber,
       override_expired_lot: true,
-    }, { actor_location_id: locAId }));
+    }, { actor_location_id: locAId }), operatorHeaders);
+    assert.strictEqual(deniedOverrideRes.status, 403);
+    assert.strictEqual(deniedOverrideRes.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+
+    // Retry through the HTTP layer (not a direct persistEvent bypass) with an actor whose
+    // authenticated, RBAC-resolved role IS on the allowlist - proves the override actually
+    // succeeds end-to-end, not just that a bypassed call doesn't throw.
+    const overrideRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
+      sku: SKU_LOT,
+      target_location_id: locAId,
+      quantity: 10,
+      lot_id: expiredLotNumber,
+      override_expired_lot: true,
+    }, { actor_location_id: locAId }), qualityHeaders);
+    assert.strictEqual(overrideRes.status, 201);
+    assert.strictEqual((overrideRes.body['payload'] as Record<string, unknown>)['lot_id'], expiredLotNumber);
   });
 
   // AC3: Quality hold rejection
@@ -321,6 +344,18 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
     assert.strictEqual(issueRes.body['error_code'], 'LOT_ON_HOLD');
     assert.strictEqual((issueRes.body['details'] as Record<string, unknown>)['reason'], 'Quality inspection failed');
 
+    // AC3 also covers allocation, not just issue - a held lot must reject stock.allocated too.
+    const allocateRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.allocated', {
+      sku: SKU_LOT,
+      target_location_id: locAId,
+      quantity: 10,
+      lot_id: heldLotNumber,
+    }, { actor_location_id: locAId }), operatorHeaders);
+
+    assert.strictEqual(allocateRes.status, 400);
+    assert.strictEqual(allocateRes.body['error_code'], 'LOT_ON_HOLD');
+    assert.strictEqual((allocateRes.body['details'] as Record<string, unknown>)['reason'], 'Quality inspection failed');
+
     // Clear hold
     const clearRes = await makeRequest(port, 'DELETE', `/api/v1/lots/${heldLotNumber}/quality-hold`, {}, qualityHeaders);
     assert.strictEqual(clearRes.status, 200);
@@ -343,14 +378,24 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       lot_id: 'LOT-2026-001',
     }, { actor_location_id: locAId }));
 
-    const startedAt = performance.now();
-    const traceRes = await makeRequest(port, 'GET', '/api/v1/lots/LOT-2026-001/trace', {}, operatorHeaders);
-    const durationMs = performance.now() - startedAt;
+    // AC4's threshold is a p95, not "the one time I measured it" - take enough samples that a
+    // single slow outlier (GC pause, connection setup) can't flip the assertion either way.
+    const SAMPLE_COUNT = 20;
+    const durationsMs: number[] = [];
+    let traceRes!: HttpResult;
+    for (let i = 0; i < SAMPLE_COUNT; i++) {
+      const startedAt = performance.now();
+      traceRes = await makeRequest(port, 'GET', '/api/v1/lots/LOT-2026-001/trace', {}, operatorHeaders);
+      durationsMs.push(performance.now() - startedAt);
+      assert.strictEqual(traceRes.status, 200);
+    }
+    durationsMs.sort((a, b) => a - b);
+    const p95DurationMs = durationsMs[Math.floor(SAMPLE_COUNT * 0.95) - 1]!;
+    assert.ok(p95DurationMs < 500, `p95 lot-trace latency ${p95DurationMs}ms exceeds the 500ms AC4 threshold`);
+
     const trace = traceRes.body['trace'] as Array<Record<string, unknown>>;
     const balances = traceRes.body['balances_by_location'] as Array<Record<string, unknown>>;
 
-    assert.strictEqual(traceRes.status, 200);
-    assert.ok(durationMs < 500);
     assert.strictEqual(traceRes.body['lot_number'], 'LOT-2026-001');
     assert.ok(trace.some((entry) => entry['event_type'] === 'stock.received' && entry['location_id'] === locAId));
     assert.ok(trace.some((entry) => entry['event_type'] === 'stock.issued' && entry['location_id'] === locAId));
@@ -394,6 +439,9 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
 
     assert.strictEqual(dupReceipt.status, 400);
     assert.strictEqual(dupReceipt.body['error_code'], 'DUPLICATE_SERIAL');
+    // AC6 requires the location currently holding the serial to be returned, not just the
+    // rejection code.
+    assert.strictEqual((dupReceipt.body['details'] as Record<string, unknown>)['currentLocationId'], locAId);
   });
 
   it('FIFO selection picks oldest received lot', async () => {
@@ -488,5 +536,111 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
     const retryRes = await makeRequest(port, 'POST', '/api/v1/events', event, operatorHeaders);
     assert.strictEqual(retryRes.status, 409);
     assert.strictEqual(retryRes.body['error_code'], 'DUPLICATE_EVENT');
+
+    // Prove the rejected retry did not re-apply the lot/stock-balance projections - exactly one
+    // lot row and exactly one receipt's worth of on_hand, not two (Story 2.3 re-review).
+    const lotRows = await getPool().query('SELECT lot_id FROM lot_master WHERE lot_number = $1', ['LOT-IDEMPOTENT-001']);
+    assert.strictEqual(lotRows.rows.length, 1);
+    const balanceRows = await getPool().query(
+      'SELECT on_hand FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id = $3',
+      [SKU_LOT, locAId, 'LOT-IDEMPOTENT-001'],
+    );
+    assert.strictEqual(balanceRows.rows.length, 1);
+    assert.strictEqual(Number(balanceRows.rows[0]!['on_hand']), 25);
+  });
+
+  it('Successful serial-controlled issue validates and applies serial state', async () => {
+    const serialNumbers = [`SN-ISSUE-${Date.now()}-1`, `SN-ISSUE-${Date.now()}-2`];
+    const receiptRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
+      sku: SKU,
+      target_location_id: locAId,
+      quantity: 2,
+      serials: serialNumbers.map((serial_number) => ({ serial_number, initial_quantity: 1 })),
+    }, { actor_location_id: locAId }), operatorHeaders);
+    assert.strictEqual(receiptRes.status, 201);
+
+    // Sum of serial current_quantity (2 x 1) must equal the issue's payload.quantity.
+    const issueRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
+      sku: SKU,
+      target_location_id: locAId,
+      quantity: 2,
+      serials: serialNumbers.map((serial_number) => ({ serial_number })),
+    }, { actor_location_id: locAId }), operatorHeaders);
+    assert.strictEqual(issueRes.status, 201);
+
+    const projection = await getPool().query(
+      'SELECT current_location_id, current_quantity FROM serial_master WHERE serial_number = ANY($1::text[])',
+      [serialNumbers],
+    );
+    assert.strictEqual(projection.rows.length, 2);
+    assert.ok(projection.rows.every((row) => row['current_location_id'] === null && Number(row['current_quantity']) === 0));
+
+    // A mismatched quantity (1 serial worth issued but 2 claimed) must be rejected, not silently
+    // applied with stock_balance and serial_master diverging (Story 2.3 re-review).
+    const mismatchSerials = [`SN-ISSUE-${Date.now()}-3`];
+    await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
+      sku: SKU,
+      target_location_id: locAId,
+      quantity: 1,
+      serials: mismatchSerials.map((serial_number) => ({ serial_number, initial_quantity: 1 })),
+    }, { actor_location_id: locAId }), operatorHeaders);
+    const mismatchRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
+      sku: SKU,
+      target_location_id: locAId,
+      quantity: 2,
+      serials: mismatchSerials.map((serial_number) => ({ serial_number })),
+    }, { actor_location_id: locAId }), operatorHeaders);
+    assert.strictEqual(mismatchRes.status, 400);
+    assert.strictEqual(mismatchRes.body['error_code'], 'INVALID_PARAMS');
+  });
+
+  it('pass-3: lot-controlled item moved without a resolvable lot is rejected LOT_REQUIRED', async () => {
+    // SKU_LOT (RM-0042) is lot_controlled and NOT serial_controlled. A real stock movement (one that
+    // carries a target location) supplying no lot_id, no serials, and no FEFO/FIFO mode has no
+    // traceability anchor, so lot-controlled stock could otherwise enter or leave inventory with no
+    // lot_master row and no lot_trace entry - invisible to an AC4 recall. Both the receive and issue
+    // paths must reject it (Story 2.3 pass-3 decision).
+    const receiveRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
+      sku: SKU_LOT,
+      target_location_id: locAId,
+      quantity: 5,
+    }, { actor_location_id: locAId }), operatorHeaders);
+    assert.strictEqual(receiveRes.status, 400);
+    assert.strictEqual(receiveRes.body['error_code'], 'LOT_REQUIRED');
+
+    const issueRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
+      sku: SKU_LOT,
+      target_location_id: locAId,
+      quantity: 1,
+    }, { actor_location_id: locAId }), operatorHeaders);
+    assert.strictEqual(issueRes.status, 400);
+    assert.strictEqual(issueRes.body['error_code'], 'LOT_REQUIRED');
+  });
+
+  it('pass-3: a quality-hold event is visible in the recall trace to a wildcard reader', async () => {
+    const tracedLot = 'LOT-HOLD-TRACE-001';
+    await persistEvent(stockEnvelope('stock.received', {
+      sku: SKU_LOT,
+      target_location_id: locAId,
+      quantity: 10,
+      lot_id: tracedLot,
+      expiry_date: '2026-12-31',
+    }, { actor_location_id: locAId }));
+
+    const holdRes = await makeRequest(port, 'PUT', `/api/v1/lots/${tracedLot}/quality-hold`, {
+      hold_reason: 'Recall trace visibility check',
+    }, qualityHeaders);
+    assert.strictEqual(holdRes.status, 200);
+
+    const traceRes = await makeRequest(port, 'GET', `/api/v1/lots/${tracedLot}/trace`, {}, operatorHeaders);
+    assert.strictEqual(traceRes.status, 200);
+    const trace = traceRes.body['trace'] as Array<Record<string, unknown>>;
+    // The hold was placed by a wildcard-scoped quality officer, so its trace row carries a null
+    // location. It must still appear in the recall trace for a wildcard-scoped reader; filtering
+    // null-location rows before the wildcard check silently dropped quarantine history (pass-3 P1).
+    assert.ok(
+      trace.some((entry) => entry['event_type'] === 'lot.quality_hold_placed'),
+      'quality-hold event must appear in the recall trace',
+    );
   });
 });

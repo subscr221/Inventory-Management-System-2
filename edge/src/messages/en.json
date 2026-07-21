@@ -41,7 +41,10 @@
   "errors.SERIAL_NOT_AVAILABLE": "The selected serial number is not available at this location or lot.",
   "errors.NO_AVAILABLE_LOT": "No lot is available for selection with the requested quantity.",
   "errors.LOT_NOT_FOUND": "The specified lot was not found in the system.",
+  "errors.LOT_REQUIRED": "This item is lot-controlled and requires a lot to be specified.",
   "errors.SERIAL_NOT_FOUND": "One or more serial numbers were not found in the system.",
+  "errors.ITEM_NOT_FOUND": "The specified item was not found in the system.",
+  "errors.FUNCTION_ACCESS_DENIED": "You are not authorized to perform this action.",
   "errors.UNAUTHORIZED": "Sign in again before syncing.",
   "errors.LOCATION_ACCESS_DENIED": "This device is not authorized for that site.",
   "errors.DUPLICATE_EVENT": "This event was already synced."

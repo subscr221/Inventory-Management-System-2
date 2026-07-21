@@ -3,6 +3,12 @@ import { getPool } from '../../config/db.js';
 
 export interface LotTrace {
   trace_id: string;
+  /**
+   * The lot_master.lot_id UUID surrogate key (a real foreign key, FK-checked by nothing since this
+   * is a derived read model, but semantically a UUID reference). Contrast with
+   * StockBalance.lot_id/SerialMaster.lot_id, which despite the same field name hold the
+   * lot_master.lot_number TEXT business key, not this UUID.
+   */
   lot_id: string;
   event_id: string;
   event_type: string;
@@ -50,11 +56,18 @@ function mapRow(row: Record<string, unknown>): LotTrace {
   };
 }
 
-export async function appendTraceEntry(input: CreateLotTraceInput, client?: PoolClient): Promise<LotTrace> {
+/**
+ * ON CONFLICT (event_id) DO NOTHING makes this the atomic dedup point: concurrent inserts for the
+ * same event_id cannot both land a row, unlike a check-then-insert pair racing against the same
+ * non-unique index (Story 2.3 re-review). Returns null when a row for this event_id already
+ * exists - callers that don't need the row back can ignore the return value.
+ */
+export async function appendTraceEntry(input: CreateLotTraceInput, client?: PoolClient): Promise<LotTrace | null> {
   const result = await runner(client).query(
     `INSERT INTO lot_trace
        (lot_id, event_id, event_type, sku, location_id, location_code, quantity_change, business_stream, timestamp)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamptz, now()))
+     ON CONFLICT (event_id) DO NOTHING
      RETURNING ${TRACE_COLUMNS}`,
     [
       input.lot_id,
@@ -68,7 +81,7 @@ export async function appendTraceEntry(input: CreateLotTraceInput, client?: Pool
       input.timestamp ?? null,
     ],
   );
-  return mapRow(result.rows[0]!);
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 export async function getTraceForLot(lotId: string, client?: PoolClient): Promise<LotTrace[]> {

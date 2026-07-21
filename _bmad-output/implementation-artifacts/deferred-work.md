@@ -60,3 +60,10 @@
 - `in_transit` column never written by any code path [src/read/projections/stock_balance.ts] -- deferred, Story 2.5 will add inter-location transfers that populate this field.
 - Consolidated API response merges across `stock_class` [src/api/v1/stock.ts:47-63] -- deferred, class breakdown is a future feature (Story 2.8 consignment segregation).
 - Zero permitted locations returns 200 empty instead of 403 [src/api/v1/stock.ts:42-45] -- deferred, consistent with existing RBAC handler patterns in the codebase.
+
+## Deferred from: code review of 2-3-lot-batch-and-serial-traceability (2026-07-21, adversarial pass 3)
+
+- Expiry is compared in server-local time (`todayLocalYmd`/`localToday`) while `lot_master` availability filters on SQL `CURRENT_DATE` [src/compliance/lot-serial-validation.ts:67; src/read/projections/lot_master.ts] - deferred, pre-existing clock-source split; standardize on DB `CURRENT_DATE` in a dedicated pass.
+- Serial quantity reconciliation compares a summed JS float against the event quantity (`0.1 x 3 !== 0.3`) [src/compliance/lot-serial-validation.ts:362] - deferred, serials are discrete (default quantity 1); no realistic fractional-serial case exists today. Revisit if fractional serial quantities become real.
+- FEFO/FIFO selection cannot split a request across lots and rejects `NO_AVAILABLE_LOT` even when combined stock across lots would satisfy it, while an un-lotted issue drains across lots [src/compliance/lot-serial-validation.ts:137; src/api/v1/lots.ts:180] - deferred, single-lot pick matches AC1's single-lot framing; split-pick is new scope for a dedicated story.
+- `override_expired_lot: true` from a non-override role is rejected `403 FUNCTION_ACCESS_DENIED` even when the lot is not expired, because the role gate fires on the flag alone in shape validation before any lot lookup [src/compliance/lot-serial-validation.ts:277] - deferred, defensible fail-closed on the override assertion; revisit (move the check into lot validation, gated on actual expiry) if a client is found sending the flag by default.

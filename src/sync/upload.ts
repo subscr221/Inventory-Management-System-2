@@ -29,7 +29,11 @@ const PERMANENT_ERROR_CODES = new Set([
   'SERIAL_NOT_AVAILABLE',
   'NO_AVAILABLE_LOT',
   'LOT_NOT_FOUND',
+  'LOT_REQUIRED',
   'SERIAL_NOT_FOUND',
+  'ITEM_NOT_FOUND',
+  'FUNCTION_ACCESS_DENIED',
+  'LOCATION_ACCESS_DENIED',
 ]);
 
 function isAppError(error: unknown): error is AppError {
@@ -58,6 +62,20 @@ export function classifyUploadFailure(error: unknown): UploadFailureClassificati
     return classification;
   }
 
+  // A business-rule rejection carrying a known permanent error_code settles the event as
+  // needs_attention even at 403 (FUNCTION_ACCESS_DENIED / LOCATION_ACCESS_DENIED / LOT_REQUIRED from
+  // the central write path); it must not halt the whole outbox as an auth failure. Checked before
+  // the 401/403 halt so those codes are reachable at 403 (Story 2.3 pass-3). A genuine authn failure
+  // (401 UNAUTHORIZED, or a 403 with no permanent business code) is not in the set and still halts.
+  if (PERMANENT_ERROR_CODES.has(error.errorCode)) {
+    return {
+      action: 'complete',
+      localStatus: 'needs_attention',
+      retryable: false,
+      serverErrorCode: error.errorCode,
+    };
+  }
+
   if (error.statusCode === 401 || error.statusCode === 403) {
     return {
       action: 'halt',
@@ -67,10 +85,7 @@ export function classifyUploadFailure(error: unknown): UploadFailureClassificati
     };
   }
 
-  if (
-    PERMANENT_ERROR_CODES.has(error.errorCode) ||
-    (error.statusCode >= 400 && error.statusCode < 500)
-  ) {
+  if (error.statusCode >= 400 && error.statusCode < 500) {
     return {
       action: 'complete',
       localStatus: 'needs_attention',

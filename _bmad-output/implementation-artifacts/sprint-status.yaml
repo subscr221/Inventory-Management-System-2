@@ -1,5 +1,5 @@
 # generated: 2026-07-12
-# last_updated: 2026-07-12
+# last_updated: 2026-07-21
 # project: Inventory Management System_2
 # project_key: NOKEY
 # tracking_system: file-system
@@ -48,6 +48,12 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-21
+# story 2-3 code review 2026-07-21 (adversarial pass 3): 3 layers over baseline 12a931f -> working tree; 1 decision
+#   (lot_controlled LOT_REQUIRED enforcement, chose enforce-both-paths) + 10 patches applied, 4 defers, 7 dismissed;
+#   new LOT_REQUIRED error code scoped to target-location movements (serial precedence, allocation exempt, legacy
+#   sku-only spine fixtures untouched); edge 403 business-denial now settles needs_attention instead of halting the
+#   whole outbox; trace null-location holds visible to wildcard readers; tsc/eslint/edge-typecheck clean, npm test
+#   225/225 (2 new: LOT_REQUIRED enforcement + hold-trace visibility), edge 14/14, spine 6/6, diff-check clean; moved review->done
 # story 2-3 code re-review 2026-07-21: independent second adversarial pass over baseline->working-tree; tsc + npm test
 #   reproduced clean (222/222) but green suite did not cover a confirmed torn-write. Fixed 1 (locationless stock.issued
 #   torn write now requires a resolvable target location). 17 further patch findings + 1 decision (expired-lot override
@@ -167,7 +173,7 @@ development_status:
   epic-2: in-progress
   2-1-item-master-and-location-register: done   # PILOT
   2-2-real-time-multi-location-stock-balances: done   # PILOT
-  2-3-lot-batch-and-serial-traceability: in-progress   # PILOT
+  2-3-lot-batch-and-serial-traceability: done   # PILOT
   2-4-ind-as-2-compliant-inventory-valuation: backlog   # PILOT
   2-5-inter-location-transfer-requests: backlog   # PILOT
   2-6-cycle-counting-and-physical-inventory: backlog   # PILOT

@@ -5,6 +5,12 @@ export interface SerialMaster {
   serial_id: string;
   serial_number: string;
   sku: string;
+  /**
+   * Story 2.3: the lot_master.lot_number (TEXT business key), NOT the lot_master.lot_id UUID
+   * surrogate key - despite the shared column/field name. lot_trace.lot_id, by contrast, IS the
+   * UUID. Do not pass this value where a lot_master.lot_id UUID is expected, or vice versa; the
+   * two are structurally identical strings and TypeScript will not catch the mixup.
+   */
   lot_id: string | null;
   current_location_id: string | null;
   current_location_code: string | null;

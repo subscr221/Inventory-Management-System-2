@@ -17,6 +17,12 @@ export interface StockBalance {
   sku: string;
   location_id: string;
   location_code: string | null;
+  /**
+   * Story 2.3: the lot_master.lot_number (TEXT business key), NOT the lot_master.lot_id UUID
+   * surrogate key - despite the shared column/field name. lot_trace.lot_id, by contrast, IS the
+   * UUID. Do not pass this value where a lot_master.lot_id UUID is expected, or vice versa; the
+   * two are structurally identical strings and TypeScript will not catch the mixup.
+   */
   lot_id: string | null;
   stock_class: string;
   on_hand: number;
@@ -109,6 +115,13 @@ export async function applyStockReceipt(input: StockReceiptInput, client: PoolCl
  * Applies a stock.allocated event with a transaction-local row lock (Task 1.6): the matching
  * balance rows are locked FOR UPDATE, availability is summed in SQL (NUMERIC precision, not
  * JS float), and the allocation is rejected with 409 INSUFFICIENT_STOCK before any event row
+ *
+ * `$3::text IS NULL OR lot_id = $3` (not `lot_id IS NOT DISTINCT FROM $3`) is deliberate: an
+ * un-lotted allocation/issue (no lot_id in the payload) is allowed to draw against ANY lot's stock
+ * at this sku+location, not scoped to a NULL-lot row only - this is an established, tested
+ * contract (test/integration/story-2-2.test.ts "AC2: allocation ... " allocates 10 units with no
+ * lot_id against a location whose only stock is under a named lot). A caller that wants
+ * lot-specific behavior supplies lot_id explicitly or uses fefo_mode/fifo_mode selection.
  * exists when available stock does not cover the request. The drain runs in SQL via a windowed
  * cumulative sum so every row update preserves NUMERIC(18,6) precision. Two transactions racing
  * for the last unit therefore have exactly one winner.
