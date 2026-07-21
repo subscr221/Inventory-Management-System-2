@@ -48,6 +48,7 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-21
+# story 2-4 created 2026-07-21 via create-story workflow: Ind AS 2 compliant inventory valuation; weighted average, FIFO, specific identification, LIFO rejection, standard-cost measurement-technique controls, NRV write-down and recovery cap, valuation route, central valuation projection seam, edge error classification, migration mirror, RBAC, and regression guardrails; ready-for-dev
 # story 2-3 code review 2026-07-21 (adversarial pass 3): 3 layers over baseline 12a931f -> working tree; 1 decision
 #   (lot_controlled LOT_REQUIRED enforcement, chose enforce-both-paths) + 10 patches applied, 4 defers, 7 dismissed;
 #   new LOT_REQUIRED error code scoped to target-location movements (serial precedence, allocation exempt, legacy
@@ -174,7 +175,7 @@ development_status:
   2-1-item-master-and-location-register: done   # PILOT
   2-2-real-time-multi-location-stock-balances: done   # PILOT
   2-3-lot-batch-and-serial-traceability: done   # PILOT
-  2-4-ind-as-2-compliant-inventory-valuation: backlog   # PILOT
+  2-4-ind-as-2-compliant-inventory-valuation: ready-for-dev   # PILOT
   2-5-inter-location-transfer-requests: backlog   # PILOT
   2-6-cycle-counting-and-physical-inventory: backlog   # PILOT
   2-7-safety-stock-reorder-points-and-obsolescence-flagging: backlog   # PILOT
