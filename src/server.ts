@@ -101,6 +101,14 @@ import {
   getWeighbridgeEventHandler,
   listWeighbridgeEventsHandler,
 } from './api/v1/weighbridge.js';
+import { createAsnHandler, getAsnHandler } from './api/v1/asn.js';
+import {
+  createGrnLineHandler,
+  getGrnHandler,
+  listGrnsHandler,
+  listDiscrepanciesHandler,
+  releasePutawayTaskHandler,
+} from './api/v1/receiving.js';
 import {
   createTransferRequestHandler,
   getTransferRequestHandler,
@@ -210,6 +218,16 @@ export function createAppRouter(): Router {
   router.post('/api/v1/weighbridge-events', createWeighbridgeEventHandler);
   router.get('/api/v1/weighbridge-events/:weighbridgeEventId', getWeighbridgeEventHandler);
   router.get('/api/v1/weighbridge-events', listWeighbridgeEventsHandler);
+
+  // Story 3.4: Goods Receiving Against ASN or PO
+  router.post('/api/v1/asn', createAsnHandler);
+  router.get('/api/v1/asn/:asnNumberExt', getAsnHandler);
+  router.post('/api/v1/grn-lines', createGrnLineHandler);
+  router.get('/api/v1/grns/:grnId', getGrnHandler);
+  router.get('/api/v1/grns', listGrnsHandler);
+  router.get('/api/v1/receiving/discrepancies', listDiscrepanciesHandler);
+  router.post('/api/v1/putaway-tasks/:putawayTaskId/release', releasePutawayTaskHandler);
+
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
   router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);

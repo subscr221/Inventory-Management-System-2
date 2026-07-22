@@ -58,6 +58,15 @@ const PERMANENT_ERROR_CODES = new Set([
   'OWNERSHIP_AGREEMENT_NOT_FOUND',
   'OWNER_PARTY_MISMATCH',
   'VMI_MIN_NOT_CONFIGURED',
+  // Story 3.4: goods-receiving permanent business rejections (RECEIPT_TOLERANCE_EXCEEDED is NOT here -
+  // it is a committed 2xx business outcome, not a sync error)
+  'ITEM_PO_MISMATCH',
+  'RECEIVING_BINDING_TOKEN_REQUIRED',
+  'RECEIVING_BINDING_TOKEN_NOT_FOUND',
+  'RECEIVING_WEIGHT_NOT_ACCEPTED',
+  'RECEIVING_PO_NOT_FOUND',
+  'RECEIVING_QTY_REQUIRED',
+  'RECEIVING_QC_HOLD_ZONE_NOT_FOUND',
   'INVALID_SIGNAL_TYPE',
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). A write from an
   // edge upload can never mutate ERP-mastered state; settle it needs_attention, never halt the outbox.

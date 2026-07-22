@@ -64,6 +64,15 @@ const PERMANENT_ERROR_CODES = new Set([
   'OWNER_PARTY_MISMATCH',
   'VMI_MIN_NOT_CONFIGURED',
   'INVALID_SIGNAL_TYPE',
+  // Story 3.4: goods-receiving permanent business rejections (RECEIPT_TOLERANCE_EXCEEDED is NOT here -
+  // it is a committed 2xx business outcome, not a sync error)
+  'ITEM_PO_MISMATCH',
+  'RECEIVING_BINDING_TOKEN_REQUIRED',
+  'RECEIVING_BINDING_TOKEN_NOT_FOUND',
+  'RECEIVING_WEIGHT_NOT_ACCEPTED',
+  'RECEIVING_PO_NOT_FOUND',
+  'RECEIVING_QTY_REQUIRED',
+  'RECEIVING_QC_HOLD_ZONE_NOT_FOUND',
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01).
   'SOURCE_SYSTEM_READ_ONLY',
   // Story 3.2: gate-event permanent business rejections

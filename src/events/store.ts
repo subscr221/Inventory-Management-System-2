@@ -25,6 +25,12 @@ import { assertInventoryPlanningShape, applyInventoryPlanningProjection } from '
 import { assertOwnershipShape, applyOwnershipProjection } from '../compliance/ownership.js';
 import { assertGateEnteredShape, assertGateReversedShape, applyGateProjection } from '../compliance/gate.js';
 import { assertWeighbridgeRecordedShape, applyWeighbridgeProjection } from '../compliance/weighbridge.js';
+import {
+  assertGoodsReceivedShape,
+  assertGoodsPutawayReleasedShape,
+  applyGoodsReceivedProjection,
+  applyGoodsPutawayReleasedProjection,
+} from '../compliance/receiving.js';
 import { assertErpReadOnly } from '../compliance/erp-readonly.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -216,6 +222,11 @@ export async function persistEvent(
   // computed in exact integer milli-kg) is non-DB and runs with the other pre-transaction asserts,
   // so a malformed weighment never consumes an idempotency key.
   assertWeighbridgeRecordedShape(envelope);
+  // Story 3.4: goods-receiving shape validation (binding-token/PO/qty presence, expiry-date shape,
+  // quarantine-reason presence) is non-DB and runs with the other pre-transaction asserts, so a
+  // malformed receiving event never consumes an idempotency key.
+  assertGoodsReceivedShape(envelope);
+  assertGoodsPutawayReleasedShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -273,6 +284,12 @@ export async function persistEvent(
       // enforces the site match, computes the tolerance band against the Story 2.9 open-PO line in
       // SQL NUMERIC, and upserts the weighbridge_event row inside this same transaction.
       await applyWeighbridgeProjection(envelope, client, eventId);
+      // Story 3.4: goods receiving consumes the accepted-weighment binding token, computes the PO
+      // tolerance band in SQL NUMERIC, routes QC-hold/quarantine/over-tolerance outcomes, and posts
+      // stock through a synthetic stock.received view - all inside this same transaction so the GRN
+      // line, the stock movement, and the domain_events insert commit or roll back together.
+      await applyGoodsReceivedProjection(envelope, client, eventId);
+      await applyGoodsPutawayReleasedProjection(envelope, client, eventId);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {

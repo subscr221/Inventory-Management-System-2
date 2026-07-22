@@ -351,6 +351,59 @@ export interface WeighbridgeRecordedEnvelope extends Omit<EventEnvelope, 'payloa
 }
 
 // ---------------------------------------------------------------------------
+// Story 3.4: Goods Receiving Against ASN or PO (FR-W-02)
+// ---------------------------------------------------------------------------
+
+// The receiving envelope is a superset of a stock receipt plus GRN metadata. correlation_id is the
+// Story 3.2 binding token (the accepted-weighment chain, AD-2). received_by is NEVER trusted from the
+// client payload - the API and edge paths server-set it from auth. NUMERIC quantities travel as
+// strings and are never rounded/compared as JS floats until the synthetic stock-receipt view posts
+// stock through the existing Story 2.2/2.3 projection helpers.
+export interface GoodsReceivedPayload {
+  grn_id: string;
+  grn_line_id: string;
+  correlation_id: string;
+  po_ref_ext: string;
+  line_no: number;
+  source_document: 'PO' | 'ASN';
+  source_ref_ext?: string | null;
+  sku: string;
+  target_location_id?: string;
+  target_location_code?: string;
+  received_qty: number | string;
+  lot_id?: string;
+  expiry_date?: string;
+  serials?: Array<{ serial_number: string; initial_quantity?: number }>;
+  stock_class?: 'owned' | 'consignment' | 'vmi' | 'job_work';
+  owner_party_code?: string;
+  unit_cost?: number | string;
+  quarantine_approved?: boolean;
+  quarantine_reason_code?: string;
+  /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
+  received_by?: string;
+}
+
+export interface GoodsReceivedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'goods.received';
+  payload: GoodsReceivedPayload;
+}
+
+// Auditable manual release of a held putaway task (AC3). released_by and approver_actor_id are
+// server-set from auth; reason_code is carried so the standard persistEvent audit path records it.
+export interface GoodsPutawayReleasedPayload {
+  putaway_task_id: string;
+  grn_line_id: string;
+  reason_code: string;
+  released_by?: string;
+  approver_actor_id?: string;
+}
+
+export interface GoodsPutawayReleasedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'goods.putaway_released';
+  payload: GoodsPutawayReleasedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -439,6 +492,17 @@ export const SUPPORTED_EVENT_TYPES = {
   // tagging is not gated on it)
   'weighbridge.recorded': {
     streamType: 'weighbridge',
+    requiresBusinessStream: false,
+  },
+  // Story 3.4: goods receiving on a new 'receiving' stream. The receiving envelope posts no valuated
+  // movement of its own - the stock receipt it drives (via the synthetic stock.received view) carries
+  // the item business stream - so business-stream tagging is not gated on these events.
+  'goods.received': {
+    streamType: 'receiving',
+    requiresBusinessStream: false,
+  },
+  'goods.putaway_released': {
+    streamType: 'receiving',
     requiresBusinessStream: false,
   },
 } as const;

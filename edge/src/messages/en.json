@@ -84,5 +84,13 @@
   "errors.WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND": "The binding token was not found centrally. Confirm the gate entry synced first.",
   "errors.WEIGHBRIDGE_SITE_MISMATCH": "The weighbridge site differs from the gate-entry site for this vehicle.",
   "errors.WEIGHBRIDGE_NET_NEGATIVE": "Net weight cannot be negative; check the tare and gross readings.",
-  "errors.WEIGHBRIDGE_PO_LINE_NOT_FOUND": "The PO line for this weighment was not found. Refresh PO data and try again."
+  "errors.WEIGHBRIDGE_PO_LINE_NOT_FOUND": "The PO line for this weighment was not found. Refresh PO data and try again.",
+  "errors.ITEM_PO_MISMATCH": "That PO isn't here yet. Double-check the number or contact procurement.",
+  "errors.RECEIPT_TOLERANCE_EXCEEDED": "Over-receipt: this quantity exceeds the PO tolerance. A supervisor has been notified.",
+  "errors.RECEIVING_BINDING_TOKEN_REQUIRED": "The vehicle-to-PO binding token is required to receive goods.",
+  "errors.RECEIVING_BINDING_TOKEN_NOT_FOUND": "The binding token was not found centrally. Confirm the weighment synced first.",
+  "errors.RECEIVING_WEIGHT_NOT_ACCEPTED": "Receipt is blocked: the weighment is outside tolerance and awaiting review.",
+  "errors.RECEIVING_PO_NOT_FOUND": "The referenced PO was not found. Refresh PO data and try again.",
+  "errors.RECEIVING_QTY_REQUIRED": "A received quantity is required before this line can sync.",
+  "errors.RECEIVING_QC_HOLD_ZONE_NOT_FOUND": "No QC-hold zone is configured for this site. Contact your supervisor."
 }

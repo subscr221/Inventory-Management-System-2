@@ -81,6 +81,25 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-23
+# story 3-4 dev-story 2026-07-23: implementation started from baseline 8f86be6; moved to in-progress
+# story 3-4 dev-story 2026-07-23: implemented all 9 tasks. New 'receiving' stream (goods.received +
+#   goods.putaway_released, requiresBusinessStream false); grn header + grn_line + putaway_task projections
+#   and minimal INT-SUP-02 asn/asn_line direct-upsert reference intake. Central applyGoodsReceivedProjection
+#   seam: resolves the Story 3.3 accepted weighment for the binding token (RECEIVING_WEIGHT_NOT_ACCEPTED
+#   blocks tolerance_breach-only tokens), matches PO line by sku (ITEM_PO_MISMATCH), computes the over/under
+#   tolerance band in PostgreSQL NUMERIC under a pg_advisory_xact_lock on (po_ref,line_no) so concurrent
+#   receipts cannot both over-receive. AC5 over-tolerance = committed 2xx business outcome (durable rejected
+#   line + unloading_supervisor discrepancy notification, RECEIPT_TOLERANCE_EXCEEDED in body, NOT a rollback,
+#   NOT an edge permanent code). AC6 short-within-tolerance posts with shortage_variance_qty visible in the
+#   discrepancy view. AC7 expired lot = LOT_EXPIRED unless DOA-approved quarantine into ZONE-QC-HOLD else
+#   APPROVAL_REQUIRED. AC3 BIS/quarantine QC-hold routes into ZONE-QC-HOLD with held putaway + qc_inspector
+#   notification + DOA-gated audited manual release. Stock posted via a synthetic stock.received view feeding
+#   the existing Story 2.2/2.3/2.8 helpers (never writes erp_*). Edge received_by server-set; 8 new permanent
+#   codes + i18n. Decision (flag CR): AC7 quarantine gate resolves a DOA band + active supervisor holder rather
+#   than requiring the store_assistant actor to be the approver (Task 7.2 create=store_assistant vs Task 5.3.4).
+#   OQ2: svc_supplier_edi accepted defensively on POST /api/v1/asn (confirm role registry). tsc/eslint/build
+#   clean, npm test 385/386 (1 pre-existing story-3-3 date-flake, unrelated; +14 new), edge 15/15, schema-drift
+#   39/39 (5 new tables), spine 6/6; moved to review
 # story 3-4 created 2026-07-23 via create-story workflow: Goods Receiving Against ASN or PO (FR-W-02);
 #   receives against the Story 2.9 read-only open-PO projection with no Epic 4 PO capability. New goods.received
 #   + goods.putaway_released events on a new 'receiving' stream (requiresBusinessStream false), grn/grn_line/
@@ -315,7 +334,7 @@ development_status:
   3-1-warehouse-topology-setup-fr-w-01: done   # PILOT
   3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: review   # PILOT
   3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: done   # PILOT
-  3-4-goods-receiving-against-asn-or-po-fr-w-02: ready-for-dev   # PILOT
+  3-4-goods-receiving-against-asn-or-po-fr-w-02: review   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: backlog   # PILOT
   3-6-pick-task-generation-and-execution-fr-w-04: backlog   # PILOT
   3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: backlog   # PILOT

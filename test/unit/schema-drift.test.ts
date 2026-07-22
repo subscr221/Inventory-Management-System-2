@@ -294,6 +294,50 @@ const EXPECTED = [
       'idx_weighbridge_event_business_date',
     ],
   },
+  {
+    canonical: 'read/projections/grn.sql',
+    table: 'grn',
+    constraints: ['chk_grn_source_document', 'chk_grn_status'],
+    indexes: [
+      'idx_grn_correlation',
+      'idx_grn_po_ref',
+      'idx_grn_site_status',
+      'idx_grn_business_date',
+    ],
+  },
+  {
+    canonical: 'read/projections/grn_line.sql',
+    table: 'grn_line',
+    constraints: [
+      'chk_grn_line_received_positive',
+      'chk_grn_line_status',
+      'chk_grn_line_shortage_non_negative',
+    ],
+    indexes: [
+      'idx_grn_line_grn',
+      'idx_grn_line_po_line',
+      'idx_grn_line_sku',
+      'idx_grn_line_shortage',
+    ],
+  },
+  {
+    canonical: 'read/projections/putaway_task.sql',
+    table: 'putaway_task',
+    constraints: ['chk_putaway_task_status'],
+    indexes: ['idx_putaway_task_grn_line', 'idx_putaway_task_site_status'],
+  },
+  {
+    canonical: 'read/projections/asn.sql',
+    table: 'asn',
+    constraints: ['chk_asn_status'],
+    indexes: ['idx_asn_po_ref'],
+  },
+  {
+    canonical: 'read/projections/asn_line.sql',
+    table: 'asn_line',
+    constraints: [] as string[],
+    indexes: [] as string[],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

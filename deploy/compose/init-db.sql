@@ -2229,3 +2229,227 @@ BEGIN
     GRANT SELECT ON weighbridge_event TO readonly_user;
   END IF;
 END $$;
+
+CREATE TABLE IF NOT EXISTS grn (
+  grn_id          UUID PRIMARY KEY,
+  correlation_id  UUID NOT NULL,
+  po_ref_ext      TEXT NOT NULL,
+  source_document TEXT NOT NULL,
+  source_ref_ext  TEXT,
+  site_id         UUID NOT NULL,
+  site_code_ext   TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'open',
+  received_by     UUID NOT NULL,
+  business_date   DATE NOT NULL,
+  source_event_id UUID NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_grn_source_document CHECK (source_document IN ('PO', 'ASN')),
+  CONSTRAINT chk_grn_status CHECK (status IN ('open', 'posted'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_grn_source_document'
+      AND conrelid = 'grn'::regclass
+  ) THEN
+    ALTER TABLE grn
+      ADD CONSTRAINT chk_grn_source_document CHECK (source_document IN ('PO', 'ASN'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_grn_status'
+      AND conrelid = 'grn'::regclass
+  ) THEN
+    ALTER TABLE grn
+      ADD CONSTRAINT chk_grn_status CHECK (status IN ('open', 'posted'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_grn_correlation ON grn (correlation_id);
+CREATE INDEX IF NOT EXISTS idx_grn_po_ref ON grn (po_ref_ext);
+CREATE INDEX IF NOT EXISTS idx_grn_site_status ON grn (site_id, status);
+CREATE INDEX IF NOT EXISTS idx_grn_business_date ON grn (business_date);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON grn TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON grn TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS grn_line (
+  grn_line_id                UUID PRIMARY KEY,
+  grn_id                     UUID NOT NULL,
+  po_ref_ext                 TEXT NOT NULL,
+  line_no                    INTEGER NOT NULL,
+  sku                        TEXT NOT NULL,
+  lot_id                     TEXT,
+  expiry_date                DATE,
+  received_qty               NUMERIC(18,3) NOT NULL,
+  uom                        TEXT NOT NULL,
+  stock_class                TEXT NOT NULL DEFAULT 'owned',
+  weighbridge_correlation_id UUID NOT NULL,
+  qc_hold                    BOOLEAN NOT NULL DEFAULT false,
+  shortage_variance_qty      NUMERIC(18,3) NOT NULL DEFAULT 0,
+  target_location_id         UUID,
+  status                     TEXT NOT NULL DEFAULT 'posted',
+  rejection_reason           TEXT,
+  source_event_id            UUID NOT NULL,
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_grn_line_received_positive CHECK (received_qty > 0),
+  CONSTRAINT chk_grn_line_status CHECK (status IN ('posted', 'quarantined', 'rejected')),
+  CONSTRAINT chk_grn_line_shortage_non_negative CHECK (shortage_variance_qty >= 0)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_grn_line_received_positive'
+      AND conrelid = 'grn_line'::regclass
+  ) THEN
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_received_positive CHECK (received_qty > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_grn_line_status'
+      AND conrelid = 'grn_line'::regclass
+  ) THEN
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_status CHECK (status IN ('posted', 'quarantined', 'rejected'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_grn_line_shortage_non_negative'
+      AND conrelid = 'grn_line'::regclass
+  ) THEN
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_shortage_non_negative CHECK (shortage_variance_qty >= 0);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_grn_line_grn ON grn_line (grn_id);
+CREATE INDEX IF NOT EXISTS idx_grn_line_po_line ON grn_line (po_ref_ext, line_no);
+CREATE INDEX IF NOT EXISTS idx_grn_line_sku ON grn_line (sku);
+CREATE INDEX IF NOT EXISTS idx_grn_line_shortage ON grn_line (shortage_variance_qty);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON grn_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON grn_line TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS putaway_task (
+  putaway_task_id     UUID PRIMARY KEY,
+  grn_line_id         UUID NOT NULL,
+  sku                 TEXT NOT NULL,
+  lot_id              TEXT,
+  quantity            NUMERIC(18,3) NOT NULL,
+  from_location_id    UUID NOT NULL,
+  site_id             UUID NOT NULL,
+  status              TEXT NOT NULL DEFAULT 'ready',
+  owner_role          TEXT,
+  released_by         UUID,
+  release_reason_code TEXT,
+  released_event_id   UUID,
+  source_event_id     UUID NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_putaway_task_status CHECK (status IN ('ready', 'held', 'completed'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_putaway_task_status'
+      AND conrelid = 'putaway_task'::regclass
+  ) THEN
+    ALTER TABLE putaway_task
+      ADD CONSTRAINT chk_putaway_task_status CHECK (status IN ('ready', 'held', 'completed'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_putaway_task_grn_line ON putaway_task (grn_line_id);
+CREATE INDEX IF NOT EXISTS idx_putaway_task_site_status ON putaway_task (site_id, status);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON putaway_task TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON putaway_task TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS asn (
+  asn_number_ext   TEXT PRIMARY KEY,
+  po_ref_ext       TEXT NOT NULL,
+  supplier_ref_ext TEXT NOT NULL,
+  site_id          UUID NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'open',
+  source_snapshot  JSONB,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_asn_status CHECK (status IN ('open', 'closed'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asn_status'
+      AND conrelid = 'asn'::regclass
+  ) THEN
+    ALTER TABLE asn
+      ADD CONSTRAINT chk_asn_status CHECK (status IN ('open', 'closed'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_asn_po_ref ON asn (po_ref_ext);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON asn TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON asn TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS asn_line (
+  asn_number_ext TEXT NOT NULL,
+  line_no        INTEGER NOT NULL,
+  sku            TEXT NOT NULL,
+  expected_qty   NUMERIC(18,3) NOT NULL,
+  lot_number     TEXT,
+  serial_number  TEXT,
+  expiry_date    DATE,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (asn_number_ext, line_no)
+);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON asn_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON asn_line TO readonly_user;
+  END IF;
+END $$;

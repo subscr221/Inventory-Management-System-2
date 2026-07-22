@@ -141,6 +141,25 @@ describe('edge upload failure classification', () => {
     ]) {
       assert.equal(classifyServerUploadFailure(403, { error_code: code }).localStatus, 'needs_attention');
     }
+    // Story 3.4 goods-receiving permanent business rejections. RECEIPT_TOLERANCE_EXCEEDED is
+    // deliberately NOT here - it is a committed 2xx business outcome, not a sync error.
+    for (const code of [
+      'ITEM_PO_MISMATCH',
+      'RECEIVING_BINDING_TOKEN_REQUIRED',
+      'RECEIVING_BINDING_TOKEN_NOT_FOUND',
+      'RECEIVING_WEIGHT_NOT_ACCEPTED',
+      'RECEIVING_PO_NOT_FOUND',
+      'RECEIVING_QTY_REQUIRED',
+      'RECEIVING_QC_HOLD_ZONE_NOT_FOUND',
+    ]) {
+      assert.equal(classifyServerUploadFailure(409, { error_code: code }).localStatus, 'needs_attention');
+      assert.equal(classifyServerUploadFailure(403, { error_code: code }).localStatus, 'needs_attention');
+    }
+    // A tolerance-exceeded outcome must NOT be classified as a permanent sync failure.
+    assert.notEqual(
+      classifyServerUploadFailure(200, { error_code: 'RECEIPT_TOLERANCE_EXCEEDED' }).localStatus,
+      'needs_attention',
+    );
     assert.equal(
       classifyServerUploadFailure(401, { error_code: 'UNAUTHORIZED' }).localStatus,
       'auth_required',
