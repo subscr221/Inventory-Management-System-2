@@ -81,6 +81,8 @@ describe('Story 1.8 sync upload classification', () => {
       'OWNER_PARTY_MISMATCH',
       'VMI_MIN_NOT_CONFIGURED',
       'INVALID_SIGNAL_TYPE',
+      // Story 2.9 ERP read-only reference projection rejection
+      'SOURCE_SYSTEM_READ_ONLY',
     ]) {
       assertClassification(classifyUploadFailure(new AppError(400, code, 'Permanent failure')), {
         action: 'complete',

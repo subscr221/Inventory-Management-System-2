@@ -148,4 +148,10 @@ export const config = {
     // more to this guaranteed-staffed role and then stops. Operations must keep it staffed.
     fallbackEscalationRole: process.env['NOTIFY_FALLBACK_ESCALATION_ROLE'] ?? 'system_admin',
   },
+  erp: {
+    // Story 2.9 (INT-ERP-01): an ERP inbound reference projection is stale when its heartbeat's
+    // last_successful_at is older than this threshold (default 15 minutes per AC3). Staleness is
+    // computed in SQL (now() - last_successful_at), never against the JS wall clock.
+    freshnessMs: parsePositiveIntEnv('ERP_SYNC_FRESHNESS_MS', 900_000),
+  },
 } as const;

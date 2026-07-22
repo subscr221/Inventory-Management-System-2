@@ -23,6 +23,7 @@ import {
 import { assertCycleCountShape, applyCycleCountProjection } from '../compliance/cycle-count.js';
 import { assertInventoryPlanningShape, applyInventoryPlanningProjection } from '../compliance/inventory-planning.js';
 import { assertOwnershipShape, applyOwnershipProjection } from '../compliance/ownership.js';
+import { assertErpReadOnly } from '../compliance/erp-readonly.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -207,6 +208,11 @@ export async function persistEvent(
   // an idempotency key. The consignment/vmi receipt owner-party gate runs in-transaction inside
   // applyStockBalanceProjection.
   assertOwnershipShape(envelope);
+  // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
+  // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
+  // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
+  // passes through byte-for-byte and the Story 1.9 spine gate stays green.
+  assertErpReadOnly(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();

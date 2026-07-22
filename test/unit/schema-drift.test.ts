@@ -221,6 +221,46 @@ const EXPECTED = [
     ],
     indexes: ['idx_ownership_agreement_location', 'idx_ownership_agreement_sku', 'uq_ownership_agreement_active'],
   },
+  // Story 2.9 ERP inbound reference projections (NOT event-sourced; direct adapter upsert).
+  {
+    canonical: 'read/projections/erp_purchase_order.sql',
+    table: 'erp_purchase_order',
+    constraints: ['chk_erp_purchase_order_status', 'chk_erp_purchase_order_source_system'],
+    indexes: [] as string[],
+  },
+  {
+    canonical: 'read/projections/erp_purchase_order.sql',
+    table: 'erp_purchase_order_line',
+    constraints: [
+      'chk_erp_po_line_ordered_non_negative',
+      'chk_erp_po_line_open_within_ordered',
+      'chk_erp_po_line_unit_price_non_negative',
+      'chk_erp_po_line_tolerance_non_negative',
+    ],
+    indexes: ['idx_erp_purchase_order_line_sku'],
+  },
+  {
+    canonical: 'read/projections/erp_sales_order.sql',
+    table: 'erp_sales_order',
+    constraints: [
+      'chk_erp_so_quantity_non_negative',
+      'chk_erp_sales_order_status',
+      'chk_erp_sales_order_source_system',
+    ],
+    indexes: ['idx_erp_sales_order_site_status', 'idx_erp_sales_order_site_code_status'],
+  },
+  {
+    canonical: 'read/projections/integration_exception.sql',
+    table: 'erp_sync_state',
+    constraints: ['chk_erp_sync_state_status'],
+    indexes: [] as string[],
+  },
+  {
+    canonical: 'read/projections/integration_exception.sql',
+    table: 'integration_exception',
+    constraints: ['chk_integration_exception_record_type', 'chk_integration_exception_status'],
+    indexes: ['idx_integration_exception_status', 'uq_integration_exception_open'],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

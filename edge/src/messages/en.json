@@ -69,5 +69,6 @@
   "errors.OWNERSHIP_AGREEMENT_NOT_FOUND": "No active consignment or VMI agreement exists for this item at this location.",
   "errors.OWNER_PARTY_MISMATCH": "The supplier on this receipt does not match the active ownership agreement.",
   "errors.VMI_MIN_NOT_CONFIGURED": "A VMI minimum quantity must be set on the agreement before the VMI check can run.",
-  "errors.INVALID_SIGNAL_TYPE": "That replenishment signal type is not supported."
+  "errors.INVALID_SIGNAL_TYPE": "That replenishment signal type is not supported.",
+  "errors.SOURCE_SYSTEM_READ_ONLY": "This record is owned by the ERP and is read-only here. Make corrections in the ERP; they arrive on the next sync."
 }

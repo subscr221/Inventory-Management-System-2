@@ -80,3 +80,9 @@
 - `reorder_point` = ceil(avg_daily_demand * lead_time_days + safety_stock) is computed and stored into NUMERIC(18,6) with no upper bound, so extreme demand/lead combinations overflow as an uncaught 500 [src/compliance/planning-jobs.ts:169] - deferred, roll into the shared quantity-bound hardening pass tracked across Stories 2.4/2.6.
 - Minimum sample-day guard is hardcoded (DEFAULT_MIN_SAMPLE_DAYS = 2) but Task 5 specifies a *configured* minimum [src/compliance/planning-jobs.ts:45] - deferred, needs a DDL/params-field decision before it is worth wiring.
 - Demand-window anchor and obsolescence aging both use SQL now() rather than the supplied scope.business_date, so a backdated or replayed job decides against wall-clock time [src/compliance/planning-jobs.ts:146, :407] - deferred, revisit when a real scheduler replaces the Phase-1 synthetic HTTP trigger.
+
+## Deferred from: code review of 2-9-erp-inbound-reference-projections (2026-07-22)
+
+- No batch-size bound on the ERP sync array: runErpSync processes the whole posted array in one transaction, one savepoint per record. Low risk (trigger RBAC-restricted to svc_erp_adapter/system_administrator). src/api/v1/erp-projections.ts:162-178
+- Per-record exceptions lost on late infra rollback: exceptions queued inside the batch transaction are discarded if a later COMMIT/statement fails and rolls back; self-healing on the next retry. src/adapters/erp/sync.ts:280-337
+- Dropped PO lines persist as phantoms: soft-close is header-only; erp_purchase_order_line has no status column and the app role has no DELETE grant on it (deliberate - reference tables withhold DELETE). Clean fix needs a schema decision (add a line status column + migration + drift guard + read filter, or grant DELETE). A hard-DELETE patch was attempted and reverted (permission denied). src/read/projections/erp_purchase_order.ts, src/adapters/erp/sync.ts

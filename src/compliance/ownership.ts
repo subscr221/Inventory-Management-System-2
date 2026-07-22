@@ -164,6 +164,13 @@ export async function applyOwnershipProjection(envelope: EventEnvelope, client: 
     },
     client,
   );
+
+  // Story 2.9 (Task 7) owner-party referential warning REMOVED (code review 2026-07-22): it compared
+  // ownership owner_party_code against erp_purchase_order.supplier_ref_ext, which are DIFFERENT
+  // identifier namespaces (who owns the stock vs who a PO is cut to). The comparison false-positives
+  // essentially every agreement once any PO syncs, poisoning the integration exception queue. The
+  // correct referential anchor is the governed supplier registry (Epic 4, Story 4.1); owner-party
+  // referential validation is deferred to that registry. Do NOT reinstate a supplier_ref_ext match.
 }
 
 // ---------------------------------------------------------------------------

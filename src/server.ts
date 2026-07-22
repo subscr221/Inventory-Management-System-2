@@ -85,6 +85,12 @@ import {
   listOwnershipAgreementsHandler,
 } from './api/v1/ownership-agreements.js';
 import {
+  getPurchaseOrderHandler,
+  listSalesOrdersHandler,
+  erpSyncTriggerHandler,
+  erpReadOnlyRejectHandler,
+} from './api/v1/erp-projections.js';
+import {
   createTransferRequestHandler,
   getTransferRequestHandler,
   listTransferRequestsHandler,
@@ -164,6 +170,24 @@ export function createAppRouter(): Router {
   router.get('/api/v1/ownership-agreements', listOwnershipAgreementsHandler);
   router.put('/api/v1/ownership-agreements/:sku/:locationId/:stockClass', putOwnershipAgreementHandler);
   router.post('/api/v1/planning/vmi/check', checkVmiReplenishmentHandler);
+  // Story 2.9: ERP Inbound Reference Projections (read-only; INT-ERP-01). Every write verb is
+  // registered to an explicit reject handler returning SOURCE_SYSTEM_READ_ONLY (the router 404s
+  // unregistered methods, so a bare 404 would otherwise mask the stable read-only code).
+  router.get('/api/v1/erp/purchase-orders/:poNumber', getPurchaseOrderHandler);
+  router.get('/api/v1/erp/sales-orders', listSalesOrdersHandler);
+  router.post('/api/v1/erp/sync', erpSyncTriggerHandler);
+  router.post('/api/v1/erp/purchase-orders', erpReadOnlyRejectHandler);
+  router.put('/api/v1/erp/purchase-orders', erpReadOnlyRejectHandler);
+  router.patch('/api/v1/erp/purchase-orders', erpReadOnlyRejectHandler);
+  router.delete('/api/v1/erp/purchase-orders', erpReadOnlyRejectHandler);
+  router.post('/api/v1/erp/purchase-orders/:poNumber', erpReadOnlyRejectHandler);
+  router.put('/api/v1/erp/purchase-orders/:poNumber', erpReadOnlyRejectHandler);
+  router.patch('/api/v1/erp/purchase-orders/:poNumber', erpReadOnlyRejectHandler);
+  router.delete('/api/v1/erp/purchase-orders/:poNumber', erpReadOnlyRejectHandler);
+  router.post('/api/v1/erp/sales-orders', erpReadOnlyRejectHandler);
+  router.put('/api/v1/erp/sales-orders', erpReadOnlyRejectHandler);
+  router.patch('/api/v1/erp/sales-orders', erpReadOnlyRejectHandler);
+  router.delete('/api/v1/erp/sales-orders', erpReadOnlyRejectHandler);
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
   router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);

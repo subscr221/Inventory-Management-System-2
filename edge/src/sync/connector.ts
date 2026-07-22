@@ -64,6 +64,8 @@ const PERMANENT_ERROR_CODES = new Set([
   'OWNER_PARTY_MISMATCH',
   'VMI_MIN_NOT_CONFIGURED',
   'INVALID_SIGNAL_TYPE',
+  // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01).
+  'SOURCE_SYSTEM_READ_ONLY',
 ]);
 
 const TRANSIENT_STATUS_CODES = new Set([408, 425, 429]);

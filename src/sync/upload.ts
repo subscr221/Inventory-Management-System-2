@@ -59,6 +59,9 @@ const PERMANENT_ERROR_CODES = new Set([
   'OWNER_PARTY_MISMATCH',
   'VMI_MIN_NOT_CONFIGURED',
   'INVALID_SIGNAL_TYPE',
+  // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). A write from an
+  // edge upload can never mutate ERP-mastered state; settle it needs_attention, never halt the outbox.
+  'SOURCE_SYSTEM_READ_ONLY',
 ]);
 
 function isAppError(error: unknown): error is AppError {

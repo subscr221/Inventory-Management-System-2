@@ -101,6 +101,8 @@ describe('edge upload failure classification', () => {
       'OWNER_PARTY_MISMATCH',
       'VMI_MIN_NOT_CONFIGURED',
       'INVALID_SIGNAL_TYPE',
+      // Story 2.9 ERP read-only reference projection rejection
+      'SOURCE_SYSTEM_READ_ONLY',
     ]) {
       assert.equal(classifyServerUploadFailure(409, { error_code: code }).localStatus, 'needs_attention');
     }

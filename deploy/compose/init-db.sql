@@ -1791,3 +1791,261 @@ BEGIN
     GRANT SELECT ON ownership_agreement TO readonly_user;
   END IF;
 END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- ERP open purchase-order reference projection (Story 2.9). The section below MUST stay identical
+-- to the canonical read/projections/erp_purchase_order.sql (applied by src/events/migrate.ts and the
+-- integration-test harness) - change both files together. Reference data only (INT-ERP-01):
+-- populated by the ERP sync adapter via direct upsert, NOT event-sourced.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS erp_purchase_order (
+  po_number_ext          TEXT PRIMARY KEY,
+  supplier_ref_ext       TEXT NOT NULL,
+  currency               TEXT NOT NULL,
+  expected_delivery_date DATE,
+  status                 TEXT NOT NULL DEFAULT 'open',
+  source_system          TEXT NOT NULL DEFAULT 'ERP',
+  last_synced_at         TIMESTAMPTZ NOT NULL,
+  source_snapshot        JSONB,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_erp_purchase_order_status CHECK (status IN ('open', 'closed')),
+  CONSTRAINT chk_erp_purchase_order_source_system CHECK (source_system = 'ERP')
+);
+
+CREATE TABLE IF NOT EXISTS erp_purchase_order_line (
+  po_number_ext              TEXT NOT NULL,
+  line_no                    INTEGER NOT NULL,
+  sku                        TEXT NOT NULL,
+  ordered_qty                NUMERIC(18, 3) NOT NULL,
+  open_qty                   NUMERIC(18, 3) NOT NULL,
+  unit_price                 NUMERIC(18, 4) NOT NULL,
+  over_receipt_tolerance_pct  NUMERIC(9, 3),
+  under_receipt_tolerance_pct NUMERIC(9, 3),
+  source_system              TEXT NOT NULL DEFAULT 'ERP',
+  last_synced_at             TIMESTAMPTZ NOT NULL,
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (po_number_ext, line_no),
+  CONSTRAINT chk_erp_po_line_ordered_non_negative CHECK (ordered_qty >= 0),
+  CONSTRAINT chk_erp_po_line_open_within_ordered CHECK (open_qty >= 0 AND open_qty <= ordered_qty),
+  CONSTRAINT chk_erp_po_line_unit_price_non_negative CHECK (unit_price >= 0),
+  CONSTRAINT chk_erp_po_line_tolerance_non_negative CHECK ((over_receipt_tolerance_pct IS NULL OR over_receipt_tolerance_pct >= 0) AND (under_receipt_tolerance_pct IS NULL OR under_receipt_tolerance_pct >= 0))
+);
+
+CREATE INDEX IF NOT EXISTS idx_erp_purchase_order_line_sku ON erp_purchase_order_line (sku);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_purchase_order_status'
+      AND conrelid = 'erp_purchase_order'::regclass
+  ) THEN
+    ALTER TABLE erp_purchase_order
+      ADD CONSTRAINT chk_erp_purchase_order_status CHECK (status IN ('open', 'closed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_purchase_order_source_system'
+      AND conrelid = 'erp_purchase_order'::regclass
+  ) THEN
+    ALTER TABLE erp_purchase_order
+      ADD CONSTRAINT chk_erp_purchase_order_source_system CHECK (source_system = 'ERP');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_po_line_ordered_non_negative'
+      AND conrelid = 'erp_purchase_order_line'::regclass
+  ) THEN
+    ALTER TABLE erp_purchase_order_line
+      ADD CONSTRAINT chk_erp_po_line_ordered_non_negative CHECK (ordered_qty >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_po_line_open_within_ordered'
+      AND conrelid = 'erp_purchase_order_line'::regclass
+  ) THEN
+    ALTER TABLE erp_purchase_order_line
+      ADD CONSTRAINT chk_erp_po_line_open_within_ordered CHECK (open_qty >= 0 AND open_qty <= ordered_qty);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_po_line_unit_price_non_negative'
+      AND conrelid = 'erp_purchase_order_line'::regclass
+  ) THEN
+    ALTER TABLE erp_purchase_order_line
+      ADD CONSTRAINT chk_erp_po_line_unit_price_non_negative CHECK (unit_price >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_po_line_tolerance_non_negative'
+      AND conrelid = 'erp_purchase_order_line'::regclass
+  ) THEN
+    ALTER TABLE erp_purchase_order_line
+      ADD CONSTRAINT chk_erp_po_line_tolerance_non_negative CHECK ((over_receipt_tolerance_pct IS NULL OR over_receipt_tolerance_pct >= 0) AND (under_receipt_tolerance_pct IS NULL OR under_receipt_tolerance_pct >= 0));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON erp_purchase_order TO app_user;
+    GRANT INSERT, SELECT, UPDATE ON erp_purchase_order_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON erp_purchase_order TO readonly_user;
+    GRANT SELECT ON erp_purchase_order_line TO readonly_user;
+  END IF;
+END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- ERP open sales-order (dispatch-demand) reference projection (Story 2.9). The section below MUST
+-- stay identical to the canonical read/projections/erp_sales_order.sql - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS erp_sales_order (
+  so_number_ext           TEXT NOT NULL,
+  line_no                 INTEGER NOT NULL,
+  sku                     TEXT NOT NULL,
+  quantity                NUMERIC(18, 3) NOT NULL,
+  required_by             DATE,
+  ship_to_ext             TEXT,
+  ship_from_site_id       UUID NOT NULL,
+  ship_from_site_code_ext TEXT NOT NULL,
+  status                  TEXT NOT NULL DEFAULT 'open',
+  source_system           TEXT NOT NULL DEFAULT 'ERP',
+  last_synced_at          TIMESTAMPTZ NOT NULL,
+  source_snapshot         JSONB,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (so_number_ext, line_no),
+  CONSTRAINT chk_erp_so_quantity_non_negative CHECK (quantity >= 0),
+  CONSTRAINT chk_erp_sales_order_status CHECK (status IN ('open', 'closed')),
+  CONSTRAINT chk_erp_sales_order_source_system CHECK (source_system = 'ERP')
+);
+
+CREATE INDEX IF NOT EXISTS idx_erp_sales_order_site_status ON erp_sales_order (ship_from_site_id, status);
+CREATE INDEX IF NOT EXISTS idx_erp_sales_order_site_code_status ON erp_sales_order (ship_from_site_code_ext, status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_so_quantity_non_negative'
+      AND conrelid = 'erp_sales_order'::regclass
+  ) THEN
+    ALTER TABLE erp_sales_order
+      ADD CONSTRAINT chk_erp_so_quantity_non_negative CHECK (quantity >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_sales_order_status'
+      AND conrelid = 'erp_sales_order'::regclass
+  ) THEN
+    ALTER TABLE erp_sales_order
+      ADD CONSTRAINT chk_erp_sales_order_status CHECK (status IN ('open', 'closed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_sales_order_source_system'
+      AND conrelid = 'erp_sales_order'::regclass
+  ) THEN
+    ALTER TABLE erp_sales_order
+      ADD CONSTRAINT chk_erp_sales_order_source_system CHECK (source_system = 'ERP');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON erp_sales_order TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON erp_sales_order TO readonly_user;
+  END IF;
+END $$;
+
+-- -------------------------------------------------------------------------------------------
+-- Integration sync-state heartbeat and exception queue (Story 2.9). The section below MUST stay
+-- identical to the canonical read/projections/integration_exception.sql - change both files together.
+-- -------------------------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS erp_sync_state (
+  projection_name    TEXT PRIMARY KEY,
+  status             TEXT NOT NULL DEFAULT 'never_synced',
+  last_attempted_at  TIMESTAMPTZ,
+  last_successful_at TIMESTAMPTZ,
+  last_error         TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_erp_sync_state_status CHECK (status IN ('never_synced', 'success', 'failed'))
+);
+
+CREATE TABLE IF NOT EXISTS integration_exception (
+  exception_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_system     TEXT NOT NULL DEFAULT 'ERP',
+  record_type       TEXT NOT NULL,
+  source_record_ref TEXT,
+  error_code        TEXT NOT NULL,
+  reason            TEXT NOT NULL,
+  details           JSONB,
+  status            TEXT NOT NULL DEFAULT 'open',
+  raised_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch')),
+  CONSTRAINT chk_integration_exception_status CHECK (status IN ('open', 'resolved'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_exception_status ON integration_exception (status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_integration_exception_open ON integration_exception (source_system, record_type, source_record_ref, error_code) NULLS NOT DISTINCT WHERE status = 'open';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_sync_state_status'
+      AND conrelid = 'erp_sync_state'::regclass
+  ) THEN
+    ALTER TABLE erp_sync_state
+      ADD CONSTRAINT chk_erp_sync_state_status CHECK (status IN ('never_synced', 'success', 'failed'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_integration_exception_record_type'
+      AND conrelid = 'integration_exception'::regclass
+  ) THEN
+    ALTER TABLE integration_exception
+      ADD CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_integration_exception_status'
+      AND conrelid = 'integration_exception'::regclass
+  ) THEN
+    ALTER TABLE integration_exception
+      ADD CONSTRAINT chk_integration_exception_status CHECK (status IN ('open', 'resolved'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON erp_sync_state TO app_user;
+    GRANT INSERT, SELECT, UPDATE ON integration_exception TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON erp_sync_state TO readonly_user;
+    GRANT SELECT ON integration_exception TO readonly_user;
+  END IF;
+END $$;

@@ -1,6 +1,21 @@
 # generated: 2026-07-12
 # last_updated: 2026-07-22
 # story 2-9 created 2026-07-22 via create-story workflow: ERP inbound read-only reference projections for open PO headers/lines and sales-order dispatch demand; adapter-owned direct upserts with per-record isolation, source snapshots, soft-close semantics, zero-row-aware sync heartbeat and 15-minute freshness, deduped integration exception queue, SOURCE_SYSTEM_READ_ONLY bypass guard across API/direct-event/edge paths, site-code-to-location-UUID RBAC, additive Story 2.8 owner-party warning, migration/schema/route drift guards; ready-for-dev
+# story 2-9 dev-story 2026-07-22: implemented all 11 tasks from baseline 8f5c3eb (closes Epic 2). ERP inbound
+#   reference projections are direct-upsert read models (NOT event-sourced): erp_purchase_order header + line,
+#   erp_sales_order dispatch-demand line, erp_sync_state heartbeat + integration_exception queue. Sync adapter
+#   (src/adapters/erp/sync.ts) applies each PO (header+lines) and each SO line in its own SAVEPOINT (per-record
+#   isolation, whole-PO atomicity), soft-closes dropped feed records (status='closed', never hard-delete),
+#   server-sets source_system='ERP'/last_synced_at, and routes malformed records to the deduped exception queue
+#   (NULLS NOT DISTINCT open partial-unique). Read API (GET purchase-orders/:po, GET sales-orders?site&status) with
+#   SQL-computed staleness (now()-last_successful_at vs config.erp.freshnessMs, strict >, never JS clock); a stale
+#   read raises one deduped ERP_SYNC_STALE alert + a one-time emitNotification. Read-only enforced by a persistEvent
+#   bypass guard (rejects erp stream/erp.* event SOURCE_SYSTEM_READ_ONLY across direct-event + edge) plus explicit
+#   405 write-verb reject handlers. SOURCE_SYSTEM_READ_ONLY wired across all four surfaces (backend/edge permanent
+#   sets + i18n + tests); site RBAC resolves ext code to site UUID; sync trigger allowlisted to svc_erp_adapter/
+#   system_administrator. Additive Story 2.8 owner-party OWNER_PARTY_NOT_IN_ERP warning (never rejects). Story 2.7
+#   lead-time stays optional-additive (still fails closed LEAD_TIME_NOT_CONFIGURED). tsc/eslint/build clean, npm test
+#   347/347 (+14), edge 14/14, spine gate 6/6, diff-check clean; moved to review
 # story 2-6 dev-story 2026-07-21: implementation started from baseline 3be7fc2; moved to in-progress
 # story 2-6 dev-story 2026-07-21: implemented all 10 tasks; cycle_count + cycle_count_line + physical_verification
 #   (+ append-only physical_verification_line) projections, central cycle-count seam in persistEvent (variance from
@@ -255,7 +270,7 @@ development_status:
   2-6-cycle-counting-and-physical-inventory: done   # PILOT
   2-7-safety-stock-reorder-points-and-obsolescence-flagging: done   # PILOT
   2-8-consignment-and-vmi-stock-segregation: done   # PILOT
-  2-9-erp-inbound-reference-projections: ready-for-dev   # PILOT
+  2-9-erp-inbound-reference-projections: done   # PILOT
   epic-2-retrospective: optional
 
   # --- Epic 3: Warehouse Operations and Frontline Capture Flows  [PILOT] ---
