@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS gate_event (
   challan_photo_ref TEXT NOT NULL,
   gate_id           TEXT NOT NULL,
   gate_officer_id   UUID NOT NULL,
-  correlation_id    UUID NOT NULL,
+  correlation_id    UUID NOT NULL UNIQUE,
   entered_at        TIMESTAMPTZ NOT NULL,
   business_date     DATE NOT NULL,
   status            TEXT NOT NULL DEFAULT 'open',
@@ -72,5 +72,17 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON gate_event TO readonly_user;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_gate_event_correlation_id'
+      AND conrelid = 'gate_event'::regclass
+  ) THEN
+    ALTER TABLE gate_event
+      ADD CONSTRAINT uq_gate_event_correlation_id UNIQUE (correlation_id);
   END IF;
 END $$;

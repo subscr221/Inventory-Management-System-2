@@ -46,6 +46,7 @@ export interface ListGateEventsFilters {
   siteAny?: string[] | null;
   status?: 'open' | 'reversed' | null;
   bindingStatus?: 'matched' | 'unmatched' | null;
+  limit?: number;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -115,9 +116,10 @@ export async function listGateEvents(filters: ListGateEventsFilters = {}, client
   if (filters.status) add('status = ?', filters.status);
   if (filters.bindingStatus) add('binding_status = ?', filters.bindingStatus);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+  const limit = Math.min(filters.limit ?? 200, 500);
   const result = await runner(client).query(
-    `SELECT ${GATE_EVENT_COLUMNS} FROM gate_event ${where} ORDER BY entered_at DESC, created_at DESC`,
-    values,
+    `SELECT ${GATE_EVENT_COLUMNS} FROM gate_event ${where} ORDER BY entered_at DESC, created_at DESC LIMIT $${values.length + 1}`,
+    [...values, limit],
   );
   return result.rows.map(mapRow);
 }

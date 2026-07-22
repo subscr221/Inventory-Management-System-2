@@ -4,7 +4,7 @@ baseline_commit: 798d2cfaed5fedd5fef76f31f6bbf073c11684d5
 
 # Story 3.2: Gate Event Capture and Vehicle-to-PO Binding
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -108,7 +108,7 @@ The gate event is the head of the inbound chain. The vehicle-to-PO binding token
 ### Compliance and NFR
 
 - Immutable edit log, no hard deletes (FR-AC-13, AD-16): reversal is a `gate.reversed` event that flips `status` to `reversed` and keeps the row. Reversal requires a reason code and is auditor-visible.
-- Vehicle registration number is a statutory join key (e-way-bill context, Rs 50,000 threshold). Store it verbatim as `vehicle_reg_ext`; do not normalize away characters.
+- Vehicle registration number is a statutory join key (e-way-bill context, Rs 50,000 threshold). Store it as `vehicle_reg_ext` in trimmed uppercase; normalize case so downstream lookups are deterministic.
 - Downstream token visibility target is 30 seconds after reconnect (AC2); the edge/PowerSync path already governs this cadence.
 - Reconciliation happens at central apply time: when the offline event syncs, `applyGateProjection` resolves the PO reference then. There is no separate reconcile event. `pending_sync` is an edge-local status only and is never a central `binding_status` value.
 
@@ -198,3 +198,20 @@ fugu-ultra-20260615
 ### Change Log
 
 - 2026-07-22: Implemented Story 3.2 gate event capture and vehicle-to-PO binding; status moved to review after full validation.
+
+### Review Findings
+
+- [x] [Review][Decision] `vehicle_reg_ext` uppercase vs verbatim storage — RESOLVED: User chose B. Enforce uppercase storage per Task 1.1; Dev Note (line 111) must be updated to match. [src/compliance/gate.ts:57]
+- [x] [Review][Decision] `GENERAL_READ_ROLES` scope expansion — RESOLVED: User chose B. Keep broader scope; `warehouse_manager`/`unloading_supervisor` read access to all gate events is intentional. [src/api/v1/gate.ts:550]
+
+- [x] [Review][Patch] `localYmd` computes `business_date` from server-local timezone instead of IST — FIXED: replaced with offset-based IST computation using `date.getTime() + 5.5h`. [src/compliance/gate.ts:25-27]
+- [x] [Review][Patch] `binding_token` response field duplicates `correlation_id` without contract enforcement — FIXED: removed redundant `binding_token` alias; response now exposes only `correlation_id`. [src/api/v1/gate.ts:614]
+- [x] [Review][Patch] Client-supplied `gate_event_id` accepted without server generation — FIXED: create handler always generates `gate_event_id` server-side; client-supplied value is ignored. [src/api/v1/gate.ts:113]
+- [x] [Review][Patch] No UNIQUE constraint on `correlation_id` — FIXED: added `uq_gate_event_correlation_id` guarded constraint to canonical SQL, init-db mirror, and schema-drift expectations. [read/projections/gate_event.sql, deploy/compose/init-db.sql, test/unit/schema-drift.test.ts]
+- [x] [Review][Patch] `listGateEvents` has no pagination limit — FIXED: added default limit of 200 (max 500) via `ListGateEventsFilters.limit` and API passes `limit: 200`. [src/read/projections/gate_event.ts:106-124, src/api/v1/gate.ts:226]
+- [x] [Review][Patch] Tautological `binding_token` test masks contract risk — FIXED: test now asserts `read.body['correlation_id'] === res.body['correlation_id']` across separate API calls. [test/integration/story-3-2.test.ts:230]
+- [x] [Review][Patch] Missing negative-path tests for reverse endpoint and list filters — FIXED: added tests for 404 on missing reverse, 400 on missing reason, 403 RBAC/site-scope on reverse, and 400 on invalid binding/status filters. [test/integration/story-3-2.test.ts:320-338,340-345]
+- [ ] [Review][Patch] `alreadyPersisted` returns false when both `idempotency_key` and `event_id` are null — NOT APPLIED: throwing on null keys broke the HTTP create path which never sets these envelope fields. Original behavior preserved. [src/compliance/gate.ts:42-48]
+- [ ] [Review][Patch] `ts()` helper exported but unused in `mapRow` — ALREADY FIXED: current `mapRow` calls `ts()` for all timestamp fields. No patch needed. [src/read/projections/gate_event.ts:88-94]
+
+- [x] [Review][Defer] `gateEventToJson` exposes internal `gate_officer_id` in all read responses — Consistent with codebase audit patterns and other API responses; not a new risk.

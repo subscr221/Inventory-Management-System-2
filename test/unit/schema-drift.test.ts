@@ -269,6 +269,7 @@ const EXPECTED = [
       'chk_gate_event_status',
       'chk_gate_event_vehicle_reg_nonempty',
       'chk_gate_event_challan_photo_nonempty',
+      'uq_gate_event_correlation_id',
     ],
     indexes: [
       'idx_gate_event_site_status',

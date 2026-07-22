@@ -80,7 +80,6 @@ function gateEventToJson(row: GateEvent, poSummary?: Record<string, unknown> | n
     gate_id: row.gate_id,
     gate_officer_id: row.gate_officer_id,
     correlation_id: row.correlation_id,
-    binding_token: row.correlation_id,
     entered_at: row.entered_at,
     business_date: row.business_date,
     status: row.status,
@@ -110,7 +109,7 @@ const createGateEventBase: RouteHandler = async (req, res) => {
   assertSiteAccess(req, site.location_id, 'write');
 
   const actor = actorContext(req);
-  const gateEventId = typeof body['gate_event_id'] === 'string' && UUID_REGEX.test(body['gate_event_id']) ? body['gate_event_id'] : randomUUID();
+  const gateEventId = randomUUID();
   const correlationId = randomUUID();
   const pool = getPool();
   const client = await pool.connect();
@@ -224,7 +223,7 @@ const listGateEventsBase: RouteHandler = async (req, res) => {
   } else if (!wildcard) {
     siteAny = [...locations];
   }
-  const rows = await listGateEvents({ siteId, siteAny, status: status as 'open' | 'reversed' | null, bindingStatus: binding as 'matched' | 'unmatched' | null });
+  const rows = await listGateEvents({ siteId, siteAny, status: status as 'open' | 'reversed' | null, bindingStatus: binding as 'matched' | 'unmatched' | null, limit: 200 });
   sendJson(res, 200, { gate_events: rows.map((row) => gateEventToJson(row)) });
 };
 
