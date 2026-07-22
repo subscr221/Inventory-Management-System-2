@@ -30,7 +30,7 @@ import {
   standardCostVarianceReviewHandler,
   standardCostVarianceReportHandler,
 } from './api/v1/valuation.js';
-import { createLocationHandler, updateLocationHandler, getLocationHandler } from './api/v1/location-register.js';
+import { createLocationHandler, updateLocationHandler, listLocationsHandler, getLocationHandler } from './api/v1/location-register.js';
 import {
   updateCalibrationStatusHandler,
   createQcResultHandler,
@@ -131,6 +131,7 @@ export function createAppRouter(): Router {
   router.patch('/api/v1/items/:sku', updateItemHandler);
   router.get('/api/v1/items/:sku', getItemHandler);
   router.post('/api/v1/locations', createLocationHandler);
+  router.get('/api/v1/locations', listLocationsHandler);
   router.patch('/api/v1/locations/:locationId', updateLocationHandler);
   router.get('/api/v1/locations/:locationId', getLocationHandler);
   router.get('/api/v1/stock/:sku', getStockHandler);

@@ -21,8 +21,10 @@ CREATE TABLE IF NOT EXISTS location_register (
   site_id            UUID NOT NULL,
   zone_type          TEXT NOT NULL DEFAULT 'general',
   temperature_class  TEXT NOT NULL DEFAULT 'ambient',
+  size_class         TEXT NOT NULL DEFAULT 'standard',
   hazmat_allowed     BOOLEAN NOT NULL DEFAULT false,
   quarantine         BOOLEAN NOT NULL DEFAULT false,
+  access_restricted  BOOLEAN NOT NULL DEFAULT false,
   status             TEXT NOT NULL DEFAULT 'active',
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -32,6 +34,9 @@ CREATE TABLE IF NOT EXISTS location_register (
   CONSTRAINT chk_location_register_temperature_class CHECK (temperature_class IN ('ambient', 'cold', 'frozen')),
   CONSTRAINT chk_location_register_status CHECK (status IN ('active', 'inactive'))
 );
+
+ALTER TABLE location_register ADD COLUMN IF NOT EXISTS size_class TEXT NOT NULL DEFAULT 'standard';
+ALTER TABLE location_register ADD COLUMN IF NOT EXISTS access_restricted BOOLEAN NOT NULL DEFAULT false;
 
 DO $$
 BEGIN

@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -11,6 +16,8 @@ import {
   createLocation,
   updateLocation,
   getLocationById,
+  getLocationWithHierarchyPath,
+  listLocationsBySite,
   LOCATION_LEVELS,
   ZONE_TYPES,
   TEMPERATURE_CLASSES,
@@ -85,13 +92,30 @@ function isLocationStatus(value: unknown): value is LocationStatus {
   return typeof value === 'string' && (LOCATION_STATUSES as readonly string[]).includes(value);
 }
 
-function parseBooleanField(body: Record<string, unknown>, field: string, fallback: boolean): boolean {
+function parseBooleanField(
+  body: Record<string, unknown>,
+  field: string,
+  fallback: boolean,
+): boolean {
   const value = body[field];
   if (value === undefined) return fallback;
   if (typeof value !== 'boolean') {
     throw new AppError(400, 'INVALID_PARAMS', `${field} must be a boolean`);
   }
   return value;
+}
+
+function parseSizeClass(body: Record<string, unknown>): string {
+  const value = body['size_class'];
+  if (value === undefined) return 'standard';
+  if (!isNonEmptyString(value) || value.length > 64) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'size_class must be a non-empty string up to 64 characters',
+    );
+  }
+  return value.trim();
 }
 
 function isDuplicateCodeError(err: unknown): boolean {
@@ -111,29 +135,62 @@ function isDuplicateCodeError(err: unknown): boolean {
 const createLocationBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!body || !isNonEmptyString(body['location_code'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'location_code is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'location_code is required and must be a non-empty string',
+    );
     return;
   }
   const locationCode = body['location_code'];
   if (!LOCATION_CODE_REGEX.test(locationCode)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'location_code must be 1-64 URL-safe characters (letters, digits, ".", "_", "-")');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'location_code must be 1-64 URL-safe characters (letters, digits, ".", "_", "-")',
+    );
     return;
   }
   if (!isLevel(body['level'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', `level must be one of ${LOCATION_LEVELS.join(', ')}`, {
-      allowed: [...LOCATION_LEVELS],
-    });
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      `level must be one of ${LOCATION_LEVELS.join(', ')}`,
+      {
+        allowed: [...LOCATION_LEVELS],
+      },
+    );
     return;
   }
   const level = body['level'];
   if (body['zone_type'] !== undefined && !isZoneType(body['zone_type'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', `zone_type must be one of ${ZONE_TYPES.join(', ')}`, { allowed: [...ZONE_TYPES] });
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      `zone_type must be one of ${ZONE_TYPES.join(', ')}`,
+      { allowed: [...ZONE_TYPES] },
+    );
     return;
   }
   if (body['temperature_class'] !== undefined && !isTemperatureClass(body['temperature_class'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', `temperature_class must be one of ${TEMPERATURE_CLASSES.join(', ')}`, {
-      allowed: [...TEMPERATURE_CLASSES],
-    });
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      `temperature_class must be one of ${TEMPERATURE_CLASSES.join(', ')}`,
+      {
+        allowed: [...TEMPERATURE_CLASSES],
+      },
+    );
     return;
   }
   if (body['status'] !== undefined && !isLocationStatus(body['status'])) {
@@ -155,14 +212,19 @@ const createLocationBase: RouteHandler = async (req, res, _params) => {
       location_id: locationId,
       location_code: locationCode,
       level,
-      parent_location_id: parentIdRaw === undefined || parentIdRaw === null ? null : String(parentIdRaw),
+      parent_location_id:
+        parentIdRaw === undefined || parentIdRaw === null ? null : String(parentIdRaw),
       zone_type: isZoneType(body['zone_type']) ? body['zone_type'] : 'general',
-      temperature_class: isTemperatureClass(body['temperature_class']) ? body['temperature_class'] : 'ambient',
+      temperature_class: isTemperatureClass(body['temperature_class'])
+        ? body['temperature_class']
+        : 'ambient',
+      size_class: parseSizeClass(body),
       hazmat_allowed: parseBooleanField(body, 'hazmat_allowed', false),
       quarantine: parseBooleanField(body, 'quarantine', false),
+      access_restricted: parseBooleanField(body, 'access_restricted', false),
       status: isLocationStatus(body['status']) ? body['status'] : 'active',
     };
-    const location = await createLocation(input, client);
+    const location = await createLocation(input, client, actor);
     await persistEvent(
       {
         stream_type: 'location_register',
@@ -183,9 +245,14 @@ const createLocationBase: RouteHandler = async (req, res, _params) => {
   } catch (err) {
     await client.query('ROLLBACK');
     if (isDuplicateCodeError(err)) {
-      throw new AppError(409, 'DUPLICATE_LOCATION_CODE', `A location with code "${locationCode}" already exists`, {
-        location_code: locationCode,
-      });
+      throw new AppError(
+        409,
+        'DUPLICATE_LOCATION_CODE',
+        `A location with code "${locationCode}" already exists`,
+        {
+          location_code: locationCode,
+        },
+      );
     }
     throw err;
   } finally {
@@ -211,21 +278,46 @@ const updateLocationBase: RouteHandler = async (req, res, params) => {
   const patch: UpdateLocationPatch = {};
   if (body['zone_type'] !== undefined) {
     if (!isZoneType(body['zone_type'])) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', `zone_type must be one of ${ZONE_TYPES.join(', ')}`, { allowed: [...ZONE_TYPES] });
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        `zone_type must be one of ${ZONE_TYPES.join(', ')}`,
+        { allowed: [...ZONE_TYPES] },
+      );
       return;
     }
     patch.zone_type = body['zone_type'];
   }
   if (body['temperature_class'] !== undefined) {
     if (!isTemperatureClass(body['temperature_class'])) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', `temperature_class must be one of ${TEMPERATURE_CLASSES.join(', ')}`, {
-        allowed: [...TEMPERATURE_CLASSES],
-      });
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        `temperature_class must be one of ${TEMPERATURE_CLASSES.join(', ')}`,
+        {
+          allowed: [...TEMPERATURE_CLASSES],
+        },
+      );
       return;
     }
     patch.temperature_class = body['temperature_class'];
   }
-  for (const field of ['hazmat_allowed', 'quarantine'] as const) {
+  if (body['size_class'] !== undefined) {
+    try {
+      patch.size_class = parseSizeClass(body);
+    } catch (err) {
+      if (err instanceof AppError) {
+        sendRequestError(req, res, err.statusCode, err.errorCode, err.message, err.details);
+        return;
+      }
+      throw err;
+    }
+  }
+  for (const field of ['hazmat_allowed', 'quarantine', 'access_restricted'] as const) {
     if (body[field] !== undefined) {
       if (typeof body[field] !== 'boolean') {
         sendRequestError(req, res, 400, 'INVALID_PARAMS', `${field} must be a boolean`);
@@ -253,11 +345,16 @@ const updateLocationBase: RouteHandler = async (req, res, params) => {
     await client.query('BEGIN');
     const before = await getLocationById(locationId, client);
     if (!before) {
-      throw new AppError(404, 'LOCATION_NOT_FOUND', `No location register record exists for location_id "${locationId}"`, {
-        location_id: locationId,
-      });
+      throw new AppError(
+        404,
+        'LOCATION_NOT_FOUND',
+        `No location register record exists for location_id "${locationId}"`,
+        {
+          location_id: locationId,
+        },
+      );
     }
-    const after = await updateLocation(locationId, patch, client);
+    const after = await updateLocation(locationId, patch, client, actor);
     await persistEvent(
       {
         stream_type: 'location_register',
@@ -284,24 +381,64 @@ const updateLocationBase: RouteHandler = async (req, res, params) => {
 };
 
 // -----------------------------------------------------------------------------------------------
-// GET /api/v1/locations/:locationId (AC3: returns zone and temperature attributes)
+// GET /api/v1/locations?site=site-code-or-id
+// -----------------------------------------------------------------------------------------------
+const listLocationsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const site = url.searchParams.get('site');
+  if (!site || !LOCATION_CODE_REGEX.test(site)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'site query parameter is required');
+    return;
+  }
+  const locations = await listLocationsBySite(site);
+  sendJson(res, 200, { locations });
+};
+
+// -----------------------------------------------------------------------------------------------
+// GET /api/v1/locations/:locationId (UUID or location_code) with hierarchy path
 // -----------------------------------------------------------------------------------------------
 const getLocationBase: RouteHandler = async (req, res, params) => {
   const locationId = params['locationId'];
-  if (!locationId || !UUID_REGEX.test(locationId)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'locationId must be a valid UUID');
+  if (!locationId || !LOCATION_CODE_REGEX.test(locationId)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'locationId must be a valid UUID or location_code',
+    );
     return;
   }
-  const location = await getLocationById(locationId);
+  const location = await getLocationWithHierarchyPath(locationId);
   if (!location) {
-    sendRequestError(req, res, 404, 'LOCATION_NOT_FOUND', `No location register record exists for location_id "${locationId}"`, {
-      location_id: locationId,
-    });
+    sendRequestError(
+      req,
+      res,
+      404,
+      'LOCATION_NOT_FOUND',
+      `No location register record exists for "${locationId}"`,
+      {
+        location_id: locationId,
+      },
+    );
     return;
   }
   sendJson(res, 200, location);
 };
 
-export const createLocationHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(createLocationBase);
-export const updateLocationHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(updateLocationBase);
-export const getLocationHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(getLocationBase);
+export const createLocationHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(createLocationBase);
+export const updateLocationHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(updateLocationBase);
+export const listLocationsHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(listLocationsBase);
+export const getLocationHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(getLocationBase);

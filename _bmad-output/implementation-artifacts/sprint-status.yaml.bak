@@ -75,8 +75,6 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-22
-# story 3-1 dev-story 2026-07-22: implemented from baseline 7cd3dc7; extended location_register with size_class and access_restricted, added GET /api/v1/locations?site=... site-filtered topology listing, code-or-UUID GET /api/v1/locations/:locationId with hierarchy_path, service-level restricted-zone write gate returning ZONE_ACCESS_RESTRICTED for non-qc_inspector writers, canonical SQL/init-db mirror, Story 3.1 integration tests, schema drift and route-surface guard updates; re-review findings fixed, final re-review no findings, build/lint clean, targeted guards clean, npm test 351/351; moved to done
-# story 3-1 created 2026-07-22 via create-story workflow: Warehouse Topology Setup (FR-W-01); define and manage warehouse topology (sites, zones, aisles, racks, bins) with temperature, hazmat, and quarantine zone attributes, so that every putaway task, pick path, and location override references a real, validated physical location in the system; ready-for-dev
 # story 2-8 dev-story 2026-07-22: implemented all 10 tasks from baseline e030403; found allocation/issue/deallocation drain SQL
 #   ignored stock_class entirely (classless issue could drain consignment) and class-scoped every lock/check/drain plus the
 #   last_issue_at stamp (default 'owned'; 2.5 transfer flows inherit owned); ownership_agreement registry (one active agreement
@@ -276,9 +274,9 @@ development_status:
   epic-2-retrospective: optional
 
   # --- Epic 3: Warehouse Operations and Frontline Capture Flows  [PILOT] ---
-  epic-3: in-progress
-  3-1-warehouse-topology-setup-fr-w-01: done   # PILOT
-  3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: ready-for-dev   # PILOT
+  epic-3: backlog
+  3-1-warehouse-topology-setup-fr-w-01: backlog   # PILOT
+  3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: backlog   # PILOT
   3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: backlog   # PILOT
   3-4-goods-receiving-against-asn-or-po-fr-w-02: backlog   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: backlog   # PILOT

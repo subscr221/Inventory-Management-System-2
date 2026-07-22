@@ -161,6 +161,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/events/:streamType/:streamId',
       'GET /api/v1/health',
       'GET /api/v1/items/:sku',
+      'GET /api/v1/locations',
       'GET /api/v1/locations/:locationId',
       'GET /api/v1/lots/:lotId/location',
       'GET /api/v1/lots/:lot_id/trace',
