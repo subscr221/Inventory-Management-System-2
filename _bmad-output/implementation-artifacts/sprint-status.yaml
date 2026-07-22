@@ -81,6 +81,20 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-23
+# story 3-4 created 2026-07-23 via create-story workflow: Goods Receiving Against ASN or PO (FR-W-02);
+#   receives against the Story 2.9 read-only open-PO projection with no Epic 4 PO capability. New goods.received
+#   + goods.putaway_released events on a new 'receiving' stream (requiresBusinessStream false), grn/grn_line/
+#   putaway_task projections + minimal INT-SUP-02 asn/asn_line direct-upsert reference tables. Central
+#   applyGoodsReceivedProjection seam: resolves the Story 3.2 binding token via getWeighbridgeEventsByCorrelationId
+#   (RECEIVING_WEIGHT_NOT_ACCEPTED blocks tolerance_breach weighments, preserving the 3.3 no-silent-receipt chain),
+#   matches PO line by sku (ITEM_PO_MISMATCH), enforces the over/under tolerance band in PostgreSQL NUMERIC
+#   (RECEIPT_TOLERANCE_EXCEEDED rejects with no stock + discrepancy notification to unloading_supervisor; short-
+#   within-tolerance posts with shortage_variance_qty visible in the discrepancy view, ERP stays PO system of
+#   record), expiry gate (LOT_EXPIRED unless DOA-approved quarantine into ZONE-QC-HOLD else APPROVAL_REQUIRED),
+#   BIS/quarantine QC-hold routing into ZONE-QC-HOLD with held putaway + qc_inspector notification + DOA-gated
+#   audited manual release. Reuses applyStockReceipt/applyLotSerialValidation for atomic stock posting; never
+#   writes erp_*. RBAC create=store_assistant, release=unloading_supervisor/warehouse_manager; edge intake maps
+#   stream_type 'receiving' to module receiving, server-sets received_by. ready-for-dev
 # story 3-3 dev-story 2026-07-22: implemented all 7 tasks from baseline 60e2fe6. Weighbridge event
 #   capture is event-sourced through persistEvent (weighbridge.recorded, streamType 'weighbridge',
 #   requiresBusinessStream false). net = gross - tare computed in exact integer milli-kg (no JS float);
@@ -301,7 +315,7 @@ development_status:
   3-1-warehouse-topology-setup-fr-w-01: done   # PILOT
   3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: review   # PILOT
   3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: done   # PILOT
-  3-4-goods-receiving-against-asn-or-po-fr-w-02: backlog   # PILOT
+  3-4-goods-receiving-against-asn-or-po-fr-w-02: ready-for-dev   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: backlog   # PILOT
   3-6-pick-task-generation-and-execution-fr-w-04: backlog   # PILOT
   3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: backlog   # PILOT

@@ -1,0 +1,194 @@
+name: CD
+
+# Story 1.10: builds and pushes immutable images once per commit and promotes the SAME digests
+# through staging and production. Deliberately triggered by `workflow_run` (never `pull_request`
+# or `pull_request_target`) so it only ever runs after CI has already succeeded on a real push to
+# the protected default branch (AC3, Task 4.1, Task 4.10) - it cannot be triggered from a fork PR.
+#
+# The default branch is detected dynamically via `github.event.repository.default_branch` in the
+# job condition below, matching whatever deploy/pipeline/bootstrap.sh currently protects - no
+# branch name is hard-coded. The `on.workflow_run` trigger itself has no `branches:` filter because
+# GitHub Actions only supports static literals there (no expressions), so this workflow accepts
+# every completed CI run and lets the dynamic job condition below do the real filtering.
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ${{ vars.REGISTRY || 'ghcr.io' }}
+  REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE || github.repository }}
+
+jobs:
+  build-and-push:
+    name: build-and-push
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    outputs:
+      app-image: ${{ steps.app-digest.outputs.image }}
+      edge-image: ${{ steps.edge-digest.outputs.image }}
+      commit-sha: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Compute image references
+        id: image-refs
+        run: |
+          NAMESPACE="$(echo "${REGISTRY_NAMESPACE}" | tr '[:upper:]' '[:lower:]')"
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          echo "app-image=${REGISTRY}/${NAMESPACE}-app:${SHA}" >>"$GITHUB_OUTPUT"
+          echo "edge-image=${REGISTRY}/${NAMESPACE}-edge:${SHA}" >>"$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+
+      - name: Build and push app image
+        id: build-app
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.image-refs.outputs.app-image }}
+
+      - name: Export app digest reference
+        id: app-digest
+        run: echo "image=${{ steps.image-refs.outputs.app-image }}@${{ steps.build-app.outputs.digest }}" >>"$GITHUB_OUTPUT"
+
+      - name: Build and push edge image
+        id: build-edge
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: edge/Dockerfile
+          push: true
+          tags: ${{ steps.image-refs.outputs.edge-image }}
+
+      - name: Export edge digest reference
+        id: edge-digest
+        run: echo "image=${{ steps.image-refs.outputs.edge-image }}@${{ steps.build-edge.outputs.digest }}" >>"$GITHUB_OUTPUT"
+
+  deploy-staging:
+    name: deploy-staging
+    needs: build-and-push
+    runs-on: [self-hosted, staging]
+    environment: staging
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      deployed: ${{ steps.branch-tip.outputs.deploy }}
+    concurrency:
+      group: cd-deploy-staging
+      cancel-in-progress: false
+    env:
+      APP_IMAGE: ${{ needs.build-and-push.outputs.app-image }}
+      EDGE_IMAGE: ${{ needs.build-and-push.outputs.edge-image }}
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.commit-sha }}
+      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      AUTH_JWKS_URI: ${{ secrets.AUTH_JWKS_URI }}
+      AUTH_ISSUER: ${{ secrets.AUTH_ISSUER }}
+      AUTH_AUDIENCE: ${{ secrets.AUTH_AUDIENCE }}
+      SCIM_BEARER_TOKEN: ${{ secrets.SCIM_BEARER_TOKEN }}
+      POWERSYNC_TOKEN_SECRET: ${{ secrets.POWERSYNC_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-and-push.outputs.commit-sha }}
+      - name: Confirm commit is still default-branch tip
+        id: branch-tip
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          COMMIT_SHA: ${{ needs.build-and-push.outputs.commit-sha }}
+        run: |
+          LATEST_SHA="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | cut -f1)"
+          if [ -z "$LATEST_SHA" ]; then
+            echo "ERROR: could not resolve default-branch tip for ${DEFAULT_BRANCH}." >&2
+            exit 1
+          fi
+          if [ "$LATEST_SHA" != "$COMMIT_SHA" ]; then
+            echo "Skipping stale deploy for ${COMMIT_SHA}; ${LATEST_SHA} is now the default-branch tip."
+            echo "deploy=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "deploy=true" >>"$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        if: steps.branch-tip.outputs.deploy == 'true'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+      - if: steps.branch-tip.outputs.deploy == 'true'
+        run: bash deploy/pipeline/deploy.sh staging
+
+  promote-production:
+    name: promote-production
+    needs: [build-and-push, deploy-staging]
+    if: needs.deploy-staging.outputs.deployed == 'true'
+    runs-on:
+      group: production-deploy
+      labels: [self-hosted, production]
+    permissions:
+      contents: read
+      packages: read
+    # GitHub's `production` environment protection rule (deploy/pipeline/environments.json,
+    # applied by deploy/pipeline/bootstrap.sh) pauses this job until a required reviewer approves.
+    # The approval and the approver's identity are recorded on the resulting deployment; secrets
+    # scoped to `production` are withheld from this job until that approval happens (AC3). This
+    # job's own concurrency group is scoped separately from build-and-push/deploy-staging so a
+    # pending production approval never blocks the next commit's automatic staging deploy.
+    environment: production
+    concurrency:
+      group: cd-deploy-production
+      cancel-in-progress: false
+    env:
+      APP_IMAGE: ${{ needs.build-and-push.outputs.app-image }}
+      EDGE_IMAGE: ${{ needs.build-and-push.outputs.edge-image }}
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.commit-sha }}
+      POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+      AUTH_JWKS_URI: ${{ secrets.AUTH_JWKS_URI }}
+      AUTH_ISSUER: ${{ secrets.AUTH_ISSUER }}
+      AUTH_AUDIENCE: ${{ secrets.AUTH_AUDIENCE }}
+      SCIM_BEARER_TOKEN: ${{ secrets.SCIM_BEARER_TOKEN }}
+      POWERSYNC_TOKEN_SECRET: ${{ secrets.POWERSYNC_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-and-push.outputs.commit-sha }}
+      - name: Confirm commit is still default-branch tip
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          COMMIT_SHA: ${{ needs.build-and-push.outputs.commit-sha }}
+        run: |
+          LATEST_SHA="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | cut -f1)"
+          if [ -z "$LATEST_SHA" ]; then
+            echo "ERROR: could not resolve default-branch tip for ${DEFAULT_BRANCH}." >&2
+            exit 1
+          fi
+          if [ "$LATEST_SHA" != "$COMMIT_SHA" ]; then
+            echo "ERROR: refusing stale production promotion for ${COMMIT_SHA}; ${LATEST_SHA} is now the default-branch tip." >&2
+            exit 1
+          fi
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+      - run: bash deploy/pipeline/deploy.sh production

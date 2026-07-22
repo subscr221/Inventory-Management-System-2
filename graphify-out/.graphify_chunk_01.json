@@ -1,0 +1,31 @@
+{
+  "chunk_num": 1,
+  "total_chunks": 2,
+  "files": [
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\0-document-purpose.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\1-vision.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\10-integration-and-dependencies.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\11-stakeholders-and-roles.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\12-data-migration-and-cutover.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\13-rollout-and-change-management.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\14-open-questions.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\15-assumptions-index.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\2-target-user.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\3-glossary.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\4-features.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\5-non-goals-explicit.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\6-mvp-scope.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\7-success-metrics.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\8-cross-cutting-nfrs.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\9-compliance-and-regulatory.md",
+    "D:\\WINCODE\\Inventory Management System_2\\PLANNING\\prd\\index.md",
+    "D:\\WINCODE\\Inventory Management System_2\\.github\\workflows\\cd.yml",
+    "D:\\WINCODE\\Inventory Management System_2\\.github\\workflows\\ci.yml",
+    "D:\\WINCODE\\Inventory Management System_2\\deploy\\compose\\docker-compose.images.yml",
+    "D:\\WINCODE\\Inventory Management System_2\\deploy\\compose\\docker-compose.yml",
+    "D:\\WINCODE\\Inventory Management System_2\\.playwright-mcp\\page-2026-07-20T15-36-00-078Z.yml",
+    "D:\\WINCODE\\Inventory Management System_2\\.playwright-mcp\\page-2026-07-20T15-36-34-351Z.yml",
+    "D:\\WINCODE\\Inventory Management System_2\\docs\\adr\\ADR-001-notification-emission-coupling.md",
+    "D:\\WINCODE\\Inventory Management System_2\\sync\\sync-rules.yaml"
+  ]
+}

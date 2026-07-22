@@ -1,0 +1,50 @@
+{
+  "name": "inventory-management-system",
+  "version": "1.0.0",
+  "description": "Materials & Supply Chain Management Platform",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/src/server.js",
+    "dev": "tsx watch src/server.ts",
+    "test": "node --env-file=.env.test --import tsx --test --test-concurrency=1 test/**/*.test.ts",
+    "test:integration": "node --env-file=.env.test --import tsx --test --test-concurrency=1 test/integration/**/*.test.ts",
+    "spine-acceptance-contract": "eslint src/ test/ && node --env-file=.env.test --import tsx --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=spine-acceptance-contract-results.xml test/integration/story-1-9.test.ts",
+    "lint": "eslint src/ test/",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
+    "db:migrate": "node --import tsx src/events/migrate.ts",
+    "edge:build": "npm --workspace @inventory/edge run build",
+    "edge:typecheck": "npm --workspace @inventory/edge run typecheck",
+    "edge:lint": "npm --workspace @inventory/edge run lint",
+    "edge:test": "npm --workspace @inventory/edge test",
+    "edge:test:e2e": "npm --workspace @inventory/edge run test:e2e",
+    "edge:accessibility": "npm --workspace @inventory/edge run accessibility",
+    "sync:smoke": "powershell -ExecutionPolicy Bypass -File sync/smoke-test.ps1"
+  },
+  "dependencies": {
+    "jose": "^6.2.3",
+    "pg": "^8.16.0",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/web-push": "^3.6.4",
+    "eslint": "^9.0.0",
+    "prettier": "^3.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.0.0"
+  },
+  "workspaces": [
+    "edge"
+  ],
+  "overrides": {
+    "postcss": "^8.5.10"
+  }
+}

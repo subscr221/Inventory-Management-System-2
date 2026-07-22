@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Inventory Edge">
+  <rect width="128" height="128" rx="24" fill="#1a3ab3"/>
+  <path d="M30 38h68v52H30z" fill="#f8f9fa"/>
+  <path d="M42 50h44v8H42zm0 16h44v8H42z" fill="#1a3ab3"/>
+</svg>

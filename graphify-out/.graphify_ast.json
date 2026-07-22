@@ -1,0 +1,977 @@
+{
+  "nodes": [
+    {
+      "id": "edge_app_first_sync_page_firstsyncpage",
+      "label": "FirstSyncPage",
+      "file_type": "code",
+      "source_file": "edge/app/first-sync/page.tsx",
+      "source_location": "L4",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_app_layout_rootlayout",
+      "label": "RootLayout",
+      "file_type": "code",
+      "source_file": "edge/app/layout.tsx",
+      "source_location": "L11",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_app_manifest_manifest",
+      "label": "manifest",
+      "file_type": "code",
+      "source_file": "edge/app/manifest.ts",
+      "source_location": "L4",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_app_page_home",
+      "label": "Home",
+      "file_type": "code",
+      "source_file": "edge/app/page.tsx",
+      "source_location": "L3",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_app_sync_error_page_syncerrorpage",
+      "label": "SyncErrorPage",
+      "file_type": "code",
+      "source_file": "edge/app/sync-error/page.tsx",
+      "source_location": "L4",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_capture_test_capture_edgeeventrecord",
+      "label": "EdgeEventRecord",
+      "file_type": "code",
+      "source_file": "edge/src/capture/test-capture.ts",
+      "source_location": "L7",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_capture_test_capture_creategateenteredevent",
+      "label": "createGateEnteredEvent",
+      "file_type": "code",
+      "source_file": "edge/src/capture/test-capture.ts",
+      "source_location": "L30",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_capture_test_capture_createtestcaptureevent",
+      "label": "createTestCaptureEvent",
+      "file_type": "code",
+      "source_file": "edge/src/capture/test-capture.ts",
+      "source_location": "L81",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_components_app_shell_appshellprops",
+      "label": "AppShellProps",
+      "file_type": "code",
+      "source_file": "edge/src/components/app-shell.tsx",
+      "source_location": "L13",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_components_edge_client_edgeclient",
+      "label": "EdgeClient",
+      "file_type": "code",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L70",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_components_service_worker_registration_serviceworkerregistration",
+      "label": "ServiceWorkerRegistration",
+      "file_type": "code",
+      "source_file": "edge/src/components/service-worker-registration.tsx",
+      "source_location": "L5",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_components_sync_failure_list_syncfailureitem",
+      "label": "SyncFailureItem",
+      "file_type": "code",
+      "source_file": "edge/src/components/sync-failure-list.tsx",
+      "source_location": "L3",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_components_sync_status_badge_syncstatusbadge",
+      "label": "SyncStatusBadge",
+      "file_type": "code",
+      "source_file": "edge/src/components/sync-status-badge.tsx",
+      "source_location": "L20",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_i18n_locale_messagekey",
+      "label": "MessageKey",
+      "file_type": "code",
+      "source_file": "edge/src/i18n/locale.ts",
+      "source_location": "L3",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_i18n_locale_availablelocales",
+      "label": "availableLocales",
+      "file_type": "code",
+      "source_file": "edge/src/i18n/locale.ts",
+      "source_location": "L13",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_i18n_locale_resolvelocale",
+      "label": "resolveLocale",
+      "file_type": "code",
+      "source_file": "edge/src/i18n/locale.ts",
+      "source_location": "L17",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_i18n_locale_t",
+      "label": "t",
+      "file_type": "code",
+      "source_file": "edge/src/i18n/locale.ts",
+      "source_location": "L32",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_i18n_locale_errormessage",
+      "label": "errorMessage",
+      "file_type": "code",
+      "source_file": "edge/src/i18n/locale.ts",
+      "source_location": "L37",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_i18n_locale_formatdatetime",
+      "label": "formatDateTime",
+      "file_type": "code",
+      "source_file": "edge/src/i18n/locale.ts",
+      "source_location": "L43",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_database_createedgedatabase",
+      "label": "createEdgeDatabase",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/database.ts",
+      "source_location": "L4",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_queryexecutor",
+      "label": "QueryExecutor",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L5",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_cacheduser",
+      "label": "CachedUser",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L10",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_cachedsite",
+      "label": "CachedSite",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L16",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_outboxrow",
+      "label": "OutboxRow",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L21",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_failurerow",
+      "label": "FailureRow",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L29",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_outboxcounts",
+      "label": "OutboxCounts",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L36",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_insertcaptureevent",
+      "label": "insertCaptureEvent",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L41",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_readoutboxcounts",
+      "label": "readOutboxCounts",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L70",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_hasauthrequired",
+      "label": "hasAuthRequired",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L83",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_readfailures",
+      "label": "readFailures",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L91",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_cachecontext",
+      "label": "cacheContext",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L99",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_outbox_readcachedcontext",
+      "label": "readCachedContext",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L119",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_local_db_schema_edgelocalstatus",
+      "label": "EdgeLocalStatus",
+      "file_type": "code",
+      "source_file": "edge/src/local-db/schema.ts",
+      "source_location": "L58",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_sync_connector_uploadfailureclassification",
+      "label": "UploadFailureClassification",
+      "file_type": "code",
+      "source_file": "edge/src/sync/connector.ts",
+      "source_location": "L9",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_sync_connector_classifyserveruploadfailure",
+      "label": "classifyServerUploadFailure",
+      "file_type": "code",
+      "source_file": "edge/src/sync/connector.ts",
+      "source_location": "L101",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_sync_connector_edgepowersyncconnector",
+      "label": "EdgePowerSyncConnector",
+      "file_type": "code",
+      "source_file": "edge/src/sync/connector.ts",
+      "source_location": "L210",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_sync_sync_status_syncuistate",
+      "label": "SyncUiState",
+      "file_type": "code",
+      "source_file": "edge/src/sync/sync-status.ts",
+      "source_location": "L3",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_sync_sync_status_syncstatusinput",
+      "label": "SyncStatusInput",
+      "file_type": "code",
+      "source_file": "edge/src/sync/sync-status.ts",
+      "source_location": "L5",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_sync_sync_status_derivesyncuistate",
+      "label": "deriveSyncUiState",
+      "file_type": "code",
+      "source_file": "edge/src/sync/sync-status.ts",
+      "source_location": "L13",
+      "_origin": "ast"
+    },
+    {
+      "id": "edge_src_sync_sync_status_ispendingstatus",
+      "label": "isPendingStatus",
+      "file_type": "code",
+      "source_file": "edge/src/sync/sync-status.ts",
+      "source_location": "L20",
+      "_origin": "ast"
+    }
+  ],
+  "edges": [
+    {
+      "source": "edge_app_first_sync_page",
+      "target": "edge_src_i18n_locale_t",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/app/first-sync/page.tsx",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_app_layout",
+      "target": "edge_src_i18n_locale_t",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/app/layout.tsx",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_app_manifest",
+      "target": "edge_src_i18n_locale_t",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/app/manifest.ts",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_app_page",
+      "target": "edge_src_components_edge_client_edgeclient",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/app/page.tsx",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_app_sync_error_page",
+      "target": "edge_src_i18n_locale_t",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/app/sync-error/page.tsx",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_capture_test_capture",
+      "target": "edge_src_local_db_schema_edgelocalstatus",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/capture/test-capture.ts",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_app_shell",
+      "target": "edge_src_components_sync_status_badge_syncstatusbadge",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/app-shell.tsx",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_app_shell",
+      "target": "edge_src_components_sync_failure_list_syncfailureitem",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/app-shell.tsx",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_app_shell",
+      "target": "edge_src_components_service_worker_registration_serviceworkerregistration",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/app-shell.tsx",
+      "source_location": "L4",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_app_shell",
+      "target": "edge_src_i18n_locale_t",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/app-shell.tsx",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_app_shell",
+      "target": "edge_src_i18n_locale_messagekey",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/app-shell.tsx",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_app_shell",
+      "target": "edge_src_sync_sync_status_syncuistate",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/app-shell.tsx",
+      "source_location": "L6",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_capture_test_capture_createtestcaptureevent",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L5",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_i18n_locale_t",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L7",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_local_db_database_createedgedatabase",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L8",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_local_db_outbox_cachecontext",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_local_db_outbox_hasauthrequired",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_local_db_outbox_insertcaptureevent",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_local_db_outbox_readcachedcontext",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_local_db_outbox_readfailures",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_local_db_outbox_readoutboxcounts",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_sync_connector_edgepowersyncconnector",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L17",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_sync_sync_status_derivesyncuistate",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L18",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_edge_client",
+      "target": "edge_src_sync_sync_status_syncuistate",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L18",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_sync_failure_list",
+      "target": "edge_src_i18n_locale_errormessage",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/sync-failure-list.tsx",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_sync_failure_list",
+      "target": "edge_src_i18n_locale_formatdatetime",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/sync-failure-list.tsx",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_sync_failure_list",
+      "target": "edge_src_i18n_locale_t",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/sync-failure-list.tsx",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_sync_status_badge",
+      "target": "edge_src_i18n_locale_t",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/sync-status-badge.tsx",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_sync_status_badge",
+      "target": "edge_src_i18n_locale_messagekey",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/sync-status-badge.tsx",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_sync_status_badge",
+      "target": "edge_src_sync_sync_status_syncuistate",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/sync-status-badge.tsx",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_test_capture_button",
+      "target": "edge_src_i18n_locale_t",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/test-capture-button.tsx",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_local_db_outbox",
+      "target": "edge_src_capture_test_capture_edgeeventrecord",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_local_db_outbox",
+      "target": "edge_src_sync_sync_status_ispendingstatus",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L2",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_local_db_outbox",
+      "target": "edge_src_local_db_schema_edgelocalstatus",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_sync_connector",
+      "target": "edge_src_local_db_schema_edgelocalstatus",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/sync/connector.ts",
+      "source_location": "L7",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_sync_sync_status",
+      "target": "edge_src_local_db_schema_edgelocalstatus",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/sync/sync-status.ts",
+      "source_location": "L1",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_connector_test",
+      "target": "edge_src_sync_connector_edgepowersyncconnector",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/connector.test.ts",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_connector_test",
+      "target": "edge_src_sync_connector_classifyserveruploadfailure",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/connector.test.ts",
+      "source_location": "L9",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_connector_test",
+      "target": "edge_src_local_db_schema_edgelocalstatus",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/connector.test.ts",
+      "source_location": "L13",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_outbox_test",
+      "target": "edge_src_local_db_outbox_cachecontext",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/outbox.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_outbox_test",
+      "target": "edge_src_local_db_outbox_hasauthrequired",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/outbox.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_outbox_test",
+      "target": "edge_src_local_db_outbox_insertcaptureevent",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/outbox.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_outbox_test",
+      "target": "edge_src_local_db_outbox_readcachedcontext",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/outbox.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_outbox_test",
+      "target": "edge_src_local_db_outbox_readfailures",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/outbox.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_outbox_test",
+      "target": "edge_src_local_db_outbox_readoutboxcounts",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/outbox.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_outbox_test",
+      "target": "edge_src_local_db_outbox_queryexecutor",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/outbox.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_outbox_test",
+      "target": "edge_src_capture_test_capture_createtestcaptureevent",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/outbox.test.ts",
+      "source_location": "L12",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_sync_status_test",
+      "target": "edge_src_sync_sync_status_derivesyncuistate",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/sync-status.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_sync_status_test",
+      "target": "edge_src_sync_sync_status_ispendingstatus",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/sync-status.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_test_capture_test",
+      "target": "edge_src_capture_test_capture_creategateenteredevent",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/test-capture.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_test_unit_test_capture_test",
+      "target": "edge_src_capture_test_capture_createtestcaptureevent",
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/test-capture.test.ts",
+      "source_location": "L3",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_capture_test_capture_edgeeventrecord",
+      "target": "edge_src_local_db_schema_edgelocalstatus",
+      "relation": "references",
+      "context": "field",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/capture/test-capture.ts",
+      "source_location": "L23",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_app_shell_appshellprops",
+      "target": "edge_src_sync_sync_status_syncuistate",
+      "relation": "references",
+      "context": "field",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/app-shell.tsx",
+      "source_location": "L16",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_components_app_shell_appshellprops",
+      "target": "edge_src_components_sync_failure_list_syncfailureitem",
+      "relation": "references",
+      "context": "field",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/app-shell.tsx",
+      "source_location": "L18",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "d_wincode_inventory_management_system_2_edge_src_components_edge_client_runtimestate",
+      "target": "edge_src_sync_sync_status_syncuistate",
+      "relation": "references",
+      "context": "field",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/components/edge-client.tsx",
+      "source_location": "L42",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_local_db_outbox_outboxrow",
+      "target": "edge_src_local_db_schema_edgelocalstatus",
+      "relation": "references",
+      "context": "field",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/local-db/outbox.ts",
+      "source_location": "L24",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "edge_src_sync_connector_uploadfailureclassification",
+      "target": "edge_src_local_db_schema_edgelocalstatus",
+      "relation": "references",
+      "context": "field",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/sync/connector.ts",
+      "source_location": "L11",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "d_wincode_inventory_management_system_2_edge_src_sync_connector_outboxstatusrow",
+      "target": "edge_src_local_db_schema_edgelocalstatus",
+      "relation": "references",
+      "context": "field",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/src/sync/connector.ts",
+      "source_location": "L91",
+      "weight": 1.0,
+      "_origin": "ast"
+    },
+    {
+      "source": "d_wincode_inventory_management_system_2_edge_test_unit_outbox_test_fakedb",
+      "target": "edge_src_local_db_outbox_queryexecutor",
+      "relation": "implements",
+      "context": "type",
+      "confidence": "EXTRACTED",
+      "source_file": "edge/test/unit/outbox.test.ts",
+      "source_location": "L22",
+      "weight": 1.0,
+      "_origin": "ast"
+    }
+  ],
+  "input_tokens": 0,
+  "output_tokens": 0
+}

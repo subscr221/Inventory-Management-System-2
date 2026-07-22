@@ -1,0 +1,18 @@
+services:
+  # Immutable-image override for CD-driven staging/production deploys (Story 1.10 Task 4.4).
+  # Used together with docker-compose.yml so the SAME image built once in CD (see
+  # .github/workflows/cd.yml) is deployed to both staging and production, instead of being
+  # rebuilt separately per environment:
+  #   docker compose -f docker-compose.yml -f docker-compose.images.yml up -d
+  # Requires Docker Compose v2.24+ for the `!reset` merge tag, which removes the base file's
+  # `build:` key - without it, Compose keeps both `build:` and `image:` and can rebuild locally
+  # instead of pulling the immutable image.
+  app:
+    build: !reset null
+    image: ${APP_IMAGE:?set APP_IMAGE to the immutable app image reference, e.g. ghcr.io/owner/repo-app:sha}
+    pull_policy: always
+
+  edge:
+    build: !reset null
+    image: ${EDGE_IMAGE:?set EDGE_IMAGE to the immutable edge image reference, e.g. ghcr.io/owner/repo-edge:sha}
+    pull_policy: always

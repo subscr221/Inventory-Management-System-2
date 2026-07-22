@@ -1,0 +1,21 @@
+source:
+  type: postgresql
+  uri: !env PS_SOURCE_URI
+  # This deployment's postgres has no SSL configured (see docker-compose.yml DB_SSL=false);
+  # the client default (verify-full) would otherwise hang the SSL handshake indefinitely.
+  sslmode: disable
+  publication: powersync_publication
+
+storage:
+  type: postgresql
+  uri: !env PS_STORAGE_URI
+  sslmode: disable
+
+jwt:
+  issuer: !env PS_TOKEN_ISSUER
+  audience: !env PS_TOKEN_AUDIENCE
+  algorithm: HS256
+  secret: !env PS_TOKEN_SECRET
+
+sync_rules:
+  path: /config/sync-rules.yaml
