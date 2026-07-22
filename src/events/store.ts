@@ -22,6 +22,7 @@ import {
 } from '../compliance/transfer-request.js';
 import { assertCycleCountShape, applyCycleCountProjection } from '../compliance/cycle-count.js';
 import { assertInventoryPlanningShape, applyInventoryPlanningProjection } from '../compliance/inventory-planning.js';
+import { assertOwnershipShape, applyOwnershipProjection } from '../compliance/ownership.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -201,6 +202,11 @@ export async function persistEvent(
   // recommendation, obsolescence flag/clear) is non-DB and runs with the other pre-transaction
   // asserts, so a malformed planning event never consumes an idempotency key.
   assertInventoryPlanningShape(envelope);
+  // Story 2.8: ownership-agreement shape validation (consignment/VMI segregation config) is non-DB
+  // and runs with the other pre-transaction asserts, so a malformed agreement event never consumes
+  // an idempotency key. The consignment/vmi receipt owner-party gate runs in-transaction inside
+  // applyStockBalanceProjection.
+  assertOwnershipShape(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();
@@ -244,6 +250,10 @@ export async function persistEvent(
       // and obsolescence-transition decisions (and their transactional planner alerts) live in the
       // planning jobs, which hold the params/flag row lock across read -> decide -> persist.
       await applyInventoryPlanningProjection(envelope, client, eventId);
+      // Story 2.8: ownership agreement upsert (consignment/VMI segregation config) runs inside this
+      // same transaction so the registry row and the domain_events insert commit or roll back
+      // together. Receipt-side owner-party enforcement lives in applyStockBalanceProjection above.
+      await applyOwnershipProjection(envelope, client);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {
@@ -338,6 +348,18 @@ export async function persistEvent(
       } else if (constraint === 'uq_serial_master_sku_serial_number') {
         throw new AppError(400, 'DUPLICATE_SERIAL', 'Serial number already exists for this SKU', {
           sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
+        });
+      } else if (constraint === 'uq_ownership_agreement_active') {
+        throw new AppError(409, 'OWNERSHIP_AGREEMENT_CONFLICT', 'An active ownership agreement already exists for this sku/location/stock_class grain', {
+          sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
+          location_id: typeof envelope.payload['location_id'] === 'string' ? envelope.payload['location_id'] : null,
+          stock_class: typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : null,
+        });
+      } else if (constraint === 'uq_replenishment_recommendation_open_signal') {
+        throw new AppError(409, 'REPLENISHMENT_RECOMMENDATION_CONFLICT', 'An open replenishment recommendation already exists for this sku/location/signal_type grain', {
+          sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
+          location_id: typeof envelope.payload['location_id'] === 'string' ? envelope.payload['location_id'] : null,
+          signal_type: typeof envelope.payload['signal_type'] === 'string' ? envelope.payload['signal_type'] : 'internal',
         });
       }
     }

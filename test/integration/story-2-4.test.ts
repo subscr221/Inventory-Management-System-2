@@ -153,6 +153,7 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
       '../../read/projections/serial_master.sql',
       '../../read/projections/lot_trace.sql',
       '../../read/projections/inventory_valuation.sql',
+      '../../read/projections/ownership_agreement.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }

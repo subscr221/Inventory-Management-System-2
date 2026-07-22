@@ -15,6 +15,7 @@ import {
   runSafetyStockComputation,
   runReplenishmentCheck,
   runObsolescenceScan,
+  runVmiReplenishmentCheck,
   type PlanningJobScope,
 } from '../../compliance/planning-jobs.js';
 
@@ -282,6 +283,13 @@ const listRecommendationsBase: RouteHandler = async (req, res) => {
   const locationId = url.searchParams.get('location_id');
   const sku = url.searchParams.get('sku');
   const status = url.searchParams.get('status');
+  // Story 2.8: the exception queue serves both internal reorder signals and VMI replenishment
+  // signals; signal_type narrows the view.
+  const signalType = url.searchParams.get('signal_type');
+  if (signalType !== null && signalType !== 'internal' && signalType !== 'vmi_replenishment') {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', "signal_type filter must be 'internal' or 'vmi_replenishment'");
+    return;
+  }
 
   const { wildcard, locations } = permittedLocationsForModule(authContext.roles, 'inventory');
   let locationAny: string[] | null = null;
@@ -293,8 +301,22 @@ const listRecommendationsBase: RouteHandler = async (req, res) => {
     if (!locationId) locationAny = [...locations];
   }
 
-  const rows = await listRecommendations({ location_id: locationId, location_any: locationAny, sku, status });
+  const rows = await listRecommendations({ location_id: locationId, location_any: locationAny, sku, status, signal_type: signalType });
   sendJson(res, 200, { recommendations: rows });
+};
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/planning/vmi/check (Story 2.8)
+// ---------------------------------------------------------------------------
+
+const checkVmiReplenishmentBase: RouteHandler = async (req, res) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  assertRoleAllowed(req, PLANNING_WRITE_ROLES, 'write');
+  const businessDate = requireBusinessDate(body);
+  const actor = actorContext(req);
+  const scope = resolveScope(req, body, actor);
+  const result = await runVmiReplenishmentCheck({ ...scope, business_date: businessDate, auditCtx: auditCtxFor(req, actor, 200) });
+  sendJson(res, 200, result);
 };
 
 // ---------------------------------------------------------------------------
@@ -349,4 +371,5 @@ export const computeSafetyStockHandler: RouteHandler = requireRole({ module: 'in
 export const checkReplenishmentHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(checkReplenishmentBase);
 export const listRecommendationsHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(listRecommendationsBase);
 export const scanObsolescenceHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(scanObsolescenceBase);
+export const checkVmiReplenishmentHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(checkVmiReplenishmentBase);
 export const obsolescenceReportHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(obsolescenceReportBase);

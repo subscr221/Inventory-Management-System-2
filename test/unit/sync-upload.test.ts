@@ -76,6 +76,11 @@ describe('Story 1.8 sync upload classification', () => {
       'INVALID_SERVICE_LEVEL',
       'PLANNING_PARAMS_NOT_FOUND',
       'OBSOLESCENCE_THRESHOLD_NOT_CONFIGURED',
+      // Story 2.8 consignment/VMI ownership permanent business rejections
+      'OWNERSHIP_AGREEMENT_NOT_FOUND',
+      'OWNER_PARTY_MISMATCH',
+      'VMI_MIN_NOT_CONFIGURED',
+      'INVALID_SIGNAL_TYPE',
     ]) {
       assertClassification(classifyUploadFailure(new AppError(400, code, 'Permanent failure')), {
         action: 'complete',

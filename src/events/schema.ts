@@ -229,6 +229,10 @@ export interface ReplenishmentRecommendedPayload {
   on_hand_at_check: number;
   reorder_point: number;
   recommended_order_qty: number;
+  /** Story 2.8: 'internal' (default, owned-stock reorder) or 'vmi_replenishment'. */
+  signal_type?: 'internal' | 'vmi_replenishment';
+  /** Story 2.8: owner-party supplier code; required when signal_type is 'vmi_replenishment'. */
+  owner_party_code?: string;
   triggered_at: string;
   business_date: string;
   business_stream: string;
@@ -271,6 +275,28 @@ export interface ObsolescenceClearedPayload {
 export interface ObsolescenceClearedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'obsolescence.cleared';
   payload: ObsolescenceClearedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 2.8: Consignment and VMI Stock Segregation
+// ---------------------------------------------------------------------------
+
+export interface OwnershipAgreementSetPayload {
+  agreement_id: string;
+  sku: string;
+  location_id: string;
+  stock_class: 'consignment' | 'vmi';
+  owner_party_code: string;
+  /** VMI agreement minimum (Story 2.8 SKU-location config). null clears; omitted preserves. */
+  vmi_min_qty?: number | null;
+  active?: boolean;
+  business_stream: string;
+  set_by_actor_id?: string;
+}
+
+export interface OwnershipAgreementSetEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'ownership.agreement_set';
+  payload: OwnershipAgreementSetPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +367,11 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: true,
   },
   'obsolescence.cleared': {
+    streamType: 'inventory',
+    requiresBusinessStream: true,
+  },
+  // Story 2.8: ownership agreement (consignment/VMI segregation) events
+  'ownership.agreement_set': {
     streamType: 'inventory',
     requiresBusinessStream: true,
   },

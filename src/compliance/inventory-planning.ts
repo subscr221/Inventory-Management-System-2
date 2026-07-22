@@ -8,6 +8,7 @@ import {
 } from '../read/projections/inventory_planning.js';
 import { insertRecommendation } from '../read/projections/replenishment_recommendation.js';
 import { flagObsolescence, clearObsolescence } from '../read/projections/obsolescence_flag.js';
+import { OWNERSHIP_ERROR_CODES, OWNER_PARTY_CODE_REGEX } from './ownership.js';
 
 /**
  * Central inventory-planning compliance seam (Story 2.7). Split like every other seam:
@@ -156,6 +157,22 @@ export function assertInventoryPlanningShape(envelope: EventEnvelope): void {
     if (!isNonNegativeFinite(p['on_hand_at_check'])) throw new AppError(400, 'INVALID_PARAMS', 'on_hand_at_check must be a non-negative finite number');
     if (!isNonNegativeFinite(p['reorder_point'])) throw new AppError(400, 'INVALID_PARAMS', 'reorder_point must be a non-negative finite number');
     if (!isFiniteNumber(p['recommended_order_qty']) || (p['recommended_order_qty'] as number) <= 0 || (p['recommended_order_qty'] as number) > MAX_QUANTITY) throw new AppError(400, 'INVALID_PARAMS', 'recommended_order_qty must be a positive finite number');
+    // Story 2.8: signal typing. 'internal' (default) is the owned-stock reorder signal;
+    // 'vmi_replenishment' carries the owner-party supplier reference. Anything else fails closed.
+    if (p['signal_type'] !== undefined && p['signal_type'] !== 'internal' && p['signal_type'] !== 'vmi_replenishment') {
+      throw new AppError(400, OWNERSHIP_ERROR_CODES.INVALID_SIGNAL_TYPE, "signal_type must be 'internal' or 'vmi_replenishment' when supplied", {
+        signal_type: p['signal_type'],
+      });
+    }
+    if (p['signal_type'] === 'vmi_replenishment') {
+      if (typeof p['owner_party_code'] !== 'string' || !OWNER_PARTY_CODE_REGEX.test(p['owner_party_code'])) {
+        throw new AppError(400, 'INVALID_PARAMS', 'owner_party_code is required for a vmi_replenishment signal and must be 2-32 uppercase alphanumeric/hyphen characters', {
+          owner_party_code: typeof p['owner_party_code'] === 'string' ? p['owner_party_code'] : null,
+        });
+      }
+    } else if (p['owner_party_code'] !== undefined) {
+      throw new AppError(400, 'INVALID_PARAMS', 'owner_party_code applies only to vmi_replenishment signals');
+    }
     if (!isIsoTimestamp(p['triggered_at'])) throw new AppError(400, 'INVALID_PARAMS', 'triggered_at is required and must be an ISO-8601 timestamp');
     if (!isLocalDate(p['business_date'])) throw new AppError(400, 'INVALID_PARAMS', 'business_date is required and must be a real YYYY-MM-DD date');
     return;
@@ -266,6 +283,8 @@ export async function applyInventoryPlanningProjection(
         on_hand_at_check: p['on_hand_at_check'] as number,
         reorder_point: p['reorder_point'] as number,
         recommended_order_qty: p['recommended_order_qty'] as number,
+        signal_type: (p['signal_type'] as string | undefined) ?? 'internal',
+        owner_party_code: (p['owner_party_code'] as string | undefined) ?? null,
         triggered_at: p['triggered_at'] as string,
         source_event_id: eventId,
       },

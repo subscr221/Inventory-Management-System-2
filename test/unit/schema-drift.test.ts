@@ -193,12 +193,14 @@ const EXPECTED = [
   },
   {
     canonical: 'read/projections/replenishment_recommendation.sql',
+    // Story 2.8 extension: signal_type + owner_party_code columns and the per-signal open guard
+    // (uq_replenishment_recommendation_open_signal replaced uq_replenishment_recommendation_open).
     table: 'replenishment_recommendation',
-    constraints: ['chk_replenishment_recommendation_status'],
+    constraints: ['chk_replenishment_recommendation_status', 'chk_replenishment_recommendation_signal_type'],
     indexes: [
       'idx_replenishment_recommendation_sku',
       'idx_replenishment_recommendation_location',
-      'uq_replenishment_recommendation_open',
+      'uq_replenishment_recommendation_open_signal',
     ],
   },
   {
@@ -206,6 +208,18 @@ const EXPECTED = [
     table: 'obsolescence_flag',
     constraints: ['uq_obsolescence_flag_grain', 'chk_obsolescence_flag_status'],
     indexes: ['idx_obsolescence_flag_location', 'idx_obsolescence_flag_status'],
+  },
+  // Story 2.8 projections.
+  {
+    canonical: 'read/projections/ownership_agreement.sql',
+    table: 'ownership_agreement',
+    constraints: [
+      'chk_ownership_agreement_stock_class',
+      'chk_ownership_agreement_vmi_min_positive',
+      'chk_ownership_agreement_vmi_min_required',
+      'chk_ownership_agreement_owner_party_code',
+    ],
+    indexes: ['idx_ownership_agreement_location', 'idx_ownership_agreement_sku', 'uq_ownership_agreement_active'],
   },
 ];
 

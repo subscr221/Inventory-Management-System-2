@@ -17,6 +17,10 @@ export interface ReplenishmentRecommendationRow {
   reorder_point: number;
   recommended_order_qty: number;
   status: string;
+  /** Story 2.8: 'internal' (owned-stock reorder) or 'vmi_replenishment' (supplier-owned VMI). */
+  signal_type: string;
+  /** Story 2.8: owner-party supplier code; set only on vmi_replenishment signals. */
+  owner_party_code: string | null;
   triggered_at: string;
   source_event_id: string | null;
   created_at: string;
@@ -29,7 +33,7 @@ function runner(client?: PoolClient): Queryable {
 }
 
 const COLUMNS = `recommendation_id, sku, location_id, on_hand_at_check, reorder_point,
-       recommended_order_qty, status, triggered_at, source_event_id, created_at`;
+       recommended_order_qty, status, signal_type, owner_party_code, triggered_at, source_event_id, created_at`;
 
 function ts(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value);
@@ -44,6 +48,8 @@ function mapRow(row: Record<string, unknown>): ReplenishmentRecommendationRow {
     reorder_point: Number(row['reorder_point']),
     recommended_order_qty: Number(row['recommended_order_qty']),
     status: row['status'] as string,
+    signal_type: row['signal_type'] as string,
+    owner_party_code: (row['owner_party_code'] as string | null) ?? null,
     triggered_at: ts(row['triggered_at']),
     source_event_id: (row['source_event_id'] as string | null) ?? null,
     created_at: ts(row['created_at']),
@@ -51,19 +57,22 @@ function mapRow(row: Record<string, unknown>): ReplenishmentRecommendationRow {
 }
 
 /**
- * The current OPEN recommendation for a grain, if any. Locks FOR UPDATE when a client is supplied so
- * a concurrent reorder check for the same grain cannot create a second open recommendation.
+ * The current OPEN recommendation for a grain and signal type, if any. Locks FOR UPDATE when a
+ * client is supplied so a concurrent check for the same grain cannot create a second open
+ * recommendation. Story 2.8: the open guard is per (sku, location_id, signal_type) - an open
+ * internal reorder signal and an open VMI replenishment signal for the same grain coexist.
  */
 export async function getOpenRecommendation(
   sku: string,
   locationId: string,
   client?: PoolClient,
   forUpdate = false,
+  signalType = 'internal',
 ): Promise<ReplenishmentRecommendationRow | null> {
   const result = await runner(client).query(
     `SELECT ${COLUMNS} FROM replenishment_recommendation
-     WHERE sku = $1 AND location_id = $2 AND status = 'open'${forUpdate ? ' FOR UPDATE' : ''}`,
-    [sku, locationId],
+     WHERE sku = $1 AND location_id = $2 AND signal_type = $3 AND status = 'open'${forUpdate ? ' FOR UPDATE' : ''}`,
+    [sku, locationId, signalType],
   );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
@@ -73,6 +82,8 @@ export interface RecommendationFilters {
   location_any?: string[] | null;
   sku?: string | null;
   status?: string | null;
+  /** Story 2.8: filter the queue by signal type ('internal' | 'vmi_replenishment'). */
+  signal_type?: string | null;
 }
 
 export async function listRecommendations(filters: RecommendationFilters, client?: PoolClient): Promise<ReplenishmentRecommendationRow[]> {
@@ -95,6 +106,10 @@ export async function listRecommendations(filters: RecommendationFilters, client
     conditions.push(`status = $${i++}`);
     params.push(filters.status);
   }
+  if (filters.signal_type) {
+    conditions.push(`signal_type = $${i++}`);
+    params.push(filters.signal_type);
+  }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await runner(client).query(
     `SELECT ${COLUMNS} FROM replenishment_recommendation ${where} ORDER BY triggered_at DESC, recommendation_id`,
@@ -114,6 +129,10 @@ export interface InsertRecommendationInput {
   on_hand_at_check: number | string;
   reorder_point: number | string;
   recommended_order_qty: number | string;
+  /** Story 2.8: defaults to 'internal'; VMI signals pass 'vmi_replenishment'. */
+  signal_type?: string;
+  /** Story 2.8: owner-party supplier code; required for vmi_replenishment signals. */
+  owner_party_code?: string | null;
   triggered_at: string;
   source_event_id: string;
 }
@@ -127,8 +146,8 @@ export async function insertRecommendation(input: InsertRecommendationInput, cli
   await client.query(
     `INSERT INTO replenishment_recommendation (
        recommendation_id, sku, location_id, on_hand_at_check, reorder_point, recommended_order_qty,
-       status, triggered_at, source_event_id
-     ) VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6::numeric, 'open', $7::timestamptz, $8)`,
+       status, signal_type, owner_party_code, triggered_at, source_event_id
+     ) VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6::numeric, 'open', $7, $8, $9::timestamptz, $10)`,
     [
       input.recommendation_id,
       input.sku,
@@ -136,6 +155,8 @@ export async function insertRecommendation(input: InsertRecommendationInput, cli
       String(input.on_hand_at_check),
       String(input.reorder_point),
       String(input.recommended_order_qty),
+      input.signal_type ?? 'internal',
+      input.owner_party_code ?? null,
       input.triggered_at,
       input.source_event_id,
     ],

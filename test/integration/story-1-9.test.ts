@@ -222,6 +222,10 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/planning/replenishment/recommendations',
       'POST /api/v1/planning/obsolescence/scan',
       'GET /api/v1/planning/obsolescence/report',
+      // Story 2.8: Consignment and VMI Stock Segregation
+      'GET /api/v1/ownership-agreements',
+      'PUT /api/v1/ownership-agreements/:sku/:locationId/:stockClass',
+      'POST /api/v1/planning/vmi/check',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
       'PUT /api/v1/lots/:lot_id/quality-hold',

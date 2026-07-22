@@ -7,6 +7,7 @@ import { auditConfig } from '../../config/audit.js';
 import { getPool } from '../../config/db.js';
 import { logTamperAttempt } from '../../read/projections/audit_log.js';
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
+import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const PLANNING_EVENT_TYPES = new Set([
@@ -15,6 +16,9 @@ const PLANNING_EVENT_TYPES = new Set([
   'replenishment.recommended',
   'obsolescence.flagged',
   'obsolescence.cleared',
+  // Story 2.8: ownership agreements are location-scoped config; the payload location must be
+  // write-permitted exactly like the planning events above.
+  'ownership.agreement_set',
 ]);
 
 function planningPayloadLocation(body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): string | null {
@@ -26,6 +30,12 @@ function planningPayloadLocation(body: { stream_type: string; event_type: string
 function assertPlanningPayloadWriteLocation(authContext: NonNullable<ReturnType<typeof getAuthContext>>, body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): void {
   const locationId = planningPayloadLocation(body);
   if (!locationId) return;
+  if (body.event_type === 'ownership.agreement_set') {
+    const allowed = authContext.roles.some(
+      (r) => (r.module === 'inventory' || r.module === '*') && r.functionScope === 'write' && OWNERSHIP_CONFIG_ROLES.includes(r.role),
+    );
+    if (!allowed) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${OWNERSHIP_CONFIG_ROLES.join(', ')}`);
+  }
   const { wildcard, locations } = permittedLocationsForModuleScope(authContext.roles, 'inventory', 'write');
   if (!wildcard && !locations.has(locationId)) {
     throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to planning payload location "${locationId}"`);

@@ -59,6 +59,37 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-22
+# story 2-8 dev-story 2026-07-22: implemented all 10 tasks from baseline e030403; found allocation/issue/deallocation drain SQL
+#   ignored stock_class entirely (classless issue could drain consignment) and class-scoped every lock/check/drain plus the
+#   last_issue_at stamp (default 'owned'; 2.5 transfer flows inherit owned); ownership_agreement registry (one active agreement
+#   per sku-location-class, owner-code CHECK, partial-edit-preserving upsert) + ownership.agreement_set seam in persistEvent;
+#   consignment/vmi receipts owner-party-gated inside applyStockBalanceProjection on all write paths (OWNERSHIP_AGREEMENT_NOT_FOUND /
+#   OWNER_PARTY_MISMATCH); per-class breakdown + consolidated_by_class in GET /api/v1/stock/:sku (closes 2.2 defer); valuation
+#   non_owned_quantities report section (2.4 owned-only seam untouched); replenishment_recommendation gains signal_type +
+#   owner_party_code with open guard widened to (sku, location_id, signal_type) so internal + vmi signals coexist;
+#   runVmiReplenishmentCheck (FOR UPDATE on agreement, strict NUMERIC below-minimum, replenish-to-min, transactional planner alert)
+#   + POST /api/v1/planning/vmi/check + signal_type queue filter; 4 new stable errors on all four surfaces; RBAC write-location +
+#   direct-event/edge parity (ownership.agreement_set in both PLANNING_EVENT_TYPES sets); story-2-7 owned-only test adapted to the
+#   new receipt contract (agreement seeded, statuses asserted), 2-2/2-4 harnesses gained ownership_agreement.sql, 2-2 pins the
+#   preserved top-level stock shape; tsc/eslint/build clean, npm test 329/329 (21 new), edge 14/14, spine gate 6/6, diff-check
+#   clean; moved to review
+# story 2-8 code review 2026-07-22: 1 decision resolved to patch + 14 patch findings applied, 0 deferred, 6 dismissed.
+#   Critical fixes: top-level stock totals are now owned-only, active VMI agreements require NUMERIC(14,3) minimums,
+#   ownership agreements validate active item/location references and trim owner codes, direct-event and edge paths enforce
+#   planning-config roles, unique-index races map to 409s, transfer in_transit is owned-class scoped, class availability and
+#   VMI refresh checks avoid JS float comparisons, VMI checks lock balance rows, agreement lookups are visibility-scoped,
+#   and regression coverage includes mixed-class transfer and concurrent VMI checks. tsc/lint/build clean, npm test 333/333,
+#   edge 14/14, spine gate 6/6, diff-check clean; moved to done
+# story 2-8 dev-story 2026-07-22: implementation started from baseline e030403; moved to in-progress
+# story 2-8 created 2026-07-22 via create-story workflow: Consignment and VMI Stock Segregation (FR-I-10); ownership_agreement
+#   SKU-location-class registry (single active owner per grain, ownership.agreement_set event), owner-party validation on
+#   consignment/vmi stock.received (OWNERSHIP_AGREEMENT_NOT_FOUND / OWNER_PARTY_MISMATCH), classless issues stay owned-only,
+#   class-scoped INSUFFICIENT_STOCK pinned by tests, per-class breakdown in GET /api/v1/stock/:sku (closes 2.2 defer),
+#   valuation non_owned_quantities section (seam untouched), runVmiReplenishmentCheck emitting replenishment.recommended with
+#   signal_type vmi_replenishment + owner_party_code (replenishment_recommendation gains signal_type/owner_party_code, open
+#   guard widened to include signal_type), no supplier transmission (Epic 4) / no job_work custody (Epic 9) / owner-party
+#   referential validation tightens with Story 2.9; RBAC write-location + direct-event/edge parity, four-surface error codes,
+#   schema-drift + route-surface + 2.2/2.7 regression guards; ready-for-dev
 # story 2-7 dev-story 2026-07-22: implemented all 10 tasks from baseline f23c59f; three SKU-location projections
 #   (inventory_planning_params, replenishment_recommendation with partial-unique open guard, obsolescence_flag),
 #   central applyInventoryPlanningProjection seam in persistEvent (5 new inventory event types, narrow-gated), safety-stock =
@@ -222,7 +253,7 @@ development_status:
   2-5-inter-location-transfer-requests: done   # PILOT
   2-6-cycle-counting-and-physical-inventory: done   # PILOT
   2-7-safety-stock-reorder-points-and-obsolescence-flagging: done   # PILOT
-  2-8-consignment-and-vmi-stock-segregation: backlog   # PILOT
+  2-8-consignment-and-vmi-stock-segregation: done   # PILOT
   2-9-erp-inbound-reference-projections: backlog   # PILOT
   epic-2-retrospective: optional
 

@@ -117,6 +117,7 @@ describe('Story 2.7 Safety Stock, Reorder Points, and Obsolescence Flagging', ()
       '../../read/projections/inventory_planning.sql',
       '../../read/projections/replenishment_recommendation.sql',
       '../../read/projections/obsolescence_flag.sql',
+      '../../read/projections/ownership_agreement.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
@@ -125,7 +126,7 @@ describe('Story 2.7 Safety Stock, Reorder Points, and Obsolescence Flagging', ()
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE obsolescence_flag, replenishment_recommendation, inventory_planning_params, physical_verification_line, physical_verification, cycle_count_line, cycle_count, in_transit, transfer_request, inventory_valuation, lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE ownership_agreement, obsolescence_flag, replenishment_recommendation, inventory_planning_params, physical_verification_line, physical_verification, cycle_count_line, cycle_count, in_transit, transfer_request, inventory_valuation, lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');
@@ -551,8 +552,16 @@ describe('Story 2.7 Safety Stock, Reorder Points, and Obsolescence Flagging', ()
   it('review patch: only owned stock feeds replenishment and obsolescence decisions', async () => {
     const sku = 'OWNED-ONLY-2-7';
     await seedItem(sku);
-    await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 1, unit_cost: 5 });
-    await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 1000, unit_cost: 5, stock_class: 'consignment' });
+    // Story 2.8: consignment receipts are agreement-gated and must carry the owner party code.
+    await getPool().query(
+      `INSERT INTO ownership_agreement (agreement_id, sku, location_id, stock_class, owner_party_code, business_stream)
+       VALUES ($1, $2, $3, 'consignment', 'SUP-2-7', 'production')`,
+      [randomUUID(), sku, locAId],
+    );
+    const ownedReceipt = await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 1, unit_cost: 5 });
+    assert.strictEqual(ownedReceipt.status, 201, JSON.stringify(ownedReceipt.body));
+    const consignmentReceipt = await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 1000, unit_cost: 5, stock_class: 'consignment', owner_party_code: 'SUP-2-7' });
+    assert.strictEqual(consignmentReceipt.status, 201, JSON.stringify(consignmentReceipt.body));
     await getPool().query(
       `INSERT INTO inventory_planning_params (planning_params_id, sku, location_id, service_level, reorder_point, standard_order_qty, obsolescence_threshold_days, business_stream)
        VALUES ($1, $2, $3, 0.95, 50, 100, 180, 'production')`,

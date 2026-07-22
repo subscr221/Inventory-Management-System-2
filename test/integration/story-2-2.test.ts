@@ -172,6 +172,7 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       '../../read/projections/inventory_valuation.sql',
       '../../read/projections/cycle_count.sql',
       '../../read/projections/physical_verification.sql',
+      '../../read/projections/ownership_agreement.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
@@ -366,6 +367,17 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       assert.strictEqual(entry.in_transit, 0);
     }
     assert.deepStrictEqual(body.consolidated, { on_hand: 150, allocated: 0, available: 150, in_transit: 0 });
+
+    // Story 2.8 regression pin: the per-class breakdown must not disturb the Story 2.2 top-level
+    // shape - owned-only stock reports exactly one 'owned' class entry per location whose totals
+    // equal the location totals.
+    for (const location of body.locations as unknown as Array<Record<string, unknown>>) {
+      const classes = location['classes'] as Array<Record<string, unknown>>;
+      assert.strictEqual(classes.length, 1);
+      assert.strictEqual(classes[0]!['stock_class'], 'owned');
+      assert.strictEqual(classes[0]!['owner_party_code'], null);
+      assert.strictEqual(classes[0]!['on_hand'], location['on_hand']);
+    }
   });
 
   it('AC4: balances are reproducible from the directly posted receipt events', async () => {

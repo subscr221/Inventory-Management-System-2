@@ -45,6 +45,12 @@ export interface StockAllocationInput {
   sku: string;
   location_id: string;
   lot_id?: string | null;
+  /**
+   * Story 2.8: allocations and issues draw from exactly ONE stock class - 'owned' unless the
+   * command explicitly targets another class. Owned stock is never drawn to cover a
+   * consignment/vmi shortfall and vice versa (class-scoped INSUFFICIENT_STOCK).
+   */
+  stock_class?: string;
   quantity: number;
 }
 
@@ -52,6 +58,8 @@ export interface StockIssueInput {
    sku: string;
    location_id: string;
    lot_id?: string | null;
+   /** Story 2.8: see StockAllocationInput.stock_class - one class per issue, default 'owned'. */
+   stock_class?: string;
    quantity: number;
    /**
     * Story 2.7: the event's business timestamp, stamped onto last_issue_at for every balance row at
@@ -66,6 +74,8 @@ export interface StockIssueInput {
    sku: string;
    location_id: string;
    lot_id?: string | null;
+   /** Story 2.8: see StockAllocationInput.stock_class - one class per deallocation, default 'owned'. */
+   stock_class?: string;
    quantity: number;
  }
 
@@ -142,24 +152,30 @@ export async function applyStockReceipt(input: StockReceiptInput, client: PoolCl
  */
 export async function applyStockAllocation(input: StockAllocationInput, client: PoolClient): Promise<void> {
   const lotId = input.lot_id ?? null;
+  // Story 2.8: every lock/check/drain below is scoped to ONE stock class. A command without an
+  // explicit stock_class draws from owned stock only - consignment/vmi/job_work rows are invisible
+  // to it, so INSUFFICIENT_STOCK is per class and owned stock never covers a non-owned shortfall.
+  const stockClass = input.stock_class ?? 'owned';
   await client.query(
     `SELECT balance_id FROM stock_balance
-     WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
+     WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)
      FOR UPDATE`,
-    [input.sku, input.location_id, lotId],
+    [input.sku, input.location_id, lotId, stockClass],
   );
 
   const checkResult = await client.query(
-    `SELECT COALESCE(SUM(available), 0)::text AS total_available
+    `SELECT COALESCE(SUM(available), 0)::text AS total_available,
+            COALESCE(SUM(available), 0) >= $5::numeric AS sufficient
      FROM stock_balance
-     WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)`,
-    [input.sku, input.location_id, lotId],
+     WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)`,
+    [input.sku, input.location_id, lotId, stockClass, String(input.quantity)],
   );
-  const totalAvailable = parseFloat(checkResult.rows[0]!['total_available'] as string);
-  if (totalAvailable < input.quantity) {
+  const totalAvailable = Number(checkResult.rows[0]!['total_available'] as string);
+  if (checkResult.rows[0]!['sufficient'] !== true) {
     throw new AppError(409, 'INSUFFICIENT_STOCK', 'Available stock does not cover the requested allocation', {
       sku: input.sku,
       location_id: input.location_id,
+      stock_class: stockClass,
       ...(lotId !== null ? { lot_id: lotId } : {}),
       requested_quantity: input.quantity,
       available_quantity: totalAvailable,
@@ -171,7 +187,7 @@ export async function applyStockAllocation(input: StockAllocationInput, client: 
        SELECT balance_id, available AS available_qty,
               SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
        FROM stock_balance
-       WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
+       WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)
      )
      UPDATE stock_balance
      SET allocated = allocated + LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
@@ -179,30 +195,35 @@ export async function applyStockAllocation(input: StockAllocationInput, client: 
      FROM ranked
      WHERE stock_balance.balance_id = ranked.balance_id
        AND ranked.cumulative - ranked.available_qty < $4`,
-    [input.sku, input.location_id, lotId, input.quantity],
+    [input.sku, input.location_id, lotId, input.quantity, stockClass],
   );
 }
 
 export async function applyStockIssue(input: StockIssueInput, client: PoolClient): Promise<void> {
   const lotId = input.lot_id ?? null;
+  // Story 2.8: class-scoped exactly like applyStockAllocation - a classless issue drains owned
+  // stock only; an explicit consignment/vmi issue drains that class only.
+  const stockClass = input.stock_class ?? 'owned';
   await client.query(
     `SELECT balance_id FROM stock_balance
-     WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
+     WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)
      FOR UPDATE`,
-    [input.sku, input.location_id, lotId],
+    [input.sku, input.location_id, lotId, stockClass],
   );
 
   const checkResult = await client.query(
-    `SELECT COALESCE(SUM(available), 0)::text AS total_available
+    `SELECT COALESCE(SUM(available), 0)::text AS total_available,
+            COALESCE(SUM(available), 0) >= $5::numeric AS sufficient
      FROM stock_balance
-     WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)`,
-    [input.sku, input.location_id, lotId],
+     WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)`,
+    [input.sku, input.location_id, lotId, stockClass, String(input.quantity)],
   );
-  const totalAvailable = parseFloat(checkResult.rows[0]!['total_available'] as string);
-  if (totalAvailable < input.quantity) {
+  const totalAvailable = Number(checkResult.rows[0]!['total_available'] as string);
+  if (checkResult.rows[0]!['sufficient'] !== true) {
     throw new AppError(409, 'INSUFFICIENT_STOCK', 'Available stock does not cover the requested issue', {
       sku: input.sku,
       location_id: input.location_id,
+      stock_class: stockClass,
       ...(lotId !== null ? { lot_id: lotId } : {}),
       requested_quantity: input.quantity,
       available_quantity: totalAvailable,
@@ -214,7 +235,7 @@ await client.query(
         SELECT balance_id, available AS available_qty,
                SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
         FROM stock_balance
-        WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)
+        WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)
       )
       UPDATE stock_balance
       SET on_hand = on_hand - LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
@@ -222,20 +243,22 @@ await client.query(
       FROM ranked
       WHERE stock_balance.balance_id = ranked.balance_id
         AND ranked.cumulative - ranked.available_qty < $4`,
-     [input.sku, input.location_id, lotId, input.quantity],
+     [input.sku, input.location_id, lotId, input.quantity, stockClass],
   );
 
   // Story 2.7: stamp last_issue_at for every balance row at this (sku, location_id) so the
   // obsolescence scan reads MAX(last_issue_at) across lots. GREATEST keeps the value monotonic - a
   // late or out-of-order issue never moves the obsolescence clock backwards. Touches only
   // last_issue_at/updated_at, never on_hand/allocated/available/in_transit (Story 2.2 invariants).
+  // Story 2.8: scoped to the issued stock class - a consignment/vmi issue must not reset the OWNED
+  // obsolescence clock (the scan reads owned rows only).
   const occurredAt = input.occurred_at ?? new Date().toISOString();
   await client.query(
     `UPDATE stock_balance
      SET last_issue_at = GREATEST(COALESCE(last_issue_at, $4::timestamptz), $4::timestamptz),
          updated_at = now()
-     WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)`,
-    [input.sku, input.location_id, lotId, occurredAt],
+     WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)`,
+    [input.sku, input.location_id, lotId, occurredAt, stockClass],
   );
 }
 
@@ -247,11 +270,12 @@ await client.query(
  */
 export async function applyStockDeallocation(input: StockDeallocationInput, client: PoolClient): Promise<void> {
   const lotId = input.lot_id ?? null;
+  const stockClass = input.stock_class ?? 'owned';
   await client.query(
     `UPDATE stock_balance
      SET allocated = GREATEST(allocated - $1, 0),
          updated_at = now()
-     WHERE sku = $2 AND location_id = $3 AND ($4::text IS NULL OR lot_id = $4)`,
-    [input.quantity, input.sku, input.location_id, lotId],
+     WHERE sku = $2 AND location_id = $3 AND stock_class = $5 AND ($4::text IS NULL OR lot_id = $4)`,
+    [input.quantity, input.sku, input.location_id, lotId, stockClass],
   );
 }

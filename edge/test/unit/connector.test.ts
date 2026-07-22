@@ -96,6 +96,11 @@ describe('edge upload failure classification', () => {
       'INVALID_SERVICE_LEVEL',
       'PLANNING_PARAMS_NOT_FOUND',
       'OBSOLESCENCE_THRESHOLD_NOT_CONFIGURED',
+      // Story 2.8 consignment/VMI ownership permanent business rejections
+      'OWNERSHIP_AGREEMENT_NOT_FOUND',
+      'OWNER_PARTY_MISMATCH',
+      'VMI_MIN_NOT_CONFIGURED',
+      'INVALID_SIGNAL_TYPE',
     ]) {
       assert.equal(classifyServerUploadFailure(409, { error_code: code }).localStatus, 'needs_attention');
     }

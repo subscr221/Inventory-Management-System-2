@@ -352,7 +352,7 @@ export async function applyTransferShipProjection(
   const inTransitUpdate = await client.query(
     `UPDATE stock_balance
      SET in_transit = in_transit + $1, updated_at = now()
-     WHERE sku = $2 AND location_id = $3 AND ($4::text IS NULL OR lot_id = $4)`,
+     WHERE sku = $2 AND location_id = $3 AND stock_class = 'owned' AND ($4::text IS NULL OR lot_id = $4)`,
     [shippedQuantity, reqRow.sku_id, reqRow.from_location_id, sourceLot],
   );
   if (inTransitUpdate.rowCount === 0) {
@@ -523,8 +523,9 @@ export async function applyTransferReceiveProjection(
   await client.query(
     `UPDATE stock_balance
      SET in_transit = GREATEST(in_transit - $1, 0), updated_at = now()
-     WHERE sku = $2 AND location_id = $3 AND ($4::text IS NULL OR lot_id = $4)`,
-    [receivedQuantity, reqRow.sku_id, reqRow.from_location_id, reqRow.lot_id],
+      WHERE sku = $2 AND location_id = $3 AND stock_class = 'owned' AND ($4::text IS NULL OR lot_id = $4)`,
+     [receivedQuantity, reqRow.sku_id, reqRow.from_location_id, reqRow.lot_id],
+
   );
 
   // Receipt at destination: increment on_hand

@@ -10,6 +10,9 @@ import type { PlanningParamsRow } from '../read/projections/inventory_planning.j
 import { getOpenRecommendation } from '../read/projections/replenishment_recommendation.js';
 import { getObsolescenceFlag } from '../read/projections/obsolescence_flag.js';
 import { PLANNING_ERROR_CODES } from './inventory-planning.js';
+import { listAgreements, getActiveAgreement } from '../read/projections/ownership_agreement.js';
+import type { OwnershipAgreementRow } from '../read/projections/ownership_agreement.js';
+import { OWNERSHIP_ERROR_CODES } from './ownership.js';
 
 /**
  * Phase-1 planning job cycles (Story 2.7). These are pure functions callable from the synthetic HTTP
@@ -367,6 +370,177 @@ async function checkOneGrain(row: PlanningParamsRow, scope: PlanningJobScope): P
     await client.query('COMMIT');
     committed = true;
     return { sku: row.sku, location_id: row.location_id, recommendation_id: recommendationId, recommended_order_qty: locked.standard_order_qty };
+  } catch (err) {
+    if (!committed) await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Story 2.8: VMI replenishment check
+// ---------------------------------------------------------------------------
+
+export interface VmiReplenishmentCheckResult {
+  recommended: Array<{ sku: string; location_id: string; recommendation_id: string; owner_party_code: string; recommended_order_qty: number }>;
+  skipped: Array<{ sku: string; location_id: string; reason: string }>;
+}
+
+/**
+ * Scans ACTIVE vmi ownership agreements: when the vmi-class on-hand for the agreement's grain has
+ * fallen BELOW the agreed VMI minimum, emits a replenishment.recommended event with
+ * signal_type 'vmi_replenishment' carrying the owner-party supplier reference, visible in the same
+ * replenishment exception queue as internal signals (AC3). Never a purchase requisition, never a
+ * supplier transmission (Epic 4 Story 4.1 delivers the channel), and completely disjoint from
+ * runReplenishmentCheck: this function reads stock_class 'vmi' balances only, the internal check
+ * reads 'owned' only. The agreement row is held FOR UPDATE across read - decide - persist so
+ * concurrent runs for the same grain serialize; the widened partial unique index
+ * uq_replenishment_recommendation_open_signal is the backstop.
+ */
+export async function runVmiReplenishmentCheck(scope: PlanningJobScope): Promise<VmiReplenishmentCheckResult> {
+  const agreements = await listAgreements({
+    location_id: scope.location_id ?? null,
+    location_any: scope.location_any ?? null,
+    sku: scope.sku ?? null,
+    stock_class: 'vmi',
+    active: true,
+  });
+  const recommended: VmiReplenishmentCheckResult['recommended'] = [];
+  const skipped: VmiReplenishmentCheckResult['skipped'] = [];
+
+  for (const agreement of agreements) {
+    const outcome = await checkOneVmiGrain(agreement, scope);
+    if (outcome) {
+      if ('recommendation_id' in outcome) recommended.push(outcome);
+      else skipped.push(outcome);
+    }
+  }
+  return { recommended, skipped };
+}
+
+type VmiGrainOutcome =
+  | { sku: string; location_id: string; recommendation_id: string; owner_party_code: string; recommended_order_qty: number }
+  | { sku: string; location_id: string; reason: string }
+  | null;
+
+async function checkOneVmiGrain(agreement: OwnershipAgreementRow, scope: PlanningJobScope): Promise<VmiGrainOutcome> {
+  const pool = getPool();
+  const client = await pool.connect();
+  let committed = false;
+  try {
+    await client.query('BEGIN');
+    // Lock the agreement row so a concurrent VMI check for this grain serializes: the loser waits,
+    // then sees the open vmi signal the winner committed and skips it.
+    const locked = await getActiveAgreement(agreement.sku, agreement.location_id, 'vmi', client, true);
+    if (!locked) {
+      await client.query('COMMIT');
+      committed = true;
+      return { sku: agreement.sku, location_id: agreement.location_id, reason: OWNERSHIP_ERROR_CODES.OWNERSHIP_AGREEMENT_NOT_FOUND };
+    }
+    if (locked.vmi_min_qty === null || locked.vmi_min_qty <= 0) {
+      await client.query('COMMIT');
+      committed = true;
+      return { sku: agreement.sku, location_id: agreement.location_id, reason: OWNERSHIP_ERROR_CODES.VMI_MIN_NOT_CONFIGURED };
+    }
+
+    await client.query(
+      `SELECT balance_id FROM stock_balance
+       WHERE sku = $1 AND location_id = $2 AND stock_class = 'vmi'
+       FOR UPDATE`,
+      [locked.sku, locked.location_id],
+    );
+
+    // Compare vmi-class on_hand against the agreed minimum in SQL NUMERIC (not JS float).
+    // "Falls below the agreed VMI minimum" (AC3) is a strict comparison: at-minimum is compliant.
+    const balRes = await client.query(
+      `SELECT COALESCE(SUM(on_hand), 0)::text AS on_hand,
+              (COALESCE(SUM(on_hand), 0) < $3::numeric) AS below
+       FROM stock_balance WHERE sku = $1 AND location_id = $2 AND stock_class = 'vmi'`,
+      [locked.sku, locked.location_id, String(locked.vmi_min_qty)],
+    );
+    const onHand = balRes.rows[0]!['on_hand'] as string;
+    const below = balRes.rows[0]!['below'] === true;
+    if (!below) {
+      await client.query('COMMIT');
+      committed = true;
+      return null;
+    }
+
+    // Replenish back up to the agreed minimum, computed in SQL NUMERIC.
+    const qtyRes = await client.query(`SELECT ($1::numeric - $2::numeric)::text AS order_qty`, [String(locked.vmi_min_qty), onHand]);
+    const orderQty = qtyRes.rows[0]!['order_qty'] as string;
+
+    const openRec = await getOpenRecommendation(locked.sku, locked.location_id, client, true, 'vmi_replenishment');
+    if (openRec) {
+      // Idempotent per crossing: refresh only when the minimum, order qty, or owner changed.
+      const unchangedRes = await client.query(
+        `SELECT $1::numeric = $2::numeric AND $3::numeric = $4::numeric AS unchanged`,
+        [String(openRec.reorder_point), String(locked.vmi_min_qty), String(openRec.recommended_order_qty), orderQty],
+      );
+      const unchanged = unchangedRes.rows[0]!['unchanged'] === true && openRec.owner_party_code === locked.owner_party_code;
+      if (unchanged) {
+        await client.query('COMMIT');
+        committed = true;
+        return null;
+      }
+      await client.query(
+        `UPDATE replenishment_recommendation SET status = 'superseded', updated_at = now()
+         WHERE recommendation_id = $1`,
+        [openRec.recommendation_id],
+      );
+    }
+
+    const recommendationId = randomUUID();
+    await persistEvent(
+      {
+        stream_type: 'inventory',
+        stream_id: recommendationId,
+        event_type: 'replenishment.recommended',
+        payload: {
+          recommendation_id: recommendationId,
+          sku: locked.sku,
+          location_id: locked.location_id,
+          on_hand_at_check: Number(onHand),
+          reorder_point: locked.vmi_min_qty,
+          recommended_order_qty: Number(orderQty),
+          signal_type: 'vmi_replenishment',
+          owner_party_code: locked.owner_party_code,
+          triggered_at: new Date().toISOString(),
+          business_date: scope.business_date,
+          business_stream: locked.business_stream,
+        },
+        metadata: planningEventMetadata(scope),
+      },
+      scope.auditCtx,
+      client,
+    );
+
+    // Planner exception alert, transactional so it commits with the vmi signal. The signal routes
+    // to the exception queue for the owner party - NOT an internal purchase requisition (AC3).
+    await emitNotificationInTransaction(
+      {
+        target: { role: PLANNER_ROLE, location_id: locked.location_id },
+        event_type: 'vmi_replenishment_recommended',
+        status_verb: 'Below VMI minimum',
+        object_type: 'sku',
+        object_id: locked.sku,
+        actor_label: 'Inventory Planning',
+        next_step: `VMI replenishment signal for owner party ${locked.owner_party_code} is in the exception queue (supplier transmission arrives with Epic 4)`,
+        actor: scope.actor,
+      },
+      client,
+    );
+
+    await client.query('COMMIT');
+    committed = true;
+    return {
+      sku: locked.sku,
+      location_id: locked.location_id,
+      recommendation_id: recommendationId,
+      owner_party_code: locked.owner_party_code,
+      recommended_order_qty: Number(orderQty),
+    };
   } catch (err) {
     if (!committed) await client.query('ROLLBACK').catch(() => undefined);
     throw err;

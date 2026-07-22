@@ -65,5 +65,9 @@
   "errors.INSUFFICIENT_DEMAND_HISTORY": "There is not enough demand history to compute safety stock for this item yet.",
   "errors.INVALID_SERVICE_LEVEL": "That service level is not supported. Choose 90%, 95%, 97.5%, or 99%.",
   "errors.PLANNING_PARAMS_NOT_FOUND": "No planning parameters are configured for this item and location.",
-  "errors.OBSOLESCENCE_THRESHOLD_NOT_CONFIGURED": "An obsolescence threshold must be set before this item can be scanned for aging."
+  "errors.OBSOLESCENCE_THRESHOLD_NOT_CONFIGURED": "An obsolescence threshold must be set before this item can be scanned for aging.",
+  "errors.OWNERSHIP_AGREEMENT_NOT_FOUND": "No active consignment or VMI agreement exists for this item at this location.",
+  "errors.OWNER_PARTY_MISMATCH": "The supplier on this receipt does not match the active ownership agreement.",
+  "errors.VMI_MIN_NOT_CONFIGURED": "A VMI minimum quantity must be set on the agreement before the VMI check can run.",
+  "errors.INVALID_SIGNAL_TYPE": "That replenishment signal type is not supported."
 }

@@ -16,6 +16,8 @@ import {
   getLatestStandardCostVariance,
   listLatestStandardCostVariancePerSku,
 } from '../../read/projections/inventory_valuation.js';
+import { listAgreements } from '../../read/projections/ownership_agreement.js';
+import { SUPPLIER_OWNED_STOCK_CLASSES } from '../../compliance/ownership.js';
 
 // Mirrors src/api/v1/items.ts and src/api/v1/stock.ts: SKU is API-facing (URL path segment).
 const SKU_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -142,6 +144,36 @@ const getValuationBase: RouteHandler = async (req, res, params) => {
   }
   visibleLocations = visibleLocations.sort((a, b) => (a.location_code ?? a.location_id).localeCompare(b.location_code ?? b.location_id, 'en', { sensitivity: 'base' }));
 
+  // Story 2.8 (AC4): non-owned quantities are REPORTED but contribute zero to the owned carrying
+  // value - the valuation projection itself never ingested them (inventory-valuation.ts gates to
+  // 'owned'), so this is purely a response section. Owner-party codes come from the active
+  // ownership agreements; scoping follows the same visible-locations rule as the rest of this
+  // endpoint. The customer-owned 'job_work' class (Epic 9) is likewise non-valuated and included
+  // for completeness when present, without an owner agreement.
+  const { wildcard: agreementWildcard, locations: agreementLocations } = authContext ? permittedLocationsForModule(authContext.roles, 'inventory') : { wildcard: true, locations: new Set<string>() };
+  const agreements = await listAgreements({ sku, active: true, location_any: agreementWildcard ? null : [...agreementLocations] });
+  const ownerByGrain = new Map<string, string>();
+  for (const agreement of agreements) {
+    ownerByGrain.set(`${agreement.location_id}|${agreement.stock_class}`, agreement.owner_party_code);
+  }
+  const nonOwnedTotals = new Map<string, { stock_class: string; quantity_on_hand: number; owner_parties: Set<string> }>();
+  for (const row of scopedBalances) {
+    if (row.stock_class === 'owned') continue;
+    const entry = nonOwnedTotals.get(row.stock_class) ?? { stock_class: row.stock_class, quantity_on_hand: 0, owner_parties: new Set<string>() };
+    entry.quantity_on_hand += row.on_hand;
+    const owner = ownerByGrain.get(`${row.location_id}|${row.stock_class}`);
+    if (owner) entry.owner_parties.add(owner);
+    nonOwnedTotals.set(row.stock_class, entry);
+  }
+  const nonOwnedQuantities = [...nonOwnedTotals.values()]
+    .sort((a, b) => a.stock_class.localeCompare(b.stock_class, 'en', { sensitivity: 'base' }))
+    .map((entry) => ({
+      stock_class: entry.stock_class,
+      quantity_on_hand: entry.quantity_on_hand,
+      carrying_value_contribution: 0,
+      owner_party_codes: SUPPLIER_OWNED_STOCK_CLASSES.has(entry.stock_class) ? [...entry.owner_parties].sort() : [],
+    }));
+
   sendJson(res, 200, {
     sku,
     valuation_method: item.valuation_method,
@@ -154,6 +186,7 @@ const getValuationBase: RouteHandler = async (req, res, params) => {
     nrv_adjustments: await listNrvAdjustments(sku),
     standard_cost: standardCost,
     visible_locations: visibleLocations,
+    non_owned_quantities: nonOwnedQuantities,
   });
 };
 

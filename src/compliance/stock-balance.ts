@@ -4,6 +4,7 @@ import { AppError } from '../middleware/error.js';
 import { getLocationById, getLocationByCode } from '../read/projections/location_register.js';
 import type { LocationRegisterEntry } from '../read/projections/location_register.js';
 import { applyStockReceipt, applyStockAllocation, applyStockIssue } from '../read/projections/stock_balance.js';
+import { assertConsignmentReceiptOwnership, SUPPLIER_OWNED_STOCK_CLASSES, OWNER_PARTY_CODE_REGEX } from './ownership.js';
 
 /**
  * Central stock-balance seam (Story 2.2), split in two because the two halves run at different
@@ -129,6 +130,21 @@ export function assertStockBalanceShape(envelope: EventEnvelope): void {
         stock_class: stockClass,
       });
     }
+    // Story 2.8: a supplier-owned receipt (consignment/vmi) must carry a well-formed
+    // owner_party_code; the in-transaction gate then matches it against the active ownership
+    // agreement. This is the non-DB half, so a malformed receipt never consumes an idempotency key.
+    if (kind === 'receipt' && SUPPLIER_OWNED_STOCK_CLASSES.has(stockClass)) {
+      const ownerPartyCode = envelope.payload['owner_party_code'];
+      const trimmedOwnerPartyCode = typeof ownerPartyCode === 'string' ? ownerPartyCode.trim() : ownerPartyCode;
+      if (typeof trimmedOwnerPartyCode !== 'string' || !OWNER_PARTY_CODE_REGEX.test(trimmedOwnerPartyCode)) {
+        throw new AppError(400, 'INVALID_PARAMS', `owner_party_code is required for a ${stockClass} receipt and must be 2-32 uppercase alphanumeric/hyphen characters`, {
+          event_type: envelope.event_type,
+          stock_class: stockClass,
+          owner_party_code: typeof ownerPartyCode === 'string' ? ownerPartyCode : null,
+        });
+      }
+      envelope.payload['owner_party_code'] = trimmedOwnerPartyCode;
+    }
   }
 }
 
@@ -178,8 +194,13 @@ export async function applyStockBalanceProjection(
   const quantity = envelope.payload['quantity'] as number;
   const lotId = typeof envelope.payload['lot_id'] === 'string' ? envelope.payload['lot_id'] : null;
 
+  const stockClass = typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : 'owned';
+
   if (kind === 'receipt') {
-    const stockClass = typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : 'owned';
+    // Story 2.8: consignment/vmi receipts must match the single active ownership agreement for
+    // their grain (owner-party validation) BEFORE any balance mutates. Runs here so every write
+    // path - HTTP handler, direct POST /api/v1/events, edge upload - is gated identically.
+    await assertConsignmentReceiptOwnership(envelope, stockClass, sku, location.location_id, client);
     await applyStockReceipt(
       {
         sku,
@@ -195,12 +216,12 @@ export async function applyStockBalanceProjection(
   }
 
   if (kind === 'allocation') {
-    await applyStockAllocation({ sku, location_id: location.location_id, lot_id: lotId, quantity }, client);
+    await applyStockAllocation({ sku, location_id: location.location_id, lot_id: lotId, stock_class: stockClass, quantity }, client);
     return;
   }
 
   await applyStockIssue(
-    { sku, location_id: location.location_id, lot_id: lotId, quantity, occurred_at: envelope.metadata.occurred_at },
+    { sku, location_id: location.location_id, lot_id: lotId, stock_class: stockClass, quantity, occurred_at: envelope.metadata.occurred_at },
     client,
   );
 }

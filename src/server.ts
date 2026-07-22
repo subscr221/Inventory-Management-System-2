@@ -78,7 +78,12 @@ import {
   listRecommendationsHandler,
   scanObsolescenceHandler,
   obsolescenceReportHandler,
+  checkVmiReplenishmentHandler,
 } from './api/v1/inventory-planning.js';
+import {
+  putOwnershipAgreementHandler,
+  listOwnershipAgreementsHandler,
+} from './api/v1/ownership-agreements.js';
 import {
   createTransferRequestHandler,
   getTransferRequestHandler,
@@ -155,6 +160,10 @@ export function createAppRouter(): Router {
   router.get('/api/v1/planning/replenishment/recommendations', listRecommendationsHandler);
   router.post('/api/v1/planning/obsolescence/scan', scanObsolescenceHandler);
   router.get('/api/v1/planning/obsolescence/report', obsolescenceReportHandler);
+  // Story 2.8: Consignment and VMI Stock Segregation
+  router.get('/api/v1/ownership-agreements', listOwnershipAgreementsHandler);
+  router.put('/api/v1/ownership-agreements/:sku/:locationId/:stockClass', putOwnershipAgreementHandler);
+  router.post('/api/v1/planning/vmi/check', checkVmiReplenishmentHandler);
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
   router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);
