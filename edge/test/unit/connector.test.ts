@@ -111,6 +111,14 @@ describe('edge upload failure classification', () => {
       'GATE_REVERSAL_REASON_REQUIRED',
       'GATE_EVENT_NOT_FOUND',
       'GATE_ALREADY_REVERSED',
+      // Story 3.3 weighbridge permanent business rejections
+      'WEIGHBRIDGE_TARE_REQUIRED',
+      'WEIGHBRIDGE_GROSS_REQUIRED',
+      'WEIGHBRIDGE_BINDING_TOKEN_REQUIRED',
+      'WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND',
+      'WEIGHBRIDGE_SITE_MISMATCH',
+      'WEIGHBRIDGE_NET_NEGATIVE',
+      'WEIGHBRIDGE_PO_LINE_NOT_FOUND',
     ]) {
       assert.equal(classifyServerUploadFailure(409, { error_code: code }).localStatus, 'needs_attention');
     }
@@ -122,6 +130,14 @@ describe('edge upload failure classification', () => {
       'GATE_REVERSAL_REASON_REQUIRED',
       'GATE_EVENT_NOT_FOUND',
       'GATE_ALREADY_REVERSED',
+      // Story 3.3 weighbridge permanent business rejections settle on a 403 business denial too
+      'WEIGHBRIDGE_TARE_REQUIRED',
+      'WEIGHBRIDGE_GROSS_REQUIRED',
+      'WEIGHBRIDGE_BINDING_TOKEN_REQUIRED',
+      'WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND',
+      'WEIGHBRIDGE_SITE_MISMATCH',
+      'WEIGHBRIDGE_NET_NEGATIVE',
+      'WEIGHBRIDGE_PO_LINE_NOT_FOUND',
     ]) {
       assert.equal(classifyServerUploadFailure(403, { error_code: code }).localStatus, 'needs_attention');
     }

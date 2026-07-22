@@ -75,6 +75,21 @@
 
 generated: 2026-07-12
 last_updated: 2026-07-22
+# story 3-3 dev-story 2026-07-22: implemented all 7 tasks from baseline 60e2fe6. Weighbridge event
+#   capture is event-sourced through persistEvent (weighbridge.recorded, streamType 'weighbridge',
+#   requiresBusinessStream false). net = gross - tare computed in exact integer milli-kg (no JS float);
+#   WEIGHBRIDGE_NET_NEGATIVE rejected pre-transaction. Tolerance band ordered_qty*(1 +/- pct/100)
+#   computed/compared in PostgreSQL NUMERIC against the Story 2.9 erp_purchase_order_line -> accepted |
+#   tolerance_breach with reason (AC3 blocks silent receipt). Binding token (Story 3.2
+#   gate_event.correlation_id) resolved in the seam (WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND /
+#   WEIGHBRIDGE_SITE_MISMATCH); idempotent replay-safe upsert; never writes any erp_* projection.
+#   weighbridge_event projection (SQL + init-db mirror + migrate registration + schema-drift EXPECTED),
+#   TS accessor, REST API (weighbridge_operator create RBAC, site scoping across inventory/gate/
+#   weighbridge modules), edge intake (permanent codes in upload.ts + connector.ts + en.json;
+#   weighed_by server-set on HTTP + edge). New codes beyond the 5-code table:
+#   WEIGHBRIDGE_BINDING_TOKEN_REQUIRED, WEIGHBRIDGE_PO_LINE_NOT_FOUND (header-only PO tolerance
+#   unknowable -> block). tsc/eslint/build clean, npm test 367/367 (+8), edge 15/15 (+1), spine 6/6,
+#   schema-drift green; moved to review
 # story 3-1 dev-story 2026-07-22: implemented from baseline 7cd3dc7; extended location_register with size_class and access_restricted, added GET /api/v1/locations?site=... site-filtered topology listing, code-or-UUID GET /api/v1/locations/:locationId with hierarchy_path, service-level restricted-zone write gate returning ZONE_ACCESS_RESTRICTED for non-qc_inspector writers, canonical SQL/init-db mirror, Story 3.1 integration tests, schema drift and route-surface guard updates; re-review findings fixed, final re-review no findings, build/lint clean, targeted guards clean, npm test 351/351; moved to done
 # story 3-1 created 2026-07-22 via create-story workflow: Warehouse Topology Setup (FR-W-01); define and manage warehouse topology (sites, zones, aisles, racks, bins) with temperature, hazmat, and quarantine zone attributes, so that every putaway task, pick path, and location override references a real, validated physical location in the system; ready-for-dev
 # story 2-8 dev-story 2026-07-22: implemented all 10 tasks from baseline e030403; found allocation/issue/deallocation drain SQL
@@ -279,7 +294,7 @@ development_status:
   epic-3: in-progress
   3-1-warehouse-topology-setup-fr-w-01: done   # PILOT
   3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: review   # PILOT
-  3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: backlog   # PILOT
+  3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: review   # PILOT
   3-4-goods-receiving-against-asn-or-po-fr-w-02: backlog   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: backlog   # PILOT
   3-6-pick-task-generation-and-execution-fr-w-04: backlog   # PILOT

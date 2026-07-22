@@ -172,6 +172,11 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   if (body.stream_type === 'gate' && body.event_type === 'gate.entered') {
     body.payload['gate_officer_id'] = authContext.userId;
   }
+  // Story 3.3: the weighbridge operator identity is the authenticated actor, never trusted from the
+  // edge payload (mirrors gate_officer_id above).
+  if (body.stream_type === 'weighbridge' && body.event_type === 'weighbridge.recorded') {
+    body.payload['weighed_by'] = authContext.userId;
+  }
   if (assignment.locationId !== '*') {
     body.metadata.actor.location_id = assignment.locationId;
   } else if (body.stream_type === 'inventory') {

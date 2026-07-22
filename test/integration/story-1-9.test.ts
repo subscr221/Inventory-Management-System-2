@@ -248,6 +248,10 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/gate-events/:gateEventId/reverse',
       'GET /api/v1/gate-events/:gateEventId',
       'GET /api/v1/gate-events',
+      // Story 3.3: Weighbridge Event Capture and Tolerance Enforcement
+      'POST /api/v1/weighbridge-events',
+      'GET /api/v1/weighbridge-events/:weighbridgeEventId',
+      'GET /api/v1/weighbridge-events',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
       'PUT /api/v1/lots/:lot_id/quality-hold',

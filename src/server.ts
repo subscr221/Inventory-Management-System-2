@@ -97,6 +97,11 @@ import {
   listGateEventsHandler,
 } from './api/v1/gate.js';
 import {
+  createWeighbridgeEventHandler,
+  getWeighbridgeEventHandler,
+  listWeighbridgeEventsHandler,
+} from './api/v1/weighbridge.js';
+import {
   createTransferRequestHandler,
   getTransferRequestHandler,
   listTransferRequestsHandler,
@@ -200,6 +205,11 @@ export function createAppRouter(): Router {
   router.post('/api/v1/gate-events/:gateEventId/reverse', reverseGateEventHandler);
   router.get('/api/v1/gate-events/:gateEventId', getGateEventHandler);
   router.get('/api/v1/gate-events', listGateEventsHandler);
+
+  // Story 3.3: Weighbridge Event Capture and Tolerance Enforcement
+  router.post('/api/v1/weighbridge-events', createWeighbridgeEventHandler);
+  router.get('/api/v1/weighbridge-events/:weighbridgeEventId', getWeighbridgeEventHandler);
+  router.get('/api/v1/weighbridge-events', listWeighbridgeEventsHandler);
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
   router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);

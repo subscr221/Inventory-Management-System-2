@@ -77,5 +77,12 @@
   "errors.GATE_SITE_NOT_FOUND": "The gate site is not recognized. Refresh site data and try again.",
   "errors.GATE_REVERSAL_REASON_REQUIRED": "A reversal reason is required for gate-event reversal.",
   "errors.GATE_EVENT_NOT_FOUND": "The gate event to reverse was not found centrally.",
-  "errors.GATE_ALREADY_REVERSED": "This gate event was already reversed."
+  "errors.GATE_ALREADY_REVERSED": "This gate event was already reversed.",
+  "errors.WEIGHBRIDGE_TARE_REQUIRED": "A tare weight is required before the weighment can sync.",
+  "errors.WEIGHBRIDGE_GROSS_REQUIRED": "A gross weight is required before the weighment can sync.",
+  "errors.WEIGHBRIDGE_BINDING_TOKEN_REQUIRED": "The vehicle-to-PO binding token is required for the weighment.",
+  "errors.WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND": "The binding token was not found centrally. Confirm the gate entry synced first.",
+  "errors.WEIGHBRIDGE_SITE_MISMATCH": "The weighbridge site differs from the gate-entry site for this vehicle.",
+  "errors.WEIGHBRIDGE_NET_NEGATIVE": "Net weight cannot be negative; check the tare and gross readings.",
+  "errors.WEIGHBRIDGE_PO_LINE_NOT_FOUND": "The PO line for this weighment was not found. Refresh PO data and try again."
 }

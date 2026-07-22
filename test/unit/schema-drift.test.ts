@@ -277,6 +277,23 @@ const EXPECTED = [
       'idx_gate_event_correlation',
     ],
   },
+  {
+    canonical: 'read/projections/weighbridge_event.sql',
+    table: 'weighbridge_event',
+    constraints: [
+      'chk_weighbridge_event_status',
+      'chk_weighbridge_event_tare_non_negative',
+      'chk_weighbridge_event_gross_non_negative',
+      'chk_weighbridge_event_net_non_negative',
+      'chk_weighbridge_event_capture_method',
+    ],
+    indexes: [
+      'idx_weighbridge_event_correlation',
+      'idx_weighbridge_event_site_status',
+      'idx_weighbridge_event_po_line',
+      'idx_weighbridge_event_business_date',
+    ],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

@@ -24,6 +24,7 @@ import { assertCycleCountShape, applyCycleCountProjection } from '../compliance/
 import { assertInventoryPlanningShape, applyInventoryPlanningProjection } from '../compliance/inventory-planning.js';
 import { assertOwnershipShape, applyOwnershipProjection } from '../compliance/ownership.js';
 import { assertGateEnteredShape, assertGateReversedShape, applyGateProjection } from '../compliance/gate.js';
+import { assertWeighbridgeRecordedShape, applyWeighbridgeProjection } from '../compliance/weighbridge.js';
 import { assertErpReadOnly } from '../compliance/erp-readonly.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -211,6 +212,10 @@ export async function persistEvent(
   assertOwnershipShape(envelope);
   assertGateEnteredShape(envelope);
   assertGateReversedShape(envelope);
+  // Story 3.3: weighbridge shape validation (tare/gross/binding-token presence, net = gross - tare
+  // computed in exact integer milli-kg) is non-DB and runs with the other pre-transaction asserts,
+  // so a malformed weighment never consumes an idempotency key.
+  assertWeighbridgeRecordedShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -264,6 +269,10 @@ export async function persistEvent(
       // together. Receipt-side owner-party enforcement lives in applyStockBalanceProjection above.
       await applyOwnershipProjection(envelope, client);
       await applyGateProjection(envelope, client, eventId);
+      // Story 3.3: weighbridge tolerance enforcement resolves the binding token to its gate event,
+      // enforces the site match, computes the tolerance band against the Story 2.9 open-PO line in
+      // SQL NUMERIC, and upserts the weighbridge_event row inside this same transaction.
+      await applyWeighbridgeProjection(envelope, client, eventId);
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {

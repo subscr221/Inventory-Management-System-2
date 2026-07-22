@@ -328,6 +328,28 @@ export interface GateReversedEnvelope extends Omit<EventEnvelope, 'payload'> {
   payload: GateReversedPayload;
 }
 
+// Story 3.3: weighbridge event capture (net = gross - tare, tolerance enforced against the
+// Story 2.9 open-PO line). correlation_id is the Story 3.2 binding token. NUMERIC weights are
+// carried as strings or numbers on the wire but never rounded/compared as JS floats downstream.
+export interface WeighbridgeRecordedPayload {
+  weighbridge_event_id: string;
+  correlation_id: string;
+  tare_kg: number | string;
+  gross_kg: number | string;
+  net_kg?: number | string;
+  po_ref_ext: string;
+  line_no: number;
+  site_code_ext?: string;
+  device_id: string;
+  capture_method: 'AUTO' | 'MANUAL';
+  weighed_by: string;
+}
+
+export interface WeighbridgeRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'weighbridge.recorded';
+  payload: WeighbridgeRecordedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
@@ -411,6 +433,12 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'gate.reversed': {
     streamType: 'gate',
+    requiresBusinessStream: false,
+  },
+  // Story 3.3: weighbridge event capture (no valuated inventory movement, so business-stream
+  // tagging is not gated on it)
+  'weighbridge.recorded': {
+    streamType: 'weighbridge',
     requiresBusinessStream: false,
   },
 } as const;
