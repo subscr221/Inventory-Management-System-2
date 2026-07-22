@@ -109,6 +109,8 @@ function weighbridgeEventToJson(row: WeighbridgeEvent, poSummary?: Record<string
     weighed_by: row.weighed_by,
     business_date: row.business_date,
     source_event_id: row.source_event_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
     ...(poSummary !== undefined ? { po_summary: poSummary } : {}),
   };
 }

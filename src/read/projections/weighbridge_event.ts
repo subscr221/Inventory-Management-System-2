@@ -111,7 +111,11 @@ export async function getWeighbridgeEventById(id: string, client?: PoolClient): 
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
-/** All weighments recorded against a Story 3.2 binding token (joins the gate-event chain). */
+/**
+ * All weighments recorded against a Story 3.2 binding token. `gate_event_id`, `site_id`, and
+ * `site_code_ext` are denormalized onto this row at write time (see applyWeighbridgeProjection),
+ * so no JOIN back to `gate_event` is needed here.
+ */
 export async function getWeighbridgeEventsByCorrelationId(correlationId: string, client?: PoolClient): Promise<WeighbridgeEvent[]> {
   const result = await runner(client).query(
     `SELECT ${WEIGHBRIDGE_EVENT_COLUMNS} FROM weighbridge_event

@@ -1,8 +1,12 @@
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
+import { emitNotificationInTransaction } from '../notify/emit.js';
 import { getLocationByCode } from '../read/projections/location_register.js';
 import { upsertWeighbridgeEvent } from '../read/projections/weighbridge_event.js';
+
+/** AC3: tolerance breaches are routed to the receiving supervisor for review before receipt. */
+const TOLERANCE_BREACH_TARGET_ROLE = 'receiving_supervisor';
 
 const WEIGHBRIDGE_STREAM_TYPES = new Set(['weighbridge']);
 const WEIGHBRIDGE_EVENT_TYPES = new Set(['weighbridge.recorded']);
@@ -121,16 +125,19 @@ export async function applyWeighbridgeProjection(envelope: EventEnvelope, client
   const p = envelope.payload;
 
   const correlationId = envelope.metadata.correlation_id;
+  // AC1 requires the binding token to be active: a gate event that has been reversed (Story 3.2
+  // gate.reversed) no longer represents an active vehicle-to-PO binding, so it must not resolve as
+  // a valid token here even though the row itself still exists.
   const gateResult = await client.query(
     `SELECT gate_event_id, site_id, site_code_ext, status
        FROM gate_event
-      WHERE correlation_id = $1
+      WHERE correlation_id = $1 AND status = 'open'
       ORDER BY entered_at DESC, created_at DESC
       LIMIT 1`,
     [correlationId],
   );
   if (gateResult.rows.length === 0) {
-    throw new AppError(404, 'WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND', `No gate event exists for binding token "${correlationId}"`, { correlation_id: correlationId });
+    throw new AppError(404, 'WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND', `No active gate event exists for binding token "${correlationId}"`, { correlation_id: correlationId });
   }
   const gate = gateResult.rows[0]!;
   const gateSiteId = gate['site_id'] as string;
@@ -205,4 +212,25 @@ export async function applyWeighbridgeProjection(envelope: EventEnvelope, client
     },
     client,
   );
+
+  // AC3: an out-of-tolerance load is blocked from silent receipt and routed as a task to the
+  // named owner (receiving supervisor). Transactional with the projection write above, so a
+  // breach is never persisted without its routed alert (mirrors the Story 2.6/2.7 approval-task
+  // pattern in src/compliance/planning-jobs.ts).
+  if (status === 'tolerance_breach') {
+    await emitNotificationInTransaction(
+      {
+        target: { role: TOLERANCE_BREACH_TARGET_ROLE, location_id: siteId },
+        event_type: 'weighbridge_tolerance_breach',
+        status_verb: 'Tolerance breach',
+        object_type: 'weighbridge_event',
+        object_id: p['weighbridge_event_id'] as string,
+        actor_label: 'Weighbridge',
+        next_step: toleranceBreachReason,
+        actor: envelope.metadata.actor,
+        correlation_id: correlationId,
+      },
+      client,
+    );
+  }
 }

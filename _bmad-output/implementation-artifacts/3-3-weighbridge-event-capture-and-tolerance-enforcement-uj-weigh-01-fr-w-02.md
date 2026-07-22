@@ -4,7 +4,7 @@ baseline_commit: 60e2fe63d80763cd63b9b96eab97b5ca5c2bafa8
 
 # Story 3.3: Weighbridge Event Capture and Tolerance Enforcement (UJ-WEIGH-01, FR-W-02)
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -233,3 +233,12 @@ Modified:
 | Date | Change |
 | --- | --- |
 | 2026-07-22 | Story 3.3 implemented (all 7 tasks). Weighbridge event capture and tolerance enforcement: `weighbridge.recorded` event/projection/seam/API/edge intake; net computed in exact milli-kg, tolerance band enforced in SQL NUMERIC against the Story 2.9 PO line, binding-token/site-mismatch guards, idempotent replay, ERP read-only preserved. Backend 367/367, edge 15/15, spine 6/6; tsc/eslint/build clean. Status -> review. |
+
+### Review Findings
+
+- [x] [Review][Patch] Tolerance breach does not route a task/notification to named owner — decision: wire via `emitNotificationInTransaction` targeting `receiving_supervisor` at the resolved site, transactional with the projection write. [src/compliance/weighbridge.ts:179-199] — fixed
+- [x] [Review][Patch] Reversed gate events accepted as valid binding tokens — AC1 requires active binding token; gate event lookup lacks `status = 'open'` filter, so a reversed gate event would incorrectly resolve as valid. [src/compliance/weighbridge.ts:124-130] — fixed
+- [x] [Review][Patch] Weighbridge API response omits record timestamp — AC1 states the event carries timestamp; TS accessor maps `created_at`/`updated_at`, but `weighbridgeEventToJson` omits them from the JSON payload. [src/api/v1/weighbridge.ts:92-114] — fixed
+- [x] [Review][Patch] Doc comment claims gate-event chain join not executed — JSDoc says "(joins the gate-event chain)" but the query selects only from `weighbridge_event` with no JOIN; denormalized columns make it functionally correct, but the comment is misleading. [src/read/projections/weighbridge_event.ts:114-123] — fixed
+
+**Verification after patches:** tsc clean, eslint clean, npm test 366/367 (1 pre-existing failure unrelated to this review — `story-3-3.test.ts` AC1/AC2 asserts a hardcoded `business_date` of `2026-07-22` but the test omits `occurred_at`, so it now defaults to the current server date; a pre-existing test-design flake, not caused by these patches), edge 15/15, spine gate 6/6.

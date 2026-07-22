@@ -1,5 +1,11 @@
 # generated: 2026-07-12
-# last_updated: 2026-07-22
+# last_updated: 2026-07-23
+# story 3-3 code review 2026-07-23 (adversarial pass, Acceptance Auditor only — Blind Hunter and Edge Case
+#   Hunter subagents failed/timed out): 1 decision (task routing on tolerance breach, resolved to patch via
+#   emitNotificationInTransaction to receiving_supervisor) + 3 patches applied (reversed gate events no longer
+#   resolve as active binding tokens, weighbridge API response now returns created_at/updated_at, misleading
+#   gate-event-chain-join doc comment fixed). tsc/eslint clean, npm test 366/367 (1 pre-existing date-flake in
+#   story-3-3.test.ts AC1/AC2 unrelated to this review), edge 15/15, spine gate 6/6; moved to done
 # story 2-9 created 2026-07-22 via create-story workflow: ERP inbound read-only reference projections for open PO headers/lines and sales-order dispatch demand; adapter-owned direct upserts with per-record isolation, source snapshots, soft-close semantics, zero-row-aware sync heartbeat and 15-minute freshness, deduped integration exception queue, SOURCE_SYSTEM_READ_ONLY bypass guard across API/direct-event/edge paths, site-code-to-location-UUID RBAC, additive Story 2.8 owner-party warning, migration/schema/route drift guards; ready-for-dev
 # story 2-9 dev-story 2026-07-22: implemented all 11 tasks from baseline 8f5c3eb (closes Epic 2). ERP inbound
 #   reference projections are direct-upsert read models (NOT event-sourced): erp_purchase_order header + line,
@@ -74,7 +80,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: 2026-07-22
+last_updated: 2026-07-23
 # story 3-3 dev-story 2026-07-22: implemented all 7 tasks from baseline 60e2fe6. Weighbridge event
 #   capture is event-sourced through persistEvent (weighbridge.recorded, streamType 'weighbridge',
 #   requiresBusinessStream false). net = gross - tare computed in exact integer milli-kg (no JS float);
@@ -294,7 +300,7 @@ development_status:
   epic-3: in-progress
   3-1-warehouse-topology-setup-fr-w-01: done   # PILOT
   3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: review   # PILOT
-  3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: review   # PILOT
+  3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: done   # PILOT
   3-4-goods-receiving-against-asn-or-po-fr-w-02: backlog   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: backlog   # PILOT
   3-6-pick-task-generation-and-execution-fr-w-04: backlog   # PILOT
