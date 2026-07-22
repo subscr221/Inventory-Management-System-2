@@ -169,6 +169,9 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
 
   body.metadata.actor.user_id = authContext.userId;
   body.metadata.actor.role = assignment.role;
+  if (body.stream_type === 'gate' && body.event_type === 'gate.entered') {
+    body.payload['gate_officer_id'] = authContext.userId;
+  }
   if (assignment.locationId !== '*') {
     body.metadata.actor.location_id = assignment.locationId;
   } else if (body.stream_type === 'inventory') {

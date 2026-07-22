@@ -62,6 +62,14 @@ const PERMANENT_ERROR_CODES = new Set([
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). A write from an
   // edge upload can never mutate ERP-mastered state; settle it needs_attention, never halt the outbox.
   'SOURCE_SYSTEM_READ_ONLY',
+  // Story 3.2: gate-event permanent business rejections
+  'GATE_VEHICLE_REG_REQUIRED',
+  'GATE_CHALLAN_PHOTO_REQUIRED',
+  'GATE_PO_REF_REQUIRED',
+  'GATE_SITE_NOT_FOUND',
+  'GATE_REVERSAL_REASON_REQUIRED',
+  'GATE_EVENT_NOT_FOUND',
+  'GATE_ALREADY_REVERSED',
 ]);
 
 function isAppError(error: unknown): error is AppError {

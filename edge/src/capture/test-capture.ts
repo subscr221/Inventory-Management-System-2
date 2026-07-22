@@ -27,6 +27,57 @@ export interface EdgeEventRecord {
   updated_at: string;
 }
 
+export function createGateEnteredEvent(input: {
+  userId: string;
+  role: string;
+  siteId: string;
+  siteCodeExt: string;
+  poRefExt: string;
+  vehicleRegExt: string;
+  challanNumberExt?: string;
+  challanPhotoRef: string;
+  driverName?: string;
+  gateId: string;
+  deviceId: string;
+  occurredAt?: string;
+}): EdgeEventRecord {
+  const now = input.occurredAt ?? new Date().toISOString();
+  const gateEventId = randomUUID();
+  return {
+    event_id: randomUUID(),
+    stream_type: 'gate',
+    stream_id: gateEventId,
+    event_type: 'gate.entered',
+    event_version: 1,
+    payload: {
+      gate_event_id: gateEventId,
+      site_code_ext: input.siteCodeExt,
+      po_ref_ext: input.poRefExt,
+      vehicle_reg_ext: input.vehicleRegExt,
+      ...(input.challanNumberExt !== undefined ? { challan_number_ext: input.challanNumberExt } : {}),
+      challan_photo_ref: input.challanPhotoRef,
+      ...(input.driverName !== undefined ? { driver_name: input.driverName } : {}),
+      gate_id: input.gateId,
+      gate_officer_id: input.userId,
+      entered_at: now,
+    },
+    metadata: {
+      correlation_id: randomUUID(),
+      actor: { user_id: input.userId, role: input.role, location_id: input.siteId },
+      device_id: input.deviceId,
+      capture_method: 'MANUAL',
+      occurred_at: now,
+    },
+    schema_version: 1,
+    idempotency_key: `edge-gate-entered-${gateEventId}`,
+    local_status: 'pending_sync',
+    server_error_code: null,
+    server_error_details: null,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
 export function createTestCaptureEvent(input: {
   userId: string;
   role: string;

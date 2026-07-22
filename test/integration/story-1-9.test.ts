@@ -243,6 +243,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'PUT /api/v1/erp/sales-orders',
       'PATCH /api/v1/erp/sales-orders',
       'DELETE /api/v1/erp/sales-orders',
+      // Story 3.2: Gate Event Capture and Vehicle-to-PO Binding
+      'POST /api/v1/gate-events',
+      'POST /api/v1/gate-events/:gateEventId/reverse',
+      'GET /api/v1/gate-events/:gateEventId',
+      'GET /api/v1/gate-events',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
       'PUT /api/v1/lots/:lot_id/quality-hold',

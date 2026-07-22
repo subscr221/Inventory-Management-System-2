@@ -261,6 +261,22 @@ const EXPECTED = [
     constraints: ['chk_integration_exception_record_type', 'chk_integration_exception_status'],
     indexes: ['idx_integration_exception_status', 'uq_integration_exception_open'],
   },
+  {
+    canonical: 'read/projections/gate_event.sql',
+    table: 'gate_event',
+    constraints: [
+      'chk_gate_event_binding_status',
+      'chk_gate_event_status',
+      'chk_gate_event_vehicle_reg_nonempty',
+      'chk_gate_event_challan_photo_nonempty',
+    ],
+    indexes: [
+      'idx_gate_event_site_status',
+      'idx_gate_event_po_ref',
+      'idx_gate_event_binding_status',
+      'idx_gate_event_correlation',
+    ],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

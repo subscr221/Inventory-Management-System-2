@@ -91,6 +91,12 @@ import {
   erpReadOnlyRejectHandler,
 } from './api/v1/erp-projections.js';
 import {
+  createGateEventHandler,
+  reverseGateEventHandler,
+  getGateEventHandler,
+  listGateEventsHandler,
+} from './api/v1/gate.js';
+import {
   createTransferRequestHandler,
   getTransferRequestHandler,
   listTransferRequestsHandler,
@@ -189,6 +195,11 @@ export function createAppRouter(): Router {
   router.put('/api/v1/erp/sales-orders', erpReadOnlyRejectHandler);
   router.patch('/api/v1/erp/sales-orders', erpReadOnlyRejectHandler);
   router.delete('/api/v1/erp/sales-orders', erpReadOnlyRejectHandler);
+  // Story 3.2: Gate Event Capture and Vehicle-to-PO Binding
+  router.post('/api/v1/gate-events', createGateEventHandler);
+  router.post('/api/v1/gate-events/:gateEventId/reverse', reverseGateEventHandler);
+  router.get('/api/v1/gate-events/:gateEventId', getGateEventHandler);
+  router.get('/api/v1/gate-events', listGateEventsHandler);
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);
   router.put('/api/v1/lots/:lot_id/quality-hold', placeQualityHoldHandler);

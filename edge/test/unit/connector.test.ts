@@ -103,8 +103,27 @@ describe('edge upload failure classification', () => {
       'INVALID_SIGNAL_TYPE',
       // Story 2.9 ERP read-only reference projection rejection
       'SOURCE_SYSTEM_READ_ONLY',
+      // Story 3.2 gate-event permanent business rejections
+      'GATE_VEHICLE_REG_REQUIRED',
+      'GATE_CHALLAN_PHOTO_REQUIRED',
+      'GATE_PO_REF_REQUIRED',
+      'GATE_SITE_NOT_FOUND',
+      'GATE_REVERSAL_REASON_REQUIRED',
+      'GATE_EVENT_NOT_FOUND',
+      'GATE_ALREADY_REVERSED',
     ]) {
       assert.equal(classifyServerUploadFailure(409, { error_code: code }).localStatus, 'needs_attention');
+    }
+    for (const code of [
+      'GATE_VEHICLE_REG_REQUIRED',
+      'GATE_CHALLAN_PHOTO_REQUIRED',
+      'GATE_PO_REF_REQUIRED',
+      'GATE_SITE_NOT_FOUND',
+      'GATE_REVERSAL_REASON_REQUIRED',
+      'GATE_EVENT_NOT_FOUND',
+      'GATE_ALREADY_REVERSED',
+    ]) {
+      assert.equal(classifyServerUploadFailure(403, { error_code: code }).localStatus, 'needs_attention');
     }
     assert.equal(
       classifyServerUploadFailure(401, { error_code: 'UNAUTHORIZED' }).localStatus,

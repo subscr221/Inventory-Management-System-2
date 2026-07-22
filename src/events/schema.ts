@@ -299,6 +299,35 @@ export interface OwnershipAgreementSetEnvelope extends Omit<EventEnvelope, 'payl
   payload: OwnershipAgreementSetPayload;
 }
 
+export interface GateEnteredPayload {
+  gate_event_id: string;
+  site_code_ext: string;
+  po_ref_ext: string;
+  vehicle_reg_ext: string;
+  challan_number_ext?: string;
+  challan_photo_ref: string;
+  driver_name?: string;
+  gate_id: string;
+  gate_officer_id: string;
+  entered_at: string;
+}
+
+export interface GateEnteredEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'gate.entered';
+  payload: GateEnteredPayload;
+}
+
+export interface GateReversedPayload {
+  gate_event_id: string;
+  reversal_reason: string;
+  reversed_by: string;
+}
+
+export interface GateReversedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'gate.reversed';
+  payload: GateReversedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
@@ -374,5 +403,14 @@ export const SUPPORTED_EVENT_TYPES = {
   'ownership.agreement_set': {
     streamType: 'inventory',
     requiresBusinessStream: true,
+  },
+  // Story 3.2: gate event capture events
+  'gate.entered': {
+    streamType: 'gate',
+    requiresBusinessStream: false,
+  },
+  'gate.reversed': {
+    streamType: 'gate',
+    requiresBusinessStream: false,
   },
 } as const;

@@ -1,6 +1,10 @@
+---
+baseline_commit: 798d2cfaed5fedd5fef76f31f6bbf073c11684d5
+---
+
 # Story 3.2: Gate Event Capture and Vehicle-to-PO Binding
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -36,44 +40,44 @@ Covers UJ-GATE-01 at the inbound edge (realized through FR-W-02 and INT-GATE-01)
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Gate event contracts and event registration (AC: 1, 2, 3, 4)
-  - [ ] 1.1 In `src/events/schema.ts`, add `GateEnteredPayload` and `GateEnteredEnvelope extends Omit<EventEnvelope, 'payload'>` with literal `event_type: 'gate.entered'`. Payload fields: `gate_event_id` (UUIDv4), `site_code_ext` (ERP/human site code, resolved to a `site` level location), `po_ref_ext` (the scanned PO reference, or the literal `"UNKNOWN"`), `vehicle_reg_ext` (Indian plate format, non-empty, trimmed uppercase), `challan_number_ext`, `challan_photo_ref` (attachment key, mandatory), `driver_name` (optional), `gate_id`, `gate_officer_id`, `entered_at` (ISO timestamp). The binding token is the event `correlation_id` carried in `metadata.correlation_id` (AD-2).
-  - [ ] 1.2 Add `GateReversedPayload` and `GateReversedEnvelope` with literal `event_type: 'gate.reversed'`: `gate_event_id`, `reversal_reason` (required, non-empty), `reversed_by`. Reversal is auditor-visible and never deletes the original row (FR-AC-13, AD-16).
-  - [ ] 1.3 Register both keys in `SUPPORTED_EVENT_TYPES` as `{ streamType: 'gate', requiresBusinessStream: false }`. Use `streamType: 'gate'` (NOT `inventory`) so business-stream tagging in `src/compliance/business-stream.ts` is not gated on this event (a gate event posts no valuated inventory movement, so it must not raise `UNTAGGED_TRANSACTION`). Keep event names past-tense, dot-separated. See the open questions if the stream-type registry rejects a new value.
-  - [ ] 1.4 Add the `gate_event` table to the `EXPECTED` list in `test/unit/schema-drift.test.ts` with its constraints, indexes, and grant expectations.
+- [x] Task 1: Gate event contracts and event registration (AC: 1, 2, 3, 4)
+  - [x] 1.1 In `src/events/schema.ts`, add `GateEnteredPayload` and `GateEnteredEnvelope extends Omit<EventEnvelope, 'payload'>` with literal `event_type: 'gate.entered'`. Payload fields: `gate_event_id` (UUIDv4), `site_code_ext` (ERP/human site code, resolved to a `site` level location), `po_ref_ext` (the scanned PO reference, or the literal `"UNKNOWN"`), `vehicle_reg_ext` (Indian plate format, non-empty, trimmed uppercase), `challan_number_ext`, `challan_photo_ref` (attachment key, mandatory), `driver_name` (optional), `gate_id`, `gate_officer_id`, `entered_at` (ISO timestamp). The binding token is the event `correlation_id` carried in `metadata.correlation_id` (AD-2).
+  - [x] 1.2 Add `GateReversedPayload` and `GateReversedEnvelope` with literal `event_type: 'gate.reversed'`: `gate_event_id`, `reversal_reason` (required, non-empty), `reversed_by`. Reversal is auditor-visible and never deletes the original row (FR-AC-13, AD-16).
+  - [x] 1.3 Register both keys in `SUPPORTED_EVENT_TYPES` as `{ streamType: 'gate', requiresBusinessStream: false }`. Use `streamType: 'gate'` (NOT `inventory`) so business-stream tagging in `src/compliance/business-stream.ts` is not gated on this event (a gate event posts no valuated inventory movement, so it must not raise `UNTAGGED_TRANSACTION`). Keep event names past-tense, dot-separated. See the open questions if the stream-type registry rejects a new value.
+  - [x] 1.4 Add the `gate_event` table to the `EXPECTED` list in `test/unit/schema-drift.test.ts` with its constraints, indexes, and grant expectations.
 
-- [ ] Task 2: Gate event projection DDL (AC: 1, 2, 3)
-  - [ ] 2.1 Create `read/projections/gate_event.sql` following the exact idempotent pattern of `read/projections/erp_purchase_order.sql`. Table `gate_event` at grain `gate_event_id UUID PRIMARY KEY`. Columns: `site_id UUID NOT NULL` (internal `location_register.location_id`), `site_code_ext TEXT NOT NULL`, `po_ref_ext TEXT` (NULL or `'UNKNOWN'` when no PO), `binding_status TEXT NOT NULL` (`matched` | `unmatched`), `vehicle_reg_ext TEXT NOT NULL`, `driver_name TEXT`, `challan_number_ext TEXT`, `challan_photo_ref TEXT NOT NULL`, `gate_id TEXT NOT NULL`, `gate_officer_id UUID NOT NULL`, `correlation_id UUID NOT NULL` (the binding token), `entered_at TIMESTAMPTZ NOT NULL`, `business_date DATE NOT NULL` (IST local date, mirror the cycle-count/physical-verification helper), `status TEXT NOT NULL DEFAULT 'open'` (`open` | `reversed`), `reversal_reason TEXT`, `source_event_id UUID NOT NULL`, timestamps.
-  - [ ] 2.2 CHECK constraints via guarded `DO $$` blocks checking `pg_constraint`: `chk_gate_event_binding_status` (`binding_status IN ('matched','unmatched')`), `chk_gate_event_status` (`status IN ('open','reversed')`), `chk_gate_event_vehicle_reg_nonempty` (`length(trim(vehicle_reg_ext)) > 0`), `chk_gate_event_challan_photo_nonempty` (`length(trim(challan_photo_ref)) > 0`).
-  - [ ] 2.3 Indexes: `(site_id, status)` for the location-scoped worklist, `(po_ref_ext)` for reconcile lookups, `(binding_status, status)` for the unmatched exception worklist, `(correlation_id)` for downstream token joins.
-  - [ ] 2.4 Guarded grants in idempotent `DO $$` blocks checking `pg_roles`: `INSERT, SELECT, UPDATE` for `app_user`; `SELECT` for `readonly_user`; no DELETE (reversal is soft).
-  - [ ] 2.5 Register `gate_event.sql` in the `MIGRATIONS` array in `src/events/migrate.ts` (append after the last Epic 2 entry). Mirror the DDL BYTE-FOR-BYTE into `deploy/compose/init-db.sql` WITHOUT touching the `powersync_publication` block.
+- [x] Task 2: Gate event projection DDL (AC: 1, 2, 3)
+  - [x] 2.1 Create `read/projections/gate_event.sql` following the exact idempotent pattern of `read/projections/erp_purchase_order.sql`. Table `gate_event` at grain `gate_event_id UUID PRIMARY KEY`. Columns: `site_id UUID NOT NULL` (internal `location_register.location_id`), `site_code_ext TEXT NOT NULL`, `po_ref_ext TEXT` (NULL or `'UNKNOWN'` when no PO), `binding_status TEXT NOT NULL` (`matched` | `unmatched`), `vehicle_reg_ext TEXT NOT NULL`, `driver_name TEXT`, `challan_number_ext TEXT`, `challan_photo_ref TEXT NOT NULL`, `gate_id TEXT NOT NULL`, `gate_officer_id UUID NOT NULL`, `correlation_id UUID NOT NULL` (the binding token), `entered_at TIMESTAMPTZ NOT NULL`, `business_date DATE NOT NULL` (IST local date, mirror the cycle-count/physical-verification helper), `status TEXT NOT NULL DEFAULT 'open'` (`open` | `reversed`), `reversal_reason TEXT`, `source_event_id UUID NOT NULL`, timestamps.
+  - [x] 2.2 CHECK constraints via guarded `DO $$` blocks checking `pg_constraint`: `chk_gate_event_binding_status` (`binding_status IN ('matched','unmatched')`), `chk_gate_event_status` (`status IN ('open','reversed')`), `chk_gate_event_vehicle_reg_nonempty` (`length(trim(vehicle_reg_ext)) > 0`), `chk_gate_event_challan_photo_nonempty` (`length(trim(challan_photo_ref)) > 0`).
+  - [x] 2.3 Indexes: `(site_id, status)` for the location-scoped worklist, `(po_ref_ext)` for reconcile lookups, `(binding_status, status)` for the unmatched exception worklist, `(correlation_id)` for downstream token joins.
+  - [x] 2.4 Guarded grants in idempotent `DO $$` blocks checking `pg_roles`: `INSERT, SELECT, UPDATE` for `app_user`; `SELECT` for `readonly_user`; no DELETE (reversal is soft).
+  - [x] 2.5 Register `gate_event.sql` in the `MIGRATIONS` array in `src/events/migrate.ts` (append after the last Epic 2 entry). Mirror the DDL BYTE-FOR-BYTE into `deploy/compose/init-db.sql` WITHOUT touching the `powersync_publication` block.
 
-- [ ] Task 3: Gate read-model TypeScript accessor (AC: 2, 3)
-  - [ ] 3.1 Create `src/read/projections/gate_event.ts` mirroring `src/read/projections/erp_purchase_order.ts` structure: `runner(client?) = client ?? getPool()`, a `GATE_EVENT_COLUMNS` const, `mapRow`, and `ts()`/`num()`/`numOrNull()` helpers. Bind DATE columns via `to_char(..., 'YYYY-MM-DD')`; never round or compare NUMERIC in JS.
-  - [ ] 3.2 Accessors: `getGateEventById(gateEventId, client?)`, `listGateEvents({ siteId?, status?, bindingStatus? }, client?)` (used by the worklist API and downstream consumers), and `upsertGateEvent` / `markGateEventReversed` used ONLY by the compliance seam (not event-sourced elsewhere). Export a `GateEvent` type.
+- [x] Task 3: Gate read-model TypeScript accessor (AC: 2, 3)
+  - [x] 3.1 Create `src/read/projections/gate_event.ts` mirroring `src/read/projections/erp_purchase_order.ts` structure: `runner(client?) = client ?? getPool()`, a `GATE_EVENT_COLUMNS` const, `mapRow`, and `ts()`/`num()`/`numOrNull()` helpers. Bind DATE columns via `to_char(..., 'YYYY-MM-DD')`; never round or compare NUMERIC in JS.
+  - [x] 3.2 Accessors: `getGateEventById(gateEventId, client?)`, `listGateEvents({ siteId?, status?, bindingStatus? }, client?)` (used by the worklist API and downstream consumers), and `upsertGateEvent` / `markGateEventReversed` used ONLY by the compliance seam (not event-sourced elsewhere). Export a `GateEvent` type.
 
-- [ ] Task 4: Gate compliance seam and central write-path wiring (AC: 1, 2, 3)
-  - [ ] 4.1 Create `src/compliance/gate.ts` with `assertGateEnteredShape(envelope)`, `assertGateReversedShape(envelope)`, `applyGateProjection(envelope, client, eventId)`. Follow the `src/compliance/ownership.ts` structure.
-  - [ ] 4.2 `assertGateEnteredShape` (pre-transaction, before any DB write so a rejected event consumes no idempotency key): require `vehicle_reg_ext` (reject `GATE_VEHICLE_REG_REQUIRED`), require `challan_photo_ref` (reject `GATE_CHALLAN_PHOTO_REQUIRED`), require `po_ref_ext` present as a non-empty string or the literal `"UNKNOWN"` (reject `GATE_PO_REF_REQUIRED`), require `site_code_ext`, `gate_id`, `gate_officer_id`. `assertGateReversedShape`: require `reversal_reason` non-empty (reject `GATE_REVERSAL_REASON_REQUIRED`).
-  - [ ] 4.3 `applyGateProjection` for `gate.entered` (in-transaction): resolve `site_code_ext` through `getLocationByCode` requiring an active `level = 'site'` row (reject `GATE_SITE_NOT_FOUND` if unknown or non-site). Resolve `po_ref_ext` through `getPurchaseOrderByRef(po_ref_ext, client)`: if it returns an open PO, set `binding_status = 'matched'`; otherwise (`'UNKNOWN'`, not found, or `status = 'closed'`) set `binding_status = 'unmatched'`. Set `correlation_id = envelope.metadata.correlation_id` (the binding token). Upsert the `gate_event` row keyed on `gate_event_id` (idempotent replay-safe). NEVER write to any `erp_*` projection.
-  - [ ] 4.4 `applyGateProjection` for `gate.reversed`: load the gate event, reject `GATE_EVENT_NOT_FOUND` if missing, reject `GATE_ALREADY_REVERSED` if already `reversed`, then set `status = 'reversed'` and `reversal_reason`. Keep the row (soft reversal, auditor-visible).
-  - [ ] 4.5 Wire into `src/events/store.ts` `persistEvent`: add `assertGateEnteredShape` / `assertGateReversedShape` alongside the existing pre-transaction asserts (near lines 185-210) and `await applyGateProjection(envelope, client, eventId)` alongside the in-transaction projection calls (near lines 236-262). Preserve the existing `assertLocationInvariant` and `logAuditEntry` post-insert calls.
+- [x] Task 4: Gate compliance seam and central write-path wiring (AC: 1, 2, 3)
+  - [x] 4.1 Create `src/compliance/gate.ts` with `assertGateEnteredShape(envelope)`, `assertGateReversedShape(envelope)`, `applyGateProjection(envelope, client, eventId)`. Follow the `src/compliance/ownership.ts` structure.
+  - [x] 4.2 `assertGateEnteredShape` (pre-transaction, before any DB write so a rejected event consumes no idempotency key): require `vehicle_reg_ext` (reject `GATE_VEHICLE_REG_REQUIRED`), require `challan_photo_ref` (reject `GATE_CHALLAN_PHOTO_REQUIRED`), require `po_ref_ext` present as a non-empty string or the literal `"UNKNOWN"` (reject `GATE_PO_REF_REQUIRED`), require `site_code_ext`, `gate_id`, `gate_officer_id`. `assertGateReversedShape`: require `reversal_reason` non-empty (reject `GATE_REVERSAL_REASON_REQUIRED`).
+  - [x] 4.3 `applyGateProjection` for `gate.entered` (in-transaction): resolve `site_code_ext` through `getLocationByCode` requiring an active `level = 'site'` row (reject `GATE_SITE_NOT_FOUND` if unknown or non-site). Resolve `po_ref_ext` through `getPurchaseOrderByRef(po_ref_ext, client)`: if it returns an open PO, set `binding_status = 'matched'`; otherwise (`'UNKNOWN'`, not found, or `status = 'closed'`) set `binding_status = 'unmatched'`. Set `correlation_id = envelope.metadata.correlation_id` (the binding token). Upsert the `gate_event` row keyed on `gate_event_id` (idempotent replay-safe). NEVER write to any `erp_*` projection.
+  - [x] 4.4 `applyGateProjection` for `gate.reversed`: load the gate event, reject `GATE_EVENT_NOT_FOUND` if missing, reject `GATE_ALREADY_REVERSED` if already `reversed`, then set `status = 'reversed'` and `reversal_reason`. Keep the row (soft reversal, auditor-visible).
+  - [x] 4.5 Wire into `src/events/store.ts` `persistEvent`: add `assertGateEnteredShape` / `assertGateReversedShape` alongside the existing pre-transaction asserts (near lines 185-210) and `await applyGateProjection(envelope, client, eventId)` alongside the in-transaction projection calls (near lines 236-262). Preserve the existing `assertLocationInvariant` and `logAuditEntry` post-insert calls.
 
-- [ ] Task 5: Gate REST API with RBAC and site scoping (AC: 1, 2, 3)
-  - [ ] 5.1 Create `src/api/v1/gate.ts` following `src/api/v1/erp-projections.ts` and `src/api/v1/ownership-agreements.ts`. Handlers: `POST /api/v1/gate-events` (online capture, emits `gate.entered` via `persistEvent`), `POST /api/v1/gate-events/:gateEventId/reverse` (emits `gate.reversed`), `GET /api/v1/gate-events/:gateEventId` (single, includes resolved PO summary and binding token), `GET /api/v1/gate-events?site=&status=&binding=` (list; `binding=unmatched` is the exception worklist).
-  - [ ] 5.2 RBAC via `requireRole` (`src/middleware/rbac.ts`), module `inventory`. Create and reverse: `gate_officer` only. Unmatched worklist (`binding=unmatched`): `unloading_supervisor` and `warehouse_manager` in addition to `gate_officer`. Enforce site scope via `permittedLocationsForModule(roles, 'inventory')`, filtering results to permitted `site_id` and rejecting out-of-scope create/read with `LOCATION_ACCESS_DENIED`. Never trust client-supplied role or identity; take `gate_officer_id` from `authContext`.
-  - [ ] 5.3 Register every handler in `src/server.ts` with `router.get`/`router.post` (mirror the existing `erp-projections` and `edge` registration lines). Use the standard error envelope `{ error_code, message, details, trace_id }` from `src/middleware/error.js`.
+- [x] Task 5: Gate REST API with RBAC and site scoping (AC: 1, 2, 3)
+  - [x] 5.1 Create `src/api/v1/gate.ts` following `src/api/v1/erp-projections.ts` and `src/api/v1/ownership-agreements.ts`. Handlers: `POST /api/v1/gate-events` (online capture, emits `gate.entered` via `persistEvent`), `POST /api/v1/gate-events/:gateEventId/reverse` (emits `gate.reversed`), `GET /api/v1/gate-events/:gateEventId` (single, includes resolved PO summary and binding token), `GET /api/v1/gate-events?site=&status=&binding=` (list; `binding=unmatched` is the exception worklist).
+  - [x] 5.2 RBAC via `requireRole` (`src/middleware/rbac.ts`), module `inventory`. Create and reverse: `gate_officer` only. Unmatched worklist (`binding=unmatched`): `unloading_supervisor` and `warehouse_manager` in addition to `gate_officer`. Enforce site scope via `permittedLocationsForModule(roles, 'inventory')`, filtering results to permitted `site_id` and rejecting out-of-scope create/read with `LOCATION_ACCESS_DENIED`. Never trust client-supplied role or identity; take `gate_officer_id` from `authContext`.
+  - [x] 5.3 Register every handler in `src/server.ts` with `router.get`/`router.post` (mirror the existing `erp-projections` and `edge` registration lines). Use the standard error envelope `{ error_code, message, details, trace_id }` from `src/middleware/error.js`.
 
-- [ ] Task 6: Edge (offline) event acceptance and i18n (AC: 1, 2, 4)
-  - [ ] 6.1 In `src/sync/upload.ts`, ensure `gate.entered` and `gate.reversed` pass `validateEnvelope` and `validateEdgeEnvelope` on the backend edge intake (`src/api/v1/edge.ts` calls these then `persistEvent`). Add the new validation error codes (`GATE_VEHICLE_REG_REQUIRED`, `GATE_CHALLAN_PHOTO_REQUIRED`, `GATE_PO_REF_REQUIRED`, `GATE_SITE_NOT_FOUND`, `GATE_REVERSAL_REASON_REQUIRED`, `GATE_EVENT_NOT_FOUND`, `GATE_ALREADY_REVERSED`) to the backend permanent-error set in `src/sync/upload.ts`.
-  - [ ] 6.2 Add the SAME codes to `PERMANENT_ERROR_CODES` in `edge/src/sync/connector.ts` so the edge client discards them rather than retrying forever, and add `errors.<CODE>` strings for each to `edge/src/messages/en.json`.
-  - [ ] 6.3 Confirm the challan-photo attachment path: the photo is captured to local SQLite with `pending_sync` and transmitted on reconnect. Reuse the existing edge attachment mechanism if one exists; if not, store `challan_photo_ref` as the attachment key and record the gap in the open questions. Do NOT invent a new blob pipeline without confirming.
+- [x] Task 6: Edge (offline) event acceptance and i18n (AC: 1, 2, 4)
+  - [x] 6.1 In `src/sync/upload.ts`, ensure `gate.entered` and `gate.reversed` pass `validateEnvelope` and `validateEdgeEnvelope` on the backend edge intake (`src/api/v1/edge.ts` calls these then `persistEvent`). Add the new validation error codes (`GATE_VEHICLE_REG_REQUIRED`, `GATE_CHALLAN_PHOTO_REQUIRED`, `GATE_PO_REF_REQUIRED`, `GATE_SITE_NOT_FOUND`, `GATE_REVERSAL_REASON_REQUIRED`, `GATE_EVENT_NOT_FOUND`, `GATE_ALREADY_REVERSED`) to the backend permanent-error set in `src/sync/upload.ts`.
+  - [x] 6.2 Add the SAME codes to `PERMANENT_ERROR_CODES` in `edge/src/sync/connector.ts` so the edge client discards them rather than retrying forever, and add `errors.<CODE>` strings for each to `edge/src/messages/en.json`.
+  - [x] 6.3 Confirm the challan-photo attachment path: the photo is captured to local SQLite with `pending_sync` and transmitted on reconnect. Reuse the existing edge attachment mechanism if one exists; if not, store `challan_photo_ref` as the attachment key and record the gap in the open questions. Do NOT invent a new blob pipeline without confirming.
 
-- [ ] Task 7: Tests (AC: 1, 2, 3, 4)
-  - [ ] 7.1 Create `test/integration/story-3-2.test.ts` (Node built-in runner `node:test`, mirror `test/integration/` style). Cover: matched capture against an open PO sets `binding_status = 'matched'` and stamps `correlation_id`; unknown/`UNKNOWN` PO sets `binding_status = 'unmatched'`; reversal marks `status = 'reversed'` and preserves the row; `gate_officer` RBAC (non-gate roles rejected); site scoping (out-of-scope site rejected `LOCATION_ACCESS_DENIED`); idempotent replay of the same `gate_event_id`; missing photo rejected `GATE_CHALLAN_PHOTO_REQUIRED`; the seam never writes any `erp_*` table.
-  - [ ] 7.2 Add edge unit coverage in `edge/test/unit/` for `gate.entered` envelope validation and the new `PERMANENT_ERROR_CODES` entries.
-  - [ ] 7.3 Run `npm test`, `npm run edge:test`, and keep the spine gate green (`npm run spine-acceptance-contract`, story-1-9). Add the `gate_event` expectations so `test/unit/schema-drift.test.ts` passes.
+- [x] Task 7: Tests (AC: 1, 2, 3, 4)
+  - [x] 7.1 Create `test/integration/story-3-2.test.ts` (Node built-in runner `node:test`, mirror `test/integration/` style). Cover: matched capture against an open PO sets `binding_status = 'matched'` and stamps `correlation_id`; unknown/`UNKNOWN` PO sets `binding_status = 'unmatched'`; reversal marks `status = 'reversed'` and preserves the row; `gate_officer` RBAC (non-gate roles rejected); site scoping (out-of-scope site rejected `LOCATION_ACCESS_DENIED`); idempotent replay of the same `gate_event_id`; missing photo rejected `GATE_CHALLAN_PHOTO_REQUIRED`; the seam never writes any `erp_*` table.
+  - [x] 7.2 Add edge unit coverage in `edge/test/unit/` for `gate.entered` envelope validation and the new `PERMANENT_ERROR_CODES` entries.
+  - [x] 7.3 Run `npm test`, `npm run edge:test`, and keep the spine gate green (`npm run spine-acceptance-contract`, story-1-9). Add the `gate_event` expectations so `test/unit/schema-drift.test.ts` passes.
 
 ## Dev Notes
 
@@ -147,10 +151,50 @@ The gate error codes table below lists every new stable error code, its trigger,
 
 ### Agent Model Used
 
+fugu-ultra-20260615
+
 ### Debug Log References
+
+- `npm --workspace @inventory/edge test -- connector.test.ts` red phase: edge permanent-code assertion initially passed until the 403-specific permanent-code assertion was added.
+- `node --env-file=.env.test --import tsx --test --test-concurrency=1 test/integration/story-3-2.test.ts` red phase failed on missing `read/projections/gate_event.sql` before implementation.
+- `npm run build` initially failed on exact optional property typing in `src/compliance/gate.ts`; fixed by passing explicit nulls for optional projection columns.
+- Targeted Story 3.2 integration initially failed edge upload because `gate_officer_id` was not server-stamped on edge intake; fixed in `src/api/v1/edge.ts`.
+- Final validation passed: `npm run build`, `npm run lint`, `npm run edge:test`, `npm run edge:typecheck`, targeted schema drift and Story 3.2 integration, `npm run spine-acceptance-contract`, `npm run edge:lint`, and full `npm test` with 358/358 tests passing.
 
 ### Completion Notes List
 
-Ultimate context engine analysis completed - comprehensive developer guide created.
+- Implemented gate event and reversal contracts with `gate` stream registration and no business-stream tagging requirement.
+- Added canonical `gate_event` projection DDL, migration registration, init-db mirror, schema drift guard coverage, and TypeScript accessor helpers.
+- Added central gate compliance seam in `persistEvent`: pre-transaction shape validation, in-transaction site and PO reconciliation, matched and unmatched binding, correlation-id binding token, and soft reversal.
+- Added REST gate APIs for capture, reversal, single read, and worklist listing with gate role, unmatched exception owner, and site-scope enforcement.
+- Added backend and edge permanent error classification and i18n strings for all gate stable error codes.
+- Added edge-local `gate.entered` capture record construction using `challan_photo_ref` as the attachment key; no separate blob pipeline was invented.
+- Added integration and edge unit coverage for matched, unmatched, reversal, RBAC, site scoping, idempotent edge replay, mandatory photo enforcement, and ERP read-only invariants.
 
 ### File List
+
+- `read/projections/gate_event.sql`
+- `src/read/projections/gate_event.ts`
+- `src/compliance/gate.ts`
+- `src/api/v1/gate.ts`
+- `src/events/schema.ts`
+- `src/events/store.ts`
+- `src/events/migrate.ts`
+- `src/server.ts`
+- `src/api/v1/edge.ts`
+- `src/sync/upload.ts`
+- `deploy/compose/init-db.sql`
+- `test/integration/story-3-2.test.ts`
+- `test/integration/story-1-9.test.ts`
+- `test/unit/schema-drift.test.ts`
+- `edge/src/capture/test-capture.ts`
+- `edge/src/messages/en.json`
+- `edge/src/sync/connector.ts`
+- `edge/test/unit/connector.test.ts`
+- `edge/test/unit/test-capture.test.ts`
+- `_bmad-output/implementation-artifacts/3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+
+### Change Log
+
+- 2026-07-22: Implemented Story 3.2 gate event capture and vehicle-to-PO binding; status moved to review after full validation.

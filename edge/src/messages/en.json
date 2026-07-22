@@ -70,5 +70,12 @@
   "errors.OWNER_PARTY_MISMATCH": "The supplier on this receipt does not match the active ownership agreement.",
   "errors.VMI_MIN_NOT_CONFIGURED": "A VMI minimum quantity must be set on the agreement before the VMI check can run.",
   "errors.INVALID_SIGNAL_TYPE": "That replenishment signal type is not supported.",
-  "errors.SOURCE_SYSTEM_READ_ONLY": "This record is owned by the ERP and is read-only here. Make corrections in the ERP; they arrive on the next sync."
+  "errors.SOURCE_SYSTEM_READ_ONLY": "This record is owned by the ERP and is read-only here. Make corrections in the ERP; they arrive on the next sync.",
+  "errors.GATE_VEHICLE_REG_REQUIRED": "Vehicle registration is required before gate capture can sync.",
+  "errors.GATE_CHALLAN_PHOTO_REQUIRED": "A challan photo is required before gate capture can sync.",
+  "errors.GATE_PO_REF_REQUIRED": "Scan or enter a PO reference, or use UNKNOWN when no PO is available.",
+  "errors.GATE_SITE_NOT_FOUND": "The gate site is not recognized. Refresh site data and try again.",
+  "errors.GATE_REVERSAL_REASON_REQUIRED": "A reversal reason is required for gate-event reversal.",
+  "errors.GATE_EVENT_NOT_FOUND": "The gate event to reverse was not found centrally.",
+  "errors.GATE_ALREADY_REVERSED": "This gate event was already reversed."
 }

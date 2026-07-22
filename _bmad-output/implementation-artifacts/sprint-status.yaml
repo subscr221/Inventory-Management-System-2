@@ -278,7 +278,7 @@ development_status:
   # --- Epic 3: Warehouse Operations and Frontline Capture Flows  [PILOT] ---
   epic-3: in-progress
   3-1-warehouse-topology-setup-fr-w-01: done   # PILOT
-  3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: ready-for-dev   # PILOT
+  3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: review   # PILOT
   3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: backlog   # PILOT
   3-4-goods-receiving-against-asn-or-po-fr-w-02: backlog   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: backlog   # PILOT
