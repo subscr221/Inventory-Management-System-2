@@ -1,5 +1,20 @@
 # generated: 2026-07-12
 # last_updated: 2026-07-23
+# story 3-5 created 2026-07-23 via create-story workflow: Directed Putaway and Location Override
+#   Recording (UJ-PUT-01, FR-W-03); builds velocity-classification (ABC, putaway-frequency-derived)
+#   and the override-driven re-slotting job from scratch (neither existed). New 'putaway' stream
+#   with putaway.completed + location.override events (requiresBusinessStream false, mirrors
+#   receiving). Extends Story 3.4's putaway_task additively (directed_location_id, actual_location_id,
+#   override_reason_code/confidence, completed_at/by) per that story's explicit reservation; new
+#   velocity_class(sku,site_id) projection. Directed-suggestion algorithm filters bins by size_class
+#   (new item_master column, confirmed absent pre-story), zone/hazmat/quarantine compatibility (reuses
+#   Story 2.1's zoneIncompatibilityReasons), and access_restricted (reuses Story 3.1's
+#   assertLocationWritable); ranks by velocity class, occupancy proxy, and re-slotting-clustered
+#   preference. location.override write path CONFIRMED to bypass assertLocationInvariant (narrowly
+#   gated to stream_type inventory + location.asserted/expected only) and instead calls
+#   src/read/projections/location.ts accessors directly after bridging putaway_task's TEXT lot number
+#   to lot_master's UUID lot_id via getLotByNumberAndSku. Re-slotting job is an on-demand admin
+#   endpoint, not a scheduler. ready-for-dev
 # story 3-3 code review 2026-07-23 (adversarial pass, Acceptance Auditor only — Blind Hunter and Edge Case
 #   Hunter subagents failed/timed out): 1 decision (task routing on tolerance breach, resolved to patch via
 #   emitNotificationInTransaction to receiving_supervisor) + 3 patches applied (reversed gate events no longer
@@ -340,7 +355,7 @@ development_status:
   3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: done   # PILOT
   3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: done   # PILOT
   3-4-goods-receiving-against-asn-or-po-fr-w-02: done   # PILOT
-  3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: backlog   # PILOT
+  3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: ready-for-dev   # PILOT
   3-6-pick-task-generation-and-execution-fr-w-04: backlog   # PILOT
   3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: backlog   # PILOT
   3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: backlog   # PILOT
