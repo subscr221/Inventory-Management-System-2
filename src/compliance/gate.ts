@@ -23,8 +23,10 @@ function isIsoTimestamp(value: unknown): value is string {
 }
 
 function localYmd(date: Date): string {
+  // IST = UTC+5:30. Shift the instant, then read back with UTC getters so the result is
+  // host-timezone independent (local getters would double-apply the offset on an IST host).
   const ist = new Date(date.getTime() + 5.5 * 60 * 60 * 1000);
-  return `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}-${String(ist.getDate()).padStart(2, '0')}`;
+  return `${ist.getUTCFullYear()}-${String(ist.getUTCMonth() + 1).padStart(2, '0')}-${String(ist.getUTCDate()).padStart(2, '0')}`;
 }
 
 function gateEventType(envelope: EventEnvelope): string | null {

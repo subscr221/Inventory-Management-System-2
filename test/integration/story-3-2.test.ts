@@ -348,4 +348,85 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
     assert.strictEqual(badStatus.status, 400, JSON.stringify(badStatus.body));
     assert.strictEqual(badStatus.body['error_code'], 'INVALID_PARAMS');
   });
+
+  it('Review D1: online create with Idempotency-Key replays the original gate event instead of duplicating', async () => {
+    const key = `gate-online-${randomUUID()}`;
+    const body = gateBody();
+    const first = await makeRequest(port, 'POST', '/api/v1/gate-events', body, { ...gateHeaders, 'Idempotency-Key': key });
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+    const gateEventId = first.body['gate_event_id'] as string;
+
+    const retry = await makeRequest(port, 'POST', '/api/v1/gate-events', body, { ...gateHeaders, 'Idempotency-Key': key });
+    assert.strictEqual(retry.status, 200, JSON.stringify(retry.body));
+    assert.strictEqual(retry.body['gate_event_id'], gateEventId);
+    assert.strictEqual(retry.body['correlation_id'], first.body['correlation_id']);
+
+    const rows = await getPool().query(`SELECT count(*)::int AS c FROM domain_events WHERE idempotency_key = $1`, [key]);
+    assert.strictEqual(rows.rows[0]!['c'], 1);
+  });
+
+  it('Review re-review: Idempotency-Key reused across sites is rejected, not replayed cross-site', async () => {
+    const key = `gate-cross-site-${randomUUID()}`;
+    const first = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody(), { ...gateHeaders, 'Idempotency-Key': key });
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+
+    const conflict = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ site_code_ext: 'site-B' }), { ...siteBHeaders, 'Idempotency-Key': key });
+    assert.strictEqual(conflict.status, 409, JSON.stringify(conflict.body));
+    assert.strictEqual(conflict.body['error_code'], 'IDEMPOTENCY_KEY_CONFLICT');
+    assert.strictEqual(conflict.body['vehicle_reg_ext'], undefined, 'conflict response must not leak the other site event data');
+  });
+
+  it('Review re-review: Idempotency-Key reused with a different vehicle is rejected, not silently replayed', async () => {
+    const key = `gate-body-mismatch-${randomUUID()}`;
+    const first = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ vehicle_reg_ext: 'KA01AB1234' }), { ...gateHeaders, 'Idempotency-Key': key });
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+
+    const conflict = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ vehicle_reg_ext: 'KA01AB9999' }), { ...gateHeaders, 'Idempotency-Key': key });
+    assert.strictEqual(conflict.status, 409, JSON.stringify(conflict.body));
+    assert.strictEqual(conflict.body['error_code'], 'IDEMPOTENCY_KEY_CONFLICT');
+  });
+
+  it('Review D2: binding_token is exposed as a deprecated alias of correlation_id', async () => {
+    const res = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody(), gateHeaders);
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body['binding_token'], res.body['correlation_id']);
+
+    const read = await makeRequest(port, 'GET', `/api/v1/gate-events/${res.body['gate_event_id'] as string}`, undefined, supervisorHeaders);
+    assert.strictEqual(read.status, 200, JSON.stringify(read.body));
+    assert.strictEqual(read.body['binding_token'], read.body['correlation_id']);
+  });
+
+  it('Review D3: unmatched worklist defaults oldest-first and supports offset pagination', async () => {
+    const older = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ po_ref_ext: 'UNKNOWN', entered_at: '2026-07-20T01:00:00.000Z' }), gateHeaders);
+    assert.strictEqual(older.status, 201, JSON.stringify(older.body));
+    const newer = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ po_ref_ext: 'UNKNOWN', entered_at: '2026-07-23T01:00:00.000Z' }), gateHeaders);
+    assert.strictEqual(newer.status, 201, JSON.stringify(newer.body));
+
+    const list = await makeRequest(port, 'GET', '/api/v1/gate-events?binding=unmatched', undefined, supervisorHeaders);
+    assert.strictEqual(list.status, 200, JSON.stringify(list.body));
+    const events = list.body['gate_events'] as Record<string, unknown>[];
+    const olderIdx = events.findIndex((row) => row['gate_event_id'] === older.body['gate_event_id']);
+    const newerIdx = events.findIndex((row) => row['gate_event_id'] === newer.body['gate_event_id']);
+    assert.ok(olderIdx !== -1 && newerIdx !== -1, 'both unmatched events must appear in the worklist');
+    assert.ok(olderIdx < newerIdx, `oldest-first worklist: older at ${olderIdx}, newer at ${newerIdx}`);
+
+    const paged = await makeRequest(port, 'GET', '/api/v1/gate-events?binding=unmatched&offset=1', undefined, supervisorHeaders);
+    assert.strictEqual(paged.status, 200, JSON.stringify(paged.body));
+    const pagedEvents = paged.body['gate_events'] as Record<string, unknown>[];
+    assert.strictEqual(pagedEvents.length, events.length - 1);
+    assert.strictEqual(pagedEvents[0]!['gate_event_id'], events[1]!['gate_event_id']);
+
+    const explicitDesc = await makeRequest(port, 'GET', '/api/v1/gate-events?binding=unmatched&order=desc', undefined, supervisorHeaders);
+    assert.strictEqual(explicitDesc.status, 200, JSON.stringify(explicitDesc.body));
+    const descEvents = explicitDesc.body['gate_events'] as Record<string, unknown>[];
+    assert.strictEqual(descEvents[descEvents.length - 1]!['gate_event_id'], events[0]!['gate_event_id']);
+
+    const badOffset = await makeRequest(port, 'GET', '/api/v1/gate-events?offset=-1', undefined, supervisorHeaders);
+    assert.strictEqual(badOffset.status, 400, JSON.stringify(badOffset.body));
+    assert.strictEqual(badOffset.body['error_code'], 'INVALID_PARAMS');
+
+    const badOrder = await makeRequest(port, 'GET', '/api/v1/gate-events?order=sideways', undefined, supervisorHeaders);
+    assert.strictEqual(badOrder.status, 400, JSON.stringify(badOrder.body));
+    assert.strictEqual(badOrder.body['error_code'], 'INVALID_PARAMS');
+  });
 });

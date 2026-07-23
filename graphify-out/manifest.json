@@ -1,8 +1,8 @@
 {
   ".kilo/kilo.json": {
-    "mtime": 1784739915.5809743,
-    "ast_hash": "27f61d9c68a5640b925de6da9469d914",
-    "semantic_hash": "27f61d9c68a5640b925de6da9469d914"
+    "mtime": 1784747015.606558,
+    "ast_hash": "7cfb30835f7fe7b9b9986d8af69064ff",
+    "semantic_hash": ""
   },
   ".kilo/plugins/graphify.js": {
     "mtime": 1784739915.5714047,
@@ -55,8 +55,8 @@
     "semantic_hash": "bf25c76a804c38087a6d9977eef38004"
   },
   "deploy/compose/init-db.sql": {
-    "mtime": 1784744872.6016407,
-    "ast_hash": "5293c7db4e7a4c482c6aa7690d558aa2",
+    "mtime": 1784779401.6547272,
+    "ast_hash": "5a074fcf644d36fe2324132bc5eb714c",
     "semantic_hash": ""
   },
   "deploy/compose/init-pg-hba.sh": {
@@ -340,9 +340,9 @@
     "semantic_hash": "3b3a551f2047d99f1289b71f71a4ab65"
   },
   "read/projections/gate_event.sql": {
-    "mtime": 1784710885.863483,
-    "ast_hash": "66477621fbb4470cbd3a43bb4c886464",
-    "semantic_hash": "66477621fbb4470cbd3a43bb4c886464"
+    "mtime": 1784779395.7574418,
+    "ast_hash": "1056857d0340f0a1267c0d5b4b910d40",
+    "semantic_hash": ""
   },
   "read/projections/in_transit.sql": {
     "mtime": 1784639484.4504673,
@@ -560,9 +560,9 @@
     "semantic_hash": "825f6db99069554fed86b64a4b01f3f5"
   },
   "test/integration/story-3-2.test.ts": {
-    "mtime": 1784710798.140499,
-    "ast_hash": "2c4abcc4fab18c610dc99fc48225e478",
-    "semantic_hash": "2c4abcc4fab18c610dc99fc48225e478"
+    "mtime": 1784779425.7106538,
+    "ast_hash": "d8e5cbb100ba0a9557030218b23b05e4",
+    "semantic_hash": ""
   },
   "test/integration/story-3-3.test.ts": {
     "mtime": 1784731154.7623963,
@@ -595,8 +595,8 @@
     "semantic_hash": "34668b8db5f0f651f3ef434db11b3f01"
   },
   "test/unit/schema-drift.test.ts": {
-    "mtime": 1784744838.4595375,
-    "ast_hash": "4d708c1b0317007fcd85d6b456900f70",
+    "mtime": 1784749435.8395455,
+    "ast_hash": "27516f2da11c1a90e96276f1f32b0938",
     "semantic_hash": ""
   },
   "test/unit/stock-balance.test.ts": {
@@ -1165,8 +1165,8 @@
     "semantic_hash": ""
   },
   ".claude/settings.local.json": {
-    "mtime": 1784744554.0482779,
-    "ast_hash": "2e1b499bbdf01970bc26792b4446593c",
+    "mtime": 1784753349.382556,
+    "ast_hash": "fb3e0e512dfc0d934b4ab3014bb09df7",
     "semantic_hash": ""
   },
   ".claude/skills/bmad-agent-builder/assets/init-sanctum-template.py": {
@@ -1600,8 +1600,8 @@
     "semantic_hash": ""
   },
   "src/api/v1/gate.ts": {
-    "mtime": 1784710954.805279,
-    "ast_hash": "8065771bf8c7eb109bf8d6f155eb5648",
+    "mtime": 1784779376.694709,
+    "ast_hash": "0c558c4320ee8f53b80f1d3b1f7f14d4",
     "semantic_hash": ""
   },
   "src/api/v1/health.ts": {
@@ -1715,8 +1715,8 @@
     "semantic_hash": ""
   },
   "src/compliance/gate.ts": {
-    "mtime": 1784711121.852687,
-    "ast_hash": "2cf9ec900c3ca772ab68794260364b6d",
+    "mtime": 1784779317.6229591,
+    "ast_hash": "654ac6a3f5a359720a2d19920195ab28",
     "semantic_hash": ""
   },
   "src/compliance/inventory-master.ts": {
@@ -1895,8 +1895,8 @@
     "semantic_hash": ""
   },
   "src/read/projections/gate_event.ts": {
-    "mtime": 1784710907.3408835,
-    "ast_hash": "21bcc64bdaa40d0f50ab94f6869fab71",
+    "mtime": 1784779334.7848344,
+    "ast_hash": "52790a91b772d943e0b6a4c3905bf20b",
     "semantic_hash": ""
   },
   "src/read/projections/grn.ts": {
@@ -17115,8 +17115,8 @@
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02.md": {
-    "mtime": 1784711317.494337,
-    "ast_hash": "27c9b7ca412159602f064b1f8730e237",
+    "mtime": 1784779488.7847452,
+    "ast_hash": "c1af70c08eb06ca1b92445fae516e15e",
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02.md": {
@@ -17125,18 +17125,18 @@
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/3-4-goods-receiving-against-asn-or-po-fr-w-02.md": {
-    "mtime": 1784741211.7903745,
-    "ast_hash": "d1a1838bc148c21f75d1b86b490afd22",
+    "mtime": 1784746223.5568483,
+    "ast_hash": "d0c4d62ed5022dd762078ec271c16651",
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/deferred-work.md": {
-    "mtime": 1784699440.9258313,
-    "ast_hash": "04401f8c477459defb07f5ce819167c4",
+    "mtime": 1784779554.5392652,
+    "ast_hash": "704dc7b7a37d5402c601e300a1f832fa",
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/sprint-status.yaml": {
-    "mtime": 1784744393.7708278,
-    "ast_hash": "0d16c9aa4b1d585a3621dc54579a78d1",
+    "mtime": 1784750152.410564,
+    "ast_hash": "c43061763e3b1a655351712d633ee104",
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/stories-explained-simple.md": {

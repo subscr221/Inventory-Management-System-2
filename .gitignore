@@ -9,3 +9,4 @@ spine-acceptance-contract-results.xml
 .env.*
 !.env.example
 !.env.test
+graphify-out/

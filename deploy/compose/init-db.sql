@@ -2073,7 +2073,7 @@ CREATE TABLE IF NOT EXISTS gate_event (
   challan_photo_ref TEXT NOT NULL,
   gate_id           TEXT NOT NULL,
   gate_officer_id   UUID NOT NULL,
-  correlation_id    UUID NOT NULL UNIQUE,
+  correlation_id    UUID NOT NULL,
   entered_at        TIMESTAMPTZ NOT NULL,
   business_date     DATE NOT NULL,
   status            TEXT NOT NULL DEFAULT 'open',
@@ -2140,6 +2140,16 @@ END $$;
 
 DO $$
 BEGIN
+  -- Databases created while correlation_id carried an inline UNIQUE keyword hold an auto-named
+  -- duplicate of uq_gate_event_correlation_id; drop it so exactly one unique index remains.
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'gate_event_correlation_id_key'
+      AND conrelid = 'gate_event'::regclass
+  ) THEN
+    ALTER TABLE gate_event
+      DROP CONSTRAINT gate_event_correlation_id_key;
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'uq_gate_event_correlation_id'

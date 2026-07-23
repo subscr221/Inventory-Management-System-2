@@ -1,16 +1,16 @@
 # Graph Report - Inventory Management System_2  (2026-07-23)
 
 ## Corpus Check
-- 3406 files · ~3,941,855 words
+- 3406 files · ~3,944,504 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 54190 nodes · 56179 edges · 3505 communities (3425 shown, 80 thin omitted)
-- Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS · INFERRED: 278 edges (avg confidence: 0.53)
+- 54198 nodes · 56190 edges · 3503 communities (3423 shown, 80 thin omitted)
+- Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS · INFERRED: 277 edges (avg confidence: 0.53)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `0eac294d`
+- Built from commit: `9fbdcf1c`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -388,7 +388,6 @@
 - Sequence of Instructions (Do not deviate, skip, or optimize)
 - Sequence of Instructions (Do not deviate, skip, or optimize)
 - compliance/gate.ts
-- compliance/weighbridge.ts
 - .agents/skills/bmad-bmb-setup/scripts/merge-config.py
 - EPIC DESIGN PROCESS:
 - .agents/skills/bmad-loop-setup/scripts/merge-config.py
@@ -2893,7 +2892,6 @@
 - [V] Validate — Quality Audit
 - Common API Patterns
 - Before Considering Prototype "Done"
-- Execution Principles
 - Level 3: Technical (Verify on Deployment)
 - Issue Templates
 - [T] Acceptance Testing — Design & Run Tests from Spec Criteria
@@ -3510,15 +3508,15 @@
 - **Stock-balance seam gating validation flow** — src_compliance_stock_balance_stockBalanceEventKind, src_compliance_stock_balance_assertStockBalanceShape, src_events_store_EventEnvelope [INFERRED 0.70]
 - **Sync upload failure classification flow** — src_sync_upload_classifyUploadFailure, src_sync_upload_validateEdgeEnvelope, src_sync_upload_UploadFailureClassification, src_middleware_error_AppError [INFERRED 0.70]
 
-## Communities (3505 total, 80 thin omitted)
+## Communities (3503 total, 80 thin omitted)
 
 ### Community 0 - "Event Handlers"
 Cohesion: 0.12
 Nodes (23): Home(), createGateEnteredEvent(), createTestCaptureEvent(), EdgeEventRecord, randomUUID(), BootstrapResponse, deviceId(), EdgeClient() (+15 more)
 
 ### Community 1 - "Domain Events Audit"
-Cohesion: 0.02
-Nodes (140): audit_log table, audit_log_archive table, audit_log_tamper_attempt_log table, deprovisionUser(), logNoOpAuditEntry(), provisionUser(), ProvisionUserRequest, reactivateUser() (+132 more)
+Cohesion: 0.03
+Nodes (120): domain_events table, audit_log table, audit_log_archive table, audit_log_tamper_attempt_log table, deprovisionUser(), logNoOpAuditEntry(), provisionUser(), ProvisionUserRequest (+112 more)
 
 ### Community 2 - "Database Initialization"
 Cohesion: 0.10
@@ -3526,7 +3524,7 @@ Nodes (25): init-db.sql first-boot init, domain_events table, doa_vacation_deleg
 
 ### Community 3 - "Audit Archive"
 Cohesion: 0.02
-Nodes (151): ArchiveRunResult, runArchiveAuditLog(), main(), enabledNormalized, NOTE: calendar-year subtraction, not financial-year boundaries - the FY start da, retentionCutoff(), retentionYears, closeAdminPool() (+143 more)
+Nodes (169): erpReadOnlyRejectHandler(), ArchiveRunResult, runArchiveAuditLog(), main(), enabledNormalized, NOTE: calendar-year subtraction, not financial-year boundaries - the FY start da, retentionCutoff(), retentionYears (+161 more)
 
 ### Community 4 - "PRD Planning"
 Cohesion: 0.13
@@ -3538,11 +3536,11 @@ Nodes (25): FirstSyncPage(), metadata, RootLayout(), manifest(), SyncErrorPage()
 
 ### Community 6 - "API Router Audit"
 Cohesion: 0.03
-Nodes (235): raiseErpSyncStale(), ActorContext, configAuditLogBase(), configAuditLogHandler, ActorContext, approveAdjustmentHandler, createCycleCountHandler, getCycleCountHandler (+227 more)
+Nodes (179): ActorContext, configAuditLogBase(), configAuditLogHandler, ActorContext, approveAdjustmentHandler, createCycleCountHandler, getCycleCountHandler, listCycleCountsHandler (+171 more)
 
 ### Community 7 - "Inventory Tagging"
-Cohesion: 0.11
-Nodes (31): auditCtxFor(), createTaggingRuleBase(), getTaggingRuleBase(), isNonEmptyString(), isValidDateString(), isValidStringLength(), listBusinessStreamsBase(), WriteAuditCtx (+23 more)
+Cohesion: 0.07
+Nodes (42): auditCtxFor(), createTaggingRuleBase(), createTaggingRuleHandler, getTaggingRuleBase(), getTaggingRuleHandler, isNonEmptyString(), isValidDateString(), isValidStringLength() (+34 more)
 
 ### Community 8 - "Stock Balance"
 Cohesion: 0.20
@@ -3553,8 +3551,8 @@ Cohesion: 0.19
 Nodes (12): deploy/compose/init-db.sql, __dirname, EXPECTED, extractCreateTable, extractDoBlock, extractCreateTable(), extractDoBlock(), normalizeSql (+4 more)
 
 ### Community 10 - "Location Invariants"
-Cohesion: 0.10
-Nodes (35): assertLocationInvariant(), defaultDeps, isConfidence(), isNonEmptyString(), LOCATION_STREAM_TYPES, LocationDeps, EventEnvelope, PersistedEvent (+27 more)
+Cohesion: 0.50
+Nodes (3): plugin, $schema, file:///D:/WINCODE/Inventory%20Management%20System_2/.kilo/plugins/graphify.js
 
 ### Community 11 - "DevOps Compliance"
 Cohesion: 0.22
@@ -3565,24 +3563,24 @@ Cohesion: 0.40
 Nodes (5): erp_purchase_order table, erp_sales_order table, in_transit table, integration_exception table, location_register table (topology)
 
 ### Community 13 - "Story 2.8 Tests"
-Cohesion: 0.04
-Nodes (98): acknowledgeNotificationBase(), acknowledgeNotificationHandler, auditCtxFor(), createPushSubscriptionHandler, deletePushSubscriptionHandler, getPreferencesBase(), getPreferencesHandler, getUnreadCountBase() (+90 more)
+Cohesion: 0.03
+Nodes (104): acknowledgeNotificationBase(), acknowledgeNotificationHandler, auditCtxFor(), createPushSubscriptionHandler, deletePushSubscriptionHandler, getPreferencesBase(), getPreferencesHandler, getUnreadCountBase() (+96 more)
 
 ### Community 14 - "Edge Sync UI"
 Cohesion: 0.05
-Nodes (86): domain_events table, assertErpReadOnly(), assertActiveItem(), assertActiveLocation(), assertInventoryMasterReferences(), defaultDeps, INVENTORY_MOVEMENT_STREAM_TYPES, InventoryMasterDeps (+78 more)
+Nodes (82): assertErpReadOnly(), assertLocationInvariant(), defaultDeps, isConfidence(), isNonEmptyString(), LOCATION_STREAM_TYPES, LocationDeps, assertConsignmentReceiptOwnership() (+74 more)
 
 ### Community 15 - "Story 2.2 Auth"
 Cohesion: 0.05
-Nodes (83): resolveCountApprover(), auditCtxFor(), createDelegationBase(), createDelegationHandler, createDoaEntryBase(), createDoaEntryHandler, isNonEmptyString(), parseOptionalBound() (+75 more)
+Nodes (81): resolveCountApprover(), auditCtxFor(), createDelegationBase(), createDelegationHandler, createDoaEntryBase(), createDoaEntryHandler, isNonEmptyString(), parseOptionalBound() (+73 more)
 
 ### Community 16 - "Story 2.3 Auth"
-Cohesion: 0.06
-Nodes (75): actorContext(), auditCtxFor(), clearQualityHoldBase(), getLotNumber(), getLotTraceBase(), isPositiveFiniteNumber(), localToday(), placeQualityHoldBase() (+67 more)
+Cohesion: 0.05
+Nodes (81): actorContext(), auditCtxFor(), clearQualityHoldBase(), clearQualityHoldHandler, getLotNumber(), getLotTraceBase(), getLotTraceHandler, isPositiveFiniteNumber() (+73 more)
 
 ### Community 17 - "Story 3.3 Weighbridge"
-Cohesion: 0.05
-Nodes (70): alreadyPersisted(), applyInventoryPlanningProjection(), assertInventoryPlanningShape(), isFiniteNumber(), isIsoTimestamp(), isLocalDate(), isNonEmptyString(), isNonNegativeFinite() (+62 more)
+Cohesion: 0.04
+Nodes (90): alreadyPersisted(), applyInventoryPlanningProjection(), assertInventoryPlanningShape(), isFiniteNumber(), isIsoTimestamp(), isLocalDate(), isNonEmptyString(), isNonNegativeFinite() (+82 more)
 
 ### Community 18 - "Deploy Scripts"
 Cohesion: 0.53
@@ -3597,8 +3595,8 @@ Cohesion: 0.67
 Nodes (3): Environments Config, fail(), verify.sh script
 
 ### Community 27 - "Retention Tests"
-Cohesion: 0.06
-Nodes (61): ADVISORY_LOCK_KEYS, applyPurchaseOrder(), applySalesOrderLine(), assertSkuActive(), ERP_ERROR_CODES, ErpSyncBatch, ErpSyncResult, errorCodeOf() (+53 more)
+Cohesion: 0.04
+Nodes (93): ADVISORY_LOCK_KEYS, applyPurchaseOrder(), applySalesOrderLine(), assertSkuActive(), ERP_ERROR_CODES, ErpSyncBatch, ErpSyncResult, errorCodeOf() (+85 more)
 
 ### Community 28 - "Story 2.4 Auth"
 Cohesion: 0.07
@@ -3606,7 +3604,7 @@ Nodes (49): benchmark_pair(), count_tokens(), main(), print_table(), Path, main(
 
 ### Community 29 - "Story 2.5 Auth"
 Cohesion: 0.10
-Nodes (50): getValuationBase(), applyInventoryValuationProjection(), applyNrvRecovery(), applyNrvWriteDown(), applyReceiptOrIssue(), applyStandardCostVarianceReview(), assertDoaApprovedAuthoriser(), assertNrvCommonShape() (+42 more)
+Nodes (52): getValuationBase(), applyInventoryValuationProjection(), applyNrvRecovery(), applyNrvWriteDown(), applyReceiptOrIssue(), applyStandardCostVarianceReview(), assertDoaApprovedAuthoriser(), assertNrvCommonShape() (+44 more)
 
 ### Community 30 - "Story 2.6 Count"
 Cohesion: 0.09
@@ -3741,8 +3739,8 @@ Cohesion: 0.05
 Nodes (43): **Accumulated Changes**, **Business Goals**, **Business Triggers**, **Designer & Developer Partnership**, DO ✅, DON'T ❌, **Entry Point 1: New Product (Phases 1-7) - Greenfield + Kaikaku**, **Entry Point 2: Existing Product (Phase 8) - Brownfield + Kaizen** (+35 more)
 
 ### Community 70 - "Provision User 2.8"
-Cohesion: 0.11
-Nodes (42): auditCtxFor(), createLocationBase(), createLocationHandler, getLocationHandler, isDuplicateCodeError(), isLevel(), isLocationStatus(), isNonEmptyString() (+34 more)
+Cohesion: 0.07
+Nodes (67): auditCtxFor(), createLocationBase(), createLocationHandler, getLocationHandler, isDuplicateCodeError(), isLevel(), isLocationStatus(), isNonEmptyString() (+59 more)
 
 ### Community 71 - "Auth Story 2.9"
 Cohesion: 0.05
@@ -3862,7 +3860,7 @@ Nodes (37): 10. Dark Mode, 1.1 Design Philosophy, 1.2 Visual Tone, 1. Brand & St
 
 ### Community 100 - "items.ts"
 Cohesion: 0.11
-Nodes (36): assertBusinessStream(), assertStandardCostConfig(), assertValuationMethod(), auditCtxFor(), createItemBase(), createItemHandler, getItemHandler, isDuplicateSkuError() (+28 more)
+Nodes (38): assertBusinessStream(), assertStandardCostConfig(), assertValuationMethod(), auditCtxFor(), createItemBase(), createItemHandler, getItemBase(), getItemHandler (+30 more)
 
 ### Community 101 - "Process Steps"
 Cohesion: 0.05
@@ -4949,12 +4947,8 @@ Cohesion: 0.08
 Nodes (24): 1. Preview All Motion, 2. Motion Consistency, 3. Performance Check, 4. Accessibility Check, 5. User Review, 6. Iterate, 7. Save Approved Set, 8. Update Design Log (+16 more)
 
 ### Community 374 - "compliance/gate.ts"
-Cohesion: 0.15
-Nodes (21): alreadyPersisted(), applyGateProjection(), assertGateEnteredShape(), assertGateReversedShape(), GATE_EVENT_TYPES, GATE_STREAM_TYPES, gateEventType(), isIsoTimestamp() (+13 more)
-
-### Community 375 - "compliance/weighbridge.ts"
-Cohesion: 0.15
-Nodes (22): alreadyPersisted(), applyWeighbridgeProjection(), assertWeighbridgeRecordedShape(), isNonEmptyString(), isUuid(), localYmd(), milliToKgString(), parseKgToMilli() (+14 more)
+Cohesion: 0.10
+Nodes (39): assertRoleAllowed(), assertSiteAccess(), auditCtxFor(), createGateEventBase(), createGateEventHandler, GATE_WRITE_ROLES, gateEventToJson(), GENERAL_READ_ROLES (+31 more)
 
 ### Community 376 - ".agents/skills/bmad-bmb-setup/scripts/merge-config.py"
 Cohesion: 0.13
@@ -6302,7 +6296,7 @@ Nodes (21): Acceptance Criteria, Agent Model Used, Architecture Compliance, Chan
 
 ### Community 712 - "Dev Notes"
 Cohesion: 0.09
-Nodes (21): Acceptance Criteria, Agent Model Used, Architecture and Conventions the Dev MUST Follow, Boundary Notes (Scope Guardrails), Completion Notes List, Compliance and NFR, Debug Log References, Dependency Reality Check (+13 more)
+Nodes (22): Acceptance Criteria, Agent Model Used, Architecture and Conventions the Dev MUST Follow, Boundary Notes (Scope Guardrails), Change Log, Completion Notes List, Compliance and NFR, Debug Log References (+14 more)
 
 ### Community 713 - "Project Brief: {{project_name}}"
 Cohesion: 0.09
@@ -6425,8 +6419,8 @@ Cohesion: 0.09
 Nodes (21): 1. Hub to Persona Document Alignment, 2. Persona Document Completeness, 3. Cross-Persona Distinctness, 4. Generate Report, 5. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS: (+13 more)
 
 ### Community 743 - "Step 8: Update Design Log"
-Cohesion: 0.09
-Nodes (21): 1. Read the Current Log, 2. Append Progress Entry, 3. Record Key Decisions, 4. Verify, 5. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS: (+13 more)
+Cohesion: 0.10
+Nodes (20): 1. Read the Current Log, 2. Append Progress Entry, 3. Record Key Decisions, 4. Verify, 5. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS: (+12 more)
 
 ### Community 744 - "Validation Step 1: Scenario Coverage"
 Cohesion: 0.09
@@ -6921,8 +6915,8 @@ Cohesion: 0.10
 Nodes (21): 1. Read Configuration, 2. Read Product Brief, 3. Read Trigger Map, 4. Check for Existing Work, 5. Present Context Summary, 6. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE (+13 more)
 
 ### Community 867 - "Step 6: Generate Scenario Overview"
-Cohesion: 0.10
-Nodes (20): 1. Create Overview File, 2. Document Structure, 3. Verify Links, 4. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, EXECUTION RULES: (+12 more)
+Cohesion: 0.11
+Nodes (19): 1. Create Overview File, 2. Document Structure, 3. Verify Links, 4. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, EXECUTION RULES: (+11 more)
 
 ### Community 868 - "Step 1: Detect Epic Completion"
 Cohesion: 0.10
@@ -7005,8 +6999,8 @@ Cohesion: 0.10
 Nodes (20): Acceptance Criteria, API and Error Contract, Architecture Compliance, Current Code State, Decision Needed, Deferred, Dev Notes, Dismissed (+12 more)
 
 ### Community 888 - "Dev Notes"
-Cohesion: 0.10
-Nodes (20): Acceptance Criteria, AD-2 binding token, Agent Model Used, Architecture and conventions the dev MUST follow, Change Log, Completion Notes List, Compliance and NFR, Debug Log References (+12 more)
+Cohesion: 0.09
+Nodes (21): Acceptance Criteria, AD-2 binding token, Agent Model Used, Architecture and conventions the dev MUST follow, Change Log, Completion Notes List, Compliance and NFR, Debug Log References (+13 more)
 
 ### Community 889 - "_bmad/scripts/memlog.py"
 Cohesion: 0.22
@@ -7265,8 +7259,8 @@ Cohesion: 0.10
 Nodes (20): 1. Extract Relevant Information from Communications/Documents, 2. Map Extracted Information to Alignment Sections, 3. Apply Extraction Guardrails, 4. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, EXECUTION RULES: (+12 more)
 
 ### Community 953 - "Step 6: Explore The Realization"
-Cohesion: 0.10
-Nodes (20): 1. Explore the Realization, 2. Confirm the Realization with Evidence, 3. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, Data References, EXECUTION PROTOCOLS:, EXECUTION RULES: (+12 more)
+Cohesion: 0.11
+Nodes (18): 1. Explore the Realization, 2. Confirm the Realization with Evidence, 3. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, EXECUTION RULES:, MANDATORY EXECUTION RULES (READ FIRST): (+10 more)
 
 ### Community 954 - "Step 13: Explore The Value We'll Create"
 Cohesion: 0.10
@@ -7689,8 +7683,8 @@ Cohesion: 0.10
 Nodes (19): 1. Explore Cost of Inaction, 2. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, Data References, EXECUTION PROTOCOLS:, EXECUTION RULES:, File References (+11 more)
 
 ### Community 1059 - "Step 15: Explore Our Commitment"
-Cohesion: 0.10
-Nodes (19): 1. Explore Our Commitment, 2. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, Data References, EXECUTION PROTOCOLS:, EXECUTION RULES:, File References (+11 more)
+Cohesion: 0.12
+Nodes (17): 1. Explore Our Commitment, 2. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, EXECUTION RULES:, MANDATORY EXECUTION RULES (READ FIRST):, Menu Handling Logic: (+9 more)
 
 ### Community 1060 - "Step 16: Explore Summary"
 Cohesion: 0.10
@@ -8129,8 +8123,8 @@ Cohesion: 0.10
 Nodes (19): 1. Present Completion Summary, 2. Present Handover Summary, 3. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, EXECUTION RULES:, File References (+11 more)
 
 ### Community 1169 - "Step 9: Handover"
-Cohesion: 0.10
-Nodes (20): 1. Present Completion Summary, 2. Design Intent Selection, 3. What Comes Next, 4. Update Design Log (If Exists), 5. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS: (+12 more)
+Cohesion: 0.09
+Nodes (21): 1. Present Completion Summary, 2. Design Intent Selection, 3. What Comes Next, 4. Update Design Log (If Exists), 5. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS: (+13 more)
 
 ### Community 1170 - "Page Specification Workflow"
 Cohesion: 0.10
@@ -9065,8 +9059,8 @@ Cohesion: 0.12
 Nodes (16): 1. Load Checklist, 2. Validate Outputs, 3. Write Report, CONTEXT BOUNDARIES:, EXECUTION PROTOCOLS:, MANDATORY EXECUTION RULES (READ FIRST):, MANDATORY SEQUENCE, On Complete (+8 more)
 
 ### Community 1403 - "Step 10: Explore Paths We Explored"
-Cohesion: 0.12
-Nodes (17): 1. Explore Paths They Explored, 2. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, EXECUTION RULES:, MANDATORY EXECUTION RULES (READ FIRST):, Menu Handling Logic: (+9 more)
+Cohesion: 0.10
+Nodes (19): 1. Explore Paths They Explored, 2. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, Data References, EXECUTION PROTOCOLS:, EXECUTION RULES:, File References (+11 more)
 
 ### Community 1404 - "Step 11: Explore Recommended Solution"
 Cohesion: 0.12
@@ -9229,8 +9223,8 @@ Cohesion: 0.12
 Nodes (17): 1. Explore the Recommended Solution, 2. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, EXECUTION RULES:, MANDATORY EXECUTION RULES (READ FIRST):, Menu Handling Logic: (+9 more)
 
 ### Community 1444 - "Step 15: Explore Our Commitment"
-Cohesion: 0.12
-Nodes (17): 1. Explore Our Commitment, 2. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, EXECUTION RULES:, MANDATORY EXECUTION RULES (READ FIRST):, Menu Handling Logic: (+9 more)
+Cohesion: 0.10
+Nodes (19): 1. Explore Our Commitment, 2. Present MENU OPTIONS, CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, Data References, EXECUTION PROTOCOLS:, EXECUTION RULES:, File References (+11 more)
 
 ### Community 1445 - "Workshop C: Placeholder Pages"
 Cohesion: 0.12
@@ -9446,7 +9440,7 @@ Nodes (16): Before You Start, Completion, Failure Modes, From Impact Report, Nex
 
 ### Community 1498 - "Deferred Work"
 Cohesion: 0.12
-Nodes (15): Deferred from: code review of 1-10-ci-cd-pipeline-construction (2026-07-20), Deferred from: code review of 1-10-ci-cd-pipeline-construction (2026-07-20, fourth pass), Deferred from: code review of 1-10-ci-cd-pipeline-construction (2026-07-20, third pass), Deferred from: code review of 1-11-notification-and-alerting-foundation (2026-07-20), Deferred from: code review of 1-1-core-infrastructure-deployment-and-event-store-schema.md (2026-07-12), Deferred from: code review of 1-3-statutory-edit-log.md (2026-07-14), Deferred from: code review of 1-3-statutory-edit-log.md (2026-07-18), Deferred from: code review of 1-7-calibration-lockout-enforcement (2026-07-19) (+7 more)
+Nodes (16): Deferred from: code review of 1-10-ci-cd-pipeline-construction (2026-07-20), Deferred from: code review of 1-10-ci-cd-pipeline-construction (2026-07-20, fourth pass), Deferred from: code review of 1-10-ci-cd-pipeline-construction (2026-07-20, third pass), Deferred from: code review of 1-11-notification-and-alerting-foundation (2026-07-20), Deferred from: code review of 1-1-core-infrastructure-deployment-and-event-store-schema.md (2026-07-12), Deferred from: code review of 1-3-statutory-edit-log.md (2026-07-14), Deferred from: code review of 1-3-statutory-edit-log.md (2026-07-18), Deferred from: code review of 1-7-calibration-lockout-enforcement (2026-07-19) (+8 more)
 
 ### Community 1499 - "89 Stories Explained in Simple Language (Grandmother Edition)"
 Cohesion: 0.12
@@ -11861,8 +11855,8 @@ Cohesion: 0.17
 Nodes (11): Flow Rules, Minimum Requirements (must pass), Page Naming, Phase 1 → Phase 3 Connection, Quality Thresholds, SEO Integration, Shared Pages, Validation Severity Levels (+3 more)
 
 ### Community 2102 - "Step 5: Outline Scenario (One at a Time)"
-Cohesion: 0.17
-Nodes (12): CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, EXECUTION PROTOCOLS:, MANDATORY EXECUTION RULES (READ FIRST):, Role Reinforcement:, Step 5: Outline Scenario (One at a Time), STEP GOAL:, Step-Specific Rules: (+4 more)
+Cohesion: 0.13
+Nodes (14): CONTEXT BOUNDARIES:, CRITICAL STEP COMPLETION NOTE, Data References, EXECUTION PROTOCOLS:, File References, MANDATORY EXECUTION RULES (READ FIRST):, Role Reinforcement:, Step 5: Outline Scenario (One at a Time) (+6 more)
 
 ### Community 2103 - "Step 7: Quality Review"
 Cohesion: 0.17
@@ -11889,7 +11883,7 @@ Cohesion: 0.17
 Nodes (12): Checklist, Conditional Sections, Layout Structure, Open Questions, Overview, Page Metadata, {page-number}-{page-name}, Page States (+4 more)
 
 ### Community 2109 - ".agents/skills/wds-5-agentic-development/data/guides/EXECUTION-PRINCIPLES.md"
-Cohesion: 0.20
+Cohesion: 0.33
 Nodes (6): 1. Read the Dialog Document, 2. Verify Plan Against Reality, 3. Present Current Status, 4. Before Implementing a Step, Session Start Protocol, Why This Matters
 
 ### Community 2110 - ".agents/skills/wds-5-agentic-development/data/guides/INLINE-TESTING-GUIDE.md"
@@ -13857,8 +13851,8 @@ Cohesion: 0.22
 Nodes (9): Concept Documentation, Concept Exploration, Core Structural Idea, Deep Dive, Purpose, Reflection Checkpoint, Related Features, Step 4: Product Concept (+1 more)
 
 ### Community 2603 - ".agents/skills/wds-3-scenarios/workflow.md"
-Cohesion: 0.22
-Nodes (5): File References, Data References, File References, Data References, File References
+Cohesion: 0.25
+Nodes (4): File References, File References, Data References, File References
 
 ### Community 2604 - "Sequence of Instructions (Do not deviate, skip, or optimize)"
 Cohesion: 0.22
@@ -13925,8 +13919,8 @@ Cohesion: 0.22
 Nodes (9): Addition (Add to Plan), Anti-Pattern, Bug/Issue (Document First, Then Fix), Change Request (Document for Later), Feedback Types, Quick Adjustment (Fix Now), Response Flow, The 2-Minute Rule (GTD) (+1 more)
 
 ### Community 2620 - "[A] Analysis — Understand Your Own Codebase"
-Cohesion: 0.22
-Nodes (8): [A] Analysis — Understand Your Own Codebase, AFTER COMPLETION, CORE PRINCIPLES, Critical Rules, Design Log, Essential Guides, INITIALIZATION, STEPS
+Cohesion: 0.10
+Nodes (15): Document Before Acting, Dynamic Planning After Step Completion, Execution Principles, Handoff Always References Dialog, Plan-then-Execute Pattern, Sketch Fidelity, Sub-Steps During Execution, [A] Analysis — Understand Your Own Codebase (+7 more)
 
 ### Community 2621 - "[D] Development — Write Production Code"
 Cohesion: 0.22
@@ -14174,7 +14168,7 @@ Nodes (8): Authoring the script, Opportunity categories, Script Opportunities Re
 
 ### Community 2682 - ".claude/skills/wds-0-alignment-signoff/data/02-explore-sections-routing.md"
 Cohesion: 0.22
-Nodes (5): File References, Data References, File References, Data References, File References
+Nodes (5): Data References, File References, File References, Data References, File References
 
 ### Community 2683 - ".claude/skills/wds-0-project-setup/resources/wds-1-project-brief/templates/project-brief-dialog/progress-tracker.md"
 Cohesion: 0.22
@@ -14971,10 +14965,6 @@ Nodes (7): 1. Get Current User, 2. Create/Update User Profile, 3. Create Family,
 ### Community 2881 - "Before Considering Prototype "Done""
 Cohesion: 0.29
 Nodes (7): Accessibility, Before Considering Prototype "Done", Code Quality, Documentation, Functionality Testing, Mobile Testing, ✅ Step 6: Testing Checklist
-
-### Community 2882 - "Execution Principles"
-Cohesion: 0.29
-Nodes (7): Document Before Acting, Dynamic Planning After Step Completion, Execution Principles, Handoff Always References Dialog, Plan-then-Execute Pattern, Sketch Fidelity, Sub-Steps During Execution
 
 ### Community 2883 - "Level 3: Technical (Verify on Deployment)"
 Cohesion: 0.29
@@ -16991,7 +16981,7 @@ Nodes (3): Kaikaku (改革) - Revolutionary Change, Kaizen vs Kaikaku, Kaizen (�
   test/unit/stock-balance.test.ts · relation: references
 
 ## Knowledge Gaps
-- **37880 isolated node(s):** `$schema`, `title`, `description`, `type`, `workflow_version` (+37875 more)
+- **37885 isolated node(s):** `$schema`, `title`, `description`, `type`, `workflow_version` (+37880 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **80 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -17002,13 +16992,13 @@ _Questions this graph is uniquely positioned to answer:_
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
 - **What is the exact relationship between `makeEnvelope` and `stockBalanceEventKind`?**
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
-- **Why does `sendJson()` connect `API Router Audit` to `Domain Events Audit`, `items.ts`, `Provision User 2.8`, `Inventory Tagging`, `Failure Row`, `Story 2.8 Tests`, `Story 2.2 Auth`, `Story 2.3 Auth`, `Health Rollback`, `v1/asn.ts`, `Story 2.5 Auth`?**
+- **Why does `getPool()` connect `Audit Archive` to `Domain Events Audit`, `items.ts`, `API Router Audit`, `Inventory Tagging`, `Failure Row`, `Provision User 2.8`, `Story 2.8 Tests`, `Edge Sync UI`, `Story 2.2 Auth`, `Story 2.3 Auth`, `Story 3.3 Weighbridge`, `Health Rollback`, `v1/asn.ts`, `compliance/gate.ts`, `Retention Tests`, `Story 2.5 Auth`?**
   _High betweenness centrality (0.000) - this node is a cross-community bridge._
-- **Why does `assertInventoryPlanningShape()` connect `Story 3.3 Weighbridge` to `Edge Sync UI`?**
+- **Why does `audit_log table` connect `Domain Events Audit` to `Audit Archive`, `PRD Planning`?**
   _High betweenness centrality (0.000) - this node is a cross-community bridge._
-- **Why does `getPool()` connect `Audit Archive` to `Domain Events Audit`, `items.ts`, `API Router Audit`, `Inventory Tagging`, `Failure Row`, `Provision User 2.8`, `Location Invariants`, `Story 2.8 Tests`, `Edge Sync UI`, `Story 2.2 Auth`, `Story 2.3 Auth`, `Story 3.3 Weighbridge`, `Health Rollback`, `v1/asn.ts`, `compliance/gate.ts`, `compliance/weighbridge.ts`, `Retention Tests`, `Story 2.5 Auth`?**
+- **Why does `PRD 9 Compliance and Regulatory` connect `PRD Planning` to `Domain Events Audit`?**
   _High betweenness centrality (0.000) - this node is a cross-community bridge._
 - **What connects `$schema`, `title`, `description` to the rest of the system?**
-  _37880 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _37885 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Event Handlers` be split into smaller, more focused modules?**
   _Cohesion score 0.12100840336134454 - nodes in this community are weakly interconnected._

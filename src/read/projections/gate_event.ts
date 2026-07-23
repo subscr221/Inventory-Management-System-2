@@ -47,6 +47,8 @@ export interface ListGateEventsFilters {
   status?: 'open' | 'reversed' | null;
   bindingStatus?: 'matched' | 'unmatched' | null;
   limit?: number;
+  offset?: number;
+  order?: 'asc' | 'desc';
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -104,6 +106,17 @@ export async function getGateEventById(gateEventId: string, client?: PoolClient)
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
+// Review D1 (Story 3.2): resolve a previously accepted online create by its client-supplied
+// Idempotency-Key so a retried POST replays the original gate event instead of duplicating it.
+export async function getGateEventByIdempotencyKey(idempotencyKey: string, client?: PoolClient): Promise<GateEvent | null> {
+  const evt = await runner(client).query(
+    `SELECT payload->>'gate_event_id' AS gate_event_id FROM domain_events WHERE idempotency_key = $1 AND event_type = 'gate.entered' LIMIT 1`,
+    [idempotencyKey],
+  );
+  if (evt.rows.length === 0) return null;
+  return getGateEventById(evt.rows[0]!['gate_event_id'] as string, client);
+}
+
 export async function listGateEvents(filters: ListGateEventsFilters = {}, client?: PoolClient): Promise<GateEvent[]> {
   const clauses: string[] = [];
   const values: unknown[] = [];
@@ -116,10 +129,12 @@ export async function listGateEvents(filters: ListGateEventsFilters = {}, client
   if (filters.status) add('status = ?', filters.status);
   if (filters.bindingStatus) add('binding_status = ?', filters.bindingStatus);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-  const limit = Math.min(filters.limit ?? 200, 500);
+  const limit = Math.min(Math.max(Math.trunc(filters.limit ?? 200), 1), 500);
+  const offset = Math.max(Math.trunc(filters.offset ?? 0), 0);
+  const dir = filters.order === 'asc' ? 'ASC' : 'DESC';
   const result = await runner(client).query(
-    `SELECT ${GATE_EVENT_COLUMNS} FROM gate_event ${where} ORDER BY entered_at DESC, created_at DESC LIMIT $${values.length + 1}`,
-    [...values, limit],
+    `SELECT ${GATE_EVENT_COLUMNS} FROM gate_event ${where} ORDER BY entered_at ${dir}, created_at ${dir} LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+    [...values, limit, offset],
   );
   return result.rows.map(mapRow);
 }

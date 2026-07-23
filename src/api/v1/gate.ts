@@ -9,8 +9,9 @@ import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
 import { getPurchaseOrderByRef } from '../../read/projections/erp_purchase_order.js';
 import { getLocationByCode } from '../../read/projections/location_register.js';
-import { getGateEventById, listGateEvents } from '../../read/projections/gate_event.js';
+import { getGateEventById, getGateEventByIdempotencyKey, listGateEvents } from '../../read/projections/gate_event.js';
 import type { GateEvent } from '../../read/projections/gate_event.js';
+import { logAuditEntry } from '../../read/projections/audit_log.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -80,6 +81,10 @@ function gateEventToJson(row: GateEvent, poSummary?: Record<string, unknown> | n
     gate_id: row.gate_id,
     gate_officer_id: row.gate_officer_id,
     correlation_id: row.correlation_id,
+    // AD-2 (Review D2): deprecated alias of correlation_id, kept for response-contract stability
+    // with edge/PWA consumers. New consumers must read correlation_id; remove via versioned
+    // deprecation only.
+    binding_token: row.correlation_id,
     entered_at: row.entered_at,
     business_date: row.business_date,
     status: row.status,
@@ -107,8 +112,60 @@ const createGateEventBase: RouteHandler = async (req, res) => {
   const site = siteCode ? await getLocationByCode(siteCode) : null;
   if (!site || site.status !== 'active' || site.level !== 'site') throw new AppError(404, 'GATE_SITE_NOT_FOUND', `No active site exists for "${siteCode}"`, { site_code_ext: siteCode });
   assertSiteAccess(req, site.location_id, 'write');
-
   const actor = actorContext(req);
+
+  // Review D1: the online create path dedups retried submissions on a client-supplied
+  // Idempotency-Key (stored in domain_events under uq_idempotency). A replayed key returns the
+  // originally created gate event with 200 instead of inserting a duplicate row.
+  //
+  // Re-review fix: a key match alone is not sufficient to replay. uq_idempotency is unscoped
+  // (any event_type, any site, any actor), so returning the matched row unconditionally would let
+  // an officer at Site X see another site's gate event (vehicle_reg, driver, challan photo, PO ref)
+  // just by colliding on a client-generated key - and would silently swallow a corrected retry
+  // (typo fix, different vehicle) that reused the same key. Both are rejected as 409
+  // IDEMPOTENCY_KEY_CONFLICT instead of returning stale/foreign data; only a same-site,
+  // same-submission replay short-circuits with 200.
+  const idempotencyKeyHeader = req.headers['idempotency-key'];
+  if (Array.isArray(idempotencyKeyHeader) && new Set(idempotencyKeyHeader).size > 1) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Idempotency-Key header must not repeat with different values');
+    return;
+  }
+  const idempotencyKey = (Array.isArray(idempotencyKeyHeader) ? idempotencyKeyHeader[0] ?? '' : idempotencyKeyHeader ?? '').trim();
+  if (idempotencyKey.length > 255) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Idempotency-Key header must be at most 255 characters');
+    return;
+  }
+
+  const replayIfMatch = async (): Promise<GateEvent | null> => {
+    const replay = await getGateEventByIdempotencyKey(idempotencyKey);
+    if (!replay) return null;
+    const expectedPoRef = typeof body['po_ref_ext'] === 'string' && body['po_ref_ext'].trim() && body['po_ref_ext'].trim() !== 'UNKNOWN' ? body['po_ref_ext'].trim() : null;
+    const bodyMatches =
+      replay.site_id === site!.location_id &&
+      replay.vehicle_reg_ext === (typeof body['vehicle_reg_ext'] === 'string' ? body['vehicle_reg_ext'].trim().toUpperCase() : '') &&
+      replay.gate_id === (typeof body['gate_id'] === 'string' ? body['gate_id'].trim() : '') &&
+      replay.challan_photo_ref === (typeof body['challan_photo_ref'] === 'string' ? body['challan_photo_ref'].trim() : '') &&
+      replay.po_ref_ext === expectedPoRef;
+    if (!bodyMatches) {
+      throw new AppError(409, 'IDEMPOTENCY_KEY_CONFLICT', 'Idempotency-Key was already used for a different gate event submission');
+    }
+    const auditClient = await getPool().connect();
+    try {
+      await logAuditEntry(auditClient, { ...auditCtxFor(req, actor, 200), event_id: replay.source_event_id, error_code: null });
+    } finally {
+      auditClient.release();
+    }
+    return replay;
+  };
+
+  if (idempotencyKey) {
+    const replay = await replayIfMatch();
+    if (replay) {
+      sendJson(res, 200, gateEventToJson(replay));
+      return;
+    }
+  }
+
   const gateEventId = randomUUID();
   const correlationId = randomUUID();
   const pool = getPool();
@@ -131,6 +188,7 @@ const createGateEventBase: RouteHandler = async (req, res) => {
           actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
           occurred_at: new Date().toISOString(),
         },
+        idempotency_key: idempotencyKey || null,
       },
       auditCtxFor(req, actor, 201),
       client,
@@ -141,6 +199,16 @@ const createGateEventBase: RouteHandler = async (req, res) => {
     sendJson(res, 201, gateEventToJson(saved!));
   } catch (err) {
     if (!committed) await client.query('ROLLBACK');
+    // Concurrent same-key requests race past the replay pre-check; the uq_idempotency constraint
+    // rejects the loser, which then replays the winner's row (through the same site/body check
+    // used above) instead of surfacing an opaque 409.
+    if (idempotencyKey && err instanceof AppError && err.errorCode === 'DUPLICATE_EVENT') {
+      const replay = await replayIfMatch();
+      if (replay) {
+        sendJson(res, 200, gateEventToJson(replay));
+        return;
+      }
+    }
     throw err;
   } finally {
     client.release();
@@ -206,6 +274,17 @@ const listGateEventsBase: RouteHandler = async (req, res) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', "status filter must be 'open' or 'reversed'");
     return;
   }
+  const orderParam = url.searchParams.get('order');
+  if (orderParam !== null && orderParam !== 'asc' && orderParam !== 'desc') {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', "order filter must be 'asc' or 'desc'");
+    return;
+  }
+  const offsetParam = url.searchParams.get('offset');
+  const offset = offsetParam === null ? 0 : Number(offsetParam);
+  if (!Number.isInteger(offset) || offset < 0) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'offset must be a non-negative integer');
+    return;
+  }
   assertRoleAllowed(req, binding === 'unmatched' ? UNMATCHED_READ_ROLES : GENERAL_READ_ROLES, 'read');
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
@@ -223,7 +302,10 @@ const listGateEventsBase: RouteHandler = async (req, res) => {
   } else if (!wildcard) {
     siteAny = [...locations];
   }
-  const rows = await listGateEvents({ siteId, siteAny, status: status as 'open' | 'reversed' | null, bindingStatus: binding as 'matched' | 'unmatched' | null, limit: 200 });
+  // Review D3 (AC3): the unmatched worklist defaults oldest-first so long-stuck vehicles surface
+  // before newer arrivals; every other listing stays newest-first. An explicit order param wins.
+  const order = (orderParam as 'asc' | 'desc' | null) ?? (binding === 'unmatched' ? 'asc' : 'desc');
+  const rows = await listGateEvents({ siteId, siteAny, status: status as 'open' | 'reversed' | null, bindingStatus: binding as 'matched' | 'unmatched' | null, limit: 200, offset, order });
   sendJson(res, 200, { gate_events: rows.map((row) => gateEventToJson(row)) });
 };
 

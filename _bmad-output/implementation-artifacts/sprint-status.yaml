@@ -332,7 +332,12 @@ development_status:
   # --- Epic 3: Warehouse Operations and Frontline Capture Flows  [PILOT] ---
   epic-3: in-progress
   3-1-warehouse-topology-setup-fr-w-01: done   # PILOT
-   3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: done   # PILOT
+  # story 3-2 re-review 2026-07-23 (adversarial pass over fix commit 9fbdcf1): 3 decisions (Idempotency-Key
+  #   online dedup, binding_token deprecated alias restored, offset/order pagination + oldest-first unmatched
+  #   worklist) + 2 patches (localYmd UTC getters, single named UNIQUE on correlation_id) applied; 2 deferred;
+  #   tsc/eslint clean, targeted 44/44, full suite 390/391 (1 pre-existing date-dependent 3-3 failure logged
+  #   to deferred-work); remains done
+  3-2-gate-event-capture-and-vehicle-to-po-binding-uj-gate-01-fr-w-02: done   # PILOT
   3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: done   # PILOT
   3-4-goods-receiving-against-asn-or-po-fr-w-02: review   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: backlog   # PILOT
