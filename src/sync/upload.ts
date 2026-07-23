@@ -67,6 +67,10 @@ const PERMANENT_ERROR_CODES = new Set([
   'RECEIVING_PO_NOT_FOUND',
   'RECEIVING_QTY_REQUIRED',
   'RECEIVING_QC_HOLD_ZONE_NOT_FOUND',
+  'LOCATION_NOT_FOUND',
+  'PUTAWAY_TASK_NOT_FOUND',
+  'PUTAWAY_TASK_NOT_HELD',
+  'ASN_PO_NOT_FOUND',
   'INVALID_SIGNAL_TYPE',
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). A write from an
   // edge upload can never mutate ERP-mastered state; settle it needs_attention, never halt the outbox.

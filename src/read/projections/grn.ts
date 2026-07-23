@@ -97,7 +97,12 @@ export async function listGrns(filters: ListGrnsFilters = {}, client?: PoolClien
   return result.rows.map(mapRow);
 }
 
-/** Idempotent, replay-safe upsert keyed on grn_id (client-supplied UUID keeps replay idempotent). */
+/**
+ * Idempotent, replay-safe upsert keyed on grn_id (client-supplied UUID keeps replay idempotent).
+ * Header identity (received_by, business_date, source_event_id, site, PO ref) is set by the first
+ * line that creates the header and never overwritten by later lines sharing the same grn_id; status
+ * only ever advances open -> posted, never regresses.
+ */
 export async function insertGrnHeader(input: InsertGrnHeaderInput, client: PoolClient): Promise<void> {
   await client.query(
     `INSERT INTO grn
@@ -105,16 +110,7 @@ export async function insertGrnHeader(input: InsertGrnHeaderInput, client: PoolC
         status, received_by, business_date, source_event_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (grn_id) DO UPDATE SET
-       correlation_id = EXCLUDED.correlation_id,
-       po_ref_ext = EXCLUDED.po_ref_ext,
-       source_document = EXCLUDED.source_document,
-       source_ref_ext = EXCLUDED.source_ref_ext,
-       site_id = EXCLUDED.site_id,
-       site_code_ext = EXCLUDED.site_code_ext,
-       status = EXCLUDED.status,
-       received_by = EXCLUDED.received_by,
-       business_date = EXCLUDED.business_date,
-       source_event_id = EXCLUDED.source_event_id,
+       status = CASE WHEN grn.status = 'posted' THEN 'posted' ELSE EXCLUDED.status END,
        updated_at = now()`,
     [
       input.grn_id,

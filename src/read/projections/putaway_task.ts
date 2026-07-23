@@ -144,14 +144,15 @@ export async function insertPutawayTask(input: InsertPutawayTaskInput, client: P
  * reason code, and the goods.putaway_released event id. Scoped to a currently-held task so a replay
  * or a race cannot re-release a task that is already ready/completed.
  */
+/** Returns false (no-op) if a concurrent request already released the task out from under this one. */
 export async function markPutawayReleased(
   putawayTaskId: string,
   releasedBy: string,
   reasonCode: string,
   releasedEventId: string,
   client: PoolClient,
-): Promise<void> {
-  await client.query(
+): Promise<boolean> {
+  const result = await client.query(
     `UPDATE putaway_task
         SET status = 'ready',
             released_by = $2,
@@ -161,4 +162,5 @@ export async function markPutawayReleased(
       WHERE putaway_task_id = $1 AND status = 'held'`,
     [putawayTaskId, releasedBy, reasonCode, releasedEventId],
   );
+  return (result.rowCount ?? 0) > 0;
 }

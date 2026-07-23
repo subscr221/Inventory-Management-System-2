@@ -109,6 +109,15 @@ const createAsnBase: RouteHandler = async (req, res) => {
   }
   assertSiteAccess(req, site.location_id, 'write');
 
+  const existing = await getAsnByNumber(asnNumberExt);
+  if (existing) {
+    assertSiteAccess(req, existing.site_id, 'write');
+    if (existing.site_id !== site.location_id) {
+      sendRequestError(req, res, 409, 'ASN_SITE_MISMATCH', `ASN "${asnNumberExt}" is already bound to a different site and cannot be re-posted against "${siteCode}"`);
+      return;
+    }
+  }
+
   const supplierRef = typeof body['supplier_ref_ext'] === 'string' && body['supplier_ref_ext'].trim().length > 0 ? body['supplier_ref_ext'].trim() : po.supplier_ref_ext;
 
   const pool = getPool();

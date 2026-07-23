@@ -92,5 +92,9 @@
   "errors.RECEIVING_WEIGHT_NOT_ACCEPTED": "Receipt is blocked: the weighment is outside tolerance and awaiting review.",
   "errors.RECEIVING_PO_NOT_FOUND": "The referenced PO was not found. Refresh PO data and try again.",
   "errors.RECEIVING_QTY_REQUIRED": "A received quantity is required before this line can sync.",
-  "errors.RECEIVING_QC_HOLD_ZONE_NOT_FOUND": "No QC-hold zone is configured for this site. Contact your supervisor."
+  "errors.RECEIVING_QC_HOLD_ZONE_NOT_FOUND": "No QC-hold zone is configured for this site. Contact your supervisor.",
+  "errors.LOCATION_NOT_FOUND": "The target location was not found or is not active. Confirm the location and try again.",
+  "errors.PUTAWAY_TASK_NOT_FOUND": "The putaway task was not found. Refresh and try again.",
+  "errors.PUTAWAY_TASK_NOT_HELD": "This putaway task is no longer awaiting release.",
+  "errors.ASN_PO_NOT_FOUND": "The PO referenced by this ASN was not found. Refresh PO data and try again."
 }

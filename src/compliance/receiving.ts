@@ -331,7 +331,7 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
     target = isUuid(p['target_location_id'])
       ? await getLocationById(p['target_location_id'] as string, client)
       : await getLocationByCode(p['target_location_code'] as string, client);
-    if (!target || target.status !== 'active') {
+    if (!target || target.status !== 'active' || target.site_id !== siteId) {
       throw new AppError(400, 'LOCATION_NOT_FOUND', 'The receiving target location is not registered or not active', {
         target_location_id: isNonEmptyString(p['target_location_id']) ? (p['target_location_id'] as string) : null,
         target_location_code: isNonEmptyString(p['target_location_code']) ? (p['target_location_code'] as string) : null,
@@ -473,6 +473,12 @@ export async function applyGoodsPutawayReleasedProjection(envelope: EventEnvelop
   //      receiving supervisor. The reason_code rides the event payload into the standard audit path.
   await assertReleaseApproval(envelope.metadata.actor.role, client);
 
-  const releasedBy = isUuid(p['released_by']) ? (p['released_by'] as string) : envelope.metadata.actor.user_id;
-  await markPutawayReleased(putawayTaskId, releasedBy, p['reason_code'] as string, eventId, client);
+  // The release approver identity is always the authenticated actor, never trusted from the payload
+  // (mirrors received_by/weighed_by/gate_officer_id) - edge.ts and the REST handler both force
+  // metadata.actor.user_id to the authenticated user, so this is the only trustworthy source.
+  const releasedBy = envelope.metadata.actor.user_id;
+  const released = await markPutawayReleased(putawayTaskId, releasedBy, p['reason_code'] as string, eventId, client);
+  if (!released) {
+    throw new AppError(409, 'PUTAWAY_TASK_NOT_HELD', `Putaway task "${putawayTaskId}" was released by a concurrent request`, { putaway_task_id: putawayTaskId });
+  }
 }

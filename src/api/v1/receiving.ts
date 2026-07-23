@@ -109,6 +109,16 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
   const grnId = typeof body['grn_id'] === 'string' && UUID_REGEX.test(body['grn_id']) ? body['grn_id'] : randomUUID();
   const grnLineId = typeof body['grn_line_id'] === 'string' && UUID_REGEX.test(body['grn_line_id']) ? body['grn_line_id'] : randomUUID();
 
+  // A client-supplied grn_id/grn_line_id must belong to a GRN this actor already has write access to
+  // (idempotent replay of the caller's own receipt); otherwise it could target another site's record.
+  const existingGrn = await getGrnById(grnId);
+  if (existingGrn) assertSiteAccess(req, existingGrn.site_id, 'write');
+  const existingLine = await getGrnLineById(grnLineId);
+  if (existingLine) {
+    const parentGrn = await getGrnById(existingLine.grn_id);
+    if (parentGrn) assertSiteAccess(req, parentGrn.site_id, 'write');
+  }
+
   const pool = getPool();
   const client = await pool.connect();
   let committed = false;
