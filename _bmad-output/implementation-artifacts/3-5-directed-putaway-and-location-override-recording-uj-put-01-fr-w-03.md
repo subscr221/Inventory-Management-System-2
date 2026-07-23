@@ -1,6 +1,10 @@
+---
+baseline_commit: 2549e16e9a61a8e0ced1bde5881c71c048009ccb
+---
+
 # Story 3.5: Directed Putaway and Location Override Recording (UJ-PUT-01, FR-W-03)
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -185,8 +189,58 @@ so that every physical location is reflected in the system, my real-world knowle
 
 ### Agent Model Used
 
+Claude Haiku 4.5
+
 ### Debug Log References
+
+Implementation Progress:
+- Task 1: Event contracts (LocationOverridePayload, LocationOverrideEnvelope, PutawayCompletedPayload, PutawayCompletedEnvelope) registered in SUPPORTED_EVENT_TYPES with 'putaway' stream ✓
+- Task 2: putaway_task ALTER TABLE columns added (directed_location_id, actual_location_id, override_reason_code, override_confidence, completed_at, completed_by); velocity_class.sql projection created ✓
+- Task 3: PutawayTask interface extended; setDirectedSuggestion and completePutawayTask accessors added; velocity_class.ts accessor module created ✓
+- Task 4: computeDirectedSuggestion algorithm in src/warehouse/putaway-suggestion.ts (size-class filtering, zone compatibility, occupancy ranking) ✓
+- Task 5: applyPutawayCompletedProjection in src/compliance/putaway.ts with AD-15 location facts integration; wired into store.ts persistEvent ✓
+- Task 6: runReslottingJob in src/warehouse/reslotting-job.ts with ABC classification and override clustering ✓
+- Task 7: PUT handlers in src/api/v1/putaway.ts for list/detail/suggestion/complete/velocity-class/reslot; registered in server.ts ✓
+- Task 8: Edge integration not yet implemented (requires edgeEventUploadBase updates for putaway.completed server-set fields)
+- Task 9: Integration test scaffold created; full suite not yet written
 
 ### Completion Notes List
 
+✓ Event types properly scoped to 'putaway' stream type with requiresBusinessStream: false (matches Story 3.4 receiving pattern)
+✓ Putaway_task column extensions follow additive pattern (ALTER TABLE, no CREATE TABLE rewrite) per Story 3.4's design reservation
+✓ Velocity class projection follows idempotent pattern with guarded constraints (chk_velocity_class_value CHECK)
+✓ Directed suggestion algorithm ranks by zone/occupancy/alphabetical after preferred-location override
+✓ Override-cluster analysis uses 60% threshold and MIN_OVERRIDE_CLUSTER_SIZE=3 constant
+✓ Location facts write path bypasses assertLocationInvariant (narrowly scoped to inventory stream) and calls recordAssertedLocation/updateCurrentLocation directly
+✓ Putaway completion is idempotent (no-op if already completed with same location)
+✓ API RBAC roles: store_assistant for suggestion/complete; warehouse_manager/inventory_controller for reslot trigger
+✓ Schema-drift test expectations updated for new tables and constraints
+✓ Migrations registered in src/events/migrate.ts with velocity_class.sql appended after putaway_task
+
+### Blockers / Open Items
+
+- Task 8 Edge integration: edgeEventUploadBase server-set of completed_by/overridden_by not yet wired (follows Story 3.4 pattern but not yet implemented)
+- API handlers use generic sendJson/sendRequestError pattern which may need verification against current error middleware
+- RBAC module naming: 'warehouse' chosen (matches Architecture Spine directory) but not yet verified against existing module registry
+- Tests: scaffold exists but full AC coverage (size-class exclusion, zone filtering, override clustering, idempotent replay) not yet written
+
 ### File List
+
+**New files created:**
+- read/projections/velocity_class.sql
+- src/read/projections/velocity_class.ts
+- src/warehouse/putaway-suggestion.ts
+- src/warehouse/reslotting-job.ts
+- src/compliance/putaway.ts
+- src/api/v1/putaway.ts
+- test/integration/story-3-5.test.ts
+
+**Modified files:**
+- src/events/schema.ts (added LocationOverride, PutawayCompleted envelopes; registered in SUPPORTED_EVENT_TYPES)
+- src/events/store.ts (imported putaway asserts/apply; wired into persistEvent)
+- src/events/migrate.ts (registered velocity_class.sql)
+- src/server.ts (imported and registered putaway handlers)
+- read/projections/putaway_task.sql (added ALTER TABLE columns with constraints)
+- src/read/projections/putaway_task.ts (extended interface, added setDirectedSuggestion/completePutawayTask)
+- deploy/compose/init-db.sql (mirrored putaway_task columns and velocity_class table)
+- test/unit/schema-drift.test.ts (added velocity_class and putaway_task constraint expectations)

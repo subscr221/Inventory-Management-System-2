@@ -324,8 +324,15 @@ const EXPECTED = [
   {
     canonical: 'read/projections/putaway_task.sql',
     table: 'putaway_task',
-    constraints: ['chk_putaway_task_status'],
+    constraints: ['chk_putaway_task_status', 'chk_putaway_task_velocity_class_value', 'chk_putaway_task_override_confidence'],
     indexes: ['idx_putaway_task_grn_line', 'idx_putaway_task_site_status'],
+  },
+  // Story 3.5 projections.
+  {
+    canonical: 'read/projections/velocity_class.sql',
+    table: 'velocity_class',
+    constraints: ['chk_velocity_class_value'],
+    indexes: ['idx_velocity_class_site_class'],
   },
   {
     canonical: 'read/projections/asn.sql',

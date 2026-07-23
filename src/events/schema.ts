@@ -404,6 +404,47 @@ export interface GoodsPutawayReleasedEnvelope extends Omit<EventEnvelope, 'paylo
 }
 
 // ---------------------------------------------------------------------------
+// Story 3.5: Directed Putaway and Location Override Recording (FR-W-03)
+// ---------------------------------------------------------------------------
+
+// Location override records when an operator places a lot in a different bin than the
+// system's directed suggestion. Asserted and expected locations are both captured per
+// AD-15. overridden_by is server-set from auth; never trusted from client payload.
+export interface LocationOverridePayload {
+  putaway_task_id: string;
+  lot_id: string;
+  asserted_location_code: string;
+  expected_location_code: string;
+  reason_code: string;
+  confidence: 'certain' | 'uncertain';
+  /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
+  overridden_by?: string;
+}
+
+export interface LocationOverrideEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'location.override';
+  payload: LocationOverridePayload;
+}
+
+// Putaway completion marks when an operator finishes placing a lot in a bin, optionally
+// recording an override. completed_by is server-set from auth; never trusted from client.
+export interface PutawayCompletedPayload {
+  putaway_task_id: string;
+  actual_location_id?: string;
+  actual_location_code?: string;
+  correlation_id: string;
+  override_reason_code?: string;
+  override_confidence?: 'certain' | 'uncertain';
+  /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
+  completed_by?: string;
+}
+
+export interface PutawayCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'putaway.completed';
+  payload: PutawayCompletedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -503,6 +544,17 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'goods.putaway_released': {
     streamType: 'receiving',
+    requiresBusinessStream: false,
+  },
+  // Story 3.5: putaway completion and location override on a new 'putaway' stream. The putaway
+  // envelope posts no valuated movement of its own - location override is an auditable correction
+  // event, not a stock transaction - so business-stream tagging is not gated on these events.
+  'putaway.completed': {
+    streamType: 'putaway',
+    requiresBusinessStream: false,
+  },
+  'location.override': {
+    streamType: 'putaway',
     requiresBusinessStream: false,
   },
 } as const;

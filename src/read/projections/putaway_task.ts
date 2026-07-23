@@ -23,6 +23,16 @@ export interface PutawayTask {
   source_event_id: string;
   created_at: string;
   updated_at: string;
+  // Story 3.5: Directed Putaway (Task 3 fields)
+  directed_location_id: string | null;
+  directed_location_code: string | null;
+  velocity_class_at_suggestion: 'A' | 'B' | 'C' | null;
+  actual_location_id: string | null;
+  actual_location_code: string | null;
+  override_reason_code: string | null;
+  override_confidence: 'certain' | 'uncertain' | null;
+  completed_at: string | null;
+  completed_by: string | null;
 }
 
 export interface InsertPutawayTaskInput {
@@ -56,7 +66,10 @@ function ts(value: unknown): string {
 
 const PUTAWAY_TASK_COLUMNS = `putaway_task_id, grn_line_id, sku, lot_id, quantity::text AS quantity,
        from_location_id, site_id, status, owner_role, released_by, release_reason_code,
-       released_event_id, source_event_id, created_at, updated_at`;
+       released_event_id, source_event_id, created_at, updated_at,
+       directed_location_id, directed_location_code, velocity_class_at_suggestion,
+       actual_location_id, actual_location_code, override_reason_code, override_confidence,
+       completed_at, completed_by`;
 
 function mapRow(row: Record<string, unknown>): PutawayTask {
   return {
@@ -75,6 +88,15 @@ function mapRow(row: Record<string, unknown>): PutawayTask {
     source_event_id: row['source_event_id'] as string,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
+    directed_location_id: (row['directed_location_id'] as string | null) ?? null,
+    directed_location_code: (row['directed_location_code'] as string | null) ?? null,
+    velocity_class_at_suggestion: (row['velocity_class_at_suggestion'] as 'A' | 'B' | 'C' | null) ?? null,
+    actual_location_id: (row['actual_location_id'] as string | null) ?? null,
+    actual_location_code: (row['actual_location_code'] as string | null) ?? null,
+    override_reason_code: (row['override_reason_code'] as string | null) ?? null,
+    override_confidence: (row['override_confidence'] as 'certain' | 'uncertain' | null) ?? null,
+    completed_at: (row['completed_at'] ? ts(row['completed_at']) : null),
+    completed_by: (row['completed_by'] as string | null) ?? null,
   };
 }
 
@@ -161,6 +183,61 @@ export async function markPutawayReleased(
             updated_at = now()
       WHERE putaway_task_id = $1 AND status = 'held'`,
     [putawayTaskId, releasedBy, reasonCode, releasedEventId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Story 3.5: Set the directed suggestion for a putaway task (idempotent, no-op if already completed). */
+export async function setDirectedSuggestion(
+  putawayTaskId: string,
+  directedLocationId: string,
+  directedLocationCode: string,
+  velocityClass: 'A' | 'B' | 'C',
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `UPDATE putaway_task
+        SET directed_location_id = $2,
+            directed_location_code = $3,
+            velocity_class_at_suggestion = $4,
+            updated_at = now()
+      WHERE putaway_task_id = $1 AND status != 'completed'`,
+    [putawayTaskId, directedLocationId, directedLocationCode, velocityClass],
+  );
+}
+
+/** Story 3.5: Complete a putaway task, recording the actual location and override if applicable. Returns false (no-op) if a concurrent request already completed the task. */
+export async function completePutawayTask(
+  input: {
+    putawayTaskId: string;
+    actualLocationId: string;
+    actualLocationCode: string;
+    overrideReasonCode?: string | null;
+    overrideConfidence?: 'certain' | 'uncertain' | null;
+    completedBy: string;
+    completedEventId?: string;
+  },
+  client: PoolClient,
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE putaway_task
+        SET status = 'completed',
+            actual_location_id = $2,
+            actual_location_code = $3,
+            override_reason_code = $4,
+            override_confidence = $5,
+            completed_by = $6,
+            completed_at = now(),
+            updated_at = now()
+      WHERE putaway_task_id = $1 AND status = 'ready'`,
+    [
+      input.putawayTaskId,
+      input.actualLocationId,
+      input.actualLocationCode,
+      input.overrideReasonCode ?? null,
+      input.overrideConfidence ?? null,
+      input.completedBy,
+    ],
   );
   return (result.rowCount ?? 0) > 0;
 }

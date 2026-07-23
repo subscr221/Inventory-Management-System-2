@@ -31,6 +31,7 @@ import {
   applyGoodsReceivedProjection,
   applyGoodsPutawayReleasedProjection,
 } from '../compliance/receiving.js';
+import { assertPutawayCompletedShape, assertLocationOverrideShape, applyPutawayCompletedProjection } from '../compliance/putaway.js';
 import { assertErpReadOnly } from '../compliance/erp-readonly.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -227,6 +228,16 @@ export async function persistEvent(
   // malformed receiving event never consumes an idempotency key.
   assertGoodsReceivedShape(envelope);
   assertGoodsPutawayReleasedShape(envelope);
+  // Story 3.5: putaway-completion and location-override shape validation (putaway_task_id presence,
+  // actual location and override_confidence when override_reason_code is supplied) is non-DB and
+  // runs with the other pre-transaction asserts, so a malformed putaway event never consumes an
+  // idempotency key.
+  if (envelope.event_type === 'putaway.completed') {
+    assertPutawayCompletedShape(envelope as any);
+  }
+  if (envelope.event_type === 'location.override') {
+    assertLocationOverrideShape(envelope as any);
+  }
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -290,6 +301,25 @@ export async function persistEvent(
       // line, the stock movement, and the domain_events insert commit or roll back together.
       await applyGoodsReceivedProjection(envelope, client, eventId);
       await applyGoodsPutawayReleasedProjection(envelope, client, eventId);
+      // Story 3.5: putaway completion records the actual location and any override against the directed
+      // suggestion, updates the Story 1.6 location asserted/expected facts, and completes the putaway
+      // task - all inside this same transaction so the location facts and the domain_events insert
+      // commit or roll back together.
+      if (envelope.event_type === 'putaway.completed') {
+        const payload = envelope.payload as Record<string, unknown>;
+        await applyPutawayCompletedProjection(
+          {
+            putawayTaskId: payload.putaway_task_id as string,
+            actualLocationId: payload.actual_location_id as string | undefined,
+            actualLocationCode: payload.actual_location_code as string | undefined,
+            overrideReasonCode: payload.override_reason_code as string | undefined,
+            overrideConfidence: payload.override_confidence as 'certain' | 'uncertain' | undefined,
+            completedBy: payload.completed_by as string,
+            eventId,
+          },
+          client,
+        );
+      }
 
     let nextVersion: number;
     if (envelope.event_version !== undefined) {
