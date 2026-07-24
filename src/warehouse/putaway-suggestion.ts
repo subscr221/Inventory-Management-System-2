@@ -27,28 +27,28 @@ export async function computeDirectedSuggestion(
   const pool = client ?? getPool();
 
   // Step 1: Load the putaway task
-  const task = await getPutawayTaskById(putawayTaskId, pool);
+  const task = await getPutawayTaskById(putawayTaskId, client);
   if (!task) {
-    throw new AppError('PUTAWAY_TASK_NOT_FOUND', `Putaway task ${putawayTaskId} not found`);
+    throw new AppError(404, 'PUTAWAY_TASK_NOT_FOUND', `Putaway task ${putawayTaskId} not found`);
   }
 
   // Step 4.4: Reject if task is held (QC-hold)
   if (task.status === 'held') {
-    throw new AppError('PUTAWAY_TASK_NOT_READY', 'Putaway task is on QC hold and cannot be suggested');
+    throw new AppError(409, 'PUTAWAY_TASK_NOT_READY', 'Putaway task is on QC hold and cannot be suggested');
   }
 
   // Step 4.2(a): Load item master to get hazmat/quarantine flags
-  const item = await getItemBySku(task.sku, pool);
+  const item = await getItemBySku(task.sku, client);
   if (!item) {
-    throw new AppError('ITEM_NOT_FOUND', `Item ${task.sku} not found`);
+    throw new AppError(404, 'ITEM_NOT_FOUND', `Item ${task.sku} not found`);
   }
 
   // Step 4.2(b): Load velocity class (default to C if no row exists)
-  const velocityClassRow = await getVelocityClass(task.sku, task.site_id, pool);
+  const velocityClassRow = await getVelocityClass(task.sku, task.site_id, client);
   const velocityClass = velocityClassRow?.velocity_class ?? 'C';
 
   // Step 4.2(c): Query candidate bins at this site
-  const locations = await listLocationsBySite(task.site_id, pool);
+  const locations = await listLocationsBySite(task.site_id, client);
 
   // Filter candidates: must be active bins
   let candidates = locations.filter(
@@ -61,17 +61,19 @@ export async function computeDirectedSuggestion(
   // Step 4.2(d): Exclude bins that cannot accommodate the item's size class
   // Size class ordering: small < standard < large < oversized
   // A bin's size_class must be >= the item's size_class
-  const itemSizeClass = item.size_class || 'standard';
+  // item_master carries no size_class column yet; every item ranks as 'standard' until a future
+  // story adds per-item size data.
+  const itemSizeClass = 'standard';
   const sizeClassOrder: Record<string, number> = {
     small: 1,
     standard: 2,
     large: 3,
     oversized: 4,
   };
-  const itemSizeIndex = sizeClassOrder[itemSizeClass] || sizeClassOrder['standard'];
+  const itemSizeIndex = sizeClassOrder[itemSizeClass] ?? 2;
 
   candidates = candidates.filter((bin) => {
-    const binSizeIndex = sizeClassOrder[bin.size_class || 'standard'] || sizeClassOrder['standard'];
+    const binSizeIndex = sizeClassOrder[bin.size_class || 'standard'] ?? 2;
     return binSizeIndex >= itemSizeIndex;
   });
 
@@ -122,17 +124,11 @@ export async function computeDirectedSuggestion(
     occupancyMap.set(row['actual_location_id'] as string, Number(row['putaway_count_90d']));
   });
 
-  // Get the item's typical zone (if any) - for now, assume no specific zone preference
-  // This can be enhanced in future stories
-  const typicalZone = item.zone_type || '';
+  // item_master carries no zone preference column, so the zone-match tiebreaker is inert until a
+  // future story adds one.
 
   // Sort candidates
   const ranked = candidates.sort((a, b) => {
-    // Same zone preference
-    const aZoneMatch = a.zone_type === typicalZone ? 0 : 1;
-    const bZoneMatch = b.zone_type === typicalZone ? 0 : 1;
-    if (aZoneMatch !== bZoneMatch) return aZoneMatch - bZoneMatch;
-
     // Lowest occupancy
     const aOccupancy = occupancyMap.get(a.location_id) || 0;
     const bOccupancy = occupancyMap.get(b.location_id) || 0;

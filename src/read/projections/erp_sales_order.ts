@@ -12,6 +12,8 @@ import { getPool } from '../../config/db.js';
  */
 
 export interface ErpSalesOrderRow {
+  /** Story 3.6: stable UUID surrogate (additive column) used as the dispatch-order identifier. */
+  id: string;
   so_number_ext: string;
   line_no: number;
   sku: string;
@@ -35,12 +37,13 @@ function ts(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
-const COLUMNS = `so_number_ext, line_no, sku, quantity,
+const COLUMNS = `id, so_number_ext, line_no, sku, quantity,
        to_char(required_by, 'YYYY-MM-DD') AS required_by,
        ship_to_ext, ship_from_site_id, ship_from_site_code_ext, status, source_system, last_synced_at`;
 
 function mapRow(row: Record<string, unknown>): ErpSalesOrderRow {
   return {
+    id: row['id'] as string,
     so_number_ext: row['so_number_ext'] as string,
     line_no: Number(row['line_no']),
     sku: row['sku'] as string,
@@ -84,6 +87,12 @@ export async function listSalesOrders(filters: SalesOrderFilters, client?: PoolC
     params,
   );
   return result.rows.map(mapRow);
+}
+
+/** Story 3.6: loads a single sales-order line by its UUID surrogate (the dispatch-order id). */
+export async function getSalesOrderLineById(id: string, client?: PoolClient): Promise<ErpSalesOrderRow | null> {
+  const result = await runner(client).query(`SELECT ${COLUMNS} FROM erp_sales_order WHERE id = $1`, [id]);
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 // ---------------------------------------------------------------------------

@@ -83,8 +83,8 @@ export async function listVelocityClasses(
 }
 
 /** Idempotent upsert keyed on (sku, site_id). */
-export async function upsertVelocityClass(input: UpsertVelocityClassInput, client: PoolClient): Promise<void> {
-  await client.query(
+export async function upsertVelocityClass(input: UpsertVelocityClassInput, client?: PoolClient): Promise<void> {
+  await runner(client).query(
     `INSERT INTO velocity_class
        (sku, site_id, velocity_class, putaway_count_30d, override_count_30d,
         preferred_location_id, preferred_location_code, source_event_id)

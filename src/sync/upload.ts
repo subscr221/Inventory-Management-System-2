@@ -91,6 +91,16 @@ const PERMANENT_ERROR_CODES = new Set([
   'WEIGHBRIDGE_SITE_MISMATCH',
   'WEIGHBRIDGE_NET_NEGATIVE',
   'WEIGHBRIDGE_PO_LINE_NOT_FOUND',
+  // Story 3.6: pick-task permanent business rejections (INSUFFICIENT_STOCK is already present
+  // above; INSUFFICIENT_STOCK_FOR_PICK is the pick-specific variant)
+  'PICK_TASK_NOT_FOUND',
+  'PICK_LINE_NOT_FOUND',
+  'PICK_TASK_INVALID_PAYLOAD',
+  'PICK_LINE_ALREADY_CONFIRMED',
+  'PICK_OVERRIDE_REASON_REQUIRED',
+  'PICK_TASK_NOT_ALL_LINES_CONFIRMED',
+  'INSUFFICIENT_STOCK_FOR_PICK',
+  'DISPATCH_ORDER_LINE_NOT_FOUND',
 ]);
 
 function isAppError(error: unknown): error is AppError {

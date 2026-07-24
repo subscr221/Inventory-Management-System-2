@@ -2,7 +2,8 @@ import type { PoolClient } from 'pg';
 import type { LocationOverrideEnvelope, PutawayCompletedEnvelope } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
 import { completePutawayTask, getPutawayTaskById } from '../read/projections/putaway_task.js';
-import { getLocationByCode, recordAssertedLocation, recordExpectedLocation, updateCurrentLocation } from '../read/projections/location.js';
+import { getCurrentLocation, recordAssertedLocation, recordExpectedLocation, updateCurrentLocation } from '../read/projections/location.js';
+import { getLocationByCode } from '../read/projections/location_register.js';
 import { getLotByNumberAndSku } from '../read/projections/lot_master.js';
 
 /** Story 3.5 Task 5: Pre-transaction shape validation for putaway.completed envelope. */
@@ -10,19 +11,19 @@ export function assertPutawayCompletedShape(envelope: PutawayCompletedEnvelope):
   const { payload } = envelope;
 
   if (!payload.putaway_task_id) {
-    throw new AppError('PUTAWAY_TASK_REQUIRED', 'putaway_task_id is required');
+    throw new AppError(400, 'PUTAWAY_TASK_REQUIRED', 'putaway_task_id is required');
   }
 
   if (!payload.actual_location_id && !payload.actual_location_code) {
-    throw new AppError('PUTAWAY_LOCATION_REQUIRED', 'Either actual_location_id or actual_location_code is required');
+    throw new AppError(400, 'PUTAWAY_LOCATION_REQUIRED', 'Either actual_location_id or actual_location_code is required');
   }
 
   if (payload.override_reason_code && !payload.override_confidence) {
-    throw new AppError('PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED', 'override_confidence is required when override_reason_code is present');
+    throw new AppError(400, 'PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED', 'override_confidence is required when override_reason_code is present');
   }
 
   if (payload.override_reason_code && !['certain', 'uncertain'].includes(payload.override_confidence!)) {
-    throw new AppError('PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED', 'override_confidence must be "certain" or "uncertain"');
+    throw new AppError(400, 'PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED', 'override_confidence must be "certain" or "uncertain"');
   }
 }
 
@@ -33,10 +34,10 @@ export function assertLocationOverrideShape(_envelope: LocationOverrideEnvelope)
 
 export interface ApplyPutawayCompletedInput {
   putawayTaskId: string;
-  actualLocationId?: string;
-  actualLocationCode?: string;
-  overrideReasonCode?: string;
-  overrideConfidence?: 'certain' | 'uncertain';
+  actualLocationId?: string | undefined;
+  actualLocationCode?: string | undefined;
+  overrideReasonCode?: string | undefined;
+  overrideConfidence?: 'certain' | 'uncertain' | undefined;
   completedBy: string;
   eventId: string;
 }
@@ -55,7 +56,7 @@ export async function applyPutawayCompletedProjection(
   // Step 1: Load the putaway task
   const task = await getPutawayTaskById(putawayTaskId, client);
   if (!task) {
-    throw new AppError('PUTAWAY_TASK_NOT_FOUND', `Putaway task ${putawayTaskId} not found`);
+    throw new AppError(404, 'PUTAWAY_TASK_NOT_FOUND', `Putaway task ${putawayTaskId} not found`);
   }
 
   if (task.status !== 'ready') {
@@ -63,7 +64,7 @@ export async function applyPutawayCompletedProjection(
     if (task.status === 'completed' && task.actual_location_code === actualLocationCode) {
       return;
     }
-    throw new AppError('PUTAWAY_TASK_NOT_READY', `Putaway task ${putawayTaskId} is not in ready state`);
+    throw new AppError(409, 'PUTAWAY_TASK_NOT_READY', `Putaway task ${putawayTaskId} is not in ready state`);
   }
 
   // Step 2: Resolve actual location ID from code if needed
@@ -73,19 +74,19 @@ export async function applyPutawayCompletedProjection(
   if (actualLocationCode) {
     const location = await getLocationByCode(actualLocationCode, client);
     if (!location) {
-      throw new AppError('PUTAWAY_LOCATION_NOT_FOUND', `Location ${actualLocationCode} not found`);
+      throw new AppError(404, 'PUTAWAY_LOCATION_NOT_FOUND', `Location ${actualLocationCode} not found`);
     }
     resolvedLocationId = location.location_id;
   } else if (actualLocationId) {
     resolvedLocationId = actualLocationId;
   } else {
-    throw new AppError('PUTAWAY_LOCATION_REQUIRED', 'Either actualLocationId or actualLocationCode must be provided');
+    throw new AppError(400, 'PUTAWAY_LOCATION_REQUIRED', 'Either actualLocationId or actualLocationCode must be provided');
   }
 
   // Step 3: Check if override is needed and reason code is present
   const isOverride = task.directed_location_id && task.directed_location_id !== resolvedLocationId;
   if (isOverride && !overrideReasonCode) {
-    throw new AppError('PUTAWAY_OVERRIDE_REASON_REQUIRED', 'override_reason_code is required when actual location differs from directed suggestion');
+    throw new AppError(400, 'PUTAWAY_OVERRIDE_REASON_REQUIRED', 'override_reason_code is required when actual location differs from directed suggestion');
   }
 
   // Step 4: Write location facts (AD-15 Story 1.6 integration)
@@ -108,21 +109,28 @@ export async function applyPutawayCompletedProjection(
         );
       }
 
-      // Record asserted location (the actual scanned location)
-      await recordAssertedLocation(
+      // The asserted-fact/current-location upserts are version-gated (only a strictly newer
+      // source_event_version wins), so the putaway assertion is stamped one past the lot's
+      // current projection version.
+      const current = await getCurrentLocation(lotId, client);
+      const nextVersion = (current?.source_event_version ?? 0) + 1;
+
+      const fact = await recordAssertedLocation(
         {
           lot_id: lotId,
           asserted_location: resolvedLocationCode,
           recorded_by: completedBy,
-          device_id: undefined,
+          device_id: null,
           confidence,
           source_event_id: eventId,
+          source_event_version: nextVersion,
         },
         client,
       );
 
-      // Update current location
-      await updateCurrentLocation(lotId, resolvedLocationCode, confidence, undefined, undefined, client);
+      if (fact) {
+        await updateCurrentLocation(lotId, resolvedLocationCode, confidence, fact.fact_id, nextVersion, client);
+      }
     }
   }
 
@@ -132,8 +140,8 @@ export async function applyPutawayCompletedProjection(
       putawayTaskId,
       actualLocationId: resolvedLocationId,
       actualLocationCode: resolvedLocationCode,
-      overrideReasonCode: overrideReasonCode || null,
-      overrideConfidence: overrideConfidence || null,
+      overrideReasonCode: overrideReasonCode ?? null,
+      overrideConfidence: overrideConfidence ?? null,
       completedBy,
       completedEventId: eventId,
     },
@@ -141,6 +149,6 @@ export async function applyPutawayCompletedProjection(
   );
 
   if (!completed) {
-    throw new AppError('PUTAWAY_TASK_NOT_READY', `Putaway task ${putawayTaskId} could not be completed (already completed or released)`);
+    throw new AppError(409, 'PUTAWAY_TASK_NOT_READY', `Putaway task ${putawayTaskId} could not be completed (already completed or released)`);
   }
 }

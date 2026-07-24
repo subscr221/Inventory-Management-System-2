@@ -182,6 +182,14 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   if (body.stream_type === 'receiving' && body.event_type === 'goods.received') {
     body.payload['received_by'] = authContext.userId;
   }
+  // Story 3.6: the picking operator identity is the authenticated actor, never trusted from the
+  // edge payload (mirrors received_by/weighed_by/gate_officer_id above).
+  if (body.stream_type === 'warehouse' && body.event_type === 'pick_line.confirmed') {
+    body.payload['confirmed_by'] = authContext.userId;
+  }
+  if (body.stream_type === 'warehouse' && body.event_type === 'pick_task.completed') {
+    body.payload['completed_by'] = authContext.userId;
+  }
   if (assignment.locationId !== '*') {
     body.metadata.actor.location_id = assignment.locationId;
   } else if (body.stream_type === 'inventory') {

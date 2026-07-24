@@ -15,6 +15,18 @@ CREATE TABLE IF NOT EXISTS velocity_class (
   CONSTRAINT chk_velocity_class_value CHECK (velocity_class IN ('A','B','C'))
 );
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_velocity_class_value'
+      AND conrelid = 'velocity_class'::regclass
+  ) THEN
+    ALTER TABLE velocity_class
+      ADD CONSTRAINT chk_velocity_class_value CHECK (velocity_class IN ('A','B','C'));
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_velocity_class_site_class ON velocity_class (site_id, velocity_class);
 
 DO $$

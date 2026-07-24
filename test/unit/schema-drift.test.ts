@@ -334,6 +334,25 @@ const EXPECTED = [
     constraints: ['chk_velocity_class_value'],
     indexes: ['idx_velocity_class_site_class'],
   },
+  // Story 3.6 projections.
+  {
+    canonical: 'read/projections/pick_task.sql',
+    table: 'pick_task',
+    constraints: ['chk_pick_task_strategy', 'chk_pick_task_status'],
+    indexes: [
+      'idx_pick_task_dispatch_order',
+      'idx_pick_task_zone_status',
+      'idx_pick_task_assigned_status',
+      'idx_pick_task_wave',
+      'idx_pick_task_batch',
+    ],
+  },
+  {
+    canonical: 'read/projections/pick_line.sql',
+    table: 'pick_line',
+    constraints: ['chk_pick_line_status', 'chk_pick_line_capture_method'],
+    indexes: ['idx_pick_line_task', 'idx_pick_line_location_status', 'idx_pick_line_directed_lot'],
+  },
   {
     canonical: 'read/projections/asn.sql',
     table: 'asn',

@@ -1,5 +1,28 @@
 # generated: 2026-07-12
-# last_updated: 2026-07-23
+# last_updated: 2026-07-25
+# story 3-6 dev-story 2026-07-25: implemented all 8 tasks from baseline cf342e6. New 'warehouse' stream
+#   (pick_task.created/pick_line.confirmed/pick_task.completed, requiresBusinessStream false), pick_task +
+#   pick_line + dispatch_order_status projections, additive erp_sales_order.id surrogate + location_register
+#   .pick_sequence migrations, FEFO/velocity-aware generator (single/batch/wave/zone) emitting events through
+#   persistEvent so allocation + projection + event commit atomically, substitution release/reallocate with
+#   PICK_LOT_SUBSTITUTED 2xx warning, plain-text paper pick list, 9 REST routes with warehouse-module RBAC +
+#   site scoping, edge acceptance (server-set confirmed_by/completed_by, 8 permanent codes + i18n).
+#   PREREQUISITE: repaired Story 3.5's committed baseline (did not compile; broke entire integration suite) -
+#   putaway API rewritten to real RouteHandler contract, compliance/putaway import + typing fixes,
+#   velocity_class.sql guarded constraint block, story-1-9 allowlist additions, story-3-5 test rewrite.
+#   tsc/eslint/build clean both workspaces, npm test 408/409 (pre-existing story-3-3 date-flake only),
+#   edge 19/19, spine gate 6/6; moved to review
+# story 3-6 created 2026-07-25 via create-story workflow: Pick Task Generation and Execution (FR-W-04);
+#   system-generated pick tasks with optimized paths (single-order, batch, wave, zone strategies);
+#   FEFO lot selection, bin pick-sequence ordering, paper-directed picking; real-time stock allocation
+#   on pick confirmation with lot substitution and override reason capture; consumes Story 2.9
+#   sales-order projection as Phase-1 outbound demand, Story 3.5 velocity_class for bin preference,
+#   Story 2.2 stock_balance for FEFO allocation, Story 2.3 lot_master for expiry ordering,
+#   Story 1.6 location_current for lot-to-bin resolution; new pick_task + pick_line projections,
+#   pick_task.created/pick_line.confirmed/pick_task.completed events on 'warehouse' stream,
+#   src/warehouse/pick-task-generator.ts for generation logic, src/compliance/pick.ts for write-path seam,
+#   8 new permanent error codes, paper pick list (plain-text rendering), zone-strategy dispatch-order
+#   completion tracking; ready-for-dev
 # story 3-5 created 2026-07-23 via create-story workflow: Directed Putaway and Location Override
 #   Recording (UJ-PUT-01, FR-W-03); builds velocity-classification (ABC, putaway-frequency-derived)
 #   and the override-driven re-slotting job from scratch (neither existed). New 'putaway' stream
@@ -95,7 +118,29 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: 2026-07-23
+last_updated: '2026-07-25'
+# story 3-6 created 2026-07-25 via create-story workflow: Pick Task Generation and Execution (FR-W-04);
+#   system-generated pick tasks with optimized paths (single-order, batch, wave, zone strategies);
+#   FEFO lot selection, bin pick-sequence ordering, paper-directed picking; real-time stock allocation
+#   on pick confirmation with lot substitution and override reason capture; consumes Story 2.9
+#   sales-order projection as Phase-1 outbound demand, Story 3.5 velocity_class for bin preference,
+#   Story 2.2 stock_balance for FEFO allocation, Story 2.3 lot_master for expiry ordering,
+#   Story 1.6 location_current for lot-to-bin resolution; new pick_task + pick_line projections,
+#   pick_task.created/pick_line.confirmed/pick_task.completed events on 'warehouse' stream,
+#   src/warehouse/pick-task-generator.ts for generation logic, src/compliance/pick.ts for write-path seam,
+#   8 new permanent error codes, paper pick list (plain-text rendering), zone-strategy dispatch-order
+#   completion tracking; ready-for-dev
+# story 3-6 created 2026-07-25 via create-story workflow: Pick Task Generation and Execution (FR-W-04);
+#   system-generated pick tasks with optimized paths (single-order, batch, wave, zone strategies);
+#   FEFO lot selection, bin pick-sequence ordering, paper-directed picking; real-time stock allocation
+#   on pick confirmation with lot substitution and override reason capture; consumes Story 2.9
+#   sales-order projection as Phase-1 outbound demand, Story 3.5 velocity_class for bin preference,
+#   Story 2.2 stock_balance for FEFO allocation, Story 2.3 lot_master for expiry ordering,
+#   Story 1.6 location_current for lot-to-bin resolution; new pick_task + pick_line projections,
+#   pick_task.created/pick_line.confirmed/pick_task.completed events on 'warehouse' stream,
+#   src/warehouse/pick-task-generator.ts for generation logic, src/compliance/pick.ts for write-path seam,
+#   8 new permanent error codes, paper pick list (plain-text rendering), zone-strategy dispatch-order
+#   completion tracking; ready-for-dev
 # story 3-4 dev-story 2026-07-23: implementation started from baseline 8f86be6; moved to in-progress
 # story 3-4 dev-story 2026-07-23: implemented all 9 tasks. New 'receiving' stream (goods.received +
 #   goods.putaway_released, requiresBusinessStream false); grn header + grn_line + putaway_task projections
@@ -356,7 +401,7 @@ development_status:
   3-3-weighbridge-event-capture-and-tolerance-enforcement-uj-weigh-01-fr-w-02: done   # PILOT
   3-4-goods-receiving-against-asn-or-po-fr-w-02: done   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: review   # PILOT
-  3-6-pick-task-generation-and-execution-fr-w-04: backlog   # PILOT
+  3-6-pick-task-generation-and-execution-fr-w-04: review   # PILOT
   3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: backlog   # PILOT
   3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: backlog   # PILOT
   3-9-forward-pick-replenishment-fr-w-08: backlog   # PILOT

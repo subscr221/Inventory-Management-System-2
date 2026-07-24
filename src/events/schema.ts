@@ -445,6 +445,84 @@ export interface PutawayCompletedEnvelope extends Omit<EventEnvelope, 'payload'>
 }
 
 // ---------------------------------------------------------------------------
+// Story 3.6: Pick Task Generation and Execution (FR-W-04)
+// ---------------------------------------------------------------------------
+
+// One directed pick line inside a pick_task.created envelope. The generator (not the client)
+// computes the FEFO lot, bin location and pick sequence; quantities travel as NUMERIC strings.
+export interface PickLineInput {
+  pick_line_id: string;
+  dispatch_order_line_id: string;
+  sku: string;
+  directed_lot_id: string;
+  directed_quantity: number | string;
+  location_id: string;
+  pick_sequence: number;
+}
+
+// Pick task creation carries the full directed picture: the primary dispatch-order line, the
+// strategy, and every generated pick line. created_by is server-set from auth; never trusted
+// from the client payload.
+export interface PickTaskCreatedPayload {
+  pick_task_id: string;
+  dispatch_order_id: string;
+  sku: string;
+  quantity: number | string;
+  lot_id: string;
+  location_id: string;
+  pick_sequence: number;
+  strategy: 'single' | 'batch' | 'wave' | 'zone';
+  wave_id?: string | null;
+  batch_id?: string | null;
+  zone_id: string;
+  pick_lines: PickLineInput[];
+  /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
+  created_by?: string;
+}
+
+export interface PickTaskCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'pick_task.created';
+  payload: PickTaskCreatedPayload;
+}
+
+// Pick line confirmation records the lot actually picked. override_reason is required (enforced
+// in-transaction) when confirmed_lot_id differs from the directed lot (AC6/AC8). confirmed_by and
+// confirmed_at are server-set; never trusted from the client payload.
+export interface PickLineConfirmedPayload {
+  pick_task_id: string;
+  pick_line_id: string;
+  confirmed_lot_id: string;
+  confirmed_quantity: number | string;
+  override_reason?: string | null;
+  capture_method: 'PWA' | 'PAPER';
+  /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
+  confirmed_by?: string;
+  /** Server-set; never trusted from the client. */
+  confirmed_at?: string;
+}
+
+export interface PickLineConfirmedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'pick_line.confirmed';
+  payload: PickLineConfirmedPayload;
+}
+
+// Fires when ALL pick lines for a task are confirmed (AC7). completed_by/completed_at are
+// server-set; never trusted from the client payload.
+export interface PickTaskCompletedPayload {
+  pick_task_id: string;
+  dispatch_order_id: string;
+  /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
+  completed_by?: string;
+  /** Server-set; never trusted from the client. */
+  completed_at?: string;
+}
+
+export interface PickTaskCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'pick_task.completed';
+  payload: PickTaskCompletedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -555,6 +633,22 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'location.override': {
     streamType: 'putaway',
+    requiresBusinessStream: false,
+  },
+  // Story 3.6: pick task generation and execution on a new 'warehouse' stream. Pick events post no
+  // valuated movement of their own - stock allocation changes are driven by the projection apply
+  // functions, not by business-stream-tagged events - so tagging is not gated on these events
+  // (mirrors the Story 3.5 'putaway' stream rationale).
+  'pick_task.created': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'pick_line.confirmed': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'pick_task.completed': {
+    streamType: 'warehouse',
     requiresBusinessStream: false,
   },
 } as const;

@@ -118,6 +118,17 @@ import {
   handleReslottingJob,
 } from './api/v1/putaway.js';
 import {
+  generatePickTasksHandler,
+  generateWavePickTasksHandler,
+  generateBatchPickTasksHandler,
+  listPickTasksHandler,
+  getPickTaskHandler,
+  assignPickTaskHandler,
+  confirmPickLineHandler,
+  completePickTaskHandler,
+  printPickTaskHandler,
+} from './api/v1/pick-tasks.js';
+import {
   createTransferRequestHandler,
   getTransferRequestHandler,
   listTransferRequestsHandler,
@@ -243,6 +254,17 @@ export function createAppRouter(): Router {
   router.post('/api/v1/putaway-tasks/:putawayTaskId/complete', handleCompletePutaway);
   router.get('/api/v1/velocity-classification', handleListVelocityClassification);
   router.post('/api/v1/velocity-classification/reslot', handleReslottingJob);
+
+  // Story 3.6: Pick Task Generation and Execution
+  router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);
+  router.post('/api/v1/pick-tasks/wave', generateWavePickTasksHandler);
+  router.post('/api/v1/pick-tasks/batch', generateBatchPickTasksHandler);
+  router.get('/api/v1/pick-tasks', listPickTasksHandler);
+  router.get('/api/v1/pick-tasks/:pickTaskId', getPickTaskHandler);
+  router.post('/api/v1/pick-tasks/:pickTaskId/assign', assignPickTaskHandler);
+  router.post('/api/v1/pick-tasks/:pickTaskId/lines/:pickLineId/confirm', confirmPickLineHandler);
+  router.post('/api/v1/pick-tasks/:pickTaskId/complete', completePickTaskHandler);
+  router.get('/api/v1/pick-tasks/:pickTaskId/print', printPickTaskHandler);
 
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);

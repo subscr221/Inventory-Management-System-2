@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { getPool } from '../config/db.js';
-import { listVelocityClasses, upsertVelocityClass } from '../read/projections/velocity_class.js';
+import { upsertVelocityClass } from '../read/projections/velocity_class.js';
 
 const MIN_OVERRIDE_CLUSTER_SIZE = 3;
 const ABC_PERCENTILES = { A: 0.2, B: 0.5 };
@@ -123,7 +123,7 @@ export async function runReslottingJob(siteId?: string, client?: PoolClient): Pr
           preferred_location_id: preferredLocationId,
           preferred_location_code: preferredLocationCode,
         },
-        pool,
+        client,
       );
 
       // Track result

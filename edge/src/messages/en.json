@@ -96,5 +96,13 @@
   "errors.LOCATION_NOT_FOUND": "The target location was not found or is not active. Confirm the location and try again.",
   "errors.PUTAWAY_TASK_NOT_FOUND": "The putaway task was not found. Refresh and try again.",
   "errors.PUTAWAY_TASK_NOT_HELD": "This putaway task is no longer awaiting release.",
+  "errors.PICK_TASK_NOT_FOUND": "The pick task was not found. Refresh and try again.",
+  "errors.PICK_LINE_NOT_FOUND": "The pick line was not found. Refresh and try again.",
+  "errors.PICK_TASK_INVALID_PAYLOAD": "The pick task data is incomplete. Contact your supervisor.",
+  "errors.PICK_LINE_ALREADY_CONFIRMED": "This pick line was already confirmed with a different lot or quantity.",
+  "errors.PICK_OVERRIDE_REASON_REQUIRED": "A different lot was scanned. Enter an override reason to substitute.",
+  "errors.PICK_TASK_NOT_ALL_LINES_CONFIRMED": "Confirm every pick line before completing this task.",
+  "errors.INSUFFICIENT_STOCK_FOR_PICK": "Not enough available stock to cover this pick.",
+  "errors.DISPATCH_ORDER_LINE_NOT_FOUND": "The dispatch order line was not found. Refresh and try again.",
   "errors.ASN_PO_NOT_FOUND": "The PO referenced by this ASN was not found. Refresh PO data and try again."
 }

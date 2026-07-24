@@ -32,6 +32,21 @@ import {
   applyGoodsPutawayReleasedProjection,
 } from '../compliance/receiving.js';
 import { assertPutawayCompletedShape, assertLocationOverrideShape, applyPutawayCompletedProjection } from '../compliance/putaway.js';
+import {
+  assertPickTaskCreatedShape,
+  assertPickLineConfirmedShape,
+  assertPickTaskCompletedShape,
+  applyPickTaskCreatedProjection,
+  applyPickLineConfirmedProjection,
+  applyPickTaskCompletedProjection,
+} from '../compliance/pick.js';
+import type {
+  PickTaskCreatedEnvelope,
+  PickLineConfirmedEnvelope,
+  PickTaskCompletedEnvelope,
+  PutawayCompletedEnvelope,
+  LocationOverrideEnvelope,
+} from './schema.js';
 import { assertErpReadOnly } from '../compliance/erp-readonly.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -233,10 +248,22 @@ export async function persistEvent(
   // runs with the other pre-transaction asserts, so a malformed putaway event never consumes an
   // idempotency key.
   if (envelope.event_type === 'putaway.completed') {
-    assertPutawayCompletedShape(envelope as any);
+    assertPutawayCompletedShape(envelope as unknown as PutawayCompletedEnvelope);
   }
   if (envelope.event_type === 'location.override') {
-    assertLocationOverrideShape(envelope as any);
+    assertLocationOverrideShape(envelope as unknown as LocationOverrideEnvelope);
+  }
+  // Story 3.6: pick-task shape validation (task/line/completion payload fields) is non-DB and runs
+  // with the other pre-transaction asserts, so a malformed pick event never consumes an
+  // idempotency key.
+  if (envelope.event_type === 'pick_task.created') {
+    assertPickTaskCreatedShape(envelope as unknown as PickTaskCreatedEnvelope);
+  }
+  if (envelope.event_type === 'pick_line.confirmed') {
+    assertPickLineConfirmedShape(envelope as unknown as PickLineConfirmedEnvelope);
+  }
+  if (envelope.event_type === 'pick_task.completed') {
+    assertPickTaskCompletedShape(envelope as unknown as PickTaskCompletedEnvelope);
   }
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -319,6 +346,20 @@ export async function persistEvent(
           },
           client,
         );
+      }
+      // Story 3.6: pick task creation inserts the task + pick lines and allocates stock; pick line
+      // confirmation records the picked lot (with substitution release/reallocate); pick task
+      // completion enforces all-lines-confirmed, notifies packing, and flags the dispatch order
+      // picked - all inside this same transaction so the projections, the stock allocation, and
+      // the domain_events insert commit or roll back together.
+      if (envelope.event_type === 'pick_task.created') {
+        await applyPickTaskCreatedProjection(envelope as unknown as PickTaskCreatedEnvelope, client, eventId);
+      }
+      if (envelope.event_type === 'pick_line.confirmed') {
+        await applyPickLineConfirmedProjection(envelope as unknown as PickLineConfirmedEnvelope, client, eventId);
+      }
+      if (envelope.event_type === 'pick_task.completed') {
+        await applyPickTaskCompletedProjection(envelope as unknown as PickTaskCompletedEnvelope, client, eventId);
       }
 
     let nextVersion: number;
