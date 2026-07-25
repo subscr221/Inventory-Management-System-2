@@ -105,6 +105,12 @@ export async function getPutawayTaskById(putawayTaskId: string, client?: PoolCli
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
+/** Story 3.5: Lock the putaway task row FOR UPDATE inside a transaction to serialise concurrent completions. */
+export async function getPutawayTaskByIdForUpdate(putawayTaskId: string, client: PoolClient): Promise<PutawayTask | null> {
+  const result = await client.query(`SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task WHERE putaway_task_id = $1 FOR UPDATE`, [putawayTaskId]);
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
+}
+
 export async function getPutawayTaskByGrnLine(grnLineId: string, client?: PoolClient): Promise<PutawayTask | null> {
   const result = await runner(client).query(
     `SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task WHERE grn_line_id = $1 ORDER BY created_at DESC LIMIT 1`,
@@ -201,7 +207,7 @@ export async function setDirectedSuggestion(
             directed_location_code = $3,
             velocity_class_at_suggestion = $4,
             updated_at = now()
-      WHERE putaway_task_id = $1 AND status != 'completed'`,
+      WHERE putaway_task_id = $1 AND status = 'ready'`,
     [putawayTaskId, directedLocationId, directedLocationCode, velocityClass],
   );
 }

@@ -58,6 +58,9 @@ ALTER TABLE item_master ADD COLUMN IF NOT EXISTS variance_review_cadence TEXT;
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS variance_tolerance_percent NUMERIC(7, 4);
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS count_variance_tolerance_percent NUMERIC(7, 4);
 
+-- Story 3.5: size_class for putaway bin-matching (small / standard / large / oversized).
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS size_class TEXT NOT NULL DEFAULT 'standard';
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -122,6 +125,16 @@ BEGIN
     ALTER TABLE item_master
       ADD CONSTRAINT chk_item_master_count_variance_tolerance_percent CHECK (
         count_variance_tolerance_percent IS NULL OR (count_variance_tolerance_percent >= 0 AND count_variance_tolerance_percent <= 100)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_item_master_size_class'
+      AND conrelid = 'item_master'::regclass
+  ) THEN
+    ALTER TABLE item_master
+      ADD CONSTRAINT chk_item_master_size_class CHECK (
+        size_class IN ('small', 'standard', 'large', 'oversized')
       );
   END IF;
 END $$;

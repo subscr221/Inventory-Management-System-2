@@ -206,7 +206,10 @@ async function allocateForLine(
   }
 
   if (remaining > 0n) {
-    throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'Available stock does not cover the dispatch-order line; pick tasks are all-or-nothing per line', {
+    const detail = candidates.length === 0
+      ? 'No pickable stock found for this SKU at the site; stock may exist in restricted or quarantined bins'
+      : `Shortfall of ${microToNumeric(remaining)} after allocating from ${allocations.length} lot-location(s)`;
+    throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', detail, {
       dispatch_order_line_id: line.id,
       sku: line.sku,
       requested_quantity: line.quantity,
@@ -347,6 +350,7 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
   if (input.strategy === 'single' || input.strategy === 'wave') {
     // One task per dispatch-order line; the task's zone is its first allocation's zone.
     for (const { line, allocations } of allocated) {
+      if (allocations.length === 0) continue;
       drafts.push({
         dispatchOrderId: line.id,
         sku: line.sku,

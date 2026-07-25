@@ -61,9 +61,7 @@ export async function computeDirectedSuggestion(
   // Step 4.2(d): Exclude bins that cannot accommodate the item's size class
   // Size class ordering: small < standard < large < oversized
   // A bin's size_class must be >= the item's size_class
-  // item_master carries no size_class column yet; every item ranks as 'standard' until a future
-  // story adds per-item size data.
-  const itemSizeClass = 'standard';
+  const itemSizeClass = item.size_class || 'standard';
   const sizeClassOrder: Record<string, number> = {
     small: 1,
     standard: 2,

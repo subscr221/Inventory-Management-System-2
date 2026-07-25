@@ -17,6 +17,7 @@
 -- to 'ERP'; last_synced_at is server-set to now(). Close/removal is soft (status = 'closed').
 
 CREATE TABLE IF NOT EXISTS erp_sales_order (
+  id                      UUID NOT NULL DEFAULT gen_random_uuid(),
   so_number_ext           TEXT NOT NULL,
   line_no                 INTEGER NOT NULL,
   sku                     TEXT NOT NULL,
@@ -39,6 +40,9 @@ CREATE TABLE IF NOT EXISTS erp_sales_order (
 
 CREATE INDEX IF NOT EXISTS idx_erp_sales_order_site_status ON erp_sales_order (ship_from_site_id, status);
 CREATE INDEX IF NOT EXISTS idx_erp_sales_order_site_code_status ON erp_sales_order (ship_from_site_code_ext, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_erp_sales_order_id ON erp_sales_order (id);
+
+ALTER TABLE erp_sales_order ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
 
 DO $$
 BEGIN

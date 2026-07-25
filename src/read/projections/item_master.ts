@@ -38,6 +38,7 @@ export interface ItemMaster {
   variance_review_cadence: string | null;
   variance_tolerance_percent: number | null;
   count_variance_tolerance_percent: number | null;
+  size_class: string;
   created_at: string;
   updated_at: string;
 }
@@ -58,6 +59,7 @@ export interface CreateItemInput {
   variance_review_cadence?: string | null;
   variance_tolerance_percent?: number | null;
   count_variance_tolerance_percent?: number | null;
+  size_class?: string;
 }
 
 export interface UpdateItemPatch {
@@ -75,6 +77,7 @@ export interface UpdateItemPatch {
   variance_review_cadence?: string | null;
   variance_tolerance_percent?: number | null;
   count_variance_tolerance_percent?: number | null;
+  size_class?: string;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -86,7 +89,7 @@ function runner(client?: PoolClient): Queryable {
 const ITEM_COLUMNS = `item_id, sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required,
        bis_licence_required, valuation_method, business_stream, status,
        standard_cost_designation, standard_cost_amount, variance_review_cadence, variance_tolerance_percent,
-       count_variance_tolerance_percent, created_at, updated_at`;
+       count_variance_tolerance_percent, size_class, created_at, updated_at`;
 
 // node-postgres returns NUMERIC as a string to avoid precision loss; convert to a JS number (or
 // null) at the projection boundary so callers get the numeric contract the API layer expects.
@@ -115,6 +118,7 @@ function mapRow(row: Record<string, unknown>): ItemMaster {
     variance_review_cadence: (row['variance_review_cadence'] as string | null) ?? null,
     variance_tolerance_percent: toNumberOrNull(row['variance_tolerance_percent']),
     count_variance_tolerance_percent: toNumberOrNull(row['count_variance_tolerance_percent']),
+    size_class: (row['size_class'] as string) ?? 'standard',
     created_at: createdAt,
     updated_at: updatedAt,
   };
@@ -127,8 +131,8 @@ export async function createItem(input: CreateItemInput, client?: PoolClient): P
        (sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required, bis_licence_required,
         valuation_method, business_stream, status,
         standard_cost_designation, standard_cost_amount, variance_review_cadence, variance_tolerance_percent,
-        count_variance_tolerance_percent)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        count_variance_tolerance_percent, size_class)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      RETURNING ${ITEM_COLUMNS}`,
     [
       input.sku,
@@ -146,6 +150,7 @@ export async function createItem(input: CreateItemInput, client?: PoolClient): P
       input.variance_review_cadence ?? null,
       input.variance_tolerance_percent ?? null,
       input.count_variance_tolerance_percent ?? null,
+      input.size_class ?? 'standard',
     ],
   );
   return mapRow(result.rows[0]!);
@@ -173,6 +178,7 @@ export async function updateItem(sku: string, patch: UpdateItemPatch, client?: P
   if (patch.variance_review_cadence !== undefined) push('variance_review_cadence', patch.variance_review_cadence);
   if (patch.variance_tolerance_percent !== undefined) push('variance_tolerance_percent', patch.variance_tolerance_percent);
   if (patch.count_variance_tolerance_percent !== undefined) push('count_variance_tolerance_percent', patch.count_variance_tolerance_percent);
+  if (patch.size_class !== undefined) push('size_class', patch.size_class);
   if (sets.length === 0) return getItemBySku(sku, client);
 
   const result = await runner(client).query(

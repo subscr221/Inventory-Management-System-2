@@ -3,7 +3,7 @@ import { getPool } from '../config/db.js';
 import { upsertVelocityClass } from '../read/projections/velocity_class.js';
 
 const MIN_OVERRIDE_CLUSTER_SIZE = 3;
-const ABC_PERCENTILES = { A: 0.2, B: 0.5 };
+const ABC_PERCENTILES = { A: 0.2, B: 0.3 };
 
 export interface ReslottingResult {
   sku: string;

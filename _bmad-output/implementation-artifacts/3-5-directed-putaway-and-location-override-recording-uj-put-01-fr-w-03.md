@@ -4,7 +4,7 @@ baseline_commit: 2549e16e9a61a8e0ced1bde5881c71c048009ccb
 
 # Story 3.5: Directed Putaway and Location Override Recording (UJ-PUT-01, FR-W-03)
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -244,3 +244,15 @@ Implementation Progress:
 - src/read/projections/putaway_task.ts (extended interface, added setDirectedSuggestion/completePutawayTask)
 - deploy/compose/init-db.sql (mirrored putaway_task columns and velocity_class table)
 - test/unit/schema-drift.test.ts (added velocity_class and putaway_task constraint expectations)
+
+### Review Findings
+
+- [x] [Review][Patch] ABC percentile constant misclassifies 50% of SKUs as B instead of 30%; `ABC_PERCENTILES.B` = 0.5 is treated as cumulative 0.7 (A+B) [src/warehouse/reslotting-job.ts:6,50]
+- [x] [Review][Patch] `resolvedLocationCode` falls back to a UUID string when only `actualLocationId` is supplied, corrupting the location code field and lot-location facts [src/compliance/putaway.ts:72]
+- [x] [Review][Patch] Idempotency guard compares `actual_location_code` only, missing replays that use `actual_location_id` instead of the code [src/compliance/putaway.ts:64]
+- [x] [Review][Patch] `getPutawayTaskById` lacks `FOR UPDATE` lock; concurrent completions can race past the idempotent guard [src/compliance/putaway.ts:57]
+- [x] [Review][Patch] `setDirectedSuggestion` allows updates to held/cancelled tasks (`WHERE status != 'completed'` instead of `WHERE status = 'ready'`) [src/read/projections/putaway_task.ts]
+- [x] [Review][Patch] `itemSizeClass` hardcoded to `'standard'` in suggestion computation; spec Task 4.3 requires adding `size_class` to `item_master` [src/warehouse/putaway-suggestion.ts:66]
+- [x] [Review][Defer] DDL duplicated across `init-db.sql` and `read/projections/*.sql` -- deferred, pre-existing mirror pattern shared with prior stories [deploy/compose/init-db.sql, read/projections/putaway_task.sql, read/projections/velocity_class.sql]
+- [x] [Review][Defer] Reslotting job upserts each SKU independently without transaction wrapping -- deferred, low severity on-demand job; partial state on crash auto-heals on next run [src/warehouse/reslotting-job.ts:116-127]
+- [x] [Review][Defer] Location facts silently skipped when putaway task has no `lot_id`; completion succeeds but lot-location projection becomes stale -- deferred, lot-less putaway is an edge case not exercised by current receiving flow [src/compliance/putaway.ts:93]

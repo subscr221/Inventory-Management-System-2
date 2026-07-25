@@ -351,7 +351,8 @@ export async function applyPickTaskCompletedProjection(envelope: PickTaskComplet
     `SELECT COUNT(*) FILTER (WHERE status IN ('confirmed', 'substituted')) AS confirmed_count,
             COUNT(*) FILTER (WHERE status <> 'cancelled') AS active_count
        FROM pick_line
-      WHERE pick_task_id = $1`,
+      WHERE pick_task_id = $1
+      FOR UPDATE`,
     [p.pick_task_id],
   );
   const confirmedCount = Number(counts.rows[0]!['confirmed_count']);
@@ -384,22 +385,38 @@ export async function applyPickTaskCompletedProjection(envelope: PickTaskComplet
   );
 
   // AC4: the order moves to picked only when EVERY task for the dispatch order is completed
-  // (this event's own task was just marked completed above).
-  const orderCounts = await client.query(
-    `SELECT COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
-            COUNT(*) FILTER (WHERE status <> 'cancelled') AS active_count
-       FROM pick_task
-      WHERE dispatch_order_id = $1`,
-    [task.dispatch_order_id],
-  );
-  const orderCompleted = Number(orderCounts.rows[0]!['completed_count']);
-  const orderActive = Number(orderCounts.rows[0]!['active_count']);
-  if (orderActive > 0 && orderCompleted === orderActive) {
-    await client.query(
-      `INSERT INTO dispatch_order_status (dispatch_order_id, picked_at, picked_by)
-       VALUES ($1, now(), $2)
-       ON CONFLICT (dispatch_order_id) DO NOTHING`,
-      [task.dispatch_order_id, completedBy],
+  // (this event's own task was just marked completed above). In batch strategy, a single
+  // task consolidates multiple dispatch-order lines; flag each contributing order when all
+  // of its tasks are done.
+  const orderIds: string[] =
+    task.strategy === 'batch'
+      ? (
+          await client.query(
+            `SELECT DISTINCT pl.dispatch_order_line_id
+               FROM pick_line pl
+              WHERE pl.pick_task_id = $1`,
+            [p.pick_task_id],
+          )
+        ).rows.map((r: Record<string, unknown>) => r['dispatch_order_line_id'] as string)
+      : [task.dispatch_order_id];
+
+  for (const orderId of orderIds) {
+    const orderCounts = await client.query(
+      `SELECT COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
+              COUNT(*) FILTER (WHERE status <> 'cancelled') AS active_count
+         FROM pick_task
+        WHERE dispatch_order_id = $1`,
+      [orderId],
     );
+    const orderCompleted = Number(orderCounts.rows[0]!['completed_count']);
+    const orderActive = Number(orderCounts.rows[0]!['active_count']);
+    if (orderActive > 0 && orderCompleted === orderActive) {
+      await client.query(
+        `INSERT INTO dispatch_order_status (dispatch_order_id, picked_at, picked_by)
+         VALUES ($1, now(), $2)
+         ON CONFLICT (dispatch_order_id) DO NOTHING`,
+        [orderId, completedBy],
+      );
+    }
   }
 }

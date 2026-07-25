@@ -1,9 +1,9 @@
 import type { PoolClient } from 'pg';
 import type { LocationOverrideEnvelope, PutawayCompletedEnvelope } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
-import { completePutawayTask, getPutawayTaskById } from '../read/projections/putaway_task.js';
+import { completePutawayTask, getPutawayTaskByIdForUpdate } from '../read/projections/putaway_task.js';
 import { getCurrentLocation, recordAssertedLocation, recordExpectedLocation, updateCurrentLocation } from '../read/projections/location.js';
-import { getLocationByCode } from '../read/projections/location_register.js';
+import { getLocationByCode, getLocationById } from '../read/projections/location_register.js';
 import { getLotByNumberAndSku } from '../read/projections/lot_master.js';
 
 /** Story 3.5 Task 5: Pre-transaction shape validation for putaway.completed envelope. */
@@ -53,23 +53,23 @@ export async function applyPutawayCompletedProjection(
 ): Promise<void> {
   const { putawayTaskId, actualLocationId, actualLocationCode, overrideReasonCode, overrideConfidence, completedBy, eventId } = input;
 
-  // Step 1: Load the putaway task
-  const task = await getPutawayTaskById(putawayTaskId, client);
+  // Step 1: Load the putaway task with FOR UPDATE to serialise concurrent completions
+  const task = await getPutawayTaskByIdForUpdate(putawayTaskId, client);
   if (!task) {
     throw new AppError(404, 'PUTAWAY_TASK_NOT_FOUND', `Putaway task ${putawayTaskId} not found`);
   }
 
+  if (task.status === 'completed') {
+    return;
+  }
+
   if (task.status !== 'ready') {
-    // Idempotent check: if already completed with the same location, treat as no-op
-    if (task.status === 'completed' && task.actual_location_code === actualLocationCode) {
-      return;
-    }
     throw new AppError(409, 'PUTAWAY_TASK_NOT_READY', `Putaway task ${putawayTaskId} is not in ready state`);
   }
 
-  // Step 2: Resolve actual location ID from code if needed
+  // Step 2: Resolve actual location from code or ID
   let resolvedLocationId: string;
-  const resolvedLocationCode: string = actualLocationCode || actualLocationId || '';
+  let resolvedLocationCode: string;
 
   if (actualLocationCode) {
     const location = await getLocationByCode(actualLocationCode, client);
@@ -77,8 +77,14 @@ export async function applyPutawayCompletedProjection(
       throw new AppError(404, 'PUTAWAY_LOCATION_NOT_FOUND', `Location ${actualLocationCode} not found`);
     }
     resolvedLocationId = location.location_id;
+    resolvedLocationCode = actualLocationCode;
   } else if (actualLocationId) {
+    const location = await getLocationById(actualLocationId, client);
+    if (!location) {
+      throw new AppError(404, 'PUTAWAY_LOCATION_NOT_FOUND', `Location ${actualLocationId} not found`);
+    }
     resolvedLocationId = actualLocationId;
+    resolvedLocationCode = location.location_code;
   } else {
     throw new AppError(400, 'PUTAWAY_LOCATION_REQUIRED', 'Either actualLocationId or actualLocationCode must be provided');
   }
