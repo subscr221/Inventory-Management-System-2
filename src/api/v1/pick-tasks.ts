@@ -317,7 +317,7 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
         actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
         occurred_at: new Date().toISOString(),
       },
-      idempotency_key: typeof body['idempotency_key'] === 'string' ? body['idempotency_key'] : null,
+      idempotency_key: typeof body['idempotency_key'] === 'string' && body['idempotency_key'] !== '' ? body['idempotency_key'] : null,
     },
     auditCtxFor(req, actor, 200),
   );
@@ -362,7 +362,7 @@ const completePickTaskBase: RouteHandler = async (req, res, params) => {
         actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
         occurred_at: new Date().toISOString(),
       },
-      idempotency_key: typeof body['idempotency_key'] === 'string' ? body['idempotency_key'] : null,
+      idempotency_key: typeof body['idempotency_key'] === 'string' && body['idempotency_key'] !== '' ? body['idempotency_key'] : null,
     },
     auditCtxFor(req, actor, 200),
   );
