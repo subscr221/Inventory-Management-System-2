@@ -16,6 +16,8 @@ interface ClassBalance {
   owner_party_code: string | null;
   on_hand: number;
   allocated: number;
+  /** Story 3.6: stock picked (allocated -> picked) but not yet shipped/dispatched. */
+  picked: number;
   available: number;
   in_transit: number;
 }
@@ -25,6 +27,7 @@ interface LocationBalance {
   location_code: string | null;
   on_hand: number;
   allocated: number;
+  picked: number;
   available: number;
   in_transit: number;
   /** Story 2.8: per-stock-class breakdown (closes the Story 2.2 merged-across-class defer). */
@@ -73,6 +76,7 @@ const getStockBase: RouteHandler = async (req, res, params) => {
       location_code: row.location_code,
       on_hand: 0,
       allocated: 0,
+      picked: 0,
       available: 0,
       in_transit: 0,
       classes: [] as ClassBalance[],
@@ -81,6 +85,7 @@ const getStockBase: RouteHandler = async (req, res, params) => {
     if (row.stock_class === 'owned') {
       entry.on_hand += row.on_hand;
       entry.allocated += row.allocated;
+      entry.picked += row.picked;
       entry.available += row.available;
       entry.in_transit += row.in_transit;
     }
@@ -91,6 +96,7 @@ const getStockBase: RouteHandler = async (req, res, params) => {
         owner_party_code: ownerByGrain.get(`${row.location_id}|${row.stock_class}`) ?? null,
         on_hand: 0,
         allocated: 0,
+        picked: 0,
         available: 0,
         in_transit: 0,
       };
@@ -98,6 +104,7 @@ const getStockBase: RouteHandler = async (req, res, params) => {
     }
     classEntry.on_hand += row.on_hand;
     classEntry.allocated += row.allocated;
+    classEntry.picked += row.picked;
     classEntry.available += row.available;
     classEntry.in_transit += row.in_transit;
     byLocation.set(row.location_id, entry);
@@ -115,25 +122,28 @@ const getStockBase: RouteHandler = async (req, res, params) => {
     (totals, entry) => ({
       on_hand: totals.on_hand + entry.on_hand,
       allocated: totals.allocated + entry.allocated,
+      picked: totals.picked + entry.picked,
       available: totals.available + entry.available,
       in_transit: totals.in_transit + entry.in_transit,
     }),
-    { on_hand: 0, allocated: 0, available: 0, in_transit: 0 },
+    { on_hand: 0, allocated: 0, picked: 0, available: 0, in_transit: 0 },
   );
 
   // Story 2.8: consolidated per-class totals across visible locations, deterministically ordered.
-  const byClassTotals = new Map<string, { stock_class: string; on_hand: number; allocated: number; available: number; in_transit: number }>();
+  const byClassTotals = new Map<string, { stock_class: string; on_hand: number; allocated: number; picked: number; available: number; in_transit: number }>();
   for (const entry of locations) {
     for (const classEntry of entry.classes) {
       const totals = byClassTotals.get(classEntry.stock_class) ?? {
         stock_class: classEntry.stock_class,
         on_hand: 0,
         allocated: 0,
+        picked: 0,
         available: 0,
         in_transit: 0,
       };
       totals.on_hand += classEntry.on_hand;
       totals.allocated += classEntry.allocated;
+      totals.picked += classEntry.picked;
       totals.available += classEntry.available;
       totals.in_transit += classEntry.in_transit;
       byClassTotals.set(classEntry.stock_class, totals);

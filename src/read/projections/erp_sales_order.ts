@@ -17,7 +17,8 @@ export interface ErpSalesOrderRow {
   so_number_ext: string;
   line_no: number;
   sku: string;
-  quantity: number;
+  /** NUMERIC string to preserve precision - never convert to JS Number for quantity arithmetic. */
+  quantity: string;
   required_by: string | null;
   ship_to_ext: string | null;
   ship_from_site_id: string;
@@ -47,7 +48,7 @@ function mapRow(row: Record<string, unknown>): ErpSalesOrderRow {
     so_number_ext: row['so_number_ext'] as string,
     line_no: Number(row['line_no']),
     sku: row['sku'] as string,
-    quantity: Number(row['quantity']),
+    quantity: String(row['quantity']),
     required_by: (row['required_by'] as string | null) ?? null,
     ship_to_ext: (row['ship_to_ext'] as string | null) ?? null,
     ship_from_site_id: row['ship_from_site_id'] as string,
@@ -103,7 +104,8 @@ export interface UpsertSalesOrderLineInput {
   so_number_ext: string;
   line_no: number;
   sku: string;
-  quantity: number;
+  /** NUMERIC string to preserve precision. */
+  quantity: string;
   required_by?: string | null;
   ship_to_ext?: string | null;
   ship_from_site_id: string;

@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS dispatch_order_status (
   picked_by         UUID NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_dispatch_order_status_picked ON dispatch_order_status (picked_at);
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN

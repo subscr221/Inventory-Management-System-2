@@ -238,7 +238,7 @@ async function applySalesOrderLine(so: SourceSalesOrderLine, client: PoolClient)
       so_number_ext: so.so_number_ext,
       line_no: so.line_no,
       sku: so.sku,
-      quantity: so.quantity,
+      quantity: String(so.quantity),
       required_by: so.required_by ?? null,
       ship_to_ext: so.ship_to_ext ?? null,
       ship_from_site_id: site.location_id,

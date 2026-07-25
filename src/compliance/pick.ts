@@ -4,6 +4,8 @@ import { AppError } from '../middleware/error.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import { createPickTask, getPickTaskById, updatePickTaskStatus } from '../read/projections/pick_task.js';
 import { confirmPickLine, createPickLine, getPickLineById } from '../read/projections/pick_line.js';
+import { getCurrentLocation } from '../read/projections/location.js';
+import { applyStockPick } from '../read/projections/stock_balance.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STRATEGIES = ['single', 'batch', 'wave', 'zone'];
@@ -12,8 +14,36 @@ function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
 }
 
-function isNumericString(value: unknown): boolean {
-  return (typeof value === 'string' && value.length > 0 && !Number.isNaN(Number(value))) || (typeof value === 'number' && Number.isFinite(value));
+const NUMERIC_REGEX = /^-?\d+(\.\d+)?$/;
+const QUANTITY_SCALE = 6;
+const QUANTITY_FACTOR = 1_000_000n;
+
+function numericToMicro(value: string | number): bigint {
+  const s = typeof value === 'number' ? value.toString() : value;
+  const clean = s.trim();
+  const [intPart = '0', fracPart = ''] = clean.split('.');
+  const frac = (fracPart + '0'.repeat(QUANTITY_SCALE)).slice(0, QUANTITY_SCALE);
+  const sign = clean.startsWith('-') ? -1n : 1n;
+  return sign * (BigInt(intPart.replace('-', '')) * QUANTITY_FACTOR + BigInt(frac));
+}
+
+function microToNumeric(micro: bigint): string {
+  const negative = micro < 0n;
+  const abs = negative ? -micro : micro;
+  const whole = (abs / QUANTITY_FACTOR).toString();
+  const frac = (abs % QUANTITY_FACTOR).toString().padStart(QUANTITY_SCALE, '0');
+  const num = `${whole}.${frac}`;
+  return negative ? `-${num}` : num;
+}
+
+function isPositiveFiniteQuantity(value: unknown): value is string | number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0;
+  }
+  if (typeof value !== 'string' || value.length === 0) return false;
+  if (!NUMERIC_REGEX.test(value)) return false;
+  const n = numericToMicro(value);
+  return n > 0n;
 }
 
 function reject(message: string, details: Record<string, unknown> = {}): never {
@@ -26,7 +56,7 @@ export function assertPickTaskCreatedShape(envelope: PickTaskCreatedEnvelope): v
   if (!isUuid(p.pick_task_id)) reject('pick_task_id is required and must be a UUID');
   if (!isUuid(p.dispatch_order_id)) reject('dispatch_order_id is required and must be a UUID');
   if (typeof p.sku !== 'string' || p.sku.length === 0) reject('sku is required');
-  if (!isNumericString(p.quantity)) reject('quantity is required and must be numeric');
+  if (!isPositiveFiniteQuantity(p.quantity)) reject('quantity is required and must be a positive finite numeric value');
   if (!isUuid(p.lot_id)) reject('lot_id is required and must be a UUID');
   if (!isUuid(p.location_id)) reject('location_id is required and must be a UUID');
   if (!Number.isInteger(p.pick_sequence)) reject('pick_sequence is required and must be an integer');
@@ -40,7 +70,7 @@ export function assertPickTaskCreatedShape(envelope: PickTaskCreatedEnvelope): v
     if (!isUuid(line.dispatch_order_line_id)) reject('pick_lines[].dispatch_order_line_id is required and must be a UUID');
     if (typeof line.sku !== 'string' || line.sku.length === 0) reject('pick_lines[].sku is required');
     if (!isUuid(line.directed_lot_id)) reject('pick_lines[].directed_lot_id is required and must be a UUID');
-    if (!isNumericString(line.directed_quantity)) reject('pick_lines[].directed_quantity is required and must be numeric');
+    if (!isPositiveFiniteQuantity(line.directed_quantity)) reject('pick_lines[].directed_quantity is required and must be a positive finite numeric value');
     if (!isUuid(line.location_id)) reject('pick_lines[].location_id is required and must be a UUID');
     if (!Number.isInteger(line.pick_sequence)) reject('pick_lines[].pick_sequence is required and must be an integer');
   }
@@ -52,7 +82,7 @@ export function assertPickLineConfirmedShape(envelope: PickLineConfirmedEnvelope
   if (!isUuid(p.pick_task_id)) reject('pick_task_id is required and must be a UUID');
   if (!isUuid(p.pick_line_id)) reject('pick_line_id is required and must be a UUID');
   if (!isUuid(p.confirmed_lot_id)) reject('confirmed_lot_id is required and must be a UUID');
-  if (!isNumericString(p.confirmed_quantity)) reject('confirmed_quantity is required and must be numeric');
+  if (!isPositiveFiniteQuantity(p.confirmed_quantity)) reject('confirmed_quantity is required and must be a positive finite numeric value');
   if (p.capture_method !== 'PWA' && p.capture_method !== 'PAPER') reject("capture_method must be 'PWA' or 'PAPER'");
   // override_reason requiredness compares against the directed lot, which needs DB access -
   // enforced in applyPickLineConfirmedProjection, not here.
@@ -76,7 +106,7 @@ async function lotNumberForUuid(lotUuid: string, sku: string, client: PoolClient
 /**
  * Allocates `quantity` of owned stock for (sku, location, lot_number), guarded on availability in
  * the same UPDATE (defensive against races - the generator already checked availability).
- * `available` is a generated column (on_hand - allocated), so only `allocated` is written.
+ * `available` is a generated column (on_hand - allocated - picked), so only `allocated` is written.
  */
 async function allocateStock(sku: string, locationId: string, lotNumber: string, quantity: string, client: PoolClient): Promise<void> {
   const result = await client.query(
@@ -127,7 +157,7 @@ export async function applyPickTaskCreatedProjection(envelope: PickTaskCreatedEn
       wave_id: p.wave_id ?? null,
       batch_id: p.batch_id ?? null,
       zone_id: p.zone_id,
-      created_by: p.created_by ?? envelope.metadata.actor.user_id,
+      created_by: envelope.metadata.actor.user_id,
     },
     client,
   );
@@ -173,7 +203,7 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
 
   if (line.status === 'confirmed' || line.status === 'substituted') {
     const sameLot = line.confirmed_lot_id === p.confirmed_lot_id;
-    const sameQty = line.confirmed_quantity !== null && Number(line.confirmed_quantity) === Number(p.confirmed_quantity);
+    const sameQty = line.confirmed_quantity !== null && numericToMicro(line.confirmed_quantity) === numericToMicro(p.confirmed_quantity);
     if (sameLot && sameQty) return; // idempotent replay - no re-mutation
     throw new AppError(409, 'PICK_LINE_ALREADY_CONFIRMED', 'Pick line is already confirmed with a different lot or quantity', {
       pick_line_id: p.pick_line_id,
@@ -203,7 +233,7 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
     String(p.confirmed_quantity),
     isSubstitution ? overrideReason : null,
     p.capture_method,
-    p.confirmed_by ?? envelope.metadata.actor.user_id,
+    envelope.metadata.actor.user_id,
     client,
   );
   if (!confirmed) {
@@ -212,34 +242,84 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
     });
   }
 
+  let finalLocationId = line.location_id;
+
   if (isSubstitution) {
     // Release the directed lot's allocation at the directed bin...
     const directedLotNumber = await lotNumberForUuid(line.directed_lot_id, line.sku, client);
     await releaseStock(line.sku, line.location_id, directedLotNumber, line.directed_quantity, client);
 
-    // ...and allocate the confirmed lot at the bin where its stock actually sits. The substituted
-    // lot must have sufficient available owned stock somewhere at this site; the row with the
-    // largest availability is taken (a scanned lot substitution is a single-bin action).
+    // ...and allocate the confirmed lot at the bin where its stock actually sits. Resolve the lot's
+    // current location from Story 1.6 location_current (per spec Task 5.4 step 5), constrained to
+    // the same site as the original pick line and with sufficient available owned stock.
     const confirmedLotNumber = await lotNumberForUuid(p.confirmed_lot_id, line.sku, client);
+    const current = await getCurrentLocation(p.confirmed_lot_id, client);
+    if (!current || current.location === null) {
+      throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'The substituted lot has no current bin location', {
+        pick_line_id: p.pick_line_id,
+        confirmed_lot_id: p.confirmed_lot_id,
+      });
+    }
+    const resolvedBin = await client.query(
+      `SELECT lr.location_id
+         FROM location_register lr
+        WHERE lr.location_code = $1
+          AND lr.site_id = (SELECT site_id FROM location_register WHERE location_id = $2 LIMIT 1)
+          AND lr.status = 'active'
+          AND lr.quarantine = false
+          AND lr.access_restricted = false
+        LIMIT 1`,
+      [current.location, line.location_id],
+    );
+    if (resolvedBin.rows.length === 0) {
+      throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'The substituted lot has no active, writable bin at this site', {
+        pick_line_id: p.pick_line_id,
+        confirmed_lot_id: p.confirmed_lot_id,
+        location_code: current.location,
+      });
+    }
+    const confirmedLocationId = resolvedBin.rows[0]!['location_id'] as string;
     const balance = await client.query(
       `SELECT sb.location_id
          FROM stock_balance sb
-        WHERE sb.sku = $1 AND sb.lot_id = $2 AND sb.stock_class = 'owned'
-          AND sb.available >= $3::numeric
-        ORDER BY sb.available DESC
+        WHERE sb.sku = $1 AND sb.lot_id = $2 AND sb.location_id = $3 AND sb.stock_class = 'owned'
+          AND sb.available >= $4::numeric
         LIMIT 1`,
-      [line.sku, confirmedLotNumber, String(p.confirmed_quantity)],
+      [line.sku, confirmedLotNumber, confirmedLocationId, String(p.confirmed_quantity)],
     );
     if (balance.rows.length === 0) {
-      throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'The substituted lot has insufficient available stock', {
+      throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'The substituted lot has insufficient available stock at its current bin', {
         pick_line_id: p.pick_line_id,
         confirmed_lot_id: p.confirmed_lot_id,
         requested_quantity: String(p.confirmed_quantity),
       });
     }
-    const confirmedLocationId = balance.rows[0]!['location_id'] as string;
     await allocateStock(line.sku, confirmedLocationId, confirmedLotNumber, String(p.confirmed_quantity), client);
+    finalLocationId = confirmedLocationId;
+  } else if (numericToMicro(p.confirmed_quantity) !== numericToMicro(line.directed_quantity)) {
+    // Same lot but a different quantity: adjust the allocation so allocated reflects the actual
+    // picked quantity (never negative, never exceeding on_hand via the available guard).
+    const directedLotNumber = await lotNumberForUuid(line.directed_lot_id, line.sku, client);
+    const directedMicro = numericToMicro(line.directed_quantity);
+    const confirmedMicro = numericToMicro(p.confirmed_quantity);
+    if (confirmedMicro > directedMicro) {
+      const delta = microToNumeric(confirmedMicro - directedMicro);
+      await allocateStock(line.sku, line.location_id, directedLotNumber, delta, client);
+    } else {
+      const delta = microToNumeric(directedMicro - confirmedMicro);
+      await releaseStock(line.sku, line.location_id, directedLotNumber, delta, client);
+    }
   }
+
+  // AC7: the confirmed quantity has now been verified as actually picked - move it out of
+  // `allocated` into `picked` at the final (sku, location, lot) so it is no longer offered to
+  // new allocations but is distinguishable from stock still awaiting a pick. Story 3.7
+  // (packing/shipping) owns the next transition out of `picked`.
+  const finalLotNumber = await lotNumberForUuid(p.confirmed_lot_id, line.sku, client);
+  await applyStockPick(
+    { sku: line.sku, location_id: finalLocationId, lot_id: finalLotNumber, quantity: String(p.confirmed_quantity) },
+    client,
+  );
 
   // Mark the task in_progress on first confirmation (pending -> in_progress).
   await client.query(
@@ -252,7 +332,11 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
  * Story 3.6 Task 5.5: in-transaction apply for pick_task.completed. Requires every pick line
  * confirmed (AC7), notifies the packing station (warehouse_manager placeholder until Story 3.7
  * defines the packing role), and - when every task for the dispatch order is complete - flags the
- * order picked in dispatch_order_status (AC4 zone completion included).
+ * order picked in dispatch_order_status (AC4 zone completion included). The AC7 "stock status
+ * moves from allocated to picked" transition itself already happened per-line at confirmation
+ * time (applyPickLineConfirmedProjection -> applyStockPick), because that is the point at which
+ * the actually-picked lot/location/quantity is known; this function only gates completion on
+ * every line being confirmed and does not mutate stock_balance itself.
  */
 export async function applyPickTaskCompletedProjection(envelope: PickTaskCompletedEnvelope, client: PoolClient, eventId: string): Promise<void> {
   const p = envelope.payload;
@@ -280,7 +364,7 @@ export async function applyPickTaskCompletedProjection(envelope: PickTaskComplet
     });
   }
 
-  const completedBy = p.completed_by ?? envelope.metadata.actor.user_id;
+  const completedBy = envelope.metadata.actor.user_id;
   await updatePickTaskStatus(p.pick_task_id, 'completed', completedBy, client);
 
   // AC7: notify the packing station. warehouse_manager is a documented placeholder target until

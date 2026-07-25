@@ -8,8 +8,9 @@ import { AppError } from '../../middleware/error.js';
  * applies this projection inside the SAME transaction as the domain_events insert. Grain is
  * (sku, location_id, lot_id) with NULLS NOT DISTINCT - un-lotted stock occupies exactly one row
  * per sku+location - and the stock query aggregates rows per location. `available` is a
- * database-generated column (on_hand - allocated); it is never written by code and never
- * accepted from clients.
+ * database-generated column (on_hand - allocated - picked); it is never written by code and
+ * never accepted from clients. `picked` (Story 3.6) tracks stock that left the `allocated`
+ * bucket because a pick line was confirmed, but has not yet shipped/dispatched.
  */
 
 export interface StockBalance {
@@ -27,6 +28,8 @@ export interface StockBalance {
   stock_class: string;
   on_hand: number;
   allocated: number;
+  /** Story 3.6: stock picked (allocated -> picked) but not yet shipped/dispatched. */
+  picked: number;
   available: number;
   in_transit: number;
   updated_at: string;
@@ -79,6 +82,16 @@ export interface StockIssueInput {
    quantity: number;
  }
 
+/** Story 3.6: moves a quantity already in `allocated` into `picked` at a single (sku, location, lot). */
+export interface StockPickInput {
+  sku: string;
+  location_id: string;
+  lot_id?: string | null;
+  stock_class?: string;
+  /** NUMERIC string preferred to avoid JS float precision loss; a number is coerced via String(). */
+  quantity: string | number;
+}
+
 type Queryable = Pick<PoolClient, 'query'>;
 
 function runner(client?: PoolClient): Queryable {
@@ -86,7 +99,7 @@ function runner(client?: PoolClient): Queryable {
 }
 
 const BALANCE_COLUMNS = `balance_id, sku, location_id, location_code, lot_id, stock_class,
-       on_hand, allocated, available, in_transit, updated_at`;
+       on_hand, allocated, picked, available, in_transit, updated_at`;
 
 function mapRow(row: Record<string, unknown>): StockBalance {
   const updatedAt = row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
@@ -100,6 +113,7 @@ function mapRow(row: Record<string, unknown>): StockBalance {
     // pg returns NUMERIC as string to avoid silent precision loss; quantities here fit a JS number.
     on_hand: Number(row['on_hand']),
     allocated: Number(row['allocated']),
+    picked: Number(row['picked']),
     available: Number(row['available']),
     in_transit: Number(row['in_transit']),
     updated_at: updatedAt,
@@ -277,5 +291,28 @@ export async function applyStockDeallocation(input: StockDeallocationInput, clie
          updated_at = now()
      WHERE sku = $2 AND location_id = $3 AND stock_class = $5 AND ($4::text IS NULL OR lot_id = $4)`,
     [input.quantity, input.sku, input.location_id, lotId, stockClass],
+  );
+}
+
+/**
+ * Story 3.6 (AC7): moves `quantity` from `allocated` into `picked` at a single (sku, location,
+ * lot, stock_class) grain - the projection-level counterpart to a pick-line confirmation. Runs
+ * in SQL NUMERIC (never JS float) and is guarded so it never drives `allocated` negative: the
+ * amount actually moved is capped at the current `allocated` value, and the caller (which has
+ * already verified the allocation covers the confirmed quantity via allocateStock/releaseStock)
+ * is expected to pass a quantity that is fully covered. Must run on the SAME client/transaction
+ * as the caller's event insert.
+ */
+export async function applyStockPick(input: StockPickInput, client: PoolClient): Promise<void> {
+  const lotId = input.lot_id ?? null;
+  const stockClass = input.stock_class ?? 'owned';
+  const quantity = String(input.quantity);
+  await client.query(
+    `UPDATE stock_balance
+        SET allocated = allocated - LEAST(allocated, $1::numeric),
+            picked = picked + LEAST(allocated, $1::numeric),
+            updated_at = now()
+      WHERE sku = $2 AND location_id = $3 AND stock_class = $5 AND ($4::text IS NULL OR lot_id = $4)`,
+    [quantity, input.sku, input.location_id, lotId, stockClass],
   );
 }

@@ -10,7 +10,7 @@ import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
 import { getLocationByCode } from '../../read/projections/location_register.js';
 import { getSalesOrderLineById } from '../../read/projections/erp_sales_order.js';
-import { getPickTaskById, getPickTaskSiteId, listPickTasks, assignPickTask } from '../../read/projections/pick_task.js';
+import { getPickTaskById, getPickTaskSiteId, listPickTasks } from '../../read/projections/pick_task.js';
 import { listPickLinesByTask } from '../../read/projections/pick_line.js';
 import { generatePickTasks } from '../../warehouse/pick-task-generator.js';
 
@@ -241,11 +241,28 @@ const assignPickTaskBase: RouteHandler = async (req, res, params) => {
     sendRequestError(req, res, 404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${pickTaskId}"`);
     return;
   }
+  if (task.status !== 'pending') {
+    sendRequestError(req, res, 409, 'PICK_TASK_NOT_PENDING', `Pick task "${pickTaskId}" cannot be assigned because it is ${task.status}`);
+    return;
+  }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'write');
   const pool = getPool();
   const client = await pool.connect();
   try {
-    await assignPickTask(pickTaskId, assignedTo, client);
+    await client.query('BEGIN');
+    const updatedRows = await client.query(
+      `UPDATE pick_task SET assigned_to = $2, updated_at = now() WHERE pick_task_id = $1 AND status = 'pending' RETURNING pick_task_id`,
+      [pickTaskId, assignedTo],
+    );
+    if ((updatedRows.rowCount ?? 0) === 0) {
+      await client.query('ROLLBACK');
+      sendRequestError(req, res, 409, 'PICK_TASK_NOT_PENDING', `Pick task "${pickTaskId}" cannot be assigned because it is no longer pending`);
+      return;
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
   } finally {
     client.release();
   }
@@ -294,7 +311,6 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
         confirmed_quantity: typeof confirmedQuantity === 'number' ? String(confirmedQuantity) : confirmedQuantity,
         override_reason: typeof overrideReason === 'string' ? overrideReason : null,
         capture_method: captureMethod,
-        confirmed_by: actor.userId,
       },
       metadata: {
         correlation_id: randomUUID(),
@@ -340,7 +356,6 @@ const completePickTaskBase: RouteHandler = async (req, res, params) => {
       payload: {
         pick_task_id: pickTaskId,
         dispatch_order_id: task.dispatch_order_id,
-        completed_by: actor.userId,
       },
       metadata: {
         correlation_id: randomUUID(),

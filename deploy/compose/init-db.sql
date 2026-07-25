@@ -970,6 +970,26 @@ CREATE TABLE IF NOT EXISTS stock_balance (
 -- the grain, so the Story 2.2 on_hand/allocated/available/in_transit invariants are unchanged.
 ALTER TABLE stock_balance ADD COLUMN IF NOT EXISTS last_issue_at TIMESTAMPTZ;
 
+-- Story 3.6: picked tracks stock that has left the `allocated` bucket because a pick line was
+-- confirmed (AC7 "stock status moves from allocated to picked"), but has not yet shipped/
+-- dispatched (Story 3.7 will introduce that transition). Added idempotently so a live database
+-- gains the column without a table rebuild. `available` is redefined below to also subtract
+-- `picked` so picked stock is not offered to new allocations, exactly like allocated stock.
+ALTER TABLE stock_balance ADD COLUMN IF NOT EXISTS picked NUMERIC(18, 6) NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'stock_balance'
+      AND column_name = 'available'
+      AND generation_expression ILIKE '%picked%'
+  ) THEN
+    ALTER TABLE stock_balance DROP COLUMN IF EXISTS available;
+    ALTER TABLE stock_balance ADD COLUMN available NUMERIC(18, 6) GENERATED ALWAYS AS (on_hand - allocated - picked) STORED;
+  END IF;
+END $$;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -990,12 +1010,21 @@ BEGIN
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_stock_balance_allocated_within_on_hand'
+    WHERE conname = 'chk_stock_balance_picked_non_negative'
       AND conrelid = 'stock_balance'::regclass
   ) THEN
     ALTER TABLE stock_balance
-      ADD CONSTRAINT chk_stock_balance_allocated_within_on_hand CHECK (allocated <= on_hand);
+      ADD CONSTRAINT chk_stock_balance_picked_non_negative CHECK (picked >= 0);
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_stock_balance_allocated_within_on_hand'
+      AND conrelid = 'stock_balance'::regclass
+  ) THEN
+    ALTER TABLE stock_balance DROP CONSTRAINT chk_stock_balance_allocated_within_on_hand;
+  END IF;
+  ALTER TABLE stock_balance
+    ADD CONSTRAINT chk_stock_balance_allocated_within_on_hand CHECK (allocated + picked <= on_hand);
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_stock_balance_in_transit_non_negative'
@@ -2578,6 +2607,8 @@ CREATE TABLE IF NOT EXISTS dispatch_order_status (
   picked_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   picked_by         UUID NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_dispatch_order_status_picked ON dispatch_order_status (picked_at);
 
 DO $$
 BEGIN

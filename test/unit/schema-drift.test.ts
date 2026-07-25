@@ -65,6 +65,7 @@ const EXPECTED = [
       'uq_stock_balance_grain',
       'chk_stock_balance_on_hand_non_negative',
       'chk_stock_balance_allocated_non_negative',
+      'chk_stock_balance_picked_non_negative',
       'chk_stock_balance_allocated_within_on_hand',
       'chk_stock_balance_in_transit_non_negative',
     ],
@@ -352,6 +353,12 @@ const EXPECTED = [
     table: 'pick_line',
     constraints: ['chk_pick_line_status', 'chk_pick_line_capture_method'],
     indexes: ['idx_pick_line_task', 'idx_pick_line_location_status', 'idx_pick_line_directed_lot'],
+  },
+  {
+    canonical: 'read/projections/pick_task.sql',
+    table: 'dispatch_order_status',
+    constraints: [] as string[],
+    indexes: ['idx_dispatch_order_status_picked'],
   },
   {
     canonical: 'read/projections/asn.sql',
