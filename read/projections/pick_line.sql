@@ -50,6 +50,12 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 3.6 (review pass 2): the bin a confirmation actually allocated at. Completion moves stock
+-- from `allocated` to `picked` at THIS bin instead of re-deriving it with a different predicate
+-- than confirmation used, which could resolve to another bin (and another task's allocation) when
+-- a lot is allocated across several bins. Null until the line is confirmed.
+ALTER TABLE IF EXISTS pick_line ADD COLUMN IF NOT EXISTS confirmed_location_id UUID;
+
 CREATE INDEX IF NOT EXISTS idx_pick_line_task ON pick_line (pick_task_id);
 CREATE INDEX IF NOT EXISTS idx_pick_line_location_status ON pick_line (location_id, status);
 CREATE INDEX IF NOT EXISTS idx_pick_line_directed_lot ON pick_line (directed_lot_id);

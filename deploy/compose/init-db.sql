@@ -1980,9 +1980,13 @@ CREATE TABLE IF NOT EXISTS erp_sales_order (
 
 CREATE INDEX IF NOT EXISTS idx_erp_sales_order_site_status ON erp_sales_order (ship_from_site_id, status);
 CREATE INDEX IF NOT EXISTS idx_erp_sales_order_site_code_status ON erp_sales_order (ship_from_site_code_ext, status);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_erp_sales_order_id ON erp_sales_order (id);
 
+-- Story 3.6: the `id` surrogate must be added BEFORE the unique index that references it. A
+-- database created before Story 3.6 has an erp_sales_order without `id`, so CREATE TABLE IF NOT
+-- EXISTS above is a no-op there and indexing `id` first aborts the whole migration run.
 ALTER TABLE erp_sales_order ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_erp_sales_order_id ON erp_sales_order (id);
 
 DO $$
 BEGIN
@@ -2688,6 +2692,12 @@ BEGIN
       ADD CONSTRAINT chk_pick_line_capture_method CHECK (capture_method IS NULL OR capture_method IN ('PWA', 'PAPER'));
   END IF;
 END $$;
+
+-- Story 3.6 (review pass 2): the bin a confirmation actually allocated at. Completion moves stock
+-- from `allocated` to `picked` at THIS bin instead of re-deriving it with a different predicate
+-- than confirmation used, which could resolve to another bin (and another task's allocation) when
+-- a lot is allocated across several bins. Null until the line is confirmed.
+ALTER TABLE IF EXISTS pick_line ADD COLUMN IF NOT EXISTS confirmed_location_id UUID;
 
 CREATE INDEX IF NOT EXISTS idx_pick_line_task ON pick_line (pick_task_id);
 CREATE INDEX IF NOT EXISTS idx_pick_line_location_status ON pick_line (location_id, status);

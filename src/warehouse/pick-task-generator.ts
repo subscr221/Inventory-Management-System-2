@@ -101,7 +101,7 @@ async function fefoCandidates(sku: string, siteId: string, client: PoolClient): 
        SELECT z.start_id, parent.location_id, parent.level, parent.parent_location_id
          FROM location_register parent
          JOIN zone_of z ON z.parent_location_id = parent.location_id
-        WHERE z.level <> 'zone'
+        WHERE z.level <> 'zone' AND parent.site_id = $2
      )
      SELECT lm.lot_id AS lot_uuid,
             lm.lot_number,
@@ -191,7 +191,12 @@ async function allocateForLine(
         location_id: c.location_id,
       });
     }
-    const take = available < remaining ? available : remaining;
+    // Review pass 2: truncate to milli precision. stock_balance.available is NUMERIC(18,6) while
+    // pick quantities persist into NUMERIC(14,3), so an untruncated take from a bin holding
+    // sub-milli availability produced a quantity this story's own shape assert then rejected.
+    const rawTake = available < remaining ? available : remaining;
+    const take = (rawTake / 1000n) * 1000n;
+    if (take <= 0n) continue;
     consumed.set(key, alreadyConsumed + take);
     allocations.push({
       lotUuid: c.lot_uuid,
@@ -328,6 +333,26 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
         ship_from_site_id: line.ship_from_site_id,
       });
     }
+    // Review pass 2: generation must be idempotent. Nothing marks a demand line consumed - the
+    // FOR UPDATE above only serializes concurrent runs, it does not stop a second run from
+    // re-allocating the same demand - so a repeated submission previously produced a second task
+    // holding a second allocation for the same order line. An existing live pick line for this
+    // order line is the consumption record.
+    const existing = await client.query(
+      `SELECT 1
+         FROM pick_line pl
+         JOIN pick_task pt ON pt.pick_task_id = pl.pick_task_id
+        WHERE pl.dispatch_order_line_id = $1
+          AND pl.status <> 'cancelled'
+          AND pt.status <> 'cancelled'
+        LIMIT 1`,
+      [id],
+    );
+    if (existing.rows.length > 0) {
+      throw new AppError(409, 'PICK_TASK_ALREADY_GENERATED', `Pick tasks already exist for sales-order line "${id}"`, {
+        dispatch_order_line_id: id,
+      });
+    }
     lines.push(line);
   }
 
@@ -373,7 +398,7 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
     const groups = new Map<string, TaskDraft>();
     for (const { line, allocations } of allocated) {
       for (const allocation of allocations) {
-        const key = `${line.sku}\\0${allocation.zoneId}`;
+        const key = `${line.sku}\0${allocation.zoneId}`;
         let draft = groups.get(key);
         if (!draft) {
           draft = {
@@ -396,7 +421,7 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
     const groups = new Map<string, TaskDraft>();
     for (const { line, allocations } of allocated) {
       for (const allocation of allocations) {
-        const key = `${line.id}\\0${allocation.zoneId}`;
+        const key = `${line.id}\0${allocation.zoneId}`;
         let draft = groups.get(key);
         if (!draft) {
           draft = {

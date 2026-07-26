@@ -299,6 +299,23 @@ Modified files (Story 3.5 baseline repair, prerequisite):
 - read/projections/velocity_class.sql
 - test/integration/story-3-5.test.ts
 
+### File List additions (review pass 2, 2026-07-27)
+
+New files:
+
+- test/unit/pick-shape.test.ts (Task 8.2 envelope validation for all three pick event types)
+
+Additionally modified by the second review pass, and previously undeclared by this story:
+
+- read/projections/stock_balance.sql (the `picked` column, `available` redefined as
+  `on_hand - allocated - picked`, and the invariant strengthened to `allocated + picked <= on_hand`)
+- src/read/projections/stock_balance.ts (`applyStockPick`, now fail-closed)
+- src/api/v1/stock.ts (consolidated stock shape carries `picked`)
+- read/projections/item_master.sql (`size_class` inlined into the canonical CREATE TABLE)
+- read/projections/erp_sales_order.sql (the `id` surrogate; column now added before its index)
+- src/read/projections/users.ts (`activeUserExistsById`, used to validate an assignee)
+- test/integration/story-2-2.test.ts, test/integration/story-2-9.test.ts (cross-story shape pins)
+
 ## Change Log
 
 - 2026-07-25: Story 3.6 implemented (all 8 tasks, all 8 ACs) from baseline cf342e6. New warehouse
@@ -333,3 +350,84 @@ Modified files (Story 3.5 baseline repair, prerequisite):
 - [x] [Review][Decision] Substituted-lot bin resolution changed from Story 1.6 location_current (empty for never-scanned lots, made AC8 unsatisfiable) to the authoritative stock_balance row at the same site with sufficient availability; satisfies spec Task 5.4 step 5's "current bin" intent [src/compliance/pick.ts]
 - [x] [Review][Patch] Schema drift: item_master size_class inlined into canonical CREATE TABLE (was ALTER-only); erp_sales_order id surrogate + uq_erp_sales_order_id + ALTER mirrored into init-db.sql [read/projections/item_master.sql, deploy/compose/init-db.sql]
 - [x] [Review][Patch] Cross-story shape pins updated for deliberate Story 3.6 contract changes: story-2-2 consolidated stock shape gains picked: 0; story-2-9 dispatch-demand quantities are NUMERIC strings ('5.000') [test/integration/story-2-2.test.ts, test/integration/story-2-9.test.ts]
+
+- 2026-07-27: Second code review (independent pass on a different model; the first pass ran without
+  its Blind Hunter layer, which failed empty). 2 decisions resolved and 26 patches applied, 3
+  deferred, 4 dismissed. Release blocker fixed: `erp_sales_order.sql` indexed the `id` surrogate
+  before adding it, so `db:migrate` aborted on every pre-3.6 database and no Story 3.6 schema landed
+  (reproduced against a pre-3.6 schema, then verified fixed). Other high-severity fixes: generation
+  made idempotent (re-releasing a demand line was double-allocating), the completion TOCTOU closed
+  with a row lock plus a status-predicated update (two concurrent completions could double-run the
+  stock move and drain other tasks' allocations), `applyStockPick` and `releaseStock` made
+  fail-closed (both silently no-opped, stranding allocation while the task reported success), and
+  site scoping moved onto the `persistEvent` write path (it existed only in the HTTP handlers, so
+  direct-event and edge uploads crossed sites) alongside an SOD role check on completion. Per the
+  resolved decisions, a confirmed quantity must now equal the directed quantity
+  (`PICK_QUANTITY_MISMATCH`), and a task auto-completes on its last confirmation so AC7's trigger is
+  the confirmation rather than a supervisor's separate call.
+
+### Review Findings (second pass, 2026-07-27)
+
+All 26 patch findings below were applied and verified on 2026-07-27. Gates after the sweep:
+tsc and eslint clean for backend and edge, npm test 420/421 (the single failure is the deferred,
+pre-existing Story 3.3 date flake), edge 19/19, schema-drift 37/37, spine gate 6/6, both builds
+succeed, and `db:migrate` is re-runnable. Story 3.6's own suite grew from 11 to 15 tests and a new
+`test/unit/pick-shape.test.ts` adds 7 envelope-validation tests, so 421 total (up from 410).
+
+Independent adversarial pass on a different model. The first pass ran without its Blind Hunter
+layer (it failed empty); that layer is the source of most of the concurrency and stock-invariant
+findings below. Layer status this run: Acceptance Auditor and Edge Case Hunter completed on the
+first attempt; Blind Hunter stalled on the full-diff read and completed on a scoped retry.
+
+Decisions (resolved by SCHOOL-PC, 2026-07-27, now tracked as patches):
+
+- [x] [Review][Decision-resolved][Patch] `confirmed_quantity` differing from `directed_quantity` had no defined business rule - over-pick silently allocated the excess beyond sales-order demand, and short-pick completed the task and flagged the dispatch order picked with the unpicked remainder vanishing (no shortfall row, no backorder, no reconciliation against `erp_sales_order.quantity`). RESOLUTION: reject any mismatch - `confirmed_quantity` must equal `directed_quantity`, anything else is a 4xx rejection. A genuine short-pick needs an explicit exception flow, which belongs to a later story rather than silent data loss now. Remove the delta allocate/release branch accordingly. [src/compliance/pick.ts:294-307, src/compliance/pick.ts:351]
+- [x] [Review][Decision-resolved][Patch] AC7's trigger conflicted with Task 5.4 step 6. AC7 says stock moves from `allocated` to `picked` and packing is notified "when the last confirmation is submitted", but the transition lived in `pick_task.completed`, which is supervisor-only, so after an operator's final confirmation the stock was still `allocated` and packing un-notified until a manager acted. RESOLUTION: auto-complete on the last confirmation - when the final pick line is confirmed, emit `pick_task.completed` from within the same transaction. This satisfies AC7's literal trigger while keeping Task 5.4 step 6 intact (the per-line allocation still stays in place until completion), and the manual supervisor endpoint remains as a fallback. [src/compliance/pick.ts:309-316, src/api/v1/pick-tasks.ts:337]
+
+High severity:
+
+- [x] [Review][Patch] `CREATE UNIQUE INDEX uq_erp_sales_order_id ON erp_sales_order (id)` precedes the `ALTER TABLE ... ADD COLUMN IF NOT EXISTS id`, so `db:migrate` aborts with `column "id" does not exist` on any database created before this story. Proven empirically against a pre-3.6 schema: the run aborts, `id` is never added and the index is never created. Because this file precedes `pick_task.sql` in the MIGRATIONS array, no Story 3.6 schema lands on an upgrade. Same ordering in the init-db mirror. [read/projections/erp_sales_order.sql:43-45, deploy/compose/init-db.sql:1983-1985]
+- [x] [Review][Patch] Generation is not idempotent and nothing marks a demand line consumed, so re-posting the same `dispatchOrderLineIds` allocates the same demand twice. The `FOR UPDATE` on `erp_sales_order` guards nothing: no code in the pick flow writes `status`, and the generator never checks for an existing `pick_task`/`pick_line` for the line. Two sequential POSTs to `/generate` for a 10-unit line yield two tasks holding 20 units; the `available` guard cannot catch it because the stock genuinely exists. [src/warehouse/pick-task-generator.ts:314-317]
+- [x] [Review][Patch] Completion is a TOCTOU that can double-apply the stock move. The task status is read via `getPickTaskById` without `FOR UPDATE`, the `pick_line` lock is taken only afterwards, and `updatePickTaskStatus` carries no status predicate in its WHERE, so it always succeeds. Two concurrent `pick_task.completed` events both pass the gate and both run `applyStockPick`; because that helper uses `LEAST(allocated, qty)`, the second pass drains allocation belonging to other pick tasks sharing the same (sku, bin, lot) row, and the packing notification is emitted twice. [src/compliance/pick.ts:332-341, src/read/projections/pick_task.ts:120-129]
+- [x] [Review][Patch] `applyStockPick` checks no `rowCount` and uses `LEAST(allocated, quantity)`, so a bin mismatch is a silent no-op and a short allocation silently under-moves, while the task still reports completed and the dispatch order is still flagged picked. The allocation is stranded in `allocated` permanently, suppressing `available` with no pick line pointing at it. [src/read/projections/stock_balance.ts]
+- [x] [Review][Patch] `releaseStock` ignores `rowCount` while its sibling `allocateStock` throws, so a substitution whose directed row no longer matches releases nothing and then allocates the substitute anyway, leaving total allocation permanently above real demand. The short-pick branch strands the remainder the same way. [src/compliance/pick.ts:144-151, src/compliance/pick.ts:262, src/compliance/pick.ts:305]
+- [x] [Review][Patch] Site scoping is enforced only in the `pick-tasks.ts` HTTP handlers; the compliance layer contains no actor-site check at all, so `POST /api/v1/events` and `POST /api/v1/edge/events` (both authorized on `module = stream_type` plus write, with no comparison to the task's site) let a caller scoped to one site confirm pick lines and mutate stock at another. This contradicts the story's own architecture rule that `persistEvent` is the single write-path seam where invariants belong; the suite's cross-site test only exercises the REST route and so gives false assurance. [src/compliance/pick.ts, src/api/v1/events.ts:179-183, src/api/v1/edge.ts:229-231]
+
+Medium severity:
+
+- [x] [Review][Patch] Batch completion mixes two key populations: `orderIds` come from `pick_line.dispatch_order_line_id` but are then counted against `pick_task.dispatch_order_id`, which a batch draft sets to the first contributing line only. Contributing lines 2..n therefore hit `active_count = 0` and are skipped by the `orderActive > 0` guard forever, while the count for line 1 sweeps in unrelated single/zone tasks that share that id. [src/compliance/pick.ts:417-436, src/warehouse/pick-task-generator.ts:379-386]
+- [x] [Review][Patch] `hasMilliPrecision` fails open for values with more than 6 decimal places: `numericToMicro` truncates the fraction to 6 digits before the `% 1000n` test, so `"5.0000009"` passes the guard whose docstring promises to fail closed, and persists as `5.000`. The replay equality check compares the truncated micro value, so two genuinely different confirmations are treated as the same one. [src/compliance/pick.ts:24, src/compliance/pick.ts:54-61, src/compliance/pick.ts:220]
+- [x] [Review][Patch] The generator's `take` carries no milli truncation while `stock_balance.available` is `NUMERIC(18,6)`, so a bin holding sub-milli availability produces a quantity the story's own shape assert rejects with `PICK_TASK_INVALID_PAYLOAD`, making generation permanently impossible for that line on data the system itself produced. [src/warehouse/pick-task-generator.ts:194]
+- [x] [Review][Patch] The bin a substitution allocated at is never persisted, so completion re-derives it with a different predicate (`allocated >=`, ordered by allocated) than confirmation used (`available >=`, ordered by available). When a lot is allocated across several bins the two can resolve differently and the `allocated` to `picked` move lands on another task's allocation. Persist the resolved bin on the pick line instead. [src/compliance/pick.ts:271-293, src/compliance/pick.ts:378-394]
+- [x] [Review][Patch] The pick line is read without `FOR UPDATE`, so two concurrent identical confirmations both see `pending` and the loser gets a spurious 409 `PICK_LINE_ALREADY_CONFIRMED` (a permanent edge code, settling a success as needs_attention); the same unlocked read makes the substitution's resolve-then-allocate a race that 409s the whole confirmation with no fallback to the next qualifying bin. [src/compliance/pick.ts:207, src/compliance/pick.ts:271-293]
+- [x] [Review][Patch] `pick_task.created` posted directly is never validated against `erp_sales_order`, and `pick_task` carries no foreign key, so an unknown `dispatch_order_id` yields an orphan task that has already allocated stock; `listPickTasks` and `getPickTaskSiteId` INNER JOIN the ERP projection, so the task is invisible and every route 404s, leaving the allocation unreleasable. The same join makes existing tasks vanish if an ERP re-sync re-keys the surrogate id. [src/compliance/pick.ts:157-195, src/read/projections/pick_task.ts:163, src/read/projections/pick_task.ts:176]
+- [x] [Review][Patch] SOD gap: completion is specified as `warehouse_manager`/`inventory_controller` only, but the edge upload path authorizes purely on module plus write with no event-type role check, so a `store_assistant` with warehouse write can post `pick_task.completed` and trigger the stock transition. [src/api/v1/edge.ts:189-191, src/api/v1/edge.ts:229-231]
+- [x] [Review][Patch] The AC7 test asserts only task status, `completed_at` and the notification row; it never asserts that `allocated` fell and `picked` rose, which is the actual AC7 outcome. No test helper reads `picked` anywhere in the suite. [test/integration/story-3-6.test.ts:440-488]
+- [x] [Review][Patch] Story 2.2's `stock_balance` foundation projection was changed by this story (new `picked` column, `available` dropped and redefined as `on_hand - allocated - picked`) but none of `read/projections/stock_balance.sql`, `src/read/projections/stock_balance.ts` or `src/api/v1/stock.ts` appear in the story's File List or Project Structure Notes. The invariant itself is correctly strengthened to `allocated + picked <= on_hand`; this is a traceability gap, not a logic defect. [read/projections/stock_balance.sql:50-61, src/read/projections/stock_balance.ts, src/api/v1/stock.ts]
+
+Low severity:
+
+- [x] [Review][Patch] The `assignedTo`, `zoneId`, `waveId` and `batchId` list filters are passed to SQL unvalidated while only `status` and `site` are checked, so a non-UUID value raises Postgres 22P02 and surfaces as a 500 instead of the file's own `INVALID_PARAMS` 400. Confirmed against the database. [src/api/v1/pick-tasks.ts:202-205]
+- [x] [Review][Patch] `assignedTo` is never checked against the user register, so a well-formed UUID for a nonexistent or non-warehouse user leaves the task assigned to nobody while appearing assigned. [src/api/v1/pick-tasks.ts:227-262]
+- [x] [Review][Patch] The `assignPickTask` accessor and `releasePickLineAllocation` have zero call sites (the only `assignPickTask*` matches are the differently-named handler symbols) and the assign route hand-rolls its own UPDATE, contrary to Task 6.1. [src/read/projections/pick_task.ts:133, src/read/projections/pick_line.ts:147, src/api/v1/pick-tasks.ts:254-257]
+- [x] [Review][Patch] The batch and zone grouping keys use `\\0`, which is a literal backslash followed by `0`, while the same file uses a real NUL at line 185; a SKU containing a backslash can therefore collide two different (sku, zone) groups into one task whose header sku mismatches its lines. [src/warehouse/pick-task-generator.ts:376, src/warehouse/pick-task-generator.ts:399]
+- [x] [Review][Patch] The `zone_of` recursive CTE filters `site_id` only in its base term, so the ancestor climb can cross into a parent row at another site and return that site's zone as the pick task's `zone_id`; the shape validator only checks that it is a UUID. [src/warehouse/pick-task-generator.ts:96-105]
+- [x] [Review][Patch] `/pick-tasks/batch` does not require `batchId` (unlike the symmetric wave endpoint), and the generator invents one the caller never learns because the response returns only task and line ids. [src/api/v1/pick-tasks.ts:171-174, src/warehouse/pick-task-generator.ts:348]
+- [x] [Review][Patch] Task 8.2 asked for edge envelope validation coverage for all three pick event types; the edge test covers only `classifyServerUploadFailure` and the i18n keys, validating no envelope. [edge/test/unit/pick-events.test.ts]
+- [x] [Review][Patch] Task 8.1 requires assign RBAC coverage but the suite never calls `/assign` (zero matches). [test/integration/story-3-6.test.ts]
+- [x] [Review][Patch] A `single`-strategy task takes `zone_id` from its first allocation even when its lines span several zones (only `zone` strategy splits), so zone-filtered listing and the printed header misreport the zone. [src/warehouse/pick-task-generator.ts:357]
+
+Deferred:
+
+- [x] [Review][Defer] A cancelled pick line's allocation is never released (`releasePickLineAllocation` flips status with no `releaseStock`), and a task whose lines are all cancelled can never complete because completion throws on `activeCount === 0`, pinning the task and its allocations. [src/read/projections/pick_line.ts:147-153, src/compliance/pick.ts:351] - deferred, pre-existing: no code path currently cancels a pick line or task, so this is latent until cancellation is wired up.
+- [x] [Review][Defer] Confirmation never gates on the parent task's status, so lines of a cancelled task would still confirm and take a fresh allocation that nothing later converts or releases. [src/compliance/pick.ts:204-232] - deferred, pre-existing: same latency, no cancellation path exists today.
+- [x] [Review][Defer] Story 3.3's weighbridge `business_date` is derived from wall-clock `now()` rather than the event's `occurred_at`, so the AC1/AC2 assertion pinned to '2026-07-22' only ever passed on the day it was written; this is the single failing test in the suite. [test/integration/story-3-3.test.ts:255] - deferred, pre-existing and outside this story's diff (neither the test nor src/compliance/weighbridge.ts was touched).
+
+Dismissed as noise or already handled (recorded for traceability, not actionable): confirming a line on an
+already-completed task (unreachable, since completion requires every non-cancelled line already confirmed);
+the FEFO candidate filters beyond the spec's `available > 0` (quality hold, expiry, quarantine, access
+restriction are correct business behaviour and match Story 2.3's `getLotsForSelection` precedent); the
+generator not using `location_current`/`getCurrentLocationByLotId` (deliberate documented decision, since
+`stock_balance` is authoritative for where stock physically sits and `location_current` is empty for
+never-scanned lots); and the dropped `chk_stock_balance_allocated_within_on_hand` constraint (immediately
+replaced with the stronger `allocated + picked <= on_hand`).

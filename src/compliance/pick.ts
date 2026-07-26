@@ -2,12 +2,15 @@ import type { PoolClient } from 'pg';
 import type { PickLineConfirmedEnvelope, PickTaskCompletedEnvelope, PickTaskCreatedEnvelope, PickLineInput } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
-import { createPickTask, getPickTaskById, updatePickTaskStatus } from '../read/projections/pick_task.js';
-import { confirmPickLine, createPickLine, getPickLineById } from '../read/projections/pick_line.js';
+import { createPickTask, getPickTaskById, getPickTaskByIdForUpdate, updatePickTaskStatus } from '../read/projections/pick_task.js';
+import { confirmPickLine, createPickLine, getPickLineByIdForUpdate } from '../read/projections/pick_line.js';
 import { applyStockPick } from '../read/projections/stock_balance.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STRATEGIES = ['single', 'batch', 'wave', 'zone'];
+// SOD (Task 6.2): completing a pick task is a supervisor action, enforced here on the central
+// write path so the edge and direct-event routes cannot bypass the HTTP handler's role check.
+const PICK_COMPLETE_ROLES = ['warehouse_manager', 'inventory_controller'];
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
@@ -24,15 +27,6 @@ function numericToMicro(value: string | number): bigint {
   const frac = (fracPart + '0'.repeat(QUANTITY_SCALE)).slice(0, QUANTITY_SCALE);
   const sign = clean.startsWith('-') ? -1n : 1n;
   return sign * (BigInt(intPart.replace('-', '')) * QUANTITY_FACTOR + BigInt(frac));
-}
-
-function microToNumeric(micro: bigint): string {
-  const negative = micro < 0n;
-  const abs = negative ? -micro : micro;
-  const whole = (abs / QUANTITY_FACTOR).toString();
-  const frac = (abs % QUANTITY_FACTOR).toString().padStart(QUANTITY_SCALE, '0');
-  const num = `${whole}.${frac}`;
-  return negative ? `-${num}` : num;
 }
 
 function isPositiveFiniteQuantity(value: unknown): value is string | number {
@@ -53,6 +47,13 @@ function isPositiveFiniteQuantity(value: unknown): value is string | number {
  */
 function hasMilliPrecision(value: unknown): boolean {
   if (typeof value !== 'string' && typeof value !== 'number') return false;
+  // Review pass 2: check the RAW fraction first. numericToMicro slices the fraction to 6 digits,
+  // so testing its output alone let a value like "5.0000009" (which does round on write) pass the
+  // guard whose contract is to fail closed, and made two different confirmations compare equal on
+  // replay. Anything carrying more than 3 decimal places is rejected here.
+  const raw = typeof value === 'number' ? value.toString() : value.trim();
+  const fraction = raw.includes('.') ? raw.slice(raw.indexOf('.') + 1) : '';
+  if (fraction.replace(/0+$/, '').length > 3) return false;
   try {
     return numericToMicro(value) % 1_000n === 0n;
   } catch {
@@ -140,14 +141,63 @@ async function allocateStock(sku: string, locationId: string, lotNumber: string,
   }
 }
 
-/** Releases a previously-taken allocation (never below zero). */
+/**
+ * Releases a previously-taken allocation. Fails closed (review pass 2): scoped to
+ * `allocated >= quantity` with the affected row count checked, so a missing or already-drained row
+ * raises instead of silently releasing nothing and leaving the site's total allocation above real
+ * demand. Its sibling allocateStock has always thrown; the asymmetry was the defect.
+ */
 async function releaseStock(sku: string, locationId: string, lotNumber: string, quantity: string, client: PoolClient): Promise<void> {
-  await client.query(
+  const result = await client.query(
     `UPDATE stock_balance
-        SET allocated = GREATEST(allocated - $1::numeric, 0), updated_at = now()
-      WHERE sku = $2 AND location_id = $3 AND lot_id = $4 AND stock_class = 'owned'`,
+        SET allocated = allocated - $1::numeric, updated_at = now()
+      WHERE sku = $2 AND location_id = $3 AND lot_id = $4 AND stock_class = 'owned'
+        AND allocated >= $1::numeric`,
     [quantity, sku, locationId, lotNumber],
   );
+  if ((result.rowCount ?? 0) === 0) {
+    throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'No allocation to release at this bin and lot', {
+      sku,
+      location_id: locationId,
+      lot_number: lotNumber,
+      requested_quantity: quantity,
+    });
+  }
+}
+
+/**
+ * Story 3.6 (review pass 2): site isolation belongs on the central write path, not only in the
+ * pick-tasks HTTP handlers. Without this, POST /api/v1/events and POST /api/v1/edge/events - both
+ * authorized on `module = stream_type` plus write, with no comparison against the target task's
+ * site - let a caller scoped to one site confirm pick lines and mutate stock at another.
+ *
+ * The actor location is server-set on every path: the HTTP/edge layers overwrite it with the
+ * authorizing assignment's location, and a wildcard ('*') assignment yields the all-zero sentinel,
+ * which is treated as unrestricted exactly as the other modules do.
+ */
+const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
+
+function assertActorSite(actorLocationId: string, siteId: string, context: Record<string, unknown>): void {
+  if (actorLocationId === NO_LOCATION_UUID) return;
+  if (actorLocationId !== siteId) {
+    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No assignment grants access to site "${siteId}"`, {
+      ...context,
+      actor_location_id: actorLocationId,
+      site_id: siteId,
+    });
+  }
+}
+
+/** Resolves the site a pick task belongs to through the Story 2.9 sales-order projection. */
+async function siteForPickTask(pickTaskId: string, client: PoolClient): Promise<string | null> {
+  const result = await client.query(
+    `SELECT eso.ship_from_site_id
+       FROM pick_task pt
+       JOIN erp_sales_order eso ON eso.id = pt.dispatch_order_id
+      WHERE pt.pick_task_id = $1`,
+    [pickTaskId],
+  );
+  return result.rows.length > 0 ? (result.rows[0]!['ship_from_site_id'] as string) : null;
 }
 
 /**
@@ -160,6 +210,20 @@ export async function applyPickTaskCreatedProjection(envelope: PickTaskCreatedEn
 
   const existing = await getPickTaskById(p.pick_task_id, client);
   if (existing) return; // idempotent replay - projection rows and allocations already applied
+
+  // Review pass 2: the dispatch order must exist before any stock is allocated against it.
+  // pick_task carries no foreign key to the ERP projection, and both listPickTasks and the site
+  // resolver INNER JOIN it, so an unknown dispatch_order_id previously produced an invisible task
+  // that had already taken an allocation nothing could release.
+  const orderLine = await client.query(`SELECT ship_from_site_id FROM erp_sales_order WHERE id = $1`, [p.dispatch_order_id]);
+  if (orderLine.rows.length === 0) {
+    throw new AppError(404, 'DISPATCH_ORDER_LINE_NOT_FOUND', `No sales-order line exists for "${p.dispatch_order_id}"`, {
+      dispatch_order_id: p.dispatch_order_id,
+    });
+  }
+  assertActorSite(envelope.metadata.actor.location_id, orderLine.rows[0]!['ship_from_site_id'] as string, {
+    pick_task_id: p.pick_task_id,
+  });
 
   await createPickTask(
     {
@@ -204,7 +268,10 @@ export async function applyPickTaskCreatedProjection(envelope: PickTaskCreatedEn
 export async function applyPickLineConfirmedProjection(envelope: PickLineConfirmedEnvelope, client: PoolClient, _eventId: string): Promise<void> {
   const p = envelope.payload;
 
-  const line = await getPickLineById(p.pick_line_id, client);
+  // Review pass 2: lock the line first. An unlocked read let two concurrent identical
+  // confirmations both observe `pending`, after which the loser got a spurious 409 that the edge
+  // outbox settles as needs_attention on what was actually a success.
+  const line = await getPickLineByIdForUpdate(p.pick_line_id, client);
   if (!line) {
     throw new AppError(404, 'PICK_LINE_NOT_FOUND', `No pick line exists for "${p.pick_line_id}"`, { pick_line_id: p.pick_line_id });
   }
@@ -231,6 +298,25 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
     });
   }
 
+  const taskSiteId = await siteForPickTask(p.pick_task_id, client);
+  if (taskSiteId === null) {
+    throw new AppError(404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${p.pick_task_id}"`, { pick_task_id: p.pick_task_id });
+  }
+  assertActorSite(envelope.metadata.actor.location_id, taskSiteId, { pick_line_id: p.pick_line_id, pick_task_id: p.pick_task_id });
+
+  // Review decision (2026-07-27): a confirmed quantity must equal the directed quantity. Accepting
+  // a short pick previously completed the task and flagged the dispatch order fully picked with the
+  // unpicked remainder vanishing (no shortfall row, no backorder); accepting an over-pick allocated
+  // stock beyond sales-order demand. A genuine short pick needs an explicit exception flow, which
+  // is its own story rather than silent data loss here.
+  if (numericToMicro(p.confirmed_quantity) !== numericToMicro(line.directed_quantity)) {
+    throw new AppError(400, 'PICK_QUANTITY_MISMATCH', 'confirmed_quantity must equal the directed quantity for this pick line', {
+      pick_line_id: p.pick_line_id,
+      directed_quantity: line.directed_quantity,
+      confirmed_quantity: String(p.confirmed_quantity),
+    });
+  }
+
   const isSubstitution = p.confirmed_lot_id !== line.directed_lot_id;
   const overrideReason = typeof p.override_reason === 'string' ? p.override_reason.trim() : '';
   if (isSubstitution && overrideReason.length === 0) {
@@ -241,21 +327,11 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
     });
   }
 
-  const confirmed = await confirmPickLine(
-    p.pick_line_id,
-    p.confirmed_lot_id,
-    String(p.confirmed_quantity),
-    isSubstitution ? overrideReason : null,
-    p.capture_method,
-    envelope.metadata.actor.user_id,
-    client,
-  );
-  if (!confirmed) {
-    throw new AppError(409, 'PICK_LINE_ALREADY_CONFIRMED', 'Pick line was confirmed by a concurrent request', {
-      pick_line_id: p.pick_line_id,
-    });
-  }
-
+  // Resolve the bin this confirmation allocates at BEFORE stamping the line, so the resolved bin
+  // can be persisted on the row. Completion then moves stock at exactly this bin instead of
+  // re-deriving it with a different predicate, which could land on another task's allocation when
+  // a lot is allocated across several bins (review pass 2).
+  let confirmedLocationId = line.location_id;
   if (isSubstitution) {
     // Release the directed lot's allocation at the directed bin...
     const directedLotNumber = await lotNumberForUuid(line.directed_lot_id, line.sku, client);
@@ -289,31 +365,140 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
         requested_quantity: String(p.confirmed_quantity),
       });
     }
-    const confirmedLocationId = resolved.rows[0]!['location_id'] as string;
+    confirmedLocationId = resolved.rows[0]!['location_id'] as string;
     await allocateStock(line.sku, confirmedLocationId, confirmedLotNumber, String(p.confirmed_quantity), client);
-  } else if (numericToMicro(p.confirmed_quantity) !== numericToMicro(line.directed_quantity)) {
-    // Same lot but a different quantity: adjust the allocation so allocated reflects the actual
-    // picked quantity (never negative, never exceeding on_hand via the available guard).
-    const directedLotNumber = await lotNumberForUuid(line.directed_lot_id, line.sku, client);
-    const directedMicro = numericToMicro(line.directed_quantity);
-    const confirmedMicro = numericToMicro(p.confirmed_quantity);
-    if (confirmedMicro > directedMicro) {
-      const delta = microToNumeric(confirmedMicro - directedMicro);
-      await allocateStock(line.sku, line.location_id, directedLotNumber, delta, client);
-    } else {
-      const delta = microToNumeric(directedMicro - confirmedMicro);
-      await releaseStock(line.sku, line.location_id, directedLotNumber, delta, client);
-    }
   }
 
-  // Per spec Task 5.4 step 6, the allocation stays in place at confirmation time; the AC7
-  // allocated -> picked transition happens at task completion in applyPickTaskCompletedProjection.
+  const confirmed = await confirmPickLine(
+    p.pick_line_id,
+    p.confirmed_lot_id,
+    String(p.confirmed_quantity),
+    isSubstitution ? overrideReason : null,
+    p.capture_method,
+    envelope.metadata.actor.user_id,
+    confirmedLocationId,
+    client,
+  );
+  if (!confirmed) {
+    throw new AppError(409, 'PICK_LINE_ALREADY_CONFIRMED', 'Pick line was confirmed by a concurrent request', {
+      pick_line_id: p.pick_line_id,
+    });
+  }
+
+  // Per spec Task 5.4 step 6, the per-line allocation stays in place at confirmation time; the AC7
+  // allocated -> picked transition runs once, at task completion.
 
   // Mark the task in_progress on first confirmation (pending -> in_progress).
   await client.query(
     `UPDATE pick_task SET status = 'in_progress', updated_at = now() WHERE pick_task_id = $1 AND status = 'pending'`,
     [p.pick_task_id],
   );
+
+  // AC7 (review decision 2026-07-27): "when the last confirmation is submitted" is the trigger, so
+  // finalize here the moment no line is left outstanding rather than waiting for a supervisor's
+  // separate call. The supervisor endpoint remains available and is a no-op once this has run.
+  // Finalization is performed inline rather than by emitting pick_task.completed, so the SOD gate
+  // on that command stays meaningful and an operator cannot use auto-completion to impersonate one.
+  const outstanding = await client.query(
+    `SELECT COUNT(*) AS pending_count FROM pick_line WHERE pick_task_id = $1 AND status = 'pending'`,
+    [p.pick_task_id],
+  );
+  if (Number(outstanding.rows[0]!['pending_count']) === 0) {
+    await finalizePickTaskCompletion(p.pick_task_id, envelope.metadata.actor, client, _eventId);
+  }
+}
+
+/**
+ * Shared completion side effects (AC7 and AC4), used both by the auto-completion path above and by
+ * the explicit `pick_task.completed` command. Assumes the caller holds the task row lock and has
+ * verified that every non-cancelled line is confirmed. Returns false when the task was already
+ * completed, so both callers can treat a replay as a no-op.
+ */
+async function finalizePickTaskCompletion(
+  pickTaskId: string,
+  actor: { user_id: string; role: string; location_id: string },
+  client: PoolClient,
+  eventId: string,
+): Promise<boolean> {
+  const task = await getPickTaskByIdForUpdate(pickTaskId, client);
+  if (!task || task.status === 'completed') return false;
+
+  const completedBy = actor.user_id;
+  // The status predicate makes this the serialization point: a concurrent completion that already
+  // committed leaves zero rows here, so the stock move below can never run twice.
+  const moved = await updatePickTaskStatus(pickTaskId, 'completed', completedBy, client);
+  if (!moved) return false;
+
+  // AC7: move every confirmed line's quantity from allocated to picked at the bin the confirmation
+  // recorded. Older rows predating confirmed_location_id fall back to the directed bin.
+  const confirmedLines = await client.query(
+    `SELECT pl.sku, pl.confirmed_lot_id,
+            COALESCE(pl.confirmed_location_id, pl.location_id) AS bin_id,
+            pl.confirmed_quantity::text AS confirmed_quantity
+       FROM pick_line pl
+      WHERE pl.pick_task_id = $1 AND pl.status IN ('confirmed', 'substituted')`,
+    [pickTaskId],
+  );
+  for (const row of confirmedLines.rows) {
+    const sku = row['sku'] as string;
+    const confirmedLotNumber = await lotNumberForUuid(row['confirmed_lot_id'] as string, sku, client);
+    await applyStockPick(
+      { sku, location_id: row['bin_id'] as string, lot_id: confirmedLotNumber, quantity: row['confirmed_quantity'] as string },
+      client,
+    );
+  }
+
+  // AC7: notify the packing station. warehouse_manager is a documented placeholder target until
+  // Story 3.7 (packing) defines the packing-station role.
+  await emitNotificationInTransaction(
+    {
+      target: { role: 'warehouse_manager' },
+      event_type: 'pick_task_completed',
+      status_verb: 'Completed',
+      object_type: 'Pick task',
+      object_id: pickTaskId,
+      next_step: 'Ready for packing.',
+      actor,
+      causation_id: eventId,
+    },
+    client,
+  );
+
+  // AC4: the dispatch order moves to picked only when every task for it is complete. A batch task
+  // consolidates several order lines, and pick_task.dispatch_order_id holds only the first of them,
+  // so each contributing line is resolved through the pick_line rows and then counted against the
+  // tasks that actually reference it (review pass 2: the previous version counted contributing
+  // lines 2..n against an empty set and skipped them forever).
+  const contributing = await client.query(
+    `SELECT DISTINCT pl.dispatch_order_line_id AS order_id FROM pick_line pl WHERE pl.pick_task_id = $1`,
+    [pickTaskId],
+  );
+  const orderIds = new Set<string>(contributing.rows.map((r: Record<string, unknown>) => r['order_id'] as string));
+  orderIds.add(task.dispatch_order_id);
+
+  for (const orderId of orderIds) {
+    // Count every task that carries a line for this order, whether it references the order
+    // directly (single/wave/zone) or only through its pick lines (batch).
+    const orderCounts = await client.query(
+      `SELECT COUNT(*) FILTER (WHERE pt.status = 'completed') AS completed_count,
+              COUNT(*) FILTER (WHERE pt.status <> 'cancelled') AS active_count
+         FROM pick_task pt
+        WHERE pt.dispatch_order_id = $1
+           OR EXISTS (SELECT 1 FROM pick_line pl WHERE pl.pick_task_id = pt.pick_task_id AND pl.dispatch_order_line_id = $1)`,
+      [orderId],
+    );
+    const orderCompleted = Number(orderCounts.rows[0]!['completed_count']);
+    const orderActive = Number(orderCounts.rows[0]!['active_count']);
+    if (orderActive > 0 && orderCompleted === orderActive) {
+      await client.query(
+        `INSERT INTO dispatch_order_status (dispatch_order_id, picked_at, picked_by)
+         VALUES ($1, now(), $2)
+         ON CONFLICT (dispatch_order_id) DO NOTHING`,
+        [orderId, completedBy],
+      );
+    }
+  }
+  return true;
 }
 
 /**
@@ -329,15 +514,35 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
 export async function applyPickTaskCompletedProjection(envelope: PickTaskCompletedEnvelope, client: PoolClient, eventId: string): Promise<void> {
   const p = envelope.payload;
 
-  const task = await getPickTaskById(p.pick_task_id, client);
+  // Review pass 2: read the task INSIDE the row lock. The previous version read the status
+  // unlocked and then relied on an unguarded UPDATE, so two concurrent completions both passed the
+  // gate and both ran the allocated-to-picked move, draining allocation belonging to other tasks
+  // at the same (sku, bin, lot) row.
+  const task = await getPickTaskByIdForUpdate(p.pick_task_id, client);
   if (!task) {
     throw new AppError(404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${p.pick_task_id}"`, { pick_task_id: p.pick_task_id });
   }
   if (task.status === 'completed') return; // idempotent replay
 
-  // Lock the task's pick lines first so a concurrent confirmation cannot slip between the count
-  // and the status update. FOR UPDATE cannot ride the aggregate query itself (PostgreSQL 0A000),
-  // so the lock runs as a separate statement (mirrors applyStockAllocation's lock-then-check).
+  const taskSiteId = await siteForPickTask(p.pick_task_id, client);
+  if (taskSiteId === null) {
+    throw new AppError(404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${p.pick_task_id}"`, { pick_task_id: p.pick_task_id });
+  }
+  assertActorSite(envelope.metadata.actor.location_id, taskSiteId, { pick_task_id: p.pick_task_id });
+
+  // SOD (Task 6.2 and the Dev Notes SOD/RBAC rule): completion is a supervisor action. The HTTP
+  // handler enforces this, but the edge upload and direct-event paths authorize only on
+  // module plus write, so without this check an operator could post the command themselves.
+  if (!PICK_COMPLETE_ROLES.includes(envelope.metadata.actor.role)) {
+    throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Completing a pick task is restricted to roles: ${PICK_COMPLETE_ROLES.join(', ')}`, {
+      pick_task_id: p.pick_task_id,
+      actor_role: envelope.metadata.actor.role,
+    });
+  }
+
+  // Lock the task's pick lines so a concurrent confirmation cannot slip between the count and the
+  // status update. FOR UPDATE cannot ride the aggregate query itself (PostgreSQL 0A000), so the
+  // lock runs as a separate statement (mirrors applyStockAllocation's lock-then-check).
   await client.query(`SELECT pick_line_id FROM pick_line WHERE pick_task_id = $1 FOR UPDATE`, [p.pick_task_id]);
   const counts = await client.query(
     `SELECT COUNT(*) FILTER (WHERE status IN ('confirmed', 'substituted')) AS confirmed_count,
@@ -356,93 +561,5 @@ export async function applyPickTaskCompletedProjection(envelope: PickTaskComplet
     });
   }
 
-  const completedBy = envelope.metadata.actor.user_id;
-  await updatePickTaskStatus(p.pick_task_id, 'completed', completedBy, client);
-
-  // AC7: move every confirmed line's quantity from allocated to picked at the bin where its
-  // allocation actually sits. Same-lot lines allocate at the directed bin; substituted lines at
-  // the bin the substitution resolved (the stock_balance row holding this lot's allocation at the
-  // site - a generation run directs each lot from exactly one bin, so this is deterministic).
-  const confirmedLines = await client.query(
-    `SELECT pl.sku, pl.location_id, pl.directed_lot_id, pl.confirmed_lot_id,
-            pl.confirmed_quantity::text AS confirmed_quantity
-       FROM pick_line pl
-      WHERE pl.pick_task_id = $1 AND pl.status IN ('confirmed', 'substituted')`,
-    [p.pick_task_id],
-  );
-  for (const row of confirmedLines.rows) {
-    const sku = row['sku'] as string;
-    const directedBin = row['location_id'] as string;
-    const confirmedLotNumber = await lotNumberForUuid(row['confirmed_lot_id'] as string, sku, client);
-    let binId = directedBin;
-    if (row['confirmed_lot_id'] !== row['directed_lot_id']) {
-      const substitutedBin = await client.query(
-        `SELECT sb.location_id
-           FROM stock_balance sb
-           JOIN location_register lr ON lr.location_id = sb.location_id
-          WHERE sb.sku = $1 AND sb.lot_id = $2 AND sb.stock_class = 'owned'
-            AND lr.site_id = (SELECT site_id FROM location_register WHERE location_id = $3 LIMIT 1)
-            AND sb.allocated >= $4::numeric
-          ORDER BY sb.allocated DESC, sb.location_id
-          LIMIT 1`,
-        [sku, confirmedLotNumber, directedBin, row['confirmed_quantity'] as string],
-      );
-      if (substitutedBin.rows.length > 0) {
-        binId = substitutedBin.rows[0]!['location_id'] as string;
-      }
-    }
-    await applyStockPick({ sku, location_id: binId, lot_id: confirmedLotNumber, quantity: row['confirmed_quantity'] as string }, client);
-  }
-
-  // AC7: notify the packing station. warehouse_manager is a documented placeholder target until
-  // Story 3.7 (packing) defines the packing-station role.
-  await emitNotificationInTransaction(
-    {
-      target: { role: 'warehouse_manager' },
-      event_type: 'pick_task_completed',
-      status_verb: 'Completed',
-      object_type: 'Pick task',
-      object_id: p.pick_task_id,
-      next_step: 'Ready for packing.',
-      actor: envelope.metadata.actor,
-      causation_id: eventId,
-    },
-    client,
-  );
-
-  // AC4: the order moves to picked only when EVERY task for the dispatch order is completed
-  // (this event's own task was just marked completed above). In batch strategy, a single
-  // task consolidates multiple dispatch-order lines; flag each contributing order when all
-  // of its tasks are done.
-  const orderIds: string[] =
-    task.strategy === 'batch'
-      ? (
-          await client.query(
-            `SELECT DISTINCT pl.dispatch_order_line_id
-               FROM pick_line pl
-              WHERE pl.pick_task_id = $1`,
-            [p.pick_task_id],
-          )
-        ).rows.map((r: Record<string, unknown>) => r['dispatch_order_line_id'] as string)
-      : [task.dispatch_order_id];
-
-  for (const orderId of orderIds) {
-    const orderCounts = await client.query(
-      `SELECT COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
-              COUNT(*) FILTER (WHERE status <> 'cancelled') AS active_count
-         FROM pick_task
-        WHERE dispatch_order_id = $1`,
-      [orderId],
-    );
-    const orderCompleted = Number(orderCounts.rows[0]!['completed_count']);
-    const orderActive = Number(orderCounts.rows[0]!['active_count']);
-    if (orderActive > 0 && orderCompleted === orderActive) {
-      await client.query(
-        `INSERT INTO dispatch_order_status (dispatch_order_id, picked_at, picked_by)
-         VALUES ($1, now(), $2)
-         ON CONFLICT (dispatch_order_id) DO NOTHING`,
-        [orderId, completedBy],
-      );
-    }
-  }
+  await finalizePickTaskCompletion(p.pick_task_id, envelope.metadata.actor, client, eventId);
 }

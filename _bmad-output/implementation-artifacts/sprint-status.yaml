@@ -1,5 +1,22 @@
 # generated: 2026-07-12
-# last_updated: 2026-07-26
+# last_updated: 2026-07-27
+# story 3-6 code review 2026-07-27 (SECOND adversarial pass, independent model; first pass had run without
+#   its Blind Hunter layer, which failed empty - the retry supplied most of the concurrency and
+#   stock-invariant findings). 2 decisions + 26 patches applied, 3 deferred, 4 dismissed.
+#   RELEASE BLOCKER fixed: erp_sales_order.sql created the uq index on the `id` surrogate BEFORE the
+#   ALTER that adds it, so db:migrate aborted on every pre-3.6 database and no Story 3.6 schema landed
+#   (reproduced on a pre-3.6 schema, then verified fixed). Other highs: generation made idempotent
+#   (re-release double-allocated the same demand line); completion TOCTOU closed (row lock +
+#   status-predicated update - two concurrent completions could double-run the allocated->picked move
+#   and drain other tasks' allocations via LEAST()); applyStockPick and releaseStock made fail-closed
+#   (both silently no-opped, stranding allocation while the task reported success); site scoping moved
+#   onto the persistEvent seam (it lived only in the HTTP handlers, so direct-event and edge uploads
+#   crossed sites) plus an SOD role check on completion. Decisions: confirmed qty must equal directed
+#   qty (new PICK_QUANTITY_MISMATCH; short-pick previously flagged orders picked with demand vanishing),
+#   and tasks auto-complete on the last confirmation so AC7's trigger is the confirmation, not a
+#   supervisor's separate call. tsc/eslint/builds clean both workspaces, npm test 420/421 (pre-existing
+#   story-3-3 date-flake only), edge 19/19, schema-drift 37/37, spine gate 6/6, db:migrate re-runnable;
+#   stays done
 # story 3-6 code review 2026-07-26 (adversarial pass, Edge Case Hunter + Acceptance Auditor; Blind
 #   Hunter layer failed empty): 1 decision (substituted-lot bin resolution switched from Story 1.6
 #   location_current - empty for never-scanned lots - to the authoritative stock_balance row at the

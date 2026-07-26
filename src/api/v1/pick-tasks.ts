@@ -10,7 +10,8 @@ import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
 import { getLocationByCode } from '../../read/projections/location_register.js';
 import { getSalesOrderLineById } from '../../read/projections/erp_sales_order.js';
-import { getPickTaskById, getPickTaskSiteId, listPickTasks } from '../../read/projections/pick_task.js';
+import { getPickTaskById, getPickTaskSiteId, listPickTasks, assignPickTask } from '../../read/projections/pick_task.js';
+import { activeUserExistsById } from '../../read/projections/users.js';
 import { listPickLinesByTask } from '../../read/projections/pick_line.js';
 import { generatePickTasks } from '../../warehouse/pick-task-generator.js';
 
@@ -170,6 +171,12 @@ const generateWaveBase: RouteHandler = async (req, res) => {
 
 const generateBatchBase: RouteHandler = async (req, res) => {
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  // Symmetric with the wave endpoint (review pass 2): without this the generator invented a
+  // batch id the caller never learned, since the response returns only task and line ids.
+  if (typeof body['batchId'] !== 'string' && typeof body['batch_id'] !== 'string') {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'batchId is required for batch release');
+    return;
+  }
   await runGenerate(req, res, 'batch', body);
 };
 
@@ -194,6 +201,16 @@ const listPickTasksBase: RouteHandler = async (req, res) => {
     siteId = site.location_id;
   } else if (!scope.wildcard) {
     siteAny = [...scope.locations];
+  }
+  // Review pass 2: these four filters bind straight into uuid-typed predicates, so an
+  // unvalidated value raised Postgres 22P02 and surfaced as a 500 rather than this file's
+  // own INVALID_PARAMS 400.
+  for (const key of ['assignedTo', 'zoneId', 'waveId', 'batchId']) {
+    const value = url.searchParams.get(key);
+    if (value !== null && !UUID_REGEX.test(value)) {
+      sendRequestError(req, res, 400, 'INVALID_PARAMS', `${key} filter must be a UUID`);
+      return;
+    }
   }
   const tasks = await listPickTasks({
     siteId,
@@ -237,6 +254,12 @@ const assignPickTaskBase: RouteHandler = async (req, res, params) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'assignedTo is required and must be a UUID');
     return;
   }
+  // Review pass 2: a well-formed UUID for a nonexistent user previously left the task looking
+  // assigned while no operator could ever see it.
+  if (!(await activeUserExistsById(assignedTo))) {
+    sendRequestError(req, res, 404, 'ASSIGNEE_NOT_FOUND', `No active user exists for "${assignedTo}"`);
+    return;
+  }
   const task = await getPickTaskById(pickTaskId);
   if (!task) {
     sendRequestError(req, res, 404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${pickTaskId}"`);
@@ -251,11 +274,8 @@ const assignPickTaskBase: RouteHandler = async (req, res, params) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const updatedRows = await client.query(
-      `UPDATE pick_task SET assigned_to = $2, updated_at = now() WHERE pick_task_id = $1 AND status = 'pending' RETURNING pick_task_id`,
-      [pickTaskId, assignedTo],
-    );
-    if ((updatedRows.rowCount ?? 0) === 0) {
+    const assigned = await assignPickTask(pickTaskId, assignedTo, client);
+    if (!assigned) {
       await client.query('ROLLBACK');
       sendRequestError(req, res, 409, 'PICK_TASK_NOT_PENDING', `Pick task "${pickTaskId}" cannot be assigned because it is no longer pending`);
       return;

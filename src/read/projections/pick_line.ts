@@ -22,6 +22,8 @@ export interface PickLine {
   override_reason: string | null;
   capture_method: 'PWA' | 'PAPER' | null;
   confirmed_by: string | null;
+  /** Story 3.6 (review pass 2): the bin the confirmation actually allocated at. */
+  confirmed_location_id: string | null;
   confirmed_at: string | null;
   created_at: string;
   updated_at: string;
@@ -51,7 +53,8 @@ function ts(value: unknown): string {
 const PICK_LINE_COLUMNS = `pick_line_id, pick_task_id, dispatch_order_line_id, sku, directed_lot_id,
        confirmed_lot_id, directed_quantity::text AS directed_quantity,
        confirmed_quantity::text AS confirmed_quantity, location_id, pick_sequence, status,
-       override_reason, capture_method, confirmed_by, confirmed_at, created_at, updated_at`;
+       override_reason, capture_method, confirmed_by, confirmed_location_id, confirmed_at,
+       created_at, updated_at`;
 
 function mapRow(row: Record<string, unknown>): PickLine {
   return {
@@ -69,6 +72,7 @@ function mapRow(row: Record<string, unknown>): PickLine {
     override_reason: (row['override_reason'] as string | null) ?? null,
     capture_method: (row['capture_method'] as 'PWA' | 'PAPER' | null) ?? null,
     confirmed_by: (row['confirmed_by'] as string | null) ?? null,
+    confirmed_location_id: (row['confirmed_location_id'] as string | null) ?? null,
     confirmed_at: row['confirmed_at'] ? ts(row['confirmed_at']) : null,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
@@ -113,6 +117,7 @@ export async function confirmPickLine(
   overrideReason: string | null,
   captureMethod: 'PWA' | 'PAPER',
   confirmedBy: string,
+  confirmedLocationId: string,
   client: PoolClient,
 ): Promise<boolean> {
   const result = await client.query(
@@ -122,13 +127,24 @@ export async function confirmPickLine(
             override_reason = $4,
             capture_method = $5,
             confirmed_by = $6,
+            confirmed_location_id = $7,
             confirmed_at = now(),
             status = CASE WHEN $2::uuid <> directed_lot_id THEN 'substituted' ELSE 'confirmed' END,
             updated_at = now()
       WHERE pick_line_id = $1 AND status = 'pending'`,
-    [pickLineId, confirmedLotId, confirmedQuantity, overrideReason, captureMethod, confirmedBy],
+    [pickLineId, confirmedLotId, confirmedQuantity, overrideReason, captureMethod, confirmedBy, confirmedLocationId],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Reads a pick line under a row lock so a concurrent confirmation of the same line serializes
+ * behind this transaction instead of both observing `pending` and one losing with a spurious
+ * PICK_LINE_ALREADY_CONFIRMED (review pass 2).
+ */
+export async function getPickLineByIdForUpdate(pickLineId: string, client: PoolClient): Promise<PickLine | null> {
+  const result = await client.query(`SELECT ${PICK_LINE_COLUMNS} FROM pick_line WHERE pick_line_id = $1 FOR UPDATE`, [pickLineId]);
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 /** Returns all lines for a task in directed pick-path order (pick_sequence ASC). */
@@ -138,16 +154,4 @@ export async function listPickLinesByTask(pickTaskId: string, client?: PoolClien
     [pickTaskId],
   );
   return result.rows.map(mapRow);
-}
-
-/**
- * Cancels a still-pending pick line (used when a lot substitution releases the original lot's
- * allocation). Scoped to status = 'pending' so a replay is a no-op (returns false).
- */
-export async function releasePickLineAllocation(pickLineId: string, client: PoolClient): Promise<boolean> {
-  const result = await client.query(
-    `UPDATE pick_line SET status = 'cancelled', updated_at = now() WHERE pick_line_id = $1 AND status = 'pending'`,
-    [pickLineId],
-  );
-  return (result.rowCount ?? 0) > 0;
 }

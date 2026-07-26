@@ -75,6 +75,7 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
   let managerHeaders: Record<string, string>;
   let operatorHeaders: Record<string, string>;
   let siteBOperatorHeaders: Record<string, string>;
+  let operatorUserId: string;
 
   const siteAId = randomUUID();
   const siteBId = randomUUID();
@@ -141,6 +142,15 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     return result.rows.length > 0 ? (result.rows[0]!['allocated'] as number) : 0;
   }
 
+  /** AC7's observable outcome: stock that has moved out of `allocated` into `picked`. */
+  async function pickedFor(sku: string, locationId: string, lotNumber: string): Promise<number> {
+    const result = await getPool().query(
+      `SELECT picked::float8 AS picked FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id = $3 AND stock_class = 'owned'`,
+      [sku, locationId, lotNumber],
+    );
+    return result.rows.length > 0 ? (result.rows[0]!['picked'] as number) : 0;
+  }
+
   before(async () => {
     server = createAppServer();
     await new Promise<void>((resolvePromise, reject) => {
@@ -174,7 +184,7 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     ]);
     managerHeaders = await authFor(port, `pick-manager-${run}@example.com`);
 
-    await provisionUser(port, `pick-operator-${run}@example.com`, [
+    operatorUserId = await provisionUser(port, `pick-operator-${run}@example.com`, [
       { role: 'store_assistant', module: 'warehouse', functionScope: 'write', locationId: siteAId },
     ]);
     operatorHeaders = await authFor(port, `pick-operator-${run}@example.com`);
@@ -306,7 +316,8 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     const taskIds = res.body['pickTaskIds'] as string[];
     assert.strictEqual(taskIds.length, 2, 'one task per zone');
 
-    // Confirm every line of both tasks, completing zone by zone.
+    // Confirm every line of both tasks, zone by zone. Each zone task auto-completes on its own
+    // last confirmation (AC7's trigger), so no separate supervisor call is needed.
     for (const [i, taskId] of taskIds.entries()) {
       const detail = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskId}`, undefined, managerHeaders);
       const lines = detail.body['lines'] as Array<Record<string, unknown>>;
@@ -320,8 +331,8 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
         );
         assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
       }
-      const complete = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/complete`, {}, managerHeaders);
-      assert.strictEqual(complete.status, 200, JSON.stringify(complete.body));
+      const after = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskId}`, undefined, managerHeaders);
+      assert.strictEqual((after.body['task'] as Record<string, unknown>)['status'], 'completed', 'zone task auto-completes on its last confirmation');
 
       const picked = await getPool().query(`SELECT 1 FROM dispatch_order_status WHERE dispatch_order_id = $1`, [lineId]);
       if (i === 0) {
@@ -405,9 +416,13 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     assert.strictEqual(line['override_reason'], 'Directed lot damaged');
     assert.strictEqual(line['confirmed_lot_id'], substituteUuid);
     assert.strictEqual(line['directed_lot_id'], directedUuid);
-    // Original allocation released; substituted lot allocated (AC8).
-    assert.strictEqual(await allocatedFor(sku, binA1, directedLot), 0);
-    assert.strictEqual(await allocatedFor(sku, binA2, substituteLot), 40);
+    // Original allocation released; the substituted lot carries the quantity (AC8). This is the
+    // task's only line, so its confirmation is also the last one: the task auto-completes and AC7
+    // moves the substituted lot's stock straight on from `allocated` into `picked`.
+    assert.strictEqual(await allocatedFor(sku, binA1, directedLot), 0, 'directed lot allocation released');
+    assert.strictEqual(await pickedFor(sku, binA1, directedLot), 0, 'directed lot is never picked');
+    assert.strictEqual(await allocatedFor(sku, binA2, substituteLot), 0);
+    assert.strictEqual(await pickedFor(sku, binA2, substituteLot), 40, 'substituted lot moves to picked on completion');
   });
 
   it('AC8: a substitution whose lot lacks available stock rejects INSUFFICIENT_STOCK_FOR_PICK', async () => {
@@ -470,11 +485,22 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
       assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
     }
 
-    const complete = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/complete`, {}, managerHeaders);
-    assert.strictEqual(complete.status, 200, JSON.stringify(complete.body));
-    const task = complete.body['task'] as Record<string, unknown>;
-    assert.strictEqual(task['status'], 'completed');
+    // AC7's trigger is the LAST confirmation, so the task is already complete here - no separate
+    // supervisor call. The manual endpoint is a fallback and now reports the task already done.
+    const after = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskId}`, undefined, managerHeaders);
+    const task = after.body['task'] as Record<string, unknown>;
+    assert.strictEqual(task['status'], 'completed', 'task auto-completes on the last confirmation');
     assert.ok(task['completed_at'], 'completed_at is stamped');
+
+    const redundant = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/complete`, {}, managerHeaders);
+    assert.strictEqual(redundant.status, 409, JSON.stringify(redundant.body));
+    assert.strictEqual(redundant.body['error_code'], 'PICK_TASK_ALREADY_COMPLETED');
+
+    // AC7's actual outcome: every confirmed line's stock leaves `allocated` and lands in `picked`.
+    assert.strictEqual(await allocatedFor(sku, binA1, lotA), 0, 'lot A allocation cleared');
+    assert.strictEqual(await pickedFor(sku, binA1, lotA), 10, 'lot A moved to picked');
+    assert.strictEqual(await allocatedFor(sku, binA2, lotB), 0, 'lot B allocation cleared');
+    assert.strictEqual(await pickedFor(sku, binA2, lotB), 10, 'lot B moved to picked');
 
     // AC7: the packing station is notified (warehouse_manager placeholder target).
     const note = await getPool().query(
@@ -503,7 +529,10 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     assert.strictEqual(first.status, 200, JSON.stringify(first.body));
     const replay = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/lines/${pickLineId}/confirm`, payload, operatorHeaders);
     assert.strictEqual(replay.status, 200, JSON.stringify(replay.body));
-    assert.strictEqual(await allocatedFor(sku, binA1, lot), 20, 'allocation applied exactly once');
+    // The single line's confirmation also completes the task, so the quantity has moved on to
+    // `picked`; the replay must not move it a second time.
+    assert.strictEqual(await allocatedFor(sku, binA1, lot), 0);
+    assert.strictEqual(await pickedFor(sku, binA1, lot), 20, 'stock moved exactly once');
 
     // A conflicting re-confirmation (different quantity) rejects PICK_LINE_ALREADY_CONFIRMED.
     const conflicting = await makeRequest(
@@ -515,6 +544,95 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     );
     assert.strictEqual(conflicting.status, 409, JSON.stringify(conflicting.body));
     assert.strictEqual(conflicting.body['error_code'], 'PICK_LINE_ALREADY_CONFIRMED');
+  });
+
+  it('Review decision: a confirmed quantity differing from the directed quantity is rejected either way', async () => {
+    const sku = `FG-QTY-${run}`;
+    const lot = `LOT-Q-${run}`;
+    const lotUuid = await seedLot(sku, lot, null);
+    await seedStock(sku, binA1, lot, 500);
+    const lineId = await seedOrderLine(`SO36-Q1-${run}`, 1, sku, 100);
+
+    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
+    const pickLineId = (gen.body['pickLineIds'] as string[])[0]!;
+
+    // Short pick: previously completed the task and flagged the order picked, losing 99 units of
+    // demand with no shortfall record.
+    const short = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${taskId}/lines/${pickLineId}/confirm`,
+      { confirmedLotId: lotUuid, confirmedQuantity: '1', captureMethod: 'PWA' },
+      operatorHeaders,
+    );
+    assert.strictEqual(short.status, 400, JSON.stringify(short.body));
+    assert.strictEqual(short.body['error_code'], 'PICK_QUANTITY_MISMATCH');
+
+    // Over-pick: previously allocated stock beyond the sales-order demand.
+    const over = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${taskId}/lines/${pickLineId}/confirm`,
+      { confirmedLotId: lotUuid, confirmedQuantity: '150', captureMethod: 'PWA' },
+      operatorHeaders,
+    );
+    assert.strictEqual(over.status, 400, JSON.stringify(over.body));
+    assert.strictEqual(over.body['error_code'], 'PICK_QUANTITY_MISMATCH');
+
+    // Neither rejection may disturb the standing allocation.
+    assert.strictEqual(await allocatedFor(sku, binA1, lot), 100, 'allocation untouched by rejected confirmations');
+    assert.strictEqual(await pickedFor(sku, binA1, lot), 0);
+  });
+
+  it('Review: generation is idempotent - re-releasing the same demand line does not double-allocate', async () => {
+    const sku = `FG-REGEN-${run}`;
+    const lot = `LOT-RG-${run}`;
+    await seedLot(sku, lot, null);
+    await seedStock(sku, binA1, lot, 100);
+    const lineId = await seedOrderLine(`SO36-RG-${run}`, 1, sku, 10);
+
+    const first = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+    assert.strictEqual(await allocatedFor(sku, binA1, lot), 10);
+
+    const second = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    assert.strictEqual(second.status, 409, JSON.stringify(second.body));
+    assert.strictEqual(second.body['error_code'], 'PICK_TASK_ALREADY_GENERATED');
+    assert.strictEqual(await allocatedFor(sku, binA1, lot), 10, 'demand allocated exactly once');
+  });
+
+  it('Review: assign requires a supervisor, a real assignee, and a permitted site', async () => {
+    const sku = `FG-ASSIGN-${run}`;
+    const lot = `LOT-AS-${run}`;
+    await seedLot(sku, lot, null);
+    await seedStock(sku, binA1, lot, 40);
+    const lineId = await seedOrderLine(`SO36-AS-${run}`, 1, sku, 10);
+
+    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
+
+    // Assignment is supervisor-only (Task 8.1's assign RBAC coverage).
+    const byOperator = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/assign`, { assignedTo: operatorUserId }, operatorHeaders);
+    assert.strictEqual(byOperator.status, 403, JSON.stringify(byOperator.body));
+    assert.strictEqual(byOperator.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+
+    // A well-formed UUID that is nobody must not leave the task looking assigned.
+    const ghost = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/assign`, { assignedTo: randomUUID() }, managerHeaders);
+    assert.strictEqual(ghost.status, 404, JSON.stringify(ghost.body));
+    assert.strictEqual(ghost.body['error_code'], 'ASSIGNEE_NOT_FOUND');
+
+    const ok = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/assign`, { assignedTo: operatorUserId }, managerHeaders);
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual((ok.body['task'] as Record<string, unknown>)['assigned_to'], operatorUserId);
+  });
+
+  it('Review: non-UUID list filters are a 400, not a 500', async () => {
+    for (const key of ['assignedTo', 'zoneId', 'waveId', 'batchId']) {
+      const res = await makeRequest(port, 'GET', `/api/v1/pick-tasks?${key}=not-a-uuid`, undefined, managerHeaders);
+      assert.strictEqual(res.status, 400, `${key}: ${JSON.stringify(res.body)}`);
+      assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS', key);
+    }
   });
 
   it('RBAC: operators cannot generate; out-of-site operators cannot confirm; unknown lines reject', async () => {

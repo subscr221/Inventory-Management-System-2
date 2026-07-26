@@ -105,5 +105,7 @@
   "errors.PICK_TASK_ALREADY_COMPLETED": "This pick task is already completed. Refresh and try again.",
   "errors.INSUFFICIENT_STOCK_FOR_PICK": "Not enough available stock to cover this pick.",
   "errors.DISPATCH_ORDER_LINE_NOT_FOUND": "The dispatch order line was not found. Refresh and try again.",
+  "errors.PICK_QUANTITY_MISMATCH": "Confirm the exact quantity shown on the pick line.",
+  "errors.PICK_TASK_ALREADY_GENERATED": "Pick tasks already exist for this order line.",
   "errors.ASN_PO_NOT_FOUND": "The PO referenced by this ASN was not found. Refresh PO data and try again."
 }

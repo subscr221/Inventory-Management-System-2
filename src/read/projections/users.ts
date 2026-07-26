@@ -161,3 +161,10 @@ export async function getUserIdByExternalId(externalId: string): Promise<string 
   const result = await pool.query(`SELECT user_id FROM users WHERE external_id = $1`, [externalId]);
   return result.rows.length > 0 ? (result.rows[0]!['user_id'] as string) : null;
 }
+
+/** True when the user_id belongs to an existing, still-active user. */
+export async function activeUserExistsById(userId: string): Promise<boolean> {
+  const pool = getPool();
+  const result = await pool.query(`SELECT 1 FROM users WHERE user_id = $1 AND active = true LIMIT 1`, [userId]);
+  return result.rows.length > 0;
+}

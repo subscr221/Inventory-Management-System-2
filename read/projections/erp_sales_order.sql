@@ -40,9 +40,13 @@ CREATE TABLE IF NOT EXISTS erp_sales_order (
 
 CREATE INDEX IF NOT EXISTS idx_erp_sales_order_site_status ON erp_sales_order (ship_from_site_id, status);
 CREATE INDEX IF NOT EXISTS idx_erp_sales_order_site_code_status ON erp_sales_order (ship_from_site_code_ext, status);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_erp_sales_order_id ON erp_sales_order (id);
 
+-- Story 3.6: the `id` surrogate must be added BEFORE the unique index that references it. A
+-- database created before Story 3.6 has an erp_sales_order without `id`, so CREATE TABLE IF NOT
+-- EXISTS above is a no-op there and indexing `id` first aborts the whole migration run.
 ALTER TABLE erp_sales_order ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_erp_sales_order_id ON erp_sales_order (id);
 
 DO $$
 BEGIN

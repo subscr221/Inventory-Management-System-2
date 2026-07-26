@@ -297,22 +297,35 @@ export async function applyStockDeallocation(input: StockDeallocationInput, clie
 /**
  * Story 3.6 (AC7): moves `quantity` from `allocated` into `picked` at a single (sku, location,
  * lot, stock_class) grain - the projection-level counterpart to a pick-line confirmation. Runs
- * in SQL NUMERIC (never JS float) and is guarded so it never drives `allocated` negative: the
- * amount actually moved is capped at the current `allocated` value, and the caller (which has
- * already verified the allocation covers the confirmed quantity via allocateStock/releaseStock)
- * is expected to pass a quantity that is fully covered. Must run on the SAME client/transaction
- * as the caller's event insert.
+ * in SQL NUMERIC (never JS float).
+ *
+ * Fails closed (review pass 2): the move is scoped to `allocated >= quantity` and the affected
+ * row count is checked, so a bin mismatch (zero matching rows) or an allocation smaller than the
+ * confirmed quantity raises INSUFFICIENT_STOCK_FOR_PICK instead of silently moving less than
+ * asked. The previous LEAST()-capped form let a wrong-bin call no-op while the caller reported the
+ * task completed, stranding the allocation permanently. Must run on the SAME client/transaction as
+ * the caller's event insert so the rejection rolls the whole completion back.
  */
 export async function applyStockPick(input: StockPickInput, client: PoolClient): Promise<void> {
   const lotId = input.lot_id ?? null;
   const stockClass = input.stock_class ?? 'owned';
   const quantity = String(input.quantity);
-  await client.query(
+  const result = await client.query(
     `UPDATE stock_balance
-        SET allocated = allocated - LEAST(allocated, $1::numeric),
-            picked = picked + LEAST(allocated, $1::numeric),
+        SET allocated = allocated - $1::numeric,
+            picked = picked + $1::numeric,
             updated_at = now()
-      WHERE sku = $2 AND location_id = $3 AND stock_class = $5 AND ($4::text IS NULL OR lot_id = $4)`,
+      WHERE sku = $2 AND location_id = $3 AND stock_class = $5 AND ($4::text IS NULL OR lot_id = $4)
+        AND allocated >= $1::numeric`,
     [quantity, input.sku, input.location_id, lotId, stockClass],
   );
+  if ((result.rowCount ?? 0) === 0) {
+    throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'No allocation covers this pick at the given bin and lot', {
+      sku: input.sku,
+      location_id: input.location_id,
+      ...(lotId !== null ? { lot_id: lotId } : {}),
+      stock_class: stockClass,
+      requested_quantity: quantity,
+    });
+  }
 }

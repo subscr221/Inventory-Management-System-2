@@ -87,6 +87,16 @@ export async function getPickTaskById(pickTaskId: string, client?: PoolClient): 
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
+/**
+ * Reads a pick task under a row lock. Completion must read the status inside the lock, otherwise
+ * two concurrent completions both observe a non-completed task, both pass the all-lines-confirmed
+ * gate, and both run the allocated-to-picked move (review pass 2).
+ */
+export async function getPickTaskByIdForUpdate(pickTaskId: string, client: PoolClient): Promise<PickTask | null> {
+  const result = await client.query(`SELECT ${PICK_TASK_COLUMNS} FROM pick_task WHERE pick_task_id = $1 FOR UPDATE`, [pickTaskId]);
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
+}
+
 /** Idempotent, replay-safe insert keyed on pick_task_id. total_quantity bound as a NUMERIC string. */
 export async function createPickTask(input: CreatePickTaskInput, client: PoolClient): Promise<void> {
   await client.query(
@@ -110,7 +120,12 @@ export async function createPickTask(input: CreatePickTaskInput, client: PoolCli
   );
 }
 
-/** Idempotent status update; returns false (no-op) when the task does not exist. */
+/**
+ * Status update guarded against re-completion: the WHERE excludes a task that is already
+ * `completed`, so a second completion of the same task affects zero rows and the caller can treat
+ * it as a no-op instead of re-running the allocated-to-picked move (review pass 2). Returns false
+ * when the task does not exist or is already completed.
+ */
 export async function updatePickTaskStatus(
   pickTaskId: string,
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled',
@@ -123,16 +138,20 @@ export async function updatePickTaskStatus(
             completed_at = CASE WHEN $2 = 'completed' THEN now() ELSE completed_at END,
             completed_by = CASE WHEN $2 = 'completed' THEN $3 ELSE completed_by END,
             updated_at = now()
-      WHERE pick_task_id = $1`,
+      WHERE pick_task_id = $1 AND status <> 'completed'`,
     [pickTaskId, status, completedBy],
   );
   return (result.rowCount ?? 0) > 0;
 }
 
-/** Idempotent operator assignment; returns false (no-op) when the task does not exist. */
+/**
+ * Assigns an operator to a still-pending task. Scoped to `status = 'pending'` so a task that a
+ * concurrent request already started or completed is not reassigned; returns false in that case
+ * and when the task does not exist.
+ */
 export async function assignPickTask(pickTaskId: string, assignedTo: string, client: PoolClient): Promise<boolean> {
   const result = await client.query(
-    `UPDATE pick_task SET assigned_to = $2, updated_at = now() WHERE pick_task_id = $1`,
+    `UPDATE pick_task SET assigned_to = $2, updated_at = now() WHERE pick_task_id = $1 AND status = 'pending'`,
     [pickTaskId, assignedTo],
   );
   return (result.rowCount ?? 0) > 0;
