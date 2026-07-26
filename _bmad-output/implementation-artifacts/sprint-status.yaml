@@ -432,7 +432,7 @@ development_status:
   3-4-goods-receiving-against-asn-or-po-fr-w-02: done   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: done   # PILOT
   3-6-pick-task-generation-and-execution-fr-w-04: done   # PILOT
-  3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: ready-for-dev   # PILOT
+  3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: in-progress   # PILOT
   3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: backlog   # PILOT
   3-9-forward-pick-replenishment-fr-w-08: backlog   # PILOT
   3-10-cross-docking-execution-fr-w-09: backlog   # PILOT
