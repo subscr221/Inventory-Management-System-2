@@ -366,7 +366,7 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       assert.strictEqual(entry.available, onHand);
       assert.strictEqual(entry.in_transit, 0);
     }
-    assert.deepStrictEqual(body.consolidated, { on_hand: 150, allocated: 0, available: 150, in_transit: 0 });
+    assert.deepStrictEqual(body.consolidated, { on_hand: 150, allocated: 0, picked: 0, available: 150, in_transit: 0 });
 
     // Story 2.8 regression pin: the per-class breakdown must not disturb the Story 2.2 top-level
     // shape - owned-only stock reports exactly one 'owned' class entry per location whose totals
@@ -410,7 +410,7 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     assert.strictEqual(locA.on_hand, 100, 'allocation must not change on_hand');
     assert.strictEqual(locA.allocated, 10);
     assert.strictEqual(locA.available, 90);
-    assert.deepStrictEqual(body.consolidated, { on_hand: 150, allocated: 10, available: 140, in_transit: 0 });
+    assert.deepStrictEqual(body.consolidated, { on_hand: 150, allocated: 10, picked: 0, available: 140, in_transit: 0 });
 
     // Double allocation beyond the remaining available is blocked with the documented envelope.
     const rejectedStreamId = randomUUID();
@@ -586,7 +586,7 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     assert.strictEqual(scopedBody.locations[0]!.location_id, locAId);
     assert.deepStrictEqual(
       scopedBody.consolidated,
-      { on_hand: 100, allocated: 10, available: 90, in_transit: 0 },
+      { on_hand: 100, allocated: 10, picked: 0, available: 90, in_transit: 0 },
       'the consolidated total must sum only authorized locations',
     );
 

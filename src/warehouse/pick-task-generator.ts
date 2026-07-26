@@ -142,8 +142,8 @@ async function allocateForLine(
   consumed: Map<string, bigint>,
   client: PoolClient,
 ): Promise<LotAllocation[]> {
-  if (!isNonNegativeMicro(line.quantity)) {
-    throw new AppError(400, 'PICK_TASK_INVALID_PAYLOAD', 'Dispatch-order line quantity must be a non-negative numeric value', {
+  if (!isNonNegativeMicro(line.quantity) || numericToMicro(line.quantity) === 0n) {
+    throw new AppError(400, 'PICK_TASK_INVALID_PAYLOAD', 'Dispatch-order line quantity must be a positive numeric value', {
       dispatch_order_line_id: line.id,
       quantity: line.quantity,
     });

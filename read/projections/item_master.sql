@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS item_master (
   variance_review_cadence     TEXT,
   variance_tolerance_percent  NUMERIC(7, 4),
   count_variance_tolerance_percent NUMERIC(7, 4),
+  size_class                  TEXT NOT NULL DEFAULT 'standard',
   created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_item_master_sku UNIQUE (sku),
@@ -49,7 +50,8 @@ CREATE TABLE IF NOT EXISTS item_master (
   ),
   CONSTRAINT chk_item_master_count_variance_tolerance_percent CHECK (
     count_variance_tolerance_percent IS NULL OR (count_variance_tolerance_percent >= 0 AND count_variance_tolerance_percent <= 100)
-  )
+  ),
+  CONSTRAINT chk_item_master_size_class CHECK (size_class IN ('small', 'standard', 'large', 'oversized'))
 );
 
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS standard_cost_designation TEXT;

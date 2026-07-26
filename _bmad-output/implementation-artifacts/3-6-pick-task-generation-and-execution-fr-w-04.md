@@ -4,7 +4,7 @@ baseline_commit: cf342e6df9337632c8007b590e35a0df174d0098
 
 # Story 3.6: Pick Task Generation and Execution (FR-W-04)
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -310,3 +310,26 @@ Modified files (Story 3.5 baseline repair, prerequisite):
 - 2026-07-25: Prerequisite baseline repair - Story 3.5's committed code did not compile and broke the
   whole integration suite; repaired (see Debug Log) so gates could run. tsc/eslint/build clean,
   npm test 408/409 (pre-existing story-3-3 date-flake only), edge 19/19, spine gate 6/6.
+- 2026-07-26: Code review (adversarial, Edge Case Hunter + Acceptance Auditor; Blind Hunter layer
+  failed empty): 9 patch findings + 1 decision applied, 0 deferred, 12 dismissed. Critical fixes:
+  FOR UPDATE-on-aggregate 500 on every task completion; per-line allocated-to-picked regression
+  (introduced by Story 3.5 commit eb4b5f6) moved to completion-time per spec Task 5.4 step 6 and
+  AC7; substituted-lot bin resolution switched from location_current to authoritative stock_balance
+  (decision documented in Review Findings); input dedup, zero-quantity rejection, milli-precision
+  shape enforcement, already-completed guard with new permanent code PICK_TASK_ALREADY_COMPLETED
+  wired across backend/edge/i18n/tests; schema drift (item_master size_class inline,
+  erp_sales_order id surrogate mirror); story-2-2/2-9 shape pins updated for deliberate contract
+  changes. story-3-6 11/11, npm test 409/410 (pre-existing story-3-3 date-flake only), edge 19/19,
+  schema-drift 37/37, spine gate 6/6, tsc/eslint clean; moved to done
+
+### Review Findings
+
+- [x] [Review][Patch] Duplicate dispatch_order_line_ids not deduplicated [src/api/v1/pick-tasks.ts:100]
+- [x] [Review][Patch] Zero-quantity dispatch-order line silently skipped [src/warehouse/pick-task-generator.ts:145]
+- [x] [Review][Patch] Idempotency comparison truncates beyond NUMERIC(14,3) precision [src/compliance/pick.ts:206]
+- [x] [Review][Patch] completePickTaskBase does not guard already-completed tasks before persistEvent [src/api/v1/pick-tasks.ts:343]
+- [x] [Review][Patch] FOR UPDATE riding an aggregate query in applyPickTaskCompletedProjection 500'd every completion (PostgreSQL 0A000); lock-then-count split mirrors applyStockAllocation [src/compliance/pick.ts:350]
+- [x] [Review][Patch] Per-line allocated-to-picked move (introduced by Story 3.5 commit eb4b5f6) contradicted spec Task 5.4 step 6 ("the allocation from Task 5.3 stays in place") and broke the story's own AC6/AC8 and AC6-idempotent tests; moved to task completion per AC7's "when the last confirmation is submitted" [src/compliance/pick.ts]
+- [x] [Review][Decision] Substituted-lot bin resolution changed from Story 1.6 location_current (empty for never-scanned lots, made AC8 unsatisfiable) to the authoritative stock_balance row at the same site with sufficient availability; satisfies spec Task 5.4 step 5's "current bin" intent [src/compliance/pick.ts]
+- [x] [Review][Patch] Schema drift: item_master size_class inlined into canonical CREATE TABLE (was ALTER-only); erp_sales_order id surrogate + uq_erp_sales_order_id + ALTER mirrored into init-db.sql [read/projections/item_master.sql, deploy/compose/init-db.sql]
+- [x] [Review][Patch] Cross-story shape pins updated for deliberate Story 3.6 contract changes: story-2-2 consolidated stock shape gains picked: 0; story-2-9 dispatch-demand quantities are NUMERIC strings ('5.000') [test/integration/story-2-2.test.ts, test/integration/story-2-9.test.ts]

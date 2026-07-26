@@ -97,7 +97,8 @@ async function runGenerate(
   body: Record<string, unknown>,
 ): Promise<void> {
   assertRoleAllowed(req, PICK_SUPERVISE_ROLES, 'write');
-  const dispatchOrderLineIds = parseLineIds(body);
+  // Deduplicate: a repeated line id must not generate two tasks for the same demand line.
+  const dispatchOrderLineIds = [...new Set(parseLineIds(body))];
   const waveId = typeof body['waveId'] === 'string' ? body['waveId'] : typeof body['wave_id'] === 'string' ? (body['wave_id'] as string) : undefined;
   const batchId = typeof body['batchId'] === 'string' ? body['batchId'] : typeof body['batch_id'] === 'string' ? (body['batch_id'] as string) : undefined;
   if (waveId !== undefined && !UUID_REGEX.test(waveId)) throw new AppError(400, 'INVALID_PARAMS', 'waveId must be a UUID');
@@ -343,6 +344,10 @@ const completePickTaskBase: RouteHandler = async (req, res, params) => {
   const task = await getPickTaskById(pickTaskId);
   if (!task) {
     sendRequestError(req, res, 404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${pickTaskId}"`);
+    return;
+  }
+  if (task.status === 'completed' || task.status === 'cancelled') {
+    sendRequestError(req, res, 409, 'PICK_TASK_ALREADY_COMPLETED', `Pick task "${pickTaskId}" is ${task.status} and cannot be completed`);
     return;
   }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'write');

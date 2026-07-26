@@ -4,7 +4,6 @@ import { AppError } from '../middleware/error.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import { createPickTask, getPickTaskById, updatePickTaskStatus } from '../read/projections/pick_task.js';
 import { confirmPickLine, createPickLine, getPickLineById } from '../read/projections/pick_line.js';
-import { getCurrentLocation } from '../read/projections/location.js';
 import { applyStockPick } from '../read/projections/stock_balance.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -46,6 +45,21 @@ function isPositiveFiniteQuantity(value: unknown): value is string | number {
   return n > 0n;
 }
 
+/**
+ * pick_task/pick_line quantities persist into NUMERIC(14,3) columns. A value with significant
+ * digits beyond 3 decimal places would round on write, so a later replay of the same event would
+ * compare unequal against the stored row and be misjudged a conflicting re-confirmation. Reject
+ * at the shape boundary instead (fail closed). Trailing zeros beyond 3 places are fine.
+ */
+function hasMilliPrecision(value: unknown): boolean {
+  if (typeof value !== 'string' && typeof value !== 'number') return false;
+  try {
+    return numericToMicro(value) % 1_000n === 0n;
+  } catch {
+    return false;
+  }
+}
+
 function reject(message: string, details: Record<string, unknown> = {}): never {
   throw new AppError(400, 'PICK_TASK_INVALID_PAYLOAD', message, details);
 }
@@ -56,7 +70,7 @@ export function assertPickTaskCreatedShape(envelope: PickTaskCreatedEnvelope): v
   if (!isUuid(p.pick_task_id)) reject('pick_task_id is required and must be a UUID');
   if (!isUuid(p.dispatch_order_id)) reject('dispatch_order_id is required and must be a UUID');
   if (typeof p.sku !== 'string' || p.sku.length === 0) reject('sku is required');
-  if (!isPositiveFiniteQuantity(p.quantity)) reject('quantity is required and must be a positive finite numeric value');
+  if (!isPositiveFiniteQuantity(p.quantity) || !hasMilliPrecision(p.quantity)) reject('quantity is required and must be a positive finite numeric value with at most 3 decimal places');
   if (!isUuid(p.lot_id)) reject('lot_id is required and must be a UUID');
   if (!isUuid(p.location_id)) reject('location_id is required and must be a UUID');
   if (!Number.isInteger(p.pick_sequence)) reject('pick_sequence is required and must be an integer');
@@ -70,7 +84,7 @@ export function assertPickTaskCreatedShape(envelope: PickTaskCreatedEnvelope): v
     if (!isUuid(line.dispatch_order_line_id)) reject('pick_lines[].dispatch_order_line_id is required and must be a UUID');
     if (typeof line.sku !== 'string' || line.sku.length === 0) reject('pick_lines[].sku is required');
     if (!isUuid(line.directed_lot_id)) reject('pick_lines[].directed_lot_id is required and must be a UUID');
-    if (!isPositiveFiniteQuantity(line.directed_quantity)) reject('pick_lines[].directed_quantity is required and must be a positive finite numeric value');
+    if (!isPositiveFiniteQuantity(line.directed_quantity) || !hasMilliPrecision(line.directed_quantity)) reject('pick_lines[].directed_quantity is required and must be a positive finite numeric value with at most 3 decimal places');
     if (!isUuid(line.location_id)) reject('pick_lines[].location_id is required and must be a UUID');
     if (!Number.isInteger(line.pick_sequence)) reject('pick_lines[].pick_sequence is required and must be an integer');
   }
@@ -82,7 +96,7 @@ export function assertPickLineConfirmedShape(envelope: PickLineConfirmedEnvelope
   if (!isUuid(p.pick_task_id)) reject('pick_task_id is required and must be a UUID');
   if (!isUuid(p.pick_line_id)) reject('pick_line_id is required and must be a UUID');
   if (!isUuid(p.confirmed_lot_id)) reject('confirmed_lot_id is required and must be a UUID');
-  if (!isPositiveFiniteQuantity(p.confirmed_quantity)) reject('confirmed_quantity is required and must be a positive finite numeric value');
+  if (!isPositiveFiniteQuantity(p.confirmed_quantity) || !hasMilliPrecision(p.confirmed_quantity)) reject('confirmed_quantity is required and must be a positive finite numeric value with at most 3 decimal places');
   if (p.capture_method !== 'PWA' && p.capture_method !== 'PAPER') reject("capture_method must be 'PWA' or 'PAPER'");
   // override_reason requiredness compares against the directed lot, which needs DB access -
   // enforced in applyPickLineConfirmedProjection, not here.
@@ -242,60 +256,41 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
     });
   }
 
-  let finalLocationId = line.location_id;
-
   if (isSubstitution) {
     // Release the directed lot's allocation at the directed bin...
     const directedLotNumber = await lotNumberForUuid(line.directed_lot_id, line.sku, client);
     await releaseStock(line.sku, line.location_id, directedLotNumber, line.directed_quantity, client);
 
-    // ...and allocate the confirmed lot at the bin where its stock actually sits. Resolve the lot's
-    // current location from Story 1.6 location_current (per spec Task 5.4 step 5), constrained to
-    // the same site as the original pick line and with sufficient available owned stock.
+    // ...and allocate the confirmed lot at the bin where its stock actually sits. The authoritative
+    // source for that bin is stock_balance itself: the allocation target row must exist there with
+    // sufficient availability. Story 1.6 location_current only tracks scanner-asserted positions
+    // and is empty for lots never scanned, so it cannot gate a substitution (review decision:
+    // satisfies spec Task 5.4 step 5's "current bin" intent with the authoritative source).
+    // Constrained to the same site as the original pick line and an active, writable bin.
     const confirmedLotNumber = await lotNumberForUuid(p.confirmed_lot_id, line.sku, client);
-    const current = await getCurrentLocation(p.confirmed_lot_id, client);
-    if (!current || current.location === null) {
-      throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'The substituted lot has no current bin location', {
-        pick_line_id: p.pick_line_id,
-        confirmed_lot_id: p.confirmed_lot_id,
-      });
-    }
-    const resolvedBin = await client.query(
-      `SELECT lr.location_id
-         FROM location_register lr
-        WHERE lr.location_code = $1
-          AND lr.site_id = (SELECT site_id FROM location_register WHERE location_id = $2 LIMIT 1)
+    const resolved = await client.query(
+      `SELECT sb.location_id
+         FROM stock_balance sb
+         JOIN location_register lr ON lr.location_id = sb.location_id
+        WHERE sb.sku = $1 AND sb.lot_id = $2 AND sb.stock_class = 'owned'
+          AND lr.site_id = (SELECT site_id FROM location_register WHERE location_id = $3 LIMIT 1)
           AND lr.status = 'active'
           AND lr.quarantine = false
           AND lr.access_restricted = false
-        LIMIT 1`,
-      [current.location, line.location_id],
-    );
-    if (resolvedBin.rows.length === 0) {
-      throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'The substituted lot has no active, writable bin at this site', {
-        pick_line_id: p.pick_line_id,
-        confirmed_lot_id: p.confirmed_lot_id,
-        location_code: current.location,
-      });
-    }
-    const confirmedLocationId = resolvedBin.rows[0]!['location_id'] as string;
-    const balance = await client.query(
-      `SELECT sb.location_id
-         FROM stock_balance sb
-        WHERE sb.sku = $1 AND sb.lot_id = $2 AND sb.location_id = $3 AND sb.stock_class = 'owned'
           AND sb.available >= $4::numeric
+        ORDER BY sb.available DESC, sb.location_id
         LIMIT 1`,
-      [line.sku, confirmedLotNumber, confirmedLocationId, String(p.confirmed_quantity)],
+      [line.sku, confirmedLotNumber, line.location_id, String(p.confirmed_quantity)],
     );
-    if (balance.rows.length === 0) {
-      throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'The substituted lot has insufficient available stock at its current bin', {
+    if (resolved.rows.length === 0) {
+      throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'The substituted lot has insufficient available stock at an active, writable bin at this site', {
         pick_line_id: p.pick_line_id,
         confirmed_lot_id: p.confirmed_lot_id,
         requested_quantity: String(p.confirmed_quantity),
       });
     }
+    const confirmedLocationId = resolved.rows[0]!['location_id'] as string;
     await allocateStock(line.sku, confirmedLocationId, confirmedLotNumber, String(p.confirmed_quantity), client);
-    finalLocationId = confirmedLocationId;
   } else if (numericToMicro(p.confirmed_quantity) !== numericToMicro(line.directed_quantity)) {
     // Same lot but a different quantity: adjust the allocation so allocated reflects the actual
     // picked quantity (never negative, never exceeding on_hand via the available guard).
@@ -311,15 +306,8 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
     }
   }
 
-  // AC7: the confirmed quantity has now been verified as actually picked - move it out of
-  // `allocated` into `picked` at the final (sku, location, lot) so it is no longer offered to
-  // new allocations but is distinguishable from stock still awaiting a pick. Story 3.7
-  // (packing/shipping) owns the next transition out of `picked`.
-  const finalLotNumber = await lotNumberForUuid(p.confirmed_lot_id, line.sku, client);
-  await applyStockPick(
-    { sku: line.sku, location_id: finalLocationId, lot_id: finalLotNumber, quantity: String(p.confirmed_quantity) },
-    client,
-  );
+  // Per spec Task 5.4 step 6, the allocation stays in place at confirmation time; the AC7
+  // allocated -> picked transition happens at task completion in applyPickTaskCompletedProjection.
 
   // Mark the task in_progress on first confirmation (pending -> in_progress).
   await client.query(
@@ -330,13 +318,13 @@ export async function applyPickLineConfirmedProjection(envelope: PickLineConfirm
 
 /**
  * Story 3.6 Task 5.5: in-transaction apply for pick_task.completed. Requires every pick line
- * confirmed (AC7), notifies the packing station (warehouse_manager placeholder until Story 3.7
- * defines the packing role), and - when every task for the dispatch order is complete - flags the
- * order picked in dispatch_order_status (AC4 zone completion included). The AC7 "stock status
- * moves from allocated to picked" transition itself already happened per-line at confirmation
- * time (applyPickLineConfirmedProjection -> applyStockPick), because that is the point at which
- * the actually-picked lot/location/quantity is known; this function only gates completion on
- * every line being confirmed and does not mutate stock_balance itself.
+ * confirmed (AC7), moves each confirmed line's quantity from `allocated` to `picked` at the bin
+ * where its allocation actually sits (AC7's "stock status moves from allocated to picked" fires
+ * when the LAST confirmation is submitted - i.e. at completion, not per-line, per spec Task 5.4
+ * step 6 "the allocation from Task 5.3 stays in place"; Story 3.7 packing/shipping owns the next
+ * transition out of `picked`), notifies the packing station (warehouse_manager placeholder until
+ * Story 3.7 defines the packing role), and - when every task for the dispatch order is complete -
+ * flags the order picked in dispatch_order_status (AC4 zone completion included).
  */
 export async function applyPickTaskCompletedProjection(envelope: PickTaskCompletedEnvelope, client: PoolClient, eventId: string): Promise<void> {
   const p = envelope.payload;
@@ -347,12 +335,15 @@ export async function applyPickTaskCompletedProjection(envelope: PickTaskComplet
   }
   if (task.status === 'completed') return; // idempotent replay
 
+  // Lock the task's pick lines first so a concurrent confirmation cannot slip between the count
+  // and the status update. FOR UPDATE cannot ride the aggregate query itself (PostgreSQL 0A000),
+  // so the lock runs as a separate statement (mirrors applyStockAllocation's lock-then-check).
+  await client.query(`SELECT pick_line_id FROM pick_line WHERE pick_task_id = $1 FOR UPDATE`, [p.pick_task_id]);
   const counts = await client.query(
     `SELECT COUNT(*) FILTER (WHERE status IN ('confirmed', 'substituted')) AS confirmed_count,
             COUNT(*) FILTER (WHERE status <> 'cancelled') AS active_count
        FROM pick_line
-      WHERE pick_task_id = $1
-      FOR UPDATE`,
+      WHERE pick_task_id = $1`,
     [p.pick_task_id],
   );
   const confirmedCount = Number(counts.rows[0]!['confirmed_count']);
@@ -367,6 +358,41 @@ export async function applyPickTaskCompletedProjection(envelope: PickTaskComplet
 
   const completedBy = envelope.metadata.actor.user_id;
   await updatePickTaskStatus(p.pick_task_id, 'completed', completedBy, client);
+
+  // AC7: move every confirmed line's quantity from allocated to picked at the bin where its
+  // allocation actually sits. Same-lot lines allocate at the directed bin; substituted lines at
+  // the bin the substitution resolved (the stock_balance row holding this lot's allocation at the
+  // site - a generation run directs each lot from exactly one bin, so this is deterministic).
+  const confirmedLines = await client.query(
+    `SELECT pl.sku, pl.location_id, pl.directed_lot_id, pl.confirmed_lot_id,
+            pl.confirmed_quantity::text AS confirmed_quantity
+       FROM pick_line pl
+      WHERE pl.pick_task_id = $1 AND pl.status IN ('confirmed', 'substituted')`,
+    [p.pick_task_id],
+  );
+  for (const row of confirmedLines.rows) {
+    const sku = row['sku'] as string;
+    const directedBin = row['location_id'] as string;
+    const confirmedLotNumber = await lotNumberForUuid(row['confirmed_lot_id'] as string, sku, client);
+    let binId = directedBin;
+    if (row['confirmed_lot_id'] !== row['directed_lot_id']) {
+      const substitutedBin = await client.query(
+        `SELECT sb.location_id
+           FROM stock_balance sb
+           JOIN location_register lr ON lr.location_id = sb.location_id
+          WHERE sb.sku = $1 AND sb.lot_id = $2 AND sb.stock_class = 'owned'
+            AND lr.site_id = (SELECT site_id FROM location_register WHERE location_id = $3 LIMIT 1)
+            AND sb.allocated >= $4::numeric
+          ORDER BY sb.allocated DESC, sb.location_id
+          LIMIT 1`,
+        [sku, confirmedLotNumber, directedBin, row['confirmed_quantity'] as string],
+      );
+      if (substitutedBin.rows.length > 0) {
+        binId = substitutedBin.rows[0]!['location_id'] as string;
+      }
+    }
+    await applyStockPick({ sku, location_id: binId, lot_id: confirmedLotNumber, quantity: row['confirmed_quantity'] as string }, client);
+  }
 
   // AC7: notify the packing station. warehouse_manager is a documented placeholder target until
   // Story 3.7 (packing) defines the packing-station role.

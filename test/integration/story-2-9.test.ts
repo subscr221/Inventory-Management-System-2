@@ -282,8 +282,8 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
     assert.deepStrictEqual(
       rowsA.map((r) => ({ sku: r['sku'], quantity: r['quantity'], required_by: r['required_by'], ship_to: r['ship_to'] })).sort((a, b) => a.required_by! < b.required_by! ? -1 : 1),
       [
-        { sku: 'SKU-ERP-1', quantity: 5, required_by: '2026-08-01', ship_to: 'CUST-1' },
-        { sku: 'SKU-ERP-2', quantity: 3, required_by: '2026-08-02', ship_to: 'CUST-1' },
+        { sku: 'SKU-ERP-1', quantity: '5.000', required_by: '2026-08-01', ship_to: 'CUST-1' },
+        { sku: 'SKU-ERP-2', quantity: '3.000', required_by: '2026-08-02', ship_to: 'CUST-1' },
       ],
     );
 
