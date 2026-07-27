@@ -373,6 +373,19 @@ const EXPECTED = [
     constraints: [] as string[],
     indexes: [] as string[],
   },
+  {
+    canonical: 'read/projections/packing_record.sql',
+    table: 'packing_record',
+    constraints: ['chk_packing_record_status', 'chk_packing_record_qty', 'chk_packing_record_carton'],
+    indexes: ['idx_packing_record_dispatch_order', 'idx_packing_record_lot'],
+  },
+  {
+    canonical: 'read/projections/dispatch_document.sql',
+    table: 'dispatch_document',
+    constraints: ['chk_dispatch_document_type'],
+    indexes: ['idx_dispatch_document_order'],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

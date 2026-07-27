@@ -40,12 +40,23 @@ import {
   applyPickLineConfirmedProjection,
   applyPickTaskCompletedProjection,
 } from '../compliance/pick.js';
+import {
+  assertDispatchPackedShape,
+  assertDispatchShippingDocumentsGeneratedShape,
+  assertDispatchDispatchedShape,
+  applyDispatchPackedProjection,
+  applyDispatchShippingDocumentsGeneratedProjection,
+  applyDispatchDispatchedProjection,
+} from '../compliance/dispatch.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
   PickTaskCompletedEnvelope,
   PutawayCompletedEnvelope,
   LocationOverrideEnvelope,
+  DispatchPackedEnvelope,
+  DispatchShippingDocumentsGeneratedEnvelope,
+  DispatchDispatchedEnvelope,
 } from './schema.js';
 import { assertErpReadOnly } from '../compliance/erp-readonly.js';
 
@@ -265,6 +276,18 @@ export async function persistEvent(
   if (envelope.event_type === 'pick_task.completed') {
     assertPickTaskCompletedShape(envelope as unknown as PickTaskCompletedEnvelope);
   }
+  // Story 3.7: dispatch shape validation (packed, documents-generated, dispatched) is non-DB and
+  // runs with the other pre-transaction asserts, so a malformed dispatch event never consumes an
+  // idempotency key.
+  if (envelope.event_type === 'dispatch.packed') {
+    assertDispatchPackedShape(envelope as unknown as DispatchPackedEnvelope);
+  }
+  if (envelope.event_type === 'dispatch.shipping_documents_generated') {
+    assertDispatchShippingDocumentsGeneratedShape(envelope as unknown as DispatchShippingDocumentsGeneratedEnvelope);
+  }
+  if (envelope.event_type === 'dispatch.dispatched') {
+    assertDispatchDispatchedShape(envelope as unknown as DispatchDispatchedEnvelope);
+  }
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -360,6 +383,18 @@ export async function persistEvent(
       }
       if (envelope.event_type === 'pick_task.completed') {
         await applyPickTaskCompletedProjection(envelope as unknown as PickTaskCompletedEnvelope, client, eventId);
+      }
+      // Story 3.7: dispatch operations - packing validation, document generation with LOT_ON_HOLD
+      // check, dispatch confirmation with stock decrement - all inside this same transaction so
+      // projections, stock movement, and domain_events insert commit or roll back together.
+      if (envelope.event_type === 'dispatch.packed') {
+        await applyDispatchPackedProjection(envelope as unknown as DispatchPackedEnvelope, client, eventId);
+      }
+      if (envelope.event_type === 'dispatch.shipping_documents_generated') {
+        await applyDispatchShippingDocumentsGeneratedProjection(envelope as unknown as DispatchShippingDocumentsGeneratedEnvelope, client, eventId);
+      }
+      if (envelope.event_type === 'dispatch.dispatched') {
+        await applyDispatchDispatchedProjection(envelope as unknown as DispatchDispatchedEnvelope, client, eventId);
       }
 
     let nextVersion: number;

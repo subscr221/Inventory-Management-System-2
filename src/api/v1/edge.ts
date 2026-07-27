@@ -190,6 +190,17 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   if (body.stream_type === 'warehouse' && body.event_type === 'pick_task.completed') {
     body.payload['completed_by'] = authContext.userId;
   }
+  // Story 3.7: the dispatch operator identity is the authenticated actor, never trusted from the
+  // edge payload (mirrors pick_line.confirmed above).
+  if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.packed') {
+    body.payload['packed_by'] = authContext.userId;
+  }
+  if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.shipping_documents_generated') {
+    body.payload['generated_by'] = authContext.userId;
+  }
+  if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.dispatched') {
+    body.payload['dispatched_by'] = authContext.userId;
+  }
   if (assignment.locationId !== '*') {
     body.metadata.actor.location_id = assignment.locationId;
   } else if (body.stream_type === 'inventory') {

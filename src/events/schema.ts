@@ -523,6 +523,50 @@ export interface PickTaskCompletedEnvelope extends Omit<EventEnvelope, 'payload'
 }
 
 // ---------------------------------------------------------------------------
+// Story 3.7: packing, documents, dispatch
+// ---------------------------------------------------------------------------
+export interface DispatchPackedPayload {
+  packing_record_id: string;
+  dispatch_order_id: string;
+  sku: string;
+  packed_qty: number | string;
+  lot_id: string;
+  actual_weight_kg?: number | string | null;
+  label_ref?: string | null;
+  carton_count: number;
+  packed_by?: string;
+  packed_at?: string;
+}
+
+export interface DispatchPackedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'dispatch.packed';
+  payload: DispatchPackedPayload;
+}
+
+export interface DispatchShippingDocumentsGeneratedPayload {
+  dispatch_order_id: string;
+  document_types: string[];
+  generated_by?: string;
+  generated_at?: string;
+}
+
+export interface DispatchShippingDocumentsGeneratedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'dispatch.shipping_documents_generated';
+  payload: DispatchShippingDocumentsGeneratedPayload;
+}
+
+export interface DispatchDispatchedPayload {
+  dispatch_order_id: string;
+  dispatched_by?: string;
+  dispatched_at?: string;
+}
+
+export interface DispatchDispatchedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'dispatch.dispatched';
+  payload: DispatchDispatchedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -648,6 +692,22 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'pick_task.completed': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  // Story 3.7: packing, shipping documents, and dispatch on the existing 'warehouse' stream.
+  // Dispatch events post no valuated movement of their own - dispatch stock decrement is driven
+  // by the projection apply function, not by business-stream-tagged events - so tagging is not
+  // gated on these events (mirrors the Story 3.5/3.6 'warehouse' stream rationale).
+  'dispatch.packed': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'dispatch.shipping_documents_generated': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'dispatch.dispatched': {
     streamType: 'warehouse',
     requiresBusinessStream: false,
   },

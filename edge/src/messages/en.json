@@ -107,5 +107,12 @@
   "errors.DISPATCH_ORDER_LINE_NOT_FOUND": "The dispatch order line was not found. Refresh and try again.",
   "errors.PICK_QUANTITY_MISMATCH": "Confirm the exact quantity shown on the pick line.",
   "errors.PICK_TASK_ALREADY_GENERATED": "Pick tasks already exist for this order line.",
+  "errors.DISPATCH_ORDER_NOT_PICKED": "This order has not been fully picked yet. Complete picking first.",
+  "errors.DISPATCH_ORDER_NOT_PACKED": "This order has not been packed yet. Complete packing first.",
+  "errors.DISPATCH_ORDER_ALREADY_DISPATCHED": "This order has already been dispatched.",
+  "errors.DISPATCH_PACKED_INVALID_PAYLOAD": "The packing data is incomplete. Check your inputs.",
+  "errors.DISPATCH_DOCUMENTS_INVALID_PAYLOAD": "The document generation request is incomplete. Check your inputs.",
+  "errors.DISPATCH_DISPATCHED_INVALID_PAYLOAD": "The dispatch confirmation data is incomplete. Check your inputs.",
+  "errors.PACKED_QTY_MISMATCH": "The packed quantity does not match the confirmed pick quantity.",
   "errors.ASN_PO_NOT_FOUND": "The PO referenced by this ASN was not found. Refresh PO data and try again."
 }

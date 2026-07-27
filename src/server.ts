@@ -129,6 +129,15 @@ import {
   printPickTaskHandler,
 } from './api/v1/pick-tasks.js';
 import {
+  postPacked,
+  postShippingDocumentsGenerated,
+  postDispatched,
+  getPackingRecords,
+  getDispatchDocuments,
+  getPackingRecord,
+  getDispatchOrderStatusHandler,
+} from './api/v1/dispatch.js';
+import {
   createTransferRequestHandler,
   getTransferRequestHandler,
   listTransferRequestsHandler,
@@ -265,6 +274,15 @@ export function createAppRouter(): Router {
   router.post('/api/v1/pick-tasks/:pickTaskId/lines/:pickLineId/confirm', confirmPickLineHandler);
   router.post('/api/v1/pick-tasks/:pickTaskId/complete', completePickTaskHandler);
   router.get('/api/v1/pick-tasks/:pickTaskId/print', printPickTaskHandler);
+
+  // Story 3.7: Packing, Shipping, and Dispatch Documents
+  router.post('/api/v1/dispatch/packed', postPacked);
+  router.post('/api/v1/dispatch/shipping-documents-generated', postShippingDocumentsGenerated);
+  router.post('/api/v1/dispatch/dispatched', postDispatched);
+  router.get('/api/v1/dispatch/:dispatchOrderId/packing-records', getPackingRecords);
+  router.get('/api/v1/dispatch/:dispatchOrderId/documents', getDispatchDocuments);
+  router.get('/api/v1/packing-records/:packingRecordId', getPackingRecord);
+  router.get('/api/v1/dispatch-order-status/:dispatchOrderId', getDispatchOrderStatusHandler);
 
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);

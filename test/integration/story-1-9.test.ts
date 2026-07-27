@@ -277,6 +277,13 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/pick-tasks/:pickTaskId/lines/:pickLineId/confirm',
       'POST /api/v1/pick-tasks/:pickTaskId/complete',
       'GET /api/v1/pick-tasks/:pickTaskId/print',
+      // Story 3.7: dispatch routes
+      'POST /api/v1/dispatch/packed',
+      'POST /api/v1/dispatch/shipping-documents-generated',
+      'POST /api/v1/dispatch/dispatched',
+      'GET /api/v1/dispatch/:dispatchOrderId/packing-records',
+      'GET /api/v1/dispatch/:dispatchOrderId/documents',
+      'GET /api/v1/dispatch-order-status/:dispatchOrderId',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
       'PUT /api/v1/lots/:lot_id/quality-hold',

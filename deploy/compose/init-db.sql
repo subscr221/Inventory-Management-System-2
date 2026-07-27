@@ -2713,6 +2713,97 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 3.7: packing record, dispatch document, and dispatch_order_status extension
+CREATE TABLE IF NOT EXISTS packing_record (
+  packing_record_id UUID PRIMARY KEY,
+  dispatch_order_id UUID NOT NULL,
+  sku TEXT NOT NULL,
+  packed_qty NUMERIC(14,3) NOT NULL,
+  lot_id UUID,
+  actual_weight_kg NUMERIC(12,3),
+  label_ref TEXT,
+  carton_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'packed',
+  packed_by UUID NOT NULL,
+  packed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_packing_record_status'
+  ) THEN
+    ALTER TABLE packing_record ADD CONSTRAINT chk_packing_record_status
+      CHECK (status IN ('packed', 'documents_generated', 'dispatched'));
+  END IF;
+END
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_packing_record_qty'
+  ) THEN
+    ALTER TABLE packing_record ADD CONSTRAINT chk_packing_record_qty
+      CHECK (packed_qty > 0);
+  END IF;
+END
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_packing_record_carton'
+  ) THEN
+    ALTER TABLE packing_record ADD CONSTRAINT chk_packing_record_carton
+      CHECK (carton_count >= 0);
+  END IF;
+END
+$$;
+
+CREATE INDEX IF NOT EXISTS idx_packing_record_dispatch_order ON packing_record (dispatch_order_id);
+CREATE INDEX IF NOT EXISTS idx_packing_record_lot ON packing_record (lot_id);
+
+ALTER TABLE dispatch_order_status ADD COLUMN IF NOT EXISTS packed_at TIMESTAMPTZ;
+ALTER TABLE dispatch_order_status ADD COLUMN IF NOT EXISTS packed_by UUID;
+ALTER TABLE dispatch_order_status ADD COLUMN IF NOT EXISTS dispatched_at TIMESTAMPTZ;
+ALTER TABLE dispatch_order_status ADD COLUMN IF NOT EXISTS dispatched_by UUID;
+
+CREATE TABLE IF NOT EXISTS dispatch_document (
+  document_id UUID PRIMARY KEY,
+  dispatch_order_id UUID NOT NULL,
+  document_type TEXT NOT NULL,
+  document_content TEXT,
+  generated_by UUID NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_dispatch_document_type'
+  ) THEN
+    ALTER TABLE dispatch_document ADD CONSTRAINT chk_dispatch_document_type
+      CHECK (document_type IN ('bol', 'packing_slip', 'commercial_invoice', 'label'));
+  END IF;
+END
+$$;
+
+CREATE INDEX IF NOT EXISTS idx_dispatch_document_order ON dispatch_document (dispatch_order_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON packing_record TO app_user;
+    GRANT INSERT, SELECT, UPDATE, DELETE ON dispatch_document TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON packing_record TO readonly_user;
+    GRANT SELECT ON dispatch_document TO readonly_user;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS asn (
   asn_number_ext   TEXT PRIMARY KEY,
   po_ref_ext       TEXT NOT NULL,

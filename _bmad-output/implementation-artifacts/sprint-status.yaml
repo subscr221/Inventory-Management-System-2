@@ -148,7 +148,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-07-26'
+last_updated: '2026-07-27'
 # story 3-6 created 2026-07-25 via create-story workflow: Pick Task Generation and Execution (FR-W-04);
 #   system-generated pick tasks with optimized paths (single-order, batch, wave, zone strategies);
 #   FEFO lot selection, bin pick-sequence ordering, paper-directed picking; real-time stock allocation
@@ -432,7 +432,7 @@ development_status:
   3-4-goods-receiving-against-asn-or-po-fr-w-02: done   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: done   # PILOT
   3-6-pick-task-generation-and-execution-fr-w-04: done   # PILOT
-  3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: in-progress   # PILOT
+  3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: review   # PILOT
   3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: backlog   # PILOT
   3-9-forward-pick-replenishment-fr-w-08: backlog   # PILOT
   3-10-cross-docking-execution-fr-w-09: backlog   # PILOT
