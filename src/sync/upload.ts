@@ -113,6 +113,7 @@ const PERMANENT_ERROR_CODES = new Set([
   'PACKED_QTY_MISMATCH',
   'DISPATCH_ORDER_NOT_PACKED',
   'LOT_ON_HOLD',
+  'DISPATCH_DOCUMENTS_NOT_GENERATED',
 ]);
 
 function isAppError(error: unknown): error is AppError {

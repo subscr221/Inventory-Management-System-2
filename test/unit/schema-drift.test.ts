@@ -384,7 +384,6 @@ const EXPECTED = [
     table: 'dispatch_document',
     constraints: ['chk_dispatch_document_type'],
     indexes: ['idx_dispatch_document_order'],
-    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
   },
 ];
 

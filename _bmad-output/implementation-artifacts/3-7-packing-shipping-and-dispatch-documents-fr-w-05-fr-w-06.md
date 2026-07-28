@@ -4,7 +4,7 @@ baseline_commit: 112587c2c7e3860ac966b1d323ed66cd7278b190
 
 # Story 3.7: Packing, Shipping, and Dispatch Documents (FR-W-05, FR-W-06)
 
-Status: review
+Status: in-progress
 
 ## Story
 
@@ -238,3 +238,53 @@ Modified files:
 - read/projections/pick_task.sql (additive dispatch_order_status ALTER)
 - src/middleware/rbac.ts (if dispatch_clerk role string needs adding)
 - src/read/projections/lot_master.ts (if UUID-to-number bridge helper added)
+
+### Review Findings
+
+- [x] [Review][Decision] API routes deviate from spec Task 6.1 — Resolved: routes now match spec exactly (`pack`, `generate-documents`, `dispatch`, `GET documents/:documentId`).
+- [x] [Review][Decision] dispatch_document DELETE grant contradicts spec Task 2.4 — Resolved: grant is now INSERT/SELECT/UPDATE only.
+- [x] [Review][Patch] API payload shape mismatch — Resolved: flat shape now matches `assertDispatchPackedShape` (introduced a new bug, see round 2 below).
+- [x] [Review][Patch] Missing SOD guard on edge dispatch (dispatch.dispatched) — Resolved for `dispatch.dispatched`; same gap remains open for `dispatch.packed`/`dispatch.shipping_documents_generated` (see round 2).
+- [x] [Review][Defer] No site-isolation in dispatch apply functions — Still unresolved; edge/direct event path still bypasses site scoping — deferred, pre-existing (see deferred-work.md, 2026-07-28) [src/compliance/dispatch.ts]
+- [x] [Review][Patch] packed_by/generated_by 'unknown' violates UUID NOT NULL DDL — Resolved: now uses `envelope.metadata.actor.user_id`.
+- [x] [Review][Patch] dispatch_order_status references non-existent generated_at/generated_by columns — Resolved.
+- [x] [Review][Patch] Missing document_types in shipping_documents_generated event payload — Resolved (defaults to all four types).
+- [x] [Review][Patch] Stock decrement silent no-op on missing lot_master join — Resolved for the fully-unmatched case; partial-match case remains (see round 2).
+- [x] [Review][Patch] dispatch_order_status has no status field but tests assert it — Resolved: derived `status` field added.
+- [x] [Review][Patch] Schema-drift DO blocks use wrong format — Resolved.
+- [x] [Review][Patch] No idempotent replay guard for packing — Resolved: early return on existing `packing_record_id`.
+- [x] [Review][Patch] Document rendering outside event transaction — Resolved: rendering moved inside `applyDispatchShippingDocumentsGeneratedProjection`.
+- [x] [Review][Patch] postShippingDocumentsGenerated returns content not documentIds — Still unresolved; response now omits content but still doesn't return `documentIds` — tracked as canonical item in round 2 below [src/api/v1/dispatch.ts:224-228]
+- [x] [Review][Patch] packed_qty precision not validated — Still unresolved; `numericEqual` normalizes for comparison only, doesn't reject >3-decimal input on write — tracked as canonical item in round 2 below [src/compliance/dispatch.ts:20-40]
+- [x] [Review][Patch] Wrong error code for missing documents — Resolved: `DISPATCH_DOCUMENTS_NOT_GENERATED`.
+- [x] [Review][Patch] RBAC roles don't match spec (write roles) — Resolved for write roles; read roles introduced a new regression (see round 2).
+- [ ] [Review][Patch] FOR UPDATE not pre-acquired before LOT_ON_HOLD check — Still unresolved; `FOR UPDATE OF lm` added but only locks rows already matching `quality_hold_status = 'held'`, so a concurrent hold placement on a not-yet-held lot still races through [src/compliance/dispatch.ts:175-187, 280-291]
+- [x] [Review][Patch] NULL lot_id bypasses LOT_ON_HOLD check — Moot: `lot_id` is now unconditionally required as UUID in `assertDispatchPackedShape`, so this path is unreachable.
+- [x] [Review][Patch] No LOT_ON_HOLD integration test — Resolved: two new AC3 tests added.
+- [x] [Review][Patch] renderLabels missing SKU and lot number — Partially resolved; SKU/lot now present but wrong for multi-line orders (see round 2).
+- [x] [Review][Patch] Document renderers non-deterministic (new Date()) — Resolved, but over-corrected by dropping the invoice date entirely (see round 2).
+- [x] [Review][Patch] Notification actor hardcoded zero UUID — Resolved.
+- [x] [Review][Patch] eventId mismatch in API response — Resolved.
+- [x] [Review][Patch] Test asserts .content instead of .document_content — Resolved, but now exposes the still-open documentIds gap as a real test failure (see round 2).
+- [ ] [Review][Defer] Schema drift missing dispatch_order_status expectations — Still unresolved; pre-existing, not touched by this diff [test/unit/schema-drift.test.ts]
+- [ ] [Review][Defer] renderLabels empty array when carton_count=0 — Still unresolved; pre-existing [src/warehouse/document-renderer.ts:189]
+- [x] [Review][Patch] NaN guard in commercial invoice total quantity — Resolved.
+- [x] [Review][Defer] Missing lot_on_hold_blocked in DispatchDispatchedPayload — Informational field only, not critical [src/events/schema.ts:558-563] — deferred, pre-existing
+- [x] [Review][Defer] Missing FK constraints — Pre-existing pattern in project [read/projections/packing_record.sql, dispatch_document.sql] — deferred, pre-existing
+
+### Review Findings (round 2 — fix-pass diff review, 2026-07-28)
+
+- [x] [Review][Patch] Batch packing API design vs. spec singular payload — Fixed: `postPacked` now pre-validates the sum of all lines in one call plus already-packed quantity against total confirmed pick quantity before persisting any event; `applyDispatchPackedProjection` now checks the cumulative packed total (not a single line) against total confirmed. [src/api/v1/dispatch.ts, src/compliance/dispatch.ts]
+- [x] [Review][Patch] RBAC read-role regression breaks read access for the roles that write — Fixed: `DISPATCH_READ_ROLES` now includes `dispatch_clerk`, `warehouse_manager`, `inventory_controller` alongside the read-only roles. [src/api/v1/dispatch.ts:21]
+- [x] [Review][Patch] Multi-line packing quantity check is broken — Fixed: see cumulative-check fix above. [src/compliance/dispatch.ts]
+- [x] [Review][Patch] Per-line persistEvent loop has no pre-validation/atomicity — Fixed: aggregate quantity is validated once before the persist loop begins, so a doomed multi-line request fails before any event commits. [src/api/v1/dispatch.ts]
+- [x] [Review][Patch] generate-documents response still doesn't return documentIds — Fixed: response now includes `documentIds: string[]` populated from the documents created during this call's transaction; corresponding test assertions updated to check documentIds/content instead of removed response fields. [src/api/v1/dispatch.ts, test/integration/story-3-7.test.ts]
+- [x] [Review][Patch] renderLabels stamps every carton with the first lot/SKU — Fixed: labels are now generated per packing record, each carton showing its own record's SKU/lot. [src/warehouse/document-renderer.ts]
+- [x] [Review][Patch] SOD guard incomplete — only covers dispatch.dispatched — Fixed: the same store_assistant/warehouse_operator rejection now applies to `dispatch.packed` and `dispatch.shipping_documents_generated` as well. [src/api/v1/edge.ts]
+- [x] [Review][Patch] LOT_ON_HOLD FOR UPDATE still racy — Fixed: both hold checks now lock every candidate lot for the order first, then filter by hold status in application code. [src/compliance/dispatch.ts]
+- [x] [Review][Patch] Stock decrement guard doesn't catch partial mismatches — Fixed: guard now compares `rowCount` against the dispatch order's packing-record count, not just `> 0`. [src/compliance/dispatch.ts]
+- [x] [Review][Patch] packed_qty precision not validated on write — Fixed: quantities are validated and compared via exact integer scaling (`toScaled3`); values with more than 3 fractional digits are rejected at the shape-assert layer instead of being silently truncated. [src/compliance/dispatch.ts]
+- [x] [Review][Patch] Commercial invoice lost its required date field — Fixed: `renderCommercialInvoice` now accepts a deterministic `invoiceDate` threaded from the event's `metadata.occurred_at`. [src/warehouse/document-renderer.ts, src/compliance/dispatch.ts]
+- [x] [Review][Dismiss] NULL lot_id bypass via INNER JOIN — moot, `lot_id` is a required UUID at the shape-assert layer; unreachable via the event path.
+- [x] [Review][Dismiss] document_type 'label' vs 'labels' naming — pre-existing spec-internal inconsistency (Task 1.2 vs Task 4.3/DDL); diff resolves consistently in favor of the DDL's `'label'`, not a new defect.
+- [x] [Review][Dismiss] document_types array not validated at the API layer before reaching the compliance layer — validation exists (just deeper in the stack via `assertDispatchShippingDocumentsGeneratedShape`), so behavior is correct, only the error surfaces later than ideal.

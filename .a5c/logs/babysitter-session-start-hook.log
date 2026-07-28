@@ -13,3 +13,18 @@
 [INFO] 2026-07-26T17:53:57Z SDK version mismatch: installed=0.0.184, required=0.0.182
 [INFO] 2026-07-26T17:53:58Z Hook input received (344 bytes)
 [INFO] 2026-07-26T17:54:00Z CLI exit code=0
+[INFO] 2026-07-27T23:16:40Z Hook script invoked
+[INFO] 2026-07-27T23:16:41Z PLUGIN_ROOT=C:/Users/admin/.claude/plugins/cache/a5c-ai/babysitter/4.0.152
+[INFO] 2026-07-27T23:16:44Z SDK version mismatch: installed=0.0.184, required=0.0.182
+[INFO] 2026-07-27T23:16:44Z Hook input received (344 bytes)
+[INFO] 2026-07-27T23:16:45Z CLI exit code=0
+[INFO] 2026-07-28T04:27:15Z Hook script invoked
+[INFO] 2026-07-28T04:27:15Z PLUGIN_ROOT=C:/Users/admin/.claude/plugins/cache/a5c-ai/babysitter/4.0.152
+[INFO] 2026-07-28T04:27:19Z SDK version mismatch: installed=0.0.184, required=0.0.182
+[INFO] 2026-07-28T04:27:19Z Hook input received (370 bytes)
+[INFO] 2026-07-28T04:27:22Z CLI exit code=0
+[INFO] 2026-07-28T04:27:23Z Hook script invoked
+[INFO] 2026-07-28T04:27:23Z PLUGIN_ROOT=C:/Users/admin/.claude/plugins/cache/a5c-ai/babysitter/4.0.152
+[INFO] 2026-07-28T04:27:25Z SDK version mismatch: installed=0.0.184, required=0.0.182
+[INFO] 2026-07-28T04:27:25Z Hook input received (343 bytes)
+[INFO] 2026-07-28T04:27:28Z CLI exit code=0

@@ -192,14 +192,30 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   }
   // Story 3.7: the dispatch operator identity is the authenticated actor, never trusted from the
   // edge payload (mirrors pick_line.confirmed above).
+  // Task 7.3 SOD guard: packing, document generation, and dispatch confirmation are all
+  // dispatch_clerk/warehouse_manager(/inventory_controller for doc-gen) operations. Reject
+  // store_assistant and warehouse_operator, who can confirm pick lines but not perform any
+  // dispatch-side action, across all three event types (not just dispatch.dispatched).
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.packed') {
     body.payload['packed_by'] = authContext.userId;
+    const role = assignment.role;
+    if (role === 'store_assistant' || role === 'warehouse_operator') {
+      throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to pack a dispatch order`);
+    }
   }
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.shipping_documents_generated') {
     body.payload['generated_by'] = authContext.userId;
+    const role = assignment.role;
+    if (role === 'store_assistant' || role === 'warehouse_operator') {
+      throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to generate shipping documents`);
+    }
   }
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.dispatched') {
     body.payload['dispatched_by'] = authContext.userId;
+    const role = assignment.role;
+    if (role === 'store_assistant' || role === 'warehouse_operator') {
+      throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to confirm dispatch`);
+    }
   }
   if (assignment.locationId !== '*') {
     body.metadata.actor.location_id = assignment.locationId;

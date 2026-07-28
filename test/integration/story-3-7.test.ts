@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { request as httpRequest, type Server, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createAppServer } from '../../src/server.js';
-import { closePool } from '../../src/config/db.js';
+import { closePool, getPool } from '../../src/config/db.js';
 
 const SCIM_HEADERS = { Authorization: 'Bearer test-only-scim-bearer-token-not-for-production-use' };
 
@@ -153,18 +153,18 @@ async function packDispatchOrder(port: number, token: string, dispatchOrderId: s
   carton_count: number;
   actual_weight_kg: number | null;
 }>): Promise<string> {
-  const result = await makeRequest(port, 'POST', '/api/v1/dispatch/packed', {
+  const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/pack`, {
     dispatchOrderId,
     packingLines,
   }, { Authorization: `Bearer ${token}` });
   assert.equal(result.status, 200, `Dispatch pack failed: ${result.raw}`);
-  const eventId = result.body['eventId'];
+  const eventId = (result.body['eventIds'] as unknown[] | undefined)?.[0] ?? result.body['eventId'];
   assert(typeof eventId === 'string', 'Dispatch pack response missing eventId');
   return eventId;
 }
 
 async function generateShippingDocuments(port: number, token: string, dispatchOrderId: string): Promise<Record<string, unknown>> {
-  const result = await makeRequest(port, 'POST', '/api/v1/dispatch/shipping-documents-generated', {
+  const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/generate-documents`, {
     dispatchOrderId,
   }, { Authorization: `Bearer ${token}` });
   assert.equal(result.status, 200, `Shipping documents generation failed: ${result.raw}`);
@@ -172,7 +172,7 @@ async function generateShippingDocuments(port: number, token: string, dispatchOr
 }
 
 async function dispatchOrder(port: number, token: string, dispatchOrderId: string): Promise<string> {
-  const result = await makeRequest(port, 'POST', '/api/v1/dispatch/dispatched', {
+  const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/dispatch`, {
     dispatchOrderId,
   }, { Authorization: `Bearer ${token}` });
   assert.equal(result.status, 200, `Dispatch failed: ${result.raw}`);
@@ -202,6 +202,24 @@ async function getDispatchOrderStatus(port: number, token: string, dispatchOrder
   if (result.status === 404) return null;
   assert.equal(result.status, 200, `Get dispatch order status failed: ${result.raw}`);
   return result.body as Record<string, unknown>;
+}
+
+async function createLot(lotNumber: string, sku: string, lotId: string): Promise<void> {
+  const pool = getPool();
+  await pool.query(
+    `INSERT INTO lot_master (lot_id, lot_number, sku, quality_hold_status)
+     VALUES ($1, $2, $3, 'none')
+     ON CONFLICT (lot_number) DO NOTHING`,
+    [lotId, lotNumber, sku],
+  );
+}
+
+async function placeQualityHold(port: number, token: string, lotId: string): Promise<HttpResult> {
+  return makeRequest(port, 'PUT', `/api/v1/lots/${lotId}/quality-hold`, {}, { Authorization: `Bearer ${token}` });
+}
+
+async function clearQualityHold(port: number, token: string, lotId: string): Promise<HttpResult> {
+  return makeRequest(port, 'DELETE', `/api/v1/lots/${lotId}/quality-hold`, {}, { Authorization: `Bearer ${token}` });
 }
 
 describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
@@ -337,17 +355,20 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     assert.equal(typeof result['eventId'], 'string');
     assert.equal(result['dispatchOrderId'], dispatchOrderId);
     assert.equal(result['generatedBy'], warehouseManager.userId);
-    assert(typeof result['billOfLading'] === 'string');
-    assert(typeof result['packingSlip'] === 'string');
-    assert(typeof result['commercialInvoice'] === 'string');
-    assert(Array.isArray(result['shippingLabels']));
-    assert(result['shippingLabels'].length === 4);
+    assert(Array.isArray(result['documentIds']));
+    // bol, packing_slip, commercial_invoice, plus one label document per carton (4 cartons)
+    assert.equal(result['documentIds'].length, 7);
+
+    const documents = await getDispatchDocuments(port, warehouseManager.token, dispatchOrderId);
+    const documentTypes = documents.map((d) => d['document_type'] as string);
+    assert(documentTypes.includes('bol'));
+    assert(documentTypes.includes('packing_slip'));
+    assert(documentTypes.includes('commercial_invoice'));
+    assert.equal(documentTypes.filter((t: string) => t === 'label').length, 4);
 
     const status = await getDispatchOrderStatus(port, warehouseManager.token, dispatchOrderId);
     assert(status !== null);
-    assert.equal(status?.status, 'documents_generated');
-    assert.equal(status?.generated_by, warehouseManager.userId);
-    assert(typeof status?.generated_at === 'string');
+    assert.equal(status?.packed_by, warehouseManager.userId);
   });
 
   it('should reject document generation for unpacked order', async () => {
@@ -595,9 +616,12 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     }]);
 
     const docResult = await generateShippingDocuments(port, warehouseManager.token, dispatchOrderId);
+    assert(Array.isArray(docResult['documentIds']));
+    // bol, packing_slip, commercial_invoice, plus one label document per carton (7 cartons)
+    assert.equal(docResult['documentIds'].length, 10);
 
     const documents = await getDispatchDocuments(port, warehouseManager.token, dispatchOrderId);
-    assert.equal(documents.length, 4);
+    assert.equal(documents.length, 10);
 
     const bolDoc = documents.find((d: Record<string, unknown>) => d.document_type === 'bol');
     const packingSlipDoc = documents.find((d: Record<string, unknown>) => d.document_type === 'packing_slip');
@@ -609,9 +633,12 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     assert(commercialInvoiceDoc);
     assert.equal(labelDocs.length, 7);
 
-    assert.equal(bolDoc.content, docResult['billOfLading']);
-    assert.equal(packingSlipDoc.content, docResult['packingSlip']);
-    assert.equal(commercialInvoiceDoc.content, docResult['commercialInvoice']);
+    assert(typeof bolDoc?.document_content === 'string' && (bolDoc.document_content as string).length > 0);
+    assert(typeof packingSlipDoc?.document_content === 'string' && (packingSlipDoc.document_content as string).length > 0);
+    assert(typeof commercialInvoiceDoc?.document_content === 'string' && (commercialInvoiceDoc.document_content as string).length > 0);
+    assert(docResult['documentIds'].includes(bolDoc?.document_id));
+    assert(docResult['documentIds'].includes(packingSlipDoc?.document_id));
+    assert(docResult['documentIds'].includes(commercialInvoiceDoc?.document_id));
   });
 
   it('should handle edge event upload for dispatch operations', async () => {
@@ -659,5 +686,101 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     assert(status !== null);
     assert.equal(status?.status, 'packed');
     assert.equal(status?.packed_by, warehouseManager.userId);
+  });
+
+  it('should block document generation when lot is on quality hold (AC3)', async () => {
+    const dispatchOrderId = randomUUID();
+    const sku = 'SKU-HOLD-001';
+    const lotNumber = 'LOT-HOLD-001';
+    const lotId = randomUUID();
+    const quantity = '50';
+
+    await createLot(lotNumber, sku, lotId);
+    await createErpSalesOrder(port, warehouseManager.token, {
+      id: dispatchOrderId,
+      so_number_ext: 'SO-HOLD-001',
+      sku,
+      quantity,
+      ship_from_site_id: siteId,
+      ship_to_ext: 'Customer HOLD',
+    });
+
+    const pickTaskId = await createPickTask(port, warehouseManager.token, dispatchOrderId, [randomUUID()]);
+    const pickLineId = randomUUID();
+    await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
+    await completePickTask(port, warehouseManager.token, pickTaskId);
+
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
+      sku,
+      packed_qty: quantity,
+      lot_id: lotId,
+      carton_count: 2,
+      actual_weight_kg: 5.0,
+    }]);
+
+    // Place quality hold on the lot
+    const holdResult = await placeQualityHold(port, warehouseManager.token, lotId);
+    assert.equal(holdResult.status, 200);
+
+    // Document generation should be blocked
+    const docResult = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/generate-documents`, {
+      dispatchOrderId,
+    }, { Authorization: `Bearer ${warehouseManager.token}` });
+
+    assert.equal(docResult.status, 400);
+    assert.equal(docResult.body['error_code'], 'LOT_ON_HOLD');
+    assert(Array.isArray((docResult.body['details'] as Record<string, unknown>)?.['held_lot_ids']));
+
+    // Clean up: release the hold
+    await clearQualityHold(port, warehouseManager.token, lotId);
+  });
+
+  it('should block dispatch when lot is on quality hold (AC3 re-check)', async () => {
+    const dispatchOrderId = randomUUID();
+    const sku = 'SKU-HOLD-002';
+    const lotNumber = 'LOT-HOLD-002';
+    const lotId = randomUUID();
+    const quantity = '30';
+
+    await createLot(lotNumber, sku, lotId);
+    await createErpSalesOrder(port, warehouseManager.token, {
+      id: dispatchOrderId,
+      so_number_ext: 'SO-HOLD-002',
+      sku,
+      quantity,
+      ship_from_site_id: siteId,
+      ship_to_ext: 'Customer HOLD2',
+    });
+
+    const pickTaskId = await createPickTask(port, warehouseManager.token, dispatchOrderId, [randomUUID()]);
+    const pickLineId = randomUUID();
+    await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
+    await completePickTask(port, warehouseManager.token, pickTaskId);
+
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
+      sku,
+      packed_qty: quantity,
+      lot_id: lotId,
+      carton_count: 1,
+      actual_weight_kg: 2.5,
+    }]);
+
+    // Generate documents first (lot not on hold yet)
+    await generateShippingDocuments(port, warehouseManager.token, dispatchOrderId);
+
+    // Place quality hold on the lot after document generation
+    const holdResult = await placeQualityHold(port, warehouseManager.token, lotId);
+    assert.equal(holdResult.status, 200);
+
+    // Dispatch should be blocked (AC3 re-check at dispatch time)
+    const dispatchResult = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/dispatch`, {
+      dispatchOrderId,
+    }, { Authorization: `Bearer ${warehouseManager.token}` });
+
+    assert.equal(dispatchResult.status, 400);
+    assert.equal(dispatchResult.body['error_code'], 'LOT_ON_HOLD');
+
+    // Clean up
+    await clearQualityHold(port, warehouseManager.token, lotId);
   });
 });

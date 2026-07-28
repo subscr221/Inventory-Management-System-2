@@ -74,11 +74,9 @@ export async function renderBOL(dispatchOrderId: string, client: PoolClient): Pr
   const consignee = await resolveConsignee(dispatchOrderId, client);
   const lines = await resolvePackingLines(dispatchOrderId, client);
   const totals = await resolveTotals(dispatchOrderId, client);
-  const date = new Date().toISOString().slice(0, 10);
 
-  let content = `BILL OF LADING
+  const content = `BILL OF LADING
 ================
-Date: ${date}
 SO Number: ${soNumber}
 Ship From: ${shipFrom}
 Consignee: ${consignee}
@@ -105,11 +103,9 @@ export async function renderPackingSlip(dispatchOrderId: string, client: PoolCli
   const shipFrom = await resolveShipFrom(dispatchOrderId, client);
   const lines = await resolvePackingLines(dispatchOrderId, client);
   const totals = await resolveTotals(dispatchOrderId, client);
-  const date = new Date().toISOString().slice(0, 10);
 
-  let content = `PACKING SLIP
+  const content = `PACKING SLIP
 =============
-Date: ${date}
 SO Number: ${soNumber}
 Ship From: ${shipFrom}
 
@@ -126,7 +122,9 @@ Total Weight: ${totals.totalWeightKg ?? 'N/A'} kg
   return content;
 }
 
-export async function renderCommercialInvoice(dispatchOrderId: string, client: PoolClient): Promise<string> {
+// invoiceDate must be a deterministic caller-supplied value (e.g. the persisted event's
+// metadata.occurred_at) — never generated inside the renderer, per Task 5.6's determinism requirement.
+export async function renderCommercialInvoice(dispatchOrderId: string, client: PoolClient, invoiceDate?: string): Promise<string> {
   const soResult = await client.query(
     `SELECT so_number_ext, sku, quantity FROM erp_sales_order WHERE id = $1`,
     [dispatchOrderId],
@@ -136,19 +134,22 @@ export async function renderCommercialInvoice(dispatchOrderId: string, client: P
   const consignee = await resolveConsignee(dispatchOrderId, client);
   const lines = await resolvePackingLines(dispatchOrderId, client);
   const totals = await resolveTotals(dispatchOrderId, client);
-  const date = new Date().toISOString().slice(0, 10);
+  const totalQuantity = lines.reduce((sum, l) => {
+    const n = Number(l.packed_qty);
+    return sum + (Number.isNaN(n) ? 0 : n);
+  }, 0);
 
-  let content = `COMMERCIAL INVOICE
+  const content = `COMMERCIAL INVOICE
 ===================
-Date: ${date}
 Invoice No: ${soNumber}
+Date: ${invoiceDate ?? 'N/A'}
 Seller: ${shipFrom}
 Buyer: ${consignee}
 
 Line Items:
 ${lines.map((l, i) => `  ${i + 1}. SKU: ${l.sku}  Qty: ${l.packed_qty}  Unit Price: TBD  Lot: ${l.lot_number}`).join('\n')}
 
-Total Quantity: ${lines.reduce((sum, l) => sum + Number(l.packed_qty), 0)}
+Total Quantity: ${totalQuantity}
 Total Weight: ${totals.totalWeightKg ?? 'N/A'} kg
 
 Terms: Goods sold on open account. Payment terms per agreement. E. & O. E.
@@ -164,19 +165,32 @@ export async function renderLabels(dispatchOrderId: string, client: PoolClient):
   );
   const soNumber = soResult.rows.length > 0 ? soResult.rows[0].so_number_ext as string : 'N/A';
   const siteCode = soResult.rows.length > 0 ? soResult.rows[0].ship_from_site_code_ext as string : 'N/A';
-  const date = new Date().toISOString().slice(0, 10);
 
-  const cartonResult = await client.query(
-    `SELECT SUM(carton_count) AS total_cartons
-     FROM packing_record
-     WHERE dispatch_order_id = $1`,
+  // Task 5.5: labels must include the correct SKU and lot number per carton — group cartons by
+  // their own packing record rather than stamping every carton with the first lot found.
+  const recordResult = await client.query(
+    `SELECT pr.sku, lm.lot_number, pr.carton_count
+     FROM packing_record pr
+     JOIN lot_master lm ON lm.lot_id = pr.lot_id
+     WHERE pr.dispatch_order_id = $1
+     ORDER BY pr.sku, lm.lot_number`,
     [dispatchOrderId],
   );
-  const totalCartons = Number(cartonResult.rows[0].total_cartons ?? 0);
+  const records = recordResult.rows.map((r: Record<string, unknown>) => ({
+    sku: r['sku'] as string,
+    lot_number: r['lot_number'] as string,
+    carton_count: Number(r['carton_count']),
+  }));
+
+  const totalCartons = records.reduce((sum, r) => sum + r.carton_count, 0);
 
   const labels: string[] = [];
-  for (let i = 1; i <= totalCartons; i++) {
-    labels.push(`[${siteCode}] SO: ${soNumber} | Carton ${i}/${totalCartons} | Date: ${date}`);
+  let cartonNumber = 0;
+  for (const record of records) {
+    for (let i = 1; i <= record.carton_count; i++) {
+      cartonNumber += 1;
+      labels.push(`[${siteCode}] SO: ${soNumber} | Carton ${cartonNumber}/${totalCartons} | SKU: ${record.sku} | Lot: ${record.lot_number}`);
+    }
   }
 
   return labels;

@@ -2737,8 +2737,7 @@ BEGIN
     ALTER TABLE packing_record ADD CONSTRAINT chk_packing_record_status
       CHECK (status IN ('packed', 'documents_generated', 'dispatched'));
   END IF;
-END
-$$;
+END $$;
 
 DO $$
 BEGIN
@@ -2748,8 +2747,7 @@ BEGIN
     ALTER TABLE packing_record ADD CONSTRAINT chk_packing_record_qty
       CHECK (packed_qty > 0);
   END IF;
-END
-$$;
+END $$;
 
 DO $$
 BEGIN
@@ -2759,8 +2757,7 @@ BEGIN
     ALTER TABLE packing_record ADD CONSTRAINT chk_packing_record_carton
       CHECK (carton_count >= 0);
   END IF;
-END
-$$;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_packing_record_dispatch_order ON packing_record (dispatch_order_id);
 CREATE INDEX IF NOT EXISTS idx_packing_record_lot ON packing_record (lot_id);
@@ -2787,8 +2784,7 @@ BEGIN
     ALTER TABLE dispatch_document ADD CONSTRAINT chk_dispatch_document_type
       CHECK (document_type IN ('bol', 'packing_slip', 'commercial_invoice', 'label'));
   END IF;
-END
-$$;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_dispatch_document_order ON dispatch_document (dispatch_order_id);
 
@@ -2796,7 +2792,7 @@ DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
     GRANT INSERT, SELECT, UPDATE ON packing_record TO app_user;
-    GRANT INSERT, SELECT, UPDATE, DELETE ON dispatch_document TO app_user;
+    GRANT INSERT, SELECT, UPDATE ON dispatch_document TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON packing_record TO readonly_user;

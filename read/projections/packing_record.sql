@@ -24,8 +24,7 @@ BEGIN
     ALTER TABLE packing_record ADD CONSTRAINT chk_packing_record_status
       CHECK (status IN ('packed', 'documents_generated', 'dispatched'));
   END IF;
-END
-$$;
+END $$;
 
 DO $$
 BEGIN
@@ -35,8 +34,7 @@ BEGIN
     ALTER TABLE packing_record ADD CONSTRAINT chk_packing_record_qty
       CHECK (packed_qty > 0);
   END IF;
-END
-$$;
+END $$;
 
 DO $$
 BEGIN
@@ -46,8 +44,7 @@ BEGIN
     ALTER TABLE packing_record ADD CONSTRAINT chk_packing_record_carton
       CHECK (carton_count >= 0);
   END IF;
-END
-$$;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_packing_record_dispatch_order ON packing_record (dispatch_order_id);
 CREATE INDEX IF NOT EXISTS idx_packing_record_lot ON packing_record (lot_id);

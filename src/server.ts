@@ -136,6 +136,7 @@ import {
   getDispatchDocuments,
   getPackingRecord,
   getDispatchOrderStatusHandler,
+  getDispatchDocument,
 } from './api/v1/dispatch.js';
 import {
   createTransferRequestHandler,
@@ -276,13 +277,14 @@ export function createAppRouter(): Router {
   router.get('/api/v1/pick-tasks/:pickTaskId/print', printPickTaskHandler);
 
   // Story 3.7: Packing, Shipping, and Dispatch Documents
-  router.post('/api/v1/dispatch/packed', postPacked);
-  router.post('/api/v1/dispatch/shipping-documents-generated', postShippingDocumentsGenerated);
-  router.post('/api/v1/dispatch/dispatched', postDispatched);
+  router.post('/api/v1/dispatch/:dispatchOrderId/pack', postPacked);
+  router.post('/api/v1/dispatch/:dispatchOrderId/generate-documents', postShippingDocumentsGenerated);
+  router.post('/api/v1/dispatch/:dispatchOrderId/dispatch', postDispatched);
   router.get('/api/v1/dispatch/:dispatchOrderId/packing-records', getPackingRecords);
   router.get('/api/v1/dispatch/:dispatchOrderId/documents', getDispatchDocuments);
   router.get('/api/v1/packing-records/:packingRecordId', getPackingRecord);
   router.get('/api/v1/dispatch-order-status/:dispatchOrderId', getDispatchOrderStatusHandler);
+  router.get('/api/v1/dispatch/documents/:documentId', getDispatchDocument);
 
   router.get('/api/v1/lots/:lot_id/trace', getLotTraceHandler);
   router.post('/api/v1/stock/:sku/select-lot', selectLotHandler);

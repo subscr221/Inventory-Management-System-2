@@ -21,8 +21,7 @@ BEGIN
     ALTER TABLE dispatch_document ADD CONSTRAINT chk_dispatch_document_type
       CHECK (document_type IN ('bol', 'packing_slip', 'commercial_invoice', 'label'));
   END IF;
-END
-$$;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_dispatch_document_order ON dispatch_document (dispatch_order_id);
 
@@ -31,9 +30,8 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user') THEN
     RETURN;
   END IF;
-  GRANT INSERT, SELECT, UPDATE, DELETE ON dispatch_document TO app_user;
-END
-$$;
+  GRANT INSERT, SELECT, UPDATE ON dispatch_document TO app_user;
+END $$;
 
 DO $$
 BEGIN
@@ -41,5 +39,4 @@ BEGIN
     RETURN;
   END IF;
   GRANT SELECT ON dispatch_document TO readonly_user;
-END
-$$;
+END $$;

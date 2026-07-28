@@ -16,6 +16,7 @@ const DISPATCH_PERMANENT_CODES = [
   'DISPATCH_DISPATCHED_INVALID_PAYLOAD',
   'PACKED_QTY_MISMATCH',
   'LOT_ON_HOLD',
+  'DISPATCH_DOCUMENTS_NOT_GENERATED',
 ];
 
 describe('Story 3.7: dispatch event edge handling', () => {

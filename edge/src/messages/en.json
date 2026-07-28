@@ -114,5 +114,6 @@
   "errors.DISPATCH_DOCUMENTS_INVALID_PAYLOAD": "The document generation request is incomplete. Check your inputs.",
   "errors.DISPATCH_DISPATCHED_INVALID_PAYLOAD": "The dispatch confirmation data is incomplete. Check your inputs.",
   "errors.PACKED_QTY_MISMATCH": "The packed quantity does not match the confirmed pick quantity.",
+  "errors.DISPATCH_DOCUMENTS_NOT_GENERATED": "Shipping documents must be generated before dispatch.",
   "errors.ASN_PO_NOT_FOUND": "The PO referenced by this ASN was not found. Refresh PO data and try again."
 }
