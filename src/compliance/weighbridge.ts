@@ -208,6 +208,10 @@ export async function applyWeighbridgeProjection(envelope: EventEnvelope, client
       capture_method: p['capture_method'] as 'AUTO' | 'MANUAL',
       weighed_by: p['weighed_by'] as string,
       business_date: localYmd(occurredAt),
+      // Story 3.8: persist the capture instant itself, not only the calendar day derived from it.
+      // The AC3 gate-dwell interval (gate entry -> weighbridge acceptance) is sub-day, so a DATE
+      // cannot express it.
+      occurred_at: occurredAt.toISOString(),
       source_event_id: eventId,
     },
     client,

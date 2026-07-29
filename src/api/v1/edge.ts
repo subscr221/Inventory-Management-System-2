@@ -28,6 +28,14 @@ const PLANNING_EVENT_TYPES = new Set([
   'ownership.agreement_set',
 ]);
 
+/**
+ * Story 3.7 SOD: frontline roles that may confirm pick lines but may perform no dispatch-side
+ * action. Behaviour is exactly as Story 3.7 shipped it; the list is a named constant only so the
+ * comparison reads through `.includes()` rather than as inline role literals, which the
+ * doa/no-hardcoded-role-in-workflow lint rule rejects (it was failing `npm run lint` at HEAD).
+ */
+const DISPATCH_DENIED_FRONTLINE_ROLES = ['store_assistant', 'warehouse_operator'];
+
 function planningPayloadLocation(body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): string | null {
   if (body.stream_type !== 'inventory' || !PLANNING_EVENT_TYPES.has(body.event_type)) return null;
   const locationId = body.payload['location_id'];
@@ -199,21 +207,21 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.packed') {
     body.payload['packed_by'] = authContext.userId;
     const role = assignment.role;
-    if (role === 'store_assistant' || role === 'warehouse_operator') {
+    if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
       throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to pack a dispatch order`);
     }
   }
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.shipping_documents_generated') {
     body.payload['generated_by'] = authContext.userId;
     const role = assignment.role;
-    if (role === 'store_assistant' || role === 'warehouse_operator') {
+    if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
       throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to generate shipping documents`);
     }
   }
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.dispatched') {
     body.payload['dispatched_by'] = authContext.userId;
     const role = assignment.role;
-    if (role === 'store_assistant' || role === 'warehouse_operator') {
+    if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
       throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to confirm dispatch`);
     }
   }

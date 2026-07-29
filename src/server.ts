@@ -114,9 +114,17 @@ import {
   handleGetPutawayTask,
   handleGetPutawaySuggestion,
   handleCompletePutaway,
+  handleAssignPutawayTask,
   handleListVelocityClassification,
   handleReslottingJob,
 } from './api/v1/putaway.js';
+import {
+  handleListWarehouseTasks,
+  handleGetProductivity,
+  handleGetGateDwellExceptions,
+  handleGetSlaConfig,
+  handlePutSlaConfig,
+} from './api/v1/warehouse-tasks.js';
 import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
@@ -264,6 +272,14 @@ export function createAppRouter(): Router {
   router.post('/api/v1/putaway-tasks/:putawayTaskId/complete', handleCompletePutaway);
   router.get('/api/v1/velocity-classification', handleListVelocityClassification);
   router.post('/api/v1/velocity-classification/reslot', handleReslottingJob);
+
+  // Story 3.8: Warehouse Task Management and Productivity Tracking
+  router.post('/api/v1/putaway-tasks/:putawayTaskId/assign', handleAssignPutawayTask);
+  router.get('/api/v1/warehouse-tasks', handleListWarehouseTasks);
+  router.get('/api/v1/warehouse-tasks/productivity', handleGetProductivity);
+  router.get('/api/v1/warehouse-tasks/exceptions/gate-dwell', handleGetGateDwellExceptions);
+  router.get('/api/v1/warehouse-tasks/sla-config', handleGetSlaConfig);
+  router.put('/api/v1/warehouse-tasks/sla-config', handlePutSlaConfig);
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

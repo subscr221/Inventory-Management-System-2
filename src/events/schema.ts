@@ -567,6 +567,71 @@ export interface DispatchDispatchedEnvelope extends Omit<EventEnvelope, 'payload
 }
 
 // ---------------------------------------------------------------------------
+// Story 3.8: warehouse task management - configurable SLA thresholds
+// ---------------------------------------------------------------------------
+export type WarehouseTaskType = 'receiving' | 'putaway' | 'picking' | 'packing';
+
+export interface TaskSlaConfigUpdatedPayload {
+  /**
+   * The site this threshold governs. Part of the grain, not decoration: without it a null-zone row
+   * is the single deployment-wide default and one site's supervisor silently changes what counts as
+   * a breach everywhere else. Validated against the actor's permitted sites in the compliance seam.
+   */
+  site_id: string;
+  task_type: WarehouseTaskType;
+  /** Omitted or null sets the site-wide default threshold for this task type, within site_id. */
+  zone_id?: string | null;
+  threshold_minutes: number | string;
+  /** Server-set from metadata.actor.user_id; a client-supplied value is ignored. */
+  updated_by?: string;
+}
+
+export interface TaskSlaConfigUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'task_sla_config.updated';
+  payload: TaskSlaConfigUpdatedPayload;
+}
+
+/**
+ * Story 3.8 code review: putaway assignment used to be written straight to the read model by the
+ * HTTP handler, with no domain event and no audit entry - the only warehouse state mutation in the
+ * codebase without one. A projection rebuild silently discarded every assignment, and the SOD gate
+ * lived only in the handler, so a direct POST /api/v1/events could not be checked by it. Assignment
+ * is now a first-class event so it replays, audits, and passes through the same seam as every other
+ * privileged warehouse write.
+ */
+/**
+ * The priority union is restated inline here rather than imported from
+ * src/read/projections/pick_task.ts, which is its canonical home. The events layer must not depend
+ * on the read layer; pick_task.ts's isTaskPriority remains the single runtime validator, and
+ * test/unit/schema-drift.test.ts pins the CHECK constraint that both must agree with.
+ */
+export interface PutawayTaskAssignedPayload {
+  putaway_task_id: string;
+  assigned_to: string;
+  /** Optional re-prioritisation applied with the assignment; omitted leaves the priority as-is. */
+  priority?: 'low' | 'normal' | 'high' | 'urgent' | null;
+  /** Server-set from metadata.actor.user_id; a client-supplied value is ignored. */
+  assigned_by?: string;
+}
+
+export interface PutawayTaskAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'putaway_task.assigned';
+  payload: PutawayTaskAssignedPayload;
+}
+
+export interface PickTaskAssignedPayload {
+  pick_task_id: string;
+  assigned_to: string;
+  priority?: 'low' | 'normal' | 'high' | 'urgent' | null;
+  assigned_by?: string;
+}
+
+export interface PickTaskAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'pick_task.assigned';
+  payload: PickTaskAssignedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -708,6 +773,25 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'dispatch.dispatched': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  // Story 3.8: configurable task SLA thresholds on the existing 'warehouse' stream. An SLA-threshold
+  // change posts no valuated stock or financial movement - it is supervisor configuration governing
+  // how the task board highlights age - so business-stream tagging is not gated on it (the same
+  // rationale already used for pick_task.* and dispatch.*).
+  'task_sla_config.updated': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  // Story 3.8 code review: task assignment is a privileged supervisor action that must replay and
+  // audit like every other warehouse write. Assigning work posts no valuated stock movement, so
+  // business-stream tagging is not gated on it, matching task_sla_config.updated above.
+  'putaway_task.assigned': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'pick_task.assigned': {
     streamType: 'warehouse',
     requiresBusinessStream: false,
   },

@@ -83,3 +83,12 @@ BEGIN
     GRANT SELECT ON weighbridge_event TO readonly_user;
   END IF;
 END $$;
+
+-- Story 3.8 additive migration: the capture instant of the weighment (AC3 gate dwell). business_date
+-- is a calendar DATE and cannot express a sub-day interval; Story 3.3 already computed this instant
+-- from metadata.occurred_at purely to derive business_date and then discarded it. Persisting it here
+-- makes the gate-entry-to-weighbridge-acceptance dwell computable without re-reading domain_events.
+-- Nullable by design: rows written before this story have no recoverable capture instant, and the
+-- gate_dwell_metric view excludes them rather than inventing one.
+ALTER TABLE IF EXISTS weighbridge_event ADD COLUMN IF NOT EXISTS occurred_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_weighbridge_event_occurred_at ON weighbridge_event (occurred_at);

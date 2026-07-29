@@ -30,7 +30,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_user') THEN
     RETURN;
   END IF;
-  GRANT INSERT, SELECT, UPDATE ON dispatch_document TO app_user;
+  GRANT INSERT, SELECT, UPDATE, DELETE ON dispatch_document TO app_user;
 END $$;
 
 DO $$

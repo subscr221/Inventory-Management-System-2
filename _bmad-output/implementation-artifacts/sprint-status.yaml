@@ -1,5 +1,65 @@
 # generated: 2026-07-12
-# last_updated: 2026-07-27
+# last_updated: 2026-07-30
+# story 3-7 dev-story 2026-07-30: repaired test/integration/story-3-7.test.ts, which had never
+#   actually executed (fictional SCIM/pick-task/dispatch API shapes); fixed 2 genuine bugs the
+#   repaired suite exposed (missing DELETE grant on dispatch_document, document-renderer.ts
+#   selecting a non-existent location_register.hierarchy_path column); corrected .env.test
+#   DB_PORT (5432->5442). All 8 tasks were already complete from prior sessions. Full suite green:
+#   488 backend (487 pass, 1 pre-existing story-3-3 date-flake), edge 23/23, tsc/eslint/build
+#   clean, spine gate 6/6; moved to review
+# story 3-8 code review 2026-07-29 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
+#   Auditor, run in parallel against baseline cd7e3d9; all three returned findings, none failed).
+#   8 decisions resolved + 26 patches applied, 2 deferred, 4 dismissed. All three layers independently
+#   found the headline defect: the AC2 packing arm aliased packed_at to BOTH created_at and
+#   completed_at with a hard-coded `true AS completed`, so every packing row added 1 to numerator AND
+#   denominator (a 100% confirmation rate by construction, against an SM-17 target of >95%) and an
+#   exact 0 to both duration rollups. Packing is now excluded from COMPLETION_SOURCES pending a real
+#   start instant on packing_record. Other highs: task_sla_config had NO site_id, so the NULLS NOT
+#   DISTINCT grain permitted exactly one null-zone row per task type for the WHOLE deployment and a
+#   single-site supervisor silently changed breach thresholds everywhere - site_id is now part of the
+#   grain, the index, the event payload and getSlaConfig's fallback; putaway assignment wrote straight
+#   to the read model with zero persistEvent calls and no audit entry (the only warehouse mutation
+#   without a domain event - a rebuild discarded every assignment and the SOD gate existed only in the
+#   handler), now a putaway_task.assigned / pick_task.assigned event pair gated in the compliance seam;
+#   productivity attribution flipped to COALESCE(assigned_to, completed_by) so an operator's
+#   unconfirmed assigned work can actually lower their rate. Also: median_duration_seconds was missing
+#   the FILTER its AVG twin carried (two figures over different populations); the `site` query alias
+#   bypassed UUID validation into a raw 22P02 500; business_date accepted 2026-13-45; the threshold
+#   regex bounded scale but not precision (NUMERIC(9,2) overflow as a 500); the board query had no
+#   LIMIT; INNER JOIN erp_sales_order silently removed pick/packing tasks from the board AND the
+#   denominator at once (no FK exists) - now LEFT JOIN; assign-vs-assign silently stole a task;
+#   task_sla_config.updated had no replay-ordering guard; zone resolution overwrote a good zone_id
+#   with NULL on re-direction; gate dwell counted neither open dwell (a yard of stuck vehicles read as
+#   "not exceeded") nor guarded against clock skew, and misreported a pre-migration weighment as a
+#   skipped capture. Migration caught a real 42P16: CREATE OR REPLACE VIEW cannot insert columns
+#   mid-list, so gate_dwell_metric is now DROP + CREATE. tsc/eslint clean, npm test 488 tests 474 pass
+#   (+2 new, both passing; the 1 fail is the documented story-3-3 date-flake and the 13 cancelled are
+#   story-3-7's non-executing suite, both unchanged from baseline and both on the deferred ledger),
+#   spine gate 6/6, edge 23/23, db:migrate re-runnable; moved to done
+# story 3-8 dev-story 2026-07-29: implementation started from baseline cd7e3d9; moved to in-progress
+# story 3-8 dev-story 2026-07-29: implemented all 8 tasks (59 subtasks) from baseline cd7e3d9. Additive
+#   capture instants (weighbridge_event.occurred_at, grn.received_at) threaded from metadata.occurred_at,
+#   which Stories 3.3/3.4 computed only to derive business_date and then discarded - without them a sub-day
+#   gate-dwell interval was not computable. Additive priority on pick_task/putaway_task plus assignment
+#   (assigned_to/by/at) and denormalized zone_id on putaway_task, the zone resolved once in
+#   setDirectedSuggestion by a depth-capped recursive parent walk. New event-sourced task_sla_config
+#   projection on the (task_type, zone_id) grain with a NULLS NOT DISTINCT unique index (unqualified, not
+#   partial - no lifecycle column to make it partial by) and a new task_sla_config.updated event on the
+#   existing 'warehouse' stream, spliced into store.ts after the Story 3.7 dispatch blocks with nothing
+#   reordered. src/warehouse/task-metrics.ts normalizes four task sources (data-driven, so Story 3.9 adds a
+#   fifth by appending one entry), computes every age/duration/percentile in SQL, and decides breaches by
+#   exact decimal-string comparison rather than JS floats. gate_dwell_metric is a VIEW over gate/weighbridge/
+#   grn with a weighbridge-then-GRN fallback and SM-C2 capture-completeness counters; the per-shift median
+#   uses percentile_cont WITHIN GROUP under a plain GROUP BY (ordered-set aggregates are not window
+#   functions in PG18) and breaches strictly above 4 minutes. 5 new REST routes + putaway assign; the
+#   supervisor SOD gate lives in the compliance seam so a direct POST /api/v1/events cannot bypass it
+#   (proved by test); WAREHOUSE_TASK_READ_ROLES enumerates supervisors explicitly (the Story 3.7 read-role
+#   regression); no edge/offline path added per Task 7.6. Also fixed a pre-existing npm run lint failure in
+#   src/api/v1/edge.ts (Story 3.7 inline SOD role literals tripping doa/no-hardcoded-role-in-workflow) that
+#   blocked this story's own eslint and spine gates; behaviour unchanged. tsc/eslint/build clean, npm test
+#   486 tests 472 pass (+50 new, all passing; the 1 fail is the documented story-3-3 date-flake and the 13
+#   cancelled are story-3-7's non-executing suite, both unchanged from baseline), spine gate 6/6,
+#   schema-drift 41/41, edge 23/23 unchanged, db:migrate re-runnable; moved to review
 # story 3-6 code review 2026-07-27 (SECOND adversarial pass, independent model; first pass had run without
 #   its Blind Hunter layer, which failed empty - the retry supplied most of the concurrency and
 #   stock-invariant findings). 2 decisions + 26 patches applied, 3 deferred, 4 dismissed.
@@ -148,7 +208,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-07-28'
+last_updated: '2026-07-29'
 # story 3-6 created 2026-07-25 via create-story workflow: Pick Task Generation and Execution (FR-W-04);
 #   system-generated pick tasks with optimized paths (single-order, batch, wave, zone strategies);
 #   FEFO lot selection, bin pick-sequence ordering, paper-directed picking; real-time stock allocation
@@ -432,8 +492,8 @@ development_status:
   3-4-goods-receiving-against-asn-or-po-fr-w-02: done   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: done   # PILOT
   3-6-pick-task-generation-and-execution-fr-w-04: done   # PILOT
-  3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: in-progress   # PILOT
-  3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: backlog   # PILOT
+  3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: review   # PILOT
+  3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: done   # PILOT
   3-9-forward-pick-replenishment-fr-w-08: backlog   # PILOT
   3-10-cross-docking-execution-fr-w-09: backlog   # PILOT
   epic-3-retrospective: optional

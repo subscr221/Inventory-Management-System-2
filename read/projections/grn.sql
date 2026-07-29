@@ -50,3 +50,10 @@ BEGIN
     GRANT SELECT ON grn TO readonly_user;
   END IF;
 END $$;
+
+-- Story 3.8 additive migration: the capture instant of the receipt (AC3 gate dwell, GRN-fallback
+-- leg). Mirrors weighbridge_event.occurred_at - business_date is a calendar DATE and cannot express
+-- a sub-day interval. Set once by the header-creating line and never overwritten, exactly like every
+-- other header-identity column on this table.
+ALTER TABLE IF EXISTS grn ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_grn_received_at ON grn (received_at);

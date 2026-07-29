@@ -1,15 +1,15 @@
 import type { PoolClient } from 'pg';
+import { getLocationWithHierarchyPath } from '../read/projections/location_register.js';
 
 async function resolveShipFrom(dispatchOrderId: string, client: PoolClient): Promise<string> {
   const result = await client.query(
-    `SELECT lr.hierarchy_path, eso.ship_from_site_code_ext
-     FROM erp_sales_order eso
-     LEFT JOIN location_register lr ON lr.location_id = eso.ship_from_site_id
-     WHERE eso.id = $1`,
+    `SELECT ship_from_site_id, ship_from_site_code_ext FROM erp_sales_order WHERE id = $1`,
     [dispatchOrderId],
   );
   if (result.rows.length === 0) return 'Unknown Site';
-  return result.rows[0].hierarchy_path || result.rows[0].ship_from_site_code_ext || 'Unknown Site';
+  const { ship_from_site_id, ship_from_site_code_ext } = result.rows[0];
+  const location = await getLocationWithHierarchyPath(ship_from_site_id, client);
+  return location?.hierarchy_path || ship_from_site_code_ext || 'Unknown Site';
 }
 
 async function resolveConsignee(dispatchOrderId: string, client: PoolClient): Promise<string> {

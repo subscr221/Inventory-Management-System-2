@@ -295,6 +295,9 @@ const EXPECTED = [
       'idx_weighbridge_event_site_status',
       'idx_weighbridge_event_po_line',
       'idx_weighbridge_event_business_date',
+      // Story 3.8: capture-instant column for gate-dwell computation. A bare additive TIMESTAMPTZ
+      // adds no named constraint, so only its index needs guarding here.
+      'idx_weighbridge_event_occurred_at',
     ],
   },
   {
@@ -306,6 +309,8 @@ const EXPECTED = [
       'idx_grn_po_ref',
       'idx_grn_site_status',
       'idx_grn_business_date',
+      // Story 3.8: capture-instant column for the GRN-fallback leg of gate-dwell computation.
+      'idx_grn_received_at',
     ],
   },
   {
@@ -326,8 +331,20 @@ const EXPECTED = [
   {
     canonical: 'read/projections/putaway_task.sql',
     table: 'putaway_task',
-    constraints: ['chk_putaway_task_status', 'chk_putaway_task_velocity_class_value', 'chk_putaway_task_override_confidence'],
-    indexes: ['idx_putaway_task_grn_line', 'idx_putaway_task_site_status'],
+    constraints: [
+      'chk_putaway_task_status',
+      'chk_putaway_task_velocity_class_value',
+      'chk_putaway_task_override_confidence',
+      // Story 3.8: task-board priority vocabulary.
+      'chk_putaway_task_priority',
+    ],
+    indexes: [
+      'idx_putaway_task_grn_line',
+      'idx_putaway_task_site_status',
+      'idx_putaway_task_priority_status',
+      'idx_putaway_task_assigned_status',
+      'idx_putaway_task_zone_status',
+    ],
   },
   // Story 3.5 projections.
   {
@@ -340,13 +357,15 @@ const EXPECTED = [
   {
     canonical: 'read/projections/pick_task.sql',
     table: 'pick_task',
-    constraints: ['chk_pick_task_strategy', 'chk_pick_task_status'],
+    // Story 3.8 added chk_pick_task_priority; every other value in this entry is unchanged.
+    constraints: ['chk_pick_task_strategy', 'chk_pick_task_status', 'chk_pick_task_priority'],
     indexes: [
       'idx_pick_task_dispatch_order',
       'idx_pick_task_zone_status',
       'idx_pick_task_assigned_status',
       'idx_pick_task_wave',
       'idx_pick_task_batch',
+      'idx_pick_task_priority_status',
     ],
   },
   {
@@ -384,6 +403,16 @@ const EXPECTED = [
     table: 'dispatch_document',
     constraints: ['chk_dispatch_document_type'],
     indexes: ['idx_dispatch_document_order'],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
+  // Story 3.8 projections. NOTE: the dispatch_order_status entry above still carries an empty
+  // `constraints` array - that gap is inherited from Story 3.7's deferred follow-up. This story
+  // neither fixes nor masks it; the entry is left exactly as Story 3.6/3.7 left it.
+  {
+    canonical: 'read/projections/task_sla_config.sql',
+    table: 'task_sla_config',
+    constraints: ['chk_task_sla_config_task_type', 'chk_task_sla_config_threshold_positive'],
+    indexes: ['uq_task_sla_config_grain', 'idx_task_sla_config_zone'],
   },
 ];
 

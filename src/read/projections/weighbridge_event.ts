@@ -24,6 +24,11 @@ export interface WeighbridgeEvent {
   capture_method: 'AUTO' | 'MANUAL';
   weighed_by: string;
   business_date: string;
+  /**
+   * Story 3.8: the capture instant this weighment was recorded at (envelope metadata.occurred_at).
+   * Null on rows written before Story 3.8, which carried only the calendar business_date.
+   */
+  occurred_at: string | null;
   source_event_id: string;
   created_at: string;
   updated_at: string;
@@ -46,6 +51,7 @@ export interface UpsertWeighbridgeEventInput {
   capture_method: 'AUTO' | 'MANUAL';
   weighed_by: string;
   business_date: string;
+  occurred_at?: string | null;
   source_event_id: string;
 }
 
@@ -77,7 +83,7 @@ export function numOrNull(value: unknown): number | null {
 const WEIGHBRIDGE_EVENT_COLUMNS = `weighbridge_event_id, correlation_id, gate_event_id, site_id,
        site_code_ext, po_ref_ext, line_no, tare_kg, gross_kg, net_kg, status, tolerance_breach_reason,
        device_id, capture_method, weighed_by, to_char(business_date, 'YYYY-MM-DD') AS business_date,
-       source_event_id, created_at, updated_at`;
+       occurred_at, source_event_id, created_at, updated_at`;
 
 function mapRow(row: Record<string, unknown>): WeighbridgeEvent {
   return {
@@ -97,6 +103,7 @@ function mapRow(row: Record<string, unknown>): WeighbridgeEvent {
     capture_method: row['capture_method'] as WeighbridgeEvent['capture_method'],
     weighed_by: row['weighed_by'] as string,
     business_date: row['business_date'] as string,
+    occurred_at: row['occurred_at'] ? ts(row['occurred_at']) : null,
     source_event_id: row['source_event_id'] as string,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
@@ -151,8 +158,8 @@ export async function upsertWeighbridgeEvent(input: UpsertWeighbridgeEventInput,
     `INSERT INTO weighbridge_event
        (weighbridge_event_id, correlation_id, gate_event_id, site_id, site_code_ext, po_ref_ext,
         line_no, tare_kg, gross_kg, net_kg, status, tolerance_breach_reason, device_id,
-        capture_method, weighed_by, business_date, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11, $12, $13, $14, $15, $16, $17)
+        capture_method, weighed_by, business_date, occurred_at, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11, $12, $13, $14, $15, $16, $17::timestamptz, $18)
      ON CONFLICT (weighbridge_event_id) DO UPDATE SET
        correlation_id = EXCLUDED.correlation_id,
        gate_event_id = EXCLUDED.gate_event_id,
@@ -169,6 +176,7 @@ export async function upsertWeighbridgeEvent(input: UpsertWeighbridgeEventInput,
        capture_method = EXCLUDED.capture_method,
        weighed_by = EXCLUDED.weighed_by,
        business_date = EXCLUDED.business_date,
+       occurred_at = EXCLUDED.occurred_at,
        source_event_id = EXCLUDED.source_event_id,
        updated_at = now()`,
     [
@@ -188,6 +196,7 @@ export async function upsertWeighbridgeEvent(input: UpsertWeighbridgeEventInput,
       input.capture_method,
       input.weighed_by,
       input.business_date,
+      input.occurred_at ?? null,
       input.source_event_id,
     ],
   );

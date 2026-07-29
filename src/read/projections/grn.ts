@@ -18,6 +18,12 @@ export interface Grn {
   status: 'open' | 'posted';
   received_by: string;
   business_date: string;
+  /**
+   * Story 3.8: the capture instant of the receipt (envelope metadata.occurred_at), used as the
+   * GRN-fallback end point of the AC3 gate-dwell interval. Part of header identity: set by the
+   * line that creates the header and never overwritten. Null on headers written before Story 3.8.
+   */
+  received_at: string | null;
   source_event_id: string;
   created_at: string;
   updated_at: string;
@@ -34,6 +40,7 @@ export interface InsertGrnHeaderInput {
   status?: 'open' | 'posted';
   received_by: string;
   business_date: string;
+  received_at?: string | null;
   source_event_id: string;
 }
 
@@ -56,7 +63,7 @@ function ts(value: unknown): string {
 
 const GRN_COLUMNS = `grn_id, correlation_id, po_ref_ext, source_document, source_ref_ext, site_id,
        site_code_ext, status, received_by, to_char(business_date, 'YYYY-MM-DD') AS business_date,
-       source_event_id, created_at, updated_at`;
+       received_at, source_event_id, created_at, updated_at`;
 
 function mapRow(row: Record<string, unknown>): Grn {
   return {
@@ -70,6 +77,7 @@ function mapRow(row: Record<string, unknown>): Grn {
     status: row['status'] as Grn['status'],
     received_by: row['received_by'] as string,
     business_date: row['business_date'] as string,
+    received_at: row['received_at'] ? ts(row['received_at']) : null,
     source_event_id: row['source_event_id'] as string,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
@@ -99,16 +107,18 @@ export async function listGrns(filters: ListGrnsFilters = {}, client?: PoolClien
 
 /**
  * Idempotent, replay-safe upsert keyed on grn_id (client-supplied UUID keeps replay idempotent).
- * Header identity (received_by, business_date, source_event_id, site, PO ref) is set by the first
- * line that creates the header and never overwritten by later lines sharing the same grn_id; status
- * only ever advances open -> posted, never regresses.
+ * Header identity (received_by, business_date, received_at, source_event_id, site, PO ref) is set by
+ * the first line that creates the header and never overwritten by later lines sharing the same
+ * grn_id; status only ever advances open -> posted, never regresses. Story 3.8's received_at joins
+ * that identity set: the ON CONFLICT clause deliberately leaves it alone, so the receipt instant is
+ * the first line's capture instant and a later line can neither move it nor null it out.
  */
 export async function insertGrnHeader(input: InsertGrnHeaderInput, client: PoolClient): Promise<void> {
   await client.query(
     `INSERT INTO grn
        (grn_id, correlation_id, po_ref_ext, source_document, source_ref_ext, site_id, site_code_ext,
-        status, received_by, business_date, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        status, received_by, business_date, received_at, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12)
      ON CONFLICT (grn_id) DO UPDATE SET
        status = CASE WHEN grn.status = 'posted' THEN 'posted' ELSE EXCLUDED.status END,
        updated_at = now()`,
@@ -123,6 +133,7 @@ export async function insertGrnHeader(input: InsertGrnHeaderInput, client: PoolC
       input.status ?? 'open',
       input.received_by,
       input.business_date,
+      input.received_at ?? null,
       input.source_event_id,
     ],
   );

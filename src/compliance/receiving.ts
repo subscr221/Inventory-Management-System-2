@@ -262,6 +262,8 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
         status: 'open',
         received_by: receivedBy,
         business_date: businessDate,
+        // Story 3.8: the capture instant backs the GRN-fallback leg of the AC3 gate-dwell interval.
+        received_at: occurredAt.toISOString(),
         source_event_id: eventId,
       },
       client,
@@ -382,6 +384,8 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
       status: 'posted',
       received_by: receivedBy,
       business_date: businessDate,
+      // Story 3.8: the capture instant backs the GRN-fallback leg of the AC3 gate-dwell interval.
+      received_at: occurredAt.toISOString(),
       source_event_id: eventId,
     },
     client,

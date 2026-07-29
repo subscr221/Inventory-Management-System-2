@@ -10,7 +10,13 @@ import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
 import { getLocationByCode } from '../../read/projections/location_register.js';
 import { getSalesOrderLineById } from '../../read/projections/erp_sales_order.js';
-import { getPickTaskById, getPickTaskSiteId, listPickTasks, assignPickTask } from '../../read/projections/pick_task.js';
+import {
+  getPickTaskById,
+  getPickTaskSiteId,
+  listPickTasks,
+  isTaskPriority,
+  TASK_PRIORITIES,
+} from '../../read/projections/pick_task.js';
 import { activeUserExistsById } from '../../read/projections/users.js';
 import { listPickLinesByTask } from '../../read/projections/pick_line.js';
 import { generatePickTasks } from '../../warehouse/pick-task-generator.js';
@@ -260,6 +266,15 @@ const assignPickTaskBase: RouteHandler = async (req, res, params) => {
     sendRequestError(req, res, 404, 'ASSIGNEE_NOT_FOUND', `No active user exists for "${assignedTo}"`);
     return;
   }
+  // Story 3.8 code review: assignment optionally carries a board priority. This route is the only
+  // writer of pick_task.priority - the story originally shipped a setPickTaskPriority accessor that
+  // nothing called and an assign route that could not carry a priority, so the column was
+  // permanently 'normal' and AC1's priority display was inert for pick tasks.
+  const priority = body['priority'];
+  if (priority !== undefined && priority !== null && !isTaskPriority(priority)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', `priority must be one of: ${TASK_PRIORITIES.join(', ')}`);
+    return;
+  }
   const task = await getPickTaskById(pickTaskId);
   if (!task) {
     sendRequestError(req, res, 404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${pickTaskId}"`);
@@ -270,25 +285,35 @@ const assignPickTaskBase: RouteHandler = async (req, res, params) => {
     return;
   }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'write');
-  const pool = getPool();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const assigned = await assignPickTask(pickTaskId, assignedTo, client);
-    if (!assigned) {
-      await client.query('ROLLBACK');
-      sendRequestError(req, res, 409, 'PICK_TASK_NOT_PENDING', `Pick task "${pickTaskId}" cannot be assigned because it is no longer pending`);
-      return;
-    }
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+
+  // Assignment goes through persistEvent so it replays, audits, and passes the supervisor SOD gate
+  // in the compliance seam, matching putaway. The hand-rolled BEGIN/COMMIT around a direct
+  // projection write is gone: persistEvent owns the transaction that commits the projection row and
+  // its domain event together.
+  const actor = actorContext(req);
+  const persisted = await persistEvent(
+    {
+      stream_type: 'warehouse',
+      stream_id: pickTaskId,
+      event_type: 'pick_task.assigned',
+      payload: {
+        pick_task_id: pickTaskId,
+        assigned_to: assignedTo,
+        priority: isTaskPriority(priority) ? priority : null,
+        assigned_by: actor.userId,
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurred_at: new Date().toISOString(),
+      },
+      idempotency_key: typeof body['idempotency_key'] === 'string' ? body['idempotency_key'] : null,
+    },
+    auditCtxFor(req, actor, 200),
+  );
+
   const updated = await getPickTaskById(pickTaskId);
-  sendJson(res, 200, { task: updated });
+  sendJson(res, 200, { event_id: persisted.event_id, task: updated });
 };
 
 const confirmPickLineBase: RouteHandler = async (req, res, params) => {

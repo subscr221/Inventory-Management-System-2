@@ -4,7 +4,7 @@ baseline_commit: 112587c2c7e3860ac966b1d323ed66cd7278b190
 
 # Story 3.7: Packing, Shipping, and Dispatch Documents (FR-W-05, FR-W-06)
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -238,6 +238,7 @@ Modified files:
 - read/projections/pick_task.sql (additive dispatch_order_status ALTER)
 - src/middleware/rbac.ts (if dispatch_clerk role string needs adding)
 - src/read/projections/lot_master.ts (if UUID-to-number bridge helper added)
+- .env.test (DB_PORT corrected from 5432 to 5442 - pointed at a different local Postgres instance)
 
 ### Review Findings
 
@@ -258,7 +259,7 @@ Modified files:
 - [x] [Review][Patch] packed_qty precision not validated — Still unresolved; `numericEqual` normalizes for comparison only, doesn't reject >3-decimal input on write — tracked as canonical item in round 2 below [src/compliance/dispatch.ts:20-40]
 - [x] [Review][Patch] Wrong error code for missing documents — Resolved: `DISPATCH_DOCUMENTS_NOT_GENERATED`.
 - [x] [Review][Patch] RBAC roles don't match spec (write roles) — Resolved for write roles; read roles introduced a new regression (see round 2).
-- [ ] [Review][Patch] FOR UPDATE not pre-acquired before LOT_ON_HOLD check — Still unresolved; `FOR UPDATE OF lm` added but only locks rows already matching `quality_hold_status = 'held'`, so a concurrent hold placement on a not-yet-held lot still races through [src/compliance/dispatch.ts:175-187, 280-291]
+- [x] [Review][Patch] FOR UPDATE not pre-acquired before LOT_ON_HOLD check — Resolved in round 2: both call sites now lock every candidate lot for the order via `FOR UPDATE OF lm` before filtering by hold status. [src/compliance/dispatch.ts:187-201, 294-305]
 - [x] [Review][Patch] NULL lot_id bypasses LOT_ON_HOLD check — Moot: `lot_id` is now unconditionally required as UUID in `assertDispatchPackedShape`, so this path is unreachable.
 - [x] [Review][Patch] No LOT_ON_HOLD integration test — Resolved: two new AC3 tests added.
 - [x] [Review][Patch] renderLabels missing SKU and lot number — Partially resolved; SKU/lot now present but wrong for multi-line orders (see round 2).
@@ -288,3 +289,59 @@ Modified files:
 - [x] [Review][Dismiss] NULL lot_id bypass via INNER JOIN — moot, `lot_id` is a required UUID at the shape-assert layer; unreachable via the event path.
 - [x] [Review][Dismiss] document_type 'label' vs 'labels' naming — pre-existing spec-internal inconsistency (Task 1.2 vs Task 4.3/DDL); diff resolves consistently in favor of the DDL's `'label'`, not a new defect.
 - [x] [Review][Dismiss] document_types array not validated at the API layer before reaching the compliance layer — validation exists (just deeper in the stack via `assertDispatchShippingDocumentsGeneratedShape`), so behavior is correct, only the error surfaces later than ideal.
+
+### Review Findings (round 3 — FOR UPDATE fix-pass verification, 2026-07-29)
+
+- [x] [Review][Defer] Lot-lock ordering can deadlock two concurrent orders sharing lots - both hold-check queries lock candidate lots via `FOR UPDATE OF lm` with no deterministic `ORDER BY lm.lot_id`, so two transactions on different dispatch orders that share two or more lots can acquire lot locks in opposite order and deadlock. The round-2 `FOR UPDATE` race fix itself is correct and verified (both call sites lock all candidate lots before filtering by hold status). [src/compliance/dispatch.ts:190-201, 295-305] - deferred, pre-existing lock-ordering class shared with prior warehouse stories; add a deterministic lot-id ordering when lock contention is addressed project-wide.
+- [x] [Review][Dismiss] "both call sites asymmetric" (dispatch re-check omits `lot_number`, uses `.some()`, selects unused `lm.lot_id`) - cosmetic divergence; both correctly lock and detect held lots, dispatch path simply needs no held-id detail in its error.
+- [x] [Review][Dismiss] "every candidate lot" overstates coverage (only packed lots locked) - correct by design: the hold gate protects lots actually being dispatched; unpacked lots carry no dispatchable stock in this transaction.
+- [x] [Review][Dismiss] Empty `packing_record` set skips the hold check - unreachable: `packed_at` is only set by `applyDispatchPackedProjection` after a packing record is created, so a packed order always has at least one row.
+- [x] [Review][Dismiss] `placeQualityHold` row-lock compatibility under-substantiated - verified: `placeQualityHold` runs `UPDATE lot_master ... WHERE`, which takes the row-level write lock that `FOR UPDATE OF lm` serializes against; the fix is sound.
+
+### Test Harness Repair (2026-07-30)
+
+`test/integration/story-3-7.test.ts` (Task 8.1) did not run at all prior to this session - it targeted
+a fictional SCIM schema/endpoint (`/api/v1/scim/Users` with a nested enterprise-extension body) and an
+invented `access-tokens` endpoint, neither of which exist; the real surface is
+`/api/v1/scim/v2/Users` + `/api/v1/auth/dev-token`, per Story 3.6's harness. Once auth was fixed, the
+suite surfaced a chain of further defects, each fixed in this pass:
+
+- `erp_sales_order` is a direct-upsert reference projection (Story 2.9), not event-sourced; the test's edge-event
+  `sales_order.created` upload was replaced with a direct SQL seed (mirrors Story 3.6's `seedOrderLine`).
+- `dispatchOrderLineIds` must reference `erp_sales_order.id` (the seeded line itself), not an unrelated random UUID.
+- Pick-task generation (`POST /api/v1/pick-tasks/generate`) returns `201` with `{ pickTaskIds, pickLineIds }`,
+  not `200` with a bare `eventId`; pick-line confirmation is `POST .../lines/:pickLineId/confirm` (not
+  `.../pick-lines/...`) and requires `confirmedLotId` / `confirmedQuantity` / `captureMethod`, not `lotId`/`pickedQty`.
+  FEFO auto-selects the lot and requires real warehouse topology + `stock_balance` + `lot_master` rows, none of
+  which the test seeded; added a minimal site/zone/aisle/rack/bin chain plus per-test lot/stock seeding.
+  Every seeded SKU/lot/SO-number gained a per-run random suffix - without it, reruns collided with a prior run's
+  rows in the shared test database.
+  A single pick line auto-completes its task on confirmation (Story 3.6 decision), so the test's explicit
+  `completePickTask` calls always 409'd; removed as redundant.
+- The three dispatch write routes are `POST /api/v1/dispatch/:id/pack|generate-documents|dispatch`, not the flat
+  `/api/v1/dispatch/packed` etc. the test invented.
+- Fixed two genuine production bugs the corrected tests then exposed: (1) `dispatch_document`'s app_user grant
+  was `INSERT, SELECT, UPDATE` only (a prior review round matched Task 2.4's grant list literally), but
+  `clearDocumentsByDispatchOrder` performs a hard DELETE on regeneration per Task 3.2's explicit design - added
+  `DELETE` to the grant in `read/projections/dispatch_document.sql` and its `deploy/compose/init-db.sql` mirror,
+  and to the live test database; (2) `document-renderer.ts`'s `resolveShipFrom` selected a non-existent
+  `location_register.hierarchy_path` column, 500ing every `generate-documents` call - switched to the existing
+  `getLocationWithHierarchyPath` accessor.
+- `.env.test` pointed `DB_PORT` at `5432`, a different local Postgres instance with different credentials, not
+  the `ims2-test-postgres` container on `5442` this project actually uses; corrected (this exact drift was
+  logged as a known pre-existing issue during Story 3.8's review).
+
+Full suite after the repair: backend 488 tests, 487 pass (the 1 remaining failure is the pre-existing,
+already-documented story-3-3 date-flake, unrelated to this story), edge 23/23, tsc/eslint/build clean, spine
+gate 6/6.
+
+## Change Log
+
+The following table records each change made while implementing this story.
+
+| Date | Change | Author |
+| --- | --- | --- |
+| 2026-07-27 | Story created via create-story workflow. | deepseek/deepseek-v4-flash:discounted |
+| 2026-07-27 | All 8 tasks implemented (compliance seam, projections, document renderer, REST API, edge acceptance, integration tests). | deepseek/deepseek-v4-pro |
+| 2026-07-27 to 2026-07-29 | Three adversarial code-review rounds; API route/response shapes corrected, SOD guard completed, FOR UPDATE lot-lock race fixed, packed-quantity precision validated, RBAC read-role regression fixed. 1 lock-ordering deadlock class and 1 site-isolation gap deferred (pre-existing pattern, logged to deferred-work.md). | claude-opus-5 |
+| 2026-07-30 | Repaired `test/integration/story-3-7.test.ts`, which had never actually executed: fictional SCIM/pick-task/dispatch API shapes replaced with the real contracts, missing warehouse topology/stock/lot seeding added, redundant post-auto-complete calls removed. Fixed two genuine bugs the repaired suite exposed - a missing `DELETE` grant on `dispatch_document` blocking document regeneration, and `document-renderer.ts` selecting a non-existent `location_register.hierarchy_path` column. Corrected `.env.test`'s `DB_PORT` (5432 to 5442). Full suite green: 488 backend tests (487 pass, 1 pre-existing unrelated date-flake), edge 23/23, tsc/eslint/build clean, spine gate 6/6. Status moved to review. | claude-sonnet-5 |

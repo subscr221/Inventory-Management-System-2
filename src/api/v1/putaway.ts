@@ -7,6 +7,7 @@ import { requireRole, permittedLocationsForModule, permittedLocationsForModuleSc
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { listPutawayTasks, getPutawayTaskById, setDirectedSuggestion } from '../../read/projections/putaway_task.js';
+import { isTaskPriority, TASK_PRIORITIES } from '../../read/projections/pick_task.js';
 import { listVelocityClasses } from '../../read/projections/velocity_class.js';
 import { computeDirectedSuggestion } from '../../warehouse/putaway-suggestion.js';
 import { runReslottingJob } from '../../warehouse/reslotting-job.js';
@@ -16,6 +17,12 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const PUTAWAY_READ_ROLES = ['store_assistant', 'unloading_supervisor', 'warehouse_manager', 'inventory_controller'];
 const PUTAWAY_EXECUTE_ROLES = ['store_assistant'];
 const RESLOTTING_ROLES = ['warehouse_manager', 'inventory_controller'];
+/**
+ * Story 3.8 (Task 2.6/7.2): assignment and prioritisation are supervisor actions, mirroring pick's
+ * PICK_SUPERVISE_ROLES. Kept as its own named constant rather than reusing RESLOTTING_ROLES so that
+ * changing who may re-slot never silently changes who may assign work.
+ */
+const PUTAWAY_SUPERVISE_ROLES = ['warehouse_manager', 'inventory_controller'];
 
 interface ActorContext {
   userId: string;
@@ -195,6 +202,72 @@ const listVelocityClassificationBase: RouteHandler = async (req, res) => {
   sendJson(res, 200, { velocity_classifications: filtered });
 };
 
+/**
+ * Story 3.8 (AC1, Task 2.6): a supervisor assigns a ready putaway task to an operator, optionally
+ * setting its board priority in the same call. The assigning identity is taken from the
+ * authenticated context and never from the request body (Task 7.5). The underlying UPDATE is
+ * status-predicated, so a task that a concurrent request released, held, or completed is reported
+ * as a 409 rather than silently reassigned.
+ *
+ * Code review moved the write onto persistEvent. It previously took a raw pooled client and wrote
+ * the projection directly, which made it the only warehouse state mutation with no domain event and
+ * no audit entry: a projection rebuild discarded every assignment, an assignment dispute had no
+ * evidence, and the SOD gate existed only in this handler, so a direct POST /api/v1/events reached
+ * the same write unchecked. The role check stays here for a fast, well-shaped 403 and runs again in
+ * the compliance seam, which is the placement that actually holds.
+ */
+const assignPutawayTaskBase: RouteHandler = async (req, res, params) => {
+  assertRoleAllowed(req, PUTAWAY_SUPERVISE_ROLES, 'write');
+  const putawayTaskId = params['putawayTaskId'];
+  if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'putawayTaskId path parameter must be a UUID');
+    return;
+  }
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const assignedTo = body['assigned_to'];
+  if (typeof assignedTo !== 'string' || !UUID_REGEX.test(assignedTo)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'assigned_to is required and must be a UUID');
+    return;
+  }
+  const priority = body['priority'];
+  if (priority !== undefined && priority !== null && !isTaskPriority(priority)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', `priority must be one of: ${TASK_PRIORITIES.join(', ')}`);
+    return;
+  }
+
+  const task = await getPutawayTaskById(putawayTaskId);
+  if (!task) {
+    sendRequestError(req, res, 404, 'PUTAWAY_TASK_NOT_FOUND', `No putaway task exists for "${putawayTaskId}"`);
+    return;
+  }
+  assertSiteAccess(req, task.site_id, 'write');
+
+  const actor = actorContext(req);
+  const persisted = await persistEvent(
+    {
+      stream_type: 'warehouse',
+      stream_id: putawayTaskId,
+      event_type: 'putaway_task.assigned',
+      payload: {
+        putaway_task_id: putawayTaskId,
+        assigned_to: assignedTo,
+        priority: isTaskPriority(priority) ? priority : null,
+        assigned_by: actor.userId,
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurred_at: new Date().toISOString(),
+      },
+      idempotency_key: typeof body['idempotency_key'] === 'string' ? body['idempotency_key'] : null,
+    },
+    auditCtxFor(req, actor, 200),
+  );
+
+  const updated = await getPutawayTaskById(putawayTaskId);
+  sendJson(res, 200, { event_id: persisted.event_id, task: updated });
+};
+
 const reslottingJobBase: RouteHandler = async (req, res) => {
   assertRoleAllowed(req, RESLOTTING_ROLES, 'write');
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
@@ -208,5 +281,6 @@ export const handleListPutawayTasks: RouteHandler = requireRole({ module: 'wareh
 export const handleGetPutawayTask: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(getPutawayTaskBase);
 export const handleGetPutawaySuggestion: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(getPutawaySuggestionBase);
 export const handleCompletePutaway: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(completePutawayBase);
+export const handleAssignPutawayTask: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(assignPutawayTaskBase);
 export const handleListVelocityClassification: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(listVelocityClassificationBase);
 export const handleReslottingJob: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(reslottingJobBase);

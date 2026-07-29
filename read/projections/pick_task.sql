@@ -76,6 +76,32 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 3.8 additive migration: supervisor-assignable priority (AC1 requires the task board to show
+-- priority alongside age and zone). Added as an ALTER rather than inside the CREATE TABLE above so
+-- databases provisioned before this story gain the column too. NOT NULL with a default keeps every
+-- pre-existing row valid without a backfill pass.
+ALTER TABLE IF EXISTS pick_task ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+
+-- Story 3.8 code review: pick_task carried assigned_to from Story 3.6 but no record of WHO assigned
+-- it or WHEN, so the pick assign route added in review had no audit shape to match putaway's. These
+-- mirror putaway_task's assignment columns exactly so both task types answer the same questions.
+ALTER TABLE IF EXISTS pick_task ADD COLUMN IF NOT EXISTS assigned_by UUID;
+ALTER TABLE IF EXISTS pick_task ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_pick_task_priority'
+      AND conrelid = 'pick_task'::regclass
+  ) THEN
+    ALTER TABLE pick_task
+      ADD CONSTRAINT chk_pick_task_priority CHECK (priority IN ('low', 'normal', 'high', 'urgent'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_pick_task_priority_status ON pick_task (priority, status);
+
 -- Story 3.6 (AC4 scope extension): minimal dispatch-order picked flag. No dispatch-order status
 -- projection existed before this story; Story 3.7 (packing) may extend or replace it.
 CREATE TABLE IF NOT EXISTS dispatch_order_status (

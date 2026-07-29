@@ -2792,7 +2792,7 @@ DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
     GRANT INSERT, SELECT, UPDATE ON packing_record TO app_user;
-    GRANT INSERT, SELECT, UPDATE ON dispatch_document TO app_user;
+    GRANT INSERT, SELECT, UPDATE, DELETE ON dispatch_document TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON packing_record TO readonly_user;
@@ -2856,5 +2856,274 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON asn_line TO readonly_user;
+  END IF;
+END $$;
+
+-- ===========================================================================
+-- Story 3.8: Warehouse Task Management and Productivity Tracking (FR-W-07)
+-- Mirrors read/projections/weighbridge_event.sql, grn.sql, pick_task.sql,
+-- putaway_task.sql, task_sla_config.sql and gate_dwell_metric.sql.
+-- ===========================================================================
+
+-- Story 3.8 additive migration: the capture instant of the weighment (AC3 gate dwell). business_date
+-- is a calendar DATE and cannot express a sub-day interval; Story 3.3 already computed this instant
+-- from metadata.occurred_at purely to derive business_date and then discarded it. Persisting it here
+-- makes the gate-entry-to-weighbridge-acceptance dwell computable without re-reading domain_events.
+-- Nullable by design: rows written before this story have no recoverable capture instant, and the
+-- gate_dwell_metric view excludes them rather than inventing one.
+ALTER TABLE IF EXISTS weighbridge_event ADD COLUMN IF NOT EXISTS occurred_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_weighbridge_event_occurred_at ON weighbridge_event (occurred_at);
+
+-- Story 3.8 additive migration: the capture instant of the receipt (AC3 gate dwell, GRN-fallback
+-- leg). Mirrors weighbridge_event.occurred_at - business_date is a calendar DATE and cannot express
+-- a sub-day interval. Set once by the header-creating line and never overwritten, exactly like every
+-- other header-identity column on this table.
+ALTER TABLE IF EXISTS grn ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_grn_received_at ON grn (received_at);
+
+-- Story 3.8 additive migration: supervisor-assignable priority (AC1 requires the task board to show
+-- priority alongside age and zone). Added as an ALTER rather than inside the CREATE TABLE above so
+-- databases provisioned before this story gain the column too. NOT NULL with a default keeps every
+-- pre-existing row valid without a backfill pass.
+ALTER TABLE IF EXISTS pick_task ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+
+-- Story 3.8 code review: assignment audit columns mirroring putaway_task, for the pick assign route.
+ALTER TABLE IF EXISTS pick_task ADD COLUMN IF NOT EXISTS assigned_by UUID;
+ALTER TABLE IF EXISTS pick_task ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_pick_task_priority'
+      AND conrelid = 'pick_task'::regclass
+  ) THEN
+    ALTER TABLE pick_task
+      ADD CONSTRAINT chk_pick_task_priority CHECK (priority IN ('low', 'normal', 'high', 'urgent'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_pick_task_priority_status ON pick_task (priority, status);
+
+-- Story 3.8: Warehouse Task Management - additive columns for the unified task board (AC1).
+-- `zone_id` is denormalized here, resolved once at suggestion time by walking
+-- location_register.parent_location_id up from directed_location_id to the ancestor at level 'zone'.
+-- The dashboard therefore never pays for a recursive topology join on every read. It stays nullable:
+-- a putaway task has no zone until a bin has been directed for it.
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS assigned_to UUID;
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS assigned_by UUID;
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS zone_id UUID;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_putaway_task_priority'
+      AND conrelid = 'putaway_task'::regclass
+  ) THEN
+    ALTER TABLE putaway_task
+      ADD CONSTRAINT chk_putaway_task_priority CHECK (priority IN ('low', 'normal', 'high', 'urgent'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_putaway_task_priority_status ON putaway_task (priority, status);
+CREATE INDEX IF NOT EXISTS idx_putaway_task_assigned_status ON putaway_task (assigned_to, status);
+CREATE INDEX IF NOT EXISTS idx_putaway_task_zone_status ON putaway_task (zone_id, status);
+
+-- Configurable per-task-type SLA thresholds (AC1: "tasks that breach a configurable SLA threshold
+-- are visually highlighted with the breached threshold shown"). Grain is
+-- (site_id, task_type, zone_id), where a NULL zone_id is the site-wide default for that task type;
+-- resolution is zone-specific first, site-wide fallback second, both within one site (see
+-- getSlaConfig in src/read/projections/task_sla_config.ts).
+--
+-- site_id is part of the grain, not decoration. Code review of this story found that without it the
+-- NULLS NOT DISTINCT index below permits exactly ONE null-zone row per task type for the entire
+-- deployment, so a supervisor scoped to one site who omitted zone_id silently changed what counts as
+-- a breach at every other site. The "site-wide default" must be scoped to an actual site to mean
+-- what its name says.
+--
+-- Rows are written ONLY through persistEvent's task_sla_config.updated seam
+-- (src/compliance/warehouse-task.ts), never by a direct handler UPDATE, so every threshold change
+-- carries a domain event, an audit entry, and a server-set updated_by. No DELETE grant: a threshold
+-- is superseded by a new value at the same grain, never removed.
+
+CREATE TABLE IF NOT EXISTS task_sla_config (
+  id                UUID PRIMARY KEY,
+  site_id           UUID NOT NULL,
+  task_type         TEXT NOT NULL,
+  zone_id           UUID REFERENCES location_register(location_id),
+  threshold_minutes NUMERIC(9,2) NOT NULL,
+  updated_by        UUID NOT NULL,
+  source_event_id   UUID,
+  -- Capture instant of the event that last wrote this row; the compliance seam's upsert uses it as a
+  -- replay-ordering guard so an older event cannot reinstate a superseded threshold. updated_at
+  -- records when the row was written, which is a different question.
+  event_occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_task_sla_config_task_type CHECK (task_type IN ('receiving', 'putaway', 'picking', 'packing')),
+  CONSTRAINT chk_task_sla_config_threshold_positive CHECK (threshold_minutes > 0)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_task_sla_config_task_type'
+      AND conrelid = 'task_sla_config'::regclass
+  ) THEN
+    ALTER TABLE task_sla_config
+      ADD CONSTRAINT chk_task_sla_config_task_type CHECK (task_type IN ('receiving', 'putaway', 'picking', 'packing'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_task_sla_config_threshold_positive'
+      AND conrelid = 'task_sla_config'::regclass
+  ) THEN
+    ALTER TABLE task_sla_config
+      ADD CONSTRAINT chk_task_sla_config_threshold_positive CHECK (threshold_minutes > 0);
+  END IF;
+END $$;
+
+-- NULLS NOT DISTINCT (the Story 2.9 uq_integration_exception_open convention) is what makes the
+-- site-wide default row enforceable: without it, PostgreSQL treats every NULL zone_id as distinct
+-- and an unbounded number of "site-wide" rows could coexist for the same task_type. This index is
+-- also the ON CONFLICT target of the compliance seam's upsert. It is deliberately unqualified
+-- rather than partial - task_sla_config carries no active/superseded lifecycle column, so there is
+-- no predicate to make it partial by, and one row per grain unconditionally is the stronger rule.
+--
+-- Upgrade path for databases provisioned from the pre-review revision of this story, where the
+-- table exists without site_id and carries the deployment-wide grain. The table is unreleased, so
+-- any row present is development or test data with no recoverable site attribution: it is discarded
+-- rather than guessed at, which converges the upgraded and freshly-created schemas on exactly the
+-- same shape. The stale index must be dropped before the new one can be built.
+ALTER TABLE IF EXISTS task_sla_config ADD COLUMN IF NOT EXISTS site_id UUID;
+ALTER TABLE IF EXISTS task_sla_config
+  ADD COLUMN IF NOT EXISTS event_occurred_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'task_sla_config' AND column_name = 'site_id' AND is_nullable = 'YES'
+  ) THEN
+    DELETE FROM task_sla_config WHERE site_id IS NULL;
+    ALTER TABLE task_sla_config ALTER COLUMN site_id SET NOT NULL;
+  END IF;
+END $$;
+
+DROP INDEX IF EXISTS uq_task_sla_config_grain;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_task_sla_config_grain
+  ON task_sla_config (site_id, task_type, zone_id) NULLS NOT DISTINCT;
+
+CREATE INDEX IF NOT EXISTS idx_task_sla_config_zone ON task_sla_config (zone_id);
+CREATE INDEX IF NOT EXISTS idx_task_sla_config_site_type ON task_sla_config (site_id, task_type);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON task_sla_config TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON task_sla_config TO readonly_user;
+  END IF;
+END $$;
+
+--
+-- AC3 gate dwell (SM-13). Deliberately a VIEW, not a table: every column is derivable from data
+-- already materialized by Stories 3.2 (gate_event), 3.3 (weighbridge_event) and 3.4 (grn), so it
+-- carries no independent state, needs no apply*Projection hook, and can never drift out of sync
+-- with its sources. This is the one documented exception to the projection-trio table pattern.
+--
+-- Dwell is measured from the gate-entry instant to the FIRST accepted weighment for the same Story
+-- 3.2 binding token (correlation_id); where no weighment applies, it falls back to the first GRN
+-- confirmation for that token. A reversed gate event is excluded - a reversal means the entry never
+-- stood, so counting its dwell would pollute the shift median.
+--
+-- Rows whose token has neither an accepted weighment nor a GRN yet are still emitted, with a NULL
+-- resolved_at and dwell_interval: a vehicle still in the yard is exactly the case a dwell dashboard
+-- must not silently drop. percentile_cont ignores those NULLs when the median is computed.
+--
+-- The capture-completeness columns (challan_photo_present, weighment_present, grn_fallback_used)
+-- exist for SM-C2: a dwell figure that improved because mandatory capture was skipped must be
+-- visible on the same row that reports the improvement, never hidden behind it.
+
+-- dwell_open marks a vehicle still in the yard: those rows carry an OPEN dwell measured against
+-- now() so a shift of stuck vehicles breaches rather than reporting a null median and "not
+-- exceeded". clock_skew_detected marks a resolved_at preceding the gate entry; that row's
+-- dwell_interval is NULL so a negative interval can never drag the median down.
+--
+-- weighment_present asks whether an accepted weighment EXISTS, independent of whether it carries an
+-- occurred_at, so a pre-migration weighment is never misreported as a skipped one. grn_fallback_used
+-- means only that the dwell was RESOLVED from the GRN.
+--
+-- challan_photo_present is always true given gate_event's NOT NULL plus non-empty CHECK. It is kept
+-- as an invariant tripwire: if either constraint is relaxed it starts varying on its own.
+-- Dropped and recreated rather than CREATE OR REPLACE'd: PostgreSQL only lets CREATE OR REPLACE
+-- VIEW append columns to the end of the select list, and this story's review inserted dwell_open and
+-- clock_skew_detected mid-list, which fails with 42P16. The GRANT block below restores privileges.
+DROP VIEW IF EXISTS gate_dwell_metric;
+
+CREATE VIEW gate_dwell_metric AS
+SELECT
+  ge.gate_event_id,
+  ge.correlation_id,
+  ge.site_id,
+  ge.site_code_ext,
+  ge.business_date,
+  ge.vehicle_reg_ext,
+  ge.po_ref_ext,
+  ge.entered_at AS gate_entered_at,
+  COALESCE(wb.occurred_at, gr.received_at) AS resolved_at,
+  CASE
+    WHEN wb.occurred_at IS NOT NULL THEN 'weighbridge'
+    WHEN gr.received_at IS NOT NULL THEN 'grn'
+    ELSE NULL
+  END AS resolution_source,
+  CASE
+    WHEN COALESCE(wb.occurred_at, gr.received_at) IS NULL
+      THEN now() - ge.entered_at
+    WHEN COALESCE(wb.occurred_at, gr.received_at) >= ge.entered_at
+      THEN COALESCE(wb.occurred_at, gr.received_at) - ge.entered_at
+    ELSE NULL
+  END AS dwell_interval,
+  (COALESCE(wb.occurred_at, gr.received_at) IS NULL) AS dwell_open,
+  (COALESCE(wb.occurred_at, gr.received_at) IS NOT NULL
+    AND COALESCE(wb.occurred_at, gr.received_at) < ge.entered_at) AS clock_skew_detected,
+  COALESCE(wb.accepted_exists, false) AS weighment_present,
+  (wb.occurred_at IS NULL AND gr.received_at IS NOT NULL) AS grn_fallback_used,
+  (ge.challan_photo_ref IS NOT NULL AND length(trim(ge.challan_photo_ref)) > 0) AS challan_photo_present
+FROM gate_event ge
+LEFT JOIN LATERAL (
+  SELECT min(w.occurred_at) AS occurred_at,
+         count(*) > 0       AS accepted_exists
+    FROM weighbridge_event w
+   WHERE w.correlation_id = ge.correlation_id
+     AND w.status = 'accepted'
+) wb ON true
+LEFT JOIN LATERAL (
+  SELECT g.received_at
+    FROM grn g
+   WHERE g.correlation_id = ge.correlation_id
+     AND g.received_at IS NOT NULL
+   ORDER BY g.received_at ASC
+   LIMIT 1
+) gr ON true
+WHERE ge.status = 'open';
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT SELECT ON gate_dwell_metric TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON gate_dwell_metric TO readonly_user;
   END IF;
 END $$;

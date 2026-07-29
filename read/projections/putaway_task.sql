@@ -78,3 +78,30 @@ BEGIN
       CHECK (override_confidence IS NULL OR override_confidence IN ('certain','uncertain'));
   END IF;
 END $$;
+
+-- Story 3.8: Warehouse Task Management - additive columns for the unified task board (AC1).
+-- `zone_id` is denormalized here, resolved once at suggestion time by walking
+-- location_register.parent_location_id up from directed_location_id to the ancestor at level 'zone'.
+-- The dashboard therefore never pays for a recursive topology join on every read. It stays nullable:
+-- a putaway task has no zone until a bin has been directed for it.
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS assigned_to UUID;
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS assigned_by UUID;
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS putaway_task ADD COLUMN IF NOT EXISTS zone_id UUID;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_putaway_task_priority'
+      AND conrelid = 'putaway_task'::regclass
+  ) THEN
+    ALTER TABLE putaway_task
+      ADD CONSTRAINT chk_putaway_task_priority CHECK (priority IN ('low', 'normal', 'high', 'urgent'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_putaway_task_priority_status ON putaway_task (priority, status);
+CREATE INDEX IF NOT EXISTS idx_putaway_task_assigned_status ON putaway_task (assigned_to, status);
+CREATE INDEX IF NOT EXISTS idx_putaway_task_zone_status ON putaway_task (zone_id, status);

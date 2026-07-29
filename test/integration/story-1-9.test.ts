@@ -286,6 +286,13 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/packing-records/:packingRecordId',
       'GET /api/v1/dispatch-order-status/:dispatchOrderId',
       'GET /api/v1/dispatch/documents/:documentId',
+      // Story 3.8: warehouse task management, productivity, and gate-dwell exceptions
+      'POST /api/v1/putaway-tasks/:putawayTaskId/assign',
+      'GET /api/v1/warehouse-tasks',
+      'GET /api/v1/warehouse-tasks/productivity',
+      'GET /api/v1/warehouse-tasks/exceptions/gate-dwell',
+      'GET /api/v1/warehouse-tasks/sla-config',
+      'PUT /api/v1/warehouse-tasks/sla-config',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
       'PUT /api/v1/lots/:lot_id/quality-hold',
