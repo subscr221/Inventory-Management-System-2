@@ -248,19 +248,27 @@ function assertSiteScoped(filters: { siteId?: string | null; siteAny?: string[] 
   throw new AppError(403, 'LOCATION_ACCESS_DENIED', 'No role assignment grants access to any site for this module');
 }
 
+export interface OpenTaskBoard {
+  tasks: OpenTask[];
+  /** True when the database was queried with a row cap and the cap could have been hit. */
+  truncated: boolean;
+  /** The cap actually applied at the database. */
+  limit: number;
+}
+
 /**
  * AC1: every open task across the four Phase-1 domains, grouped-ready and SLA-flagged.
  *
  * Ordering is most-urgent-first then oldest-first, so the row a supervisor should act on next is at
  * the top regardless of which domain it came from.
  */
-export async function listOpenTasks(filters: ListOpenTasksFilters = {}, client?: PoolClient): Promise<OpenTask[]> {
+export async function listOpenTasks(filters: ListOpenTasksFilters = {}, client?: PoolClient): Promise<OpenTaskBoard> {
   assertSiteScoped(filters);
 
   const sources = filters.taskType
     ? TASK_SOURCES.filter((s) => s.taskType === filters.taskType)
     : TASK_SOURCES;
-  if (sources.length === 0) return [];
+  if (sources.length === 0) return { tasks: [], truncated: false, limit: 0 };
 
   const clauses: string[] = [];
   const values: unknown[] = [];
@@ -338,7 +346,7 @@ export async function listOpenTasks(filters: ListOpenTasksFilters = {}, client?:
       breached_threshold_minutes: breached ? threshold : null,
     });
   }
-  return tasks;
+  return { tasks, truncated: result.rows.length >= limit, limit };
 }
 
 /** Groups a board into the AC1 shape: by task type, and within that by operator. */
@@ -471,18 +479,16 @@ function buildProductivityQuery(
            END::text AS confirmation_rate,
            ROUND(AVG(EXTRACT(EPOCH FROM (s.completed_at - s.created_at)))
                  FILTER (WHERE s.completed AND s.completed_at IS NOT NULL)::numeric, 3)::text AS avg_duration_seconds,
-           -- The FILTER must match the AVG above exactly. Without it the median relied only on
-           -- percentile_cont skipping NULLs, so any row with a completed_at but a non-completed
-           -- status (a cancelled task that kept its completion timestamp) entered the median and
-           -- not the mean, and the two figures on the same response row silently described
-           -- different populations.
            ROUND(percentile_cont(0.5) WITHIN GROUP (
                    ORDER BY EXTRACT(EPOCH FROM (s.completed_at - s.created_at))
                  ) FILTER (WHERE s.completed AND s.completed_at IS NOT NULL)::numeric, 3)::text AS median_duration_seconds
       FROM (${COMPLETION_SOURCES}) s
      WHERE ${clauses.join(' AND ')}
      GROUP BY ${groupBy === 'operator_id' ? 's.operator_id' : 's.zone_id'}
-     ORDER BY 1`;
+     -- Order by the actual selected group-by column, not the projection's NULL::uuid literal,
+     -- which left the zone rollup's row order nondeterministic. NULLS LAST keeps a NULL operator
+     -- or zone row out of the way of real values.
+     ORDER BY ${groupBy === 'operator_id' ? 's.operator_id' : 's.zone_id'} NULLS LAST`;
   return { sql, values };
 }
 
@@ -627,11 +633,16 @@ export async function computeGateDwellExceptions(
   );
 
   const results: GateDwellShift[] = [];
+  // N+1 drill-through: identify every breaching shift up front, then run a SINGLE breach query
+  // covering all (business_date, site_id) pairs, instead of one query per shift. A wildcard read
+  // that returns N exceeding shifts no longer issues N extra round trips.
+  const exceededKeys: Array<{ businessDate: string; siteId: string }> = [];
   for (const row of shifts.rows) {
     const median = (row['median_dwell_minutes'] as string | null) ?? null;
     const exceeded = exceedsGateDwellTarget(median);
     const businessDate = row['business_date'] as string;
     const siteId = row['site_id'] as string;
+    if (exceeded) exceededKeys.push({ businessDate, siteId });
     results.push({
       business_date: businessDate,
       site_id: siteId,
@@ -646,10 +657,63 @@ export async function computeGateDwellExceptions(
         unresolved_count: Number(row['unresolved_count']),
         clock_skew_count: Number(row['clock_skew_count']),
       },
-      breaches: exceeded ? await listGateDwellBreaches(businessDate, siteId, client) : [],
+      breaches: [],
     });
   }
+  const breachesByKey = await listGateDwellBreachesBulk(exceededKeys, client);
+  for (const shift of results) {
+    if (!shift.exceeded) continue;
+    shift.breaches = breachesByKey.get(`${shift.business_date}::${shift.site_id}`) ?? [];
+  }
   return results;
+}
+
+/**
+ * AC3 drill-through for a batch of (business_date, site_id) pairs in one query, so a wide read
+ * does not fan out to one round trip per breaching shift. The result is keyed by the same
+ * "business_date::site_id" string the caller uses to look it up.
+ */
+export async function listGateDwellBreachesBulk(
+  keys: Array<{ businessDate: string; siteId: string }>,
+  client?: PoolClient,
+): Promise<Map<string, GateDwellBreachRow[]>> {
+  const result = new Map<string, GateDwellBreachRow[]>();
+  if (keys.length === 0) return result;
+  const dates = [...new Set(keys.map((k) => k.businessDate))];
+  const sites = [...new Set(keys.map((k) => k.siteId))];
+  const rows = await runner(client).query(
+    `SELECT to_char(business_date, 'YYYY-MM-DD') AS business_date,
+            site_id, gate_event_id, correlation_id, vehicle_reg_ext, po_ref_ext,
+            gate_entered_at, resolved_at, resolution_source,
+            ROUND((EXTRACT(EPOCH FROM dwell_interval) / 60.0)::numeric, 6)::text AS dwell_minutes,
+            challan_photo_present, weighment_present, grn_fallback_used
+       FROM gate_dwell_metric
+      WHERE business_date = ANY($1::date[])
+        AND site_id = ANY($2::uuid[])
+        AND dwell_interval > make_interval(mins => $3)
+      ORDER BY dwell_interval DESC`,
+    [dates, sites, GATE_DWELL_TARGET_MINUTES],
+  );
+  for (const row of rows.rows) {
+    const key = `${row['business_date'] as string}::${row['site_id'] as string}`;
+    const list = result.get(key) ?? [];
+    list.push({
+      gate_event_id: row['gate_event_id'] as string,
+      correlation_id: row['correlation_id'] as string,
+      site_id: row['site_id'] as string,
+      vehicle_reg_ext: row['vehicle_reg_ext'] as string,
+      po_ref_ext: (row['po_ref_ext'] as string | null) ?? null,
+      gate_entered_at: row['gate_entered_at'] instanceof Date ? (row['gate_entered_at'] as Date).toISOString() : String(row['gate_entered_at']),
+      resolved_at: row['resolved_at'] ? (row['resolved_at'] instanceof Date ? (row['resolved_at'] as Date).toISOString() : String(row['resolved_at'])) : null,
+      resolution_source: (row['resolution_source'] as 'weighbridge' | 'grn' | null) ?? null,
+      dwell_minutes: String(row['dwell_minutes']),
+      challan_photo_present: Boolean(row['challan_photo_present']),
+      weighment_present: Boolean(row['weighment_present']),
+      grn_fallback_used: Boolean(row['grn_fallback_used']),
+    });
+    result.set(key, list);
+  }
+  return result;
 }
 
 /**
@@ -714,6 +778,16 @@ export function assertValidTaskFilters(params: URLSearchParams): void {
       throw new AppError(400, 'INVALID_PARAMS', `${key} must be a UUID`, { [key]: value });
     }
   }
+  // Limit must be a positive integer, not a float / NaN / Infinity that the route's `Number()`
+  // conversion would silently turn into 1 or NaN, and that could then reach SQL LIMIT as a 500
+  // instead of this file's 400 INVALID_PARAMS. Anything non-integer is rejected up front.
+  const limit = params.get('limit');
+  if (limit !== null) {
+    const n = Number(limit);
+    if (!Number.isInteger(n) || n < 1 || n > OPEN_TASK_MAX_LIMIT) {
+      throw new AppError(400, 'INVALID_PARAMS', `limit must be a positive integer not exceeding ${OPEN_TASK_MAX_LIMIT}`, { limit });
+    }
+  }
   // Shape alone is not enough: `2026-13-45` matches the pattern and then raises Postgres 22008
   // (date/time field out of range) when bound as ::date, turning a bad request into a 500. The
   // round-trip check is what proves the calendar date actually exists.
@@ -731,8 +805,13 @@ export function assertValidTaskFilters(params: URLSearchParams): void {
   }
   for (const key of ['period_start', 'period_end'] as const) {
     const value = params.get(key);
-    if (value !== null && Number.isNaN(Date.parse(value))) {
-      throw new AppError(400, 'INVALID_PARAMS', `${key} must be an ISO 8601 timestamp`, { [key]: value });
+    if (value === null) continue;
+    // Date.parse accepts many non-ISO inputs (RFC 2822, etc) that PostgreSQL's timestamptz parser
+    // does not. Reject anything that does not round-trip as a true ISO 8601 / RFC 3339 instant,
+    // so a query that calls Date.parse OK but fails on ::timestamptz never reaches the database.
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(value)
+        || Number.isNaN(Date.parse(value))) {
+      throw new AppError(400, 'INVALID_PARAMS', `${key} must be an ISO 8601 timestamp with timezone`, { [key]: value });
     }
   }
   const start = params.get('period_start');

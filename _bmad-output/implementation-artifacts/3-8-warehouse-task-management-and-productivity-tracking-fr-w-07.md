@@ -384,6 +384,31 @@ Decisions taken on 2026-07-29:
 - [x] [Review][Defer] Putaway tasks directed before this migration never receive a `zone_id` because the additive column ships with no backfill and `setDirectedSuggestion` only runs at direction time, so they fall into the null-zone bucket on the board and in the per-zone rollup [read/projections/putaway_task.sql:79] - deferred, inherent to an additive migration; needs a backfill pass planned with the deployment.
 - [x] [Review][Defer] GRN headers created before this migration can never backfill `received_at` because the `ON CONFLICT` clause deliberately leaves it alone [src/read/projections/grn.ts:118-124] - deferred, the immutability is mandated by Task 1.4 and the paired pre-migration weighments are equally null, so those vehicles are simply outside dwell reporting.
 
+### Review Findings - Code-Only Re-Review 2026-07-30
+
+- [ ] [Review][Patch] Legacy accepted weighment with NULL `occurred_at` and no GRN is treated as open dwell, so completed historical visits become growing false breaches [read/projections/gate_dwell_metric.sql:72]
+- [ ] [Review][Patch] Future `gate_event.entered_at` creates negative open dwell and can lower the shift median instead of surfacing clock skew [read/projections/gate_dwell_metric.sql:72]
+- [ ] [Review][Patch] SLA replay ordering has no deterministic tie-break when two threshold events share `event_occurred_at` [src/read/projections/task_sla_config.ts:165]
+- [ ] [Review][Patch] Direct `pick_task.assigned` events skip site scoping when the ERP sales-order row is missing [src/compliance/warehouse-task.ts:343]
+- [ ] [Review][Patch] Assignment projections run before duplicate event insertion, so idempotent retry after task state changes can return task conflict instead of duplicate-event semantics [src/events/store.ts:432]
+- [ ] [Review][Patch] Assignment replay uses `now()` for `assigned_at`, making rebuilt assignment timestamps non-deterministic [src/read/projections/pick_task.ts:207; src/read/projections/putaway_task.ts:303]
+- [ ] [Review][Patch] Assignment seam accepts any UUID as `assigned_to`, including nonexistent or inactive users [src/compliance/warehouse-task.ts:232]
+- [ ] [Review][Patch] Metrics role authorization and metrics site scope use different role sets, letting a supervisor at one site read productivity and gate-dwell data for another site where they only hold a frontline warehouse role [src/api/v1/warehouse-tasks.ts:211]
+- [ ] [Review][Patch] Event actor metadata may be stamped from the first write assignment rather than the supervisor assignment that covers the target site [src/api/v1/warehouse-tasks.ts:325; src/api/v1/putaway.ts:245; src/api/v1/pick-tasks.ts:293]
+- [ ] [Review][Patch] SLA-config `zone_id` is only type-checked before a UUID-column query, so malformed strings can surface as PostgreSQL 22P02 [src/api/v1/warehouse-tasks.ts:297]
+- [ ] [Review][Patch] Open-task `limit` accepts `NaN`, fractions, and infinity, which can reach SQL `LIMIT` as a 500 instead of 400 `INVALID_PARAMS` [src/warehouse/task-metrics.ts:281]
+- [ ] [Review][Patch] Productivity period validation relies on `Date.parse`, so invalid or timezone-less timestamps can disagree with PostgreSQL `timestamptz` parsing [src/warehouse/task-metrics.ts:732]
+- [ ] [Review][Patch] Putaway assignment route does not mirror pick assignment's active-assignee check and can assign work to a nonexistent operator [src/api/v1/putaway.ts:227]
+- [ ] [Review][Patch] Task-board summary counts are computed after the row cap, so `open_count` and `breached_count` can under-report total work even when `truncated` is true [src/api/v1/warehouse-tasks.ts:181; src/warehouse/task-metrics.ts:281]
+- [ ] [Review][Patch] Gate-dwell drill-through performs one unbounded breach query per exceeded shift, so wildcard reads can become N-plus-one and unbounded [src/warehouse/task-metrics.ts:649]
+- [ ] [Review][Patch] Productivity zone rollup orders by a constant `NULL::uuid` column, leaving zone row order nondeterministic [src/warehouse/task-metrics.ts:485]
+- [ ] [Review][Patch] Schema drift guard omits `idx_task_sla_config_site_type` and has no canonical view-body parity check for `gate_dwell_metric` [test/unit/schema-drift.test.ts:415; test/integration/story-3-8.test.ts:840]
+- [ ] [Review][Patch] `task_sla_config` upgrade guard checks `information_schema.columns` without table schema, so a same-named table in another schema can trigger the destructive upgrade branch [read/projections/task_sla_config.sql:80]
+- [ ] [Review][Patch] Direct-event SOD test is a false positive because read-only warehouse credentials are rejected by route RBAC before the compliance seam runs [test/integration/story-3-8.test.ts:725]
+- [ ] [Review][Patch] Task-board tests do not prove priority ordering independently and do not cover receiving or packing sources in the unified board [test/integration/story-3-8.test.ts:380]
+- [ ] [Review][Patch] Site-scope and metrics-RBAC negative tests miss SLA-config read/write surfaces and frontend role denial on productivity and gate-dwell endpoints [test/integration/story-3-8.test.ts:713; test/integration/story-3-8.test.ts:819]
+- [ ] [Review][Patch] Replay, idempotency-key, and concurrent assignment edge tests are weak or missing for the new event-sourced assignment and SLA flows [test/integration/story-3-8.test.ts:694; test/integration/story-3-8.test.ts:743; test/integration/story-3-8.test.ts:779]
+
 ## Change Log
 
 The following table records each change made while implementing this story.

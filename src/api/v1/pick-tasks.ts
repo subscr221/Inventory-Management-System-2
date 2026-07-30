@@ -45,6 +45,22 @@ function actorContext(req: IncomingMessage): ActorContext {
   return { userId, role, auditLocationId, eventLocationId };
 }
 
+/**
+ * Like `actorContext` but stamps the event metadata's `location_id` with the target site of the
+ * write, so the compliance seam's assertActorSite compares against the site the work actually
+ * belongs to. Audit fields still come from the authorized assignment.
+ */
+function actorContextForSite(req: IncomingMessage, targetSiteId: string): ActorContext {
+  const base = actorContext(req);
+  const authContext = getAuthContext(req);
+  const covering = authContext?.roles.find(
+    (r) => (r.module === 'warehouse' || r.module === '*')
+      && r.functionScope === 'write'
+      && (r.locationId === '*' || r.locationId === targetSiteId),
+  );
+  return { ...base, eventLocationId: targetSiteId, role: covering?.role ?? base.role };
+}
+
 function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
   return {
     trace_id: getTraceId(req) ?? '',
@@ -290,7 +306,8 @@ const assignPickTaskBase: RouteHandler = async (req, res, params) => {
   // in the compliance seam, matching putaway. The hand-rolled BEGIN/COMMIT around a direct
   // projection write is gone: persistEvent owns the transaction that commits the projection row and
   // its domain event together.
-  const actor = actorContext(req);
+  const targetSite = await resolveTaskSite(pickTaskId);
+  const actor = actorContextForSite(req, targetSite);
   const persisted = await persistEvent(
     {
       stream_type: 'warehouse',

@@ -162,7 +162,12 @@ export async function upsertSlaConfig(input: UpsertTaskSlaConfigInput, client: P
        source_event_id = EXCLUDED.source_event_id,
        event_occurred_at = EXCLUDED.event_occurred_at,
        updated_at = now()
-     WHERE task_sla_config.event_occurred_at <= EXCLUDED.event_occurred_at
+     -- Tie-break: when two events share event_occurred_at, the higher source_event_id wins so the
+     -- result is deterministic instead of whichever INSERT raced last.
+     WHERE task_sla_config.event_occurred_at < EXCLUDED.event_occurred_at
+        OR (task_sla_config.event_occurred_at = EXCLUDED.event_occurred_at
+            AND COALESCE(task_sla_config.source_event_id, '00000000-0000-0000-0000-000000000000')
+              < COALESCE(EXCLUDED.source_event_id, '00000000-0000-0000-0000-000000000000'))
      RETURNING ${TASK_SLA_CONFIG_COLUMNS}`,
     values,
   );

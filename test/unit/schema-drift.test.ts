@@ -412,7 +412,18 @@ const EXPECTED = [
     canonical: 'read/projections/task_sla_config.sql',
     table: 'task_sla_config',
     constraints: ['chk_task_sla_config_task_type', 'chk_task_sla_config_threshold_positive'],
-    indexes: ['uq_task_sla_config_grain', 'idx_task_sla_config_zone'],
+    indexes: ['uq_task_sla_config_grain', 'idx_task_sla_config_zone', 'idx_task_sla_config_site_type'],
+  },
+  // gate_dwell_metric is a VIEW, so it does not fit the table-shaped EXPECTED entries. A canonical
+  // view-body parity check lives below, asserting the SELECT list of the canonical SQL and the
+  // init-db.sql mirror match exactly. Any drift that reorders, drops, or renames a column the
+  // dashboard contract depends on fails this assertion before it can reach production.
+  {
+    canonical: 'read/projections/gate_dwell_metric.sql',
+    table: 'gate_dwell_metric',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    isView: true,
   },
 ];
 
@@ -420,7 +431,9 @@ describe('Story 2.1 schema drift guard', () => {
   const migrateSource = read('src/events/migrate.ts');
   const initDb = read('deploy/compose/init-db.sql');
 
-  for (const { canonical, table, constraints, indexes, appUserGrant } of EXPECTED) {
+  for (const entry of EXPECTED) {
+    if (entry.isView) continue;
+    const { canonical, table, constraints = [], indexes = [], appUserGrant } = entry;
     it(`${table}: canonical definition is in the migration list and mirrored in init-db.sql`, () => {
       const canonicalSql = read(canonical);
       const fileName = canonical.split('/').pop()!;
@@ -441,4 +454,26 @@ describe('Story 2.1 schema drift guard', () => {
       assert.ok(initDb.includes(`GRANT SELECT ON ${table} TO readonly_user`), `init-db missing readonly_user grant for ${table}`);
     });
   }
+
+  // View bodies (gate_dwell_metric) cannot be matched by the table-shape check above. The
+  // dashboard contract depends on a fixed column list, so a body drift must fail here before it
+  // can reach production.
+  for (const entry of EXPECTED) {
+    if (!entry.isView) continue;
+    const { canonical, table } = entry;
+    it(`${table}: view body is canonical and mirrored in init-db.sql`, () => {
+      const canonicalSql = read(canonical);
+      const fileName = canonical.split('/').pop()!;
+      assert.ok(migrateSource.includes(fileName), `src/events/migrate.ts must apply ${fileName}`);
+      assert.strictEqual(extractViewBody(initDb, table), extractViewBody(canonicalSql, table));
+    });
+  }
 });
+
+/** Extracts the SELECT-list of a CREATE VIEW block for the given view name. */
+function extractViewBody(sql: string, viewName: string): string {
+  const re = new RegExp(`CREATE\\s+VIEW\\s+${viewName}\\s+AS\\s+([\\s\\S]+?)\\bFROM\\b`, 'i');
+  const m = re.exec(sql);
+  if (!m) throw new Error(`Could not find CREATE VIEW ${viewName} in canonical SQL`);
+  return m[1]!.trim();
+}

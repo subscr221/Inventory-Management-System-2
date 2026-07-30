@@ -337,6 +337,28 @@ export async function persistEvent(
   try {
     if (ownsTransaction) await client.query('BEGIN');
 
+    // Idempotency short-circuit BEFORE any projection runs, so a retried assignment event whose
+    // task has since changed status still returns DUPLICATE_EVENT instead of a 409 task conflict.
+    // The domain_events unique key catches a concurrent retry; this one catches a sequential one
+    // without taking a write lock on a projection the caller never wanted to touch again. A NULL
+    // idempotency_key is treated as "not supplied" rather than a wildcard that matches every
+    // existing event without an idempotency key, which would 409 every request that omits the
+    // field - the original unique constraint is not a wildcard either.
+    if (envelope.idempotency_key || envelope.event_id) {
+      const existing = await client.query(
+        `SELECT event_id FROM domain_events
+          WHERE ($1::text IS NOT NULL AND idempotency_key = $1::text)
+             OR event_id = $2::uuid
+          LIMIT 1`,
+        [envelope.idempotency_key ?? null, eventId],
+      );
+      if (existing.rows.length > 0) {
+        throw new AppError(409, 'DUPLICATE_EVENT', 'Event already exists', {
+          existing_event_id: existing.rows[0]!['event_id'] as string,
+        });
+      }
+    }
+
     await applyLotSerialValidation(envelope, client, eventId);
     await applyStockBalanceProjection(envelope, client);
     // Story 2.4: valuation runs AFTER lot/serial resolution (so an auto-selected lot/effective

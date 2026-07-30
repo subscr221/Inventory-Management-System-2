@@ -9,6 +9,7 @@ import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { listPutawayTasks, getPutawayTaskById, setDirectedSuggestion } from '../../read/projections/putaway_task.js';
 import { isTaskPriority, TASK_PRIORITIES } from '../../read/projections/pick_task.js';
 import { listVelocityClasses } from '../../read/projections/velocity_class.js';
+import { activeUserExistsById } from '../../read/projections/users.js';
 import { computeDirectedSuggestion } from '../../warehouse/putaway-suggestion.js';
 import { runReslottingJob } from '../../warehouse/reslotting-job.js';
 
@@ -39,6 +40,24 @@ function actorContext(req: IncomingMessage): ActorContext {
   const auditLocationId = assignment?.locationId ?? '*';
   const eventLocationId = auditLocationId === '*' ? NO_LOCATION_UUID : auditLocationId;
   return { userId, role, auditLocationId, eventLocationId };
+}
+
+/**
+ * Like `actorContext` but stamps the event metadata's `location_id` with the target site of the
+ * write, so the compliance seam's assertActorSite compares against the site the work actually
+ * belongs to rather than whichever warehouse write assignment the RBAC layer happened to match
+ * first. The audit fields still come from the authorized assignment, so the audit log records the
+ * supervisor's true site even when their primary write site differs.
+ */
+function actorContextForSite(req: IncomingMessage, targetSiteId: string): ActorContext {
+  const base = actorContext(req);
+  const authContext = getAuthContext(req);
+  const covering = authContext?.roles.find(
+    (r) => (r.module === 'warehouse' || r.module === '*')
+      && r.functionScope === 'write'
+      && (r.locationId === '*' || r.locationId === targetSiteId),
+  );
+  return { ...base, eventLocationId: targetSiteId, role: covering?.role ?? base.role };
 }
 
 function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
@@ -234,6 +253,12 @@ const assignPutawayTaskBase: RouteHandler = async (req, res, params) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', `priority must be one of: ${TASK_PRIORITIES.join(', ')}`);
     return;
   }
+  // Mirrors the pick assignment route: a well-formed UUID for a nonexistent user previously left
+  // the task looking assigned while no operator could ever see it.
+  if (!(await activeUserExistsById(assignedTo))) {
+    sendRequestError(req, res, 404, 'ASSIGNEE_NOT_FOUND', `No active user exists for "${assignedTo}"`);
+    return;
+  }
 
   const task = await getPutawayTaskById(putawayTaskId);
   if (!task) {
@@ -242,7 +267,7 @@ const assignPutawayTaskBase: RouteHandler = async (req, res, params) => {
   }
   assertSiteAccess(req, task.site_id, 'write');
 
-  const actor = actorContext(req);
+  const actor = actorContextForSite(req, task.site_id);
   const persisted = await persistEvent(
     {
       stream_type: 'warehouse',

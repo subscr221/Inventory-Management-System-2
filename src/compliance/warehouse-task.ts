@@ -10,6 +10,7 @@ import { AppError } from '../middleware/error.js';
 import { assignPickTask } from '../read/projections/pick_task.js';
 import { assignPutawayTask } from '../read/projections/putaway_task.js';
 import { upsertSlaConfig } from '../read/projections/task_sla_config.js';
+import { activeUserExistsById } from '../read/projections/users.js';
 
 /**
  * Story 3.8 write-path seam for the warehouse task-management events (FR-W-07, AC1): SLA-threshold
@@ -273,6 +274,12 @@ export async function applyPutawayTaskAssignedProjection(
 
   assertSupervisor(envelope.metadata.actor.role, envelope.event_type, 'Assigning a putaway task');
 
+  if (!(await activeUserExistsById(p.assigned_to))) {
+    throw new AppError(404, 'ASSIGNEE_NOT_FOUND', `No active user exists for "${p.assigned_to}"`, {
+      assigned_to: p.assigned_to,
+    });
+  }
+
   const task = await client.query(
     `SELECT site_id, status, assigned_to FROM putaway_task WHERE putaway_task_id = $1`,
     [p.putaway_task_id],
@@ -293,6 +300,7 @@ export async function applyPutawayTaskAssignedProjection(
       assignedTo: p.assigned_to,
       assignedBy: envelope.metadata.actor.user_id,
       priority: p.priority ?? null,
+      assignedAt: occurredAtIso(envelope),
     },
     client,
   );
@@ -327,6 +335,12 @@ export async function applyPickTaskAssignedProjection(
 
   assertSupervisor(envelope.metadata.actor.role, envelope.event_type, 'Assigning a pick task');
 
+  if (!(await activeUserExistsById(p.assigned_to))) {
+    throw new AppError(404, 'ASSIGNEE_NOT_FOUND', `No active user exists for "${p.assigned_to}"`, {
+      assigned_to: p.assigned_to,
+    });
+  }
+
   const task = await client.query(
     `SELECT eso.ship_from_site_id AS site_id, pt.status, pt.assigned_to
        FROM pick_task pt
@@ -341,9 +355,15 @@ export async function applyPickTaskAssignedProjection(
   }
   const current = task.rows[0]!;
   const siteId = current['site_id'] as string | null;
-  if (siteId !== null) {
-    assertActorSite(envelope.metadata.actor.location_id, siteId, { pick_task_id: p.pick_task_id });
+  if (siteId === null) {
+    throw new AppError(
+      409,
+      'PICK_TASK_SITE_UNRESOLVED',
+      `Pick task "${p.pick_task_id}" cannot be assigned until its dispatch order is mirrored into erp_sales_order`,
+      { pick_task_id: p.pick_task_id },
+    );
   }
+  assertActorSite(envelope.metadata.actor.location_id, siteId, { pick_task_id: p.pick_task_id });
 
   const assigned = await assignPickTask(
     {
@@ -351,6 +371,7 @@ export async function applyPickTaskAssignedProjection(
       assignedTo: p.assigned_to,
       assignedBy: envelope.metadata.actor.user_id,
       priority: p.priority ?? null,
+      assignedAt: occurredAtIso(envelope),
     },
     client,
   );

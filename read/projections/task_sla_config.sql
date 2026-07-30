@@ -78,7 +78,10 @@ DO $$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'task_sla_config' AND column_name = 'site_id' AND is_nullable = 'YES'
+    WHERE table_schema = current_schema()
+      AND table_name = 'task_sla_config'
+      AND column_name = 'site_id'
+      AND is_nullable = 'YES'
   ) THEN
     DELETE FROM task_sla_config WHERE site_id IS NULL;
     ALTER TABLE task_sla_config ALTER COLUMN site_id SET NOT NULL;

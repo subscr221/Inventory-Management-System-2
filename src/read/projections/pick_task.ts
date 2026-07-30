@@ -197,6 +197,8 @@ export async function assignPickTask(
     assignedBy: string;
     priority?: TaskPriority | null;
     allowReassign?: boolean;
+    /** Event capture instant; replay uses this so the rebuilt row matches the original. */
+    assignedAt?: string | null;
   },
   client: PoolClient,
 ): Promise<boolean> {
@@ -204,13 +206,13 @@ export async function assignPickTask(
     `UPDATE pick_task
         SET assigned_to = $2,
             assigned_by = $3,
-            assigned_at = now(),
+            assigned_at = COALESCE($6::timestamptz, now()),
             priority = COALESCE($4, priority),
             updated_at = now()
       WHERE pick_task_id = $1
         AND status = 'pending'
         AND ($5::boolean OR assigned_to IS NULL OR assigned_to = $2)`,
-    [input.pickTaskId, input.assignedTo, input.assignedBy, input.priority ?? null, input.allowReassign ?? false],
+    [input.pickTaskId, input.assignedTo, input.assignedBy, input.priority ?? null, input.allowReassign ?? false, input.assignedAt ?? null],
   );
   return (result.rowCount ?? 0) > 0;
 }

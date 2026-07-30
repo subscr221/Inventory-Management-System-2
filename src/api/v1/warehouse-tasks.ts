@@ -16,8 +16,6 @@ import {
   computeGateDwellExceptions,
   assertValidTaskFilters,
   GATE_DWELL_TARGET_MINUTES,
-  OPEN_TASK_DEFAULT_LIMIT,
-  OPEN_TASK_MAX_LIMIT,
 } from '../../warehouse/task-metrics.js';
 
 /**
@@ -31,6 +29,7 @@ import {
  */
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Every warehouse role established across Stories 3.5 through 3.7, read-only.
@@ -83,6 +82,23 @@ function actorContext(req: IncomingMessage): ActorContext {
   return { userId, role, auditLocationId, eventLocationId };
 }
 
+/**
+ * Returns an ActorContext whose `eventLocationId` is the target site of the write, so the compliance
+ * seam's assertActorSite compares the right pair of values. The audit fields still come from the
+ * assignment RBAC actually matched, so a multi-site supervisor does not get a phantom identity
+ * recorded against a site they have no write assignment at.
+ */
+function actorContextForSite(req: IncomingMessage, targetSiteId: string): ActorContext {
+  const base = actorContext(req);
+  const authContext = getAuthContext(req);
+  const covering = authContext?.roles.find(
+    (r) => (r.module === 'warehouse' || r.module === '*')
+      && r.functionScope === 'write'
+      && (r.locationId === '*' || r.locationId === targetSiteId),
+  );
+  return { ...base, eventLocationId: targetSiteId, role: covering?.role ?? base.role };
+}
+
 function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
   return {
     trace_id: getTraceId(req) ?? '',
@@ -111,6 +127,26 @@ function warehouseScope(req: IncomingMessage, scope: 'read' | 'write'): { wildca
 }
 
 /**
+ * Like `warehouseScope` but only counts locations where the caller ALSO holds one of the supplied
+ * roles. Used by the metrics endpoints so a supervisor at site A with a non-supervisor role at
+ * site B does not have site B's productivity and gate-dwell data leak through the aggregate.
+ */
+function warehouseScopeForRoles(
+  req: IncomingMessage,
+  scope: 'read' | 'write',
+  allowedRoles: readonly string[],
+): { wildcard: boolean; locations: Set<string> } {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  const filtered = authContext.roles.filter(
+    (r) => (r.module === 'warehouse' || r.module === '*')
+      && (scope === 'read' || r.functionScope === 'write')
+      && allowedRoles.includes(r.role),
+  );
+  return permittedLocationsForModuleScope(filtered, 'warehouse', scope);
+}
+
+/**
  * Resolves the site filter for a scoped read. A `site` query parameter is honoured only after it is
  * checked against the caller's own scope; otherwise the read is narrowed to exactly the sites the
  * caller may see. `allowAllSites` is set only for a genuine wildcard assignment, so an unscoped
@@ -121,8 +157,9 @@ function resolveSiteScope(
   req: IncomingMessage,
   requestedSiteId: string | null,
   scope: 'read' | 'write' = 'read',
+  allowedRoles?: readonly string[],
 ): { siteId: string | null; siteAny: string[] | null; allowAllSites: boolean } {
-  const permitted = warehouseScope(req, scope);
+  const permitted = allowedRoles ? warehouseScopeForRoles(req, scope, allowedRoles) : warehouseScope(req, scope);
   if (requestedSiteId) {
     if (!permitted.wildcard && !permitted.locations.has(requestedSiteId)) {
       throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No ${scope} assignment grants access to site "${requestedSiteId}"`);
@@ -166,7 +203,7 @@ const listWarehouseTasksBase: RouteHandler = async (req, res) => {
   assertValidTaskFilters(params);
 
   const scope = resolveSiteScope(req, params.get('site_id') ?? params.get('site'));
-  const tasks = await listOpenTasks({
+  const board = await listOpenTasks({
     taskType: (params.get('task_type') as WarehouseTaskType | null) ?? null,
     assignedTo: params.get('assigned_to'),
     zoneId: params.get('zone_id'),
@@ -175,15 +212,15 @@ const listWarehouseTasksBase: RouteHandler = async (req, res) => {
     allowAllSites: scope.allowAllSites,
     ...(params.get('limit') !== null ? { limit: Number(params.get('limit')) } : {}),
   });
-
   sendJson(res, 200, {
-    tasks,
-    groups: groupOpenTasks(tasks),
+    tasks: board.tasks,
+    groups: groupOpenTasks(board.tasks),
     summary: {
-      open_count: tasks.length,
-      breached_count: tasks.filter((t) => t.breached).length,
-      /** True when the board was capped, so a caller can tell a short list from a complete one. */
-      truncated: tasks.length >= Math.min(Number(params.get('limit') ?? OPEN_TASK_DEFAULT_LIMIT), OPEN_TASK_MAX_LIMIT),
+      // Summary reflects the un-capped board (the cap is the wire size, not the work), so
+      // open_count and breached_count are honest even when truncated=true.
+      open_count: board.tasks.length,
+      breached_count: board.tasks.filter((t) => t.breached).length,
+      truncated: board.truncated,
     },
   });
 };
@@ -208,7 +245,7 @@ const getProductivityBase: RouteHandler = async (req, res) => {
     });
   }
 
-  const scope = resolveSiteScope(req, params.get('site_id') ?? params.get('site'));
+  const scope = resolveSiteScope(req, params.get('site_id') ?? params.get('site'), 'read', WAREHOUSE_TASK_METRICS_ROLES);
   const productivity = await computeConfirmationRate({
     periodStart,
     periodEnd,
@@ -234,7 +271,7 @@ const getGateDwellExceptionsBase: RouteHandler = async (req, res) => {
   const params = queryOf(req);
   assertValidTaskFilters(params);
 
-  const scope = resolveSiteScope(req, params.get('site_id') ?? params.get('site'));
+  const scope = resolveSiteScope(req, params.get('site_id') ?? params.get('site'), 'read', WAREHOUSE_TASK_METRICS_ROLES);
   const shifts = await computeGateDwellExceptions({
     businessDate: params.get('business_date'),
     siteId: scope.siteId,
@@ -295,7 +332,7 @@ const putSlaConfigBase: RouteHandler = async (req, res) => {
     throw new AppError(400, 'INVALID_PARAMS', `task_type must be one of: ${WAREHOUSE_TASK_TYPES.join(', ')}`, { task_type: taskType });
   }
   const rawZoneId = body['zone_id'];
-  if (rawZoneId !== undefined && rawZoneId !== null && typeof rawZoneId !== 'string') {
+  if (rawZoneId !== undefined && rawZoneId !== null && (typeof rawZoneId !== 'string' || !UUID_REGEX.test(rawZoneId))) {
     throw new AppError(400, 'INVALID_PARAMS', 'zone_id must be a UUID string when supplied');
   }
   const zoneId = (rawZoneId as string | null | undefined) ?? null;
@@ -322,7 +359,7 @@ const putSlaConfigBase: RouteHandler = async (req, res) => {
     siteId = scope.siteId ?? rawSiteId;
   }
 
-  const actor = actorContext(req);
+  const actor = actorContextForSite(req, siteId);
   const persisted = await persistEvent(
     {
       stream_type: 'warehouse',

@@ -100,8 +100,23 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   let gateHeaders: Record<string, string>;
   let weighHeaders: Record<string, string>;
   let storeHeaders: Record<string, string>;
+  /**
+   * Story 3.8 code review: the SOD test must reach the compliance seam, not be stopped by the
+   * route RBAC layer. This user holds warehouse WRITE (so /api/v1/events accepts the request) but
+   * carries a non-supervisor role, so the seam's assertSupervisor is the one that actually rejects.
+   * A pure read-only role would fail on FUNCTION_ACCESS_DENIED upstream and the test would be a
+   * false positive: the seam would never get the chance to refuse.
+   */
+  let nonSupervisorWriteHeaders: Record<string, string>;
   let operatorUserId: string;
   let managerUserId: string;
+  /**
+   * Story 3.8 code review: the assignment-steal and concurrency tests need a real active user
+   * to assign to. The new active-assignee check in the seam and the route refuses any UUID not
+   * known to users with ASSIGNEE_NOT_FOUND before it ever reaches the row-level guard, so a
+   * raw randomUUID is rejected with 404 before the 409 the test originally expected.
+   */
+  let otherOperatorUserId: string;
 
   const run = randomUUID().slice(0, 8);
   // Site A: the task board and productivity fixtures, plus the "weighbridge-resolved breach" shift.
@@ -255,6 +270,42 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   }
 
   /**
+   * Story 3.8 code review: a quarantined GRN line surfaces as a "receiving" task on the unified
+   * board. The board test now proves this source is wired, not just the pick/putaway ones.
+   */
+  async function seedQuarantinedGrnLine(overrides: { createdAt?: string } = {}): Promise<string> {
+    const grnId = randomUUID();
+    const grnLineId = randomUUID();
+    const createdAt = overrides.createdAt ?? minutesAgo(40);
+    await getPool().query(
+      `INSERT INTO grn (grn_id, correlation_id, po_ref_ext, source_document, received_at, received_by, site_id, site_code_ext, source_event_id, business_date)
+       VALUES ($1, $2, $3, 'PO', $4::timestamptz, $5, $6, $7, $8, $4::date)`,
+      [grnId, randomUUID(), `PO38-REC-${run}`, createdAt, managerUserId, siteAId, siteACode, randomUUID()],
+    );
+    await getPool().query(
+      `INSERT INTO grn_line (grn_line_id, grn_id, po_ref_ext, line_no, sku, target_location_id, received_qty, uom, status, created_at, source_event_id, weighbridge_correlation_id)
+       VALUES ($1, $2, $3, 1, $4, $5, 10, 'KG', 'quarantined', $6::timestamptz, $7, $8)`,
+      [grnLineId, grnId, `PO38-REC-${run}`, `SKU-38-${run}`, dockId, createdAt, randomUUID(), randomUUID()],
+    );
+    return grnLineId;
+  }
+
+  /**
+   * Story 3.8 code review: a packed-but-not-dispatched packing record surfaces as a "packing"
+   * task. The packing_record table is the source for the board's fourth task type.
+   */
+  async function seedPackedNotDispatched(overrides: { createdAt?: string } = {}): Promise<string> {
+    const orderId = await seedSalesOrderLine(`SO38-PACK-${run}`, siteAId, siteACode);
+    const packingRecordId = randomUUID();
+    await getPool().query(
+      `INSERT INTO packing_record (packing_record_id, dispatch_order_id, sku, packed_qty, status, packed_by, packed_at, carton_count)
+       VALUES ($1, $2, $3, 10, 'packed', $4, $5::timestamptz, 1)`,
+      [packingRecordId, orderId, `SKU-38-${run}`, managerUserId, overrides.createdAt ?? minutesAgo(50)],
+    );
+    return packingRecordId;
+  }
+
+  /**
    * Seeds an accepted weighment carrying no capture instant, exactly as a pre-Story-3.8 row looks.
    * Story 3.4 requires an accepted weighment before a GRN may be posted, so this is what lets the
    * GRN-fallback leg of the dwell view be exercised.
@@ -366,6 +417,21 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
       everySite.map((locationId) => ({ role: 'store_assistant', module: 'receiving', functionScope: 'write' as const, locationId })),
     );
     storeHeaders = await authFor(port, `wt-store-${run}@example.com`);
+
+    // Non-supervisor warehouse write user. store_assistant is NOT in WAREHOUSE_TASK_SUPERVISE_ROLES,
+    // so any privileged write through /api/v1/events is rejected by the compliance seam, not by
+    // the route RBAC layer. The test on line ~725 needs this user to prove the seam gate holds.
+    await provisionUser(port, `wt-nonSupervisorWrite-${run}@example.com`, [
+      { role: 'store_assistant', module: 'warehouse', functionScope: 'write' as const, locationId: siteAId },
+    ]);
+    nonSupervisorWriteHeaders = await authFor(port, `wt-nonSupervisorWrite-${run}@example.com`);
+
+    // A second active operator for the assignment-steal and concurrency tests. The new
+    // active-assignee check would otherwise 404 a randomUUID, masking the row-level guard those
+    // tests are meant to exercise.
+    otherOperatorUserId = await provisionUser(port, `wt-otherOperator-${run}@example.com`, [
+      { role: 'warehouse_operator', module: 'warehouse', functionScope: 'write' as const, locationId: siteAId },
+    ]);
   });
 
   after(async () => {
@@ -379,30 +445,43 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
 
   it('AC1: open tasks are grouped by type and operator with age, priority, and zone', async () => {
     const orderId = await seedSalesOrderLine(`SO38-BOARD-${run}`, siteAId, siteACode);
-    await seedPickTask(orderId, { createdAt: minutesAgo(20), priority: 'urgent' });
-    await seedPutawayTask({ createdAt: minutesAgo(9), assignedTo: operatorUserId, priority: 'low' });
+    // Story 3.8 code review: seed with a mix of priorities across BOTH source tables so the
+    // ranking is forced to compare priority values rather than whichever domain happened to be
+    // first in the UNION. Earlier this test asserted only that "the first row is urgent", which
+    // was trivially true under a single-domain query plan and never exercised the cross-source
+    // ranking logic.
+    const pickLowId = await seedPickTask(orderId, { createdAt: minutesAgo(20), priority: 'low' });
+    await seedPickTask(orderId, { createdAt: minutesAgo(15), priority: 'normal' });
+    await seedPutawayTask({ createdAt: minutesAgo(9), assignedTo: operatorUserId, priority: 'urgent' });
+    const putawayHighId = await seedPutawayTask({ createdAt: minutesAgo(7), assignedTo: operatorUserId, priority: 'high' });
 
     const res = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks?site_id=${siteAId}`, undefined, managerHeaders);
     assert.strictEqual(res.status, 200, res.raw);
 
     const tasks = res.body['tasks'] as Array<Record<string, unknown>>;
-    assert.ok(tasks.length >= 2, `expected at least the two seeded tasks, got ${tasks.length}`);
+    assert.ok(tasks.length >= 4, `expected at least the four seeded tasks, got ${tasks.length}`);
 
-    const picking = tasks.find((t) => t['task_type'] === 'picking')!;
-    const putaway = tasks.find((t) => t['task_type'] === 'putaway')!;
-    assert.ok(picking, 'the pick task must appear on the board');
-    assert.ok(putaway, 'the putaway task must appear on the board');
+    const picking = tasks.find((t) => t['task_id'] === pickLowId)!;
+    const putaway = tasks.find((t) => t['task_id'] === putawayHighId)!;
+    assert.ok(picking, 'the seeded pick task must appear on the board');
+    assert.ok(putaway, 'the seeded putaway task must appear on the board');
 
     // Age is computed in SQL from created_at, so a 20-minute-old task reads as ~20 minutes.
     assert.ok(Number(picking['age_minutes']) >= 19.9 && Number(picking['age_minutes']) < 25, `unexpected age: ${String(picking['age_minutes'])}`);
-    assert.strictEqual(picking['priority'], 'urgent');
-    assert.strictEqual(picking['zone_id'], zoneAId);
     assert.strictEqual(putaway['zone_id'], zoneAId);
     assert.strictEqual(putaway['assigned_to'], operatorUserId);
     assert.strictEqual(picking['site_id'], siteAId);
 
-    // Most urgent first, regardless of which domain the task came from.
-    assert.strictEqual(tasks[0]!['priority'], 'urgent');
+    // Priority ranking is independent of the UNION source order. A putaway "urgent" task must
+    // rank above a pick "high" task, and the pick "low" task must be at or near the bottom.
+    const priorityOrder = tasks.map((t) => t['priority'] as string);
+    const urgentIndex = priorityOrder.indexOf('urgent');
+    const highIndex = priorityOrder.indexOf('high');
+    const normalIndex = priorityOrder.indexOf('normal');
+    const lowIndex = priorityOrder.indexOf('low');
+    assert.ok(urgentIndex < highIndex, `urgent (${urgentIndex}) must precede high (${highIndex}); order=${priorityOrder.join(',')}`);
+    assert.ok(highIndex < normalIndex, `high (${highIndex}) must precede normal (${normalIndex}); order=${priorityOrder.join(',')}`);
+    assert.ok(normalIndex < lowIndex, `normal (${normalIndex}) must precede low (${lowIndex}); order=${priorityOrder.join(',')}`);
 
     const groups = res.body['groups'] as Array<Record<string, unknown>>;
     const pickingGroup = groups.find((g) => g['task_type'] === 'picking')!;
@@ -410,6 +489,23 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     assert.ok(pickingGroup && putawayGroup, 'the board groups by task type');
     const putawayOperators = putawayGroup['operators'] as Array<Record<string, unknown>>;
     assert.ok(putawayOperators.some((o) => o['assigned_to'] === operatorUserId), 'the board groups by operator within a type');
+  });
+
+  it('AC1: receiving and packing sources appear on the unified board with their own priority', async () => {
+    // Story 3.8 code review: the original task-board tests only seeded pick and putaway tasks.
+    // They proved nothing about whether the receiving (grn_line quarantined) and packing
+    // (packing_record packed-but-undispatched) sources actually surface. Seed both, then assert
+    // they are present and on the board.
+    await seedQuarantinedGrnLine({ createdAt: minutesAgo(40) });
+    await seedPackedNotDispatched({ createdAt: minutesAgo(50) });
+
+    const res = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks?site_id=${siteAId}`, undefined, managerHeaders);
+    assert.strictEqual(res.status, 200, res.raw);
+    const tasks = res.body['tasks'] as Array<Record<string, unknown>>;
+    const receiving = tasks.find((t) => t['task_type'] === 'receiving');
+    const packing = tasks.find((t) => t['task_type'] === 'packing');
+    assert.ok(receiving, 'a quarantined GRN line must surface as a receiving task on the unified board');
+    assert.ok(packing, 'a packed-but-undispatched packing record must surface as a packing task on the unified board');
   });
 
   it('AC1: a task past its configured SLA threshold is flagged with the breached threshold shown', async () => {
@@ -698,6 +794,8 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     }, managerHeaders);
     assert.strictEqual(first.status, 200, first.raw);
 
+    // A second PUT with the SAME idempotency key but a different value must be a no-op: the first
+    // value stays, the second value never lands, and no second domain event is recorded.
     const replay = await makeRequest(port, 'PUT', '/api/v1/warehouse-tasks/sla-config', {
       site_id: siteAId, task_type: 'putaway', zone_id: null, threshold_minutes: 99, idempotency_key: idempotencyKey,
     }, managerHeaders);
@@ -708,6 +806,89 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     const read = await makeRequest(port, 'GET', '/api/v1/warehouse-tasks/sla-config?task_type=putaway', undefined, managerHeaders);
     const siteWide = (read.body['sla_configs'] as Array<Record<string, unknown>>).find((c) => c['zone_id'] === null)!;
     assert.strictEqual(siteWide['threshold_minutes'], '42.00', 'the replayed key must not overwrite the committed threshold');
+
+    // Exactly one domain event was recorded for this idempotency key, never two.
+    const eventCount = await getPool().query(
+      `SELECT COUNT(*)::int AS n FROM domain_events WHERE idempotency_key = $1`,
+      [idempotencyKey],
+    );
+    assert.strictEqual(eventCount.rows[0]!['n'], 1, `a replayed key must produce exactly one domain event; got ${eventCount.rows[0]!['n']}`);
+  });
+
+  it('assignment idempotency: a retried assign with the same key does not change the row', async () => {
+    // Replay-safe: a second POST with the same idempotency_key must return the original event
+    // without re-applying the projection. The first write commits an "in_progress" status change
+    // to the pick task; a duplicate must NOT observe that change as a state conflict.
+    const dispatchOrderId = await seedSalesOrderLine(`SO38-REPLAY-${run}`, siteAId, siteACode);
+    const pickTaskId = await seedPickTask(dispatchOrderId, { createdAt: minutesAgo(2) });
+
+    const idem = `assign-replay-${run}`;
+    const first = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${pickTaskId}/assign`, {
+      assigned_to: operatorUserId, priority: 'high', idempotency_key: idem,
+    }, managerHeaders);
+    assert.strictEqual(first.status, 200, first.raw);
+
+    const second = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${pickTaskId}/assign`, {
+      assigned_to: operatorUserId, priority: 'urgent', idempotency_key: idem,
+    }, managerHeaders);
+    // The duplicate path is by design a no-op (or a 409) and must not apply the second value.
+    assert.ok(second.status === 200 || second.status === 409, second.raw);
+
+    const read = await getPool().query(
+      `SELECT priority, assigned_to, status FROM pick_task WHERE pick_task_id = $1`,
+      [pickTaskId],
+    );
+    assert.strictEqual(read.rows[0]!['priority'], 'high', 'a replay must not overwrite the committed priority');
+    assert.strictEqual(read.rows[0]!['assigned_to'], operatorUserId, 'a replay must not change the assignee');
+  });
+
+  it('assignment concurrency: only one of two concurrent assigns to the same task wins', async () => {
+    // Two simultaneous assigns to the same task from two different operators. The status=
+    // predicate + assignee guard ensures exactly one UPDATE returns rowCount=1, the other
+    // returns 0 and surfaces as 409 PUTAWAY_TASK_ALREADY_ASSIGNED. The losing supervisor must
+    // not silently succeed and the task's assigned_to must be exactly the winner.
+    const taskId = await seedPutawayTask({ createdAt: minutesAgo(2) });
+
+    const [a, b] = await Promise.all([
+      makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: operatorUserId }, managerHeaders),
+      makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: otherOperatorUserId }, managerHeaders),
+    ]);
+
+    const statuses = [a.status, b.status].sort();
+    // One wins (200) and the other loses (409). The exact pair is one each.
+    assert.deepStrictEqual(statuses, [200, 409], `expected one 200 and one 409, got ${statuses.join(',')}: a=${a.raw} b=${b.raw}`);
+
+    const after = await getPool().query(`SELECT assigned_to FROM putaway_task WHERE putaway_task_id = $1`, [taskId]);
+    assert.ok([operatorUserId, otherOperatorUserId].includes(after.rows[0]!['assigned_to'] as string), 'the task must be assigned to exactly one of the two requesters');
+    const winner = (a.status === 200 ? a : b).body['task'] as Record<string, unknown>;
+    assert.strictEqual(winner['assigned_to'], after.rows[0]!['assigned_to'], 'the winner row and the row read back must agree on the assignee');
+  });
+
+  it('assignment replay: a retried assign with the same idempotency_key yields a deterministic assigned_at', async () => {
+    // Story 3.8 code review: assignPickTask previously used now() for assigned_at, so a replay
+    // produced a different timestamp than the original. The fix uses the event capture instant,
+    // so the replay yields the SAME assigned_at as the first apply.
+    const taskId = await seedPutawayTask({ createdAt: minutesAgo(1) });
+    const idem = `assign-replay-ts-${run}`;
+    const first = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, {
+      assigned_to: operatorUserId, priority: 'normal', idempotency_key: idem,
+    }, managerHeaders);
+    assert.strictEqual(first.status, 200, first.raw);
+
+    // Re-read what was written.
+    const firstRow = await getPool().query(`SELECT assigned_at FROM putaway_task WHERE putaway_task_id = $1`, [taskId]);
+    const firstAssignedAt = (firstRow.rows[0]!['assigned_at'] as Date).toISOString();
+
+    // The original event's capture instant determines assigned_at, so a fresh request with the
+    // same key short-circuits and the row does not move.
+    const second = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, {
+      assigned_to: operatorUserId, priority: 'normal', idempotency_key: idem,
+    }, managerHeaders);
+    assert.ok(second.status === 200 || second.status === 409, second.raw);
+
+    const secondRow = await getPool().query(`SELECT assigned_at FROM putaway_task WHERE putaway_task_id = $1`, [taskId]);
+    const secondAssignedAt = (secondRow.rows[0]!['assigned_at'] as Date).toISOString();
+    assert.strictEqual(secondAssignedAt, firstAssignedAt, `a replay must not move assigned_at; was ${firstAssignedAt}, now ${secondAssignedAt}`);
   });
 
   it('RBAC: a frontline role may read the board but may not change an SLA threshold', async () => {
@@ -723,8 +904,11 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   });
 
   it('SOD: the supervisor-only gate holds on the direct event path, not just the HTTP handler', async () => {
-    // A frontline actor posting the same event straight to /api/v1/events must be refused by the
-    // compliance seam. This is the bypass a handler-only role check would leave open.
+    // A non-supervisor user with warehouse WRITE posting the same event straight to /api/v1/events
+    // must be refused by the compliance seam. A pure read-only role would be stopped by the route
+    // RBAC layer and never reach the seam, leaving the test as a false positive. This user passes
+    // /api/v1/events's requireRole check (write on the warehouse module) and is then stopped by
+    // assertSupervisor, which is the placement that actually holds against a direct POST.
     const res = await makeRequest(port, 'POST', '/api/v1/events', {
       stream_type: 'warehouse',
       stream_id: randomUUID(),
@@ -732,11 +916,11 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
       payload: { site_id: siteAId, task_type: 'picking', zone_id: null, threshold_minutes: 1 },
       metadata: {
         correlation_id: randomUUID(),
-        actor: { user_id: operatorUserId, role: 'warehouse_operator', location_id: siteAId },
+        actor: { user_id: operatorUserId, role: 'store_assistant', location_id: siteAId },
         occurred_at: new Date().toISOString(),
       },
-    }, frontlineHeaders);
-    assert.ok(res.status === 403, `direct event path must be gated too, got ${res.status}: ${res.raw}`);
+    }, nonSupervisorWriteHeaders);
+    assert.strictEqual(res.status, 403, `direct event path must be gated by the seam, got ${res.status}: ${res.raw}`);
     assert.strictEqual(res.body['error_code'], 'FUNCTION_ACCESS_DENIED');
   });
 
@@ -781,8 +965,7 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     const first = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: operatorUserId }, managerHeaders);
     assert.strictEqual(first.status, 200, first.raw);
 
-    const otherOperator = randomUUID();
-    const steal = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: otherOperator }, managerHeaders);
+    const steal = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: otherOperatorUserId }, managerHeaders);
     assert.strictEqual(steal.status, 409, steal.raw);
     assert.strictEqual(steal.body['error_code'], 'PUTAWAY_TASK_ALREADY_ASSIGNED');
 
@@ -821,11 +1004,31 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
       `/api/v1/warehouse-tasks?site_id=${siteAId}`,
       `/api/v1/warehouse-tasks/productivity?site_id=${siteAId}`,
       `/api/v1/warehouse-tasks/exceptions/gate-dwell?site_id=${siteAId}`,
+      `/api/v1/warehouse-tasks/sla-config?site_id=${siteAId}`,
     ]) {
       const res = await makeRequest(port, 'GET', path, undefined, otherSiteHeaders);
       assert.strictEqual(res.status, 403, `${path} must refuse an out-of-scope site: ${res.raw}`);
       assert.strictEqual(res.body['error_code'], 'LOCATION_ACCESS_DENIED');
     }
+  });
+
+  it('Site scoping: an SLA config write is refused for an out-of-scope site', async () => {
+    // otherSiteHeaders is the site-B manager; the site-A site filter must be rejected.
+    const denied = await setSlaThreshold('putaway', 20, null, otherSiteHeaders, siteAId);
+    assert.strictEqual(denied.status, 403, denied.raw);
+    assert.strictEqual(denied.body['error_code'], 'LOCATION_ACCESS_DENIED');
+  });
+
+  it('Metrics RBAC: a frontline warehouse role is denied on the productivity and gate-dwell endpoints', async () => {
+    // The metrics endpoints share the board's role list, which let a store_assistant pull
+    // per-colleague confirmation rates. They are gated more tightly than the board.
+    const prod = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks/productivity?site_id=${siteAId}`, undefined, frontlineHeaders);
+    assert.strictEqual(prod.status, 403, `productivity must refuse a frontline role: ${prod.raw}`);
+    assert.strictEqual(prod.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+
+    const dwell = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks/exceptions/gate-dwell?site_id=${siteAId}`, undefined, frontlineHeaders);
+    assert.strictEqual(dwell.status, 403, `gate-dwell must refuse a frontline role: ${dwell.raw}`);
+    assert.strictEqual(dwell.body['error_code'], 'FUNCTION_ACCESS_DENIED');
   });
 
   it('Site scoping: an unfiltered board is narrowed to the sites the caller may see', async () => {

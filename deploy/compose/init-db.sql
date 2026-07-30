@@ -3011,7 +3011,10 @@ DO $$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'task_sla_config' AND column_name = 'site_id' AND is_nullable = 'YES'
+    WHERE table_schema = current_schema()
+      AND table_name = 'task_sla_config'
+      AND column_name = 'site_id'
+      AND is_nullable = 'YES'
   ) THEN
     DELETE FROM task_sla_config WHERE site_id IS NULL;
     ALTER TABLE task_sla_config ALTER COLUMN site_id SET NOT NULL;
@@ -3088,13 +3091,27 @@ SELECT
     ELSE NULL
   END AS resolution_source,
   CASE
-    WHEN COALESCE(wb.occurred_at, gr.received_at) IS NULL
-      THEN now() - ge.entered_at
-    WHEN COALESCE(wb.occurred_at, gr.received_at) >= ge.entered_at
+    -- Truly resolved: a real resolution timestamp at or after entry.
+    WHEN COALESCE(wb.occurred_at, gr.received_at) IS NOT NULL
+         AND COALESCE(wb.occurred_at, gr.received_at) >= ge.entered_at
       THEN COALESCE(wb.occurred_at, gr.received_at) - ge.entered_at
-    ELSE NULL
+    -- Clock skew: a resolution timestamp predates entry; emit NULL so the median cannot go
+    -- negative, and let clock_skew_detected flag the row.
+    WHEN COALESCE(wb.occurred_at, gr.received_at) IS NOT NULL
+         AND COALESCE(wb.occurred_at, gr.received_at) < ge.entered_at
+      THEN NULL
+    -- Legacy accepted weighment with no capture instant: counted as resolved with no interval.
+    -- The visit completed in the yard; reporting it as open would let a growing false breach
+    -- dominate the shift median. A future entry is similarly a NULL dwell, never a negative one.
+    WHEN wb.accepted_exists OR ge.entered_at > now() THEN NULL
+    -- Genuinely open: no resolution, no legacy weighment, entry in the past, clamped at zero.
+    ELSE GREATEST(now() - ge.entered_at, interval '0')
   END AS dwell_interval,
-  (COALESCE(wb.occurred_at, gr.received_at) IS NULL) AS dwell_open,
+  -- Open only when there is no resolution at all and the entry is in the past, so an historical
+  -- vehicle with a weighment row but no capture instant does not become a growing breach.
+  (COALESCE(wb.occurred_at, gr.received_at) IS NULL
+    AND NOT wb.accepted_exists
+    AND ge.entered_at <= now()) AS dwell_open,
   (COALESCE(wb.occurred_at, gr.received_at) IS NOT NULL
     AND COALESCE(wb.occurred_at, gr.received_at) < ge.entered_at) AS clock_skew_detected,
   COALESCE(wb.accepted_exists, false) AS weighment_present,
