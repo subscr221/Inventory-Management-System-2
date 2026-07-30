@@ -1,5 +1,6 @@
 # generated: 2026-07-12
-# last_updated: 2026-07-30
+# last_updated: '2026-07-30'
+# story 3-7 code review 2026-07-30: code review passed (user-confirmed); 3-7 moved to done
 # story 3-7 dev-story 2026-07-30: repaired test/integration/story-3-7.test.ts, which had never
 #   actually executed (fictional SCIM/pick-task/dispatch API shapes); fixed 2 genuine bugs the
 #   repaired suite exposed (missing DELETE grant on dispatch_document, document-renderer.ts
@@ -492,7 +493,7 @@ development_status:
   3-4-goods-receiving-against-asn-or-po-fr-w-02: done   # PILOT
   3-5-directed-putaway-and-location-override-recording-uj-put-01-fr-w-03: done   # PILOT
   3-6-pick-task-generation-and-execution-fr-w-04: done   # PILOT
-  3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: review   # PILOT
+  3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: done   # PILOT
   3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: done   # PILOT
   3-9-forward-pick-replenishment-fr-w-08: backlog   # PILOT
   3-10-cross-docking-execution-fr-w-09: backlog   # PILOT
