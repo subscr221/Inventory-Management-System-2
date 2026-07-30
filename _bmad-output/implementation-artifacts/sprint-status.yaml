@@ -1,5 +1,14 @@
 # generated: 2026-07-12
 # last_updated: '2026-07-30'
+# story 3-9 created 2026-07-30 via create-story workflow: Forward-Pick Replenishment (FR-W-08);
+#   new forward_pick_config (SKU-per-forward-pick-zone min/max) and replenishment_task (task-board
+#   row) projections, zone_type widened to add forward_pick/reserve, a new zone-descendant balance
+#   walk (mirror of the existing bin-to-zone ancestor walk), a Phase-1 synthetic trigger job modeled
+#   on Story 2.7/2.8's planning jobs, replenishment_task.created/.completed events on the existing
+#   'warehouse' stream reusing applyStockIssue/applyStockReceipt directly (bypassing the
+#   'inventory'-stream-gated projection, mirroring transfer-request.ts), and one new TASK_SOURCES
+#   entry in Story 3.8's task board (the extension point that story built for this one); no edge
+#   path, no approval routing; ready-for-dev
 # story 3-7 code review 2026-07-30: code review passed (user-confirmed); 3-7 moved to done
 # story 3-7 dev-story 2026-07-30: repaired test/integration/story-3-7.test.ts, which had never
 #   actually executed (fictional SCIM/pick-task/dispatch API shapes); fixed 2 genuine bugs the
@@ -495,7 +504,7 @@ development_status:
   3-6-pick-task-generation-and-execution-fr-w-04: done   # PILOT
   3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: done   # PILOT
   3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: done   # PILOT
-  3-9-forward-pick-replenishment-fr-w-08: backlog   # PILOT
+  3-9-forward-pick-replenishment-fr-w-08: ready-for-dev   # PILOT
   3-10-cross-docking-execution-fr-w-09: backlog   # PILOT
   epic-3-retrospective: optional
   # story 3-2 code review 2026-07-23: 2 decisions resolved + 7 patches applied (server-generated gate_event_id, IST-based localYmd, removed redundant binding_token alias, UNIQUE correlation_id, pagination limit, negative-path tests); 1 patch reverted (alreadyPersisted null-key throw broke HTTP path); moved to done
