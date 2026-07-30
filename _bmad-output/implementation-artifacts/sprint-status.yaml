@@ -1,5 +1,25 @@
 # generated: 2026-07-12
 # last_updated: '2026-07-30'
+# story 3-9 dev-story 2026-07-30: implemented all 7 tasks (44 subtasks) from baseline e97d657.
+#   forward_pick_config (site_id denormalized from the zone) and replenishment_task (partial
+#   unique open-per-signal index) projections; location_register.zone_type and
+#   task_sla_config.task_type widened via guarded DROP-then-ADD, mirrored into init-db.sql;
+#   getForwardPickBalance (new descendant-walk CTE, depth-capped, stock_class 'owned' only) and
+#   getOpenPickDemand added to their sibling accessor files; one new TASK_SOURCES entry wires
+#   replenishment tasks onto the Story 3.8 unified task board with zero query-builder change.
+#   forward_pick_config.updated made event-sourced through persistEvent (decision: mirrors
+#   task_sla_config.updated, its stated twin, rather than the direct-upsert alternative the story
+#   flagged as equally defensible - the event-sourced path is this codebase's more recent,
+#   more-corrected precedent for exactly this class of write). replenishment_task.created/.completed
+#   compliance seam calls applyStockIssue/applyStockReceipt directly inside one transaction so
+#   AC3's shared correlation_id holds by construction; FORWARD_PICK_ZONE_INVALID and
+#   REPLENISHMENT_DESTINATION_OUTSIDE_ZONE checks live in the seam, not only the handler.
+#   runForwardPickReplenishmentCheck modeled on planning-jobs.ts's runVmiReplenishmentCheck, takes
+#   a real actor/auditCtx rather than a placeholder identity. 5 new REST routes registered in
+#   server.ts and the Story 1.9 allowlist. No edge/ files changed; npm run edge:test reran
+#   unchanged 23/23. tsc/eslint clean, schema-drift 43/43 (+2), spine gate 6/6, npm test 511/512
+#   (1 pre-existing story-3-3 date-flake, unrelated), db:migrate re-run twice cleanly; moved to
+#   review
 # story 3-9 created 2026-07-30 via create-story workflow: Forward-Pick Replenishment (FR-W-08);
 #   new forward_pick_config (SKU-per-forward-pick-zone min/max) and replenishment_task (task-board
 #   row) projections, zone_type widened to add forward_pick/reserve, a new zone-descendant balance
@@ -504,7 +524,7 @@ development_status:
   3-6-pick-task-generation-and-execution-fr-w-04: done   # PILOT
   3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: done   # PILOT
   3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: done   # PILOT
-  3-9-forward-pick-replenishment-fr-w-08: ready-for-dev   # PILOT
+  3-9-forward-pick-replenishment-fr-w-08: review   # PILOT
   3-10-cross-docking-execution-fr-w-09: backlog   # PILOT
   epic-3-retrospective: optional
   # story 3-2 code review 2026-07-23: 2 decisions resolved + 7 patches applied (server-generated gate_event_id, IST-based localYmd, removed redundant binding_token alias, UNIQUE correlation_id, pagination limit, negative-path tests); 1 patch reverted (alreadyPersisted null-key throw broke HTTP path); moved to done

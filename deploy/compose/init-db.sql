@@ -3144,3 +3144,173 @@ BEGIN
     GRANT SELECT ON gate_dwell_metric TO readonly_user;
   END IF;
 END $$;
+
+-- ===========================================================================
+-- Story 3.9: Forward-Pick Replenishment (FR-W-08)
+-- Mirrors read/projections/location_register.sql, task_sla_config.sql,
+-- forward_pick_config.sql, and replenishment_task.sql.
+-- ===========================================================================
+
+-- Widens zone_type to admit 'forward_pick' (topped-up zone) and 'reserve' (source zone). Guarded
+-- DROP-then-ADD, mirroring stock_balance.sql's chk_stock_balance_allocated_within_on_hand pattern.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_location_register_zone_type'
+      AND conrelid = 'location_register'::regclass
+  ) THEN
+    ALTER TABLE location_register DROP CONSTRAINT chk_location_register_zone_type;
+  END IF;
+  ALTER TABLE location_register
+    ADD CONSTRAINT chk_location_register_zone_type
+    CHECK (zone_type IN ('general', 'hazmat', 'quarantine', 'staging', 'forward_pick', 'reserve'));
+END $$;
+
+-- Widens task_type to admit 'replenishment', so a supervisor can configure an SLA threshold for
+-- replenishment tasks through the existing PUT /api/v1/warehouse-tasks/sla-config endpoint.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_task_sla_config_task_type'
+      AND conrelid = 'task_sla_config'::regclass
+  ) THEN
+    ALTER TABLE task_sla_config DROP CONSTRAINT chk_task_sla_config_task_type;
+  END IF;
+  ALTER TABLE task_sla_config
+    ADD CONSTRAINT chk_task_sla_config_task_type
+    CHECK (task_type IN ('receiving', 'putaway', 'picking', 'packing', 'replenishment'));
+END $$;
+
+-- SKU-per-forward-pick-zone min/max configuration. site_id is denormalized at write time from the
+-- zone's own site_id (never accepted from the client) - forward_pick_config and task_sla_config are
+-- twin projections, both keyed by a grain that includes a zone, both needing site_id in the grain
+-- for the same reason task_sla_config's review added it there.
+CREATE TABLE IF NOT EXISTS forward_pick_config (
+  config_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sku        TEXT NOT NULL,
+  zone_id    UUID NOT NULL REFERENCES location_register(location_id),
+  site_id    UUID NOT NULL,
+  min_qty    NUMERIC(18,3) NOT NULL,
+  max_qty    NUMERIC(18,3) NOT NULL,
+  updated_by UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_forward_pick_config_min_non_negative CHECK (min_qty >= 0),
+  CONSTRAINT chk_forward_pick_config_max_gt_min CHECK (max_qty > min_qty)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_forward_pick_config_min_non_negative'
+      AND conrelid = 'forward_pick_config'::regclass
+  ) THEN
+    ALTER TABLE forward_pick_config
+      ADD CONSTRAINT chk_forward_pick_config_min_non_negative CHECK (min_qty >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_forward_pick_config_max_gt_min'
+      AND conrelid = 'forward_pick_config'::regclass
+  ) THEN
+    ALTER TABLE forward_pick_config
+      ADD CONSTRAINT chk_forward_pick_config_max_gt_min CHECK (max_qty > min_qty);
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_forward_pick_config_sku_zone ON forward_pick_config (sku, zone_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON forward_pick_config TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON forward_pick_config TO readonly_user;
+  END IF;
+END $$;
+
+-- The replenishment task-board row: a SKU-zone internal-movement task, distinct from the SKU-
+-- location replenishment_recommendation (Story 2.7/2.8), which has no zone concept and is never
+-- itself an executable task. zone_id is already zone-level at creation time, so (unlike
+-- pick_task/putaway_task) no ancestor-walk denormalization is needed for the task board.
+CREATE TABLE IF NOT EXISTS replenishment_task (
+  replenishment_task_id UUID PRIMARY KEY,
+  sku                    TEXT NOT NULL,
+  zone_id                UUID NOT NULL,
+  site_id                UUID NOT NULL,
+  from_location_id       UUID,
+  to_location_id         UUID,
+  quantity               NUMERIC(18,3) NOT NULL,
+  signal_type            TEXT NOT NULL,
+  status                 TEXT NOT NULL DEFAULT 'ready',
+  priority               TEXT NOT NULL DEFAULT 'normal',
+  assigned_to            UUID,
+  assigned_by            UUID,
+  assigned_at            TIMESTAMPTZ,
+  completed_at           TIMESTAMPTZ,
+  completed_by           UUID,
+  correlation_id         UUID NOT NULL,
+  source_event_id        UUID NOT NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_replenishment_task_status CHECK (status IN ('ready', 'completed', 'cancelled')),
+  CONSTRAINT chk_replenishment_task_priority CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+  CONSTRAINT chk_replenishment_task_signal_type CHECK (signal_type IN ('min_max', 'demand_signal')),
+  CONSTRAINT chk_replenishment_task_quantity_positive CHECK (quantity > 0)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_replenishment_task_status'
+      AND conrelid = 'replenishment_task'::regclass
+  ) THEN
+    ALTER TABLE replenishment_task
+      ADD CONSTRAINT chk_replenishment_task_status CHECK (status IN ('ready', 'completed', 'cancelled'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_replenishment_task_priority'
+      AND conrelid = 'replenishment_task'::regclass
+  ) THEN
+    ALTER TABLE replenishment_task
+      ADD CONSTRAINT chk_replenishment_task_priority CHECK (priority IN ('low', 'normal', 'high', 'urgent'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_replenishment_task_signal_type'
+      AND conrelid = 'replenishment_task'::regclass
+  ) THEN
+    ALTER TABLE replenishment_task
+      ADD CONSTRAINT chk_replenishment_task_signal_type CHECK (signal_type IN ('min_max', 'demand_signal'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_replenishment_task_quantity_positive'
+      AND conrelid = 'replenishment_task'::regclass
+  ) THEN
+    ALTER TABLE replenishment_task
+      ADD CONSTRAINT chk_replenishment_task_quantity_positive CHECK (quantity > 0);
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_replenishment_task_open_signal
+  ON replenishment_task (sku, zone_id, signal_type) WHERE status = 'ready';
+CREATE INDEX IF NOT EXISTS idx_replenishment_task_site_status ON replenishment_task (site_id, status);
+CREATE INDEX IF NOT EXISTS idx_replenishment_task_zone_status ON replenishment_task (zone_id, status);
+CREATE INDEX IF NOT EXISTS idx_replenishment_task_assigned_status ON replenishment_task (assigned_to, status);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON replenishment_task TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON replenishment_task TO readonly_user;
+  END IF;
+END $$;

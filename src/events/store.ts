@@ -56,6 +56,16 @@ import {
   assertPickTaskAssignedShape,
   applyPickTaskAssignedProjection,
 } from '../compliance/warehouse-task.js';
+import {
+  assertForwardPickConfigUpdatedShape,
+  applyForwardPickConfigUpdatedProjection,
+  assertReplenishmentTaskCreatedShape,
+  applyReplenishmentTaskCreatedProjection,
+  assertReplenishmentTaskAssignedShape,
+  applyReplenishmentTaskAssignedProjection,
+  assertReplenishmentTaskCompletedShape,
+  applyReplenishmentTaskCompletedProjection,
+} from '../compliance/replenishment.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -68,6 +78,10 @@ import type {
   TaskSlaConfigUpdatedEnvelope,
   PutawayTaskAssignedEnvelope,
   PickTaskAssignedEnvelope,
+  ForwardPickConfigUpdatedEnvelope,
+  ReplenishmentTaskCreatedEnvelope,
+  ReplenishmentTaskAssignedEnvelope,
+  ReplenishmentTaskCompletedEnvelope,
 } from './schema.js';
 import { assertErpReadOnly } from '../compliance/erp-readonly.js';
 
@@ -313,6 +327,21 @@ export async function persistEvent(
   if (envelope.event_type === 'pick_task.assigned') {
     assertPickTaskAssignedShape(envelope as unknown as PickTaskAssignedEnvelope);
   }
+  // Story 3.9: forward-pick replenishment shape validation (config threshold, task creation,
+  // task completion) is non-DB and runs with the other pre-transaction asserts, so a malformed
+  // payload never consumes an idempotency key.
+  if (envelope.event_type === 'forward_pick_config.updated') {
+    assertForwardPickConfigUpdatedShape(envelope as unknown as ForwardPickConfigUpdatedEnvelope);
+  }
+  if (envelope.event_type === 'replenishment_task.created') {
+    assertReplenishmentTaskCreatedShape(envelope as unknown as ReplenishmentTaskCreatedEnvelope);
+  }
+  if (envelope.event_type === 'replenishment_task.assigned') {
+    assertReplenishmentTaskAssignedShape(envelope as unknown as ReplenishmentTaskAssignedEnvelope);
+  }
+  if (envelope.event_type === 'replenishment_task.completed') {
+    assertReplenishmentTaskCompletedShape(envelope as unknown as ReplenishmentTaskCompletedEnvelope);
+  }
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -456,6 +485,19 @@ export async function persistEvent(
       }
       if (envelope.event_type === 'pick_task.assigned') {
         await applyPickTaskAssignedProjection(envelope as unknown as PickTaskAssignedEnvelope, client);
+      }
+      // Story 3.9: forward-pick config upsert, replenishment task creation, and task completion
+      // (which moves stock via applyStockIssue/applyStockReceipt directly) - all inside this same
+      // transaction so the projections, the stock movement, and the domain_events insert commit or
+      // roll back together.
+      if (envelope.event_type === 'forward_pick_config.updated') {
+        await applyForwardPickConfigUpdatedProjection(envelope as unknown as ForwardPickConfigUpdatedEnvelope, client);
+      }
+      if (envelope.event_type === 'replenishment_task.created') {
+        await applyReplenishmentTaskCreatedProjection(envelope as unknown as ReplenishmentTaskCreatedEnvelope, client, eventId);
+      }
+      if (envelope.event_type === 'replenishment_task.completed') {
+        await applyReplenishmentTaskCompletedProjection(envelope as unknown as ReplenishmentTaskCompletedEnvelope, client);
       }
 
     let nextVersion: number;

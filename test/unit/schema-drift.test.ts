@@ -425,6 +425,29 @@ const EXPECTED = [
     indexes: [] as string[],
     isView: true,
   },
+  // Story 3.9 projections.
+  {
+    canonical: 'read/projections/forward_pick_config.sql',
+    table: 'forward_pick_config',
+    constraints: ['chk_forward_pick_config_min_non_negative', 'chk_forward_pick_config_max_gt_min'],
+    indexes: ['uq_forward_pick_config_sku_zone'],
+  },
+  {
+    canonical: 'read/projections/replenishment_task.sql',
+    table: 'replenishment_task',
+    constraints: [
+      'chk_replenishment_task_status',
+      'chk_replenishment_task_priority',
+      'chk_replenishment_task_signal_type',
+      'chk_replenishment_task_quantity_positive',
+    ],
+    indexes: [
+      'uq_replenishment_task_open_signal',
+      'idx_replenishment_task_site_status',
+      'idx_replenishment_task_zone_status',
+      'idx_replenishment_task_assigned_status',
+    ],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

@@ -569,7 +569,7 @@ export interface DispatchDispatchedEnvelope extends Omit<EventEnvelope, 'payload
 // ---------------------------------------------------------------------------
 // Story 3.8: warehouse task management - configurable SLA thresholds
 // ---------------------------------------------------------------------------
-export type WarehouseTaskType = 'receiving' | 'putaway' | 'picking' | 'packing';
+export type WarehouseTaskType = 'receiving' | 'putaway' | 'picking' | 'packing' | 'replenishment';
 
 export interface TaskSlaConfigUpdatedPayload {
   /**
@@ -629,6 +629,71 @@ export interface PickTaskAssignedPayload {
 export interface PickTaskAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'pick_task.assigned';
   payload: PickTaskAssignedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 3.9: Forward-Pick Replenishment (FR-W-08)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mirrors TaskSlaConfigUpdatedPayload's grain-as-config shape: forward_pick_config is that story's
+ * twin projection (a supervisor-configured min/max threshold keyed by a zone). site_id is
+ * deliberately NOT a payload field - it is denormalized at write time from the zone's own site_id
+ * in the compliance seam, so a client cannot claim a site the zone does not actually belong to.
+ */
+export interface ForwardPickConfigUpdatedPayload {
+  sku: string;
+  zone_id: string;
+  min_qty: number | string;
+  max_qty: number | string;
+  /** Server-set from metadata.actor.user_id; a client-supplied value is ignored. */
+  updated_by?: string;
+}
+
+export interface ForwardPickConfigUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'forward_pick_config.updated';
+  payload: ForwardPickConfigUpdatedPayload;
+}
+
+export interface ReplenishmentTaskCreatedPayload {
+  replenishment_task_id: string;
+  sku: string;
+  zone_id: string;
+  site_id: string;
+  from_location_id?: string | null;
+  quantity: number | string;
+  signal_type: 'min_max' | 'demand_signal';
+}
+
+export interface ReplenishmentTaskCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'replenishment_task.created';
+  payload: ReplenishmentTaskCreatedPayload;
+}
+
+export interface ReplenishmentTaskCompletedPayload {
+  replenishment_task_id: string;
+  to_location_id?: string;
+  to_location_code?: string;
+  /** Server-set from metadata.actor.user_id; a client-supplied value is ignored. */
+  completed_by?: string;
+}
+
+export interface ReplenishmentTaskCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'replenishment_task.completed';
+  payload: ReplenishmentTaskCompletedPayload;
+}
+
+export interface ReplenishmentTaskAssignedPayload {
+  replenishment_task_id: string;
+  assigned_to: string;
+  /** Server-set from metadata.actor.user_id; a client-supplied value is ignored. */
+  assigned_by?: string;
+  priority?: 'low' | 'normal' | 'high' | 'urgent' | null;
+}
+
+export interface ReplenishmentTaskAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'replenishment_task.assigned';
+  payload: ReplenishmentTaskAssignedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -792,6 +857,28 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'pick_task.assigned': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  // Story 3.9: forward-pick replenishment on the existing 'warehouse' stream. Config threshold
+  // changes and replenishment task creation/completion post no valuated stock movement of their
+  // own (the completion moves already-owned stock between two locations at the same cost basis via
+  // applyStockIssue/applyStockReceipt, called directly - never through the 'inventory'-stream-gated
+  // applyStockBalanceProjection) - so business-stream tagging is not gated on any of them, matching
+  // the rationale already used for pick_task.*/putaway_task.assigned/task_sla_config.updated.
+  'forward_pick_config.updated': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'replenishment_task.created': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'replenishment_task.assigned': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'replenishment_task.completed': {
     streamType: 'warehouse',
     requiresBusinessStream: false,
   },

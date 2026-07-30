@@ -130,6 +130,33 @@ export async function getStockBalancesBySku(sku: string, client?: PoolClient): P
 }
 
 /**
+ * Story 3.9: the owned on-hand balance for a SKU summed across every bin physically inside a
+ * zone. The mirror-image of putaway_task.ts's ZONE_ANCESTOR_CTE and pick-task-generator.ts's
+ * equivalent, both of which walk a bin UPWARD to its owning zone - this walks a zone DOWNWARD to
+ * its bins. Depth-capped at 10 for the same cyclic-parent_location_id-chain safety reason as those
+ * ancestor walks. Scoped to stock_class = 'owned': consignment/VMI stock (Story 2.8) is not
+ * eligible for internal replenishment since the platform does not own it. Returns a NUMERIC
+ * string, never coerced to a JS number, so a large balance cannot lose precision.
+ */
+export async function getForwardPickBalance(sku: string, zoneId: string, client?: PoolClient): Promise<string> {
+  const result = await runner(client).query(
+    `WITH RECURSIVE descendants AS (
+       SELECT location_id, 0 AS depth FROM location_register WHERE location_id = $1
+       UNION ALL
+       SELECT lr.location_id, d.depth + 1
+         FROM location_register lr
+         JOIN descendants d ON lr.parent_location_id = d.location_id
+        WHERE d.depth < 10
+     )
+     SELECT COALESCE(SUM(sb.on_hand), 0)::text AS balance
+       FROM stock_balance sb
+      WHERE sb.sku = $2 AND sb.stock_class = 'owned' AND sb.location_id IN (SELECT location_id FROM descendants)`,
+    [zoneId, sku],
+  );
+  return String(result.rows[0]!['balance']);
+}
+
+/**
  * Applies a stock.received event: on_hand at the target location (and lot, when given) increases
  * by the received quantity. The upsert takes a row lock on conflict, so concurrent receipts to
  * the same grain serialize. Must run on the SAME client/transaction as the domain event insert.

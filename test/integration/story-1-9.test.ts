@@ -293,6 +293,12 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/warehouse-tasks/exceptions/gate-dwell',
       'GET /api/v1/warehouse-tasks/sla-config',
       'PUT /api/v1/warehouse-tasks/sla-config',
+      // Story 3.9: forward-pick replenishment config, trigger, confirm, and assign
+      'GET /api/v1/replenishment/config',
+      'PUT /api/v1/replenishment/config',
+      'POST /api/v1/replenishment/check',
+      'POST /api/v1/replenishment-tasks/:replenishmentTaskId/confirm',
+      'POST /api/v1/replenishment-tasks/:replenishmentTaskId/assign',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
       'PUT /api/v1/lots/:lot_id/quality-hold',

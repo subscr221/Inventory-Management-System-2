@@ -96,6 +96,21 @@ export async function getSalesOrderLineById(id: string, client?: PoolClient): Pr
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
+/**
+ * Story 3.9 (AC2): total open dispatch demand for a SKU at a site, summed across every open
+ * sales-order line. Returns a NUMERIC string, never coerced to a JS number, matching the
+ * codebase-wide convention for balance/demand math (Story 3.8's exact-decimal-string comparison).
+ */
+export async function getOpenPickDemand(sku: string, siteId: string, client?: PoolClient): Promise<string> {
+  const result = await runner(client).query(
+    `SELECT COALESCE(SUM(quantity), 0)::text AS demand
+       FROM erp_sales_order
+      WHERE sku = $1 AND ship_from_site_id = $2 AND status = 'open'`,
+    [sku, siteId],
+  );
+  return String(result.rows[0]!['demand']);
+}
+
 // ---------------------------------------------------------------------------
 // Adapter-only mutation helpers (direct SQL upsert; NOT event-sourced)
 // ---------------------------------------------------------------------------

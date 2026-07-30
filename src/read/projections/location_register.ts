@@ -13,7 +13,7 @@ import { AppError } from '../../middleware/error.js';
 export const LOCATION_LEVELS = ['site', 'zone', 'aisle', 'rack', 'bin'] as const;
 export type LocationLevel = (typeof LOCATION_LEVELS)[number];
 
-export const ZONE_TYPES = ['general', 'hazmat', 'quarantine', 'staging'] as const;
+export const ZONE_TYPES = ['general', 'hazmat', 'quarantine', 'staging', 'forward_pick', 'reserve'] as const;
 export type ZoneType = (typeof ZONE_TYPES)[number];
 
 export const TEMPERATURE_CLASSES = ['ambient', 'cold', 'frozen'] as const;

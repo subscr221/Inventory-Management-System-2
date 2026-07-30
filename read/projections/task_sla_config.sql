@@ -103,6 +103,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_task_sla_config_grain
 CREATE INDEX IF NOT EXISTS idx_task_sla_config_zone ON task_sla_config (zone_id);
 CREATE INDEX IF NOT EXISTS idx_task_sla_config_site_type ON task_sla_config (site_id, task_type);
 
+-- Story 3.9: widens task_type to admit 'replenishment', so a supervisor can configure an SLA
+-- threshold for replenishment tasks through this existing endpoint with zero new code here.
+-- Guarded DROP-then-ADD, mirroring location_register.sql's identical zone_type widening.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_task_sla_config_task_type'
+      AND conrelid = 'task_sla_config'::regclass
+  ) THEN
+    ALTER TABLE task_sla_config DROP CONSTRAINT chk_task_sla_config_task_type;
+  END IF;
+  ALTER TABLE task_sla_config
+    ADD CONSTRAINT chk_task_sla_config_task_type
+    CHECK (task_type IN ('receiving', 'putaway', 'picking', 'packing', 'replenishment'));
+END $$;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN

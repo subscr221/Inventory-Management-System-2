@@ -237,6 +237,23 @@ const TASK_SOURCES: readonly TaskSource[] = [
             LEFT JOIN erp_sales_order eso ON eso.id = pr.dispatch_order_id
            WHERE pr.status = 'packed'`,
   },
+  {
+    // Story 3.9: both site_id and zone_id are direct columns here - no LEFT JOIN erp_sales_order
+    // and no zone-ancestor walk needed, unlike picking/putaway/packing - because the task is
+    // generated directly against a forward-pick zone that is itself the SLA-grouping unit.
+    taskType: 'replenishment',
+    sql: `SELECT 'replenishment'::text AS task_type,
+                 rt.replenishment_task_id AS task_id,
+                 rt.site_id,
+                 rt.zone_id,
+                 rt.assigned_to,
+                 rt.priority,
+                 rt.status,
+                 rt.created_at,
+                 ${AGE_MINUTES_SQL('rt.created_at')} AS age_minutes
+            FROM replenishment_task rt
+           WHERE rt.status = 'ready'`,
+  },
 ];
 
 export const SUPPORTED_TASK_TYPES: readonly WarehouseTaskType[] = TASK_SOURCES.map((s) => s.taskType);

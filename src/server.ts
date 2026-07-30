@@ -126,6 +126,13 @@ import {
   handlePutSlaConfig,
 } from './api/v1/warehouse-tasks.js';
 import {
+  handleGetForwardPickConfig,
+  handlePutForwardPickConfig,
+  handleCheckReplenishment,
+  handleConfirmReplenishmentTask,
+  handleAssignReplenishmentTask,
+} from './api/v1/replenishment.js';
+import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
   generateBatchPickTasksHandler,
@@ -280,6 +287,13 @@ export function createAppRouter(): Router {
   router.get('/api/v1/warehouse-tasks/exceptions/gate-dwell', handleGetGateDwellExceptions);
   router.get('/api/v1/warehouse-tasks/sla-config', handleGetSlaConfig);
   router.put('/api/v1/warehouse-tasks/sla-config', handlePutSlaConfig);
+
+  // Story 3.9: Forward-Pick Replenishment
+  router.get('/api/v1/replenishment/config', handleGetForwardPickConfig);
+  router.put('/api/v1/replenishment/config', handlePutForwardPickConfig);
+  router.post('/api/v1/replenishment/check', handleCheckReplenishment);
+  router.post('/api/v1/replenishment-tasks/:replenishmentTaskId/confirm', handleConfirmReplenishmentTask);
+  router.post('/api/v1/replenishment-tasks/:replenishmentTaskId/assign', handleAssignReplenishmentTask);
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

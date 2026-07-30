@@ -74,6 +74,27 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 3.9: forward-pick replenishment (FR-W-08) needs two new zone types - 'forward_pick'
+-- (the high-velocity zone a replenishment task tops up) and 'reserve' (the bulk-storage zone a
+-- replenishment task sources from). Widened via the same guarded DROP-then-ADD pattern already
+-- used for chk_stock_balance_allocated_within_on_hand (read/projections/stock_balance.sql): the
+-- CREATE TABLE above is left at its original creation-time shape, and this block is what actually
+-- widens a table that already exists. chk_location_register_level, _temperature_class, and
+-- _status are untouched.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_location_register_zone_type'
+      AND conrelid = 'location_register'::regclass
+  ) THEN
+    ALTER TABLE location_register DROP CONSTRAINT chk_location_register_zone_type;
+  END IF;
+  ALTER TABLE location_register
+    ADD CONSTRAINT chk_location_register_zone_type
+    CHECK (zone_type IN ('general', 'hazmat', 'quarantine', 'staging', 'forward_pick', 'reserve'));
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_location_register_parent ON location_register (parent_location_id);
 CREATE INDEX IF NOT EXISTS idx_location_register_site ON location_register (site_id);
 
