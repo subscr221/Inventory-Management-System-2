@@ -2,12 +2,20 @@ import type { IncomingMessage } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson } from '../../middleware/error.js';
-import { getAuthContext, getAuthorizedAssignment, getParsedBody, getTraceId } from '../../middleware/context.js';
+import {
+  getAuthContext,
+  getAuthorizedAssignment,
+  getParsedBody,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import type { WarehouseTaskType } from '../../events/schema.js';
-import { WAREHOUSE_TASK_SUPERVISE_ROLES, WAREHOUSE_TASK_TYPES } from '../../compliance/warehouse-task.js';
+import {
+  WAREHOUSE_TASK_SUPERVISE_ROLES,
+  WAREHOUSE_TASK_TYPES,
+} from '../../compliance/warehouse-task.js';
 import { getSlaConfig, listSlaConfig } from '../../read/projections/task_sla_config.js';
 import {
   listOpenTasks,
@@ -64,7 +72,11 @@ const WAREHOUSE_TASK_READ_ROLES = [
  * not carry over: an aggregate that ranks colleagues against each other is more sensitive than the
  * per-domain task lists it is computed from.
  */
-const WAREHOUSE_TASK_METRICS_ROLES = ['unloading_supervisor', 'warehouse_manager', 'inventory_controller'];
+const WAREHOUSE_TASK_METRICS_ROLES = [
+  'unloading_supervisor',
+  'warehouse_manager',
+  'inventory_controller',
+];
 
 interface ActorContext {
   userId: string;
@@ -93,14 +105,19 @@ function actorContextForSite(req: IncomingMessage, targetSiteId: string): ActorC
   const base = actorContext(req);
   const authContext = getAuthContext(req);
   const covering = authContext?.roles.find(
-    (r) => (r.module === 'warehouse' || r.module === '*')
-      && r.functionScope === 'write'
-      && (r.locationId === '*' || r.locationId === targetSiteId),
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      (r.locationId === '*' || r.locationId === targetSiteId),
   );
   return { ...base, eventLocationId: targetSiteId, role: covering?.role ?? base.role };
 }
 
-function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
+function auditCtxFor(
+  req: IncomingMessage,
+  actor: ActorContext,
+  httpStatus: number,
+): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
   return {
     trace_id: getTraceId(req) ?? '',
     user_id: actor.userId,
@@ -112,16 +129,31 @@ function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: numb
   };
 }
 
-function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[], functionScope: 'read' | 'write'): void {
+function assertRoleAllowed(
+  req: IncomingMessage,
+  allowedRoles: string[],
+  functionScope: 'read' | 'write',
+): void {
   const authContext = getAuthContext(req);
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
-    (r) => (r.module === 'warehouse' || r.module === '*') && (functionScope === 'read' || r.functionScope === 'write') && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      (functionScope === 'read' || r.functionScope === 'write') &&
+      allowedRoles.includes(r.role),
   );
-  if (!ok) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+  if (!ok)
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
 }
 
-function warehouseScope(req: IncomingMessage, scope: 'read' | 'write'): { wildcard: boolean; locations: Set<string> } {
+function warehouseScope(
+  req: IncomingMessage,
+  scope: 'read' | 'write',
+): { wildcard: boolean; locations: Set<string> } {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   return permittedLocationsForModuleScope(authContext.roles, 'warehouse', scope);
@@ -140,9 +172,10 @@ function warehouseScopeForRoles(
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   const filtered = authContext.roles.filter(
-    (r) => (r.module === 'warehouse' || r.module === '*')
-      && (scope === 'read' || r.functionScope === 'write')
-      && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      (scope === 'read' || r.functionScope === 'write') &&
+      allowedRoles.includes(r.role),
   );
   return permittedLocationsForModuleScope(filtered, 'warehouse', scope);
 }
@@ -160,10 +193,16 @@ function resolveSiteScope(
   scope: 'read' | 'write' = 'read',
   allowedRoles?: readonly string[],
 ): { siteId: string | null; siteAny: string[] | null; allowAllSites: boolean } {
-  const permitted = allowedRoles ? warehouseScopeForRoles(req, scope, allowedRoles) : warehouseScope(req, scope);
+  const permitted = allowedRoles
+    ? warehouseScopeForRoles(req, scope, allowedRoles)
+    : warehouseScope(req, scope);
   if (requestedSiteId) {
     if (!permitted.wildcard && !permitted.locations.has(requestedSiteId)) {
-      throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No ${scope} assignment grants access to site "${requestedSiteId}"`);
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `No ${scope} assignment grants access to site "${requestedSiteId}"`,
+      );
     }
     return { siteId: requestedSiteId, siteAny: null, allowAllSites: false };
   }
@@ -185,7 +224,9 @@ const SLA_CONFIG_NAMESPACE = '6f9619ff-8b86-d011-b42d-00c04fc964ff';
 
 function uuidV5(name: string, namespace: string): string {
   const nsBytes = Buffer.from(namespace.replace(/-/g, ''), 'hex');
-  const hash = createHash('sha1').update(Buffer.concat([nsBytes, Buffer.from(name, 'utf8')])).digest();
+  const hash = createHash('sha1')
+    .update(Buffer.concat([nsBytes, Buffer.from(name, 'utf8')]))
+    .digest();
   const bytes = Buffer.from(hash.subarray(0, 16));
   bytes[6] = (bytes[6]! & 0x0f) | 0x50; // version 5
   bytes[8] = (bytes[8]! & 0x3f) | 0x80; // RFC 4122 variant
@@ -238,7 +279,9 @@ const getProductivityBase: RouteHandler = async (req, res) => {
   const periodEnd = params.get('period_end') ?? new Date().toISOString();
   // Default window is the 24 hours ending at period_end, derived from period_end itself rather than
   // from a second clock read, so the two bounds are always consistent with each other.
-  const periodStart = params.get('period_start') ?? new Date(Date.parse(periodEnd) - 24 * 60 * 60 * 1000).toISOString();
+  const periodStart =
+    params.get('period_start') ??
+    new Date(Date.parse(periodEnd) - 24 * 60 * 60 * 1000).toISOString();
   if (Date.parse(periodStart) >= Date.parse(periodEnd)) {
     throw new AppError(400, 'INVALID_PARAMS', 'period_start must be strictly before period_end', {
       period_start: periodStart,
@@ -246,7 +289,12 @@ const getProductivityBase: RouteHandler = async (req, res) => {
     });
   }
 
-  const scope = resolveSiteScope(req, params.get('site_id') ?? params.get('site'), 'read', WAREHOUSE_TASK_METRICS_ROLES);
+  const scope = resolveSiteScope(
+    req,
+    params.get('site_id') ?? params.get('site'),
+    'read',
+    WAREHOUSE_TASK_METRICS_ROLES,
+  );
   const productivity = await computeConfirmationRate({
     periodStart,
     periodEnd,
@@ -273,7 +321,12 @@ const getGateDwellExceptionsBase: RouteHandler = async (req, res) => {
   const params = queryOf(req);
   assertValidTaskFilters(params);
 
-  const scope = resolveSiteScope(req, params.get('site_id') ?? params.get('site'), 'read', WAREHOUSE_TASK_METRICS_ROLES);
+  const scope = resolveSiteScope(
+    req,
+    params.get('site_id') ?? params.get('site'),
+    'read',
+    WAREHOUSE_TASK_METRICS_ROLES,
+  );
   const shifts = await computeGateDwellExceptions({
     businessDate: params.get('business_date'),
     siteId: scope.siteId,
@@ -306,16 +359,31 @@ const getSlaConfigBase: RouteHandler = async (req, res) => {
     // Resolution answers "which threshold governs THIS task", which is meaningless without knowing
     // which site's configuration to resolve against, so the site must be explicit here.
     if (!scope.siteId) {
-      throw new AppError(400, 'INVALID_PARAMS', 'site_id is required when resolving the governing threshold', {
-        task_type: taskType,
-      });
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'site_id is required when resolving the governing threshold',
+        {
+          task_type: taskType,
+        },
+      );
     }
     const resolved = await getSlaConfig(taskType, scope.siteId, zoneId);
-    sendJson(res, 200, { task_type: taskType, site_id: scope.siteId, zone_id: zoneId, sla_config: resolved });
+    sendJson(res, 200, {
+      task_type: taskType,
+      site_id: scope.siteId,
+      zone_id: zoneId,
+      sla_config: resolved,
+    });
     return;
   }
   sendJson(res, 200, {
-    sla_configs: await listSlaConfig({ siteId: scope.siteId, siteAny: scope.siteAny, taskType, zoneId }),
+    sla_configs: await listSlaConfig({
+      siteId: scope.siteId,
+      siteAny: scope.siteAny,
+      taskType,
+      zoneId,
+    }),
   });
 };
 
@@ -330,11 +398,23 @@ const putSlaConfigBase: RouteHandler = async (req, res) => {
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
 
   const taskType = body['task_type'];
-  if (typeof taskType !== 'string' || !WAREHOUSE_TASK_TYPES.includes(taskType as WarehouseTaskType)) {
-    throw new AppError(400, 'INVALID_PARAMS', `task_type must be one of: ${WAREHOUSE_TASK_TYPES.join(', ')}`, { task_type: taskType });
+  if (
+    typeof taskType !== 'string' ||
+    !WAREHOUSE_TASK_TYPES.includes(taskType as WarehouseTaskType)
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `task_type must be one of: ${WAREHOUSE_TASK_TYPES.join(', ')}`,
+      { task_type: taskType },
+    );
   }
   const rawZoneId = body['zone_id'];
-  if (rawZoneId !== undefined && rawZoneId !== null && (typeof rawZoneId !== 'string' || !UUID_REGEX.test(rawZoneId))) {
+  if (
+    rawZoneId !== undefined &&
+    rawZoneId !== null &&
+    (typeof rawZoneId !== 'string' || !UUID_REGEX.test(rawZoneId))
+  ) {
     throw new AppError(400, 'INVALID_PARAMS', 'zone_id must be a UUID string when supplied');
   }
   const zoneId = (rawZoneId as string | null | undefined) ?? null;
@@ -345,9 +425,17 @@ const putSlaConfigBase: RouteHandler = async (req, res) => {
   let siteId: string;
   if (zoneId !== null) {
     const { getPool } = await import('../../config/db.js');
-    const zone = await getPool().query(`SELECT site_id FROM location_register WHERE location_id = $1`, [zoneId]);
+    const zone = await getPool().query(
+      `SELECT site_id FROM location_register WHERE location_id = $1`,
+      [zoneId],
+    );
     if (zone.rows.length === 0) {
-      throw new AppError(404, 'LOCATION_NOT_FOUND', `No location register entry exists for "${zoneId}"`, { zone_id: zoneId });
+      throw new AppError(
+        404,
+        'LOCATION_NOT_FOUND',
+        `No location register entry exists for "${zoneId}"`,
+        { zone_id: zoneId },
+      );
     }
     const zoneSiteId = zone.rows[0]!['site_id'] as string;
     resolveSiteScope(req, zoneSiteId, 'write');
@@ -355,7 +443,11 @@ const putSlaConfigBase: RouteHandler = async (req, res) => {
   } else {
     const rawSiteId = body['site_id'];
     if (typeof rawSiteId !== 'string' || rawSiteId.length === 0) {
-      throw new AppError(400, 'INVALID_PARAMS', 'site_id is required when setting a site-wide default threshold');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'site_id is required when setting a site-wide default threshold',
+      );
     }
     const scope = resolveSiteScope(req, rawSiteId, 'write');
     siteId = scope.siteId ?? rawSiteId;
@@ -367,7 +459,10 @@ const putSlaConfigBase: RouteHandler = async (req, res) => {
       stream_type: 'warehouse',
       // The stream is keyed by the full grain including the site, so each site's threshold history is
       // its own ordered stream and event_version means what it says within that site.
-      stream_id: uuidV5(`task_sla_config:${siteId}:${taskType}:${zoneId ?? 'site-wide'}`, SLA_CONFIG_NAMESPACE),
+      stream_id: uuidV5(
+        `task_sla_config:${siteId}:${taskType}:${zoneId ?? 'site-wide'}`,
+        SLA_CONFIG_NAMESPACE,
+      ),
       event_type: 'task_sla_config.updated',
       payload: {
         site_id: siteId,
@@ -390,8 +485,23 @@ const putSlaConfigBase: RouteHandler = async (req, res) => {
   sendJson(res, 200, { event_id: persisted.event_id, sla_config: updated });
 };
 
-export const handleListWarehouseTasks: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(listWarehouseTasksBase);
-export const handleGetProductivity: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(getProductivityBase);
-export const handleGetGateDwellExceptions: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(getGateDwellExceptionsBase);
-export const handleGetSlaConfig: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(getSlaConfigBase);
-export const handlePutSlaConfig: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(putSlaConfigBase);
+export const handleListWarehouseTasks: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(listWarehouseTasksBase);
+export const handleGetProductivity: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(getProductivityBase);
+export const handleGetGateDwellExceptions: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(getGateDwellExceptionsBase);
+export const handleGetSlaConfig: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(getSlaConfigBase);
+export const handlePutSlaConfig: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(putSlaConfigBase);

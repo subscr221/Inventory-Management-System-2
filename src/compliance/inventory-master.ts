@@ -3,7 +3,11 @@ import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { getItemBySku } from '../read/projections/item_master.js';
 import type { ItemMaster } from '../read/projections/item_master.js';
-import { getLocationById, getLocationByCode, zoneIncompatibilityReasons } from '../read/projections/location_register.js';
+import {
+  getLocationById,
+  getLocationByCode,
+  zoneIncompatibilityReasons,
+} from '../read/projections/location_register.js';
 import type { LocationRegisterEntry } from '../read/projections/location_register.js';
 
 /**
@@ -43,13 +47,18 @@ export class ZoneIncompatibleWarning extends Error {
       reasons: string[];
     },
   ) {
-    super('Placement target is not zone-compatible with the item; confirmation is required before the movement is persisted');
+    super(
+      'Placement target is not zone-compatible with the item; confirmation is required before the movement is persisted',
+    );
     this.name = 'ZoneIncompatibleWarning';
   }
 }
 
 /** Warning envelope body sent by handlers that catch ZoneIncompatibleWarning. */
-export function zoneWarningEnvelope(warning: ZoneIncompatibleWarning, traceId: string): Record<string, unknown> {
+export function zoneWarningEnvelope(
+  warning: ZoneIncompatibleWarning,
+  traceId: string,
+): Record<string, unknown> {
   return {
     warning_code: 'ZONE_INCOMPATIBLE',
     message:
@@ -70,8 +79,14 @@ export function zoneWarningEnvelope(warning: ZoneIncompatibleWarning, traceId: s
  */
 export interface InventoryMasterDeps {
   getItemBySku: (sku: string, client?: PoolClient) => Promise<ItemMaster | null>;
-  getLocationById: (locationId: string, client?: PoolClient) => Promise<LocationRegisterEntry | null>;
-  getLocationByCode: (locationCode: string, client?: PoolClient) => Promise<LocationRegisterEntry | null>;
+  getLocationById: (
+    locationId: string,
+    client?: PoolClient,
+  ) => Promise<LocationRegisterEntry | null>;
+  getLocationByCode: (
+    locationCode: string,
+    client?: PoolClient,
+  ) => Promise<LocationRegisterEntry | null>;
 }
 
 const defaultDeps: InventoryMasterDeps = {
@@ -88,16 +103,29 @@ function isNonEmptyString(value: unknown): value is string {
 
 function assertActiveItem(item: ItemMaster): void {
   if (item.status !== 'active') {
-    throw new AppError(400, 'INACTIVE_ITEM', `Item master record for sku "${item.sku}" is inactive`, { sku: item.sku });
+    throw new AppError(
+      400,
+      'INACTIVE_ITEM',
+      `Item master record for sku "${item.sku}" is inactive`,
+      { sku: item.sku },
+    );
   }
 }
 
-function assertActiveLocation(location: LocationRegisterEntry, errorCode = 'INACTIVE_LOCATION'): void {
+function assertActiveLocation(
+  location: LocationRegisterEntry,
+  errorCode = 'INACTIVE_LOCATION',
+): void {
   if (location.status !== 'active') {
-    throw new AppError(400, errorCode, `Location register record "${location.location_id}" is inactive`, {
-      location_id: location.location_id,
-      location_code: location.location_code,
-    });
+    throw new AppError(
+      400,
+      errorCode,
+      `Location register record "${location.location_id}" is inactive`,
+      {
+        location_id: location.location_id,
+        location_code: location.location_code,
+      },
+    );
   }
 }
 
@@ -122,16 +150,24 @@ export async function assertInventoryMasterReferences(
   const targetLocationIdRaw = envelope.payload['target_location_id'];
   const targetLocationCodeRaw = envelope.payload['target_location_code'];
 
-  const referencesMasters = skuRaw !== undefined || targetLocationIdRaw !== undefined || targetLocationCodeRaw !== undefined;
+  const referencesMasters =
+    skuRaw !== undefined ||
+    targetLocationIdRaw !== undefined ||
+    targetLocationCodeRaw !== undefined;
   if (!referencesMasters) return;
 
   const actorLocationId = envelope.metadata.actor.location_id;
   if (actorLocationId !== NO_LOCATION_UUID) {
     const actorLocation = await deps.getLocationById(actorLocationId);
     if (!actorLocation) {
-      throw new AppError(400, 'ACTOR_LOCATION_NOT_REGISTERED', 'The actor location is not a registered location', {
-        actor_location_id: actorLocationId,
-      });
+      throw new AppError(
+        400,
+        'ACTOR_LOCATION_NOT_REGISTERED',
+        'The actor location is not a registered location',
+        {
+          actor_location_id: actorLocationId,
+        },
+      );
     }
     assertActiveLocation(actorLocation, 'ACTOR_LOCATION_INACTIVE');
   }
@@ -139,11 +175,18 @@ export async function assertInventoryMasterReferences(
   let item: ItemMaster | null = null;
   if (skuRaw !== undefined) {
     if (!isNonEmptyString(skuRaw)) {
-      throw new AppError(400, 'ITEM_NOT_FOUND', 'sku must be a non-empty string when supplied', { sku: skuRaw ?? null });
+      throw new AppError(400, 'ITEM_NOT_FOUND', 'sku must be a non-empty string when supplied', {
+        sku: skuRaw ?? null,
+      });
     }
     item = await deps.getItemBySku(skuRaw);
     if (!item) {
-      throw new AppError(400, 'ITEM_NOT_FOUND', `No item master record exists for sku "${skuRaw}"`, { sku: skuRaw });
+      throw new AppError(
+        400,
+        'ITEM_NOT_FOUND',
+        `No item master record exists for sku "${skuRaw}"`,
+        { sku: skuRaw },
+      );
     }
     assertActiveItem(item);
   }
@@ -151,36 +194,61 @@ export async function assertInventoryMasterReferences(
   let location: LocationRegisterEntry | null = null;
   if (targetLocationIdRaw !== undefined) {
     if (!isNonEmptyString(targetLocationIdRaw) || !UUID_REGEX.test(targetLocationIdRaw)) {
-      throw new AppError(400, 'LOCATION_NOT_FOUND', 'target_location_id must be a valid UUID when supplied', {
-        target_location_id: targetLocationIdRaw ?? null,
-      });
+      throw new AppError(
+        400,
+        'LOCATION_NOT_FOUND',
+        'target_location_id must be a valid UUID when supplied',
+        {
+          target_location_id: targetLocationIdRaw ?? null,
+        },
+      );
     }
     location = await deps.getLocationById(targetLocationIdRaw);
     if (!location) {
-      throw new AppError(400, 'LOCATION_NOT_FOUND', `No location register record exists for target_location_id "${targetLocationIdRaw}"`, {
-        target_location_id: targetLocationIdRaw,
-      });
+      throw new AppError(
+        400,
+        'LOCATION_NOT_FOUND',
+        `No location register record exists for target_location_id "${targetLocationIdRaw}"`,
+        {
+          target_location_id: targetLocationIdRaw,
+        },
+      );
     }
     assertActiveLocation(location);
   }
   if (targetLocationCodeRaw !== undefined) {
     if (!isNonEmptyString(targetLocationCodeRaw)) {
-      throw new AppError(400, 'LOCATION_NOT_FOUND', 'target_location_code must be a non-empty string when supplied', {
-        target_location_code: targetLocationCodeRaw ?? null,
-      });
+      throw new AppError(
+        400,
+        'LOCATION_NOT_FOUND',
+        'target_location_code must be a non-empty string when supplied',
+        {
+          target_location_code: targetLocationCodeRaw ?? null,
+        },
+      );
     }
     const byCode = await deps.getLocationByCode(targetLocationCodeRaw);
     if (!byCode) {
-      throw new AppError(400, 'LOCATION_NOT_FOUND', `No location register record exists for target_location_code "${targetLocationCodeRaw}"`, {
-        target_location_code: targetLocationCodeRaw,
-      });
+      throw new AppError(
+        400,
+        'LOCATION_NOT_FOUND',
+        `No location register record exists for target_location_code "${targetLocationCodeRaw}"`,
+        {
+          target_location_code: targetLocationCodeRaw,
+        },
+      );
     }
     assertActiveLocation(byCode);
     if (location && location.location_id !== byCode.location_id) {
-      throw new AppError(400, 'INVALID_PARAMS', 'target_location_id and target_location_code reference different locations', {
-        target_location_id: location.location_id,
-        target_location_code: targetLocationCodeRaw,
-      });
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'target_location_id and target_location_code reference different locations',
+        {
+          target_location_id: location.location_id,
+          target_location_code: targetLocationCodeRaw,
+        },
+      );
     }
     location = byCode;
   }

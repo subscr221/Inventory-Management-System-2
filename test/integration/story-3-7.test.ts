@@ -21,7 +21,13 @@ interface Role {
   locationId: string;
 }
 
-function makeRequest(port: number, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<HttpResult> {
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<HttpResult> {
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -30,7 +36,11 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
         port,
         path,
         method,
-        headers: { 'Content-Type': 'application/json', ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}), ...headers },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+          ...headers,
+        },
       },
       (res: IncomingMessage) => {
         const chunks: Buffer[] = [];
@@ -56,13 +66,24 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
   });
 }
 
-async function scimCreateUser(port: number, externalId: string, displayName: string, roles: Role[]): Promise<string> {
-  const result = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', {
-    externalId,
-    email: externalId,
-    displayName,
-    roles,
-  }, SCIM_HEADERS);
+async function scimCreateUser(
+  port: number,
+  externalId: string,
+  displayName: string,
+  roles: Role[],
+): Promise<string> {
+  const result = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/scim/v2/Users',
+    {
+      externalId,
+      email: externalId,
+      displayName,
+      roles,
+    },
+    SCIM_HEADERS,
+  );
   assert.equal(result.status, 201, `SCIM user creation failed: ${result.raw}`);
   const userId = result.body['userId'];
   assert(typeof userId === 'string', 'SCIM response missing user id');
@@ -77,7 +98,10 @@ async function scimCreateAccessToken(port: number, externalId: string): Promise<
   return token;
 }
 
-async function createWarehouseManager(port: number, locationId: string): Promise<{ userId: string; token: string }> {
+async function createWarehouseManager(
+  port: number,
+  locationId: string,
+): Promise<{ userId: string; token: string }> {
   const externalId = `warehouse-mgr-${randomUUID().slice(0, 8)}`;
   const userId = await scimCreateUser(port, externalId, 'Warehouse Manager', [
     { role: 'warehouse_manager', module: 'warehouse', functionScope: 'write', locationId },
@@ -86,7 +110,10 @@ async function createWarehouseManager(port: number, locationId: string): Promise
   return { userId, token };
 }
 
-async function createWarehouseOperator(port: number, locationId: string): Promise<{ userId: string; token: string }> {
+async function createWarehouseOperator(
+  port: number,
+  locationId: string,
+): Promise<{ userId: string; token: string }> {
   const externalId = `warehouse-op-${randomUUID().slice(0, 8)}`;
   const userId = await scimCreateUser(port, externalId, 'Warehouse Operator', [
     { role: 'warehouse_operator', module: 'warehouse', functionScope: 'write', locationId },
@@ -95,7 +122,10 @@ async function createWarehouseOperator(port: number, locationId: string): Promis
   return { userId, token };
 }
 
-async function createQcInspector(port: number, locationId: string): Promise<{ userId: string; token: string }> {
+async function createQcInspector(
+  port: number,
+  locationId: string,
+): Promise<{ userId: string; token: string }> {
   const externalId = `qc-inspector-${randomUUID().slice(0, 8)}`;
   const userId = await scimCreateUser(port, externalId, 'QC Inspector', [
     { role: 'qc_inspector', module: 'quality', functionScope: 'write', locationId },
@@ -106,96 +136,198 @@ async function createQcInspector(port: number, locationId: string): Promise<{ us
 
 // erp_sales_order is a direct-upsert reference projection (Story 2.9), not event-sourced -
 // seed it with SQL directly, mirroring Story 3.6's seedOrderLine helper.
-async function createErpSalesOrder(_port: number, _token: string, payload: Record<string, unknown>): Promise<string> {
+async function createErpSalesOrder(
+  _port: number,
+  _token: string,
+  payload: Record<string, unknown>,
+): Promise<string> {
   const id = payload['id'] as string;
   await getPool().query(
     `INSERT INTO erp_sales_order
        (id, so_number_ext, line_no, sku, quantity, ship_from_site_id, ship_from_site_code_ext, ship_to_ext, status, source_system, last_synced_at)
      VALUES ($1, $2, 1, $3, $4, $5, 'site-A37', $6, 'open', 'ERP', now())`,
-    [id, payload['so_number_ext'], payload['sku'], payload['quantity'], payload['ship_from_site_id'], payload['ship_to_ext'] ?? null],
+    [
+      id,
+      payload['so_number_ext'],
+      payload['sku'],
+      payload['quantity'],
+      payload['ship_from_site_id'],
+      payload['ship_to_ext'] ?? null,
+    ],
   );
   return id;
 }
 
-async function createPickTask(port: number, token: string, dispatchOrderId: string, dispatchOrderLineIds: string[]): Promise<{ pickTaskId: string; pickLineId: string }> {
-  const result = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', {
-    dispatchOrderId,
-    dispatchOrderLineIds,
-    strategy: 'single',
-  }, { Authorization: `Bearer ${token}` });
+async function createPickTask(
+  port: number,
+  token: string,
+  dispatchOrderId: string,
+  dispatchOrderLineIds: string[],
+): Promise<{ pickTaskId: string; pickLineId: string }> {
+  const result = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/pick-tasks/generate',
+    {
+      dispatchOrderId,
+      dispatchOrderLineIds,
+      strategy: 'single',
+    },
+    { Authorization: `Bearer ${token}` },
+  );
   assert.equal(result.status, 201, `Pick task generation failed: ${result.raw}`);
   const pickTaskIds = result.body['pickTaskIds'] as string[] | undefined;
   const pickLineIds = result.body['pickLineIds'] as string[] | undefined;
-  assert(Array.isArray(pickTaskIds) && pickTaskIds.length > 0, 'Pick task response missing pickTaskIds');
-  assert(Array.isArray(pickLineIds) && pickLineIds.length > 0, 'Pick task response missing pickLineIds');
+  assert(
+    Array.isArray(pickTaskIds) && pickTaskIds.length > 0,
+    'Pick task response missing pickTaskIds',
+  );
+  assert(
+    Array.isArray(pickLineIds) && pickLineIds.length > 0,
+    'Pick task response missing pickLineIds',
+  );
   return { pickTaskId: pickTaskIds[0]!, pickLineId: pickLineIds[0]! };
 }
 
-async function confirmPickLine(port: number, token: string, pickTaskId: string, pickLineId: string, lotId: string, pickedQty: string): Promise<string> {
-  const result = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${pickTaskId}/lines/${pickLineId}/confirm`, {
-    confirmedLotId: lotId,
-    confirmedQuantity: pickedQty,
-    captureMethod: 'PWA',
-  }, { Authorization: `Bearer ${token}` });
+async function confirmPickLine(
+  port: number,
+  token: string,
+  pickTaskId: string,
+  pickLineId: string,
+  lotId: string,
+  pickedQty: string,
+): Promise<string> {
+  const result = await makeRequest(
+    port,
+    'POST',
+    `/api/v1/pick-tasks/${pickTaskId}/lines/${pickLineId}/confirm`,
+    {
+      confirmedLotId: lotId,
+      confirmedQuantity: pickedQty,
+      captureMethod: 'PWA',
+    },
+    { Authorization: `Bearer ${token}` },
+  );
   assert.equal(result.status, 200, `Pick line confirmation failed: ${result.raw}`);
   const eventId = result.body['event_id'];
   assert(typeof eventId === 'string', 'Pick line response missing event_id');
   return eventId;
 }
 
-async function packDispatchOrder(port: number, token: string, dispatchOrderId: string, packingLines: Array<{
-  sku: string;
-  packed_qty: string;
-  lot_id: string;
-  carton_count: number;
-  actual_weight_kg: number | null;
-}>): Promise<string> {
-  const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/pack`, {
-    dispatchOrderId,
-    packingLines,
-  }, { Authorization: `Bearer ${token}` });
+async function packDispatchOrder(
+  port: number,
+  token: string,
+  dispatchOrderId: string,
+  packingLines: Array<{
+    sku: string;
+    packed_qty: string;
+    lot_id: string;
+    carton_count: number;
+    actual_weight_kg: number | null;
+  }>,
+): Promise<string> {
+  const result = await makeRequest(
+    port,
+    'POST',
+    `/api/v1/dispatch/${dispatchOrderId}/pack`,
+    {
+      dispatchOrderId,
+      packingLines,
+    },
+    { Authorization: `Bearer ${token}` },
+  );
   assert.equal(result.status, 200, `Dispatch pack failed: ${result.raw}`);
   const eventId = (result.body['eventIds'] as unknown[] | undefined)?.[0] ?? result.body['eventId'];
   assert(typeof eventId === 'string', 'Dispatch pack response missing eventId');
   return eventId;
 }
 
-async function generateShippingDocuments(port: number, token: string, dispatchOrderId: string): Promise<Record<string, unknown>> {
-  const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/generate-documents`, {
-    dispatchOrderId,
-  }, { Authorization: `Bearer ${token}` });
+async function generateShippingDocuments(
+  port: number,
+  token: string,
+  dispatchOrderId: string,
+): Promise<Record<string, unknown>> {
+  const result = await makeRequest(
+    port,
+    'POST',
+    `/api/v1/dispatch/${dispatchOrderId}/generate-documents`,
+    {
+      dispatchOrderId,
+    },
+    { Authorization: `Bearer ${token}` },
+  );
   assert.equal(result.status, 200, `Shipping documents generation failed: ${result.raw}`);
   return result.body;
 }
 
-async function dispatchOrder(port: number, token: string, dispatchOrderId: string): Promise<string> {
-  const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/dispatch`, {
-    dispatchOrderId,
-  }, { Authorization: `Bearer ${token}` });
+async function dispatchOrder(
+  port: number,
+  token: string,
+  dispatchOrderId: string,
+): Promise<string> {
+  const result = await makeRequest(
+    port,
+    'POST',
+    `/api/v1/dispatch/${dispatchOrderId}/dispatch`,
+    {
+      dispatchOrderId,
+    },
+    { Authorization: `Bearer ${token}` },
+  );
   assert.equal(result.status, 200, `Dispatch failed: ${result.raw}`);
   const eventId = result.body['eventId'];
   assert(typeof eventId === 'string', 'Dispatch response missing eventId');
   return eventId;
 }
 
-async function getPackingRecords(port: number, token: string, dispatchOrderId: string): Promise<Record<string, unknown>[]> {
-  const result = await makeRequest(port, 'GET', `/api/v1/dispatch/${dispatchOrderId}/packing-records`, undefined, { Authorization: `Bearer ${token}` });
+async function getPackingRecords(
+  port: number,
+  token: string,
+  dispatchOrderId: string,
+): Promise<Record<string, unknown>[]> {
+  const result = await makeRequest(
+    port,
+    'GET',
+    `/api/v1/dispatch/${dispatchOrderId}/packing-records`,
+    undefined,
+    { Authorization: `Bearer ${token}` },
+  );
   assert.equal(result.status, 200, `Get packing records failed: ${result.raw}`);
   const packingRecords = result.body['packingRecords'];
   assert(Array.isArray(packingRecords), 'Packing records response missing array');
   return packingRecords as Record<string, unknown>[];
 }
 
-async function getDispatchDocuments(port: number, token: string, dispatchOrderId: string): Promise<Record<string, unknown>[]> {
-  const result = await makeRequest(port, 'GET', `/api/v1/dispatch/${dispatchOrderId}/documents`, undefined, { Authorization: `Bearer ${token}` });
+async function getDispatchDocuments(
+  port: number,
+  token: string,
+  dispatchOrderId: string,
+): Promise<Record<string, unknown>[]> {
+  const result = await makeRequest(
+    port,
+    'GET',
+    `/api/v1/dispatch/${dispatchOrderId}/documents`,
+    undefined,
+    { Authorization: `Bearer ${token}` },
+  );
   assert.equal(result.status, 200, `Get dispatch documents failed: ${result.raw}`);
   const documents = result.body['documents'];
   assert(Array.isArray(documents), 'Dispatch documents response missing array');
   return documents as Record<string, unknown>[];
 }
 
-async function getDispatchOrderStatus(port: number, token: string, dispatchOrderId: string): Promise<Record<string, unknown> | null> {
-  const result = await makeRequest(port, 'GET', `/api/v1/dispatch-order-status/${dispatchOrderId}`, undefined, { Authorization: `Bearer ${token}` });
+async function getDispatchOrderStatus(
+  port: number,
+  token: string,
+  dispatchOrderId: string,
+): Promise<Record<string, unknown> | null> {
+  const result = await makeRequest(
+    port,
+    'GET',
+    `/api/v1/dispatch-order-status/${dispatchOrderId}`,
+    undefined,
+    { Authorization: `Bearer ${token}` },
+  );
   if (result.status === 404) return null;
   assert.equal(result.status, 200, `Get dispatch order status failed: ${result.raw}`);
   return result.body as Record<string, unknown>;
@@ -236,7 +368,12 @@ async function seedLocation(
   );
 }
 
-async function seedStock(sku: string, locationId: string, lotNumber: string, onHand: number): Promise<void> {
+async function seedStock(
+  sku: string,
+  locationId: string,
+  lotNumber: string,
+  onHand: number,
+): Promise<void> {
   await getPool().query(
     `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand)
      VALUES ($1, $2, $3, 'owned', $4)`,
@@ -245,11 +382,23 @@ async function seedStock(sku: string, locationId: string, lotNumber: string, onH
 }
 
 async function placeQualityHold(port: number, token: string, lotId: string): Promise<HttpResult> {
-  return makeRequest(port, 'PUT', `/api/v1/lots/${lotId}/quality-hold`, { hold_reason: 'Story 3.7 AC3 test hold' }, { Authorization: `Bearer ${token}` });
+  return makeRequest(
+    port,
+    'PUT',
+    `/api/v1/lots/${lotId}/quality-hold`,
+    { hold_reason: 'Story 3.7 AC3 test hold' },
+    { Authorization: `Bearer ${token}` },
+  );
 }
 
 async function clearQualityHold(port: number, token: string, lotId: string): Promise<HttpResult> {
-  return makeRequest(port, 'DELETE', `/api/v1/lots/${lotId}/quality-hold`, {}, { Authorization: `Bearer ${token}` });
+  return makeRequest(
+    port,
+    'DELETE',
+    `/api/v1/lots/${lotId}/quality-hold`,
+    {},
+    { Authorization: `Bearer ${token}` },
+  );
 }
 
 describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
@@ -311,16 +460,23 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    const eventId = await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
-      sku,
-      packed_qty: quantity,
-      lot_id: lotId,
-      carton_count: 5,
-      actual_weight_kg: 12.5,
-    }]);
+    const eventId = await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [
+      {
+        sku,
+        packed_qty: quantity,
+        lot_id: lotId,
+        carton_count: 5,
+        actual_weight_kg: 12.5,
+      },
+    ]);
 
     assert.equal(typeof eventId, 'string');
     assert(eventId.length > 0);
@@ -350,19 +506,32 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/pack`, {
-      dispatchOrderId,
-      packingLines: [{
-        sku,
-        packed_qty: '50',
-        lot_id: lotId,
-        carton_count: 3,
-        actual_weight_kg: 8.0,
-      }],
-    }, { Authorization: `Bearer ${warehouseManager.token}` });
+    const result = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/dispatch/${dispatchOrderId}/pack`,
+      {
+        dispatchOrderId,
+        packingLines: [
+          {
+            sku,
+            packed_qty: '50',
+            lot_id: lotId,
+            carton_count: 3,
+            actual_weight_kg: 8.0,
+          },
+        ],
+      },
+      { Authorization: `Bearer ${warehouseManager.token}` },
+    );
 
     assert.equal(result.status, 400);
     assert.equal(result.body['error_code'], 'PACKED_QTY_MISMATCH');
@@ -385,16 +554,23 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
-      sku,
-      packed_qty: quantity,
-      lot_id: lotId,
-      carton_count: 4,
-      actual_weight_kg: 10.0,
-    }]);
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [
+      {
+        sku,
+        packed_qty: quantity,
+        lot_id: lotId,
+        carton_count: 4,
+        actual_weight_kg: 10.0,
+      },
+    ]);
 
     const result = await generateShippingDocuments(port, warehouseManager.token, dispatchOrderId);
 
@@ -434,12 +610,23 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/generate-documents`, {
-      dispatchOrderId,
-    }, { Authorization: `Bearer ${warehouseManager.token}` });
+    const result = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/dispatch/${dispatchOrderId}/generate-documents`,
+      {
+        dispatchOrderId,
+      },
+      { Authorization: `Bearer ${warehouseManager.token}` },
+    );
 
     assert.equal(result.status, 400);
     assert.equal(result.body['error_code'], 'DISPATCH_ORDER_NOT_PACKED');
@@ -462,16 +649,23 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
-      sku,
-      packed_qty: quantity,
-      lot_id: lotId,
-      carton_count: 3,
-      actual_weight_kg: 7.5,
-    }]);
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [
+      {
+        sku,
+        packed_qty: quantity,
+        lot_id: lotId,
+        carton_count: 3,
+        actual_weight_kg: 7.5,
+      },
+    ]);
 
     await generateShippingDocuments(port, warehouseManager.token, dispatchOrderId);
 
@@ -504,20 +698,33 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
-      sku,
-      packed_qty: quantity,
-      lot_id: lotId,
-      carton_count: 2,
-      actual_weight_kg: 5.0,
-    }]);
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [
+      {
+        sku,
+        packed_qty: quantity,
+        lot_id: lotId,
+        carton_count: 2,
+        actual_weight_kg: 5.0,
+      },
+    ]);
 
-    const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/dispatch`, {
-      dispatchOrderId,
-    }, { Authorization: `Bearer ${warehouseManager.token}` });
+    const result = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/dispatch/${dispatchOrderId}/dispatch`,
+      {
+        dispatchOrderId,
+      },
+      { Authorization: `Bearer ${warehouseManager.token}` },
+    );
 
     assert.equal(result.status, 400);
     assert.equal(result.body['error_code'], 'DISPATCH_DOCUMENTS_NOT_GENERATED');
@@ -540,20 +747,33 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
-      sku,
-      packed_qty: quantity,
-      lot_id: lotId,
-      carton_count: 1,
-      actual_weight_kg: 2.5,
-    }]);
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [
+      {
+        sku,
+        packed_qty: quantity,
+        lot_id: lotId,
+        carton_count: 1,
+        actual_weight_kg: 2.5,
+      },
+    ]);
 
-    const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/generate-documents`, {
-      dispatchOrderId,
-    }, { Authorization: `Bearer ${warehouseOperator.token}` });
+    const result = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/dispatch/${dispatchOrderId}/generate-documents`,
+      {
+        dispatchOrderId,
+      },
+      { Authorization: `Bearer ${warehouseOperator.token}` },
+    );
 
     assert.equal(result.status, 403);
     assert.equal(result.body['error_code'], 'FUNCTION_ACCESS_DENIED');
@@ -576,19 +796,32 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    const result = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/pack`, {
-      dispatchOrderId,
-      packingLines: [{
-        sku,
-        packed_qty: quantity,
-        lot_id: lotId,
-        carton_count: 1,
-        actual_weight_kg: 1.5,
-      }],
-    }, { Authorization: `Bearer ${otherSiteManager.token}` });
+    const result = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/dispatch/${dispatchOrderId}/pack`,
+      {
+        dispatchOrderId,
+        packingLines: [
+          {
+            sku,
+            packed_qty: quantity,
+            lot_id: lotId,
+            carton_count: 1,
+            actual_weight_kg: 1.5,
+          },
+        ],
+      },
+      { Authorization: `Bearer ${otherSiteManager.token}` },
+    );
 
     assert.equal(result.status, 403);
     assert.equal(result.body['error_code'], 'LOCATION_ACCESS_DENIED');
@@ -611,16 +844,23 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
-      sku,
-      packed_qty: quantity,
-      lot_id: lotId,
-      carton_count: 6,
-      actual_weight_kg: 15.0,
-    }]);
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [
+      {
+        sku,
+        packed_qty: quantity,
+        lot_id: lotId,
+        carton_count: 6,
+        actual_weight_kg: 15.0,
+      },
+    ]);
 
     const packingRecords = await getPackingRecords(port, warehouseManager.token, dispatchOrderId);
     assert.equal(packingRecords.length, 1);
@@ -650,18 +890,29 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
-      sku,
-      packed_qty: quantity,
-      lot_id: lotId,
-      carton_count: 7,
-      actual_weight_kg: 18.0,
-    }]);
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [
+      {
+        sku,
+        packed_qty: quantity,
+        lot_id: lotId,
+        carton_count: 7,
+        actual_weight_kg: 18.0,
+      },
+    ]);
 
-    const docResult = await generateShippingDocuments(port, warehouseManager.token, dispatchOrderId);
+    const docResult = await generateShippingDocuments(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+    );
     assert(Array.isArray(docResult['documentIds']));
     // bol, packing_slip, commercial_invoice, plus one label document per carton (7 cartons)
     assert.equal(docResult['documentIds'].length, 10);
@@ -670,8 +921,12 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     assert.equal(documents.length, 10);
 
     const bolDoc = documents.find((d: Record<string, unknown>) => d.document_type === 'bol');
-    const packingSlipDoc = documents.find((d: Record<string, unknown>) => d.document_type === 'packing_slip');
-    const commercialInvoiceDoc = documents.find((d: Record<string, unknown>) => d.document_type === 'commercial_invoice');
+    const packingSlipDoc = documents.find(
+      (d: Record<string, unknown>) => d.document_type === 'packing_slip',
+    );
+    const commercialInvoiceDoc = documents.find(
+      (d: Record<string, unknown>) => d.document_type === 'commercial_invoice',
+    );
     const labelDocs = documents.filter((d: Record<string, unknown>) => d.document_type === 'label');
 
     assert(bolDoc);
@@ -679,9 +934,18 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     assert(commercialInvoiceDoc);
     assert.equal(labelDocs.length, 7);
 
-    assert(typeof bolDoc?.document_content === 'string' && (bolDoc.document_content as string).length > 0);
-    assert(typeof packingSlipDoc?.document_content === 'string' && (packingSlipDoc.document_content as string).length > 0);
-    assert(typeof commercialInvoiceDoc?.document_content === 'string' && (commercialInvoiceDoc.document_content as string).length > 0);
+    assert(
+      typeof bolDoc?.document_content === 'string' &&
+        (bolDoc.document_content as string).length > 0,
+    );
+    assert(
+      typeof packingSlipDoc?.document_content === 'string' &&
+        (packingSlipDoc.document_content as string).length > 0,
+    );
+    assert(
+      typeof commercialInvoiceDoc?.document_content === 'string' &&
+        (commercialInvoiceDoc.document_content as string).length > 0,
+    );
     assert(docResult['documentIds'].includes(bolDoc?.document_id));
     assert(docResult['documentIds'].includes(packingSlipDoc?.document_id));
     assert(docResult['documentIds'].includes(commercialInvoiceDoc?.document_id));
@@ -704,32 +968,43 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
 
     await createLot(`LOT-${sku}`, sku, lotId);
     await seedStock(sku, binId, `LOT-${sku}`, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
     const packingRecordId = randomUUID();
     const eventId = randomUUID();
-    const result = await makeRequest(port, 'POST', '/api/v1/edge/events', {
-      event_id: eventId,
-      idempotency_key: randomUUID(),
-      stream_type: 'warehouse',
-      stream_id: dispatchOrderId,
-      event_type: 'dispatch.packed',
-      metadata: {
-        device_id: 'edge-device-001',
-        correlation_id: randomUUID(),
-        actor: { user_id: randomUUID(), role: 'warehouse_manager', location_id: siteId },
-        occurred_at: new Date().toISOString(),
+    const result = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/edge/events',
+      {
+        event_id: eventId,
+        idempotency_key: randomUUID(),
+        stream_type: 'warehouse',
+        stream_id: dispatchOrderId,
+        event_type: 'dispatch.packed',
+        metadata: {
+          device_id: 'edge-device-001',
+          correlation_id: randomUUID(),
+          actor: { user_id: randomUUID(), role: 'warehouse_manager', location_id: siteId },
+          occurred_at: new Date().toISOString(),
+        },
+        payload: {
+          packing_record_id: packingRecordId,
+          dispatch_order_id: dispatchOrderId,
+          sku,
+          packed_qty: quantity,
+          lot_id: lotId,
+          carton_count: 4,
+        },
       },
-      payload: {
-        packing_record_id: packingRecordId,
-        dispatch_order_id: dispatchOrderId,
-        sku,
-        packed_qty: quantity,
-        lot_id: lotId,
-        carton_count: 4,
-      },
-    }, { Authorization: `Bearer ${warehouseManager.token}` });
+      { Authorization: `Bearer ${warehouseManager.token}` },
+    );
 
     assert.equal(result.status, 201, `Edge upload failed: ${result.raw}`);
     assert.equal(result.body['event_id'], eventId);
@@ -759,25 +1034,38 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     });
 
     await seedStock(sku, binId, lotNumber, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
-      sku,
-      packed_qty: quantity,
-      lot_id: lotId,
-      carton_count: 2,
-      actual_weight_kg: 5.0,
-    }]);
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [
+      {
+        sku,
+        packed_qty: quantity,
+        lot_id: lotId,
+        carton_count: 2,
+        actual_weight_kg: 5.0,
+      },
+    ]);
 
     // Place quality hold on the lot
     const holdResult = await placeQualityHold(port, qcInspector.token, lotId);
     assert.equal(holdResult.status, 200, `Place quality hold failed: ${holdResult.raw}`);
 
     // Document generation should be blocked
-    const docResult = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/generate-documents`, {
-      dispatchOrderId,
-    }, { Authorization: `Bearer ${warehouseManager.token}` });
+    const docResult = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/dispatch/${dispatchOrderId}/generate-documents`,
+      {
+        dispatchOrderId,
+      },
+      { Authorization: `Bearer ${warehouseManager.token}` },
+    );
 
     assert.equal(docResult.status, 400);
     assert.equal(docResult.body['error_code'], 'LOT_ON_HOLD');
@@ -806,16 +1094,23 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     });
 
     await seedStock(sku, binId, lotNumber, Number(quantity));
-    const { pickTaskId, pickLineId } = await createPickTask(port, warehouseManager.token, dispatchOrderId, [dispatchOrderId]);
+    const { pickTaskId, pickLineId } = await createPickTask(
+      port,
+      warehouseManager.token,
+      dispatchOrderId,
+      [dispatchOrderId],
+    );
     await confirmPickLine(port, warehouseOperator.token, pickTaskId, pickLineId, lotId, quantity);
 
-    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [{
-      sku,
-      packed_qty: quantity,
-      lot_id: lotId,
-      carton_count: 1,
-      actual_weight_kg: 2.5,
-    }]);
+    await packDispatchOrder(port, warehouseManager.token, dispatchOrderId, [
+      {
+        sku,
+        packed_qty: quantity,
+        lot_id: lotId,
+        carton_count: 1,
+        actual_weight_kg: 2.5,
+      },
+    ]);
 
     // Generate documents first (lot not on hold yet)
     await generateShippingDocuments(port, warehouseManager.token, dispatchOrderId);
@@ -825,9 +1120,15 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     assert.equal(holdResult.status, 200, `Place quality hold failed: ${holdResult.raw}`);
 
     // Dispatch should be blocked (AC3 re-check at dispatch time)
-    const dispatchResult = await makeRequest(port, 'POST', `/api/v1/dispatch/${dispatchOrderId}/dispatch`, {
-      dispatchOrderId,
-    }, { Authorization: `Bearer ${warehouseManager.token}` });
+    const dispatchResult = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/dispatch/${dispatchOrderId}/dispatch`,
+      {
+        dispatchOrderId,
+      },
+      { Authorization: `Bearer ${warehouseManager.token}` },
+    );
 
     assert.equal(dispatchResult.status, 400);
     assert.equal(dispatchResult.body['error_code'], 'LOT_ON_HOLD');

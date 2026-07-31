@@ -46,7 +46,13 @@ export async function createDispatchDocument(
        (document_id, dispatch_order_id, document_type, document_content, generated_by)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING ${COLUMNS}`,
-    [input.document_id, input.dispatch_order_id, input.document_type, input.document_content, input.generated_by],
+    [
+      input.document_id,
+      input.dispatch_order_id,
+      input.document_type,
+      input.document_content,
+      input.generated_by,
+    ],
   );
   return mapRow(result.rows[0]!);
 }

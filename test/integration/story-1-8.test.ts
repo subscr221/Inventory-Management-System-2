@@ -255,7 +255,12 @@ describe('Story 1.8 backend edge sync contract', () => {
 
   it('rejects a user with two concrete operating locations with a stable 409', async () => {
     await provisionUser(TEST_PORT, 'edge-ambiguous@example.com', [
-      { role: 'gate_officer', module: 'maintenance', functionScope: 'write', locationId: EDGE_LOCATION },
+      {
+        role: 'gate_officer',
+        module: 'maintenance',
+        functionScope: 'write',
+        locationId: EDGE_LOCATION,
+      },
       {
         role: 'gate_officer',
         module: 'maintenance',

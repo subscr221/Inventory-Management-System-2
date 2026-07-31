@@ -112,16 +112,24 @@ function mapRow(row: Record<string, unknown>): GrnLine {
     status: row['status'] as GrnLine['status'],
     rejection_reason: (row['rejection_reason'] as string | null) ?? null,
     cross_dock: row['cross_dock'] === true,
-    matched_dispatch_order_line_id: (row['matched_dispatch_order_line_id'] as string | null) ?? null,
-    cross_dock_nonqualification_reason: (row['cross_dock_nonqualification_reason'] as string | null) ?? null,
+    matched_dispatch_order_line_id:
+      (row['matched_dispatch_order_line_id'] as string | null) ?? null,
+    cross_dock_nonqualification_reason:
+      (row['cross_dock_nonqualification_reason'] as string | null) ?? null,
     source_event_id: row['source_event_id'] as string,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
   };
 }
 
-export async function getGrnLineById(grnLineId: string, client?: PoolClient): Promise<GrnLine | null> {
-  const result = await runner(client).query(`SELECT ${GRN_LINE_COLUMNS} FROM grn_line WHERE grn_line_id = $1`, [grnLineId]);
+export async function getGrnLineById(
+  grnLineId: string,
+  client?: PoolClient,
+): Promise<GrnLine | null> {
+  const result = await runner(client).query(
+    `SELECT ${GRN_LINE_COLUMNS} FROM grn_line WHERE grn_line_id = $1`,
+    [grnLineId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
@@ -138,15 +146,21 @@ export async function listGrnLinesByGrn(grnId: string, client?: PoolClient): Pro
  * quarantined status, optionally scoped to a site by joining the header. rejected over-tolerance
  * lines are also surfaced (rejection_reason carries the breach detail).
  */
-export async function listDiscrepancyLines(filters: ListDiscrepancyLinesFilters = {}, client?: PoolClient): Promise<GrnLine[]> {
-  const clauses: string[] = [`(l.shortage_variance_qty > 0 OR l.status IN ('quarantined', 'rejected'))`];
+export async function listDiscrepancyLines(
+  filters: ListDiscrepancyLinesFilters = {},
+  client?: PoolClient,
+): Promise<GrnLine[]> {
+  const clauses: string[] = [
+    `(l.shortage_variance_qty > 0 OR l.status IN ('quarantined', 'rejected'))`,
+  ];
   const values: unknown[] = [];
   const add = (sql: string, value: unknown): void => {
     values.push(value);
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('h.site_id = ?', filters.siteId);
-  if (filters.siteAny !== undefined && filters.siteAny !== null) add('h.site_id = ANY(?::uuid[])', filters.siteAny);
+  if (filters.siteAny !== undefined && filters.siteAny !== null)
+    add('h.site_id = ANY(?::uuid[])', filters.siteAny);
   const result = await runner(client).query(
     `SELECT ${grnLineColumns('l.')} FROM grn_line l JOIN grn h ON h.grn_id = l.grn_id
       WHERE ${clauses.join(' AND ')} ORDER BY l.created_at DESC`,
@@ -162,10 +176,14 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
     input.cross_dock_nonqualification_reason !== null &&
     !CROSS_DOCK_NONQUALIFICATION_REASONS.has(input.cross_dock_nonqualification_reason)
   ) {
-    throw new AppError(400, 'INVALID_PARAMS', 'cross_dock_nonqualification_reason is not allowlisted');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'cross_dock_nonqualification_reason is not allowlisted',
+    );
   }
   await client.query(
-     `INSERT INTO grn_line
+    `INSERT INTO grn_line
        (grn_line_id, grn_id, po_ref_ext, line_no, sku, lot_id, expiry_date, received_qty, uom,
         stock_class, weighbridge_correlation_id, qc_hold, shortage_variance_qty, target_location_id,
         status, rejection_reason, cross_dock, matched_dispatch_order_line_id,
@@ -229,8 +247,13 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
     ],
   );
   if (existing.rows.length === 0) {
-    throw new AppError(409, 'STREAM_CONFLICT', `Conflicting immutable GRN line replay for ${input.grn_line_id}`, {
-      grn_line_id: input.grn_line_id,
-    });
+    throw new AppError(
+      409,
+      'STREAM_CONFLICT',
+      `Conflicting immutable GRN line replay for ${input.grn_line_id}`,
+      {
+        grn_line_id: input.grn_line_id,
+      },
+    );
   }
 }

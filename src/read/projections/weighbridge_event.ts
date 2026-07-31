@@ -110,7 +110,10 @@ function mapRow(row: Record<string, unknown>): WeighbridgeEvent {
   };
 }
 
-export async function getWeighbridgeEventById(id: string, client?: PoolClient): Promise<WeighbridgeEvent | null> {
+export async function getWeighbridgeEventById(
+  id: string,
+  client?: PoolClient,
+): Promise<WeighbridgeEvent | null> {
   const result = await runner(client).query(
     `SELECT ${WEIGHBRIDGE_EVENT_COLUMNS} FROM weighbridge_event WHERE weighbridge_event_id = $1`,
     [id],
@@ -123,7 +126,10 @@ export async function getWeighbridgeEventById(id: string, client?: PoolClient): 
  * `site_code_ext` are denormalized onto this row at write time (see applyWeighbridgeProjection),
  * so no JOIN back to `gate_event` is needed here.
  */
-export async function getWeighbridgeEventsByCorrelationId(correlationId: string, client?: PoolClient): Promise<WeighbridgeEvent[]> {
+export async function getWeighbridgeEventsByCorrelationId(
+  correlationId: string,
+  client?: PoolClient,
+): Promise<WeighbridgeEvent[]> {
   const result = await runner(client).query(
     `SELECT ${WEIGHBRIDGE_EVENT_COLUMNS} FROM weighbridge_event
       WHERE correlation_id = $1
@@ -133,7 +139,10 @@ export async function getWeighbridgeEventsByCorrelationId(correlationId: string,
   return result.rows.map(mapRow);
 }
 
-export async function listWeighbridgeEvents(filters: ListWeighbridgeEventsFilters = {}, client?: PoolClient): Promise<WeighbridgeEvent[]> {
+export async function listWeighbridgeEvents(
+  filters: ListWeighbridgeEventsFilters = {},
+  client?: PoolClient,
+): Promise<WeighbridgeEvent[]> {
   const clauses: string[] = [];
   const values: unknown[] = [];
   const add = (sql: string, value: unknown): void => {
@@ -141,7 +150,8 @@ export async function listWeighbridgeEvents(filters: ListWeighbridgeEventsFilter
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('site_id = ?', filters.siteId);
-  if (filters.siteAny !== undefined && filters.siteAny !== null) add('site_id = ANY(?::uuid[])', filters.siteAny);
+  if (filters.siteAny !== undefined && filters.siteAny !== null)
+    add('site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.status) add('status = ?', filters.status);
   if (filters.poRefExt) add('po_ref_ext = ?', filters.poRefExt);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -153,7 +163,10 @@ export async function listWeighbridgeEvents(filters: ListWeighbridgeEventsFilter
 }
 
 /** Idempotent, replay-safe upsert keyed on weighbridge_event_id. NUMERIC weights bound as strings. */
-export async function upsertWeighbridgeEvent(input: UpsertWeighbridgeEventInput, client: PoolClient): Promise<void> {
+export async function upsertWeighbridgeEvent(
+  input: UpsertWeighbridgeEventInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO weighbridge_event
        (weighbridge_event_id, correlation_id, gate_event_id, site_id, site_code_ext, po_ref_ext,

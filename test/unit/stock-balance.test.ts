@@ -1,6 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertStockBalanceShape, stockBalanceEventKind } from '../../src/compliance/stock-balance.js';
+import {
+  assertStockBalanceShape,
+  stockBalanceEventKind,
+} from '../../src/compliance/stock-balance.js';
 import type { EventEnvelope } from '../../src/events/store.js';
 import { AppError } from '../../src/middleware/error.js';
 
@@ -34,13 +37,17 @@ function makeEnvelope(overrides: Partial<EventEnvelope> = {}): EventEnvelope {
 function expectInvalidParams(envelope: EventEnvelope): void {
   assert.throws(
     () => assertStockBalanceShape(envelope),
-    (err: unknown) => err instanceof AppError && err.statusCode === 400 && err.errorCode === 'INVALID_PARAMS',
+    (err: unknown) =>
+      err instanceof AppError && err.statusCode === 400 && err.errorCode === 'INVALID_PARAMS',
   );
 }
 
 describe('stock-balance seam gating (Story 2.2)', () => {
   it('ignores non-inventory stream types', () => {
-    assert.strictEqual(stockBalanceEventKind(makeEnvelope({ stream_type: 'doa_registry_entry' })), null);
+    assert.strictEqual(
+      stockBalanceEventKind(makeEnvelope({ stream_type: 'doa_registry_entry' })),
+      null,
+    );
   });
 
   it('ignores inventory events that are not stock-balance event types (e.g. stock.moved)', () => {
@@ -49,7 +56,9 @@ describe('stock-balance seam gating (Story 2.2)', () => {
 
   it('ignores legacy spine-shape stock events without master references', () => {
     assert.strictEqual(
-      stockBalanceEventKind(makeEnvelope({ payload: { business_stream: 'production', quantity: 1 } })),
+      stockBalanceEventKind(
+        makeEnvelope({ payload: { business_stream: 'production', quantity: 1 } }),
+      ),
       null,
       'a stock.received with neither sku nor target location must pass through untouched',
     );
@@ -57,17 +66,29 @@ describe('stock-balance seam gating (Story 2.2)', () => {
 
   it('ignores Story 1.1-shape stock events with a sku but no target location', () => {
     assert.strictEqual(
-      stockBalanceEventKind(makeEnvelope({ payload: { business_stream: 'production', sku: 'RM-0042', quantity: 100 } })),
+      stockBalanceEventKind(
+        makeEnvelope({ payload: { business_stream: 'production', sku: 'RM-0042', quantity: 100 } }),
+      ),
       null,
     );
   });
 
   it('gates stock.received and stock.allocated referencing both sku and a target location', () => {
     assert.strictEqual(stockBalanceEventKind(makeEnvelope()), 'receipt');
-    assert.strictEqual(stockBalanceEventKind(makeEnvelope({ event_type: 'stock.allocated' })), 'allocation');
+    assert.strictEqual(
+      stockBalanceEventKind(makeEnvelope({ event_type: 'stock.allocated' })),
+      'allocation',
+    );
     assert.strictEqual(
       stockBalanceEventKind(
-        makeEnvelope({ payload: { business_stream: 'production', sku: 'RM-0042', target_location_code: 'SITE-A', quantity: 1 } }),
+        makeEnvelope({
+          payload: {
+            business_stream: 'production',
+            sku: 'RM-0042',
+            target_location_code: 'SITE-A',
+            quantity: 1,
+          },
+        }),
       ),
       'receipt',
       'target_location_code alone must also gate',
@@ -95,7 +116,9 @@ describe('assertStockBalanceShape (Story 2.2)', () => {
 
   it('does not validate ungated shapes at all', () => {
     // Missing quantity on a legacy shape must NOT throw - the seam is gated off.
-    assertStockBalanceShape(makeEnvelope({ payload: { business_stream: 'production', sku: 'RM-0042' } }));
+    assertStockBalanceShape(
+      makeEnvelope({ payload: { business_stream: 'production', sku: 'RM-0042' } }),
+    );
   });
 
   it('rejects a gated event with missing, zero, negative, or non-numeric quantity', () => {
@@ -116,7 +139,13 @@ describe('assertStockBalanceShape (Story 2.2)', () => {
   it('rejects a client-supplied available value - available is always derived', () => {
     expectInvalidParams(
       makeEnvelope({
-        payload: { business_stream: 'production', sku: 'RM-0042', target_location_id: LOCATION_ID, quantity: 1, available: 99 },
+        payload: {
+          business_stream: 'production',
+          sku: 'RM-0042',
+          target_location_id: LOCATION_ID,
+          quantity: 1,
+          available: 99,
+        },
       }),
     );
   });
@@ -124,17 +153,35 @@ describe('assertStockBalanceShape (Story 2.2)', () => {
   it('rejects an empty lot_id and a negative or non-numeric unit_cost when supplied', () => {
     expectInvalidParams(
       makeEnvelope({
-        payload: { business_stream: 'production', sku: 'RM-0042', target_location_id: LOCATION_ID, quantity: 1, lot_id: '  ' },
+        payload: {
+          business_stream: 'production',
+          sku: 'RM-0042',
+          target_location_id: LOCATION_ID,
+          quantity: 1,
+          lot_id: '  ',
+        },
       }),
     );
     expectInvalidParams(
       makeEnvelope({
-        payload: { business_stream: 'production', sku: 'RM-0042', target_location_id: LOCATION_ID, quantity: 1, unit_cost: -2 },
+        payload: {
+          business_stream: 'production',
+          sku: 'RM-0042',
+          target_location_id: LOCATION_ID,
+          quantity: 1,
+          unit_cost: -2,
+        },
       }),
     );
     expectInvalidParams(
       makeEnvelope({
-        payload: { business_stream: 'production', sku: 'RM-0042', target_location_id: LOCATION_ID, quantity: 1, unit_cost: 'costly' },
+        payload: {
+          business_stream: 'production',
+          sku: 'RM-0042',
+          target_location_id: LOCATION_ID,
+          quantity: 1,
+          unit_cost: 'costly',
+        },
       }),
     );
   });

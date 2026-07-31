@@ -116,8 +116,14 @@ function mapRow(row: Record<string, unknown>): PickTask {
   };
 }
 
-export async function getPickTaskById(pickTaskId: string, client?: PoolClient): Promise<PickTask | null> {
-  const result = await runner(client).query(`SELECT ${PICK_TASK_COLUMNS} FROM pick_task WHERE pick_task_id = $1`, [pickTaskId]);
+export async function getPickTaskById(
+  pickTaskId: string,
+  client?: PoolClient,
+): Promise<PickTask | null> {
+  const result = await runner(client).query(
+    `SELECT ${PICK_TASK_COLUMNS} FROM pick_task WHERE pick_task_id = $1`,
+    [pickTaskId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
@@ -126,15 +132,24 @@ export async function getPickTaskById(pickTaskId: string, client?: PoolClient): 
  * two concurrent completions both observe a non-completed task, both pass the all-lines-confirmed
  * gate, and both run the allocated-to-picked move (review pass 2).
  */
-export async function getPickTaskByIdForUpdate(pickTaskId: string, client: PoolClient): Promise<PickTask | null> {
-  const result = await client.query(`SELECT ${PICK_TASK_COLUMNS} FROM pick_task WHERE pick_task_id = $1 FOR UPDATE`, [pickTaskId]);
+export async function getPickTaskByIdForUpdate(
+  pickTaskId: string,
+  client: PoolClient,
+): Promise<PickTask | null> {
+  const result = await client.query(
+    `SELECT ${PICK_TASK_COLUMNS} FROM pick_task WHERE pick_task_id = $1 FOR UPDATE`,
+    [pickTaskId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 /** Idempotent, replay-safe insert keyed on pick_task_id. total_quantity bound as a NUMERIC string. */
-export async function createPickTask(input: CreatePickTaskInput, client: PoolClient): Promise<void> {
+export async function createPickTask(
+  input: CreatePickTaskInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
-     `INSERT INTO pick_task
+    `INSERT INTO pick_task
         (pick_task_id, dispatch_order_id, sku, total_quantity, strategy, wave_id, batch_id, zone_id,
          status, priority, created_by, fulfillment_source, created_at, completed_at, completed_by)
       VALUES ($1, $2, $3, $4::numeric, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13::timestamptz, now()), $14::timestamptz, $15)
@@ -221,13 +236,23 @@ export async function assignPickTask(
       WHERE pick_task_id = $1
         AND status = 'pending'
         AND ($5::boolean OR assigned_to IS NULL OR assigned_to = $2)`,
-    [input.pickTaskId, input.assignedTo, input.assignedBy, input.priority ?? null, input.allowReassign ?? false, input.assignedAt ?? null],
+    [
+      input.pickTaskId,
+      input.assignedTo,
+      input.assignedBy,
+      input.priority ?? null,
+      input.allowReassign ?? false,
+      input.assignedAt ?? null,
+    ],
   );
   return (result.rowCount ?? 0) > 0;
 }
 
 /** Filtered list; site scope resolves through the Story 2.9 sales-order projection join. */
-export async function listPickTasks(filters: ListPickTasksFilters = {}, client?: PoolClient): Promise<PickTask[]> {
+export async function listPickTasks(
+  filters: ListPickTasksFilters = {},
+  client?: PoolClient,
+): Promise<PickTask[]> {
   const clauses: string[] = [];
   const values: unknown[] = [];
   const add = (sql: string, value: unknown): void => {
@@ -235,7 +260,8 @@ export async function listPickTasks(filters: ListPickTasksFilters = {}, client?:
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('eso.ship_from_site_id = ?', filters.siteId);
-  if (filters.siteAny !== undefined && filters.siteAny !== null) add('eso.ship_from_site_id = ANY(?::uuid[])', filters.siteAny);
+  if (filters.siteAny !== undefined && filters.siteAny !== null)
+    add('eso.ship_from_site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.status) add('pt.status = ?', filters.status);
   if (filters.assignedTo) add('pt.assigned_to = ?', filters.assignedTo);
   if (filters.zoneId) add('pt.zone_id = ?', filters.zoneId);
@@ -263,7 +289,10 @@ export async function listPickTasks(filters: ListPickTasksFilters = {}, client?:
 }
 
 /** Resolves the site UUID a pick task belongs to via the Story 2.9 sales-order join. */
-export async function getPickTaskSiteId(pickTaskId: string, client?: PoolClient): Promise<string | null> {
+export async function getPickTaskSiteId(
+  pickTaskId: string,
+  client?: PoolClient,
+): Promise<string | null> {
   const result = await runner(client).query(
     `SELECT eso.ship_from_site_id
        FROM pick_task pt

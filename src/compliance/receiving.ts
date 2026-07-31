@@ -8,10 +8,19 @@ import { getLocationById, getLocationByCode } from '../read/projections/location
 import type { LocationRegisterEntry } from '../read/projections/location_register.js';
 import { getPurchaseOrderByRef } from '../read/projections/erp_purchase_order.js';
 import { getWeighbridgeEventsByCorrelationId } from '../read/projections/weighbridge_event.js';
-import { findMatchingDoaEntry, findRoleHolder, findActiveDelegation, listActiveDoaEntries } from '../read/projections/doa_registry.js';
+import {
+  findMatchingDoaEntry,
+  findRoleHolder,
+  findActiveDelegation,
+  listActiveDoaEntries,
+} from '../read/projections/doa_registry.js';
 import { insertGrnHeader } from '../read/projections/grn.js';
 import { insertGrnLine } from '../read/projections/grn_line.js';
-import { insertPutawayTask, getPutawayTaskById, markPutawayReleased } from '../read/projections/putaway_task.js';
+import {
+  insertPutawayTask,
+  getPutawayTaskById,
+  markPutawayReleased,
+} from '../read/projections/putaway_task.js';
 import { findCrossDockDemandMatch } from '../read/projections/erp_sales_order.js';
 import { insertCrossDockTask } from '../read/projections/cross_dock_task.js';
 import { isCrossDockQuantityCapacity } from './cross-dock.js';
@@ -71,7 +80,9 @@ function normalizeQty(value: unknown): string | null {
   return null;
 }
 
-function receivingEventType(envelope: EventEnvelope): 'goods.received' | 'goods.putaway_released' | null {
+function receivingEventType(
+  envelope: EventEnvelope,
+): 'goods.received' | 'goods.putaway_released' | null {
   if (!RECEIVING_STREAM_TYPES.has(envelope.stream_type)) return null;
   if (envelope.event_type === 'goods.received') return 'goods.received';
   if (envelope.event_type === 'goods.putaway_released') return 'goods.putaway_released';
@@ -104,7 +115,13 @@ async function resolveActiveHolder(role: string, client: PoolClient): Promise<st
  */
 async function assertQuarantineApproval(client: PoolClient): Promise<void> {
   const entry = await findMatchingDoaEntry(QUARANTINE_DOA_TYPE, 0, client);
-  if (!entry) throw new AppError(403, 'APPROVAL_REQUIRED', 'An expired-lot quarantine receipt requires a DOA-governed supervisor approval', { transaction_type: QUARANTINE_DOA_TYPE });
+  if (!entry)
+    throw new AppError(
+      403,
+      'APPROVAL_REQUIRED',
+      'An expired-lot quarantine receipt requires a DOA-governed supervisor approval',
+      { transaction_type: QUARANTINE_DOA_TYPE },
+    );
   let approver = await resolveActiveHolder(entry.role, client);
   if (!approver) {
     for (const e of await listActiveDoaEntries(QUARANTINE_DOA_TYPE, client)) {
@@ -113,7 +130,13 @@ async function assertQuarantineApproval(client: PoolClient): Promise<void> {
       if (approver) break;
     }
   }
-  if (!approver) throw new AppError(403, 'APPROVAL_REQUIRED', 'No active supervisor could be resolved to approve the quarantine receipt', { transaction_type: QUARANTINE_DOA_TYPE });
+  if (!approver)
+    throw new AppError(
+      403,
+      'APPROVAL_REQUIRED',
+      'No active supervisor could be resolved to approve the quarantine receipt',
+      { transaction_type: QUARANTINE_DOA_TYPE },
+    );
 }
 
 /**
@@ -124,10 +147,15 @@ async function assertQuarantineApproval(client: PoolClient): Promise<void> {
 async function assertReleaseApproval(actorRole: string, client: PoolClient): Promise<void> {
   const entry = await findMatchingDoaEntry(PUTAWAY_RELEASE_DOA_TYPE, 0, client);
   if (!entry || !RECEIVING_APPROVER_ROLES.has(actorRole)) {
-    throw new AppError(403, 'APPROVAL_REQUIRED', 'Releasing a held putaway task requires a DOA-resolved receiving supervisor approval', {
-      transaction_type: PUTAWAY_RELEASE_DOA_TYPE,
-      actor_role: actorRole,
-    });
+    throw new AppError(
+      403,
+      'APPROVAL_REQUIRED',
+      'Releasing a held putaway task requires a DOA-resolved receiving supervisor approval',
+      {
+        transaction_type: PUTAWAY_RELEASE_DOA_TYPE,
+        actor_role: actorRole,
+      },
+    );
   }
 }
 
@@ -143,35 +171,62 @@ export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
   if (receivingEventType(envelope) !== 'goods.received') return;
   const p = envelope.payload;
 
-  if (!isUuid(p['correlation_id'])) throw new AppError(400, 'RECEIVING_BINDING_TOKEN_REQUIRED', 'correlation_id (binding token) is required and must be a UUID');
-  if (!isUuid(p['grn_id'])) throw new AppError(400, 'INVALID_PARAMS', 'grn_id is required and must be a UUID');
-  if (!isUuid(p['grn_line_id'])) throw new AppError(400, 'INVALID_PARAMS', 'grn_line_id is required and must be a UUID');
-  if (!isNonEmptyString(p['po_ref_ext'])) throw new AppError(400, 'INVALID_PARAMS', 'po_ref_ext is required');
+  if (!isUuid(p['correlation_id']))
+    throw new AppError(
+      400,
+      'RECEIVING_BINDING_TOKEN_REQUIRED',
+      'correlation_id (binding token) is required and must be a UUID',
+    );
+  if (!isUuid(p['grn_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'grn_id is required and must be a UUID');
+  if (!isUuid(p['grn_line_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'grn_line_id is required and must be a UUID');
+  if (!isNonEmptyString(p['po_ref_ext']))
+    throw new AppError(400, 'INVALID_PARAMS', 'po_ref_ext is required');
   p['po_ref_ext'] = (p['po_ref_ext'] as string).trim();
 
   const lineNo = p['line_no'];
-  if (typeof lineNo !== 'number' || !Number.isInteger(lineNo) || lineNo <= 0) throw new AppError(400, 'INVALID_PARAMS', 'line_no is required and must be a positive integer');
+  if (typeof lineNo !== 'number' || !Number.isInteger(lineNo) || lineNo <= 0)
+    throw new AppError(400, 'INVALID_PARAMS', 'line_no is required and must be a positive integer');
   if (!isNonEmptyString(p['sku'])) throw new AppError(400, 'INVALID_PARAMS', 'sku is required');
   p['sku'] = (p['sku'] as string).trim();
 
   const normalizedQty = normalizeQty(p['received_qty']);
-  if (normalizedQty === null) throw new AppError(400, 'RECEIVING_QTY_REQUIRED', 'received_qty is required and must be a positive NUMERIC value');
+  if (normalizedQty === null)
+    throw new AppError(
+      400,
+      'RECEIVING_QTY_REQUIRED',
+      'received_qty is required and must be a positive NUMERIC value',
+    );
   p['received_qty'] = normalizedQty;
 
-  if (p['source_document'] !== 'PO' && p['source_document'] !== 'ASN') throw new AppError(400, 'INVALID_PARAMS', "source_document must be 'PO' or 'ASN'");
+  if (p['source_document'] !== 'PO' && p['source_document'] !== 'ASN')
+    throw new AppError(400, 'INVALID_PARAMS', "source_document must be 'PO' or 'ASN'");
 
   if (!isNonEmptyString(p['target_location_id']) && !isNonEmptyString(p['target_location_code'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'target_location_id or target_location_code is required');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'target_location_id or target_location_code is required',
+    );
   }
 
   if (p['expiry_date'] !== undefined && p['expiry_date'] !== null) {
     if (typeof p['expiry_date'] !== 'string' || !DATE_REGEX.test(p['expiry_date'])) {
-      throw new AppError(400, 'INVALID_PARAMS', 'expiry_date must be a YYYY-MM-DD string when supplied');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'expiry_date must be a YYYY-MM-DD string when supplied',
+      );
     }
   }
 
   if (p['quarantine_approved'] === true && !isNonEmptyString(p['quarantine_reason_code'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'quarantine_reason_code is required when quarantine_approved is true');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'quarantine_reason_code is required when quarantine_approved is true',
+    );
   }
 
   if (p['cross_dock'] !== undefined && typeof p['cross_dock'] !== 'boolean') {
@@ -181,66 +236,127 @@ export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
   const hasStagingCode = p['staging_zone_code'] !== undefined;
   const hasCrossDockTaskId = p['cross_dock_task_id'] !== undefined;
   if (p['cross_dock'] !== true && (hasStagingId || hasStagingCode || hasCrossDockTaskId)) {
-    throw new AppError(400, 'INVALID_PARAMS', 'cross-dock-only fields require cross_dock to be true');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'cross-dock-only fields require cross_dock to be true',
+    );
   }
   if (p['cross_dock'] === true) {
     if (hasStagingId === hasStagingCode) {
-      throw new AppError(400, 'INVALID_PARAMS', 'exactly one of staging_zone_id or staging_zone_code is required when cross_dock is true');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'exactly one of staging_zone_id or staging_zone_code is required when cross_dock is true',
+      );
     }
     if (hasStagingId && !isUuid(p['staging_zone_id'])) {
       throw new AppError(400, 'INVALID_PARAMS', 'staging_zone_id must be a UUID when supplied');
     }
     if (hasStagingCode && !isNonEmptyString(p['staging_zone_code'])) {
-      throw new AppError(400, 'INVALID_PARAMS', 'staging_zone_code must be non-empty when supplied');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'staging_zone_code must be non-empty when supplied',
+      );
     }
     if (!isUuid(p['cross_dock_task_id'])) {
-      throw new AppError(400, 'INVALID_PARAMS', 'cross_dock_task_id is required and must be a server-generated UUID when cross_dock is true');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'cross_dock_task_id is required and must be a server-generated UUID when cross_dock is true',
+      );
     }
   }
 }
 
 /** In-transaction projection (Story 3.4, Task 5.3). See the seam header for the AD-2 chain rationale. */
-export async function applyGoodsReceivedProjection(envelope: EventEnvelope, client: PoolClient, eventId: string): Promise<void> {
+export async function applyGoodsReceivedProjection(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   if (receivingEventType(envelope) !== 'goods.received') return;
   if (await alreadyPersisted(envelope, client)) return;
   const p = envelope.payload;
 
-  const correlationId = isNonEmptyString(p['correlation_id']) ? (p['correlation_id'] as string) : envelope.metadata.correlation_id;
+  const correlationId = isNonEmptyString(p['correlation_id'])
+    ? (p['correlation_id'] as string)
+    : envelope.metadata.correlation_id;
   const poRef = p['po_ref_ext'] as string;
   const sku = p['sku'] as string;
   const receivedQty = normalizeQty(p['received_qty']);
-  if (receivedQty === null) throw new AppError(400, 'RECEIVING_QTY_REQUIRED', 'received_qty is required and must be a positive NUMERIC value');
+  if (receivedQty === null)
+    throw new AppError(
+      400,
+      'RECEIVING_QTY_REQUIRED',
+      'received_qty is required and must be a positive NUMERIC value',
+    );
 
   // 1. Resolve the accepted weighment for the binding token (AC1, AD-2 chain). Only a Story 3.3
   //    'accepted' weighment opens receiving; a token whose weighments are all 'tolerance_breach' is
   //    blocked from silent receipt.
   const weighments = await getWeighbridgeEventsByCorrelationId(correlationId, client);
   if (weighments.length === 0) {
-    throw new AppError(404, 'RECEIVING_BINDING_TOKEN_NOT_FOUND', `No weighbridge event exists for binding token "${correlationId}"`, { correlation_id: correlationId });
+    throw new AppError(
+      404,
+      'RECEIVING_BINDING_TOKEN_NOT_FOUND',
+      `No weighbridge event exists for binding token "${correlationId}"`,
+      { correlation_id: correlationId },
+    );
   }
   const accepted = weighments.find((w) => w.status === 'accepted');
   if (!accepted) {
-    throw new AppError(409, 'RECEIVING_WEIGHT_NOT_ACCEPTED', 'The binding token has no accepted weighment; receipt is blocked pending tolerance review', { correlation_id: correlationId });
+    throw new AppError(
+      409,
+      'RECEIVING_WEIGHT_NOT_ACCEPTED',
+      'The binding token has no accepted weighment; receipt is blocked pending tolerance review',
+      { correlation_id: correlationId },
+    );
   }
   const siteId = accepted.site_id;
   const siteCodeExt = accepted.site_code_ext;
 
   // 2. Resolve the open PO from the Story 2.9 projection and match the scanned SKU to a PO line (AC4).
   const po = await getPurchaseOrderByRef(poRef, client);
-  if (!po) throw new AppError(404, 'RECEIVING_PO_NOT_FOUND', `No open PO projection row exists for "${poRef}"`, { po_ref_ext: poRef });
+  if (!po)
+    throw new AppError(
+      404,
+      'RECEIVING_PO_NOT_FOUND',
+      `No open PO projection row exists for "${poRef}"`,
+      { po_ref_ext: poRef },
+    );
   const poLine = po.lines.find((l) => l.sku === sku);
-  if (!poLine) throw new AppError(400, 'ITEM_PO_MISMATCH', `Scanned SKU "${sku}" matches no line of PO "${poRef}"`, { po_ref_ext: poRef, sku });
+  if (!poLine)
+    throw new AppError(
+      400,
+      'ITEM_PO_MISMATCH',
+      `Scanned SKU "${sku}" matches no line of PO "${poRef}"`,
+      { po_ref_ext: poRef, sku },
+    );
   const matchedLineNo = poLine.line_no;
 
   const item = await getItemBySku(sku, client);
-  if (!item || item.status !== 'active') throw new AppError(404, 'ITEM_NOT_FOUND', `No active item master record exists for sku "${sku}"`, { sku });
+  if (!item || item.status !== 'active')
+    throw new AppError(
+      404,
+      'ITEM_NOT_FOUND',
+      `No active item master record exists for sku "${sku}"`,
+      { sku },
+    );
   const uom = item.uom;
 
-  const occurredAt = envelope.metadata.occurred_at ? new Date(envelope.metadata.occurred_at) : new Date();
+  const occurredAt = envelope.metadata.occurred_at
+    ? new Date(envelope.metadata.occurred_at)
+    : new Date();
   const businessDate = localYmd(occurredAt);
-  const receivedBy = isUuid(p['received_by']) ? (p['received_by'] as string) : envelope.metadata.actor.user_id;
+  const receivedBy = isUuid(p['received_by'])
+    ? (p['received_by'] as string)
+    : envelope.metadata.actor.user_id;
   const sourceDocument = (p['source_document'] as 'PO' | 'ASN') ?? 'PO';
-  const sourceRefExt = isNonEmptyString(p['source_ref_ext']) ? (p['source_ref_ext'] as string) : null;
+  const sourceRefExt = isNonEmptyString(p['source_ref_ext'])
+    ? (p['source_ref_ext'] as string)
+    : null;
   const stockClass = isNonEmptyString(p['stock_class']) ? (p['stock_class'] as string) : 'owned';
 
   // 3. Tolerance band (AC5/AC6) computed entirely in PostgreSQL NUMERIC against the Story 2.9 PO line.
@@ -267,7 +383,12 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
   );
   if (calc.rows.length === 0) {
     // The PO line matched by sku above must exist; a concurrent PO close is the only way here.
-    throw new AppError(404, 'RECEIVING_PO_NOT_FOUND', `PO line ${matchedLineNo} for "${poRef}" is no longer available`, { po_ref_ext: poRef, line_no: matchedLineNo });
+    throw new AppError(
+      404,
+      'RECEIVING_PO_NOT_FOUND',
+      `PO line ${matchedLineNo} for "${poRef}" is no longer available`,
+      { po_ref_ext: poRef, line_no: matchedLineNo },
+    );
   }
   const band = calc.rows[0]!;
   const isOver = band['is_over'] === true;
@@ -341,7 +462,12 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
   let quarantined = false;
   if (expiryDate && expiryDate < businessDate) {
     if (p['quarantine_approved'] !== true) {
-      throw new AppError(400, 'LOT_EXPIRED', `expiry_date ${expiryDate} is earlier than the receiving business date ${businessDate}`, { sku, expiry_date: expiryDate });
+      throw new AppError(
+        400,
+        'LOT_EXPIRED',
+        `expiry_date ${expiryDate} is earlier than the receiving business date ${businessDate}`,
+        { sku, expiry_date: expiryDate },
+      );
     }
     await assertQuarantineApproval(client);
     quarantined = true;
@@ -349,22 +475,42 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
 
   // 5. QC-hold routing (AC3). A BIS-licensed or quarantine-required item (or the AC7 quarantine path)
   //    posts into the site ZONE-QC-HOLD with a held putaway task and a qc_inspector notification.
-  const needsQcHold = item.bis_licence_required === true || item.quarantine_required === true || quarantined;
+  const needsQcHold =
+    item.bis_licence_required === true || item.quarantine_required === true || quarantined;
   let target: LocationRegisterEntry | null;
   if (needsQcHold) {
     target = await getLocationByCode(QC_HOLD_ZONE_CODE, client);
-    if (!target || target.status !== 'active' || target.quarantine !== true || target.site_id !== siteId) {
-      throw new AppError(404, 'RECEIVING_QC_HOLD_ZONE_NOT_FOUND', `Site has no active ${QC_HOLD_ZONE_CODE} quarantine location`, { site_id: siteId });
+    if (
+      !target ||
+      target.status !== 'active' ||
+      target.quarantine !== true ||
+      target.site_id !== siteId
+    ) {
+      throw new AppError(
+        404,
+        'RECEIVING_QC_HOLD_ZONE_NOT_FOUND',
+        `Site has no active ${QC_HOLD_ZONE_CODE} quarantine location`,
+        { site_id: siteId },
+      );
     }
   } else {
     target = isUuid(p['target_location_id'])
       ? await getLocationById(p['target_location_id'] as string, client)
       : await getLocationByCode(p['target_location_code'] as string, client);
     if (!target || target.status !== 'active' || target.site_id !== siteId) {
-      throw new AppError(400, 'LOCATION_NOT_FOUND', 'The receiving target location is not registered or not active', {
-        target_location_id: isNonEmptyString(p['target_location_id']) ? (p['target_location_id'] as string) : null,
-        target_location_code: isNonEmptyString(p['target_location_code']) ? (p['target_location_code'] as string) : null,
-      });
+      throw new AppError(
+        400,
+        'LOCATION_NOT_FOUND',
+        'The receiving target location is not registered or not active',
+        {
+          target_location_id: isNonEmptyString(p['target_location_id'])
+            ? (p['target_location_id'] as string)
+            : null,
+          target_location_code: isNonEmptyString(p['target_location_code'])
+            ? (p['target_location_code'] as string)
+            : null,
+        },
+      );
     }
   }
   const qcHold = needsQcHold;
@@ -376,8 +522,18 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
     stagingZone = isUuid(p['staging_zone_id'])
       ? await getLocationById(p['staging_zone_id'] as string, client)
       : await getLocationByCode(p['staging_zone_code'] as string, client);
-    if (!stagingZone || stagingZone.status !== 'active' || stagingZone.level !== 'zone' || stagingZone.zone_type !== 'staging' || stagingZone.site_id !== siteId) {
-      throw new AppError(400, 'CROSS_DOCK_STAGING_INVALID', 'The selected cross-dock staging location must be an active staging zone at the receiving site');
+    if (
+      !stagingZone ||
+      stagingZone.status !== 'active' ||
+      stagingZone.level !== 'zone' ||
+      stagingZone.zone_type !== 'staging' ||
+      stagingZone.site_id !== siteId
+    ) {
+      throw new AppError(
+        400,
+        'CROSS_DOCK_STAGING_INVALID',
+        'The selected cross-dock staging location must be an active staging zone at the receiving site',
+      );
     }
   }
 
@@ -398,8 +554,12 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
       ...(expiryDate ? { expiry_date: expiryDate } : {}),
       ...(Array.isArray(p['serials']) ? { serials: p['serials'] } : {}),
       stock_class: stockClass,
-      ...(isNonEmptyString(p['owner_party_code']) ? { owner_party_code: p['owner_party_code'] } : {}),
-      ...(p['unit_cost'] !== undefined && p['unit_cost'] !== null ? { unit_cost: Number(p['unit_cost']) } : {}),
+      ...(isNonEmptyString(p['owner_party_code'])
+        ? { owner_party_code: p['owner_party_code'] }
+        : {}),
+      ...(p['unit_cost'] !== undefined && p['unit_cost'] !== null
+        ? { unit_cost: Number(p['unit_cost']) }
+        : {}),
       business_stream: item.business_stream,
     },
   };
@@ -408,15 +568,20 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
 
   // 7. Persist the GRN header, GRN line, and putaway task (posted/quarantined lines only). NEVER
   //    writes any erp_* projection (AC6). The lot_id may have been auto-resolved onto the view above.
-  const resolvedLotId = isNonEmptyString(stockView.payload['lot_id']) ? (stockView.payload['lot_id'] as string) : null;
+  const resolvedLotId = isNonEmptyString(stockView.payload['lot_id'])
+    ? (stockView.payload['lot_id'] as string)
+    : null;
   let nonqualificationReason: string | null = null;
   let matchedOrderLineId: string | null = null;
   let matchedLotUuid: string | null = null;
   if (crossDockRequested) {
-    if (needsQcHold) nonqualificationReason = quarantined || item.quarantine_required ? 'quarantine_required' : 'qc_blocked';
+    if (needsQcHold)
+      nonqualificationReason =
+        quarantined || item.quarantine_required ? 'quarantine_required' : 'qc_blocked';
     else if (stockClass !== 'owned') nonqualificationReason = 'non_owned_stock';
     else if (!resolvedLotId) nonqualificationReason = 'lot_required';
-    else if (!isCrossDockQuantityCapacity(receivedQty)) nonqualificationReason = 'quantity_out_of_pick_range';
+    else if (!isCrossDockQuantityCapacity(receivedQty))
+      nonqualificationReason = 'quantity_out_of_pick_range';
     else {
       const lot = await client.query(
         `SELECT lot_id FROM lot_master WHERE lot_number = $1 AND sku = $2 AND quality_hold_status = 'none' FOR UPDATE`,
@@ -432,7 +597,8 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
             `SELECT 1 FROM erp_sales_order WHERE sku = $1 AND ship_from_site_id = $2 AND status = 'open' LIMIT 1`,
             [sku, siteId],
           );
-          nonqualificationReason = anyDemand.rows.length === 0 ? 'no_open_demand' : 'insufficient_single_line_demand';
+          nonqualificationReason =
+            anyDemand.rows.length === 0 ? 'no_open_demand' : 'insufficient_single_line_demand';
         }
       }
     }
@@ -545,22 +711,40 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
 export function assertGoodsPutawayReleasedShape(envelope: EventEnvelope): void {
   if (receivingEventType(envelope) !== 'goods.putaway_released') return;
   const p = envelope.payload;
-  if (!isUuid(p['putaway_task_id'])) throw new AppError(400, 'INVALID_PARAMS', 'putaway_task_id is required and must be a UUID');
-  if (!isUuid(p['grn_line_id'])) throw new AppError(400, 'INVALID_PARAMS', 'grn_line_id is required and must be a UUID');
-  if (!isNonEmptyString(p['reason_code'])) throw new AppError(400, 'INVALID_PARAMS', 'reason_code is required');
+  if (!isUuid(p['putaway_task_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'putaway_task_id is required and must be a UUID');
+  if (!isUuid(p['grn_line_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'grn_line_id is required and must be a UUID');
+  if (!isNonEmptyString(p['reason_code']))
+    throw new AppError(400, 'INVALID_PARAMS', 'reason_code is required');
   p['reason_code'] = (p['reason_code'] as string).trim();
 }
 
-export async function applyGoodsPutawayReleasedProjection(envelope: EventEnvelope, client: PoolClient, eventId: string): Promise<void> {
+export async function applyGoodsPutawayReleasedProjection(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   if (receivingEventType(envelope) !== 'goods.putaway_released') return;
   if (await alreadyPersisted(envelope, client)) return;
   const p = envelope.payload;
 
   const putawayTaskId = p['putaway_task_id'] as string;
   const task = await getPutawayTaskById(putawayTaskId, client);
-  if (!task) throw new AppError(404, 'PUTAWAY_TASK_NOT_FOUND', `No putaway task exists for "${putawayTaskId}"`, { putaway_task_id: putawayTaskId });
+  if (!task)
+    throw new AppError(
+      404,
+      'PUTAWAY_TASK_NOT_FOUND',
+      `No putaway task exists for "${putawayTaskId}"`,
+      { putaway_task_id: putawayTaskId },
+    );
   if (task.status !== 'held') {
-    throw new AppError(409, 'PUTAWAY_TASK_NOT_HELD', `Putaway task "${putawayTaskId}" is ${task.status}; only a held task can be released`, { putaway_task_id: putawayTaskId, status: task.status });
+    throw new AppError(
+      409,
+      'PUTAWAY_TASK_NOT_HELD',
+      `Putaway task "${putawayTaskId}" is ${task.status}; only a held task can be released`,
+      { putaway_task_id: putawayTaskId, status: task.status },
+    );
   }
 
   // AC3: the release is DOA-gated - a governing band must exist AND the actor must be an authorized
@@ -571,8 +755,19 @@ export async function applyGoodsPutawayReleasedProjection(envelope: EventEnvelop
   // (mirrors received_by/weighed_by/gate_officer_id) - edge.ts and the REST handler both force
   // metadata.actor.user_id to the authenticated user, so this is the only trustworthy source.
   const releasedBy = envelope.metadata.actor.user_id;
-  const released = await markPutawayReleased(putawayTaskId, releasedBy, p['reason_code'] as string, eventId, client);
+  const released = await markPutawayReleased(
+    putawayTaskId,
+    releasedBy,
+    p['reason_code'] as string,
+    eventId,
+    client,
+  );
   if (!released) {
-    throw new AppError(409, 'PUTAWAY_TASK_NOT_HELD', `Putaway task "${putawayTaskId}" was released by a concurrent request`, { putaway_task_id: putawayTaskId });
+    throw new AppError(
+      409,
+      'PUTAWAY_TASK_NOT_HELD',
+      `Putaway task "${putawayTaskId}" was released by a concurrent request`,
+      { putaway_task_id: putawayTaskId },
+    );
   }
 }

@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -84,32 +89,68 @@ function isValidDateString(value: string): boolean {
 const createTaggingRuleBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!body || !isNonEmptyString(body['transaction_type'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transaction_type is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'transaction_type is required and must be a non-empty string',
+    );
     return;
   }
   if (!isValidStringLength(body['transaction_type'], 256)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transaction_type must not exceed 256 characters');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'transaction_type must not exceed 256 characters',
+    );
     return;
   }
   const costCentreRequired = body['cost_centre_required'] ?? false;
   const projectCodeRequired = body['project_code_required'] ?? false;
   if (typeof costCentreRequired !== 'boolean' || typeof projectCodeRequired !== 'boolean') {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'cost_centre_required and project_code_required must be booleans');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'cost_centre_required and project_code_required must be booleans',
+    );
     return;
   }
   if (!isNonEmptyString(body['effective_from']) || !isValidDateString(body['effective_from'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'effective_from is required and must be a valid YYYY-MM-DD date');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'effective_from is required and must be a valid YYYY-MM-DD date',
+    );
     return;
   }
   const effectiveFrom = body['effective_from'];
   let effectiveTo: string | null = null;
   if (body['effective_to'] !== undefined && body['effective_to'] !== null) {
     if (!isNonEmptyString(body['effective_to']) || !isValidDateString(body['effective_to'])) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'effective_to must be a valid YYYY-MM-DD date or null');
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'effective_to must be a valid YYYY-MM-DD date or null',
+      );
       return;
     }
     if (body['effective_to'] < effectiveFrom) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'effective_to must not be before effective_from');
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'effective_to must not be before effective_from',
+      );
       return;
     }
     effectiveTo = body['effective_to'];
@@ -122,7 +163,9 @@ const createTaggingRuleBase: RouteHandler = async (req, res, _params) => {
   try {
     await client.query('BEGIN');
 
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`transaction_tagging_rules:${transactionType}`]);
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `transaction_tagging_rules:${transactionType}`,
+    ]);
 
     const conflict = await findConflictingRule(transactionType, effectiveFrom, effectiveTo, client);
     if (conflict) {
@@ -133,7 +176,11 @@ const createTaggingRuleBase: RouteHandler = async (req, res, _params) => {
         409,
         'TAGGING_RULE_CONFLICT',
         `An existing rule (${conflict.rule_id}) for "${transactionType}" overlaps the requested date range`,
-        { conflicting_rule_id: conflict.rule_id, effective_from: conflict.effective_from, effective_to: conflict.effective_to },
+        {
+          conflicting_rule_id: conflict.rule_id,
+          effective_from: conflict.effective_from,
+          effective_to: conflict.effective_to,
+        },
       );
       return;
     }
@@ -182,13 +229,25 @@ const getTaggingRuleBase: RouteHandler = async (req, res, _params) => {
   const asOfDateRaw = url.searchParams.get('as_of_date');
 
   if (!transactionType) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transaction_type query parameter is required');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'transaction_type query parameter is required',
+    );
     return;
   }
   let asOfDate: string | undefined;
   if (asOfDateRaw !== null) {
     if (!isValidDateString(asOfDateRaw)) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'as_of_date must be a valid YYYY-MM-DD date');
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'as_of_date must be a valid YYYY-MM-DD date',
+      );
       return;
     }
     asOfDate = asOfDateRaw;
@@ -196,7 +255,13 @@ const getTaggingRuleBase: RouteHandler = async (req, res, _params) => {
 
   const rule = await findActiveTaggingRule(transactionType, asOfDate);
   if (!rule) {
-    sendRequestError(req, res, 404, 'NOT_FOUND', `No tagging rule is effective for "${transactionType}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'NOT_FOUND',
+      `No tagging rule is effective for "${transactionType}"`,
+    );
     return;
   }
   sendJson(res, 200, rule);
@@ -210,6 +275,15 @@ const listBusinessStreamsBase: RouteHandler = async (_req, res, _params) => {
   sendJson(res, 200, { streams });
 };
 
-export const createTaggingRuleHandler: RouteHandler = requireRole({ module: 'compliance', functionScope: 'write' })(createTaggingRuleBase);
-export const getTaggingRuleHandler: RouteHandler = requireRole({ module: 'compliance', functionScope: 'read' })(getTaggingRuleBase);
-export const listBusinessStreamsHandler: RouteHandler = requireRole({ module: 'compliance', functionScope: 'read' })(listBusinessStreamsBase);
+export const createTaggingRuleHandler: RouteHandler = requireRole({
+  module: 'compliance',
+  functionScope: 'write',
+})(createTaggingRuleBase);
+export const getTaggingRuleHandler: RouteHandler = requireRole({
+  module: 'compliance',
+  functionScope: 'read',
+})(getTaggingRuleBase);
+export const listBusinessStreamsHandler: RouteHandler = requireRole({
+  module: 'compliance',
+  functionScope: 'read',
+})(listBusinessStreamsBase);

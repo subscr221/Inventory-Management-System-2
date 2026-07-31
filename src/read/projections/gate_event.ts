@@ -98,7 +98,10 @@ function mapRow(row: Record<string, unknown>): GateEvent {
   };
 }
 
-export async function getGateEventById(gateEventId: string, client?: PoolClient): Promise<GateEvent | null> {
+export async function getGateEventById(
+  gateEventId: string,
+  client?: PoolClient,
+): Promise<GateEvent | null> {
   const result = await runner(client).query(
     `SELECT ${GATE_EVENT_COLUMNS} FROM gate_event WHERE gate_event_id = $1`,
     [gateEventId],
@@ -108,7 +111,10 @@ export async function getGateEventById(gateEventId: string, client?: PoolClient)
 
 // Review D1 (Story 3.2): resolve a previously accepted online create by its client-supplied
 // Idempotency-Key so a retried POST replays the original gate event instead of duplicating it.
-export async function getGateEventByIdempotencyKey(idempotencyKey: string, client?: PoolClient): Promise<GateEvent | null> {
+export async function getGateEventByIdempotencyKey(
+  idempotencyKey: string,
+  client?: PoolClient,
+): Promise<GateEvent | null> {
   const evt = await runner(client).query(
     `SELECT payload->>'gate_event_id' AS gate_event_id FROM domain_events WHERE idempotency_key = $1 AND event_type = 'gate.entered' LIMIT 1`,
     [idempotencyKey],
@@ -117,7 +123,10 @@ export async function getGateEventByIdempotencyKey(idempotencyKey: string, clien
   return getGateEventById(evt.rows[0]!['gate_event_id'] as string, client);
 }
 
-export async function listGateEvents(filters: ListGateEventsFilters = {}, client?: PoolClient): Promise<GateEvent[]> {
+export async function listGateEvents(
+  filters: ListGateEventsFilters = {},
+  client?: PoolClient,
+): Promise<GateEvent[]> {
   const clauses: string[] = [];
   const values: unknown[] = [];
   const add = (sql: string, value: unknown): void => {
@@ -125,7 +134,8 @@ export async function listGateEvents(filters: ListGateEventsFilters = {}, client
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('site_id = ?', filters.siteId);
-  if (filters.siteAny !== undefined && filters.siteAny !== null) add('site_id = ANY(?::uuid[])', filters.siteAny);
+  if (filters.siteAny !== undefined && filters.siteAny !== null)
+    add('site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.status) add('status = ?', filters.status);
   if (filters.bindingStatus) add('binding_status = ?', filters.bindingStatus);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -139,7 +149,10 @@ export async function listGateEvents(filters: ListGateEventsFilters = {}, client
   return result.rows.map(mapRow);
 }
 
-export async function upsertGateEvent(input: UpsertGateEventInput, client: PoolClient): Promise<void> {
+export async function upsertGateEvent(
+  input: UpsertGateEventInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO gate_event
        (gate_event_id, site_id, site_code_ext, po_ref_ext, binding_status, vehicle_reg_ext,
@@ -182,7 +195,11 @@ export async function upsertGateEvent(input: UpsertGateEventInput, client: PoolC
   );
 }
 
-export async function markGateEventReversed(gateEventId: string, reversalReason: string, client: PoolClient): Promise<GateEvent | null> {
+export async function markGateEventReversed(
+  gateEventId: string,
+  reversalReason: string,
+  client: PoolClient,
+): Promise<GateEvent | null> {
   const result = await client.query(
     `UPDATE gate_event
         SET status = 'reversed', reversal_reason = $2, updated_at = now()

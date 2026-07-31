@@ -13,7 +13,10 @@ export interface TamperContext {
 }
 
 /** Writes a tamper-attempt record using a caller-supplied (e.g. in-transaction) connection. */
-export async function handleTamperAttempt(client: PoolClient, context: TamperContext): Promise<void> {
+export async function handleTamperAttempt(
+  client: PoolClient,
+  context: TamperContext,
+): Promise<void> {
   const payload: Parameters<typeof logTamperAttempt>[1] = {
     user_id: context.user_id,
     role: context.role,

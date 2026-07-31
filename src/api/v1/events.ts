@@ -1,8 +1,18 @@
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import { validateEnvelope, persistEvent, readStream } from '../../events/store.js';
-import { getParsedBody, getAuthContext, getAuthorizedRole, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModule, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedRole,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
+import {
+  requireRole,
+  permittedLocationsForModule,
+  permittedLocationsForModuleScope,
+} from '../../middleware/rbac.js';
 import { auditConfig } from '../../config/audit.js';
 import { getPool } from '../../config/db.js';
 import { logTamperAttempt } from '../../read/projections/audit_log.js';
@@ -21,24 +31,47 @@ const PLANNING_EVENT_TYPES = new Set([
   'ownership.agreement_set',
 ]);
 
-function planningPayloadLocation(body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): string | null {
+function planningPayloadLocation(body: {
+  stream_type: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+}): string | null {
   if (body.stream_type !== 'inventory' || !PLANNING_EVENT_TYPES.has(body.event_type)) return null;
   const locationId = body.payload['location_id'];
   return typeof locationId === 'string' ? locationId : null;
 }
 
-function assertPlanningPayloadWriteLocation(authContext: NonNullable<ReturnType<typeof getAuthContext>>, body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): void {
+function assertPlanningPayloadWriteLocation(
+  authContext: NonNullable<ReturnType<typeof getAuthContext>>,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): void {
   const locationId = planningPayloadLocation(body);
   if (!locationId) return;
   if (body.event_type === 'ownership.agreement_set') {
     const allowed = authContext.roles.some(
-      (r) => (r.module === 'inventory' || r.module === '*') && r.functionScope === 'write' && OWNERSHIP_CONFIG_ROLES.includes(r.role),
+      (r) =>
+        (r.module === 'inventory' || r.module === '*') &&
+        r.functionScope === 'write' &&
+        OWNERSHIP_CONFIG_ROLES.includes(r.role),
     );
-    if (!allowed) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${OWNERSHIP_CONFIG_ROLES.join(', ')}`);
+    if (!allowed)
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        `This operation is restricted to roles: ${OWNERSHIP_CONFIG_ROLES.join(', ')}`,
+      );
   }
-  const { wildcard, locations } = permittedLocationsForModuleScope(authContext.roles, 'inventory', 'write');
+  const { wildcard, locations } = permittedLocationsForModuleScope(
+    authContext.roles,
+    'inventory',
+    'write',
+  );
   if (!wildcard && !locations.has(locationId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to planning payload location "${locationId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No write assignment grants access to planning payload location "${locationId}"`,
+    );
   }
 }
 
@@ -50,7 +83,10 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
   return '';
 }
 
-function resolveLocationFromBody(_params: Record<string, string>, body: unknown): string | undefined {
+function resolveLocationFromBody(
+  _params: Record<string, string>,
+  body: unknown,
+): string | undefined {
   if (typeof body !== 'object' || body === null) return undefined;
   const metadata = (body as Record<string, unknown>)['metadata'];
   if (typeof metadata !== 'object' || metadata === null) return undefined;
@@ -64,10 +100,15 @@ function resolveModuleFromParams(params: Record<string, string>): string {
   return params['streamType'] ?? '';
 }
 
-function referencesInventoryMasters(body: { stream_type: string; payload: Record<string, unknown> }): boolean {
+function referencesInventoryMasters(body: {
+  stream_type: string;
+  payload: Record<string, unknown>;
+}): boolean {
   return (
     body.stream_type === 'inventory' &&
-    (body.payload['sku'] !== undefined || body.payload['target_location_id'] !== undefined || body.payload['target_location_code'] !== undefined)
+    (body.payload['sku'] !== undefined ||
+      body.payload['target_location_id'] !== undefined ||
+      body.payload['target_location_code'] !== undefined)
   );
 }
 
@@ -114,7 +155,13 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     } finally {
       client.release();
     }
-    sendRequestError(req, res, 423, 'AUDIT_LOG_DISABLED', 'No mutating operations are permitted while the audit log is inactive');
+    sendRequestError(
+      req,
+      res,
+      423,
+      'AUDIT_LOG_DISABLED',
+      'No mutating operations are permitted while the audit log is inactive',
+    );
     return;
   }
 

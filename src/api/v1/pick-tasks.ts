@@ -3,8 +3,17 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getAuthContext, getAuthorizedAssignment, getParsedBody, getTraceId } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModule, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import {
+  getAuthContext,
+  getAuthorizedAssignment,
+  getParsedBody,
+  getTraceId,
+} from '../../middleware/context.js';
+import {
+  requireRole,
+  permittedLocationsForModule,
+  permittedLocationsForModuleScope,
+} from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
@@ -26,7 +35,12 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 // Supervisors generate, assign and complete pick tasks; operators execute pick confirmations.
 const PICK_SUPERVISE_ROLES = ['warehouse_manager', 'inventory_controller'];
 const PICK_CONFIRM_ROLES = ['store_assistant', 'warehouse_operator'];
-const PICK_READ_ROLES = ['store_assistant', 'warehouse_operator', 'warehouse_manager', 'inventory_controller'];
+const PICK_READ_ROLES = [
+  'store_assistant',
+  'warehouse_operator',
+  'warehouse_manager',
+  'inventory_controller',
+];
 
 interface ActorContext {
   userId: string;
@@ -54,14 +68,19 @@ function actorContextForSite(req: IncomingMessage, targetSiteId: string): ActorC
   const base = actorContext(req);
   const authContext = getAuthContext(req);
   const covering = authContext?.roles.find(
-    (r) => (r.module === 'warehouse' || r.module === '*')
-      && r.functionScope === 'write'
-      && (r.locationId === '*' || r.locationId === targetSiteId),
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      (r.locationId === '*' || r.locationId === targetSiteId),
   );
   return { ...base, eventLocationId: targetSiteId, role: covering?.role ?? base.role };
 }
 
-function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
+function auditCtxFor(
+  req: IncomingMessage,
+  actor: ActorContext,
+  httpStatus: number,
+): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
   return {
     trace_id: getTraceId(req) ?? '',
     user_id: actor.userId,
@@ -73,16 +92,31 @@ function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: numb
   };
 }
 
-function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[], functionScope: 'read' | 'write'): void {
+function assertRoleAllowed(
+  req: IncomingMessage,
+  allowedRoles: string[],
+  functionScope: 'read' | 'write',
+): void {
   const authContext = getAuthContext(req);
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
-    (r) => (r.module === 'warehouse' || r.module === '*') && (functionScope === 'read' || r.functionScope === 'write') && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      (functionScope === 'read' || r.functionScope === 'write') &&
+      allowedRoles.includes(r.role),
   );
-  if (!ok) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+  if (!ok)
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
 }
 
-function warehouseScope(req: IncomingMessage, scope: 'read' | 'write'): { wildcard: boolean; locations: Set<string> } {
+function warehouseScope(
+  req: IncomingMessage,
+  scope: 'read' | 'write',
+): { wildcard: boolean; locations: Set<string> } {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   return scope === 'read'
@@ -93,7 +127,11 @@ function warehouseScope(req: IncomingMessage, scope: 'read' | 'write'): { wildca
 function assertSiteAccess(req: IncomingMessage, siteId: string, scope: 'read' | 'write'): void {
   const s = warehouseScope(req, scope);
   if (!s.wildcard && !s.locations.has(siteId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No ${scope} assignment grants access to site "${siteId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No ${scope} assignment grants access to site "${siteId}"`,
+    );
   }
 }
 
@@ -107,8 +145,16 @@ async function resolveTaskSite(pickTaskId: string): Promise<string> {
 
 function parseLineIds(body: Record<string, unknown>): string[] {
   const raw = body['dispatchOrderLineIds'] ?? body['dispatch_order_line_ids'];
-  if (!Array.isArray(raw) || raw.length === 0 || !raw.every((v) => typeof v === 'string' && UUID_REGEX.test(v))) {
-    throw new AppError(400, 'INVALID_PARAMS', 'dispatchOrderLineIds is required and must be a non-empty array of UUIDs');
+  if (
+    !Array.isArray(raw) ||
+    raw.length === 0 ||
+    !raw.every((v) => typeof v === 'string' && UUID_REGEX.test(v))
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'dispatchOrderLineIds is required and must be a non-empty array of UUIDs',
+    );
   }
   return raw as string[];
 }
@@ -122,10 +168,22 @@ async function runGenerate(
   assertRoleAllowed(req, PICK_SUPERVISE_ROLES, 'write');
   // Deduplicate: a repeated line id must not generate two tasks for the same demand line.
   const dispatchOrderLineIds = [...new Set(parseLineIds(body))];
-  const waveId = typeof body['waveId'] === 'string' ? body['waveId'] : typeof body['wave_id'] === 'string' ? (body['wave_id'] as string) : undefined;
-  const batchId = typeof body['batchId'] === 'string' ? body['batchId'] : typeof body['batch_id'] === 'string' ? (body['batch_id'] as string) : undefined;
-  if (waveId !== undefined && !UUID_REGEX.test(waveId)) throw new AppError(400, 'INVALID_PARAMS', 'waveId must be a UUID');
-  if (batchId !== undefined && !UUID_REGEX.test(batchId)) throw new AppError(400, 'INVALID_PARAMS', 'batchId must be a UUID');
+  const waveId =
+    typeof body['waveId'] === 'string'
+      ? body['waveId']
+      : typeof body['wave_id'] === 'string'
+        ? (body['wave_id'] as string)
+        : undefined;
+  const batchId =
+    typeof body['batchId'] === 'string'
+      ? body['batchId']
+      : typeof body['batch_id'] === 'string'
+        ? (body['batch_id'] as string)
+        : undefined;
+  if (waveId !== undefined && !UUID_REGEX.test(waveId))
+    throw new AppError(400, 'INVALID_PARAMS', 'waveId must be a UUID');
+  if (batchId !== undefined && !UUID_REGEX.test(batchId))
+    throw new AppError(400, 'INVALID_PARAMS', 'batchId must be a UUID');
 
   // The generation site derives from the dispatch-order lines themselves; every line must ship
   // from a single site the caller has write access to.
@@ -133,12 +191,21 @@ async function runGenerate(
   for (const id of dispatchOrderLineIds) {
     const line = await getSalesOrderLineById(id);
     if (!line) {
-      throw new AppError(404, 'DISPATCH_ORDER_LINE_NOT_FOUND', `No sales-order line exists for "${id}"`, { dispatch_order_line_id: id });
+      throw new AppError(
+        404,
+        'DISPATCH_ORDER_LINE_NOT_FOUND',
+        `No sales-order line exists for "${id}"`,
+        { dispatch_order_line_id: id },
+      );
     }
     siteIds.add(line.ship_from_site_id);
   }
   if (siteIds.size > 1) {
-    throw new AppError(400, 'INVALID_PARAMS', 'All dispatch-order lines must ship from the same site');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'All dispatch-order lines must ship from the same site',
+    );
   }
   const siteId = [...siteIds][0]!;
   assertSiteAccess(req, siteId, 'write');
@@ -176,7 +243,13 @@ const generateBase: RouteHandler = async (req, res) => {
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
   const strategy = body['strategy'];
   if (strategy !== 'single' && strategy !== 'batch' && strategy !== 'wave' && strategy !== 'zone') {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', "strategy must be one of 'single', 'batch', 'wave', 'zone'");
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      "strategy must be one of 'single', 'batch', 'wave', 'zone'",
+    );
     return;
   }
   await runGenerate(req, res, strategy, body);
@@ -207,7 +280,13 @@ const listPickTasksBase: RouteHandler = async (req, res) => {
   const url = new URL(req.url ?? '', `http://${req.headers.host ?? 'localhost'}`);
   const status = url.searchParams.get('status');
   if (status !== null && !['pending', 'in_progress', 'completed', 'cancelled'].includes(status)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', "status filter must be 'pending', 'in_progress', 'completed' or 'cancelled'");
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      "status filter must be 'pending', 'in_progress', 'completed' or 'cancelled'",
+    );
     return;
   }
   const scope = warehouseScope(req, 'read');
@@ -215,10 +294,16 @@ const listPickTasksBase: RouteHandler = async (req, res) => {
   let siteId: string | null = null;
   let siteAny: string[] | null = null;
   if (siteCode) {
-    const site = UUID_REGEX.test(siteCode) ? { location_id: siteCode } : await getLocationByCode(siteCode);
+    const site = UUID_REGEX.test(siteCode)
+      ? { location_id: siteCode }
+      : await getLocationByCode(siteCode);
     if (!site) throw new AppError(404, 'LOCATION_NOT_FOUND', `No site exists for "${siteCode}"`);
     if (!scope.wildcard && !scope.locations.has(site.location_id)) {
-      throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No read assignment grants access to site "${site.location_id}"`);
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `No read assignment grants access to site "${site.location_id}"`,
+      );
     }
     siteId = site.location_id;
   } else if (!scope.wildcard) {
@@ -255,7 +340,13 @@ const getPickTaskBase: RouteHandler = async (req, res, params) => {
   }
   const task = await getPickTaskById(pickTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${pickTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'PICK_TASK_NOT_FOUND',
+      `No pick task exists for "${pickTaskId}"`,
+    );
     return;
   }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'read');
@@ -279,7 +370,13 @@ const assignPickTaskBase: RouteHandler = async (req, res, params) => {
   // Review pass 2: a well-formed UUID for a nonexistent user previously left the task looking
   // assigned while no operator could ever see it.
   if (!(await activeUserExistsById(assignedTo))) {
-    sendRequestError(req, res, 404, 'ASSIGNEE_NOT_FOUND', `No active user exists for "${assignedTo}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ASSIGNEE_NOT_FOUND',
+      `No active user exists for "${assignedTo}"`,
+    );
     return;
   }
   // Story 3.8 code review: assignment optionally carries a board priority. This route is the only
@@ -288,16 +385,34 @@ const assignPickTaskBase: RouteHandler = async (req, res, params) => {
   // permanently 'normal' and AC1's priority display was inert for pick tasks.
   const priority = body['priority'];
   if (priority !== undefined && priority !== null && !isTaskPriority(priority)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', `priority must be one of: ${TASK_PRIORITIES.join(', ')}`);
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      `priority must be one of: ${TASK_PRIORITIES.join(', ')}`,
+    );
     return;
   }
   const task = await getPickTaskById(pickTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${pickTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'PICK_TASK_NOT_FOUND',
+      `No pick task exists for "${pickTaskId}"`,
+    );
     return;
   }
   if (task.status !== 'pending') {
-    sendRequestError(req, res, 409, 'PICK_TASK_NOT_PENDING', `Pick task "${pickTaskId}" cannot be assigned because it is ${task.status}`);
+    sendRequestError(
+      req,
+      res,
+      409,
+      'PICK_TASK_NOT_PENDING',
+      `Pick task "${pickTaskId}" cannot be assigned because it is ${task.status}`,
+    );
     return;
   }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'write');
@@ -338,7 +453,13 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
   const pickTaskId = params['pickTaskId'];
   const pickLineId = params['pickLineId'];
   if (!pickTaskId || !UUID_REGEX.test(pickTaskId) || !pickLineId || !UUID_REGEX.test(pickLineId)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'pickTaskId and pickLineId path parameters must be UUIDs');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'pickTaskId and pickLineId path parameters must be UUIDs',
+    );
     return;
   }
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
@@ -347,7 +468,13 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
   const overrideReason = body['overrideReason'] ?? body['override_reason'];
   const captureMethod = body['captureMethod'] ?? body['capture_method'];
   if (typeof confirmedLotId !== 'string' || !UUID_REGEX.test(confirmedLotId)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'confirmedLotId is required and must be a UUID');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'confirmedLotId is required and must be a UUID',
+    );
     return;
   }
   if (captureMethod !== 'PWA' && captureMethod !== 'PAPER') {
@@ -356,7 +483,13 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
   }
   const task = await getPickTaskById(pickTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${pickTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'PICK_TASK_NOT_FOUND',
+      `No pick task exists for "${pickTaskId}"`,
+    );
     return;
   }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'write');
@@ -371,7 +504,8 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
         pick_task_id: pickTaskId,
         pick_line_id: pickLineId,
         confirmed_lot_id: confirmedLotId,
-        confirmed_quantity: typeof confirmedQuantity === 'number' ? String(confirmedQuantity) : confirmedQuantity,
+        confirmed_quantity:
+          typeof confirmedQuantity === 'number' ? String(confirmedQuantity) : confirmedQuantity,
         override_reason: typeof overrideReason === 'string' ? overrideReason : null,
         capture_method: captureMethod,
       },
@@ -380,7 +514,10 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
         actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
         occurred_at: new Date().toISOString(),
       },
-      idempotency_key: typeof body['idempotency_key'] === 'string' && body['idempotency_key'] !== '' ? body['idempotency_key'] : null,
+      idempotency_key:
+        typeof body['idempotency_key'] === 'string' && body['idempotency_key'] !== ''
+          ? body['idempotency_key']
+          : null,
     },
     auditCtxFor(req, actor, 200),
   );
@@ -389,7 +526,11 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
   // A recorded substitution is a Warning-badge business outcome, not an error - surface it in a
   // 2xx body (mirrors the Story 3.4 RECEIPT_TOLERANCE_EXCEEDED pattern).
   if (line && line.status === 'substituted') {
-    sendJson(res, 200, { event_id: persisted.event_id, line, warning_code: 'PICK_LOT_SUBSTITUTED' });
+    sendJson(res, 200, {
+      event_id: persisted.event_id,
+      line,
+      warning_code: 'PICK_LOT_SUBSTITUTED',
+    });
     return;
   }
   sendJson(res, 200, { event_id: persisted.event_id, line });
@@ -405,11 +546,23 @@ const completePickTaskBase: RouteHandler = async (req, res, params) => {
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
   const task = await getPickTaskById(pickTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${pickTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'PICK_TASK_NOT_FOUND',
+      `No pick task exists for "${pickTaskId}"`,
+    );
     return;
   }
   if (task.status === 'completed' || task.status === 'cancelled') {
-    sendRequestError(req, res, 409, 'PICK_TASK_ALREADY_COMPLETED', `Pick task "${pickTaskId}" is ${task.status} and cannot be completed`);
+    sendRequestError(
+      req,
+      res,
+      409,
+      'PICK_TASK_ALREADY_COMPLETED',
+      `Pick task "${pickTaskId}" is ${task.status} and cannot be completed`,
+    );
     return;
   }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'write');
@@ -429,7 +582,10 @@ const completePickTaskBase: RouteHandler = async (req, res, params) => {
         actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
         occurred_at: new Date().toISOString(),
       },
-      idempotency_key: typeof body['idempotency_key'] === 'string' && body['idempotency_key'] !== '' ? body['idempotency_key'] : null,
+      idempotency_key:
+        typeof body['idempotency_key'] === 'string' && body['idempotency_key'] !== ''
+          ? body['idempotency_key']
+          : null,
     },
     auditCtxFor(req, actor, 200),
   );
@@ -446,7 +602,13 @@ const printPickTaskBase: RouteHandler = async (req, res, params) => {
   }
   const task = await getPickTaskById(pickTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'PICK_TASK_NOT_FOUND', `No pick task exists for "${pickTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'PICK_TASK_NOT_FOUND',
+      `No pick task exists for "${pickTaskId}"`,
+    );
     return;
   }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'read');
@@ -469,19 +631,47 @@ const printPickTaskBase: RouteHandler = async (req, res, params) => {
     '----+--------------------------------------+--------------------------------------+--------------------------------------+----------+-----',
   ].filter((l): l is string => l !== null);
   const rows = lines.map(
-    (l) => `${String(l.pick_sequence).padStart(3)} | ${l.pick_line_id} | ${l.dispatch_order_line_id} | ${l.directed_lot_id} | ${l.directed_quantity.padStart(8)} | ${l.location_id}`,
+    (l) =>
+      `${String(l.pick_sequence).padStart(3)} | ${l.pick_line_id} | ${l.dispatch_order_line_id} | ${l.directed_lot_id} | ${l.directed_quantity.padStart(8)} | ${l.location_id}`,
   );
   const text = [...header, ...rows, ''].join('\n');
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(text);
 };
 
-export const generatePickTasksHandler: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(generateBase);
-export const generateWavePickTasksHandler: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(generateWaveBase);
-export const generateBatchPickTasksHandler: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(generateBatchBase);
-export const listPickTasksHandler: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(listPickTasksBase);
-export const getPickTaskHandler: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(getPickTaskBase);
-export const assignPickTaskHandler: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(assignPickTaskBase);
-export const confirmPickLineHandler: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(confirmPickLineBase);
-export const completePickTaskHandler: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(completePickTaskBase);
-export const printPickTaskHandler: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(printPickTaskBase);
+export const generatePickTasksHandler: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(generateBase);
+export const generateWavePickTasksHandler: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(generateWaveBase);
+export const generateBatchPickTasksHandler: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(generateBatchBase);
+export const listPickTasksHandler: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(listPickTasksBase);
+export const getPickTaskHandler: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(getPickTaskBase);
+export const assignPickTaskHandler: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(assignPickTaskBase);
+export const confirmPickLineHandler: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(confirmPickLineBase);
+export const completePickTaskHandler: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(completePickTaskBase);
+export const printPickTaskHandler: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(printPickTaskBase);

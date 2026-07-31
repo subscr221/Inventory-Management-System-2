@@ -2,14 +2,26 @@ import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModule, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
+import {
+  requireRole,
+  permittedLocationsForModule,
+  permittedLocationsForModuleScope,
+} from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
 import { getAgreementByGrain, listAgreements } from '../../read/projections/ownership_agreement.js';
 import type { OwnershipAgreementRow } from '../../read/projections/ownership_agreement.js';
-import { OWNERSHIP_CONFIG_ROLES, SUPPLIER_OWNED_STOCK_CLASSES } from '../../compliance/ownership.js';
+import {
+  OWNERSHIP_CONFIG_ROLES,
+  SUPPLIER_OWNED_STOCK_CLASSES,
+} from '../../compliance/ownership.js';
 
 /**
  * Ownership agreement admin API (Story 2.8). Agreements are the SKU-location-class registry that
@@ -48,7 +60,11 @@ function actorContext(req: IncomingMessage): ActorContext {
   return { userId, role, auditLocationId, eventLocationId };
 }
 
-function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
+function auditCtxFor(
+  req: IncomingMessage,
+  actor: ActorContext,
+  httpStatus: number,
+): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
   return {
     trace_id: getTraceId(req) ?? '',
     user_id: actor.userId,
@@ -60,23 +76,42 @@ function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: numb
   };
 }
 
-function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[], functionScope: 'read' | 'write'): void {
+function assertRoleAllowed(
+  req: IncomingMessage,
+  allowedRoles: string[],
+  functionScope: 'read' | 'write',
+): void {
   const authContext = getAuthContext(req);
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
-    (r) => (r.module === 'inventory' || r.module === '*') && r.functionScope === functionScope && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'inventory' || r.module === '*') &&
+      r.functionScope === functionScope &&
+      allowedRoles.includes(r.role),
   );
   if (!ok) {
-    throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
   }
 }
 
 function assertWriteLocationAccess(req: IncomingMessage, locationId: string): void {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
-  const { wildcard, locations } = permittedLocationsForModuleScope(authContext.roles, 'inventory', 'write');
+  const { wildcard, locations } = permittedLocationsForModuleScope(
+    authContext.roles,
+    'inventory',
+    'write',
+  );
   if (!wildcard && !locations.has(locationId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to location "${locationId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No write assignment grants access to location "${locationId}"`,
+    );
   }
 }
 
@@ -103,7 +138,13 @@ const putAgreementBase: RouteHandler = async (req, res, params) => {
   const locationId = params['locationId'];
   const stockClass = params['stockClass'];
   if (!sku || !SKU_REGEX.test(sku)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku path parameter must be 1-64 URL-safe characters');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku path parameter must be 1-64 URL-safe characters',
+    );
     return;
   }
   if (!locationId || !UUID_REGEX.test(locationId)) {
@@ -111,7 +152,13 @@ const putAgreementBase: RouteHandler = async (req, res, params) => {
     return;
   }
   if (!stockClass || !SUPPLIER_OWNED_STOCK_CLASSES.has(stockClass)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', "stockClass path parameter must be 'consignment' or 'vmi'");
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      "stockClass path parameter must be 'consignment' or 'vmi'",
+    );
     return;
   }
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
@@ -139,14 +186,32 @@ const putAgreementBase: RouteHandler = async (req, res, params) => {
     const agreementId = existing?.agreement_id ?? randomUUID();
     // owner_party_code is required on create; optional (preserved) on edit. The seam's shape
     // assert enforces the code format, so only presence is decided here.
-    const ownerPartyCode = typeof body['owner_party_code'] === 'string' ? body['owner_party_code'].trim() : body['owner_party_code'] ?? existing?.owner_party_code;
+    const ownerPartyCode =
+      typeof body['owner_party_code'] === 'string'
+        ? body['owner_party_code'].trim()
+        : (body['owner_party_code'] ?? existing?.owner_party_code);
     if (ownerPartyCode === undefined) {
-      throw new AppError(400, 'INVALID_PARAMS', 'owner_party_code is required when creating an ownership agreement');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'owner_party_code is required when creating an ownership agreement',
+      );
     }
-    const effectiveActive = body['active'] === undefined ? (existing?.active ?? true) : body['active'];
-    const effectiveVmiMinQty = body['vmi_min_qty'] === undefined ? existing?.vmi_min_qty : body['vmi_min_qty'];
-    if (stockClass === 'vmi' && effectiveActive !== false && (effectiveVmiMinQty === undefined || effectiveVmiMinQty === null)) {
-      throw new AppError(400, 'VMI_MIN_NOT_CONFIGURED', 'vmi_min_qty is required for an active vmi ownership agreement', { sku, location_id: locationId });
+    const effectiveActive =
+      body['active'] === undefined ? (existing?.active ?? true) : body['active'];
+    const effectiveVmiMinQty =
+      body['vmi_min_qty'] === undefined ? existing?.vmi_min_qty : body['vmi_min_qty'];
+    if (
+      stockClass === 'vmi' &&
+      effectiveActive !== false &&
+      (effectiveVmiMinQty === undefined || effectiveVmiMinQty === null)
+    ) {
+      throw new AppError(
+        400,
+        'VMI_MIN_NOT_CONFIGURED',
+        'vmi_min_qty is required for an active vmi ownership agreement',
+        { sku, location_id: locationId },
+      );
     }
 
     await persistEvent(
@@ -201,7 +266,13 @@ const listAgreementsBase: RouteHandler = async (req, res) => {
   const stockClass = url.searchParams.get('stock_class');
   const activeParam = url.searchParams.get('active');
   if (stockClass && !SUPPLIER_OWNED_STOCK_CLASSES.has(stockClass)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', "stock_class filter must be 'consignment' or 'vmi'");
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      "stock_class filter must be 'consignment' or 'vmi'",
+    );
     return;
   }
   if (activeParam !== null && activeParam !== 'true' && activeParam !== 'false') {
@@ -213,7 +284,13 @@ const listAgreementsBase: RouteHandler = async (req, res) => {
   let locationAny: string[] | null = null;
   if (!wildcard) {
     if (locationId && !locations.has(locationId)) {
-      sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', 'No access to the specified location_id');
+      sendRequestError(
+        req,
+        res,
+        403,
+        'LOCATION_ACCESS_DENIED',
+        'No access to the specified location_id',
+      );
       return;
     }
     if (!locationId) locationAny = [...locations];
@@ -229,5 +306,11 @@ const listAgreementsBase: RouteHandler = async (req, res) => {
   sendJson(res, 200, { agreements: rows.map(agreementToJson) });
 };
 
-export const putOwnershipAgreementHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(putAgreementBase);
-export const listOwnershipAgreementsHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(listAgreementsBase);
+export const putOwnershipAgreementHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(putAgreementBase);
+export const listOwnershipAgreementsHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(listAgreementsBase);

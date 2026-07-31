@@ -74,7 +74,10 @@ function mapRow(row: Record<string, unknown>): PickLine {
     directed_lot_id: row['directed_lot_id'] as string,
     confirmed_lot_id: (row['confirmed_lot_id'] as string | null) ?? null,
     directed_quantity: String(row['directed_quantity']),
-    confirmed_quantity: row['confirmed_quantity'] === null || row['confirmed_quantity'] === undefined ? null : String(row['confirmed_quantity']),
+    confirmed_quantity:
+      row['confirmed_quantity'] === null || row['confirmed_quantity'] === undefined
+        ? null
+        : String(row['confirmed_quantity']),
     location_id: row['location_id'] as string,
     pick_sequence: Number(row['pick_sequence']),
     status: row['status'] as PickLine['status'],
@@ -88,13 +91,22 @@ function mapRow(row: Record<string, unknown>): PickLine {
   };
 }
 
-export async function getPickLineById(pickLineId: string, client?: PoolClient): Promise<PickLine | null> {
-  const result = await runner(client).query(`SELECT ${PICK_LINE_COLUMNS} FROM pick_line WHERE pick_line_id = $1`, [pickLineId]);
+export async function getPickLineById(
+  pickLineId: string,
+  client?: PoolClient,
+): Promise<PickLine | null> {
+  const result = await runner(client).query(
+    `SELECT ${PICK_LINE_COLUMNS} FROM pick_line WHERE pick_line_id = $1`,
+    [pickLineId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 /** Idempotent, replay-safe insert keyed on pick_line_id. Quantities bound as NUMERIC strings. */
-export async function createPickLine(input: CreatePickLineInput, client: PoolClient): Promise<void> {
+export async function createPickLine(
+  input: CreatePickLineInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO pick_line
        (pick_line_id, pick_task_id, dispatch_order_line_id, sku, directed_lot_id,
@@ -152,7 +164,15 @@ export async function confirmPickLine(
             status = CASE WHEN $2::uuid <> directed_lot_id THEN 'substituted' ELSE 'confirmed' END,
             updated_at = now()
       WHERE pick_line_id = $1 AND status = 'pending'`,
-    [pickLineId, confirmedLotId, confirmedQuantity, overrideReason, captureMethod, confirmedBy, confirmedLocationId],
+    [
+      pickLineId,
+      confirmedLotId,
+      confirmedQuantity,
+      overrideReason,
+      captureMethod,
+      confirmedBy,
+      confirmedLocationId,
+    ],
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -162,13 +182,22 @@ export async function confirmPickLine(
  * behind this transaction instead of both observing `pending` and one losing with a spurious
  * PICK_LINE_ALREADY_CONFIRMED (review pass 2).
  */
-export async function getPickLineByIdForUpdate(pickLineId: string, client: PoolClient): Promise<PickLine | null> {
-  const result = await client.query(`SELECT ${PICK_LINE_COLUMNS} FROM pick_line WHERE pick_line_id = $1 FOR UPDATE`, [pickLineId]);
+export async function getPickLineByIdForUpdate(
+  pickLineId: string,
+  client: PoolClient,
+): Promise<PickLine | null> {
+  const result = await client.query(
+    `SELECT ${PICK_LINE_COLUMNS} FROM pick_line WHERE pick_line_id = $1 FOR UPDATE`,
+    [pickLineId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 /** Returns all lines for a task in directed pick-path order (pick_sequence ASC). */
-export async function listPickLinesByTask(pickTaskId: string, client?: PoolClient): Promise<PickLine[]> {
+export async function listPickLinesByTask(
+  pickTaskId: string,
+  client?: PoolClient,
+): Promise<PickLine[]> {
   const result = await runner(client).query(
     `SELECT ${PICK_LINE_COLUMNS} FROM pick_line WHERE pick_task_id = $1 ORDER BY pick_sequence ASC, pick_line_id ASC`,
     [pickTaskId],

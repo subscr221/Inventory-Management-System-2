@@ -102,8 +102,10 @@ const NOTIFICATION_COLUMNS = `notification_id, source_event_id, target_user_id, 
    status_verb, object_type, object_id, actor_label, next_step, status, occurred_at, read_at, acted_upon_at, expired_at, created_at`;
 
 function mapNotification(row: Record<string, unknown>): NotificationRecord {
-  const iso = (value: unknown): string => (value instanceof Date ? value.toISOString() : String(value));
-  const isoOrNull = (value: unknown): string | null => (value === null || value === undefined ? null : iso(value));
+  const iso = (value: unknown): string =>
+    value instanceof Date ? value.toISOString() : String(value);
+  const isoOrNull = (value: unknown): string | null =>
+    value === null || value === undefined ? null : iso(value);
   return {
     notification_id: row['notification_id'] as string,
     source_event_id: row['source_event_id'] as string,
@@ -131,7 +133,10 @@ function mapNotification(row: Record<string, unknown>): NotificationRecord {
  * the same recipient. Returns the existing row on conflict rather than null, so callers (the
  * dispatcher) always have a notification_id to record deliveries against.
  */
-export async function insertNotification(input: InsertNotificationInput, client?: PoolClient): Promise<NotificationRecord> {
+export async function insertNotification(
+  input: InsertNotificationInput,
+  client?: PoolClient,
+): Promise<NotificationRecord> {
   const inserted = await runner(client).query(
     `INSERT INTO notifications (source_event_id, target_user_id, target_role, target_location_id, event_type,
        status_verb, object_type, object_id, actor_label, next_step, occurred_at)
@@ -160,8 +165,14 @@ export async function insertNotification(input: InsertNotificationInput, client?
   return mapNotification(existing.rows[0]!);
 }
 
-export async function getNotification(notificationId: string, client?: PoolClient): Promise<NotificationRecord | null> {
-  const result = await runner(client).query(`SELECT ${NOTIFICATION_COLUMNS} FROM notifications WHERE notification_id = $1`, [notificationId]);
+export async function getNotification(
+  notificationId: string,
+  client?: PoolClient,
+): Promise<NotificationRecord | null> {
+  const result = await runner(client).query(
+    `SELECT ${NOTIFICATION_COLUMNS} FROM notifications WHERE notification_id = $1`,
+    [notificationId],
+  );
   return result.rows.length > 0 ? mapNotification(result.rows[0]!) : null;
 }
 
@@ -173,8 +184,14 @@ export async function getNotification(notificationId: string, client?: PoolClien
  * context. Returns null if the alert's role had zero holders at dispatch time (no row was ever
  * fanned out) - the caller falls back to a generic message in that case.
  */
-export async function getAnyNotificationBySourceEvent(sourceEventId: string, client?: PoolClient): Promise<NotificationRecord | null> {
-  const result = await runner(client).query(`SELECT ${NOTIFICATION_COLUMNS} FROM notifications WHERE source_event_id = $1 LIMIT 1`, [sourceEventId]);
+export async function getAnyNotificationBySourceEvent(
+  sourceEventId: string,
+  client?: PoolClient,
+): Promise<NotificationRecord | null> {
+  const result = await runner(client).query(
+    `SELECT ${NOTIFICATION_COLUMNS} FROM notifications WHERE source_event_id = $1 LIMIT 1`,
+    [sourceEventId],
+  );
   return result.rows.length > 0 ? mapNotification(result.rows[0]!) : null;
 }
 
@@ -222,7 +239,11 @@ export async function countUnreadForUser(userId: string, client?: PoolClient): P
   return result.rows[0]!['count'] as number;
 }
 
-export async function markNotificationRead(notificationId: string, userId: string, client?: PoolClient): Promise<NotificationRecord | null> {
+export async function markNotificationRead(
+  notificationId: string,
+  userId: string,
+  client?: PoolClient,
+): Promise<NotificationRecord | null> {
   const result = await runner(client).query(
     `UPDATE notifications SET status = 'read', read_at = now()
      WHERE notification_id = $1 AND target_user_id = $2 AND status = 'created'
@@ -232,7 +253,11 @@ export async function markNotificationRead(notificationId: string, userId: strin
   return result.rows.length > 0 ? mapNotification(result.rows[0]!) : null;
 }
 
-export async function markNotificationActedUpon(notificationId: string, userId: string, client?: PoolClient): Promise<NotificationRecord | null> {
+export async function markNotificationActedUpon(
+  notificationId: string,
+  userId: string,
+  client?: PoolClient,
+): Promise<NotificationRecord | null> {
   const result = await runner(client).query(
     `UPDATE notifications SET status = 'acted_upon', acted_upon_at = now(), read_at = COALESCE(read_at, now())
      WHERE notification_id = $1 AND target_user_id = $2 AND status IN ('created', 'read')
@@ -257,7 +282,10 @@ export interface ExpiredNotification {
  * `notification.expired` domain event per row; a bulk UPDATE alone would leave the event stream
  * blind to the transition.
  */
-export async function expireStaleNotifications(olderThanDays: number, client?: PoolClient): Promise<ExpiredNotification[]> {
+export async function expireStaleNotifications(
+  olderThanDays: number,
+  client?: PoolClient,
+): Promise<ExpiredNotification[]> {
   const result = await runner(client).query(
     `UPDATE notifications SET status = 'expired', expired_at = now()
      WHERE status IN ('created', 'read') AND created_at < now() - ($1 || ' days')::interval
@@ -274,7 +302,10 @@ export async function expireStaleNotifications(olderThanDays: number, client?: P
   }));
 }
 
-export async function recordDelivery(input: RecordDeliveryInput, client?: PoolClient): Promise<NotificationDeliveryRecord> {
+export async function recordDelivery(
+  input: RecordDeliveryInput,
+  client?: PoolClient,
+): Promise<NotificationDeliveryRecord> {
   const result = await runner(client).query(
     `INSERT INTO notification_deliveries (notification_id, channel, outcome, trace_id, failure_reason)
      VALUES ($1, $2, $3, $4, $5)
@@ -289,16 +320,28 @@ export async function recordDelivery(input: RecordDeliveryInput, client?: PoolCl
     outcome: row['outcome'] as DeliveryOutcome,
     trace_id: row['trace_id'] as string,
     failure_reason: (row['failure_reason'] as string | null) ?? null,
-    delivered_at: row['delivered_at'] instanceof Date ? (row['delivered_at'] as Date).toISOString() : String(row['delivered_at']),
+    delivered_at:
+      row['delivered_at'] instanceof Date
+        ? (row['delivered_at'] as Date).toISOString()
+        : String(row['delivered_at']),
   };
 }
 
-export async function isEventDispatched(sourceEventId: string, client?: PoolClient): Promise<boolean> {
-  const result = await runner(client).query(`SELECT 1 FROM notification_dispatch_log WHERE source_event_id = $1`, [sourceEventId]);
+export async function isEventDispatched(
+  sourceEventId: string,
+  client?: PoolClient,
+): Promise<boolean> {
+  const result = await runner(client).query(
+    `SELECT 1 FROM notification_dispatch_log WHERE source_event_id = $1`,
+    [sourceEventId],
+  );
   return result.rows.length > 0;
 }
 
-export async function markEventDispatched(sourceEventId: string, client?: PoolClient): Promise<void> {
+export async function markEventDispatched(
+  sourceEventId: string,
+  client?: PoolClient,
+): Promise<void> {
   await runner(client).query(
     `INSERT INTO notification_dispatch_log (source_event_id) VALUES ($1) ON CONFLICT (source_event_id) DO NOTHING`,
     [sourceEventId],
@@ -312,7 +355,10 @@ export async function markEventDispatched(sourceEventId: string, client?: PoolCl
  * of duplicating deliveries. Must be called inside the same transaction as the fan-out writes so
  * the claim and the deliveries commit together (or roll back together on failure).
  */
-export async function claimEventForDispatch(sourceEventId: string, client: PoolClient): Promise<boolean> {
+export async function claimEventForDispatch(
+  sourceEventId: string,
+  client: PoolClient,
+): Promise<boolean> {
   const result = await client.query(
     `INSERT INTO notification_dispatch_log (source_event_id) VALUES ($1) ON CONFLICT (source_event_id) DO NOTHING RETURNING source_event_id`,
     [sourceEventId],
@@ -364,8 +410,14 @@ export async function recordDispatchFailure(
  * of only currently-failing events. Called inside the dispatch transaction so the clear commits
  * (or rolls back) together with the claim it belongs to.
  */
-export async function clearDispatchAttempts(sourceEventId: string, client?: PoolClient): Promise<void> {
-  await runner(client).query(`DELETE FROM notification_dispatch_attempts WHERE source_event_id = $1`, [sourceEventId]);
+export async function clearDispatchAttempts(
+  sourceEventId: string,
+  client?: PoolClient,
+): Promise<void> {
+  await runner(client).query(
+    `DELETE FROM notification_dispatch_attempts WHERE source_event_id = $1`,
+    [sourceEventId],
+  );
 }
 
 function mapEscalationDef(row: Record<string, unknown>): EscalationDefRecord {
@@ -374,19 +426,34 @@ function mapEscalationDef(row: Record<string, unknown>): EscalationDefRecord {
     origin_target_role: row['origin_target_role'] as string,
     escalation_target_role: row['escalation_target_role'] as string,
     acknowledgment_window_seconds: row['acknowledgment_window_seconds'] as number,
-    deadline_at: row['deadline_at'] instanceof Date ? (row['deadline_at'] as Date).toISOString() : String(row['deadline_at']),
+    deadline_at:
+      row['deadline_at'] instanceof Date
+        ? (row['deadline_at'] as Date).toISOString()
+        : String(row['deadline_at']),
     resolved: row['resolved'] as boolean,
-    created_at: row['created_at'] instanceof Date ? (row['created_at'] as Date).toISOString() : String(row['created_at']),
+    created_at:
+      row['created_at'] instanceof Date
+        ? (row['created_at'] as Date).toISOString()
+        : String(row['created_at']),
   };
 }
 
-export async function upsertEscalationDef(input: UpsertEscalationDefInput, client?: PoolClient): Promise<EscalationDefRecord> {
+export async function upsertEscalationDef(
+  input: UpsertEscalationDefInput,
+  client?: PoolClient,
+): Promise<EscalationDefRecord> {
   const result = await runner(client).query(
     `INSERT INTO notification_escalation_defs (source_event_id, origin_target_role, escalation_target_role, acknowledgment_window_seconds, deadline_at)
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (source_event_id) DO NOTHING
      RETURNING source_event_id, origin_target_role, escalation_target_role, acknowledgment_window_seconds, deadline_at, resolved, created_at`,
-    [input.source_event_id, input.origin_target_role, input.escalation_target_role, input.acknowledgment_window_seconds, input.deadline_at],
+    [
+      input.source_event_id,
+      input.origin_target_role,
+      input.escalation_target_role,
+      input.acknowledgment_window_seconds,
+      input.deadline_at,
+    ],
   );
   if (result.rows.length > 0) return mapEscalationDef(result.rows[0]!);
   const existing = await runner(client).query(
@@ -397,7 +464,10 @@ export async function upsertEscalationDef(input: UpsertEscalationDefInput, clien
   return mapEscalationDef(existing.rows[0]!);
 }
 
-export async function getEscalationDefBySourceEvent(sourceEventId: string, client?: PoolClient): Promise<EscalationDefRecord | null> {
+export async function getEscalationDefBySourceEvent(
+  sourceEventId: string,
+  client?: PoolClient,
+): Promise<EscalationDefRecord | null> {
   const result = await runner(client).query(
     `SELECT source_event_id, origin_target_role, escalation_target_role, acknowledgment_window_seconds, deadline_at, resolved, created_at
      FROM notification_escalation_defs WHERE source_event_id = $1`,
@@ -407,7 +477,10 @@ export async function getEscalationDefBySourceEvent(sourceEventId: string, clien
 }
 
 /** Marks an escalation definition resolved so the escalation poll loop stops considering it (acknowledged by any recipient, or already escalated). */
-export async function resolveEscalationDef(sourceEventId: string, client?: PoolClient): Promise<boolean> {
+export async function resolveEscalationDef(
+  sourceEventId: string,
+  client?: PoolClient,
+): Promise<boolean> {
   const result = await runner(client).query(
     `UPDATE notification_escalation_defs SET resolved = true WHERE source_event_id = $1 AND resolved = false`,
     [sourceEventId],
@@ -415,7 +488,11 @@ export async function resolveEscalationDef(sourceEventId: string, client?: PoolC
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function findDueEscalationDefs(now: string, limit = 100, client?: PoolClient): Promise<EscalationDefRecord[]> {
+export async function findDueEscalationDefs(
+  now: string,
+  limit = 100,
+  client?: PoolClient,
+): Promise<EscalationDefRecord[]> {
   const result = await runner(client).query(
     `SELECT source_event_id, origin_target_role, escalation_target_role, acknowledgment_window_seconds, deadline_at, resolved, created_at
      FROM notification_escalation_defs
@@ -427,11 +504,20 @@ export async function findDueEscalationDefs(now: string, limit = 100, client?: P
   return result.rows.map(mapEscalationDef);
 }
 
-export async function recordEscalation(input: RecordEscalationInput, client?: PoolClient): Promise<void> {
+export async function recordEscalation(
+  input: RecordEscalationInput,
+  client?: PoolClient,
+): Promise<void> {
   await runner(client).query(
     `INSERT INTO notification_escalations (source_event_id, from_target, to_target, resolved_via, escalated_source_event_id)
      VALUES ($1, $2, $3, $4, $5)`,
-    [input.source_event_id, input.from_target, input.to_target, input.resolved_via, input.escalated_source_event_id],
+    [
+      input.source_event_id,
+      input.from_target,
+      input.to_target,
+      input.resolved_via,
+      input.escalated_source_event_id,
+    ],
   );
 }
 
@@ -467,15 +553,26 @@ export async function upsertPushSubscription(
   };
 }
 
-export async function deletePushSubscription(userId: string, endpoint: string, client?: PoolClient): Promise<boolean> {
-  const result = await runner(client).query(`DELETE FROM push_subscriptions WHERE user_id = $1 AND endpoint = $2`, [userId, endpoint]);
+export async function deletePushSubscription(
+  userId: string,
+  endpoint: string,
+  client?: PoolClient,
+): Promise<boolean> {
+  const result = await runner(client).query(
+    `DELETE FROM push_subscriptions WHERE user_id = $1 AND endpoint = $2`,
+    [userId, endpoint],
+  );
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function listPushSubscriptionsForUser(userId: string, client?: PoolClient): Promise<PushSubscriptionRecord[]> {
-  const result = await runner(client).query(`SELECT subscription_id, user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1`, [
-    userId,
-  ]);
+export async function listPushSubscriptionsForUser(
+  userId: string,
+  client?: PoolClient,
+): Promise<PushSubscriptionRecord[]> {
+  const result = await runner(client).query(
+    `SELECT subscription_id, user_id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1`,
+    [userId],
+  );
   return result.rows.map((row) => ({
     subscription_id: row['subscription_id'] as string,
     user_id: row['user_id'] as string,
@@ -485,15 +582,24 @@ export async function listPushSubscriptionsForUser(userId: string, client?: Pool
   }));
 }
 
-export async function isOptedIn(userId: string, eventType: string, client?: PoolClient): Promise<boolean> {
-  const result = await runner(client).query(`SELECT opted_in FROM notification_preferences WHERE user_id = $1 AND event_type = $2`, [
-    userId,
-    eventType,
-  ]);
+export async function isOptedIn(
+  userId: string,
+  eventType: string,
+  client?: PoolClient,
+): Promise<boolean> {
+  const result = await runner(client).query(
+    `SELECT opted_in FROM notification_preferences WHERE user_id = $1 AND event_type = $2`,
+    [userId, eventType],
+  );
   return result.rows.length > 0 ? (result.rows[0]!['opted_in'] as boolean) : false;
 }
 
-export async function setPreference(userId: string, eventType: string, optedIn: boolean, client?: PoolClient): Promise<void> {
+export async function setPreference(
+  userId: string,
+  eventType: string,
+  optedIn: boolean,
+  client?: PoolClient,
+): Promise<void> {
   await runner(client).query(
     `INSERT INTO notification_preferences (user_id, event_type, opted_in, updated_at)
      VALUES ($1, $2, $3, now())
@@ -502,7 +608,16 @@ export async function setPreference(userId: string, eventType: string, optedIn: 
   );
 }
 
-export async function listPreferencesForUser(userId: string, client?: PoolClient): Promise<Array<{ event_type: string; opted_in: boolean }>> {
-  const result = await runner(client).query(`SELECT event_type, opted_in FROM notification_preferences WHERE user_id = $1`, [userId]);
-  return result.rows.map((row) => ({ event_type: row['event_type'] as string, opted_in: row['opted_in'] as boolean }));
+export async function listPreferencesForUser(
+  userId: string,
+  client?: PoolClient,
+): Promise<Array<{ event_type: string; opted_in: boolean }>> {
+  const result = await runner(client).query(
+    `SELECT event_type, opted_in FROM notification_preferences WHERE user_id = $1`,
+    [userId],
+  );
+  return result.rows.map((row) => ({
+    event_type: row['event_type'] as string,
+    opted_in: row['opted_in'] as boolean,
+  }));
 }

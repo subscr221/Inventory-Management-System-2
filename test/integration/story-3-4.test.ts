@@ -24,7 +24,13 @@ interface Role {
   locationId: string;
 }
 
-function makeRequest(port: number, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<HttpResult> {
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<HttpResult> {
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -33,7 +39,11 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
         port,
         path,
         method,
-        headers: { 'Content-Type': 'application/json', ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}), ...headers },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+          ...headers,
+        },
       },
       (res: IncomingMessage) => {
         const chunks: Buffer[] = [];
@@ -61,14 +71,27 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
 }
 
 async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
-  const res = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', { externalId, email: externalId, displayName: externalId, roles }, SCIM_HEADERS);
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  const res = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/scim/v2/Users',
+    { externalId, email: externalId, displayName: externalId, roles },
+    SCIM_HEADERS,
+  );
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -86,7 +109,13 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
   let supervisorId: string;
 
   // Directly seeds an open PO + single line (no Epic 4 native PO; mirrors the Story 2.9 projection).
-  async function seedPo(poRef: string, sku: string, orderedQty: number, overPct = 5, underPct = 5): Promise<void> {
+  async function seedPo(
+    poRef: string,
+    sku: string,
+    orderedQty: number,
+    overPct = 5,
+    underPct = 5,
+  ): Promise<void> {
     await getPool().query(
       `INSERT INTO erp_purchase_order (po_number_ext, supplier_ref_ext, currency, expected_delivery_date, status, source_system, last_synced_at)
        VALUES ($1, 'SUP-1', 'INR', '2026-08-01', 'open', 'ERP', now())`,
@@ -100,7 +129,10 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
   }
 
   // Seeds an accepted (or tolerance_breach) weighbridge_event carrying a fresh binding token, at site-A.
-  async function seedToken(poRef: string, status: 'accepted' | 'tolerance_breach' = 'accepted'): Promise<string> {
+  async function seedToken(
+    poRef: string,
+    status: 'accepted' | 'tolerance_breach' = 'accepted',
+  ): Promise<string> {
     const token = randomUUID();
     await getPool().query(
       `INSERT INTO weighbridge_event
@@ -112,7 +144,10 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     return token;
   }
 
-  function grnBody(token: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  function grnBody(
+    token: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
     return {
       grn_id: randomUUID(),
       grn_line_id: randomUUID(),
@@ -136,7 +171,10 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
   }
 
   async function onHand(sku: string): Promise<number> {
-    const r = await getPool().query(`SELECT COALESCE(SUM(on_hand), 0)::float AS q FROM stock_balance WHERE sku = $1`, [sku]);
+    const r = await getPool().query(
+      `SELECT COALESCE(SUM(on_hand), 0)::float AS q FROM stock_balance WHERE sku = $1`,
+      [sku],
+    );
     return r.rows[0]!['q'] as number;
   }
 
@@ -240,7 +278,12 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     storeSiteBHeaders = await authFor(port, 'store-assistant-b-3-4@example.com');
 
     supervisorId = await provisionUser(port, 'unloading-supervisor-3-4@example.com', [
-      { role: 'unloading_supervisor', module: 'receiving', functionScope: 'write', locationId: siteAId },
+      {
+        role: 'unloading_supervisor',
+        module: 'receiving',
+        functionScope: 'write',
+        locationId: siteAId,
+      },
     ]);
 
     await provisionUser(port, 'warehouse-manager-3-4@example.com', [
@@ -249,7 +292,12 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     managerHeaders = await authFor(port, 'warehouse-manager-3-4@example.com');
 
     await provisionUser(port, 'inventory-controller-3-4@example.com', [
-      { role: 'inventory_controller', module: 'receiving', functionScope: 'read', locationId: siteAId },
+      {
+        role: 'inventory_controller',
+        module: 'receiving',
+        functionScope: 'read',
+        locationId: siteAId,
+      },
     ]);
     readerHeaders = await authFor(port, 'inventory-controller-3-4@example.com');
 
@@ -267,7 +315,12 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     await seedPo('PO-A1', 'SKU-RCV-1', 100);
     const token = await seedToken('PO-A1');
     const before = await onHand('SKU-RCV-1');
-    const body = grnBody(token, { po_ref_ext: 'PO-A1', received_qty: 10, lot_id: 'LOT-A1', expiry_date: '2027-01-01' });
+    const body = grnBody(token, {
+      po_ref_ext: 'PO-A1',
+      received_qty: 10,
+      lot_id: 'LOT-A1',
+      expiry_date: '2027-01-01',
+    });
     const res = await makeRequest(port, 'POST', '/api/v1/grn-lines', body, storeHeaders);
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const line = res.body['grn_line'] as Record<string, unknown>;
@@ -287,19 +340,35 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
       port,
       'POST',
       '/api/v1/asn',
-      { asn_number_ext: asnNumber, po_ref_ext: 'PO-A2', site_code_ext: 'site-A', lines: [{ line_no: 1, sku: 'SKU-RCV-1', expected_qty: 20 }] },
+      {
+        asn_number_ext: asnNumber,
+        po_ref_ext: 'PO-A2',
+        site_code_ext: 'site-A',
+        lines: [{ line_no: 1, sku: 'SKU-RCV-1', expected_qty: 20 }],
+      },
       storeHeaders,
     );
     assert.strictEqual(intake.status, 201, JSON.stringify(intake.body));
 
-    const read = await makeRequest(port, 'GET', `/api/v1/asn/${asnNumber}`, undefined, storeHeaders);
+    const read = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/asn/${asnNumber}`,
+      undefined,
+      storeHeaders,
+    );
     assert.strictEqual(read.status, 200, JSON.stringify(read.body));
     const asnLines = read.body['lines'] as Record<string, unknown>[];
     assert.strictEqual(asnLines[0]!['sku'], 'SKU-RCV-1');
     assert.strictEqual(asnLines[0]!['expected_qty'], '20.000');
 
     const token = await seedToken('PO-A2');
-    const body = grnBody(token, { po_ref_ext: 'PO-A2', received_qty: 20, source_document: 'ASN', source_ref_ext: asnNumber });
+    const body = grnBody(token, {
+      po_ref_ext: 'PO-A2',
+      received_qty: 20,
+      source_document: 'ASN',
+      source_ref_ext: asnNumber,
+    });
     const res = await makeRequest(port, 'POST', '/api/v1/grn-lines', body, storeHeaders);
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const grn = res.body['grn'] as Record<string, unknown>;
@@ -312,7 +381,12 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
       port,
       'POST',
       '/api/v1/asn',
-      { asn_number_ext: `ASN-${randomUUID()}`, po_ref_ext: 'PO-NOPE', site_code_ext: 'site-A', lines: [{ line_no: 1, sku: 'SKU-RCV-1', expected_qty: 5 }] },
+      {
+        asn_number_ext: `ASN-${randomUUID()}`,
+        po_ref_ext: 'PO-NOPE',
+        site_code_ext: 'site-A',
+        lines: [{ line_no: 1, sku: 'SKU-RCV-1', expected_qty: 5 }],
+      },
       storeHeaders,
     );
     assert.strictEqual(res.status, 404, JSON.stringify(res.body));
@@ -336,10 +410,22 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
 
     const putawayId = putaway['putaway_task_id'] as string;
     // A store assistant cannot release a held task (endpoint is supervisor-only).
-    const denied = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${putawayId}/release`, { reason_code: 'QC_PASSED' }, storeHeaders);
+    const denied = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${putawayId}/release`,
+      { reason_code: 'QC_PASSED' },
+      storeHeaders,
+    );
     assert.strictEqual(denied.status, 403, JSON.stringify(denied.body));
 
-    const released = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${putawayId}/release`, { reason_code: 'QC_PASSED' }, managerHeaders);
+    const released = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${putawayId}/release`,
+      { reason_code: 'QC_PASSED' },
+      managerHeaders,
+    );
     assert.strictEqual(released.status, 200, JSON.stringify(released.body));
     assert.strictEqual(released.body['status'], 'ready');
     assert.strictEqual(released.body['release_reason_code'], 'QC_PASSED');
@@ -350,12 +436,20 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     const token = await seedToken('PO-A4');
     const before = await onHand('SKU-RCV-1');
     const grnLineId = randomUUID();
-    const body = grnBody(token, { grn_line_id: grnLineId, po_ref_ext: 'PO-A4', sku: 'SKU-OFFPO', received_qty: 5 });
+    const body = grnBody(token, {
+      grn_line_id: grnLineId,
+      po_ref_ext: 'PO-A4',
+      sku: 'SKU-OFFPO',
+      received_qty: 5,
+    });
     const res = await makeRequest(port, 'POST', '/api/v1/grn-lines', body, storeHeaders);
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'ITEM_PO_MISMATCH');
     assert.strictEqual(await onHand('SKU-RCV-1'), before);
-    const line = await getPool().query('SELECT count(*)::int AS c FROM grn_line WHERE grn_line_id = $1', [grnLineId]);
+    const line = await getPool().query(
+      'SELECT count(*)::int AS c FROM grn_line WHERE grn_line_id = $1',
+      [grnLineId],
+    );
     assert.strictEqual(line.rows[0]!['c'], 0);
   });
 
@@ -372,7 +466,10 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     assert.strictEqual((res.body['grn_line'] as Record<string, unknown>)['status'], 'rejected');
     assert.strictEqual(await onHand('SKU-RCV-1'), before);
     // No putaway task for a rejected line; the discrepancy notification survives (was NOT rolled back).
-    const putaway = await getPool().query('SELECT count(*)::int AS c FROM putaway_task WHERE grn_line_id = $1', [grnLineId]);
+    const putaway = await getPool().query(
+      'SELECT count(*)::int AS c FROM putaway_task WHERE grn_line_id = $1',
+      [grnLineId],
+    );
     assert.strictEqual(putaway.rows[0]!['c'], 0);
     assert.strictEqual(await notificationCount('unloading_supervisor'), beforeNotif + 1);
   });
@@ -381,11 +478,27 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     await seedPo('PO-H1', 'SKU-RCV-1', 100);
     const token = await seedToken('PO-H1');
     const [a, b] = await Promise.all([
-      makeRequest(port, 'POST', '/api/v1/grn-lines', grnBody(token, { po_ref_ext: 'PO-H1', received_qty: 60 }), storeHeaders),
-      makeRequest(port, 'POST', '/api/v1/grn-lines', grnBody(token, { po_ref_ext: 'PO-H1', received_qty: 60 }), storeHeaders),
+      makeRequest(
+        port,
+        'POST',
+        '/api/v1/grn-lines',
+        grnBody(token, { po_ref_ext: 'PO-H1', received_qty: 60 }),
+        storeHeaders,
+      ),
+      makeRequest(
+        port,
+        'POST',
+        '/api/v1/grn-lines',
+        grnBody(token, { po_ref_ext: 'PO-H1', received_qty: 60 }),
+        storeHeaders,
+      ),
     ]);
     const rejected = [a, b].filter((r) => r.body['error_code'] === 'RECEIPT_TOLERANCE_EXCEEDED');
-    assert.strictEqual(rejected.length, 1, `exactly one of two 60-unit receipts must reject: ${JSON.stringify([a.body, b.body])}`);
+    assert.strictEqual(
+      rejected.length,
+      1,
+      `exactly one of two 60-unit receipts must reject: ${JSON.stringify([a.body, b.body])}`,
+    );
   });
 
   it('AC6: short-within-tolerance posts with a shortage variance visible in the discrepancy view', async () => {
@@ -395,18 +508,41 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     const body = grnBody(token, { grn_line_id: grnLineId, po_ref_ext: 'PO-A6', received_qty: 96 });
     const res = await makeRequest(port, 'POST', '/api/v1/grn-lines', body, storeHeaders);
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    assert.strictEqual((res.body['grn_line'] as Record<string, unknown>)['shortage_variance_qty'], '4.000');
+    assert.strictEqual(
+      (res.body['grn_line'] as Record<string, unknown>)['shortage_variance_qty'],
+      '4.000',
+    );
 
-    const disc = await makeRequest(port, 'GET', '/api/v1/receiving/discrepancies?site=site-A', undefined, readerHeaders);
+    const disc = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/receiving/discrepancies?site=site-A',
+      undefined,
+      readerHeaders,
+    );
     assert.strictEqual(disc.status, 200, JSON.stringify(disc.body));
     const rows = disc.body['discrepancies'] as Record<string, unknown>[];
-    assert.ok(rows.some((r) => r['grn_line_id'] === grnLineId), 'short line must appear in the discrepancy view');
+    assert.ok(
+      rows.some((r) => r['grn_line_id'] === grnLineId),
+      'short line must appear in the discrepancy view',
+    );
   });
 
   it('AC7: LOT_EXPIRED, then APPROVAL_REQUIRED without a DOA band, then a DOA-approved quarantine into ZONE-QC-HOLD', async () => {
     await seedPo('PO-A7', 'SKU-RCV-1', 100);
     const token1 = await seedToken('PO-A7');
-    const expired = await makeRequest(port, 'POST', '/api/v1/grn-lines', grnBody(token1, { po_ref_ext: 'PO-A7', received_qty: 10, lot_id: 'LOT-EXP', expiry_date: '2020-01-01' }), storeHeaders);
+    const expired = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/grn-lines',
+      grnBody(token1, {
+        po_ref_ext: 'PO-A7',
+        received_qty: 10,
+        lot_id: 'LOT-EXP',
+        expiry_date: '2020-01-01',
+      }),
+      storeHeaders,
+    );
     assert.strictEqual(expired.status, 400, JSON.stringify(expired.body));
     assert.strictEqual(expired.body['error_code'], 'LOT_EXPIRED');
 
@@ -416,7 +552,14 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
       port,
       'POST',
       '/api/v1/grn-lines',
-      grnBody(token2, { po_ref_ext: 'PO-A7', received_qty: 10, lot_id: 'LOT-EXP2', expiry_date: '2020-01-01', quarantine_approved: true, quarantine_reason_code: 'EXPIRED_HOLD' }),
+      grnBody(token2, {
+        po_ref_ext: 'PO-A7',
+        received_qty: 10,
+        lot_id: 'LOT-EXP2',
+        expiry_date: '2020-01-01',
+        quarantine_approved: true,
+        quarantine_reason_code: 'EXPIRED_HOLD',
+      }),
       storeHeaders,
     );
     assert.strictEqual(unapproved.status, 403, JSON.stringify(unapproved.body));
@@ -429,7 +572,14 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
       port,
       'POST',
       '/api/v1/grn-lines',
-      grnBody(token3, { po_ref_ext: 'PO-A7', received_qty: 10, lot_id: 'LOT-EXP3', expiry_date: '2020-01-01', quarantine_approved: true, quarantine_reason_code: 'EXPIRED_HOLD' }),
+      grnBody(token3, {
+        po_ref_ext: 'PO-A7',
+        received_qty: 10,
+        lot_id: 'LOT-EXP3',
+        expiry_date: '2020-01-01',
+        quarantine_approved: true,
+        quarantine_reason_code: 'EXPIRED_HOLD',
+      }),
       storeHeaders,
     );
     assert.strictEqual(approved.status, 201, JSON.stringify(approved.body));
@@ -441,14 +591,26 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
   it('AC1 chain: RECEIVING_WEIGHT_NOT_ACCEPTED when the token has only a tolerance_breach weighment', async () => {
     await seedPo('PO-BR', 'SKU-RCV-1', 100);
     const token = await seedToken('PO-BR', 'tolerance_breach');
-    const res = await makeRequest(port, 'POST', '/api/v1/grn-lines', grnBody(token, { po_ref_ext: 'PO-BR', received_qty: 10 }), storeHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/grn-lines',
+      grnBody(token, { po_ref_ext: 'PO-BR', received_qty: 10 }),
+      storeHeaders,
+    );
     assert.strictEqual(res.status, 409, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'RECEIVING_WEIGHT_NOT_ACCEPTED');
   });
 
   it('RECEIVING_BINDING_TOKEN_NOT_FOUND for a token with no weighbridge event', async () => {
     await seedPo('PO-NT', 'SKU-RCV-1', 100);
-    const res = await makeRequest(port, 'POST', '/api/v1/grn-lines', grnBody(randomUUID(), { po_ref_ext: 'PO-NT', received_qty: 10 }), storeHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/grn-lines',
+      grnBody(randomUUID(), { po_ref_ext: 'PO-NT', received_qty: 10 }),
+      storeHeaders,
+    );
     assert.strictEqual(res.status, 404, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'RECEIVING_BINDING_TOKEN_NOT_FOUND');
   });
@@ -463,7 +625,12 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
       stream_id: randomUUID(),
       event_type: 'goods.received',
       payload: grnBody(token, { po_ref_ext: 'PO-IDEM', received_qty: 10 }),
-      metadata: { correlation_id: token, actor: { user_id: supervisorId, role: 'store_assistant', location_id: siteAId }, device_id: 'EDGE-RCV-1', occurred_at: '2026-07-23T05:00:00.000Z' },
+      metadata: {
+        correlation_id: token,
+        actor: { user_id: supervisorId, role: 'store_assistant', location_id: siteAId },
+        device_id: 'EDGE-RCV-1',
+        occurred_at: '2026-07-23T05:00:00.000Z',
+      },
       idempotency_key: `grn-edge-${randomUUID()}`,
     };
     (envelope.payload as Record<string, unknown>)['grn_id'] = envelope.stream_id;
@@ -478,7 +645,13 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
   it('RBAC: store_assistant create is site-scoped; an out-of-scope site is rejected', async () => {
     await seedPo('PO-RBAC', 'SKU-RCV-1', 100);
     const token = await seedToken('PO-RBAC');
-    const res = await makeRequest(port, 'POST', '/api/v1/grn-lines', grnBody(token, { po_ref_ext: 'PO-RBAC', received_qty: 10 }), storeSiteBHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/grn-lines',
+      grnBody(token, { po_ref_ext: 'PO-RBAC', received_qty: 10 }),
+      storeSiteBHeaders,
+    );
     assert.strictEqual(res.status, 403, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'LOCATION_ACCESS_DENIED');
   });
@@ -486,9 +659,19 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
   it('the receiving seam never writes any erp_* projection', async () => {
     await seedPo('PO-ERP', 'SKU-RCV-1', 100);
     const token = await seedToken('PO-ERP');
-    const beforeLine = await getPool().query('SELECT count(*)::int AS c, COALESCE(SUM(open_qty),0)::float AS q FROM erp_purchase_order_line');
-    await makeRequest(port, 'POST', '/api/v1/grn-lines', grnBody(token, { po_ref_ext: 'PO-ERP', received_qty: 10 }), storeHeaders);
-    const afterLine = await getPool().query('SELECT count(*)::int AS c, COALESCE(SUM(open_qty),0)::float AS q FROM erp_purchase_order_line');
+    const beforeLine = await getPool().query(
+      'SELECT count(*)::int AS c, COALESCE(SUM(open_qty),0)::float AS q FROM erp_purchase_order_line',
+    );
+    await makeRequest(
+      port,
+      'POST',
+      '/api/v1/grn-lines',
+      grnBody(token, { po_ref_ext: 'PO-ERP', received_qty: 10 }),
+      storeHeaders,
+    );
+    const afterLine = await getPool().query(
+      'SELECT count(*)::int AS c, COALESCE(SUM(open_qty),0)::float AS q FROM erp_purchase_order_line',
+    );
     assert.strictEqual(afterLine.rows[0]!['c'], beforeLine.rows[0]!['c']);
     assert.strictEqual(afterLine.rows[0]!['q'], beforeLine.rows[0]!['q']);
   });

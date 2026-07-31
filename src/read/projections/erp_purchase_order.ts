@@ -92,7 +92,10 @@ function mapLine(row: Record<string, unknown>): ErpPurchaseOrderLineRow {
 }
 
 /** The PO header plus its lines (single-header, multi-line assembly), or null when unknown. */
-export async function getPurchaseOrderByRef(poNumberExt: string, client?: PoolClient): Promise<ErpPurchaseOrder | null> {
+export async function getPurchaseOrderByRef(
+  poNumberExt: string,
+  client?: PoolClient,
+): Promise<ErpPurchaseOrder | null> {
   const q = runner(client);
   const headerResult = await q.query(
     `SELECT ${HEADER_COLUMNS} FROM erp_purchase_order WHERE po_number_ext = $1`,
@@ -123,7 +126,10 @@ export interface UpsertPurchaseOrderHeaderInput {
  * Upserts a PO header by po_number_ext. A PO present in the open feed is (re-)opened. source_system
  * and last_synced_at are server-set. ON CONFLICT keeps re-syncing an unchanged PO idempotent.
  */
-export async function upsertPurchaseOrderHeader(input: UpsertPurchaseOrderHeaderInput, client: PoolClient): Promise<void> {
+export async function upsertPurchaseOrderHeader(
+  input: UpsertPurchaseOrderHeaderInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO erp_purchase_order
        (po_number_ext, supplier_ref_ext, currency, expected_delivery_date, status, source_system, last_synced_at, source_snapshot)
@@ -159,7 +165,10 @@ export interface UpsertPurchaseOrderLineInput {
 }
 
 /** Upserts a PO line by (po_number_ext, line_no). Numeric values bound as strings for precision. */
-export async function upsertPurchaseOrderLine(input: UpsertPurchaseOrderLineInput, client: PoolClient): Promise<void> {
+export async function upsertPurchaseOrderLine(
+  input: UpsertPurchaseOrderLineInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO erp_purchase_order_line
        (po_number_ext, line_no, sku, ordered_qty, open_qty, unit_price,
@@ -182,8 +191,12 @@ export async function upsertPurchaseOrderLine(input: UpsertPurchaseOrderLineInpu
       String(input.ordered_qty),
       String(input.open_qty),
       String(input.unit_price),
-      input.over_receipt_tolerance_pct === undefined || input.over_receipt_tolerance_pct === null ? null : String(input.over_receipt_tolerance_pct),
-      input.under_receipt_tolerance_pct === undefined || input.under_receipt_tolerance_pct === null ? null : String(input.under_receipt_tolerance_pct),
+      input.over_receipt_tolerance_pct === undefined || input.over_receipt_tolerance_pct === null
+        ? null
+        : String(input.over_receipt_tolerance_pct),
+      input.under_receipt_tolerance_pct === undefined || input.under_receipt_tolerance_pct === null
+        ? null
+        : String(input.under_receipt_tolerance_pct),
     ],
   );
 }
@@ -193,7 +206,10 @@ export async function upsertPurchaseOrderLine(input: UpsertPurchaseOrderLineInpu
  * hard-delete) so downstream receipts referencing a closed PO still resolve; ERP stays master.
  * An empty present list closes all currently-open POs.
  */
-export async function closePurchaseOrdersNotIn(presentPoNumbers: string[], client: PoolClient): Promise<void> {
+export async function closePurchaseOrdersNotIn(
+  presentPoNumbers: string[],
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `UPDATE erp_purchase_order SET status = 'closed', updated_at = now()
      WHERE status = 'open' AND po_number_ext <> ALL($1::text[])`,

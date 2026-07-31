@@ -89,7 +89,10 @@ function mapRow(row: Record<string, unknown>): ReplenishmentTask {
   };
 }
 
-export async function getReplenishmentTaskById(replenishmentTaskId: string, client?: PoolClient): Promise<ReplenishmentTask | null> {
+export async function getReplenishmentTaskById(
+  replenishmentTaskId: string,
+  client?: PoolClient,
+): Promise<ReplenishmentTask | null> {
   const result = await runner(client).query(
     `SELECT ${REPLENISHMENT_TASK_COLUMNS} FROM replenishment_task WHERE replenishment_task_id = $1`,
     [replenishmentTaskId],
@@ -98,7 +101,10 @@ export async function getReplenishmentTaskById(replenishmentTaskId: string, clie
 }
 
 /** Locks the row FOR UPDATE inside a transaction to serialise concurrent confirmations. */
-export async function getReplenishmentTaskByIdForUpdate(replenishmentTaskId: string, client: PoolClient): Promise<ReplenishmentTask | null> {
+export async function getReplenishmentTaskByIdForUpdate(
+  replenishmentTaskId: string,
+  client: PoolClient,
+): Promise<ReplenishmentTask | null> {
   const result = await client.query(
     `SELECT ${REPLENISHMENT_TASK_COLUMNS} FROM replenishment_task WHERE replenishment_task_id = $1 FOR UPDATE`,
     [replenishmentTaskId],
@@ -106,7 +112,10 @@ export async function getReplenishmentTaskByIdForUpdate(replenishmentTaskId: str
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
-export async function listReplenishmentTasks(filters: ListReplenishmentTasksFilters = {}, client?: PoolClient): Promise<ReplenishmentTask[]> {
+export async function listReplenishmentTasks(
+  filters: ListReplenishmentTasksFilters = {},
+  client?: PoolClient,
+): Promise<ReplenishmentTask[]> {
   const clauses: string[] = [];
   const values: unknown[] = [];
   const add = (sql: string, value: unknown): void => {
@@ -114,7 +123,8 @@ export async function listReplenishmentTasks(filters: ListReplenishmentTasksFilt
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('site_id = ?', filters.siteId);
-  if (filters.siteAny !== undefined && filters.siteAny !== null) add('site_id = ANY(?::uuid[])', filters.siteAny);
+  if (filters.siteAny !== undefined && filters.siteAny !== null)
+    add('site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.zoneId) add('zone_id = ?', filters.zoneId);
   if (filters.status) add('status = ?', filters.status);
   if (filters.assignedTo) add('assigned_to = ?', filters.assignedTo);
@@ -128,7 +138,10 @@ export async function listReplenishmentTasks(filters: ListReplenishmentTasksFilt
 }
 
 /** Idempotent, replay-safe insert keyed on replenishment_task_id. quantity bound as a NUMERIC string. */
-export async function insertReplenishmentTask(input: InsertReplenishmentTaskInput, client: PoolClient): Promise<void> {
+export async function insertReplenishmentTask(
+  input: InsertReplenishmentTaskInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO replenishment_task
        (replenishment_task_id, sku, zone_id, site_id, from_location_id, quantity, signal_type,
@@ -176,7 +189,14 @@ export async function assignReplenishmentTask(
       WHERE replenishment_task_id = $1
         AND status = 'ready'
         AND ($5::boolean OR assigned_to IS NULL OR assigned_to = $2)`,
-    [input.replenishmentTaskId, input.assignedTo, input.assignedBy, input.priority ?? null, input.allowReassign ?? false, input.assignedAt ?? null],
+    [
+      input.replenishmentTaskId,
+      input.assignedTo,
+      input.assignedBy,
+      input.priority ?? null,
+      input.allowReassign ?? false,
+      input.assignedAt ?? null,
+    ],
   );
   return (result.rowCount ?? 0) > 0;
 }

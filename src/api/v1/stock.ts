@@ -44,12 +44,25 @@ interface LocationBalance {
 const getStockBase: RouteHandler = async (req, res, params) => {
   const sku = params['sku'];
   if (!sku || !SKU_REGEX.test(sku)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku path parameter must be 1-64 URL-safe characters');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku path parameter must be 1-64 URL-safe characters',
+    );
     return;
   }
   const item = await getItemBySku(sku);
   if (!item) {
-    sendRequestError(req, res, 404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, { sku });
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ITEM_NOT_FOUND',
+      `No item master record exists for sku "${sku}"`,
+      { sku },
+    );
     return;
   }
 
@@ -62,11 +75,20 @@ const getStockBase: RouteHandler = async (req, res, params) => {
 
   // Story 2.8: resolve owner-party codes for consignment/vmi classes from the active agreements
   // so a class entry always names the supplier that owns the stock (AC1).
-  const { wildcard: agreementWildcard, locations: agreementLocations } = authContext ? permittedLocationsForModule(authContext.roles, 'inventory') : { wildcard: true, locations: new Set<string>() };
-  const agreements = await listAgreements({ sku, active: true, location_any: agreementWildcard ? null : [...agreementLocations] });
+  const { wildcard: agreementWildcard, locations: agreementLocations } = authContext
+    ? permittedLocationsForModule(authContext.roles, 'inventory')
+    : { wildcard: true, locations: new Set<string>() };
+  const agreements = await listAgreements({
+    sku,
+    active: true,
+    location_any: agreementWildcard ? null : [...agreementLocations],
+  });
   const ownerByGrain = new Map<string, string>();
   for (const agreement of agreements) {
-    ownerByGrain.set(`${agreement.location_id}|${agreement.stock_class}`, agreement.owner_party_code);
+    ownerByGrain.set(
+      `${agreement.location_id}|${agreement.stock_class}`,
+      agreement.owner_party_code,
+    );
   }
 
   const byLocation = new Map<string, LocationBalance>();
@@ -112,10 +134,14 @@ const getStockBase: RouteHandler = async (req, res, params) => {
 
   // Task 3.4: deterministic ordering - location_code when available, otherwise location_id.
   const locations = [...byLocation.values()].sort((a, b) =>
-    (a.location_code ?? a.location_id).localeCompare(b.location_code ?? b.location_id, 'en', { sensitivity: 'base' }),
+    (a.location_code ?? a.location_id).localeCompare(b.location_code ?? b.location_id, 'en', {
+      sensitivity: 'base',
+    }),
   );
   for (const entry of locations) {
-    entry.classes.sort((a, b) => a.stock_class.localeCompare(b.stock_class, 'en', { sensitivity: 'base' }));
+    entry.classes.sort((a, b) =>
+      a.stock_class.localeCompare(b.stock_class, 'en', { sensitivity: 'base' }),
+    );
   }
 
   const consolidated = locations.reduce(
@@ -130,7 +156,17 @@ const getStockBase: RouteHandler = async (req, res, params) => {
   );
 
   // Story 2.8: consolidated per-class totals across visible locations, deterministically ordered.
-  const byClassTotals = new Map<string, { stock_class: string; on_hand: number; allocated: number; picked: number; available: number; in_transit: number }>();
+  const byClassTotals = new Map<
+    string,
+    {
+      stock_class: string;
+      on_hand: number;
+      allocated: number;
+      picked: number;
+      available: number;
+      in_transit: number;
+    }
+  >();
   for (const entry of locations) {
     for (const classEntry of entry.classes) {
       const totals = byClassTotals.get(classEntry.stock_class) ?? {
@@ -156,4 +192,7 @@ const getStockBase: RouteHandler = async (req, res, params) => {
   sendJson(res, 200, { sku, locations, consolidated, consolidated_by_class: consolidatedByClass });
 };
 
-export const getStockHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(getStockBase);
+export const getStockHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(getStockBase);

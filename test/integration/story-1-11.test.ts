@@ -29,7 +29,11 @@ const TEST_PORT = 3997;
 const SCIM_HEADERS = { Authorization: 'Bearer test-only-scim-bearer-token-not-for-production-use' };
 const LOCATION_A = '55555555-5555-4555-8555-555555555555';
 const LOCATION_B = '66666666-6666-4666-8666-666666666666';
-const SYSTEM_ACTOR = { user_id: '00000000-0000-0000-0000-000000000000', role: 'system', location_id: LOCATION_A };
+const SYSTEM_ACTOR = {
+  user_id: '00000000-0000-0000-0000-000000000000',
+  role: 'system',
+  location_id: LOCATION_A,
+};
 
 interface HttpResult {
   status: number;
@@ -43,7 +47,13 @@ interface Role {
   locationId: string;
 }
 
-function makeRequest(port: number, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<HttpResult> {
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<HttpResult> {
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -74,8 +84,18 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
 }
 
 async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
-  const res = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', { externalId, email: externalId, displayName: externalId, roles }, SCIM_HEADERS);
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  const res = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/scim/v2/Users',
+    { externalId, email: externalId, displayName: externalId, roles },
+    SCIM_HEADERS,
+  );
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
@@ -140,25 +160,59 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
         console.error('Unhandled server error:', err);
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error_code: 'INTERNAL_ERROR', message: 'Internal server error', details: {}, trace_id: 'unknown' }));
+          res.end(
+            JSON.stringify({
+              error_code: 'INTERNAL_ERROR',
+              message: 'Internal server error',
+              details: {},
+              trace_id: 'unknown',
+            }),
+          );
         }
       });
     });
     await new Promise<void>((resolvePromise) => server.listen(TEST_PORT, () => resolvePromise()));
 
     await provisionUser(TEST_PORT, 'notif-supervisor-a@example.com', [
-      { role: 'maintenance_supervisor', module: 'maintenance', functionScope: 'write', locationId: LOCATION_A },
-      { role: 'notification_access', module: 'notification', functionScope: 'write', locationId: '*' },
+      {
+        role: 'maintenance_supervisor',
+        module: 'maintenance',
+        functionScope: 'write',
+        locationId: LOCATION_A,
+      },
+      {
+        role: 'notification_access',
+        module: 'notification',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     await provisionUser(TEST_PORT, 'notif-supervisor-b@example.com', [
-      { role: 'maintenance_supervisor', module: 'maintenance', functionScope: 'write', locationId: LOCATION_B },
-      { role: 'notification_access', module: 'notification', functionScope: 'write', locationId: '*' },
+      {
+        role: 'maintenance_supervisor',
+        module: 'maintenance',
+        functionScope: 'write',
+        locationId: LOCATION_B,
+      },
+      {
+        role: 'notification_access',
+        module: 'notification',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     await provisionUser(TEST_PORT, 'notif-compliance@example.com', [
       { role: 'compliance_admin', module: 'compliance', functionScope: 'write', locationId: '*' },
-      { role: 'notification_access', module: 'notification', functionScope: 'write', locationId: '*' },
+      {
+        role: 'notification_access',
+        module: 'notification',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
-    await provisionUser(TEST_PORT, 'notif-denied@example.com', [{ role: 'viewer', module: 'inventory', functionScope: 'read', locationId: '*' }]);
+    await provisionUser(TEST_PORT, 'notif-denied@example.com', [
+      { role: 'viewer', module: 'inventory', functionScope: 'read', locationId: '*' },
+    ]);
 
     supervisorAHeaders = await authFor(TEST_PORT, 'notif-supervisor-a@example.com');
     supervisorBHeaders = await authFor(TEST_PORT, 'notif-supervisor-b@example.com');
@@ -184,18 +238,38 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     assert.strictEqual(emitted.ok, true);
 
     const result = await runDispatchCycle();
-    assert.strictEqual(result.notificationsCreated, 1, 'only the location-A supervisor should be notified');
+    assert.strictEqual(
+      result.notificationsCreated,
+      1,
+      'only the location-A supervisor should be notified',
+    );
 
-    const listA = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, supervisorAHeaders);
+    const listA = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications',
+      undefined,
+      supervisorAHeaders,
+    );
     assert.strictEqual(listA.status, 200, JSON.stringify(listA.body));
     const notificationsA = listA.body['notifications'] as Array<Record<string, unknown>>;
     assert.strictEqual(notificationsA.length, 1);
     assert.strictEqual(notificationsA[0]!['object_id'], 'FLT-0001');
     assert.strictEqual(notificationsA[0]!['status'], 'created');
 
-    const listB = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, supervisorBHeaders);
+    const listB = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications',
+      undefined,
+      supervisorBHeaders,
+    );
     assert.strictEqual(listB.status, 200, JSON.stringify(listB.body));
-    assert.strictEqual((listB.body['notifications'] as unknown[]).length, 0, 'location-B supervisor must not receive a location-A alert');
+    assert.strictEqual(
+      (listB.body['notifications'] as unknown[]).length,
+      0,
+      'location-B supervisor must not receive a location-A alert',
+    );
 
     const deliveries = await getPool().query(
       `SELECT trace_id, outcome FROM notification_deliveries d JOIN notifications n ON n.notification_id = d.notification_id WHERE n.object_id = 'FLT-0001' AND d.channel = 'in_app'`,
@@ -206,7 +280,9 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
   });
 
   it('AC4: emission never blocks the emitting caller, and the notification is durably queued until a (recovered) dispatch cycle delivers it', async () => {
-    const before = await getPool().query(`SELECT count(*)::int AS count FROM notifications WHERE object_id = 'REQ-9001'`);
+    const before = await getPool().query(
+      `SELECT count(*)::int AS count FROM notifications WHERE object_id = 'REQ-9001'`,
+    );
     assert.strictEqual(before.rows[0]!['count'], 0);
 
     const start = Date.now();
@@ -220,21 +296,36 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     });
     const elapsedMs = Date.now() - start;
     assert.strictEqual(emitted.ok, true);
-    assert.ok(elapsedMs < 2000, `emission must complete quickly, not block on delivery (took ${elapsedMs}ms)`);
+    assert.ok(
+      elapsedMs < 2000,
+      `emission must complete quickly, not block on delivery (took ${elapsedMs}ms)`,
+    );
 
     // "Service unavailable": no dispatch cycle has run yet - the event exists but nothing has
     // fanned out to notifications yet. This IS the durable-queue state, not data loss.
     const stillQueued = await getPool().query(
       `SELECT count(*)::int AS count FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.created' AND payload->>'object_id' = 'REQ-9001'`,
     );
-    assert.strictEqual(stillQueued.rows[0]!['count'], 1, 'the event must be durably persisted even though nothing has dispatched it yet');
-    const notYetFannedOut = await getPool().query(`SELECT count(*)::int AS count FROM notifications WHERE object_id = 'REQ-9001'`);
+    assert.strictEqual(
+      stillQueued.rows[0]!['count'],
+      1,
+      'the event must be durably persisted even though nothing has dispatched it yet',
+    );
+    const notYetFannedOut = await getPool().query(
+      `SELECT count(*)::int AS count FROM notifications WHERE object_id = 'REQ-9001'`,
+    );
     assert.strictEqual(notYetFannedOut.rows[0]!['count'], 0);
 
     // "Recovery": the dispatcher runs again and catches up.
     await runDispatchCycle();
-    const afterRecovery = await getPool().query(`SELECT count(*)::int AS count FROM notifications WHERE object_id = 'REQ-9001'`);
-    assert.strictEqual(afterRecovery.rows[0]!['count'], 1, 'delivered once the dispatcher recovers');
+    const afterRecovery = await getPool().query(
+      `SELECT count(*)::int AS count FROM notifications WHERE object_id = 'REQ-9001'`,
+    );
+    assert.strictEqual(
+      afterRecovery.rows[0]!['count'],
+      1,
+      'delivered once the dispatcher recovers',
+    );
   });
 
   it('AC3: a recipient with no reachable push channel still gets the in-app notification, with its original occurred_at preserved', async () => {
@@ -244,7 +335,10 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
       TEST_PORT,
       'POST',
       '/api/v1/notifications/push-subscription',
-      { endpoint: 'https://push.example.com/unreachable-endpoint', keys: { p256dh: 'test-p256dh', auth: 'test-auth' } },
+      {
+        endpoint: 'https://push.example.com/unreachable-endpoint',
+        keys: { p256dh: 'test-p256dh', auth: 'test-auth' },
+      },
       complianceHeaders,
     );
     assert.strictEqual(subscribe.status, 201, JSON.stringify(subscribe.body));
@@ -260,10 +354,22 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     });
     await runDispatchCycle();
 
-    const list = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, complianceHeaders);
-    const match = (list.body['notifications'] as Array<Record<string, unknown>>).find((n) => n['object_id'] === 'PO-0042');
+    const list = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications',
+      undefined,
+      complianceHeaders,
+    );
+    const match = (list.body['notifications'] as Array<Record<string, unknown>>).find(
+      (n) => n['object_id'] === 'PO-0042',
+    );
     assert.ok(match, 'in-app delivery must not be lost when the push channel is unreachable');
-    assert.strictEqual(match!['occurred_at'], occurredAt, 'timestamp must be the original event time, not a delivery-attempt re-stamp');
+    assert.strictEqual(
+      match!['occurred_at'],
+      occurredAt,
+      'timestamp must be the original event time, not a delivery-attempt re-stamp',
+    );
 
     const pushDelivery = await getPool().query(
       `SELECT outcome, failure_reason FROM notification_deliveries d JOIN notifications n ON n.notification_id = d.notification_id
@@ -305,16 +411,38 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
       `SELECT payload FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.escalated' AND payload->>'source_event_id' = $1`,
       [sourceEventId],
     );
-    assert.strictEqual(escalatedEvents.rows.length, 1, 'a notification.escalated domain event must be persisted for the hop');
+    assert.strictEqual(
+      escalatedEvents.rows.length,
+      1,
+      'a notification.escalated domain event must be persisted for the hop',
+    );
 
     // The original def is now resolved (claimed by this escalation), so it never re-fires.
-    const originalDef = await getPool().query(`SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`, [sourceEventId]);
-    assert.strictEqual(originalDef.rows[0]!['resolved'], true, 'the original escalation def must be resolved after escalating');
+    const originalDef = await getPool().query(
+      `SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`,
+      [sourceEventId],
+    );
+    assert.strictEqual(
+      originalDef.rows[0]!['resolved'],
+      true,
+      'the original escalation def must be resolved after escalating',
+    );
 
     await runDispatchCycle();
-    const complianceList = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, complianceHeaders);
-    const escalated = (complianceList.body['notifications'] as Array<Record<string, unknown>>).find((n) => n['object_id'] === 'FLT-ESC-01');
-    assert.ok(escalated, 'the escalation target must receive their own notification through the same delivery path');
+    const complianceList = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications',
+      undefined,
+      complianceHeaders,
+    );
+    const escalated = (complianceList.body['notifications'] as Array<Record<string, unknown>>).find(
+      (n) => n['object_id'] === 'FLT-ESC-01',
+    );
+    assert.ok(
+      escalated,
+      'the escalation target must receive their own notification through the same delivery path',
+    );
 
     // No-silent-expiry chain (AC2 / Task 4.5): the escalation notification to compliance_admin
     // itself carries a follow-on escalation to the configured fallback role, so an unacknowledged
@@ -323,7 +451,11 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
       `SELECT escalation_target_role FROM notification_escalation_defs WHERE source_event_id = $1`,
       [escalated!['source_event_id']],
     );
-    assert.strictEqual(fallbackDef.rows.length, 1, 'the escalated alert must schedule a further escalation to the fallback tier');
+    assert.strictEqual(
+      fallbackDef.rows.length,
+      1,
+      'the escalated alert must schedule a further escalation to the fallback tier',
+    );
     assert.strictEqual(fallbackDef.rows[0]!['escalation_target_role'], 'system_admin');
   });
 
@@ -340,11 +472,25 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     assert.strictEqual(emitted.ok, true);
     await runDispatchCycle();
 
-    const list = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, supervisorAHeaders);
-    const own = (list.body['notifications'] as Array<Record<string, unknown>>).find((n) => n['object_id'] === 'FLT-ACK-01');
+    const list = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications',
+      undefined,
+      supervisorAHeaders,
+    );
+    const own = (list.body['notifications'] as Array<Record<string, unknown>>).find(
+      (n) => n['object_id'] === 'FLT-ACK-01',
+    );
     assert.ok(own);
 
-    const ack = await makeRequest(TEST_PORT, 'POST', `/api/v1/notifications/${own!['notification_id'] as string}/acknowledge`, {}, supervisorAHeaders);
+    const ack = await makeRequest(
+      TEST_PORT,
+      'POST',
+      `/api/v1/notifications/${own!['notification_id'] as string}/acknowledge`,
+      {},
+      supervisorAHeaders,
+    );
     assert.strictEqual(ack.status, 200, JSON.stringify(ack.body));
     assert.strictEqual(ack.body['escalation_resolved'], true);
 
@@ -356,7 +502,11 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
       [own!['notification_id']],
     );
     const cycle = await runEscalationCycle();
-    assert.strictEqual(cycle.defsProcessed, 0, 'an acknowledged alert must never escalate, no matter how far past its deadline');
+    assert.strictEqual(
+      cycle.defsProcessed,
+      0,
+      'an acknowledged alert must never escalate, no matter how far past its deadline',
+    );
 
     // Task 4.1: acknowledgment is event-sourced.
     const ackEvents = await getPool().query(
@@ -364,7 +514,11 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
        AND payload->>'source_event_id' = $1`,
       [emitted.ok ? emitted.event.event_id : ''],
     );
-    assert.strictEqual(ackEvents.rows.length, 1, 'a notification.acknowledged domain event must be persisted');
+    assert.strictEqual(
+      ackEvents.rows.length,
+      1,
+      'a notification.acknowledged domain event must be persisted',
+    );
   });
 
   it('AC2: marking a notification acted_upon via PATCH also stops escalation (resolved decision)', async () => {
@@ -380,21 +534,41 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     assert.strictEqual(emitted.ok, true);
     await runDispatchCycle();
 
-    const list = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, supervisorAHeaders);
-    const own = (list.body['notifications'] as Array<Record<string, unknown>>).find((n) => n['object_id'] === 'FLT-ACTED-01')!;
+    const list = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications',
+      undefined,
+      supervisorAHeaders,
+    );
+    const own = (list.body['notifications'] as Array<Record<string, unknown>>).find(
+      (n) => n['object_id'] === 'FLT-ACTED-01',
+    )!;
 
-    const patch = await makeRequest(TEST_PORT, 'PATCH', `/api/v1/notifications/${own['notification_id'] as string}`, { action: 'acted_upon' }, supervisorAHeaders);
+    const patch = await makeRequest(
+      TEST_PORT,
+      'PATCH',
+      `/api/v1/notifications/${own['notification_id'] as string}`,
+      { action: 'acted_upon' },
+      supervisorAHeaders,
+    );
     assert.strictEqual(patch.status, 200, JSON.stringify(patch.body));
     assert.strictEqual(patch.body['status'], 'acted_upon');
 
-    const def = await getPool().query(`SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`, [
-      emitted.ok ? emitted.event.event_id : '',
-    ]);
-    assert.strictEqual(def.rows[0]!['resolved'], true, 'acting on a notification must resolve its escalation clock');
+    const def = await getPool().query(
+      `SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
+    assert.strictEqual(
+      def.rows[0]!['resolved'],
+      true,
+      'acting on a notification must resolve its escalation clock',
+    );
 
-    await getPool().query(`UPDATE notification_escalation_defs SET deadline_at = now() - interval '1 second' WHERE source_event_id = $1`, [
-      emitted.ok ? emitted.event.event_id : '',
-    ]);
+    await getPool().query(
+      `UPDATE notification_escalation_defs SET deadline_at = now() - interval '1 second' WHERE source_event_id = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
     const cycle = await runEscalationCycle();
     assert.strictEqual(cycle.defsProcessed, 0, 'an acted-upon alert must never escalate');
   });
@@ -420,14 +594,21 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     const result = await runExpiryCycle();
     assert.ok(result.expired >= 1);
 
-    const expiredRow = await getPool().query(`SELECT status FROM notifications WHERE source_event_id = $1`, [emitted.ok ? emitted.event.event_id : '']);
+    const expiredRow = await getPool().query(
+      `SELECT status FROM notifications WHERE source_event_id = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
     assert.strictEqual(expiredRow.rows[0]!['status'], 'expired');
 
     const expiredEvents = await getPool().query(
       `SELECT 1 FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.expired' AND payload->>'source_event_id' = $1`,
       [emitted.ok ? emitted.event.event_id : ''],
     );
-    assert.strictEqual(expiredEvents.rows.length, 1, 'an expired notification must emit a notification.expired event');
+    assert.strictEqual(
+      expiredEvents.rows.length,
+      1,
+      'an expired notification must emit a notification.expired event',
+    );
 
     // Idempotent: a second sweep does not re-expire or re-emit for the same row.
     const before = await getPool().query(
@@ -439,7 +620,11 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
       `SELECT count(*)::int AS c FROM domain_events WHERE event_type = 'notification.expired' AND payload->>'source_event_id' = $1`,
       [emitted.ok ? emitted.event.event_id : ''],
     );
-    assert.strictEqual(after.rows[0]!['c'], before.rows[0]!['c'], 'a second expiry sweep must be a no-op for already-expired rows');
+    assert.strictEqual(
+      after.rows[0]!['c'],
+      before.rows[0]!['c'],
+      'a second expiry sweep must be a no-op for already-expired rows',
+    );
   });
 
   it('P8: an escalation with a non-positive window is dropped, not persisted as a poison-pill def', async () => {
@@ -458,31 +643,63 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     assert.ok(dispatch.eventsProcessed >= 1);
 
     // The notification still delivered, but no escalation def was created (window was invalid).
-    const delivered = await getPool().query(`SELECT count(*)::int AS c FROM notifications WHERE object_id = 'FLT-BADWIN-01'`);
+    const delivered = await getPool().query(
+      `SELECT count(*)::int AS c FROM notifications WHERE object_id = 'FLT-BADWIN-01'`,
+    );
     assert.strictEqual(delivered.rows[0]!['c'], 1);
-    const def = await getPool().query(`SELECT count(*)::int AS c FROM notification_escalation_defs WHERE source_event_id = $1`, [
-      emitted.ok ? emitted.event.event_id : '',
-    ]);
-    assert.strictEqual(def.rows[0]!['c'], 0, 'a non-positive window must not create an escalation def');
+    const def = await getPool().query(
+      `SELECT count(*)::int AS c FROM notification_escalation_defs WHERE source_event_id = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
+    assert.strictEqual(
+      def.rows[0]!['c'],
+      0,
+      'a non-positive window must not create an escalation def',
+    );
 
     // And the event is not a poison pill: it is marked dispatched exactly once.
-    const dispatchLog = await getPool().query(`SELECT count(*)::int AS c FROM notification_dispatch_log WHERE source_event_id = $1`, [
-      emitted.ok ? emitted.event.event_id : '',
-    ]);
+    const dispatchLog = await getPool().query(
+      `SELECT count(*)::int AS c FROM notification_dispatch_log WHERE source_event_id = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
     assert.strictEqual(dispatchLog.rows[0]!['c'], 1);
   });
 
   it('P5: malformed since/until list filters are rejected with 400, not a 500', async () => {
-    const badSince = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications?since=notadate', undefined, supervisorAHeaders);
+    const badSince = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications?since=notadate',
+      undefined,
+      supervisorAHeaders,
+    );
     assert.strictEqual(badSince.status, 400, JSON.stringify(badSince.body));
-    const badUntil = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications?until=2026-13-99', undefined, supervisorAHeaders);
+    const badUntil = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications?until=2026-13-99',
+      undefined,
+      supervisorAHeaders,
+    );
     assert.strictEqual(badUntil.status, 400, JSON.stringify(badUntil.body));
-    const good = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications?since=2026-01-01T00:00:00.000Z', undefined, supervisorAHeaders);
+    const good = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications?since=2026-01-01T00:00:00.000Z',
+      undefined,
+      supervisorAHeaders,
+    );
     assert.strictEqual(good.status, 200, JSON.stringify(good.body));
   });
 
   it('preferences default to opted-out and PUT updates them per event type', async () => {
-    const initial = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications/preferences', undefined, supervisorBHeaders);
+    const initial = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications/preferences',
+      undefined,
+      supervisorBHeaders,
+    );
     assert.strictEqual(initial.status, 200, JSON.stringify(initial.body));
     const initialPrefs = initial.body['preferences'] as Array<Record<string, unknown>>;
     assert.ok(initialPrefs.every((p) => p['opted_in'] === false));
@@ -491,9 +708,18 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     const put = await putPreferences(supervisorBHeaders, 'approval_received', true);
     assert.strictEqual(put.status, 200, JSON.stringify(put.body));
 
-    const after1 = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications/preferences', undefined, supervisorBHeaders);
+    const after1 = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications/preferences',
+      undefined,
+      supervisorBHeaders,
+    );
     const afterPrefs = after1.body['preferences'] as Array<Record<string, unknown>>;
-    assert.strictEqual(afterPrefs.find((p) => p['event_type'] === 'approval_received')?.['opted_in'], true);
+    assert.strictEqual(
+      afterPrefs.find((p) => p['event_type'] === 'approval_received')?.['opted_in'],
+      true,
+    );
   });
 
   it('unread-count and PATCH read/acted_upon lifecycle transitions', async () => {
@@ -507,13 +733,33 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     });
     await runDispatchCycle();
 
-    const countBefore = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications/unread-count', undefined, supervisorBHeaders);
+    const countBefore = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications/unread-count',
+      undefined,
+      supervisorBHeaders,
+    );
     assert.ok((countBefore.body['unread_count'] as number) >= 1);
 
-    const list = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, supervisorBHeaders);
-    const target = (list.body['notifications'] as Array<Record<string, unknown>>).find((n) => n['object_id'] === 'FLT-LC-01')!;
+    const list = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications',
+      undefined,
+      supervisorBHeaders,
+    );
+    const target = (list.body['notifications'] as Array<Record<string, unknown>>).find(
+      (n) => n['object_id'] === 'FLT-LC-01',
+    )!;
 
-    const markRead = await makeRequest(TEST_PORT, 'PATCH', `/api/v1/notifications/${target['notification_id'] as string}`, { action: 'read' }, supervisorBHeaders);
+    const markRead = await makeRequest(
+      TEST_PORT,
+      'PATCH',
+      `/api/v1/notifications/${target['notification_id'] as string}`,
+      { action: 'read' },
+      supervisorBHeaders,
+    );
     assert.strictEqual(markRead.status, 200, JSON.stringify(markRead.body));
     assert.strictEqual(markRead.body['status'], 'read');
 
@@ -573,14 +819,30 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
       `SELECT count(*)::int AS count FROM notification_deliveries d JOIN notifications n ON n.notification_id = d.notification_id
        WHERE n.object_id = 'SYNC-0001' AND d.channel = 'web_push'`,
     );
-    assert.strictEqual(pushAttempts.rows[0]!['count'], 0, 'no push attempt should be made once the subscription is unregistered');
+    assert.strictEqual(
+      pushAttempts.rows[0]!['count'],
+      0,
+      'no push attempt should be made once the subscription is unregistered',
+    );
   });
 
   it('RBAC: a user without the notification module role is denied', async () => {
-    const list = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications', undefined, deniedHeaders);
+    const list = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications',
+      undefined,
+      deniedHeaders,
+    );
     assert.strictEqual(list.status, 403, JSON.stringify(list.body));
 
-    const prefs = await makeRequest(TEST_PORT, 'GET', '/api/v1/notifications/preferences', undefined, deniedHeaders);
+    const prefs = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/notifications/preferences',
+      undefined,
+      deniedHeaders,
+    );
     assert.strictEqual(prefs.status, 403, JSON.stringify(prefs.body));
   });
 
@@ -590,10 +852,21 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     await pool.query(
       `INSERT INTO domain_events (stream_type, stream_id, event_type, event_version, payload, metadata)
        VALUES ('maintenance', $1, 'maintenance.note_recorded', 1, '{"note":"unrelated"}'::jsonb, $2::jsonb)`,
-      [randomUUID(), JSON.stringify({ correlation_id: randomUUID(), actor: SYSTEM_ACTOR, occurred_at: new Date().toISOString() })],
+      [
+        randomUUID(),
+        JSON.stringify({
+          correlation_id: randomUUID(),
+          actor: SYSTEM_ACTOR,
+          occurred_at: new Date().toISOString(),
+        }),
+      ],
     );
     const after1 = await runDispatchCycle();
-    assert.strictEqual(after1.eventsProcessed, 0, 'a non-notification stream must never be picked up by the dispatcher');
+    assert.strictEqual(
+      after1.eventsProcessed,
+      0,
+      'a non-notification stream must never be picked up by the dispatcher',
+    );
     assert.strictEqual(before.eventsProcessed, before.eventsProcessed);
   });
 
@@ -625,41 +898,79 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     );
     try {
       const failedCycle = await runEscalationCycle();
-      assert.strictEqual(failedCycle.escalated, 0, 'a hop whose transaction failed must not count as escalated');
+      assert.strictEqual(
+        failedCycle.escalated,
+        0,
+        'a hop whose transaction failed must not count as escalated',
+      );
 
-      const def = await getPool().query(`SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`, [sourceEventId]);
-      assert.strictEqual(def.rows[0]!['resolved'], false, 'a failed hop must release its claim so the escalation retries');
+      const def = await getPool().query(
+        `SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`,
+        [sourceEventId],
+      );
+      assert.strictEqual(
+        def.rows[0]!['resolved'],
+        false,
+        'a failed hop must release its claim so the escalation retries',
+      );
 
       const orphanNotifications = await getPool().query(
         `SELECT count(*)::int AS c FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.created'
          AND payload->>'event_type' = 'escalation' AND metadata->>'causation_id' = $1`,
         [sourceEventId],
       );
-      assert.strictEqual(orphanNotifications.rows[0]!['c'], 0, 'no escalation notification may survive the rolled-back hop');
+      assert.strictEqual(
+        orphanNotifications.rows[0]!['c'],
+        0,
+        'no escalation notification may survive the rolled-back hop',
+      );
       const orphanHopEvents = await getPool().query(
         `SELECT count(*)::int AS c FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.escalated'
          AND payload->>'source_event_id' = $1`,
         [sourceEventId],
       );
-      assert.strictEqual(orphanHopEvents.rows[0]!['c'], 0, 'no notification.escalated event may survive the rolled-back hop');
+      assert.strictEqual(
+        orphanHopEvents.rows[0]!['c'],
+        0,
+        'no notification.escalated event may survive the rolled-back hop',
+      );
     } finally {
-      await adminPool.query(`DROP TRIGGER IF EXISTS test_inject_escalation_failure_trg ON notification_escalations`);
+      await adminPool.query(
+        `DROP TRIGGER IF EXISTS test_inject_escalation_failure_trg ON notification_escalations`,
+      );
       await adminPool.query(`DROP FUNCTION IF EXISTS test_inject_escalation_failure()`);
     }
 
     // At-least-once: with the failure gone, the next cycle picks the released claim back up.
     const recovered = await runEscalationCycle();
-    assert.ok(recovered.escalated >= 1, 'the escalation must fire on the next cycle after the failure clears');
-    const defAfter = await getPool().query(`SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`, [sourceEventId]);
+    assert.ok(
+      recovered.escalated >= 1,
+      'the escalation must fire on the next cycle after the failure clears',
+    );
+    const defAfter = await getPool().query(
+      `SELECT resolved FROM notification_escalation_defs WHERE source_event_id = $1`,
+      [sourceEventId],
+    );
     assert.strictEqual(defAfter.rows[0]!['resolved'], true);
-    const hop = await getPool().query(`SELECT count(*)::int AS c FROM notification_escalations WHERE source_event_id = $1`, [sourceEventId]);
-    assert.strictEqual(hop.rows[0]!['c'], 1, 'exactly one hop must be recorded once the escalation succeeds');
+    const hop = await getPool().query(
+      `SELECT count(*)::int AS c FROM notification_escalations WHERE source_event_id = $1`,
+      [sourceEventId],
+    );
+    assert.strictEqual(
+      hop.rows[0]!['c'],
+      1,
+      'exactly one hop must be recorded once the escalation succeeds',
+    );
     const hopEvent = await getPool().query(
       `SELECT count(*)::int AS c FROM domain_events WHERE stream_type = 'notification' AND event_type = 'notification.escalated'
        AND payload->>'source_event_id' = $1`,
       [sourceEventId],
     );
-    assert.strictEqual(hopEvent.rows[0]!['c'], 1, 'the hop and its domain event must commit together');
+    assert.strictEqual(
+      hopEvent.rows[0]!['c'],
+      1,
+      'the hop and its domain event must commit together',
+    );
   });
 
   it('P1b: an escalation deadline anchors to dispatch time, not a stale occurred_at, so a late-dispatched alert keeps its full acknowledgment window', async () => {
@@ -685,15 +996,27 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
        FROM notification_escalation_defs WHERE source_event_id = $1`,
       [emitted.ok ? emitted.event.event_id : ''],
     );
-    assert.strictEqual(def.rows[0]!['in_future'], true, 'a late-dispatched alert must not be born already past its deadline');
-    assert.strictEqual(def.rows[0]!['full_window'], true, 'recipients must get the full acknowledgment window from delivery time');
+    assert.strictEqual(
+      def.rows[0]!['in_future'],
+      true,
+      'a late-dispatched alert must not be born already past its deadline',
+    );
+    assert.strictEqual(
+      def.rows[0]!['full_window'],
+      true,
+      'recipients must get the full acknowledgment window from delivery time',
+    );
 
     // The notification content still preserves the original business timestamp (AC3) - only the
     // escalation clock anchors to delivery.
-    const notif = await getPool().query(`SELECT occurred_at FROM notifications WHERE source_event_id = $1`, [
-      emitted.ok ? emitted.event.event_id : '',
-    ]);
-    assert.strictEqual(new Date(notif.rows[0]!['occurred_at'] as Date | string).toISOString(), staleOccurredAt);
+    const notif = await getPool().query(
+      `SELECT occurred_at FROM notifications WHERE source_event_id = $1`,
+      [emitted.ok ? emitted.event.event_id : ''],
+    );
+    assert.strictEqual(
+      new Date(notif.rows[0]!['occurred_at'] as Date | string).toISOString(),
+      staleOccurredAt,
+    );
   });
 
   it('P2: a poison event backs off, dead-letters after the attempt cap, and never starves the healthy events behind it', async () => {
@@ -706,8 +1029,17 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
       [
         poisonId,
         randomUUID(),
-        JSON.stringify({ event_type: 'fault_reported', status_verb: 'Reported', object_type: 'fault', object_id: 'FLT-POISON-01' }),
-        JSON.stringify({ correlation_id: randomUUID(), actor: SYSTEM_ACTOR, occurred_at: new Date().toISOString() }),
+        JSON.stringify({
+          event_type: 'fault_reported',
+          status_verb: 'Reported',
+          object_type: 'fault',
+          object_id: 'FLT-POISON-01',
+        }),
+        JSON.stringify({
+          correlation_id: randomUUID(),
+          actor: SYSTEM_ACTOR,
+          occurred_at: new Date().toISOString(),
+        }),
       ],
     );
     // A healthy event emitted AFTER the poison one (so it sits behind it in the oldest-first queue).
@@ -722,32 +1054,57 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     assert.strictEqual(healthy.ok, true);
 
     await runDispatchCycle();
-    const delivered = await getPool().query(`SELECT count(*)::int AS c FROM notifications WHERE object_id = 'FLT-HEALTHY-01'`);
-    assert.strictEqual(delivered.rows[0]!['c'], 1, 'a failing event must never block the healthy event behind it');
+    const delivered = await getPool().query(
+      `SELECT count(*)::int AS c FROM notifications WHERE object_id = 'FLT-HEALTHY-01'`,
+    );
+    assert.strictEqual(
+      delivered.rows[0]!['c'],
+      1,
+      'a failing event must never block the healthy event behind it',
+    );
     const firstAttempt = await getPool().query(
       `SELECT attempts, dead, next_attempt_at > now() AS backed_off FROM notification_dispatch_attempts WHERE source_event_id = $1`,
       [poisonId],
     );
     assert.strictEqual(firstAttempt.rows[0]!['attempts'], 1);
     assert.strictEqual(firstAttempt.rows[0]!['dead'], false);
-    assert.strictEqual(firstAttempt.rows[0]!['backed_off'], true, 'a failed event must be rescheduled with backoff, not retried hot');
+    assert.strictEqual(
+      firstAttempt.rows[0]!['backed_off'],
+      true,
+      'a failed event must be rescheduled with backoff, not retried hot',
+    );
 
     // While backed off, the dispatcher must skip it entirely (no attempt increment).
     await runDispatchCycle();
-    const whileBackedOff = await getPool().query(`SELECT attempts FROM notification_dispatch_attempts WHERE source_event_id = $1`, [poisonId]);
-    assert.strictEqual(whileBackedOff.rows[0]!['attempts'], 1, 'an event still in backoff must not be fetched');
+    const whileBackedOff = await getPool().query(
+      `SELECT attempts FROM notification_dispatch_attempts WHERE source_event_id = $1`,
+      [poisonId],
+    );
+    assert.strictEqual(
+      whileBackedOff.rows[0]!['attempts'],
+      1,
+      'an event still in backoff must not be fetched',
+    );
 
     // Drive it to the attempt cap, forcing each backoff due (same direct-UPDATE pattern the AC2
     // tests use to fast-forward deadlines).
     for (let attempt = 2; attempt <= 5; attempt++) {
-      await getPool().query(`UPDATE notification_dispatch_attempts SET next_attempt_at = now() - interval '1 second' WHERE source_event_id = $1`, [
-        poisonId,
-      ]);
+      await getPool().query(
+        `UPDATE notification_dispatch_attempts SET next_attempt_at = now() - interval '1 second' WHERE source_event_id = $1`,
+        [poisonId],
+      );
       await runDispatchCycle();
     }
-    const capped = await getPool().query(`SELECT attempts, dead FROM notification_dispatch_attempts WHERE source_event_id = $1`, [poisonId]);
+    const capped = await getPool().query(
+      `SELECT attempts, dead FROM notification_dispatch_attempts WHERE source_event_id = $1`,
+      [poisonId],
+    );
     assert.strictEqual(capped.rows[0]!['attempts'], 5);
-    assert.strictEqual(capped.rows[0]!['dead'], true, 'after the attempt cap the event must be dead-lettered, not retried forever');
+    assert.strictEqual(
+      capped.rows[0]!['dead'],
+      true,
+      'after the attempt cap the event must be dead-lettered, not retried forever',
+    );
 
     // Dead-lettering is loud: exactly one operator alert raised to the fallback escalation role.
     const alert = await getPool().query(
@@ -755,15 +1112,27 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
        AND payload->>'event_type' = 'dispatch_dead_letter' AND payload->>'object_id' = $1`,
       [poisonId],
     );
-    assert.strictEqual(alert.rows[0]!['c'], 1, 'dead-lettering must raise exactly one operator alert');
+    assert.strictEqual(
+      alert.rows[0]!['c'],
+      1,
+      'dead-lettering must raise exactly one operator alert',
+    );
 
     // And dead means dead: even when "due", the event is never fetched again.
-    await getPool().query(`UPDATE notification_dispatch_attempts SET next_attempt_at = now() - interval '1 second' WHERE source_event_id = $1`, [
-      poisonId,
-    ]);
+    await getPool().query(
+      `UPDATE notification_dispatch_attempts SET next_attempt_at = now() - interval '1 second' WHERE source_event_id = $1`,
+      [poisonId],
+    );
     await runDispatchCycle();
-    const afterDead = await getPool().query(`SELECT attempts FROM notification_dispatch_attempts WHERE source_event_id = $1`, [poisonId]);
-    assert.strictEqual(afterDead.rows[0]!['attempts'], 5, 'a dead event must never be retried again');
+    const afterDead = await getPool().query(
+      `SELECT attempts FROM notification_dispatch_attempts WHERE source_event_id = $1`,
+      [poisonId],
+    );
+    assert.strictEqual(
+      afterDead.rows[0]!['attempts'],
+      5,
+      'a dead event must never be retried again',
+    );
   });
 
   it('P3: expiry row transitions and their notification.expired events commit atomically - a failed event insert rolls the expiry back', async () => {
@@ -778,7 +1147,10 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     assert.strictEqual(emitted.ok, true);
     const sourceEventId = emitted.ok ? emitted.event.event_id : '';
     await runDispatchCycle();
-    await getPool().query(`UPDATE notifications SET created_at = now() - interval '60 days' WHERE source_event_id = $1`, [sourceEventId]);
+    await getPool().query(
+      `UPDATE notifications SET created_at = now() - interval '60 days' WHERE source_event_id = $1`,
+      [sourceEventId],
+    );
 
     // Fault injection: fail exactly the notification.expired event insert - previously the row
     // UPDATE had already committed, so the event was lost forever (idempotency guaranteed it was
@@ -797,33 +1169,63 @@ describe('Story 1.11 Notification and Alerting Foundation Integration Tests', ()
     );
     try {
       const failedCycle = await runExpiryCycle();
-      assert.strictEqual(failedCycle.expired, 0, 'a sweep whose event insert failed must report nothing expired');
+      assert.strictEqual(
+        failedCycle.expired,
+        0,
+        'a sweep whose event insert failed must report nothing expired',
+      );
 
-      const row = await getPool().query(`SELECT status FROM notifications WHERE source_event_id = $1`, [sourceEventId]);
-      assert.strictEqual(row.rows[0]!['status'], 'created', 'the row transition must roll back with the failed event insert');
+      const row = await getPool().query(
+        `SELECT status FROM notifications WHERE source_event_id = $1`,
+        [sourceEventId],
+      );
+      assert.strictEqual(
+        row.rows[0]!['status'],
+        'created',
+        'the row transition must roll back with the failed event insert',
+      );
       const orphanEvents = await getPool().query(
         `SELECT count(*)::int AS c FROM domain_events WHERE event_type = 'notification.expired' AND payload->>'source_event_id' = $1`,
         [sourceEventId],
       );
       assert.strictEqual(orphanEvents.rows[0]!['c'], 0);
     } finally {
-      await adminPool.query(`DROP TRIGGER IF EXISTS test_inject_expiry_failure_trg ON domain_events`);
+      await adminPool.query(
+        `DROP TRIGGER IF EXISTS test_inject_expiry_failure_trg ON domain_events`,
+      );
       await adminPool.query(`DROP FUNCTION IF EXISTS test_inject_expiry_failure()`);
     }
 
     // At-least-once: the next sweep picks the rows back up and commits both sides together.
     const recovered = await runExpiryCycle();
     assert.ok(recovered.expired >= 1, 'the sweep must succeed once the failure clears');
-    const rowAfter = await getPool().query(`SELECT status FROM notifications WHERE source_event_id = $1`, [sourceEventId]);
+    const rowAfter = await getPool().query(
+      `SELECT status FROM notifications WHERE source_event_id = $1`,
+      [sourceEventId],
+    );
     assert.strictEqual(rowAfter.rows[0]!['status'], 'expired');
     const eventAfter = await getPool().query(
       `SELECT count(*)::int AS c FROM domain_events WHERE event_type = 'notification.expired' AND payload->>'source_event_id' = $1`,
       [sourceEventId],
     );
-    assert.strictEqual(eventAfter.rows[0]!['c'], 1, 'the expiry and its event must commit together, exactly once');
+    assert.strictEqual(
+      eventAfter.rows[0]!['c'],
+      1,
+      'the expiry and its event must commit together, exactly once',
+    );
   });
 
-  async function putPreferences(headers: Record<string, string>, eventType: string, optedIn: boolean): Promise<HttpResult> {
-    return makeRequest(TEST_PORT, 'PUT', '/api/v1/notifications/preferences', { event_type: eventType, opted_in: optedIn }, headers);
+  async function putPreferences(
+    headers: Record<string, string>,
+    eventType: string,
+    optedIn: boolean,
+  ): Promise<HttpResult> {
+    return makeRequest(
+      TEST_PORT,
+      'PUT',
+      '/api/v1/notifications/preferences',
+      { event_type: eventType, opted_in: optedIn },
+      headers,
+    );
   }
 });

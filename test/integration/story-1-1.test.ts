@@ -63,16 +63,28 @@ describe('Story 1.1 Integration Tests', () => {
     // DDL and TRUNCATE require admin_user - app_user has neither CREATE nor TRUNCATE
     // privilege by design (see src/config/db.ts#getAdminPool).
     const adminPool = getAdminPool();
-    const domainEventsSql = readFileSync(resolve(__dirname, '../../events/domain_events.sql'), 'utf-8');
+    const domainEventsSql = readFileSync(
+      resolve(__dirname, '../../events/domain_events.sql'),
+      'utf-8',
+    );
     const usersSql = readFileSync(resolve(__dirname, '../../read/projections/users.sql'), 'utf-8');
     // Story 1.5: business-stream tagging is enforced on the central write path for inventory
     // events, so the vocabulary table must exist before any inventory event is posted.
-    const businessStreamSql = readFileSync(resolve(__dirname, '../../read/projections/business_stream_config.sql'), 'utf-8');
+    const businessStreamSql = readFileSync(
+      resolve(__dirname, '../../read/projections/business_stream_config.sql'),
+      'utf-8',
+    );
     // Story 2.1: inventory master validation is also enforced on the central write path, so the
     // item master and location register must exist - and the fixture's sku/actor location must
     // be seeded - before an inventory event referencing them is posted.
-    const itemMasterSql = readFileSync(resolve(__dirname, '../../read/projections/item_master.sql'), 'utf-8');
-    const locationRegisterSql = readFileSync(resolve(__dirname, '../../read/projections/location_register.sql'), 'utf-8');
+    const itemMasterSql = readFileSync(
+      resolve(__dirname, '../../read/projections/item_master.sql'),
+      'utf-8',
+    );
+    const locationRegisterSql = readFileSync(
+      resolve(__dirname, '../../read/projections/location_register.sql'),
+      'utf-8',
+    );
     await adminPool.query(domainEventsSql);
     await adminPool.query(usersSql);
     await adminPool.query(businessStreamSql);
@@ -129,12 +141,20 @@ describe('Story 1.1 Integration Tests', () => {
       },
       scimHeaders,
     );
-    assert.equal(provisionRes.status, 201, `test user provisioning failed: ${JSON.stringify(provisionRes.body)}`);
+    assert.equal(
+      provisionRes.status,
+      201,
+      `test user provisioning failed: ${JSON.stringify(provisionRes.body)}`,
+    );
 
     const tokenRes = await makeRequest(TEST_PORT, 'POST', '/api/v1/auth/dev-token', {
       sub: 'story-1-1-test-user',
     });
-    assert.equal(tokenRes.status, 201, `dev-token issuance failed: ${JSON.stringify(tokenRes.body)}`);
+    assert.equal(
+      tokenRes.status,
+      201,
+      `dev-token issuance failed: ${JSON.stringify(tokenRes.body)}`,
+    );
     authHeaders = { Authorization: `Bearer ${tokenRes.body['token'] as string}` };
   });
 
@@ -192,7 +212,13 @@ describe('Story 1.1 Integration Tests', () => {
     assert.equal(postRes2.status, 201);
     assert.equal(postRes2.body['event_version'], 2);
 
-    const getRes = await makeRequest(TEST_PORT, 'GET', `/api/v1/events/inventory/${streamId}`, undefined, authHeaders);
+    const getRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/events/inventory/${streamId}`,
+      undefined,
+      authHeaders,
+    );
     assert.equal(getRes.status, 200);
     const events = getRes.body['events'] as Array<Record<string, unknown>>;
     assert.equal(events.length, 2);

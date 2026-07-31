@@ -59,7 +59,12 @@ function depsWith(validStreams: string[], rule: TransactionTaggingRule | null): 
 function depsWithDateSensitiveRule(validStreams: string[], effectiveFrom: string): TaggingDeps {
   return {
     isValidBusinessStream: (code) => Promise.resolve(validStreams.includes(code)),
-    findActiveTaggingRule: (_transactionType, asOfDate) => Promise.resolve(asOfDate && asOfDate >= effectiveFrom ? makeRule({ effective_from: effectiveFrom, cost_centre_required: true }) : null),
+    findActiveTaggingRule: (_transactionType, asOfDate) =>
+      Promise.resolve(
+        asOfDate && asOfDate >= effectiveFrom
+          ? makeRule({ effective_from: effectiveFrom, cost_centre_required: true })
+          : null,
+      ),
   };
 }
 
@@ -86,7 +91,10 @@ describe('assertInventoryTagging (Story 1.5, FR-AC-01)', () => {
       makeEnvelope({ stream_type: 'doa_registry_entry', event_type: 'doa_registry.entry_created' }),
       unreachableDeps,
     );
-    await assertInventoryTagging(makeEnvelope({ stream_type: 'user', event_type: 'user.provisioned' }), unreachableDeps);
+    await assertInventoryTagging(
+      makeEnvelope({ stream_type: 'user', event_type: 'user.provisioned' }),
+      unreachableDeps,
+    );
   });
 
   it('rejects an inventory event with no business_stream as UNTAGGED_TRANSACTION identifying the missing tag', async () => {
@@ -99,12 +107,14 @@ describe('assertInventoryTagging (Story 1.5, FR-AC-01)', () => {
 
   it('rejects an empty-string or non-string business_stream as UNTAGGED_TRANSACTION', async () => {
     await expectAppError(
-      () => assertInventoryTagging(makeEnvelope({ payload: { business_stream: '' } }), unreachableDeps),
+      () =>
+        assertInventoryTagging(makeEnvelope({ payload: { business_stream: '' } }), unreachableDeps),
       'UNTAGGED_TRANSACTION',
       { missing_tag: 'business_stream' },
     );
     await expectAppError(
-      () => assertInventoryTagging(makeEnvelope({ payload: { business_stream: 42 } }), unreachableDeps),
+      () =>
+        assertInventoryTagging(makeEnvelope({ payload: { business_stream: 42 } }), unreachableDeps),
       'UNTAGGED_TRANSACTION',
       { missing_tag: 'business_stream' },
     );
@@ -132,13 +142,19 @@ describe('assertInventoryTagging (Story 1.5, FR-AC-01)', () => {
   it('uses occurred_at date, not server now, when resolving dated applicability rules', async () => {
     const deps = depsWithDateSensitiveRule(['production'], '2026-08-01');
     await assertInventoryTagging(
-      makeEnvelope({ payload: { business_stream: 'production' }, metadata: { ...makeEnvelope().metadata, occurred_at: '2026-07-31T23:30:00+05:30' } }),
+      makeEnvelope({
+        payload: { business_stream: 'production' },
+        metadata: { ...makeEnvelope().metadata, occurred_at: '2026-07-31T23:30:00+05:30' },
+      }),
       deps,
     );
     await expectAppError(
       () =>
         assertInventoryTagging(
-          makeEnvelope({ payload: { business_stream: 'production' }, metadata: { ...makeEnvelope().metadata, occurred_at: '2026-08-01T00:00:00+05:30' } }),
+          makeEnvelope({
+            payload: { business_stream: 'production' },
+            metadata: { ...makeEnvelope().metadata, occurred_at: '2026-08-01T00:00:00+05:30' },
+          }),
           deps,
         ),
       'UNTAGGED_TRANSACTION',
@@ -163,7 +179,10 @@ describe('assertInventoryTagging (Story 1.5, FR-AC-01)', () => {
       () =>
         assertInventoryTagging(
           makeEnvelope({ event_type: 'rd.consumed', payload: { business_stream: 'research' } }),
-          depsWith(['research'], makeRule({ transaction_type: 'rd.consumed', project_code_required: true })),
+          depsWith(
+            ['research'],
+            makeRule({ transaction_type: 'rd.consumed', project_code_required: true }),
+          ),
         ),
       'UNTAGGED_TRANSACTION',
       { missing_tag: 'project_code', transaction_type: 'rd.consumed' },
@@ -172,8 +191,13 @@ describe('assertInventoryTagging (Story 1.5, FR-AC-01)', () => {
 
   it('passes when all required tags are present', async () => {
     await assertInventoryTagging(
-      makeEnvelope({ payload: { business_stream: 'production', cost_centre: 'CC-100', project_code: 'PROJ-42' } }),
-      depsWith(['production'], makeRule({ cost_centre_required: true, project_code_required: true })),
+      makeEnvelope({
+        payload: { business_stream: 'production', cost_centre: 'CC-100', project_code: 'PROJ-42' },
+      }),
+      depsWith(
+        ['production'],
+        makeRule({ cost_centre_required: true, project_code_required: true }),
+      ),
     );
   });
 });

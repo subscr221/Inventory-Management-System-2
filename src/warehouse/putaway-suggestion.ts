@@ -3,7 +3,10 @@ import { getPool } from '../config/db.js';
 import { getPutawayTaskById } from '../read/projections/putaway_task.js';
 import { getItemBySku } from '../read/projections/item_master.js';
 import { getVelocityClass } from '../read/projections/velocity_class.js';
-import { listLocationsBySite, zoneIncompatibilityReasons } from '../read/projections/location_register.js';
+import {
+  listLocationsBySite,
+  zoneIncompatibilityReasons,
+} from '../read/projections/location_register.js';
 import { AppError } from '../middleware/error.js';
 
 export interface DirectedSuggestionResult {
@@ -34,7 +37,11 @@ export async function computeDirectedSuggestion(
 
   // Step 4.4: Reject if task is held (QC-hold)
   if (task.status === 'held') {
-    throw new AppError(409, 'PUTAWAY_TASK_NOT_READY', 'Putaway task is on QC hold and cannot be suggested');
+    throw new AppError(
+      409,
+      'PUTAWAY_TASK_NOT_READY',
+      'Putaway task is on QC hold and cannot be suggested',
+    );
   }
 
   // Step 4.2(a): Load item master to get hazmat/quarantine flags
@@ -96,7 +103,9 @@ export async function computeDirectedSuggestion(
 
   // If velocity_class row exists and has a preferred location, prefer it if eligible
   if (velocityClassRow?.preferred_location_id) {
-    const preferred = candidates.find((c) => c.location_id === velocityClassRow.preferred_location_id);
+    const preferred = candidates.find(
+      (c) => c.location_id === velocityClassRow.preferred_location_id,
+    );
     if (preferred) {
       return {
         locationId: preferred.location_id,

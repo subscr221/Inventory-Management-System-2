@@ -8,7 +8,11 @@ import {
   recordAssertedLocation,
   updateCurrentLocation,
 } from '../read/projections/location.js';
-import type { AssertedLocationFact, ExpectedLocationFact, CurrentLocation } from '../read/projections/location.js';
+import type {
+  AssertedLocationFact,
+  ExpectedLocationFact,
+  CurrentLocation,
+} from '../read/projections/location.js';
 
 /**
  * The set of stream_type values whose events carry stock-movement location data (AD-15). Events
@@ -77,7 +81,16 @@ const defaultDeps: LocationDeps = {
     await client.query(
       `INSERT INTO domain_events (event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
-      [randomUUID(), envelope.stream_type, envelope.stream_id, envelope.event_type, nextVersion, envelope.payload, metadata, envelope.schema_version ?? 1],
+      [
+        randomUUID(),
+        envelope.stream_type,
+        envelope.stream_id,
+        envelope.event_type,
+        nextVersion,
+        envelope.payload,
+        metadata,
+        envelope.schema_version ?? 1,
+      ],
     );
   },
 };
@@ -110,19 +123,33 @@ export async function assertLocationInvariant(
 
   const lotId = envelope.payload['lot_id'];
   if (!isNonEmptyString(lotId)) {
-    throw new AppError(400, 'INVALID_PARAMS', 'location event payload is missing lot_id', { missing_field: 'lot_id' });
+    throw new AppError(400, 'INVALID_PARAMS', 'location event payload is missing lot_id', {
+      missing_field: 'lot_id',
+    });
   }
 
   if (envelope.event_type === EVENT_EXPECTED) {
     const expectedLocation = envelope.payload['expected_location'];
     if (!isNonEmptyString(expectedLocation)) {
-      throw new AppError(400, 'INVALID_PARAMS', 'location.expected payload is missing expected_location', {
-        missing_field: 'expected_location',
-      });
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'location.expected payload is missing expected_location',
+        {
+          missing_field: 'expected_location',
+        },
+      );
     }
-    const source = isNonEmptyString(envelope.payload['source']) ? envelope.payload['source'] : 'unspecified';
+    const source = isNonEmptyString(envelope.payload['source'])
+      ? envelope.payload['source']
+      : 'unspecified';
     await deps.recordExpectedLocation(
-      { lot_id: lotId, expected_location: expectedLocation, source, source_event_id: persisted.event_id },
+      {
+        lot_id: lotId,
+        expected_location: expectedLocation,
+        source,
+        source_event_id: persisted.event_id,
+      },
       client,
     );
     return;
@@ -131,9 +158,14 @@ export async function assertLocationInvariant(
   // EVENT_ASSERTED
   const assertedLocation = envelope.payload['asserted_location'];
   if (!isNonEmptyString(assertedLocation)) {
-    throw new AppError(400, 'INVALID_PARAMS', 'location.asserted payload is missing asserted_location', {
-      missing_field: 'asserted_location',
-    });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'location.asserted payload is missing asserted_location',
+      {
+        missing_field: 'asserted_location',
+      },
+    );
   }
   const confidenceInput = envelope.payload['confidence'];
   if (confidenceInput !== undefined && !isConfidence(confidenceInput)) {
@@ -164,7 +196,14 @@ export async function assertLocationInvariant(
   if (!asserted) return;
 
   // The asserted location becomes the current location projection (AC1).
-  await deps.updateCurrentLocation(lotId, assertedLocation, confidence, asserted.fact_id, persisted.event_version, client);
+  await deps.updateCurrentLocation(
+    lotId,
+    assertedLocation,
+    confidence,
+    asserted.fact_id,
+    persisted.event_version,
+    client,
+  );
 
   // A divergence from the recorded expected fact raises a location.disputed event referencing both
   // facts with actor provenance. The expected fact is preserved - neither deleted nor overwritten.

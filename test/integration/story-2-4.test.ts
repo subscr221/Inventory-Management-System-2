@@ -94,20 +94,32 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
 function stockEnvelope(
   eventType: string,
   payload: Record<string, unknown>,
-  extra: { stream_id?: string; idempotency_key?: string; event_id?: string; actor_location_id?: string } = {},
+  extra: {
+    stream_id?: string;
+    idempotency_key?: string;
+    event_id?: string;
+    actor_location_id?: string;
+  } = {},
 ) {
   return {
     ...(extra.event_id ? { event_id: extra.event_id } : {}),
@@ -186,7 +198,12 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     operatorHeaders = await authFor(port, 'inventory-operator-2-4@example.com');
 
     await provisionUser(port, 'compliance-admin-2-4@example.com', [
-      { role: 'compliance_admin_2_4', module: 'compliance', functionScope: 'write', locationId: '*' },
+      {
+        role: 'compliance_admin_2_4',
+        module: 'compliance',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     complianceAdminHeaders = await authFor(port, 'compliance-admin-2-4@example.com');
 
@@ -202,10 +219,19 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
         port,
         'POST',
         '/api/v1/doa/entries',
-        { role: 'finance_controller', transaction_type: transactionType, value_min: null, value_max: null },
+        {
+          role: 'finance_controller',
+          transaction_type: transactionType,
+          value_min: null,
+          value_max: null,
+        },
         complianceAdminHeaders,
       );
-      assert.strictEqual(res.status, 201, `DOA entry ${transactionType} failed: ${JSON.stringify(res.body)}`);
+      assert.strictEqual(
+        res.status,
+        201,
+        `DOA entry ${transactionType} failed: ${JSON.stringify(res.body)}`,
+      );
     }
 
     // Seed item masters, one per valuation_method under test.
@@ -250,11 +276,21 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
   it('AC1: running weighted average cost updates after each receipt and is queryable via GET .../valuation', async () => {
     for (const unitCost of [10, 12, 14]) {
       await persistEvent(
-        stockEnvelope('stock.received', { sku: SKU_WAVG, target_location_id: locAId, quantity: 10, unit_cost: unitCost }, { actor_location_id: locAId }),
+        stockEnvelope(
+          'stock.received',
+          { sku: SKU_WAVG, target_location_id: locAId, quantity: 10, unit_cost: unitCost },
+          { actor_location_id: locAId },
+        ),
       );
     }
 
-    const res = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_WAVG}/valuation`, undefined, operatorHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_WAVG}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body['quantity_on_hand'], 30);
     assert.strictEqual(res.body['running_average_cost'], 12);
@@ -262,9 +298,19 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
 
     // Issue at the current running average.
     await persistEvent(
-      stockEnvelope('stock.issued', { sku: SKU_WAVG, target_location_id: locAId, quantity: 5 }, { actor_location_id: locAId }),
+      stockEnvelope(
+        'stock.issued',
+        { sku: SKU_WAVG, target_location_id: locAId, quantity: 5 },
+        { actor_location_id: locAId },
+      ),
     );
-    const afterIssue = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_WAVG}/valuation`, undefined, operatorHeaders);
+    const afterIssue = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_WAVG}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(afterIssue.body['quantity_on_hand'], 25);
     assert.strictEqual(afterIssue.body['carrying_value'], 300);
     assert.strictEqual(afterIssue.body['running_average_cost'], 12);
@@ -279,34 +325,78 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
       { actor_location_id: locAId, event_id: eventId, idempotency_key: idempotencyKey },
     );
 
-    const before = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_WAVG}/valuation`, undefined, operatorHeaders);
+    const before = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_WAVG}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
 
     const first = await makeRequest(port, 'POST', '/api/v1/events', envelope, operatorHeaders);
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
-    const afterFirst = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_WAVG}/valuation`, undefined, operatorHeaders);
-    assert.strictEqual(afterFirst.body['quantity_on_hand'], (before.body['quantity_on_hand'] as number) + 10);
+    const afterFirst = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_WAVG}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
+    assert.strictEqual(
+      afterFirst.body['quantity_on_hand'],
+      (before.body['quantity_on_hand'] as number) + 10,
+    );
 
     const retry = await makeRequest(port, 'POST', '/api/v1/events', envelope, operatorHeaders);
     assert.strictEqual(retry.status, 409, JSON.stringify(retry.body));
     assert.strictEqual(retry.body['error_code'], 'DUPLICATE_EVENT');
 
-    const afterRetry = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_WAVG}/valuation`, undefined, operatorHeaders);
-    assert.deepStrictEqual(afterRetry.body['quantity_on_hand'], afterFirst.body['quantity_on_hand']);
+    const afterRetry = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_WAVG}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
+    assert.deepStrictEqual(
+      afterRetry.body['quantity_on_hand'],
+      afterFirst.body['quantity_on_hand'],
+    );
     assert.deepStrictEqual(afterRetry.body['carrying_value'], afterFirst.body['carrying_value']);
   });
 
   it('monetary precision: fractional costs and quantities (0.1, 0.2, 12.345678) accumulate exactly, no JS float drift', async () => {
     await persistEvent(
-      stockEnvelope('stock.received', { sku: SKU_PRECISION, target_location_id: locAId, quantity: 0.1, unit_cost: 0.2 }, { actor_location_id: locAId }),
+      stockEnvelope(
+        'stock.received',
+        { sku: SKU_PRECISION, target_location_id: locAId, quantity: 0.1, unit_cost: 0.2 },
+        { actor_location_id: locAId },
+      ),
     );
-    const afterFirst = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_PRECISION}/valuation`, undefined, operatorHeaders);
+    const afterFirst = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_PRECISION}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(afterFirst.body['carrying_value'], 0.02);
     assert.strictEqual(afterFirst.body['running_average_cost'], 0.2);
 
     await persistEvent(
-      stockEnvelope('stock.received', { sku: SKU_PRECISION, target_location_id: locAId, quantity: 0.2, unit_cost: 0.1 }, { actor_location_id: locAId }),
+      stockEnvelope(
+        'stock.received',
+        { sku: SKU_PRECISION, target_location_id: locAId, quantity: 0.2, unit_cost: 0.1 },
+        { actor_location_id: locAId },
+      ),
     );
-    const afterSecond = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_PRECISION}/valuation`, undefined, operatorHeaders);
+    const afterSecond = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_PRECISION}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(afterSecond.body['quantity_on_hand'], 0.3);
     assert.strictEqual(afterSecond.body['carrying_value'], 0.04);
     assert.ok(
@@ -315,19 +405,47 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     );
 
     await persistEvent(
-      stockEnvelope('stock.received', { sku: SKU_PRECISION, target_location_id: locAId, quantity: 12.345678, unit_cost: 2 }, { actor_location_id: locAId }),
+      stockEnvelope(
+        'stock.received',
+        { sku: SKU_PRECISION, target_location_id: locAId, quantity: 12.345678, unit_cost: 2 },
+        { actor_location_id: locAId },
+      ),
     );
-    const afterThird = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_PRECISION}/valuation`, undefined, operatorHeaders);
+    const afterThird = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_PRECISION}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(afterThird.body['quantity_on_hand'], 12.645678);
     assert.strictEqual(afterThird.body['carrying_value'], 24.731356);
   });
 
   it('concurrency: two concurrent weighted-average receipts both land (no lost update)', async () => {
     await Promise.all([
-      persistEvent(stockEnvelope('stock.received', { sku: SKU_CONCURRENCY, target_location_id: locAId, quantity: 10, unit_cost: 5 }, { actor_location_id: locAId })),
-      persistEvent(stockEnvelope('stock.received', { sku: SKU_CONCURRENCY, target_location_id: locAId, quantity: 10, unit_cost: 5 }, { actor_location_id: locAId })),
+      persistEvent(
+        stockEnvelope(
+          'stock.received',
+          { sku: SKU_CONCURRENCY, target_location_id: locAId, quantity: 10, unit_cost: 5 },
+          { actor_location_id: locAId },
+        ),
+      ),
+      persistEvent(
+        stockEnvelope(
+          'stock.received',
+          { sku: SKU_CONCURRENCY, target_location_id: locAId, quantity: 10, unit_cost: 5 },
+          { actor_location_id: locAId },
+        ),
+      ),
     ]);
-    const res = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_CONCURRENCY}/valuation`, undefined, operatorHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_CONCURRENCY}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(res.body['quantity_on_hand'], 20);
     assert.strictEqual(res.body['carrying_value'], 100);
   });
@@ -336,12 +454,36 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
   // AC2: FIFO
   // ---------------------------------------------------------------------------------------------
   it('AC2: FIFO issue costs from the earliest received layer, and splits across layers when needed', async () => {
-    await persistEvent(stockEnvelope('stock.received', { sku: SKU_FIFO, target_location_id: locAId, quantity: 5, unit_cost: 10 }, { actor_location_id: locAId }));
-    await persistEvent(stockEnvelope('stock.received', { sku: SKU_FIFO, target_location_id: locAId, quantity: 5, unit_cost: 20 }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        { sku: SKU_FIFO, target_location_id: locAId, quantity: 5, unit_cost: 10 },
+        { actor_location_id: locAId },
+      ),
+    );
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        { sku: SKU_FIFO, target_location_id: locAId, quantity: 5, unit_cost: 20 },
+        { actor_location_id: locAId },
+      ),
+    );
 
     // Issue 5: fully depletes the first (earliest, cost 10) layer.
-    await persistEvent(stockEnvelope('stock.issued', { sku: SKU_FIFO, target_location_id: locAId, quantity: 5 }, { actor_location_id: locAId }));
-    const afterFirstIssue = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_FIFO}/valuation`, undefined, operatorHeaders);
+    await persistEvent(
+      stockEnvelope(
+        'stock.issued',
+        { sku: SKU_FIFO, target_location_id: locAId, quantity: 5 },
+        { actor_location_id: locAId },
+      ),
+    );
+    const afterFirstIssue = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_FIFO}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(afterFirstIssue.body['carrying_value'], 100);
     const layersAfterFirst = afterFirstIssue.body['fifo_layers'] as Array<Record<string, unknown>>;
     assert.strictEqual(layersAfterFirst.length, 1);
@@ -350,10 +492,28 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
 
     // Add a third layer, then issue 8 - this must split across the remaining layer-2 (5@20) and
     // layer-3 (3 of 5@30), a multi-layer costing split the FEFO/FIFO physical selector cannot do.
-    await persistEvent(stockEnvelope('stock.received', { sku: SKU_FIFO, target_location_id: locAId, quantity: 5, unit_cost: 30 }, { actor_location_id: locAId }));
-    await persistEvent(stockEnvelope('stock.issued', { sku: SKU_FIFO, target_location_id: locAId, quantity: 8 }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        { sku: SKU_FIFO, target_location_id: locAId, quantity: 5, unit_cost: 30 },
+        { actor_location_id: locAId },
+      ),
+    );
+    await persistEvent(
+      stockEnvelope(
+        'stock.issued',
+        { sku: SKU_FIFO, target_location_id: locAId, quantity: 8 },
+        { actor_location_id: locAId },
+      ),
+    );
 
-    const afterSplit = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_FIFO}/valuation`, undefined, operatorHeaders);
+    const afterSplit = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_FIFO}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     // Remaining: layer-3 had 5, consumed 3 -> 2 remain at cost 30 = 60 carrying value.
     assert.strictEqual(afterSplit.body['carrying_value'], 60);
     const layersAfterSplit = afterSplit.body['fifo_layers'] as Array<Record<string, unknown>>;
@@ -363,14 +523,38 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
   });
 
   it('concurrency: two concurrent issues that together exactly deplete the last FIFO layer do not double-consume', async () => {
-    await persistEvent(stockEnvelope('stock.received', { sku: SKU_FIFO_CONCURRENCY, target_location_id: locAId, quantity: 10, unit_cost: 5 }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        { sku: SKU_FIFO_CONCURRENCY, target_location_id: locAId, quantity: 10, unit_cost: 5 },
+        { actor_location_id: locAId },
+      ),
+    );
 
     await Promise.all([
-      persistEvent(stockEnvelope('stock.issued', { sku: SKU_FIFO_CONCURRENCY, target_location_id: locAId, quantity: 5 }, { actor_location_id: locAId })),
-      persistEvent(stockEnvelope('stock.issued', { sku: SKU_FIFO_CONCURRENCY, target_location_id: locAId, quantity: 5 }, { actor_location_id: locAId })),
+      persistEvent(
+        stockEnvelope(
+          'stock.issued',
+          { sku: SKU_FIFO_CONCURRENCY, target_location_id: locAId, quantity: 5 },
+          { actor_location_id: locAId },
+        ),
+      ),
+      persistEvent(
+        stockEnvelope(
+          'stock.issued',
+          { sku: SKU_FIFO_CONCURRENCY, target_location_id: locAId, quantity: 5 },
+          { actor_location_id: locAId },
+        ),
+      ),
     ]);
 
-    const res = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_FIFO_CONCURRENCY}/valuation`, undefined, operatorHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_FIFO_CONCURRENCY}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(res.body['carrying_value'], 0);
     assert.strictEqual(res.body['quantity_on_hand'], 0);
     assert.strictEqual((res.body['fifo_layers'] as unknown[]).length, 0);
@@ -391,7 +575,13 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     assert.strictEqual(retry.status, 409, JSON.stringify(retry.body));
     assert.strictEqual(retry.body['error_code'], 'DUPLICATE_EVENT');
 
-    const res = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_FIFO_IDEM}/valuation`, undefined, operatorHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_FIFO_IDEM}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(res.body['carrying_value'], 200);
     assert.strictEqual((res.body['fifo_layers'] as unknown[]).length, 1);
   });
@@ -401,7 +591,13 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     const idempotencyKey = `story-2-4-serial-idem-${randomUUID()}`;
     const envelope = stockEnvelope(
       'stock.received',
-      { sku: SKU_SPID_IDEM, target_location_id: locAId, quantity: 1, unit_cost: 999, serials: [{ serial_number: 'SN-IDEM-1' }] },
+      {
+        sku: SKU_SPID_IDEM,
+        target_location_id: locAId,
+        quantity: 1,
+        unit_cost: 999,
+        serials: [{ serial_number: 'SN-IDEM-1' }],
+      },
       { actor_location_id: locAId, event_id: eventId, idempotency_key: idempotencyKey },
     );
 
@@ -410,7 +606,13 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     const retry = await makeRequest(port, 'POST', '/api/v1/events', envelope, operatorHeaders);
     assert.strictEqual(retry.status, 409, JSON.stringify(retry.body));
 
-    const res = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_SPID_IDEM}/valuation`, undefined, operatorHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_SPID_IDEM}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(res.body['carrying_value'], 999);
     assert.strictEqual((res.body['serial_costs'] as unknown[]).length, 1);
   });
@@ -423,13 +625,24 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
       port,
       'POST',
       '/api/v1/items',
-      { sku: `RM-LIFO-${randomUUID().slice(0, 8)}`, uom: 'ea', valuation_method: 'lifo', business_stream: 'production' },
+      {
+        sku: `RM-LIFO-${randomUUID().slice(0, 8)}`,
+        uom: 'ea',
+        valuation_method: 'lifo',
+        business_stream: 'production',
+      },
       operatorHeaders,
     );
     assert.strictEqual(createRes.status, 400, JSON.stringify(createRes.body));
     assert.strictEqual(createRes.body['error_code'], 'VALUATION_METHOD_NOT_PERMITTED');
 
-    const patchRes = await makeRequest(port, 'PATCH', `/api/v1/items/${SKU_WAVG}`, { valuation_method: 'lifo' }, operatorHeaders);
+    const patchRes = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/items/${SKU_WAVG}`,
+      { valuation_method: 'lifo' },
+      operatorHeaders,
+    );
     assert.strictEqual(patchRes.status, 400, JSON.stringify(patchRes.body));
     assert.strictEqual(patchRes.body['error_code'], 'VALUATION_METHOD_NOT_PERMITTED');
   });
@@ -438,8 +651,20 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
   // AC4: NRV write-down and recovery cap
   // ---------------------------------------------------------------------------------------------
   it('AC4: NRV write-down reduces carrying value, is recorded with date/authoriser, and recovery is capped at original cost', async () => {
-    await persistEvent(stockEnvelope('stock.received', { sku: SKU_NRV, target_location_id: locAId, quantity: 10, unit_cost: 100 }, { actor_location_id: locAId }));
-    const initial = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_NRV}/valuation`, undefined, operatorHeaders);
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        { sku: SKU_NRV, target_location_id: locAId, quantity: 10, unit_cost: 100 },
+        { actor_location_id: locAId },
+      ),
+    );
+    const initial = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_NRV}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(initial.body['carrying_value'], 1000);
 
     // Authoriser mismatch is rejected before anything is persisted.
@@ -447,7 +672,12 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
       port,
       'POST',
       `/api/v1/stock/${SKU_NRV}/valuation/nrv-write-down`,
-      { effective_date: '2026-07-21', authoriser_actor_id: randomUUID(), nrv_amount: 600, reason: 'Obsolescence assessment' },
+      {
+        effective_date: '2026-07-21',
+        authoriser_actor_id: randomUUID(),
+        nrv_amount: 600,
+        reason: 'Obsolescence assessment',
+      },
       operatorHeaders,
     );
     assert.strictEqual(mismatch.status, 403, JSON.stringify(mismatch.body));
@@ -457,7 +687,13 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
       port,
       'POST',
       `/api/v1/stock/${SKU_NRV}/valuation/nrv-write-down`,
-      { effective_date: '2026-07-21', authoriser_actor_id: financeUserId, nrv_amount: 600, reason: 'Obsolescence assessment', evidence_ref: 'EVID-001' },
+      {
+        effective_date: '2026-07-21',
+        authoriser_actor_id: financeUserId,
+        nrv_amount: 600,
+        reason: 'Obsolescence assessment',
+        evidence_ref: 'EVID-001',
+      },
       operatorHeaders,
     );
     assert.strictEqual(writeDown.status, 201, JSON.stringify(writeDown.body));
@@ -469,7 +705,13 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     assert.strictEqual(writeDownPayload['effective_date'], '2026-07-21');
     assert.strictEqual(writeDownPayload['authoriser_actor_id'], financeUserId);
 
-    const afterWriteDown = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_NRV}/valuation`, undefined, operatorHeaders);
+    const afterWriteDown = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_NRV}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(afterWriteDown.body['carrying_value'], 600);
     assert.strictEqual(afterWriteDown.body['pre_writedown_cost'], 1000);
     assert.strictEqual(afterWriteDown.body['cumulative_write_down'], 400);
@@ -505,8 +747,18 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     assert.strictEqual(overCap.status, 409, JSON.stringify(overCap.body));
     assert.strictEqual(overCap.body['error_code'], 'NRV_RECOVERY_EXCEEDS_ORIGINAL_COST');
 
-    const afterRejectedRecovery = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_NRV}/valuation`, undefined, operatorHeaders);
-    assert.strictEqual(afterRejectedRecovery.body['carrying_value'], 600, 'a rejected recovery must not mutate carrying value');
+    const afterRejectedRecovery = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_NRV}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
+    assert.strictEqual(
+      afterRejectedRecovery.body['carrying_value'],
+      600,
+      'a rejected recovery must not mutate carrying value',
+    );
 
     // Retrying the SAME idempotency key with a valid amount proves the rejected attempt above did
     // not consume it (a consumed key would surface DUPLICATE_EVENT here instead).
@@ -539,22 +791,47 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     const recoveryPayload = validRecovery.body['payload'] as Record<string, unknown>;
     assert.strictEqual(recoveryPayload['post_recovery_carrying_value'], 900);
 
-    const afterRecovery = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_NRV}/valuation`, undefined, operatorHeaders);
+    const afterRecovery = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_NRV}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(afterRecovery.body['carrying_value'], 900);
-    assert.strictEqual(afterRecovery.body['pre_writedown_cost'], 1000, 'partial recovery keeps the original-cost cap open');
+    assert.strictEqual(
+      afterRecovery.body['pre_writedown_cost'],
+      1000,
+      'partial recovery keeps the original-cost cap open',
+    );
 
     // Final recovery to exactly the original cost clears the cap.
     const fullRecovery = await makeRequest(
       port,
       'POST',
       `/api/v1/stock/${SKU_NRV}/valuation/nrv-recovery`,
-      { effective_date: '2026-07-23', authoriser_actor_id: financeUserId, recovery_amount: 100, reason: 'Full market recovery' },
+      {
+        effective_date: '2026-07-23',
+        authoriser_actor_id: financeUserId,
+        recovery_amount: 100,
+        reason: 'Full market recovery',
+      },
       operatorHeaders,
     );
     assert.strictEqual(fullRecovery.status, 201, JSON.stringify(fullRecovery.body));
-    const afterFullRecovery = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_NRV}/valuation`, undefined, operatorHeaders);
+    const afterFullRecovery = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_NRV}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(afterFullRecovery.body['carrying_value'], 1000);
-    assert.strictEqual(afterFullRecovery.body['pre_writedown_cost'], null, 'fully recovered - the cap is cleared');
+    assert.strictEqual(
+      afterFullRecovery.body['pre_writedown_cost'],
+      null,
+      'fully recovered - the cap is cleared',
+    );
   });
 
   // ---------------------------------------------------------------------------------------------
@@ -564,30 +841,59 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     await persistEvent(
       stockEnvelope(
         'stock.received',
-        { sku: SKU_SPID, target_location_id: locAId, quantity: 1, unit_cost: 12000, serials: [{ serial_number: 'SN-1001' }] },
+        {
+          sku: SKU_SPID,
+          target_location_id: locAId,
+          quantity: 1,
+          unit_cost: 12000,
+          serials: [{ serial_number: 'SN-1001' }],
+        },
         { actor_location_id: locAId },
       ),
     );
     await persistEvent(
       stockEnvelope(
         'stock.received',
-        { sku: SKU_SPID, target_location_id: locAId, quantity: 1, unit_cost: 13500, serials: [{ serial_number: 'SN-1002' }] },
+        {
+          sku: SKU_SPID,
+          target_location_id: locAId,
+          quantity: 1,
+          unit_cost: 13500,
+          serials: [{ serial_number: 'SN-1002' }],
+        },
         { actor_location_id: locAId },
       ),
     );
 
-    const beforeIssue = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_SPID}/valuation`, undefined, operatorHeaders);
+    const beforeIssue = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_SPID}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(beforeIssue.body['carrying_value'], 25500);
 
     await persistEvent(
       stockEnvelope(
         'stock.issued',
-        { sku: SKU_SPID, target_location_id: locAId, quantity: 1, serials: [{ serial_number: 'SN-1002' }] },
+        {
+          sku: SKU_SPID,
+          target_location_id: locAId,
+          quantity: 1,
+          serials: [{ serial_number: 'SN-1002' }],
+        },
         { actor_location_id: locAId },
       ),
     );
 
-    const afterIssue = await makeRequest(port, 'GET', `/api/v1/stock/${SKU_SPID}/valuation`, undefined, operatorHeaders);
+    const afterIssue = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${SKU_SPID}/valuation`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(afterIssue.body['carrying_value'], 12000);
     const serialCosts = afterIssue.body['serial_costs'] as Array<Record<string, unknown>>;
     assert.strictEqual(serialCosts.length, 1);
@@ -600,7 +906,13 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
   // ---------------------------------------------------------------------------------------------
   it('AC6: standard cost is accepted only as an Ind AS 2 paragraph 21 measurement technique, with variance reporting and tolerance breach flags', async () => {
     // standard_cost_amount without the designation is rejected.
-    const bare = await makeRequest(port, 'PATCH', `/api/v1/items/${SKU_STDCOST}`, { standard_cost_amount: 100 }, operatorHeaders);
+    const bare = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/items/${SKU_STDCOST}`,
+      { standard_cost_amount: 100 },
+      operatorHeaders,
+    );
     assert.strictEqual(bare.status, 400, JSON.stringify(bare.body));
     assert.strictEqual(bare.body['error_code'], 'VALUATION_METHOD_NOT_PERMITTED');
 
@@ -608,7 +920,12 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
       port,
       'POST',
       '/api/v1/items',
-      { sku: `RM-STDCOST-${randomUUID().slice(0, 8)}`, uom: 'ea', valuation_method: 'standard_cost', business_stream: 'production' },
+      {
+        sku: `RM-STDCOST-${randomUUID().slice(0, 8)}`,
+        uom: 'ea',
+        valuation_method: 'standard_cost',
+        business_stream: 'production',
+      },
       operatorHeaders,
     );
     assert.strictEqual(bareMethod.status, 400, JSON.stringify(bareMethod.body));
@@ -630,7 +947,13 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     assert.strictEqual(configure.status, 200, JSON.stringify(configure.body));
 
     // Actual cost of 150/unit vs standard 100/unit is a 50% variance - well past the 5% tolerance.
-    await persistEvent(stockEnvelope('stock.received', { sku: SKU_STDCOST, target_location_id: locAId, quantity: 10, unit_cost: 150 }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        { sku: SKU_STDCOST, target_location_id: locAId, quantity: 10, unit_cost: 150 },
+        { actor_location_id: locAId },
+      ),
+    );
 
     const review = await makeRequest(
       port,
@@ -646,7 +969,13 @@ describe('Story 2.4 Ind AS 2 Compliant Inventory Valuation Integration Tests', (
     assert.strictEqual(reviewPayload['variance_amount'], 50);
     assert.strictEqual(reviewPayload['breached'], true);
 
-    const report = await makeRequest(port, 'GET', '/api/v1/valuation/standard-cost-variance-report', undefined, operatorHeaders);
+    const report = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/valuation/standard-cost-variance-report',
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(report.status, 200, JSON.stringify(report.body));
     const items = report.body['items'] as Array<Record<string, unknown>>;
     const entry = items.find((row) => row['sku'] === SKU_STDCOST);

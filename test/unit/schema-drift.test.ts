@@ -198,7 +198,10 @@ const EXPECTED = [
     // Story 2.8 extension: signal_type + owner_party_code columns and the per-signal open guard
     // (uq_replenishment_recommendation_open_signal replaced uq_replenishment_recommendation_open).
     table: 'replenishment_recommendation',
-    constraints: ['chk_replenishment_recommendation_status', 'chk_replenishment_recommendation_signal_type'],
+    constraints: [
+      'chk_replenishment_recommendation_status',
+      'chk_replenishment_recommendation_signal_type',
+    ],
     indexes: [
       'idx_replenishment_recommendation_sku',
       'idx_replenishment_recommendation_location',
@@ -221,7 +224,11 @@ const EXPECTED = [
       'chk_ownership_agreement_vmi_min_required',
       'chk_ownership_agreement_owner_party_code',
     ],
-    indexes: ['idx_ownership_agreement_location', 'idx_ownership_agreement_sku', 'uq_ownership_agreement_active'],
+    indexes: [
+      'idx_ownership_agreement_location',
+      'idx_ownership_agreement_sku',
+      'uq_ownership_agreement_active',
+    ],
   },
   // Story 2.9 ERP inbound reference projections (NOT event-sourced; direct adapter upsert).
   {
@@ -358,7 +365,12 @@ const EXPECTED = [
     canonical: 'read/projections/pick_task.sql',
     table: 'pick_task',
     // Story 3.8 added chk_pick_task_priority; every other value in this entry is unchanged.
-    constraints: ['chk_pick_task_strategy', 'chk_pick_task_status', 'chk_pick_task_priority', 'chk_pick_task_fulfillment_source'],
+    constraints: [
+      'chk_pick_task_strategy',
+      'chk_pick_task_status',
+      'chk_pick_task_priority',
+      'chk_pick_task_fulfillment_source',
+    ],
     indexes: [
       'idx_pick_task_dispatch_order',
       'idx_pick_task_zone_status',
@@ -395,7 +407,11 @@ const EXPECTED = [
   {
     canonical: 'read/projections/packing_record.sql',
     table: 'packing_record',
-    constraints: ['chk_packing_record_status', 'chk_packing_record_qty', 'chk_packing_record_carton'],
+    constraints: [
+      'chk_packing_record_status',
+      'chk_packing_record_qty',
+      'chk_packing_record_carton',
+    ],
     indexes: ['idx_packing_record_dispatch_order', 'idx_packing_record_lot'],
   },
   {
@@ -412,7 +428,11 @@ const EXPECTED = [
     canonical: 'read/projections/task_sla_config.sql',
     table: 'task_sla_config',
     constraints: ['chk_task_sla_config_task_type', 'chk_task_sla_config_threshold_positive'],
-    indexes: ['uq_task_sla_config_grain', 'idx_task_sla_config_zone', 'idx_task_sla_config_site_type'],
+    indexes: [
+      'uq_task_sla_config_grain',
+      'idx_task_sla_config_zone',
+      'idx_task_sla_config_site_type',
+    ],
   },
   // gate_dwell_metric is a VIEW, so it does not fit the table-shaped EXPECTED entries. A canonical
   // view-body parity check lives below, asserting the SELECT list of the canonical SQL and the
@@ -481,20 +501,36 @@ describe('Story 2.1 schema drift guard', () => {
     const crossDockMigration = "'../../read/projections/cross_dock_task.sql'";
     const pickLineMigration = "'../../read/projections/pick_line.sql'";
 
-    assert.ok(grnSql.includes('ADD COLUMN IF NOT EXISTS cross_dock BOOLEAN NOT NULL DEFAULT false'));
+    assert.ok(
+      grnSql.includes('ADD COLUMN IF NOT EXISTS cross_dock BOOLEAN NOT NULL DEFAULT false'),
+    );
     assert.ok(grnSql.includes('ADD COLUMN IF NOT EXISTS matched_dispatch_order_line_id UUID'));
     assert.ok(grnSql.includes('ADD COLUMN IF NOT EXISTS cross_dock_nonqualification_reason TEXT'));
-    assert.ok(pickTaskSql.includes("ADD COLUMN IF NOT EXISTS fulfillment_source TEXT NOT NULL DEFAULT 'standard'"));
+    assert.ok(
+      pickTaskSql.includes(
+        "ADD COLUMN IF NOT EXISTS fulfillment_source TEXT NOT NULL DEFAULT 'standard'",
+      ),
+    );
     assert.ok(pickTaskSql.includes("CHECK (fulfillment_source IN ('standard', 'cross_dock'))"));
     assert.ok(pickLineSql.includes('ADD COLUMN IF NOT EXISTS cross_dock_task_id UUID'));
     const deferredConstraintsSql = read('read/projections/cross_dock_constraints.sql');
     assert.ok(deferredConstraintsSql.includes('ADD CONSTRAINT fk_pick_line_cross_dock_task'));
     assert.ok(deferredConstraintsSql.includes('REFERENCES cross_dock_task(cross_dock_task_id)'));
-    assert.ok(pickLineSql.includes('CREATE UNIQUE INDEX IF NOT EXISTS uq_pick_line_cross_dock_task'));
+    assert.ok(
+      pickLineSql.includes('CREATE UNIQUE INDEX IF NOT EXISTS uq_pick_line_cross_dock_task'),
+    );
     assert.ok(pickLineSql.includes('WHERE cross_dock_task_id IS NOT NULL'));
-    assert.ok(migrateSource.indexOf(crossDockMigration) > migrateSource.indexOf("'../../read/projections/replenishment_task.sql'"));
-    assert.ok(migrateSource.lastIndexOf(pickLineMigration) > migrateSource.indexOf(crossDockMigration));
-    assert.ok(migrateSource.indexOf("'../../read/projections/cross_dock_constraints.sql'") > migrateSource.lastIndexOf(pickLineMigration));
+    assert.ok(
+      migrateSource.indexOf(crossDockMigration) >
+        migrateSource.indexOf("'../../read/projections/replenishment_task.sql'"),
+    );
+    assert.ok(
+      migrateSource.lastIndexOf(pickLineMigration) > migrateSource.indexOf(crossDockMigration),
+    );
+    assert.ok(
+      migrateSource.indexOf("'../../read/projections/cross_dock_constraints.sql'") >
+        migrateSource.lastIndexOf(pickLineMigration),
+    );
     assert.match(
       slaSql,
       /CHECK \(task_type IN \('receiving', 'putaway', 'picking', 'packing', 'replenishment', 'cross_docking'\)\)/,
@@ -503,7 +539,10 @@ describe('Story 2.1 schema drift guard', () => {
       initDb,
       /CHECK \(task_type IN \('receiving', 'putaway', 'picking', 'packing', 'replenishment', 'cross_docking'\)\)/,
     );
-    assert.ok(normalizeSql(initDb).includes(normalizeSql(constraintsSql)), 'init-db must mirror the deferred cross-dock FK block');
+    assert.ok(
+      normalizeSql(initDb).includes(normalizeSql(constraintsSql)),
+      'init-db must mirror the deferred cross-dock FK block',
+    );
   });
 
   for (const entry of EXPECTED) {
@@ -513,20 +552,38 @@ describe('Story 2.1 schema drift guard', () => {
       const canonicalSql = read(canonical);
       const fileName = canonical.split('/').pop()!;
       assert.ok(migrateSource.includes(fileName), `src/events/migrate.ts must apply ${fileName}`);
-      assert.strictEqual(extractCreateTable(initDb, table), extractCreateTable(canonicalSql, table));
+      assert.strictEqual(
+        extractCreateTable(initDb, table),
+        extractCreateTable(canonicalSql, table),
+      );
 
       for (const constraint of constraints) {
-        assert.strictEqual(extractDoBlock(initDb, constraint), extractDoBlock(canonicalSql, constraint));
+        assert.strictEqual(
+          extractDoBlock(initDb, constraint),
+          extractDoBlock(canonicalSql, constraint),
+        );
       }
       for (const index of indexes) {
         assert.ok(canonicalSql.includes(index), `canonical SQL missing index ${index}`);
         assert.ok(initDb.includes(index), `init-db.sql missing index ${index}`);
       }
       const grant = appUserGrant ?? 'INSERT, SELECT, UPDATE';
-      assert.ok(canonicalSql.includes(`GRANT ${grant} ON ${table} TO app_user`), `canonical missing app_user grant for ${table}`);
-      assert.ok(initDb.includes(`GRANT ${grant} ON ${table} TO app_user`), `init-db missing app_user grant for ${table}`);
-      assert.ok(canonicalSql.includes(`GRANT SELECT ON ${table} TO readonly_user`), `canonical missing readonly_user grant for ${table}`);
-      assert.ok(initDb.includes(`GRANT SELECT ON ${table} TO readonly_user`), `init-db missing readonly_user grant for ${table}`);
+      assert.ok(
+        canonicalSql.includes(`GRANT ${grant} ON ${table} TO app_user`),
+        `canonical missing app_user grant for ${table}`,
+      );
+      assert.ok(
+        initDb.includes(`GRANT ${grant} ON ${table} TO app_user`),
+        `init-db missing app_user grant for ${table}`,
+      );
+      assert.ok(
+        canonicalSql.includes(`GRANT SELECT ON ${table} TO readonly_user`),
+        `canonical missing readonly_user grant for ${table}`,
+      );
+      assert.ok(
+        initDb.includes(`GRANT SELECT ON ${table} TO readonly_user`),
+        `init-db missing readonly_user grant for ${table}`,
+      );
     });
   }
 

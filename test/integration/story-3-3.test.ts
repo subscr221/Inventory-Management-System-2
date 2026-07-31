@@ -31,7 +31,13 @@ function localYmd(date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
-function makeRequest(port: number, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<HttpResult> {
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<HttpResult> {
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -72,14 +78,27 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
 }
 
 async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
-  const res = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', { externalId, email: externalId, displayName: externalId, roles }, SCIM_HEADERS);
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  const res = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/scim/v2/Users',
+    { externalId, email: externalId, displayName: externalId, roles },
+    SCIM_HEADERS,
+  );
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -112,12 +131,21 @@ describe('Story 3.3 Weighbridge Event Capture and Tolerance Enforcement', () => 
 
   // Creates a Story 3.2 gate event at site-A and returns its binding token (correlation_id).
   async function newBindingToken(overrides: Record<string, unknown> = {}): Promise<string> {
-    const res = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody(overrides), gateHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody(overrides),
+      gateHeaders,
+    );
     assert.strictEqual(res.status, 201, `gate create failed: ${JSON.stringify(res.body)}`);
     return res.body['correlation_id'] as string;
   }
 
-  function wbBody(correlationId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  function wbBody(
+    correlationId: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
     return {
       weighbridge_event_id: randomUUID(),
       correlation_id: correlationId,
@@ -216,19 +244,44 @@ describe('Story 3.3 Weighbridge Event Capture and Tolerance Enforcement', () => 
     gateHeaders = await authFor(port, 'gate-officer-3-3@example.com');
 
     weighOperatorId = await provisionUser(port, 'weighbridge-operator-3-3@example.com', [
-      { role: 'weighbridge_operator', module: 'inventory', functionScope: 'write', locationId: siteAId },
-      { role: 'weighbridge_operator', module: 'weighbridge', functionScope: 'write', locationId: siteAId },
+      {
+        role: 'weighbridge_operator',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: siteAId,
+      },
+      {
+        role: 'weighbridge_operator',
+        module: 'weighbridge',
+        functionScope: 'write',
+        locationId: siteAId,
+      },
     ]);
     weighHeaders = await authFor(port, 'weighbridge-operator-3-3@example.com');
 
     await provisionUser(port, 'weighbridge-operator-site-b-3-3@example.com', [
-      { role: 'weighbridge_operator', module: 'inventory', functionScope: 'write', locationId: siteBId },
-      { role: 'weighbridge_operator', module: 'weighbridge', functionScope: 'write', locationId: siteBId },
+      {
+        role: 'weighbridge_operator',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: siteBId,
+      },
+      {
+        role: 'weighbridge_operator',
+        module: 'weighbridge',
+        functionScope: 'write',
+        locationId: siteBId,
+      },
     ]);
     weighSiteBHeaders = await authFor(port, 'weighbridge-operator-site-b-3-3@example.com');
 
     await provisionUser(port, 'unloading-supervisor-3-3@example.com', [
-      { role: 'unloading_supervisor', module: 'inventory', functionScope: 'read', locationId: siteAId },
+      {
+        role: 'unloading_supervisor',
+        module: 'inventory',
+        functionScope: 'read',
+        locationId: siteAId,
+      },
     ]);
     readerHeaders = await authFor(port, 'unloading-supervisor-3-3@example.com');
 
@@ -247,7 +300,13 @@ describe('Story 3.3 Weighbridge Event Capture and Tolerance Enforcement', () => 
   it('AC1/AC2: accepted capture auto-calculates net and carries the binding token, device, and capture_method', async () => {
     const token = await newBindingToken();
     const weighbridgeEventId = randomUUID();
-    const res = await makeRequest(port, 'POST', '/api/v1/weighbridge-events', wbBody(token, { weighbridge_event_id: weighbridgeEventId }), weighHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/weighbridge-events',
+      wbBody(token, { weighbridge_event_id: weighbridgeEventId }),
+      weighHeaders,
+    );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.strictEqual(res.body['weighbridge_event_id'], weighbridgeEventId);
     assert.strictEqual(res.body['net_kg'], '3500.000');
@@ -262,7 +321,13 @@ describe('Story 3.3 Weighbridge Event Capture and Tolerance Enforcement', () => 
     assert.strictEqual(res.body['business_date'], localYmd());
 
     // Accepted weight is queryable against the binding token, with the resolved PO line summary.
-    const read = await makeRequest(port, 'GET', `/api/v1/weighbridge-events/${weighbridgeEventId}`, undefined, readerHeaders);
+    const read = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/weighbridge-events/${weighbridgeEventId}`,
+      undefined,
+      readerHeaders,
+    );
     assert.strictEqual(read.status, 200, JSON.stringify(read.body));
     assert.strictEqual(read.body['status'], 'accepted');
     assert.strictEqual(read.body['binding_token'], token);
@@ -274,27 +339,56 @@ describe('Story 3.3 Weighbridge Event Capture and Tolerance Enforcement', () => 
   it('AC3: out-of-tolerance net is flagged tolerance_breach and blocked from silent receipt', async () => {
     const token = await newBindingToken();
     // gross 16000 - tare 12000 = net 4000, above the 3570 upper bound -> breach.
-    const res = await makeRequest(port, 'POST', '/api/v1/weighbridge-events', wbBody(token, { gross_kg: 16000 }), weighHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/weighbridge-events',
+      wbBody(token, { gross_kg: 16000 }),
+      weighHeaders,
+    );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.strictEqual(res.body['net_kg'], '4000.000');
     assert.strictEqual(res.body['status'], 'tolerance_breach');
-    assert.ok(typeof res.body['tolerance_breach_reason'] === 'string' && (res.body['tolerance_breach_reason'] as string).length > 0);
+    assert.ok(
+      typeof res.body['tolerance_breach_reason'] === 'string' &&
+        (res.body['tolerance_breach_reason'] as string).length > 0,
+    );
 
-    const list = await makeRequest(port, 'GET', '/api/v1/weighbridge-events?status=tolerance_breach', undefined, managerHeaders);
+    const list = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/weighbridge-events?status=tolerance_breach',
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(list.status, 200, JSON.stringify(list.body));
     const events = list.body['weighbridge_events'] as Record<string, unknown>[];
-    assert.ok(events.some((row) => row['weighbridge_event_id'] === res.body['weighbridge_event_id']));
+    assert.ok(
+      events.some((row) => row['weighbridge_event_id'] === res.body['weighbridge_event_id']),
+    );
   });
 
   it('AC1: WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND for a token with no gate event', async () => {
-    const res = await makeRequest(port, 'POST', '/api/v1/weighbridge-events', wbBody(randomUUID()), weighHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/weighbridge-events',
+      wbBody(randomUUID()),
+      weighHeaders,
+    );
     assert.strictEqual(res.status, 404, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND');
   });
 
   it('AC3: WEIGHBRIDGE_SITE_MISMATCH when the supplied weighbridge site differs from the gate-event site', async () => {
     const token = await newBindingToken();
-    const res = await makeRequest(port, 'POST', '/api/v1/weighbridge-events', wbBody(token, { site_code_ext: 'site-B' }), weighHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/weighbridge-events',
+      wbBody(token, { site_code_ext: 'site-B' }),
+      weighHeaders,
+    );
     assert.strictEqual(res.status, 409, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'WEIGHBRIDGE_SITE_MISMATCH');
   });
@@ -302,28 +396,55 @@ describe('Story 3.3 Weighbridge Event Capture and Tolerance Enforcement', () => 
   it('AC1: WEIGHBRIDGE_NET_NEGATIVE is rejected before any event is persisted', async () => {
     const token = await newBindingToken();
     const weighbridgeEventId = randomUUID();
-    const res = await makeRequest(port, 'POST', '/api/v1/weighbridge-events', wbBody(token, { weighbridge_event_id: weighbridgeEventId, tare_kg: 15500, gross_kg: 12000 }), weighHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/weighbridge-events',
+      wbBody(token, { weighbridge_event_id: weighbridgeEventId, tare_kg: 15500, gross_kg: 12000 }),
+      weighHeaders,
+    );
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'WEIGHBRIDGE_NET_NEGATIVE');
-    const persisted = await getPool().query('SELECT count(*)::int AS c FROM domain_events WHERE stream_id = $1', [weighbridgeEventId]);
+    const persisted = await getPool().query(
+      'SELECT count(*)::int AS c FROM domain_events WHERE stream_id = $1',
+      [weighbridgeEventId],
+    );
     assert.strictEqual(persisted.rows[0]!['c'], 0);
   });
 
   it('AC3: a PO reference with no line rejects with WEIGHBRIDGE_PO_LINE_NOT_FOUND (tolerance unknowable)', async () => {
     const token = await newBindingToken({ po_ref_ext: 'PO-WB-NOLINE' });
-    const res = await makeRequest(port, 'POST', '/api/v1/weighbridge-events', wbBody(token, { po_ref_ext: 'PO-WB-NOLINE' }), weighHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/weighbridge-events',
+      wbBody(token, { po_ref_ext: 'PO-WB-NOLINE' }),
+      weighHeaders,
+    );
     assert.strictEqual(res.status, 404, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'WEIGHBRIDGE_PO_LINE_NOT_FOUND');
   });
 
   it('Task 5: RBAC rejects non-weighbridge roles and out-of-scope sites', async () => {
     const token = await newBindingToken();
-    const nonWeigh = await makeRequest(port, 'POST', '/api/v1/weighbridge-events', wbBody(token), readerHeaders);
+    const nonWeigh = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/weighbridge-events',
+      wbBody(token),
+      readerHeaders,
+    );
     assert.strictEqual(nonWeigh.status, 403, JSON.stringify(nonWeigh.body));
     assert.strictEqual(nonWeigh.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
     // A weighbridge operator scoped to site-B cannot record against a site-A gate token.
-    const outOfScope = await makeRequest(port, 'POST', '/api/v1/weighbridge-events', wbBody(token), weighSiteBHeaders);
+    const outOfScope = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/weighbridge-events',
+      wbBody(token),
+      weighSiteBHeaders,
+    );
     assert.strictEqual(outOfScope.status, 403, JSON.stringify(outOfScope.body));
     assert.strictEqual(outOfScope.body['error_code'], 'LOCATION_ACCESS_DENIED');
   });
@@ -332,29 +453,47 @@ describe('Story 3.3 Weighbridge Event Capture and Tolerance Enforcement', () => 
     const token = await newBindingToken();
     const weighbridgeEventId = randomUUID();
     const beforePo = await getPool().query('SELECT count(*)::int AS c FROM erp_purchase_order');
-    const beforeLine = await getPool().query('SELECT count(*)::int AS c FROM erp_purchase_order_line');
+    const beforeLine = await getPool().query(
+      'SELECT count(*)::int AS c FROM erp_purchase_order_line',
+    );
     const envelope = {
       event_id: randomUUID(),
       stream_type: 'weighbridge',
       stream_id: weighbridgeEventId,
       event_type: 'weighbridge.recorded',
       payload: wbBody(token, { weighbridge_event_id: weighbridgeEventId }),
-      metadata: { correlation_id: token, actor: { user_id: weighOperatorId, role: 'weighbridge_operator', location_id: siteAId }, device_id: 'EDGE-WB-1', occurred_at: '2026-07-22T05:10:00.000Z' },
+      metadata: {
+        correlation_id: token,
+        actor: { user_id: weighOperatorId, role: 'weighbridge_operator', location_id: siteAId },
+        device_id: 'EDGE-WB-1',
+        occurred_at: '2026-07-22T05:10:00.000Z',
+      },
       idempotency_key: `wb-edge-${weighbridgeEventId}`,
     };
 
     const edge = await makeRequest(port, 'POST', '/api/v1/edge/events', envelope, weighHeaders);
     assert.strictEqual(edge.status, 201, JSON.stringify(edge.body));
-    const duplicate = await makeRequest(port, 'POST', '/api/v1/edge/events', envelope, weighHeaders);
+    const duplicate = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/edge/events',
+      envelope,
+      weighHeaders,
+    );
     assert.strictEqual(duplicate.status, 409, JSON.stringify(duplicate.body));
     assert.strictEqual(duplicate.body['error_code'], 'DUPLICATE_EVENT');
 
-    const rows = await getPool().query('SELECT count(*)::int AS c, max(status) AS status FROM weighbridge_event WHERE weighbridge_event_id = $1', [weighbridgeEventId]);
+    const rows = await getPool().query(
+      'SELECT count(*)::int AS c, max(status) AS status FROM weighbridge_event WHERE weighbridge_event_id = $1',
+      [weighbridgeEventId],
+    );
     assert.strictEqual(rows.rows[0]!['c'], 1);
     assert.strictEqual(rows.rows[0]!['status'], 'accepted');
 
     const afterPo = await getPool().query('SELECT count(*)::int AS c FROM erp_purchase_order');
-    const afterLine = await getPool().query('SELECT count(*)::int AS c FROM erp_purchase_order_line');
+    const afterLine = await getPool().query(
+      'SELECT count(*)::int AS c FROM erp_purchase_order_line',
+    );
     assert.strictEqual(afterPo.rows[0]!['c'], beforePo.rows[0]!['c']);
     assert.strictEqual(afterLine.rows[0]!['c'], beforeLine.rows[0]!['c']);
   });

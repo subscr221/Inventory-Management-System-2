@@ -3,7 +3,11 @@ import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { stockBalanceEventKind } from './stock-balance.js';
 import { getItemBySku, STANDARD_COST_DESIGNATION } from '../read/projections/item_master.js';
-import { findMatchingDoaEntry, findRoleHolder, findActiveDelegation } from '../read/projections/doa_registry.js';
+import {
+  findMatchingDoaEntry,
+  findRoleHolder,
+  findActiveDelegation,
+} from '../read/projections/doa_registry.js';
 import {
   getInventoryValuation,
   lockInventoryValuation,
@@ -63,9 +67,7 @@ function isValidDateString(value: string): boolean {
   if (isNaN(parsed.getTime())) return false;
   const [y, m, d] = value.split('-').map(Number);
   return (
-    parsed.getUTCFullYear() === y &&
-    parsed.getUTCMonth() + 1 === m &&
-    parsed.getUTCDate() === d
+    parsed.getUTCFullYear() === y && parsed.getUTCMonth() + 1 === m && parsed.getUTCDate() === d
   );
 }
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -81,19 +83,36 @@ function isFiniteNumber(value: unknown): value is number {
 function assertNrvCommonShape(envelope: EventEnvelope): void {
   const p = envelope.payload;
   if (!isNonEmptyString(p['sku'])) {
-    throw new AppError(400, 'INVALID_PARAMS', `${envelope.event_type} payload requires a non-empty sku`, { event_type: envelope.event_type });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `${envelope.event_type} payload requires a non-empty sku`,
+      { event_type: envelope.event_type },
+    );
   }
   if (typeof p['effective_date'] !== 'string' || !isValidDateString(p['effective_date'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'effective_date must be a valid YYYY-MM-DD date', { event_type: envelope.event_type });
+    throw new AppError(400, 'INVALID_PARAMS', 'effective_date must be a valid YYYY-MM-DD date', {
+      event_type: envelope.event_type,
+    });
   }
   if (typeof p['authoriser_actor_id'] !== 'string' || !UUID_REGEX.test(p['authoriser_actor_id'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'authoriser_actor_id must be a valid UUID', { event_type: envelope.event_type });
+    throw new AppError(400, 'INVALID_PARAMS', 'authoriser_actor_id must be a valid UUID', {
+      event_type: envelope.event_type,
+    });
   }
   if (!isNonEmptyString(p['reason'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'reason is required and must be a non-empty string', { event_type: envelope.event_type });
+    throw new AppError(400, 'INVALID_PARAMS', 'reason is required and must be a non-empty string', {
+      event_type: envelope.event_type,
+    });
   }
-  if (p['evidence_ref'] !== undefined && p['evidence_ref'] !== null && typeof p['evidence_ref'] !== 'string') {
-    throw new AppError(400, 'INVALID_PARAMS', 'evidence_ref must be a string when supplied', { event_type: envelope.event_type });
+  if (
+    p['evidence_ref'] !== undefined &&
+    p['evidence_ref'] !== null &&
+    typeof p['evidence_ref'] !== 'string'
+  ) {
+    throw new AppError(400, 'INVALID_PARAMS', 'evidence_ref must be a string when supplied', {
+      event_type: envelope.event_type,
+    });
   }
 }
 
@@ -103,25 +122,45 @@ export function assertValuationShape(envelope: EventEnvelope): void {
   if (envelope.event_type === 'stock.nrv_write_down_recorded') {
     assertNrvCommonShape(envelope);
     if (!isFiniteNumber(envelope.payload['nrv_amount']) || envelope.payload['nrv_amount'] < 0) {
-      throw new AppError(400, 'INVALID_PARAMS', 'nrv_amount must be a non-negative finite number', { event_type: envelope.event_type });
+      throw new AppError(400, 'INVALID_PARAMS', 'nrv_amount must be a non-negative finite number', {
+        event_type: envelope.event_type,
+      });
     }
     return;
   }
 
   if (envelope.event_type === 'stock.nrv_recovery_recorded') {
     assertNrvCommonShape(envelope);
-    if (!isFiniteNumber(envelope.payload['recovery_amount']) || envelope.payload['recovery_amount'] <= 0) {
-      throw new AppError(400, 'INVALID_PARAMS', 'recovery_amount must be a positive finite number', { event_type: envelope.event_type });
+    if (
+      !isFiniteNumber(envelope.payload['recovery_amount']) ||
+      envelope.payload['recovery_amount'] <= 0
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'recovery_amount must be a positive finite number',
+        { event_type: envelope.event_type },
+      );
     }
     return;
   }
 
   if (envelope.event_type === 'stock.standard_cost_variance_reviewed') {
     if (!isNonEmptyString(envelope.payload['sku'])) {
-      throw new AppError(400, 'INVALID_PARAMS', 'stock.standard_cost_variance_reviewed payload requires a non-empty sku', {});
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'stock.standard_cost_variance_reviewed payload requires a non-empty sku',
+        {},
+      );
     }
     if (!isNonEmptyString(envelope.payload['period'])) {
-      throw new AppError(400, 'INVALID_PARAMS', 'stock.standard_cost_variance_reviewed payload requires a non-empty period', {});
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'stock.standard_cost_variance_reviewed payload requires a non-empty period',
+        {},
+      );
     }
     return;
   }
@@ -146,28 +185,44 @@ async function assertDoaApprovedAuthoriser(
 ): Promise<void> {
   const entry = await findMatchingDoaEntry(transactionType, value, client);
   if (!entry) {
-    throw new AppError(404, 'NO_DOA_ENTRY_MATCH', `No DOA entry governs "${transactionType}" at value ${value}`, {
-      transaction_type: transactionType,
-      value,
-    });
+    throw new AppError(
+      404,
+      'NO_DOA_ENTRY_MATCH',
+      `No DOA entry governs "${transactionType}" at value ${value}`,
+      {
+        transaction_type: transactionType,
+        value,
+      },
+    );
   }
   const holder = await findRoleHolder(entry.role, client);
   if (!holder) {
-    throw new AppError(404, 'NO_APPROVER_FOUND', `No active user holds role "${entry.role}"`, { role: entry.role });
+    throw new AppError(404, 'NO_APPROVER_FOUND', `No active user holds role "${entry.role}"`, {
+      role: entry.role,
+    });
   }
   const delegation = await findActiveDelegation(holder.user_id, asOfDate, client);
   const approverUserId = delegation ? delegation.delegate_user_id : holder.user_id;
   if (authoriserActorId !== approverUserId) {
-    throw new AppError(403, 'FUNCTION_ACCESS_DENIED', 'authoriser_actor_id is not the DOA-resolved approver for this value band', {
-      transaction_type: transactionType,
-      value,
-      expected_approver_user_id: approverUserId,
-    });
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'authoriser_actor_id is not the DOA-resolved approver for this value band',
+      {
+        transaction_type: transactionType,
+        value,
+        expected_approver_user_id: approverUserId,
+      },
+    );
   }
 }
 
 /** FIFO issue costing (Task 4.2): deterministic oldest-layer-first depletion, splitting across layers when needed. */
-async function depleteFifoLayers(sku: string, quantity: number, client: PoolClient): Promise<number> {
+async function depleteFifoLayers(
+  sku: string,
+  quantity: number,
+  client: PoolClient,
+): Promise<number> {
   const layers = await lockOpenFifoLayers(sku, client);
   let remaining = quantity;
   let totalCost = 0;
@@ -175,7 +230,11 @@ async function depleteFifoLayers(sku: string, quantity: number, client: PoolClie
     if (remaining <= 0) break;
     const consumed = Math.min(monToNum(layer.remaining_quantity), remaining);
     totalCost += consumed * monToNum(layer.unit_cost);
-    await setFifoLayerRemaining(layer.layer_id, (monToNum(layer.remaining_quantity) - consumed).toString(), client);
+    await setFifoLayerRemaining(
+      layer.layer_id,
+      (monToNum(layer.remaining_quantity) - consumed).toString(),
+      client,
+    );
     remaining -= consumed;
   }
   if (remaining > 0) {
@@ -189,11 +248,16 @@ async function depleteFifoLayers(sku: string, quantity: number, client: PoolClie
   return totalCost;
 }
 
-async function applyReceiptOrIssue(envelope: EventEnvelope, client: PoolClient, eventId: string): Promise<void> {
+async function applyReceiptOrIssue(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   const kind = stockBalanceEventKind(envelope);
   if (!kind) return;
 
-  const stockClass = typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : 'owned';
+  const stockClass =
+    typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : 'owned';
   // Task 4.5: consignment/vmi/job_work stock is not owned inventory for Ind AS 2 carrying value.
   if (stockClass !== 'owned') return;
 
@@ -211,9 +275,9 @@ async function applyReceiptOrIssue(envelope: EventEnvelope, client: PoolClient, 
     // Dev Notes: unit_cost stays OPTIONAL on stock.received for legacy/non-valuated events - a
     // receipt that omits it is a physically valid movement that simply contributes no cost basis.
     if (typeof unitCost !== 'number') {
-    await lockInventoryValuation(sku, client);
-    return;
-  }
+      await lockInventoryValuation(sku, client);
+      return;
+    }
 
     await applyValuationReceipt(sku, quantity, unitCost, client);
 
@@ -223,7 +287,10 @@ async function applyReceiptOrIssue(envelope: EventEnvelope, client: PoolClient, 
       const serials = envelope.payload['serials'] as Array<{ serial_number: string }> | undefined;
       if (serials && serials.length > 0) {
         for (const serial of serials) {
-          await upsertSerialCost({ sku, serial_number: serial.serial_number, unit_cost: unitCost }, client);
+          await upsertSerialCost(
+            { sku, serial_number: serial.serial_number, unit_cost: unitCost },
+            client,
+          );
         }
       } else {
         throw new AppError(
@@ -254,12 +321,18 @@ async function applyReceiptOrIssue(envelope: EventEnvelope, client: PoolClient, 
     // weighted_average: cost the issue at the CURRENT running average (locked - Dev Notes: lock
     // the valuation row before update). Issues never change the average itself, only receipts do.
     const current = await lockInventoryValuation(sku, client);
-    cost = quantity * (current.running_average_cost !== null ? monToNum(current.running_average_cost) : 0);
+    cost =
+      quantity *
+      (current.running_average_cost !== null ? monToNum(current.running_average_cost) : 0);
   }
   await applyValuationIssue(sku, quantity, cost, client);
 }
 
-async function applyNrvWriteDown(envelope: EventEnvelope, client: PoolClient, eventId: string): Promise<void> {
+async function applyNrvWriteDown(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   const sku = envelope.payload['sku'] as string;
   const nrvAmount = envelope.payload['nrv_amount'] as number;
   const effectiveDate = envelope.payload['effective_date'] as string;
@@ -269,14 +342,21 @@ async function applyNrvWriteDown(envelope: EventEnvelope, client: PoolClient, ev
 
   const current = await lockInventoryValuation(sku, client);
   if (cmpMonetary(current.carrying_value, '0') <= 0) {
-    throw new AppError(400, 'INVALID_PARAMS', `Item "${sku}" has no carrying value to write down`, { sku });
+    throw new AppError(400, 'INVALID_PARAMS', `Item "${sku}" has no carrying value to write down`, {
+      sku,
+    });
   }
   if (cmpMonetary(String(nrvAmount), current.carrying_value) >= 0) {
-    throw new AppError(400, 'INVALID_PARAMS', 'nrv_amount must be less than the current carrying value', {
-      sku,
-      nrv_amount: nrvAmount,
-      current_carrying_value: current.carrying_value,
-    });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'nrv_amount must be less than the current carrying value',
+      {
+        sku,
+        nrv_amount: nrvAmount,
+        current_carrying_value: current.carrying_value,
+      },
+    );
   }
 
   const writeDownAmount = monToNum(current.carrying_value) - nrvAmount;
@@ -285,9 +365,21 @@ async function applyNrvWriteDown(envelope: EventEnvelope, client: PoolClient, ev
   const originalCost = current.pre_writedown_cost ?? current.carrying_value;
   const cumulativeWriteDownAfter = monToNum(current.cumulative_write_down) + writeDownAmount;
 
-  await assertDoaApprovedAuthoriser('inventory.nrv_write_down', writeDownAmount, authoriserActorId, effectiveDate, client);
+  await assertDoaApprovedAuthoriser(
+    'inventory.nrv_write_down',
+    writeDownAmount,
+    authoriserActorId,
+    effectiveDate,
+    client,
+  );
 
-await applyValuationNrvDelta(sku, -writeDownAmount, monToNum(originalCost), writeDownAmount, client);
+  await applyValuationNrvDelta(
+    sku,
+    -writeDownAmount,
+    monToNum(originalCost),
+    writeDownAmount,
+    client,
+  );
   await insertNrvAdjustment(
     {
       sku,
@@ -312,7 +404,11 @@ await applyValuationNrvDelta(sku, -writeDownAmount, monToNum(originalCost), writ
   envelope.payload['cumulative_write_down'] = cumulativeWriteDownAfter;
 }
 
-async function applyNrvRecovery(envelope: EventEnvelope, client: PoolClient, eventId: string): Promise<void> {
+async function applyNrvRecovery(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   const sku = envelope.payload['sku'] as string;
   const recoveryAmount = envelope.payload['recovery_amount'] as number;
   const effectiveDate = envelope.payload['effective_date'] as string;
@@ -322,27 +418,53 @@ async function applyNrvRecovery(envelope: EventEnvelope, client: PoolClient, eve
 
   const current = await lockInventoryValuation(sku, client);
   if (current.pre_writedown_cost === null) {
-    throw new AppError(400, 'INVALID_PARAMS', `Item "${sku}" has no active write-down to recover against`, { sku });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `Item "${sku}" has no active write-down to recover against`,
+      { sku },
+    );
   }
 
   const postRecoveryCarryingValue = monToNum(current.carrying_value) + recoveryAmount;
   if (cmpMonetary(String(postRecoveryCarryingValue), current.pre_writedown_cost) > 0) {
-    throw new AppError(409, 'NRV_RECOVERY_EXCEEDS_ORIGINAL_COST', 'Recovery would carry the item above its original cost', {
-      sku,
-      recovery_amount: recoveryAmount,
-      current_carrying_value: current.carrying_value,
-      original_cost: current.pre_writedown_cost,
-      post_recovery_carrying_value: postRecoveryCarryingValue,
-    });
+    throw new AppError(
+      409,
+      'NRV_RECOVERY_EXCEEDS_ORIGINAL_COST',
+      'Recovery would carry the item above its original cost',
+      {
+        sku,
+        recovery_amount: recoveryAmount,
+        current_carrying_value: current.carrying_value,
+        original_cost: current.pre_writedown_cost,
+        post_recovery_carrying_value: postRecoveryCarryingValue,
+      },
+    );
   }
 
-  await assertDoaApprovedAuthoriser('inventory.nrv_recovery', recoveryAmount, authoriserActorId, effectiveDate, client);
+  await assertDoaApprovedAuthoriser(
+    'inventory.nrv_recovery',
+    recoveryAmount,
+    authoriserActorId,
+    effectiveDate,
+    client,
+  );
 
-  const fullyRecovered = cmpMonetary(String(postRecoveryCarryingValue), current.pre_writedown_cost) >= 0;
+  const fullyRecovered =
+    cmpMonetary(String(postRecoveryCarryingValue), current.pre_writedown_cost) >= 0;
   const originalCost = current.pre_writedown_cost;
-  const cumulativeWriteDownAfter = Math.max(0, monToNum(current.cumulative_write_down) - recoveryAmount);
+  const cumulativeWriteDownAfter = Math.max(
+    0,
+    monToNum(current.cumulative_write_down) - recoveryAmount,
+  );
 
-  await applyValuationNrvDelta(sku, recoveryAmount, fullyRecovered ? null : monToNum(originalCost), -recoveryAmount, client);
+  await applyValuationNrvDelta(
+    sku,
+    recoveryAmount,
+    fullyRecovered ? null : monToNum(originalCost),
+    -recoveryAmount,
+    client,
+  );
   await insertNrvAdjustment(
     {
       sku,
@@ -366,19 +488,37 @@ async function applyNrvRecovery(envelope: EventEnvelope, client: PoolClient, eve
   envelope.payload['post_recovery_carrying_value'] = postRecoveryCarryingValue;
 }
 
-async function applyStandardCostVarianceReview(envelope: EventEnvelope, client: PoolClient, eventId: string): Promise<void> {
+async function applyStandardCostVarianceReview(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   const sku = envelope.payload['sku'] as string;
   const period = envelope.payload['period'] as string;
 
   const item = await getItemBySku(sku, client);
-  if (!item || item.standard_cost_designation !== STANDARD_COST_DESIGNATION || item.standard_cost_amount === null) {
-    throw new AppError(400, 'INVALID_PARAMS', `Item "${sku}" is not configured for the standard-cost measurement technique`, { sku });
+  if (
+    !item ||
+    item.standard_cost_designation !== STANDARD_COST_DESIGNATION ||
+    item.standard_cost_amount === null
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `Item "${sku}" is not configured for the standard-cost measurement technique`,
+      { sku },
+    );
   }
 
-const current = await lockInventoryValuation(sku, client);
+  const current = await lockInventoryValuation(sku, client);
   const qtyOnHand = monToNum(current.quantity_on_hand);
   if (qtyOnHand <= 0) {
-    throw new AppError(400, 'INVALID_PARAMS', `Item "${sku}" has no quantity on hand to review variance against`, { sku });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `Item "${sku}" has no quantity on hand to review variance against`,
+      { sku },
+    );
   }
 
   const standardCost = item.standard_cost_amount!;
@@ -389,7 +529,9 @@ const current = await lockInventoryValuation(sku, client);
   const breached =
     standardCost === 0
       ? Math.abs(varianceAmount) > 0
-      : tolerancePercent !== null && variancePercent !== null && Math.abs(variancePercent) > tolerancePercent;
+      : tolerancePercent !== null &&
+        variancePercent !== null &&
+        Math.abs(variancePercent) > tolerancePercent;
 
   await insertStandardCostVarianceReview(
     {
@@ -414,7 +556,11 @@ const current = await lockInventoryValuation(sku, client);
   envelope.payload['breached'] = breached;
 }
 
-export async function applyInventoryValuationProjection(envelope: EventEnvelope, client: PoolClient, eventId: string): Promise<void> {
+export async function applyInventoryValuationProjection(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   if (!VALUATION_STREAM_TYPES.has(envelope.stream_type)) return;
   if (!VALUATION_EVENT_TYPES.has(envelope.event_type)) return;
 

@@ -78,35 +78,69 @@ export function assertWeighbridgeRecordedShape(envelope: EventEnvelope): void {
   if (weighbridgeEventType(envelope) !== 'weighbridge.recorded') return;
   const p = envelope.payload;
 
-  if (!isUuid(p['weighbridge_event_id'])) throw new AppError(400, 'INVALID_PARAMS', 'weighbridge_event_id is required and must be a UUID');
-  if (!isUuid(p['correlation_id'])) throw new AppError(400, 'WEIGHBRIDGE_BINDING_TOKEN_REQUIRED', 'correlation_id (binding token) is required and must be a UUID');
+  if (!isUuid(p['weighbridge_event_id']))
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'weighbridge_event_id is required and must be a UUID',
+    );
+  if (!isUuid(p['correlation_id']))
+    throw new AppError(
+      400,
+      'WEIGHBRIDGE_BINDING_TOKEN_REQUIRED',
+      'correlation_id (binding token) is required and must be a UUID',
+    );
 
   const tareMilli = parseKgToMilli(p['tare_kg']);
-  if (tareMilli === null) throw new AppError(400, 'WEIGHBRIDGE_TARE_REQUIRED', 'tare_kg is required and must be a non-negative weight');
+  if (tareMilli === null)
+    throw new AppError(
+      400,
+      'WEIGHBRIDGE_TARE_REQUIRED',
+      'tare_kg is required and must be a non-negative weight',
+    );
   const grossMilli = parseKgToMilli(p['gross_kg']);
-  if (grossMilli === null) throw new AppError(400, 'WEIGHBRIDGE_GROSS_REQUIRED', 'gross_kg is required and must be a non-negative weight');
+  if (grossMilli === null)
+    throw new AppError(
+      400,
+      'WEIGHBRIDGE_GROSS_REQUIRED',
+      'gross_kg is required and must be a non-negative weight',
+    );
 
   const poRef = trimmed(p['po_ref_ext']);
   if (!poRef) throw new AppError(400, 'INVALID_PARAMS', 'po_ref_ext is required');
   p['po_ref_ext'] = poRef;
 
   const lineNo = p['line_no'];
-  if (typeof lineNo !== 'number' || !Number.isInteger(lineNo) || lineNo <= 0) throw new AppError(400, 'INVALID_PARAMS', 'line_no is required and must be a positive integer');
+  if (typeof lineNo !== 'number' || !Number.isInteger(lineNo) || lineNo <= 0)
+    throw new AppError(400, 'INVALID_PARAMS', 'line_no is required and must be a positive integer');
 
-  if (!isNonEmptyString(p['device_id'])) throw new AppError(400, 'INVALID_PARAMS', 'device_id is required');
+  if (!isNonEmptyString(p['device_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'device_id is required');
   p['device_id'] = (p['device_id'] as string).trim();
 
-  if (p['capture_method'] !== 'AUTO' && p['capture_method'] !== 'MANUAL') throw new AppError(400, 'INVALID_PARAMS', "capture_method must be 'AUTO' or 'MANUAL'");
-  if (!isUuid(p['weighed_by'])) throw new AppError(400, 'INVALID_PARAMS', 'weighed_by is required and must be a UUID');
+  if (p['capture_method'] !== 'AUTO' && p['capture_method'] !== 'MANUAL')
+    throw new AppError(400, 'INVALID_PARAMS', "capture_method must be 'AUTO' or 'MANUAL'");
+  if (!isUuid(p['weighed_by']))
+    throw new AppError(400, 'INVALID_PARAMS', 'weighed_by is required and must be a UUID');
 
   if (p['site_code_ext'] !== undefined && p['site_code_ext'] !== null) {
     const siteCode = trimmed(p['site_code_ext']);
-    if (!siteCode) throw new AppError(400, 'INVALID_PARAMS', 'site_code_ext must be a non-empty string when supplied');
+    if (!siteCode)
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'site_code_ext must be a non-empty string when supplied',
+      );
     p['site_code_ext'] = siteCode;
   }
 
   const netMilli = grossMilli - tareMilli;
-  if (netMilli < 0n) throw new AppError(400, 'WEIGHBRIDGE_NET_NEGATIVE', 'net_kg (gross - tare) must not be negative');
+  if (netMilli < 0n)
+    throw new AppError(
+      400,
+      'WEIGHBRIDGE_NET_NEGATIVE',
+      'net_kg (gross - tare) must not be negative',
+    );
 
   p['tare_kg'] = milliToKgString(tareMilli);
   p['gross_kg'] = milliToKgString(grossMilli);
@@ -119,7 +153,11 @@ export function assertWeighbridgeRecordedShape(envelope: EventEnvelope): void {
  * SQL NUMERIC (never JS float), and upserts an idempotent, replay-safe weighbridge_event row. Never
  * writes any erp_* projection - the ERP feed stays read-only (INT-ERP-01).
  */
-export async function applyWeighbridgeProjection(envelope: EventEnvelope, client: PoolClient, eventId: string): Promise<void> {
+export async function applyWeighbridgeProjection(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   if (weighbridgeEventType(envelope) !== 'weighbridge.recorded') return;
   if (await alreadyPersisted(envelope, client)) return;
   const p = envelope.payload;
@@ -137,7 +175,12 @@ export async function applyWeighbridgeProjection(envelope: EventEnvelope, client
     [correlationId],
   );
   if (gateResult.rows.length === 0) {
-    throw new AppError(404, 'WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND', `No active gate event exists for binding token "${correlationId}"`, { correlation_id: correlationId });
+    throw new AppError(
+      404,
+      'WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND',
+      `No active gate event exists for binding token "${correlationId}"`,
+      { correlation_id: correlationId },
+    );
   }
   const gate = gateResult.rows[0]!;
   const gateSiteId = gate['site_id'] as string;
@@ -146,17 +189,28 @@ export async function applyWeighbridgeProjection(envelope: EventEnvelope, client
 
   // Site match (AC3 guard): if the operator supplied a weighbridge site, it must resolve to the same
   // physical site the gate event was captured at; otherwise the weighment inherits the gate site.
-  const suppliedSiteCode = typeof p['site_code_ext'] === 'string' ? (p['site_code_ext'] as string) : null;
+  const suppliedSiteCode =
+    typeof p['site_code_ext'] === 'string' ? (p['site_code_ext'] as string) : null;
   if (suppliedSiteCode) {
     const site = await getLocationByCode(suppliedSiteCode, client);
     if (!site || site.status !== 'active' || site.level !== 'site') {
-      throw new AppError(404, 'WEIGHBRIDGE_SITE_MISMATCH', `No active site exists for "${suppliedSiteCode}"`, { site_code_ext: suppliedSiteCode });
+      throw new AppError(
+        404,
+        'WEIGHBRIDGE_SITE_MISMATCH',
+        `No active site exists for "${suppliedSiteCode}"`,
+        { site_code_ext: suppliedSiteCode },
+      );
     }
     if (site.location_id !== gateSiteId) {
-      throw new AppError(409, 'WEIGHBRIDGE_SITE_MISMATCH', 'Weighbridge site differs from the gate-event site for this binding token', {
-        weighbridge_site_id: site.location_id,
-        gate_site_id: gateSiteId,
-      });
+      throw new AppError(
+        409,
+        'WEIGHBRIDGE_SITE_MISMATCH',
+        'Weighbridge site differs from the gate-event site for this binding token',
+        {
+          weighbridge_site_id: site.location_id,
+          gate_site_id: gateSiteId,
+        },
+      );
     }
     siteId = site.location_id;
     siteCodeExt = suppliedSiteCode;
@@ -179,7 +233,12 @@ export async function applyWeighbridgeProjection(envelope: EventEnvelope, client
     [poRef, lineNo, netKg],
   );
   if (bandResult.rows.length === 0) {
-    throw new AppError(404, 'WEIGHBRIDGE_PO_LINE_NOT_FOUND', `No open PO line ${lineNo} exists for PO "${poRef}"`, { po_ref_ext: poRef, line_no: lineNo });
+    throw new AppError(
+      404,
+      'WEIGHBRIDGE_PO_LINE_NOT_FOUND',
+      `No open PO line ${lineNo} exists for PO "${poRef}"`,
+      { po_ref_ext: poRef, line_no: lineNo },
+    );
   }
   const band = bandResult.rows[0]!;
   const within = band['within'] === true;
@@ -188,7 +247,9 @@ export async function applyWeighbridgeProjection(envelope: EventEnvelope, client
     ? null
     : `Net weight ${netKg} kg is outside the accepted tolerance band [${band['lower_bound'] as string}, ${band['upper_bound'] as string}] for PO ${poRef} line ${lineNo}`;
 
-  const occurredAt = envelope.metadata.occurred_at ? new Date(envelope.metadata.occurred_at) : new Date();
+  const occurredAt = envelope.metadata.occurred_at
+    ? new Date(envelope.metadata.occurred_at)
+    : new Date();
 
   await upsertWeighbridgeEvent(
     {

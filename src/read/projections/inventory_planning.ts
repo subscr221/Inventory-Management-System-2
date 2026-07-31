@@ -67,9 +67,11 @@ function mapRow(row: Record<string, unknown>): PlanningParamsRow {
     avg_daily_demand: num(row['avg_daily_demand']),
     demand_std_dev: num(row['demand_std_dev']),
     demand_window_days: Number(row['demand_window_days']),
-    obsolescence_threshold_days: row['obsolescence_threshold_days'] === null || row['obsolescence_threshold_days'] === undefined
-      ? null
-      : Number(row['obsolescence_threshold_days']),
+    obsolescence_threshold_days:
+      row['obsolescence_threshold_days'] === null ||
+      row['obsolescence_threshold_days'] === undefined
+        ? null
+        : Number(row['obsolescence_threshold_days']),
     standard_order_qty: num(row['standard_order_qty']),
     safety_stock: num(row['safety_stock']),
     reorder_point: num(row['reorder_point']),
@@ -110,7 +112,10 @@ export interface PlanningScope {
 }
 
 /** All params rows matching a compute/check/scan scope, deterministically ordered. */
-export async function listPlanningParams(scope: PlanningScope, client?: PoolClient): Promise<PlanningParamsRow[]> {
+export async function listPlanningParams(
+  scope: PlanningScope,
+  client?: PoolClient,
+): Promise<PlanningParamsRow[]> {
   const conditions: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -157,7 +162,10 @@ export interface UpsertPlanningParamsInput {
  * planning_params_id, computed outputs, and computation_inputs are PRESERVED - only the caller-set
  * config fields change, so a config edit never silently discards a prior valid computation.
  */
-export async function upsertPlanningParams(input: UpsertPlanningParamsInput, client: PoolClient): Promise<void> {
+export async function upsertPlanningParams(
+  input: UpsertPlanningParamsInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO inventory_planning_params (
        planning_params_id, sku, location_id, lead_time_days, lead_time_source, service_level,
@@ -201,7 +209,10 @@ export interface ApplyComputationInput {
 }
 
 /** Stamps the computed safety stock, reorder point, demand statistics, and input snapshot. */
-export async function applySafetyStockComputation(input: ApplyComputationInput, client: PoolClient): Promise<void> {
+export async function applySafetyStockComputation(
+  input: ApplyComputationInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `UPDATE inventory_planning_params
      SET safety_stock = $3::numeric,

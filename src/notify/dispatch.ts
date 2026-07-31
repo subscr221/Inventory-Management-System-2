@@ -60,7 +60,9 @@ function resolveOccurredAt(event: NotificationCreatedEventRow): string {
     const parsed = new Date(raw).getTime();
     if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
   }
-  return event.created_at instanceof Date ? event.created_at.toISOString() : new Date(event.created_at).toISOString();
+  return event.created_at instanceof Date
+    ? event.created_at.toISOString()
+    : new Date(event.created_at).toISOString();
 }
 
 interface NotificationCreatedPayload {
@@ -101,14 +103,21 @@ async function findUndispatchedEvents(limit: number): Promise<NotificationCreate
   return result.rows as NotificationCreatedEventRow[];
 }
 
-async function resolveTargetUserIds(role: string, locationId: string | null, client: PoolClient): Promise<string[]> {
+async function resolveTargetUserIds(
+  role: string,
+  locationId: string | null,
+  client: PoolClient,
+): Promise<string[]> {
   const params: unknown[] = [role];
   let locationClause = '';
   if (locationId) {
     params.push(locationId);
     locationClause = `AND (location_id = $2 OR location_id = '*')`;
   }
-  const result = await client.query(`SELECT DISTINCT user_id FROM user_role_assignments WHERE role = $1 ${locationClause}`, params);
+  const result = await client.query(
+    `SELECT DISTINCT user_id FROM user_role_assignments WHERE role = $1 ${locationClause}`,
+    params,
+  );
   return result.rows.map((row) => row['user_id'] as string);
 }
 
@@ -169,7 +178,11 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
       // request) via the event's correlation_id, rather than an unrelated fresh UUID.
       const traceId = event.metadata.correlation_id ?? event.event_id;
 
-      const userIds = await resolveTargetUserIds(payload.target.role, payload.target.location_id, client);
+      const userIds = await resolveTargetUserIds(
+        payload.target.role,
+        payload.target.location_id,
+        client,
+      );
 
       for (const userId of userIds) {
         const notification = await insertNotification(
@@ -191,7 +204,13 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
         notificationsCreated += 1;
 
         await recordDelivery(
-          { notification_id: notification.notification_id, channel: 'in_app', outcome: 'delivered', trace_id: traceId, failure_reason: null },
+          {
+            notification_id: notification.notification_id,
+            channel: 'in_app',
+            outcome: 'delivered',
+            trace_id: traceId,
+            failure_reason: null,
+          },
           client,
         );
 
@@ -201,7 +220,12 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
         if (await isOptedIn(userId, payload.event_type, client)) {
           const subscriptions = await listPushSubscriptionsForUser(userId, client);
           if (subscriptions.length > 0) {
-            pendingPush.push({ notificationId: notification.notification_id, traceId, subscriptions, payload });
+            pendingPush.push({
+              notificationId: notification.notification_id,
+              traceId,
+              subscriptions,
+              payload,
+            });
           }
         }
       }
@@ -216,7 +240,9 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
         // gives its recipients the full window, instead of arriving already past its deadline
         // and storming the escalation tier the moment the dispatcher recovers.
         const deadlineBaseMs = Math.max(new Date(occurredAt).getTime(), Date.now());
-        const deadlineAt = new Date(deadlineBaseMs + payload.escalation.acknowledgment_window_seconds * 1000).toISOString();
+        const deadlineAt = new Date(
+          deadlineBaseMs + payload.escalation.acknowledgment_window_seconds * 1000,
+        ).toISOString();
         await upsertEscalationDef(
           {
             source_event_id: event.event_id,
@@ -232,7 +258,10 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK').catch(() => undefined);
-      console.error(`Notification dispatch failed for event ${event.event_id} - will retry with backoff:`, err);
+      console.error(
+        `Notification dispatch failed for event ${event.event_id} - will retry with backoff:`,
+        err,
+      );
       client.release();
       await recordFailedAttempt(event, err);
       continue;
@@ -259,7 +288,12 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
           outcome: pushResult.ok ? 'delivered' : 'failed',
           trace_id: job.traceId,
           failure_reason: pushResult.failureReason,
-        }).catch((err) => console.error(`Recording web_push delivery failed for notification ${job.notificationId}:`, err));
+        }).catch((err) =>
+          console.error(
+            `Recording web_push delivery failed for notification ${job.notificationId}:`,
+            err,
+          ),
+        );
       }
     }
   }
@@ -277,19 +311,29 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
  * notification_dispatch_attempts row to re-drive). Never throws: bookkeeping failure must not
  * abort the batch loop, and the event stays due for retry regardless.
  */
-async function recordFailedAttempt(event: NotificationCreatedEventRow, err: unknown): Promise<void> {
+async function recordFailedAttempt(
+  event: NotificationCreatedEventRow,
+  err: unknown,
+): Promise<void> {
   try {
-    const failure = await recordDispatchFailure(event.event_id, err instanceof Error ? err.message : String(err), {
-      maxAttempts: config.notify.dispatchMaxAttempts,
-      baseBackoffSeconds: BACKOFF_BASE_SECONDS,
-      maxBackoffSeconds: BACKOFF_CAP_SECONDS,
-    });
+    const failure = await recordDispatchFailure(
+      event.event_id,
+      err instanceof Error ? err.message : String(err),
+      {
+        maxAttempts: config.notify.dispatchMaxAttempts,
+        baseBackoffSeconds: BACKOFF_BASE_SECONDS,
+        maxBackoffSeconds: BACKOFF_CAP_SECONDS,
+      },
+    );
     if (!failure.dead) return;
 
-    console.error(`Notification event ${event.event_id} dead-lettered after ${failure.attempts} failed dispatch attempts`);
+    console.error(
+      `Notification event ${event.event_id} dead-lettered after ${failure.attempts} failed dispatch attempts`,
+    );
     // Recursion guard: a dead-letter alert that itself dead-letters (systemic failure - e.g. the
     // DB rejecting all fan-out) never raises another alert, bounding the chain at one hop.
-    const failedEventType = (event.payload as Partial<NotificationCreatedPayload> | null)?.event_type;
+    const failedEventType = (event.payload as Partial<NotificationCreatedPayload> | null)
+      ?.event_type;
     if (failedEventType === DEAD_LETTER_EVENT_TYPE) return;
 
     await emitNotification({
@@ -299,7 +343,8 @@ async function recordFailedAttempt(event: NotificationCreatedEventRow, err: unkn
       object_type: 'notification_event',
       object_id: event.event_id,
       actor_label: 'Notification Foundation',
-      next_step: 'Investigate the dispatch failure, fix the cause, then clear its notification_dispatch_attempts row to re-drive',
+      next_step:
+        'Investigate the dispatch failure, fix the cause, then clear its notification_dispatch_attempts row to re-drive',
       actor: SYSTEM_ACTOR,
       causation_id: event.event_id,
       ...(event.metadata.correlation_id ? { correlation_id: event.metadata.correlation_id } : {}),

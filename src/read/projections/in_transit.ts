@@ -37,7 +37,10 @@ function runner(client?: PoolClient): Queryable {
 }
 
 /** Insert an in-transit record. Must run inside the same transaction as the ship event. */
-export async function insertInTransitRecord(input: InsertInTransitInput, client: PoolClient): Promise<void> {
+export async function insertInTransitRecord(
+  input: InsertInTransitInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO in_transit (sku_id, location_from, location_to, lot_id, quantity,
                             transfer_request_id, correlation_id, ship_event_id)
@@ -56,7 +59,10 @@ export async function insertInTransitRecord(input: InsertInTransitInput, client:
 }
 
 /** Clear (delete) an in-transit record when the receive posts. Must run inside the same transaction. */
-export async function clearInTransitRecord(transferRequestId: string, client: PoolClient): Promise<void> {
+export async function clearInTransitRecord(
+  transferRequestId: string,
+  client: PoolClient,
+): Promise<void> {
   await client.query(`DELETE FROM in_transit WHERE transfer_request_id = $1`, [transferRequestId]);
 }
 
@@ -112,6 +118,8 @@ function mapRow(row: Record<string, unknown>): InTransitRow {
     correlation_id: (row['correlation_id'] as string) ?? null,
     ship_event_id: (row['ship_event_id'] as string) ?? null,
     created_at:
-      row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']),
+      row['created_at'] instanceof Date
+        ? row['created_at'].toISOString()
+        : String(row['created_at']),
   };
 }

@@ -87,20 +87,33 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
 function stockEnvelope(
   eventType: string,
   payload: Record<string, unknown>,
-  extra: { stream_id?: string; idempotency_key?: string; event_id?: string; device_id?: string; actor_location_id?: string } = {},
+  extra: {
+    stream_id?: string;
+    idempotency_key?: string;
+    event_id?: string;
+    device_id?: string;
+    actor_location_id?: string;
+  } = {},
 ) {
   return {
     ...(extra.event_id ? { event_id: extra.event_id } : {}),
@@ -225,37 +238,65 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
     const lot1Number = 'LOT-2026-001';
     const lot2Number = 'LOT-2026-002';
 
-    await persistEvent(stockEnvelope('stock.received', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 100,
-      lot_id: lot1Number,
-      expiry_date: '2026-09-30',
-    }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 100,
+          lot_id: lot1Number,
+          expiry_date: '2026-09-30',
+        },
+        { actor_location_id: locAId },
+      ),
+    );
 
-    await persistEvent(stockEnvelope('stock.received', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 100,
-      lot_id: lot2Number,
-      expiry_date: '2026-12-31',
-    }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 100,
+          lot_id: lot2Number,
+          expiry_date: '2026-12-31',
+        },
+        { actor_location_id: locAId },
+      ),
+    );
 
-    const selectRes = await makeRequest(port, 'POST', '/api/v1/stock/RM-0042/select-lot', {
-      location_id: locAId,
-      quantity: 10,
-      fifo_mode: 'fefo',
-    }, operatorHeaders);
+    const selectRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/stock/RM-0042/select-lot',
+      {
+        location_id: locAId,
+        quantity: 10,
+        fifo_mode: 'fefo',
+      },
+      operatorHeaders,
+    );
 
     assert.strictEqual(selectRes.status, 200);
     assert.strictEqual(selectRes.body['lot_number'], lot1Number);
 
-    const issueRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 10,
-      fefo_mode: 'fefo',
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const issueRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.issued',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 10,
+          fefo_mode: 'fefo',
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
 
     assert.strictEqual(issueRes.status, 201);
     assert.strictEqual((issueRes.body['payload'] as Record<string, unknown>)['lot_id'], lot1Number);
@@ -265,118 +306,220 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
   it('AC2: Reject issue of expired lot without override', async () => {
     // Create an expired lot
     const expiredLotNumber = 'LOT-EXPIRED-001';
-    await persistEvent(stockEnvelope('stock.received', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 50,
-      lot_id: expiredLotNumber,
-      expiry_date: '2020-01-01',
-    }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 50,
+          lot_id: expiredLotNumber,
+          expiry_date: '2020-01-01',
+        },
+        { actor_location_id: locAId },
+      ),
+    );
 
     // Attempt issue without override - should fail
-    const issueRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 10,
-      lot_id: expiredLotNumber,
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const issueRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.issued',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 10,
+          lot_id: expiredLotNumber,
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
 
     assert.strictEqual(issueRes.status, 400);
     assert.strictEqual(issueRes.body['error_code'], 'LOT_EXPIRED');
-    assert.ok(issueRes.body['details'] && (issueRes.body['details'] as Record<string, unknown>)['expiryDate']);
+    assert.ok(
+      issueRes.body['details'] &&
+        (issueRes.body['details'] as Record<string, unknown>)['expiryDate'],
+    );
 
     // A role without override authority (lot_operator is not on the exact-match allowlist) must
     // be rejected even with override_expired_lot: true - proves the allowlist check actually
     // gates, not just that the flag exists (Story 2.3 re-review: exact-match, not substring).
-    const deniedOverrideRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 10,
-      lot_id: expiredLotNumber,
-      override_expired_lot: true,
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const deniedOverrideRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.issued',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 10,
+          lot_id: expiredLotNumber,
+          override_expired_lot: true,
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
     assert.strictEqual(deniedOverrideRes.status, 403);
     assert.strictEqual(deniedOverrideRes.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
     // Retry through the HTTP layer (not a direct persistEvent bypass) with an actor whose
     // authenticated, RBAC-resolved role IS on the allowlist - proves the override actually
     // succeeds end-to-end, not just that a bypassed call doesn't throw.
-    const overrideRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 10,
-      lot_id: expiredLotNumber,
-      override_expired_lot: true,
-    }, { actor_location_id: locAId }), qualityHeaders);
+    const overrideRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.issued',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 10,
+          lot_id: expiredLotNumber,
+          override_expired_lot: true,
+        },
+        { actor_location_id: locAId },
+      ),
+      qualityHeaders,
+    );
     assert.strictEqual(overrideRes.status, 201);
-    assert.strictEqual((overrideRes.body['payload'] as Record<string, unknown>)['lot_id'], expiredLotNumber);
+    assert.strictEqual(
+      (overrideRes.body['payload'] as Record<string, unknown>)['lot_id'],
+      expiredLotNumber,
+    );
   });
 
   // AC3: Quality hold rejection
   it('AC3: Reject issue of lot on quality hold', async () => {
     // Create a lot and place it on quality hold
     const heldLotNumber = 'LOT-HELD-001';
-    await persistEvent(stockEnvelope('stock.received', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 50,
-      lot_id: heldLotNumber,
-      expiry_date: '2026-12-31',
-    }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 50,
+          lot_id: heldLotNumber,
+          expiry_date: '2026-12-31',
+        },
+        { actor_location_id: locAId },
+      ),
+    );
 
     // Place quality hold
-    const holdRes = await makeRequest(port, 'PUT', `/api/v1/lots/${heldLotNumber}/quality-hold`, {
-      hold_reason: 'Quality inspection failed',
-    }, qualityHeaders);
+    const holdRes = await makeRequest(
+      port,
+      'PUT',
+      `/api/v1/lots/${heldLotNumber}/quality-hold`,
+      {
+        hold_reason: 'Quality inspection failed',
+      },
+      qualityHeaders,
+    );
 
     assert.strictEqual(holdRes.status, 200);
     assert.strictEqual(holdRes.body['quality_hold_status'], 'held');
 
     // Attempt issue - should fail
-    const issueRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 10,
-      lot_id: heldLotNumber,
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const issueRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.issued',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 10,
+          lot_id: heldLotNumber,
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
 
     assert.strictEqual(issueRes.status, 400);
     assert.strictEqual(issueRes.body['error_code'], 'LOT_ON_HOLD');
-    assert.strictEqual((issueRes.body['details'] as Record<string, unknown>)['reason'], 'Quality inspection failed');
+    assert.strictEqual(
+      (issueRes.body['details'] as Record<string, unknown>)['reason'],
+      'Quality inspection failed',
+    );
 
     // AC3 also covers allocation, not just issue - a held lot must reject stock.allocated too.
-    const allocateRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.allocated', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 10,
-      lot_id: heldLotNumber,
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const allocateRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.allocated',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 10,
+          lot_id: heldLotNumber,
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
 
     assert.strictEqual(allocateRes.status, 400);
     assert.strictEqual(allocateRes.body['error_code'], 'LOT_ON_HOLD');
-    assert.strictEqual((allocateRes.body['details'] as Record<string, unknown>)['reason'], 'Quality inspection failed');
+    assert.strictEqual(
+      (allocateRes.body['details'] as Record<string, unknown>)['reason'],
+      'Quality inspection failed',
+    );
 
     // Clear hold
-    const clearRes = await makeRequest(port, 'DELETE', `/api/v1/lots/${heldLotNumber}/quality-hold`, {}, qualityHeaders);
+    const clearRes = await makeRequest(
+      port,
+      'DELETE',
+      `/api/v1/lots/${heldLotNumber}/quality-hold`,
+      {},
+      qualityHeaders,
+    );
     assert.strictEqual(clearRes.status, 200);
     assert.strictEqual(clearRes.body['quality_hold_status'] as string, 'none');
 
-    const retryRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 10,
-      lot_id: heldLotNumber,
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const retryRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.issued',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 10,
+          lot_id: heldLotNumber,
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
     assert.strictEqual(retryRes.status, 201);
   });
 
   it('AC4: Lot trace returns all transactions and current balances within 500ms', async () => {
-    await persistEvent(stockEnvelope('stock.allocated', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 5,
-      lot_id: 'LOT-2026-001',
-    }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.allocated',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 5,
+          lot_id: 'LOT-2026-001',
+        },
+        { actor_location_id: locAId },
+      ),
+    );
 
     // AC4's threshold is a p95, not "the one time I measured it" - take enough samples that a
     // single slow outlier (GC pause, connection setup) can't flip the assertion either way.
@@ -385,31 +528,65 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
     let traceRes!: HttpResult;
     for (let i = 0; i < SAMPLE_COUNT; i++) {
       const startedAt = performance.now();
-      traceRes = await makeRequest(port, 'GET', '/api/v1/lots/LOT-2026-001/trace', {}, operatorHeaders);
+      traceRes = await makeRequest(
+        port,
+        'GET',
+        '/api/v1/lots/LOT-2026-001/trace',
+        {},
+        operatorHeaders,
+      );
       durationsMs.push(performance.now() - startedAt);
       assert.strictEqual(traceRes.status, 200);
     }
     durationsMs.sort((a, b) => a - b);
     const p95DurationMs = durationsMs[Math.floor(SAMPLE_COUNT * 0.95) - 1]!;
-    assert.ok(p95DurationMs < 500, `p95 lot-trace latency ${p95DurationMs}ms exceeds the 500ms AC4 threshold`);
+    assert.ok(
+      p95DurationMs < 500,
+      `p95 lot-trace latency ${p95DurationMs}ms exceeds the 500ms AC4 threshold`,
+    );
 
     const trace = traceRes.body['trace'] as Array<Record<string, unknown>>;
     const balances = traceRes.body['balances_by_location'] as Array<Record<string, unknown>>;
 
     assert.strictEqual(traceRes.body['lot_number'], 'LOT-2026-001');
-    assert.ok(trace.some((entry) => entry['event_type'] === 'stock.received' && entry['location_id'] === locAId));
-    assert.ok(trace.some((entry) => entry['event_type'] === 'stock.issued' && entry['location_id'] === locAId));
-    assert.ok(trace.some((entry) => entry['event_type'] === 'stock.allocated' && entry['location_id'] === locAId));
-    assert.ok(balances.some((balance) => balance['location_id'] === locAId && balance['on_hand'] === 90 && balance['allocated'] === 5));
+    assert.ok(
+      trace.some(
+        (entry) => entry['event_type'] === 'stock.received' && entry['location_id'] === locAId,
+      ),
+    );
+    assert.ok(
+      trace.some(
+        (entry) => entry['event_type'] === 'stock.issued' && entry['location_id'] === locAId,
+      ),
+    );
+    assert.ok(
+      trace.some(
+        (entry) => entry['event_type'] === 'stock.allocated' && entry['location_id'] === locAId,
+      ),
+    );
+    assert.ok(
+      balances.some(
+        (balance) =>
+          balance['location_id'] === locAId &&
+          balance['on_hand'] === 90 &&
+          balance['allocated'] === 5,
+      ),
+    );
   });
 
   // AC5: Serial required for serial-controlled item
   it('AC5: Reject issue of serial-controlled item without serial numbers', async () => {
-    const issueRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU,
-      target_location_id: locAId,
-      quantity: 1,
-    }), operatorHeaders);
+    const issueRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope('stock.issued', {
+        sku: SKU,
+        target_location_id: locAId,
+        quantity: 1,
+      }),
+      operatorHeaders,
+    );
 
     assert.strictEqual(issueRes.status, 400);
     assert.strictEqual(issueRes.body['error_code'], 'SERIAL_REQUIRED');
@@ -418,58 +595,101 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
   // AC6: Duplicate serial rejection
   it('AC6: Reject duplicate serial number receipt', async () => {
     const serialNumber = 'SN-1001';
-    
+
     // First receipt should succeed
-    const firstReceipt = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
-      sku: SKU,
-      target_location_id: locAId,
-      quantity: 1,
-      serials: [{ serial_number: serialNumber, initial_quantity: 1 }],
-    }), operatorHeaders);
+    const firstReceipt = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope('stock.received', {
+        sku: SKU,
+        target_location_id: locAId,
+        quantity: 1,
+        serials: [{ serial_number: serialNumber, initial_quantity: 1 }],
+      }),
+      operatorHeaders,
+    );
 
     assert.strictEqual(firstReceipt.status, 201);
 
     // Second receipt with same serial should fail
-    const dupReceipt = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
-      sku: SKU,
-      target_location_id: locAId,
-      quantity: 1,
-      serials: [{ serial_number: serialNumber, initial_quantity: 1 }],
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const dupReceipt = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU,
+          target_location_id: locAId,
+          quantity: 1,
+          serials: [{ serial_number: serialNumber, initial_quantity: 1 }],
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
 
     assert.strictEqual(dupReceipt.status, 400);
     assert.strictEqual(dupReceipt.body['error_code'], 'DUPLICATE_SERIAL');
     // AC6 requires the location currently holding the serial to be returned, not just the
     // rejection code.
-    assert.strictEqual((dupReceipt.body['details'] as Record<string, unknown>)['currentLocationId'], locAId);
+    assert.strictEqual(
+      (dupReceipt.body['details'] as Record<string, unknown>)['currentLocationId'],
+      locAId,
+    );
   });
 
   it('FIFO selection picks oldest received lot', async () => {
-    await persistEvent(stockEnvelope('stock.received', {
-      sku: SKU_FIFO,
-      target_location_id: locAId,
-      quantity: 20,
-      lot_id: 'LOT-FIFO-OLD-LATE-EXPIRY',
-      expiry_date: '2026-12-31',
-    }, { actor_location_id: locAId }));
-    await persistEvent(stockEnvelope('stock.received', {
-      sku: SKU_FIFO,
-      target_location_id: locAId,
-      quantity: 20,
-      lot_id: 'LOT-FIFO-NEW-EARLY-EXPIRY',
-      expiry_date: '2026-08-31',
-    }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU_FIFO,
+          target_location_id: locAId,
+          quantity: 20,
+          lot_id: 'LOT-FIFO-OLD-LATE-EXPIRY',
+          expiry_date: '2026-12-31',
+        },
+        { actor_location_id: locAId },
+      ),
+    );
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU_FIFO,
+          target_location_id: locAId,
+          quantity: 20,
+          lot_id: 'LOT-FIFO-NEW-EARLY-EXPIRY',
+          expiry_date: '2026-08-31',
+        },
+        { actor_location_id: locAId },
+      ),
+    );
 
-    const fefoRes = await makeRequest(port, 'POST', `/api/v1/stock/${SKU_FIFO}/select-lot`, {
-      location_id: locAId,
-      quantity: 10,
-      fifo_mode: 'fefo',
-    }, operatorHeaders);
-    const fifoRes = await makeRequest(port, 'POST', `/api/v1/stock/${SKU_FIFO}/select-lot`, {
-      location_id: locAId,
-      quantity: 10,
-      fifo_mode: 'fifo',
-    }, operatorHeaders);
+    const fefoRes = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/stock/${SKU_FIFO}/select-lot`,
+      {
+        location_id: locAId,
+        quantity: 10,
+        fifo_mode: 'fefo',
+      },
+      operatorHeaders,
+    );
+    const fifoRes = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/stock/${SKU_FIFO}/select-lot`,
+      {
+        location_id: locAId,
+        quantity: 10,
+        fifo_mode: 'fifo',
+      },
+      operatorHeaders,
+    );
 
     assert.strictEqual(fefoRes.status, 200);
     assert.strictEqual(fifoRes.status, 200);
@@ -485,12 +705,22 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       { serial_number: `SN-BATCH-${Date.now()}-3`, initial_quantity: 1 },
     ];
 
-    const receiptRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
-      sku: SKU,
-      target_location_id: locAId,
-      quantity: 3,
-      serials,
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const receiptRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU,
+          target_location_id: locAId,
+          quantity: 3,
+          serials,
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
 
     assert.strictEqual(receiptRes.status, 201);
 
@@ -499,21 +729,35 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       [serials.map((serial) => serial.serial_number)],
     );
     assert.strictEqual(projection.rows.length, 3);
-    assert.ok(projection.rows.every((row) => row['current_location_id'] === locAId && row['current_quantity'] === '1.000000'));
+    assert.ok(
+      projection.rows.every(
+        (row) => row['current_location_id'] === locAId && row['current_quantity'] === '1.000000',
+      ),
+    );
   });
 
   it('Edge upload with lots and serials is validated centrally', async () => {
-    const invalidRes = await makeRequest(port, 'POST', '/api/v1/edge/events', stockEnvelope('stock.received', {
-      sku: SKU,
-      target_location_id: locAId,
-      quantity: 1,
-      serials: [{ serial_number: 'SN-1001', initial_quantity: 1 }],
-    }, {
-      event_id: randomUUID(),
-      idempotency_key: `edge-${Date.now()}`,
-      device_id: 'edge-device-2-3',
-      actor_location_id: locAId,
-    }), operatorHeaders);
+    const invalidRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/edge/events',
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU,
+          target_location_id: locAId,
+          quantity: 1,
+          serials: [{ serial_number: 'SN-1001', initial_quantity: 1 }],
+        },
+        {
+          event_id: randomUUID(),
+          idempotency_key: `edge-${Date.now()}`,
+          device_id: 'edge-device-2-3',
+          actor_location_id: locAId,
+        },
+      ),
+      operatorHeaders,
+    );
 
     assert.strictEqual(invalidRes.status, 400);
     assert.strictEqual(invalidRes.body['error_code'], 'DUPLICATE_SERIAL');
@@ -522,13 +766,17 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
   // Idempotent retry
   it('Idempotent retry of lot receipt returns DUPLICATE_EVENT', async () => {
     const idempotencyKey = `test-${Date.now()}`;
-    const event = stockEnvelope('stock.received', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 25,
-      lot_id: 'LOT-IDEMPOTENT-001',
-      expiry_date: '2026-12-31',
-    }, { idempotency_key: idempotencyKey, actor_location_id: locAId });
+    const event = stockEnvelope(
+      'stock.received',
+      {
+        sku: SKU_LOT,
+        target_location_id: locAId,
+        quantity: 25,
+        lot_id: 'LOT-IDEMPOTENT-001',
+        expiry_date: '2026-12-31',
+      },
+      { idempotency_key: idempotencyKey, actor_location_id: locAId },
+    );
 
     const firstRes = await makeRequest(port, 'POST', '/api/v1/events', event, operatorHeaders);
     assert.strictEqual(firstRes.status, 201);
@@ -539,7 +787,9 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
 
     // Prove the rejected retry did not re-apply the lot/stock-balance projections - exactly one
     // lot row and exactly one receipt's worth of on_hand, not two (Story 2.3 re-review).
-    const lotRows = await getPool().query('SELECT lot_id FROM lot_master WHERE lot_number = $1', ['LOT-IDEMPOTENT-001']);
+    const lotRows = await getPool().query('SELECT lot_id FROM lot_master WHERE lot_number = $1', [
+      'LOT-IDEMPOTENT-001',
+    ]);
     assert.strictEqual(lotRows.rows.length, 1);
     const balanceRows = await getPool().query(
       'SELECT on_hand FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id = $3',
@@ -551,22 +801,42 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
 
   it('Successful serial-controlled issue validates and applies serial state', async () => {
     const serialNumbers = [`SN-ISSUE-${Date.now()}-1`, `SN-ISSUE-${Date.now()}-2`];
-    const receiptRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
-      sku: SKU,
-      target_location_id: locAId,
-      quantity: 2,
-      unit_cost: 1,
-      serials: serialNumbers.map((serial_number) => ({ serial_number, initial_quantity: 1 })),
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const receiptRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU,
+          target_location_id: locAId,
+          quantity: 2,
+          unit_cost: 1,
+          serials: serialNumbers.map((serial_number) => ({ serial_number, initial_quantity: 1 })),
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
     assert.strictEqual(receiptRes.status, 201);
 
     // Sum of serial current_quantity (2 x 1) must equal the issue's payload.quantity.
-    const issueRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU,
-      target_location_id: locAId,
-      quantity: 2,
-      serials: serialNumbers.map((serial_number) => ({ serial_number })),
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const issueRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.issued',
+        {
+          sku: SKU,
+          target_location_id: locAId,
+          quantity: 2,
+          serials: serialNumbers.map((serial_number) => ({ serial_number })),
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
     assert.strictEqual(issueRes.status, 201);
 
     const projection = await getPool().query(
@@ -574,24 +844,48 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       [serialNumbers],
     );
     assert.strictEqual(projection.rows.length, 2);
-    assert.ok(projection.rows.every((row) => row['current_location_id'] === null && Number(row['current_quantity']) === 0));
+    assert.ok(
+      projection.rows.every(
+        (row) => row['current_location_id'] === null && Number(row['current_quantity']) === 0,
+      ),
+    );
 
     // A mismatched quantity (1 serial worth issued but 2 claimed) must be rejected, not silently
     // applied with stock_balance and serial_master diverging (Story 2.3 re-review).
     const mismatchSerials = [`SN-ISSUE-${Date.now()}-3`];
-await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
-      sku: SKU,
-      target_location_id: locAId,
-      quantity: 1,
-      unit_cost: 1,
-      serials: [{ serial_number: mismatchSerials[0], initial_quantity: 1 }],
-    }, { actor_location_id: locAId }), operatorHeaders);
-    const mismatchRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU,
-      target_location_id: locAId,
-      quantity: 2,
-      serials: mismatchSerials.map((serial_number) => ({ serial_number })),
-    }, { actor_location_id: locAId }), operatorHeaders);
+    await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU,
+          target_location_id: locAId,
+          quantity: 1,
+          unit_cost: 1,
+          serials: [{ serial_number: mismatchSerials[0], initial_quantity: 1 }],
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
+    const mismatchRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.issued',
+        {
+          sku: SKU,
+          target_location_id: locAId,
+          quantity: 2,
+          serials: mismatchSerials.map((serial_number) => ({ serial_number })),
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
     assert.strictEqual(mismatchRes.status, 400);
     assert.strictEqual(mismatchRes.body['error_code'], 'INVALID_PARAMS');
   });
@@ -602,39 +896,77 @@ await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received'
     // traceability anchor, so lot-controlled stock could otherwise enter or leave inventory with no
     // lot_master row and no lot_trace entry - invisible to an AC4 recall. Both the receive and issue
     // paths must reject it (Story 2.3 pass-3 decision).
-    const receiveRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.received', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 5,
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const receiveRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 5,
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
     assert.strictEqual(receiveRes.status, 400);
     assert.strictEqual(receiveRes.body['error_code'], 'LOT_REQUIRED');
 
-    const issueRes = await makeRequest(port, 'POST', '/api/v1/events', stockEnvelope('stock.issued', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 1,
-    }, { actor_location_id: locAId }), operatorHeaders);
+    const issueRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      stockEnvelope(
+        'stock.issued',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 1,
+        },
+        { actor_location_id: locAId },
+      ),
+      operatorHeaders,
+    );
     assert.strictEqual(issueRes.status, 400);
     assert.strictEqual(issueRes.body['error_code'], 'LOT_REQUIRED');
   });
 
   it('pass-3: a quality-hold event is visible in the recall trace to a wildcard reader', async () => {
     const tracedLot = 'LOT-HOLD-TRACE-001';
-    await persistEvent(stockEnvelope('stock.received', {
-      sku: SKU_LOT,
-      target_location_id: locAId,
-      quantity: 10,
-      lot_id: tracedLot,
-      expiry_date: '2026-12-31',
-    }, { actor_location_id: locAId }));
+    await persistEvent(
+      stockEnvelope(
+        'stock.received',
+        {
+          sku: SKU_LOT,
+          target_location_id: locAId,
+          quantity: 10,
+          lot_id: tracedLot,
+          expiry_date: '2026-12-31',
+        },
+        { actor_location_id: locAId },
+      ),
+    );
 
-    const holdRes = await makeRequest(port, 'PUT', `/api/v1/lots/${tracedLot}/quality-hold`, {
-      hold_reason: 'Recall trace visibility check',
-    }, qualityHeaders);
+    const holdRes = await makeRequest(
+      port,
+      'PUT',
+      `/api/v1/lots/${tracedLot}/quality-hold`,
+      {
+        hold_reason: 'Recall trace visibility check',
+      },
+      qualityHeaders,
+    );
     assert.strictEqual(holdRes.status, 200);
 
-    const traceRes = await makeRequest(port, 'GET', `/api/v1/lots/${tracedLot}/trace`, {}, operatorHeaders);
+    const traceRes = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/lots/${tracedLot}/trace`,
+      {},
+      operatorHeaders,
+    );
     assert.strictEqual(traceRes.status, 200);
     const trace = traceRes.body['trace'] as Array<Record<string, unknown>>;
     // The hold was placed by a wildcard-scoped quality officer, so its trace row carries a null

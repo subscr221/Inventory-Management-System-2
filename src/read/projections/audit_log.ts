@@ -42,7 +42,10 @@ export async function logAuditEntry(client: PoolClient, payload: AuditEntryPaylo
   );
 }
 
-export async function logTamperAttempt(client: PoolClient, payload: TamperAttemptPayload): Promise<void> {
+export async function logTamperAttempt(
+  client: PoolClient,
+  payload: TamperAttemptPayload,
+): Promise<void> {
   await client.query(
     `INSERT INTO audit_log_tamper_attempt_log (user_id, role, location_id, endpoint, method, error_code, details)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,

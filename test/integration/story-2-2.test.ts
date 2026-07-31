@@ -86,13 +86,20 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -100,7 +107,13 @@ async function authFor(port: number, sub: string): Promise<Record<string, string
 function stockEnvelope(
   eventType: string,
   payload: Record<string, unknown>,
-  extra: { stream_id?: string; idempotency_key?: string; event_id?: string; device_id?: string; actor_location_id?: string } = {},
+  extra: {
+    stream_id?: string;
+    idempotency_key?: string;
+    event_id?: string;
+    device_id?: string;
+    actor_location_id?: string;
+  } = {},
 ) {
   return {
     ...(extra.event_id ? { event_id: extra.event_id } : {}),
@@ -138,7 +151,10 @@ interface StockResponse {
 }
 
 async function domainEventCount(streamId: string): Promise<number> {
-  const result = await getPool().query(`SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`, [streamId]);
+  const result = await getPool().query(
+    `SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`,
+    [streamId],
+  );
   return result.rows[0]!['count'] as number;
 }
 
@@ -215,14 +231,25 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     const codes = ['SITE-SB-A', 'SITE-SB-B', 'SITE-SB-C'];
     const ids: string[] = [];
     for (const code of codes) {
-      const res = await makeRequest(port, 'POST', '/api/v1/locations', { location_code: code, level: 'site' }, operatorHeaders);
+      const res = await makeRequest(
+        port,
+        'POST',
+        '/api/v1/locations',
+        { location_code: code, level: 'site' },
+        operatorHeaders,
+      );
       assert.strictEqual(res.status, 201, JSON.stringify(res.body));
       ids.push(res.body['location_id'] as string);
     }
     [locAId, locBId, locCId] = ids as [string, string, string];
 
     await provisionUser(port, 'sb-scoped-reader@example.com', [
-      { role: 'stock_scoped_reader_2_2', module: 'inventory', functionScope: 'read', locationId: locAId },
+      {
+        role: 'stock_scoped_reader_2_2',
+        module: 'inventory',
+        functionScope: 'read',
+        locationId: locAId,
+      },
     ]);
     scopedReaderHeaders = await authFor(port, 'sb-scoped-reader@example.com');
 
@@ -235,7 +262,13 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       port,
       'POST',
       '/api/v1/items',
-      { sku: SKU, uom: 'ea', valuation_method: 'fifo', business_stream: 'production', lot_controlled: true },
+      {
+        sku: SKU,
+        uom: 'ea',
+        valuation_method: 'fifo',
+        business_stream: 'production',
+        lot_controlled: true,
+      },
       operatorHeaders,
     );
     assert.strictEqual(item.status, 201, JSON.stringify(item.body));
@@ -247,7 +280,10 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     await closeAdminPool();
   });
 
-  async function getStock(headers: Record<string, string>, sku = SKU): Promise<{ res: HttpResult; elapsedMs: number }> {
+  async function getStock(
+    headers: Record<string, string>,
+    sku = SKU,
+  ): Promise<{ res: HttpResult; elapsedMs: number }> {
     const started = performance.now();
     const res = await makeRequest(port, 'GET', `/api/v1/stock/${sku}`, undefined, headers);
     return { res, elapsedMs: performance.now() - started };
@@ -261,7 +297,18 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
 
   it('Story 2.6 regression: an applied count adjustment preserves the on_hand/allocated/available/in_transit invariants', async () => {
     const adjSku = 'ADJ-REG-2-2';
-    await makeRequest(port, 'POST', '/api/v1/items', { sku: adjSku, uom: 'ea', valuation_method: 'weighted_average', business_stream: 'production' }, operatorHeaders);
+    await makeRequest(
+      port,
+      'POST',
+      '/api/v1/items',
+      {
+        sku: adjSku,
+        uom: 'ea',
+        valuation_method: 'weighted_average',
+        business_stream: 'production',
+      },
+      operatorHeaders,
+    );
 
     // Seed a balance directly at the (sku, locA, null-lot, owned) grain with reserved and in-transit
     // quantities that the count adjustment must leave untouched.
@@ -272,7 +319,12 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
 
     // A creator (count roles) and a DOA-resolved approver (warehouse_manager).
     await provisionUser(port, 'adj-counter-2-2@example.com', [
-      { role: 'inventory_controller', module: 'inventory', functionScope: 'write', locationId: locAId },
+      {
+        role: 'inventory_controller',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: locAId,
+      },
     ]);
     const counterHeaders = await authFor(port, 'adj-counter-2-2@example.com');
     const approverUserId = await provisionUser(port, 'adj-approver-2-2@example.com', [
@@ -280,24 +332,64 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     ]);
     const approverHeaders = await authFor(port, 'adj-approver-2-2@example.com');
     await provisionUser(port, 'adj-doa-2-2@example.com', [
-      { role: 'compliance_admin_adj_2_2', module: 'compliance', functionScope: 'write', locationId: '*' },
+      {
+        role: 'compliance_admin_adj_2_2',
+        module: 'compliance',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     const doaHeaders = await authFor(port, 'adj-doa-2-2@example.com');
-    await makeRequest(port, 'POST', '/api/v1/doa/entries', { transaction_type: 'inventory.count_adjustment', role: 'warehouse_manager', value_min: null, value_max: null }, doaHeaders);
+    await makeRequest(
+      port,
+      'POST',
+      '/api/v1/doa/entries',
+      {
+        transaction_type: 'inventory.count_adjustment',
+        role: 'warehouse_manager',
+        value_min: null,
+        value_max: null,
+      },
+      doaHeaders,
+    );
 
-    const create = await makeRequest(port, 'POST', '/api/v1/cycle-counts', {
-      location_id: locAId, sku_scope: [adjSku], count_type: 'cycle', business_date: '2026-07-21', business_stream: 'production',
-    }, counterHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/cycle-counts',
+      {
+        location_id: locAId,
+        sku_scope: [adjSku],
+        count_type: 'cycle',
+        business_date: '2026-07-21',
+        business_stream: 'production',
+      },
+      counterHeaders,
+    );
     assert.strictEqual(create.status, 201, JSON.stringify(create.body));
     const countId = create.body['cycle_count_id'] as string;
 
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: adjSku, counted_quantity: 90 }],
-    }, counterHeaders);
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: adjSku, counted_quantity: 90 }],
+      },
+      counterHeaders,
+    );
     assert.strictEqual(submit.status, 201, JSON.stringify(submit.body));
-    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!['adjustment_id'] as string;
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]![
+      'adjustment_id'
+    ] as string;
 
-    const approve = await makeRequest(port, 'PATCH', `/api/v1/cycle-counts/${countId}/adjustments/${adjustmentId}/approve`, { reason_code: 'shrinkage' }, approverHeaders);
+    const approve = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/cycle-counts/${countId}/adjustments/${adjustmentId}/approve`,
+      { reason_code: 'shrinkage' },
+      approverHeaders,
+    );
     assert.strictEqual(approve.status, 200, JSON.stringify(approve.body));
     assert.strictEqual(approve.body['approved_by'], approverUserId);
 
@@ -309,7 +401,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     assert.strictEqual(Number(bal['on_hand']), 90, 'on_hand adjusted to the counted quantity');
     assert.strictEqual(Number(bal['allocated']), 30, 'allocated is preserved by the adjustment');
     assert.strictEqual(Number(bal['in_transit']), 5, 'in_transit is preserved by the adjustment');
-    assert.strictEqual(Number(bal['available']), 60, 'available stays generated as on_hand - allocated');
+    assert.strictEqual(
+      Number(bal['available']),
+      60,
+      'available stays generated as on_hand - allocated',
+    );
   });
 
   it('AC1 + AC4: receipts across three locations produce per-location and consolidated balances in under 1 second', async () => {
@@ -345,7 +441,10 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
 
     const { res, elapsedMs } = await getStock(readerHeaders);
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
-    assert.ok(elapsedMs < 1000, `stock query must complete in under 1 second, took ${elapsedMs.toFixed(1)}ms`);
+    assert.ok(
+      elapsedMs < 1000,
+      `stock query must complete in under 1 second, took ${elapsedMs.toFixed(1)}ms`,
+    );
 
     const body = res.body as unknown as StockResponse;
     assert.strictEqual(body.sku, SKU);
@@ -366,7 +465,13 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       assert.strictEqual(entry.available, onHand);
       assert.strictEqual(entry.in_transit, 0);
     }
-    assert.deepStrictEqual(body.consolidated, { on_hand: 150, allocated: 0, picked: 0, available: 150, in_transit: 0 });
+    assert.deepStrictEqual(body.consolidated, {
+      on_hand: 150,
+      allocated: 0,
+      picked: 0,
+      available: 150,
+      in_transit: 0,
+    });
 
     // Story 2.8 regression pin: the per-class breakdown must not disturb the Story 2.2 top-level
     // shape - owned-only stock reports exactly one 'owned' class entry per location whose totals
@@ -388,10 +493,21 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
        GROUP BY payload->>'target_location_id'`,
       [SKU],
     );
-    const projection = await getPool().query(`SELECT location_id, SUM(on_hand) AS on_hand FROM stock_balance WHERE sku = $1 GROUP BY location_id`, [SKU]);
-    const fromEvents = new Map(eventSums.rows.map((row) => [row['location_id'] as string, Number(row['total'])]));
-    const fromProjection = new Map(projection.rows.map((row) => [row['location_id'] as string, Number(row['on_hand'])]));
-    assert.deepStrictEqual(fromProjection, fromEvents, 'projection on_hand must equal the replayed sum of posted receipt events');
+    const projection = await getPool().query(
+      `SELECT location_id, SUM(on_hand) AS on_hand FROM stock_balance WHERE sku = $1 GROUP BY location_id`,
+      [SKU],
+    );
+    const fromEvents = new Map(
+      eventSums.rows.map((row) => [row['location_id'] as string, Number(row['total'])]),
+    );
+    const fromProjection = new Map(
+      projection.rows.map((row) => [row['location_id'] as string, Number(row['on_hand'])]),
+    );
+    assert.deepStrictEqual(
+      fromProjection,
+      fromEvents,
+      'projection on_hand must equal the replayed sum of posted receipt events',
+    );
   });
 
   it('AC2: allocation reduces available, leaves on_hand unchanged, and over-allocation is blocked before any event insert', async () => {
@@ -399,7 +515,12 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       port,
       'POST',
       '/api/v1/events',
-      stockEnvelope('stock.allocated', { sku: SKU, target_location_id: locAId, quantity: 10, allocation_ref: 'SO-2001' }),
+      stockEnvelope('stock.allocated', {
+        sku: SKU,
+        target_location_id: locAId,
+        quantity: 10,
+        allocation_ref: 'SO-2001',
+      }),
       operatorHeaders,
     );
     assert.strictEqual(allocation.status, 201, JSON.stringify(allocation.body));
@@ -410,7 +531,13 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     assert.strictEqual(locA.on_hand, 100, 'allocation must not change on_hand');
     assert.strictEqual(locA.allocated, 10);
     assert.strictEqual(locA.available, 90);
-    assert.deepStrictEqual(body.consolidated, { on_hand: 150, allocated: 10, picked: 0, available: 140, in_transit: 0 });
+    assert.deepStrictEqual(body.consolidated, {
+      on_hand: 150,
+      allocated: 10,
+      picked: 0,
+      available: 140,
+      in_transit: 0,
+    });
 
     // Double allocation beyond the remaining available is blocked with the documented envelope.
     const rejectedStreamId = randomUUID();
@@ -418,7 +545,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       port,
       'POST',
       '/api/v1/events',
-      stockEnvelope('stock.allocated', { sku: SKU, target_location_id: locAId, quantity: 95 }, { stream_id: rejectedStreamId }),
+      stockEnvelope(
+        'stock.allocated',
+        { sku: SKU, target_location_id: locAId, quantity: 95 },
+        { stream_id: rejectedStreamId },
+      ),
       operatorHeaders,
     );
     assert.strictEqual(rejected.status, 409, JSON.stringify(rejected.body));
@@ -428,7 +559,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     assert.strictEqual(details['location_id'], locAId);
     assert.strictEqual(details['requested_quantity'], 95);
     assert.strictEqual(details['available_quantity'], 90);
-    assert.strictEqual(await domainEventCount(rejectedStreamId), 0, 'a rejected allocation must not write a domain event');
+    assert.strictEqual(
+      await domainEventCount(rejectedStreamId),
+      0,
+      'a rejected allocation must not write a domain event',
+    );
 
     const after = await getStock(readerHeaders);
     const afterA = locationEntry(after.res.body as unknown as StockResponse, locAId);
@@ -456,7 +591,13 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     const envelopeFor = (orderRef: string): EventEnvelope =>
       stockEnvelope(
         'stock.allocated',
-        { sku: SKU, target_location_id: locCId, quantity: 1, lot_id: 'LOT-LAST', allocation_ref: orderRef },
+        {
+          sku: SKU,
+          target_location_id: locCId,
+          quantity: 1,
+          lot_id: 'LOT-LAST',
+          allocation_ref: orderRef,
+        },
         { actor_location_id: locCId },
       ) as unknown as EventEnvelope;
 
@@ -479,7 +620,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
         ),
         new Promise<string>((resolvePromise) => setTimeout(() => resolvePromise('pending'), 300)),
       ]);
-      assert.strictEqual(raced, 'pending', 'the second allocation must block on the row lock until the first commits');
+      assert.strictEqual(
+        raced,
+        'pending',
+        'the second allocation must block on the row lock until the first commits',
+      );
 
       await client1.query('COMMIT');
       await assert.rejects(
@@ -500,7 +645,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     const winners = await getPool().query(
       `SELECT count(*)::int AS count FROM domain_events WHERE event_type = 'stock.allocated' AND payload->>'lot_id' = 'LOT-LAST'`,
     );
-    assert.strictEqual(winners.rows[0]!['count'], 1, 'exactly one stock.allocated event may persist for the contested lot');
+    assert.strictEqual(
+      winners.rows[0]!['count'],
+      1,
+      'exactly one stock.allocated event may persist for the contested lot',
+    );
 
     const { res } = await getStock(readerHeaders);
     const locC = locationEntry(res.body as unknown as StockResponse, locCId);
@@ -513,7 +662,14 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     const receiptKey = `sb-receipt-${randomUUID()}`;
     const receipt = stockEnvelope(
       'stock.received',
-      { sku: SKU, target_location_id: locBId, quantity: 5, unit_cost: 3, lot_id: 'LOT-B1', po_line_ref: 'PO-1004/1' },
+      {
+        sku: SKU,
+        target_location_id: locBId,
+        quantity: 5,
+        unit_cost: 3,
+        lot_id: 'LOT-B1',
+        po_line_ref: 'PO-1004/1',
+      },
       { idempotency_key: receiptKey },
     );
     const first = await makeRequest(port, 'POST', '/api/v1/events', receipt, operatorHeaders);
@@ -522,7 +678,10 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     const retry = await makeRequest(port, 'POST', '/api/v1/events', receipt, operatorHeaders);
     assert.strictEqual(retry.status, 409, JSON.stringify(retry.body));
     assert.strictEqual(retry.body['error_code'], 'DUPLICATE_EVENT');
-    assert.strictEqual((retry.body['details'] as Record<string, unknown>)['existing_event_id'], first.body['event_id']);
+    assert.strictEqual(
+      (retry.body['details'] as Record<string, unknown>)['existing_event_id'],
+      first.body['event_id'],
+    );
 
     let { res } = await getStock(readerHeaders);
     let locB = locationEntry(res.body as unknown as StockResponse, locBId);
@@ -534,16 +693,32 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       { sku: SKU, target_location_id: locBId, quantity: 5, allocation_ref: 'SO-2002' },
       { idempotency_key: allocationKey },
     );
-    const firstAllocation = await makeRequest(port, 'POST', '/api/v1/events', allocation, operatorHeaders);
+    const firstAllocation = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      allocation,
+      operatorHeaders,
+    );
     assert.strictEqual(firstAllocation.status, 201, JSON.stringify(firstAllocation.body));
 
-    const allocationRetry = await makeRequest(port, 'POST', '/api/v1/events', allocation, operatorHeaders);
+    const allocationRetry = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      allocation,
+      operatorHeaders,
+    );
     assert.strictEqual(allocationRetry.status, 409, JSON.stringify(allocationRetry.body));
     assert.strictEqual(allocationRetry.body['error_code'], 'DUPLICATE_EVENT');
 
     ({ res } = await getStock(readerHeaders));
     locB = locationEntry(res.body as unknown as StockResponse, locBId);
-    assert.strictEqual(locB.allocated, 5, 'the duplicate allocation must not double-apply allocated');
+    assert.strictEqual(
+      locB.allocated,
+      5,
+      'the duplicate allocation must not double-apply allocated',
+    );
     assert.strictEqual(locB.available, 40);
   });
 
@@ -553,7 +728,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       port,
       'POST',
       '/api/v1/events',
-      stockEnvelope('stock.allocated', { sku: SKU, target_location_id: locBId, quantity: 10000 }, { idempotency_key: reusedKey }),
+      stockEnvelope(
+        'stock.allocated',
+        { sku: SKU, target_location_id: locBId, quantity: 10000 },
+        { idempotency_key: reusedKey },
+      ),
       operatorHeaders,
     );
     assert.strictEqual(rejected.status, 409, JSON.stringify(rejected.body));
@@ -566,12 +745,23 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       '/api/v1/events',
       stockEnvelope(
         'stock.received',
-        { sku: SKU, target_location_id: locBId, quantity: 2, unit_cost: 3, lot_id: 'LOT-B1', po_line_ref: 'PO-1004/2' },
+        {
+          sku: SKU,
+          target_location_id: locBId,
+          quantity: 2,
+          unit_cost: 3,
+          lot_id: 'LOT-B1',
+          po_line_ref: 'PO-1004/2',
+        },
         { idempotency_key: reusedKey },
       ),
       operatorHeaders,
     );
-    assert.strictEqual(reuse.status, 201, `the idempotency key of a rejected allocation must remain unconsumed: ${JSON.stringify(reuse.body)}`);
+    assert.strictEqual(
+      reuse.status,
+      201,
+      `the idempotency key of a rejected allocation must remain unconsumed: ${JSON.stringify(reuse.body)}`,
+    );
 
     const { res } = await getStock(readerHeaders);
     const locB = locationEntry(res.body as unknown as StockResponse, locBId);
@@ -582,7 +772,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     const scoped = await getStock(scopedReaderHeaders);
     assert.strictEqual(scoped.res.status, 200, JSON.stringify(scoped.res.body));
     const scopedBody = scoped.res.body as unknown as StockResponse;
-    assert.strictEqual(scopedBody.locations.length, 1, 'a site-scoped reader must see only their location');
+    assert.strictEqual(
+      scopedBody.locations.length,
+      1,
+      'a site-scoped reader must see only their location',
+    );
     assert.strictEqual(scopedBody.locations[0]!.location_id, locAId);
     assert.deepStrictEqual(
       scopedBody.consolidated,
@@ -629,7 +823,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const afterCount = await getPool().query(`SELECT count(*)::int AS count FROM stock_balance`);
-    assert.strictEqual(afterCount.rows[0]!['count'], beforeCount.rows[0]!['count'], 'legacy stock shapes must not create balance rows');
+    assert.strictEqual(
+      afterCount.rows[0]!['count'],
+      beforeCount.rows[0]!['count'],
+      'legacy stock shapes must not create balance rows',
+    );
   });
 
   it('rejects a gated stock event with a non-positive quantity or a client-supplied available value', async () => {
@@ -647,7 +845,12 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       port,
       'POST',
       '/api/v1/events',
-      stockEnvelope('stock.received', { sku: SKU, target_location_id: locAId, quantity: 1, available: 500 }),
+      stockEnvelope('stock.received', {
+        sku: SKU,
+        target_location_id: locAId,
+        quantity: 1,
+        available: 500,
+      }),
       operatorHeaders,
     );
     assert.strictEqual(clientAvailable.status, 400, JSON.stringify(clientAvailable.body));
@@ -655,11 +858,23 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
   });
 
   it('returns 404 ITEM_NOT_FOUND for an unknown sku and 400 for a malformed sku', async () => {
-    const unknown = await makeRequest(port, 'GET', '/api/v1/stock/NO-SUCH-SKU', undefined, readerHeaders);
+    const unknown = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/stock/NO-SUCH-SKU',
+      undefined,
+      readerHeaders,
+    );
     assert.strictEqual(unknown.status, 404, JSON.stringify(unknown.body));
     assert.strictEqual(unknown.body['error_code'], 'ITEM_NOT_FOUND');
 
-    const malformed = await makeRequest(port, 'GET', '/api/v1/stock/.bad', undefined, readerHeaders);
+    const malformed = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/stock/.bad',
+      undefined,
+      readerHeaders,
+    );
     assert.strictEqual(malformed.status, 400, JSON.stringify(malformed.body));
     assert.strictEqual(malformed.body['error_code'], 'INVALID_PARAMS');
   });
@@ -670,7 +885,12 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       port,
       'POST',
       '/api/v1/items',
-      { sku: liaSku, uom: 'ea', valuation_method: 'weighted_average', business_stream: 'production' },
+      {
+        sku: liaSku,
+        uom: 'ea',
+        valuation_method: 'weighted_average',
+        business_stream: 'production',
+      },
       operatorHeaders,
     );
     assert.strictEqual(item.status, 201, JSON.stringify(item.body));
@@ -679,7 +899,12 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       port,
       'POST',
       '/api/v1/events',
-      stockEnvelope('stock.received', { sku: liaSku, target_location_id: locAId, quantity: 50, unit_cost: 4 }),
+      stockEnvelope('stock.received', {
+        sku: liaSku,
+        target_location_id: locAId,
+        quantity: 50,
+        unit_cost: 4,
+      }),
       operatorHeaders,
     );
     assert.strictEqual(receive.status, 201, JSON.stringify(receive.body));
@@ -689,7 +914,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
       `SELECT last_issue_at FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL AND stock_class = 'owned'`,
       [liaSku, locAId],
     );
-    assert.strictEqual(afterReceipt.rows[0]!['last_issue_at'], null, 'a receipt does not stamp last_issue_at');
+    assert.strictEqual(
+      afterReceipt.rows[0]!['last_issue_at'],
+      null,
+      'a receipt does not stamp last_issue_at',
+    );
 
     const issue = await makeRequest(
       port,
@@ -709,7 +938,11 @@ describe('Story 2.2 Real-Time Multi-Location Stock Balances Integration Tests', 
     assert.ok(bal['last_issue_at'] !== null, 'stock.issued stamps last_issue_at');
     assert.strictEqual(Number(bal['on_hand']), 40, 'on_hand drops by the issued quantity');
     assert.strictEqual(Number(bal['allocated']), 0, 'allocated is unchanged by the issue');
-    assert.strictEqual(Number(bal['available']), 40, 'available stays generated as on_hand - allocated');
+    assert.strictEqual(
+      Number(bal['available']),
+      40,
+      'available stays generated as on_hand - allocated',
+    );
     assert.strictEqual(Number(bal['in_transit']), 0, 'in_transit is unchanged by the issue');
   });
 });

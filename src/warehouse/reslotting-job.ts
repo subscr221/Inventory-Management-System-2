@@ -15,7 +15,10 @@ export interface ReslottingResult {
 }
 
 /** Story 3.5 Task 6: Run the velocity classification and re-slotting analysis job. */
-export async function runReslottingJob(siteId?: string, client?: PoolClient): Promise<ReslottingResult[]> {
+export async function runReslottingJob(
+  siteId?: string,
+  client?: PoolClient,
+): Promise<ReslottingResult[]> {
   const pool = client ?? getPool();
   const results: ReslottingResult[] = [];
 
@@ -23,7 +26,9 @@ export async function runReslottingJob(siteId?: string, client?: PoolClient): Pr
   const sites = siteId
     ? [siteId]
     : (
-        await pool.query(`SELECT DISTINCT site_id FROM putaway_task WHERE status = 'completed' AND completed_at > now() - INTERVAL '30 days'`)
+        await pool.query(
+          `SELECT DISTINCT site_id FROM putaway_task WHERE status = 'completed' AND completed_at > now() - INTERVAL '30 days'`,
+        )
       ).rows.map((r: Record<string, unknown>) => r['site_id'] as string);
 
   for (const site of sites) {
@@ -110,7 +115,8 @@ export async function runReslottingJob(siteId?: string, client?: PoolClient): Pr
       );
 
       const oldVelocityClass = (existing.rows[0]?.['velocity_class'] as 'A' | 'B' | 'C') || 'C';
-      const oldPreferredLocationId = (existing.rows[0]?.['preferred_location_id'] as string | null) || null;
+      const oldPreferredLocationId =
+        (existing.rows[0]?.['preferred_location_id'] as string | null) || null;
 
       // Upsert the velocity class row
       await upsertVelocityClass(

@@ -3,7 +3,12 @@ import type { IncomingMessage } from 'node:http';
 import type { PoolClient } from 'pg';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { getPool } from '../../config/db.js';
 import { persistEvent } from '../../events/store.js';
@@ -26,7 +31,12 @@ import type { NotificationStatus } from '../../read/projections/notification.js'
 // EXPERIENCE.md section 13.2, Table 2. Preferences for event types outside this list may still
 // exist (any module can emitNotification() with a new event_type) - GET merges these known
 // defaults with whatever rows the user already has, it does not restrict which types can be set.
-const KNOWN_EVENT_TYPES = ['approval_received', 'goods_received', 'sync_complete', 'qc_hold_placed'];
+const KNOWN_EVENT_TYPES = [
+  'approval_received',
+  'goods_received',
+  'sync_complete',
+  'qc_hold_placed',
+];
 
 type WriteAuditCtx = Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>;
 
@@ -78,7 +88,12 @@ async function withAudit<T>(
   try {
     await client.query('BEGIN');
     const result = await fn(client);
-    await logAuditEntry(client, { ...auditCtxFor(req, actor, httpStatus), event_id: null, error_code: null, details });
+    await logAuditEntry(client, {
+      ...auditCtxFor(req, actor, httpStatus),
+      event_id: null,
+      error_code: null,
+      details,
+    });
     await client.query('COMMIT');
     return result;
   } catch (err) {
@@ -94,7 +109,13 @@ const listNotificationsBase: RouteHandler = async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
   const status = url.searchParams.get('status');
   if (status !== null && !isValidStatus(status)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'status must be one of created, read, acted_upon, expired');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'status must be one of created, read, acted_upon, expired',
+    );
     return;
   }
   const limitRaw = url.searchParams.get('limit');
@@ -178,7 +199,11 @@ const updateNotificationBase: RouteHandler = async (req, res, params) => {
         ? await markNotificationRead(notificationId, actor.userId, client)
         : await markNotificationActedUpon(notificationId, actor.userId, client);
     if (!updated) {
-      throw new AppError(409, 'INVALID_STATE_TRANSITION', `Notification "${notificationId}" cannot transition to "${action}" from its current status`);
+      throw new AppError(
+        409,
+        'INVALID_STATE_TRANSITION',
+        `Notification "${notificationId}" cannot transition to "${action}" from its current status`,
+      );
     }
 
     // Resolved decision: acting on a notification is a stop signal, same as an explicit
@@ -227,7 +252,11 @@ const acknowledgeNotificationBase: RouteHandler = async (req, res, params) => {
         stream_type: 'notification',
         stream_id: randomUUID(),
         event_type: 'notification.acknowledged',
-        payload: { notification_id: notificationId, source_event_id: existing.source_event_id, escalation_resolved: escalationResolved },
+        payload: {
+          notification_id: notificationId,
+          source_event_id: existing.source_event_id,
+          escalation_resolved: escalationResolved,
+        },
         metadata: {
           correlation_id: getTraceId(req) ?? randomUUID(),
           causation_id: existing.source_event_id,
@@ -243,11 +272,18 @@ const acknowledgeNotificationBase: RouteHandler = async (req, res, params) => {
       ...auditCtxFor(req, actor, 200),
       event_id: null,
       error_code: null,
-      details: { notification_id: notificationId, source_event_id: existing.source_event_id, escalation_resolved: escalationResolved },
+      details: {
+        notification_id: notificationId,
+        source_event_id: existing.source_event_id,
+        escalation_resolved: escalationResolved,
+      },
     });
 
     await client.query('COMMIT');
-    sendJson(res, 200, { notification: acted ?? existing, escalation_resolved: escalationResolved });
+    sendJson(res, 200, {
+      notification: acted ?? existing,
+      escalation_resolved: escalationResolved,
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -276,14 +312,24 @@ function isNonEmptyString(value: unknown): value is string {
 const putPreferencesBase: RouteHandler = async (req, res) => {
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!body || !isNonEmptyString(body['event_type']) || typeof body['opted_in'] !== 'boolean') {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'event_type (string) and opted_in (boolean) are required');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'event_type (string) and opted_in (boolean) are required',
+    );
     return;
   }
   const actor = actorContext(req);
   const eventType = body['event_type'];
   const optedIn = body['opted_in'];
-  await withAudit(req, actor, 200, { action: 'set_notification_preference', event_type: eventType, opted_in: optedIn }, (client) =>
-    setPreference(actor.userId, eventType, optedIn, client),
+  await withAudit(
+    req,
+    actor,
+    200,
+    { action: 'set_notification_preference', event_type: eventType, opted_in: optedIn },
+    (client) => setPreference(actor.userId, eventType, optedIn, client),
   );
   sendJson(res, 200, { event_type: eventType, opted_in: optedIn });
 };
@@ -291,15 +337,38 @@ const putPreferencesBase: RouteHandler = async (req, res) => {
 const createPushSubscriptionBase: RouteHandler = async (req, res) => {
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   const keys = body?.['keys'] as Record<string, unknown> | undefined;
-  if (!body || !isNonEmptyString(body['endpoint']) || !keys || !isNonEmptyString(keys['p256dh']) || !isNonEmptyString(keys['auth'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'endpoint and keys.p256dh/keys.auth are required (standard PushSubscription JSON shape)');
+  if (
+    !body ||
+    !isNonEmptyString(body['endpoint']) ||
+    !keys ||
+    !isNonEmptyString(keys['p256dh']) ||
+    !isNonEmptyString(keys['auth'])
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'endpoint and keys.p256dh/keys.auth are required (standard PushSubscription JSON shape)',
+    );
     return;
   }
   const actor = actorContext(req);
   const endpoint = body['endpoint'];
   // Audit the subscription registration but NOT the key material (p256dh/auth are secrets).
-  const subscription = await withAudit(req, actor, 201, { action: 'register_push_subscription', endpoint }, (client) =>
-    upsertPushSubscription(actor.userId, endpoint, keys['p256dh'] as string, keys['auth'] as string, client),
+  const subscription = await withAudit(
+    req,
+    actor,
+    201,
+    { action: 'register_push_subscription', endpoint },
+    (client) =>
+      upsertPushSubscription(
+        actor.userId,
+        endpoint,
+        keys['p256dh'] as string,
+        keys['auth'] as string,
+        client,
+      ),
   );
   sendJson(res, 201, subscription);
 };
@@ -312,23 +381,45 @@ const deletePushSubscriptionBase: RouteHandler = async (req, res) => {
     return;
   }
   const actor = actorContext(req);
-  const deleted = await withAudit(req, actor, 200, { action: 'unregister_push_subscription', endpoint }, (client) =>
-    deletePushSubscription(actor.userId, endpoint, client),
+  const deleted = await withAudit(
+    req,
+    actor,
+    200,
+    { action: 'unregister_push_subscription', endpoint },
+    (client) => deletePushSubscription(actor.userId, endpoint, client),
   );
   sendJson(res, 200, { deleted });
 };
 
-export const listNotificationsHandler: RouteHandler = requireRole({ module: 'notification', functionScope: 'read' })(listNotificationsBase);
-export const getUnreadCountHandler: RouteHandler = requireRole({ module: 'notification', functionScope: 'read' })(getUnreadCountBase);
-export const updateNotificationHandler: RouteHandler = requireRole({ module: 'notification', functionScope: 'write' })(updateNotificationBase);
-export const acknowledgeNotificationHandler: RouteHandler = requireRole({ module: 'notification', functionScope: 'write' })(
-  acknowledgeNotificationBase,
-);
-export const getPreferencesHandler: RouteHandler = requireRole({ module: 'notification', functionScope: 'read' })(getPreferencesBase);
-export const putPreferencesHandler: RouteHandler = requireRole({ module: 'notification', functionScope: 'write' })(putPreferencesBase);
-export const createPushSubscriptionHandler: RouteHandler = requireRole({ module: 'notification', functionScope: 'write' })(
-  createPushSubscriptionBase,
-);
-export const deletePushSubscriptionHandler: RouteHandler = requireRole({ module: 'notification', functionScope: 'write' })(
-  deletePushSubscriptionBase,
-);
+export const listNotificationsHandler: RouteHandler = requireRole({
+  module: 'notification',
+  functionScope: 'read',
+})(listNotificationsBase);
+export const getUnreadCountHandler: RouteHandler = requireRole({
+  module: 'notification',
+  functionScope: 'read',
+})(getUnreadCountBase);
+export const updateNotificationHandler: RouteHandler = requireRole({
+  module: 'notification',
+  functionScope: 'write',
+})(updateNotificationBase);
+export const acknowledgeNotificationHandler: RouteHandler = requireRole({
+  module: 'notification',
+  functionScope: 'write',
+})(acknowledgeNotificationBase);
+export const getPreferencesHandler: RouteHandler = requireRole({
+  module: 'notification',
+  functionScope: 'read',
+})(getPreferencesBase);
+export const putPreferencesHandler: RouteHandler = requireRole({
+  module: 'notification',
+  functionScope: 'write',
+})(putPreferencesBase);
+export const createPushSubscriptionHandler: RouteHandler = requireRole({
+  module: 'notification',
+  functionScope: 'write',
+})(createPushSubscriptionBase);
+export const deletePushSubscriptionHandler: RouteHandler = requireRole({
+  module: 'notification',
+  functionScope: 'write',
+})(deletePushSubscriptionBase);

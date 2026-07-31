@@ -2,12 +2,24 @@ import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModule, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
+import {
+  requireRole,
+  permittedLocationsForModule,
+  permittedLocationsForModuleScope,
+} from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
-import { getPlanningParams, listPlanningParams } from '../../read/projections/inventory_planning.js';
+import {
+  getPlanningParams,
+  listPlanningParams,
+} from '../../read/projections/inventory_planning.js';
 import type { PlanningParamsRow } from '../../read/projections/inventory_planning.js';
 import { listRecommendations } from '../../read/projections/replenishment_recommendation.js';
 import { listObsolescenceReport } from '../../read/projections/obsolescence_flag.js';
@@ -47,7 +59,11 @@ function actorContext(req: IncomingMessage): ActorContext {
   return { userId, role, auditLocationId, eventLocationId };
 }
 
-function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
+function auditCtxFor(
+  req: IncomingMessage,
+  actor: ActorContext,
+  httpStatus: number,
+): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
   return {
     trace_id: getTraceId(req) ?? '',
     user_id: actor.userId,
@@ -59,23 +75,42 @@ function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: numb
   };
 }
 
-function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[], functionScope: 'read' | 'write'): void {
+function assertRoleAllowed(
+  req: IncomingMessage,
+  allowedRoles: string[],
+  functionScope: 'read' | 'write',
+): void {
   const authContext = getAuthContext(req);
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
-    (r) => (r.module === 'inventory' || r.module === '*') && r.functionScope === functionScope && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'inventory' || r.module === '*') &&
+      r.functionScope === functionScope &&
+      allowedRoles.includes(r.role),
   );
   if (!ok) {
-    throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
   }
 }
 
 function assertWriteLocationAccess(req: IncomingMessage, locationId: string): void {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
-  const { wildcard, locations } = permittedLocationsForModuleScope(authContext.roles, 'inventory', 'write');
+  const { wildcard, locations } = permittedLocationsForModuleScope(
+    authContext.roles,
+    'inventory',
+    'write',
+  );
   if (!wildcard && !locations.has(locationId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to location "${locationId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No write assignment grants access to location "${locationId}"`,
+    );
   }
 }
 
@@ -84,18 +119,35 @@ function assertWriteLocationAccess(req: IncomingMessage, locationId: string): vo
  * location_id must be permitted; without one, a non-wildcard actor is restricted to its assigned
  * locations (location_any) and a wildcard actor sees all.
  */
-function resolveScope(req: IncomingMessage, body: Record<string, unknown>, actor: ActorContext): Omit<PlanningJobScope, 'business_date' | 'auditCtx'> {
+function resolveScope(
+  req: IncomingMessage,
+  body: Record<string, unknown>,
+  actor: ActorContext,
+): Omit<PlanningJobScope, 'business_date' | 'auditCtx'> {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
-  const { wildcard, locations } = permittedLocationsForModuleScope(authContext.roles, 'inventory', 'write');
+  const { wildcard, locations } = permittedLocationsForModuleScope(
+    authContext.roles,
+    'inventory',
+    'write',
+  );
   const locationId = isNonEmptyString(body['location_id']) ? (body['location_id'] as string) : null;
   const sku = isNonEmptyString(body['sku']) ? (body['sku'] as string) : null;
-  const planningActor = { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId };
+  const planningActor = {
+    user_id: actor.userId,
+    role: actor.role,
+    location_id: actor.eventLocationId,
+  };
 
   if (locationId) {
-    if (!UUID_REGEX.test(locationId)) throw new AppError(400, 'INVALID_PARAMS', 'location_id must be a UUID when supplied');
+    if (!UUID_REGEX.test(locationId))
+      throw new AppError(400, 'INVALID_PARAMS', 'location_id must be a UUID when supplied');
     if (!wildcard && !locations.has(locationId)) {
-      throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to location "${locationId}"`);
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `No write assignment grants access to location "${locationId}"`,
+      );
     }
     return { location_id: locationId, location_any: null, sku, actor: planningActor };
   }
@@ -152,7 +204,13 @@ const setPlanningParamsBase: RouteHandler = async (req, res) => {
     return;
   }
   if (typeof body['service_level'] !== 'number') {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'service_level is required and must be a number');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'service_level is required and must be a number',
+    );
     return;
   }
   if (!isNonEmptyString(body['business_stream'])) {
@@ -184,12 +242,22 @@ const setPlanningParamsBase: RouteHandler = async (req, res) => {
           planning_params_id: planningParamsId,
           sku,
           location_id: locationId,
-          ...(body['lead_time_days'] !== undefined ? { lead_time_days: body['lead_time_days'] } : {}),
-          ...(body['lead_time_source'] !== undefined ? { lead_time_source: body['lead_time_source'] } : {}),
+          ...(body['lead_time_days'] !== undefined
+            ? { lead_time_days: body['lead_time_days'] }
+            : {}),
+          ...(body['lead_time_source'] !== undefined
+            ? { lead_time_source: body['lead_time_source'] }
+            : {}),
           service_level: body['service_level'],
-          ...(body['obsolescence_threshold_days'] !== undefined ? { obsolescence_threshold_days: body['obsolescence_threshold_days'] } : {}),
-          ...(body['standard_order_qty'] !== undefined ? { standard_order_qty: body['standard_order_qty'] } : {}),
-          ...(body['demand_window_days'] !== undefined ? { demand_window_days: body['demand_window_days'] } : {}),
+          ...(body['obsolescence_threshold_days'] !== undefined
+            ? { obsolescence_threshold_days: body['obsolescence_threshold_days'] }
+            : {}),
+          ...(body['standard_order_qty'] !== undefined
+            ? { standard_order_qty: body['standard_order_qty'] }
+            : {}),
+          ...(body['demand_window_days'] !== undefined
+            ? { demand_window_days: body['demand_window_days'] }
+            : {}),
           business_stream: body['business_stream'],
           set_by_actor_id: actor.userId,
         },
@@ -234,13 +302,23 @@ const getPlanningParamsBase: RouteHandler = async (req, res, params) => {
   let locationAny: string[] | null = null;
   if (!wildcard) {
     if (locationId && !locations.has(locationId)) {
-      sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', 'No access to the specified location_id');
+      sendRequestError(
+        req,
+        res,
+        403,
+        'LOCATION_ACCESS_DENIED',
+        'No access to the specified location_id',
+      );
       return;
     }
     if (!locationId) locationAny = [...locations];
   }
 
-  const rows = await listPlanningParams({ sku, location_id: locationId, location_any: locationAny });
+  const rows = await listPlanningParams({
+    sku,
+    location_id: locationId,
+    location_any: locationAny,
+  });
   sendJson(res, 200, { sku, params: rows.map(paramsToJson) });
 };
 
@@ -254,7 +332,11 @@ const computeSafetyStockBase: RouteHandler = async (req, res) => {
   const businessDate = requireBusinessDate(body);
   const actor = actorContext(req);
   const scope = resolveScope(req, body, actor);
-  const result = await runSafetyStockComputation({ ...scope, business_date: businessDate, auditCtx: auditCtxFor(req, actor, 200) });
+  const result = await runSafetyStockComputation({
+    ...scope,
+    business_date: businessDate,
+    auditCtx: auditCtxFor(req, actor, 200),
+  });
   sendJson(res, 200, result);
 };
 
@@ -268,7 +350,11 @@ const checkReplenishmentBase: RouteHandler = async (req, res) => {
   const businessDate = requireBusinessDate(body);
   const actor = actorContext(req);
   const scope = resolveScope(req, body, actor);
-  const result = await runReplenishmentCheck({ ...scope, business_date: businessDate, auditCtx: auditCtxFor(req, actor, 200) });
+  const result = await runReplenishmentCheck({
+    ...scope,
+    business_date: businessDate,
+    auditCtx: auditCtxFor(req, actor, 200),
+  });
   sendJson(res, 200, result);
 };
 
@@ -287,7 +373,13 @@ const listRecommendationsBase: RouteHandler = async (req, res) => {
   // signals; signal_type narrows the view.
   const signalType = url.searchParams.get('signal_type');
   if (signalType !== null && signalType !== 'internal' && signalType !== 'vmi_replenishment') {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', "signal_type filter must be 'internal' or 'vmi_replenishment'");
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      "signal_type filter must be 'internal' or 'vmi_replenishment'",
+    );
     return;
   }
 
@@ -295,13 +387,25 @@ const listRecommendationsBase: RouteHandler = async (req, res) => {
   let locationAny: string[] | null = null;
   if (!wildcard) {
     if (locationId && !locations.has(locationId)) {
-      sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', 'No access to the specified location_id');
+      sendRequestError(
+        req,
+        res,
+        403,
+        'LOCATION_ACCESS_DENIED',
+        'No access to the specified location_id',
+      );
       return;
     }
     if (!locationId) locationAny = [...locations];
   }
 
-  const rows = await listRecommendations({ location_id: locationId, location_any: locationAny, sku, status, signal_type: signalType });
+  const rows = await listRecommendations({
+    location_id: locationId,
+    location_any: locationAny,
+    sku,
+    status,
+    signal_type: signalType,
+  });
   sendJson(res, 200, { recommendations: rows });
 };
 
@@ -315,7 +419,11 @@ const checkVmiReplenishmentBase: RouteHandler = async (req, res) => {
   const businessDate = requireBusinessDate(body);
   const actor = actorContext(req);
   const scope = resolveScope(req, body, actor);
-  const result = await runVmiReplenishmentCheck({ ...scope, business_date: businessDate, auditCtx: auditCtxFor(req, actor, 200) });
+  const result = await runVmiReplenishmentCheck({
+    ...scope,
+    business_date: businessDate,
+    auditCtx: auditCtxFor(req, actor, 200),
+  });
   sendJson(res, 200, result);
 };
 
@@ -329,7 +437,11 @@ const scanObsolescenceBase: RouteHandler = async (req, res) => {
   const businessDate = requireBusinessDate(body);
   const actor = actorContext(req);
   const scope = resolveScope(req, body, actor);
-  const result = await runObsolescenceScan({ ...scope, business_date: businessDate, auditCtx: auditCtxFor(req, actor, 200) });
+  const result = await runObsolescenceScan({
+    ...scope,
+    business_date: businessDate,
+    auditCtx: auditCtxFor(req, actor, 200),
+  });
   sendJson(res, 200, result);
 };
 
@@ -351,13 +463,26 @@ const obsolescenceReportBase: RouteHandler = async (req, res) => {
   let locationAny: string[] | null = null;
   if (!wildcard) {
     if (locationId && !locations.has(locationId)) {
-      sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', 'No access to the specified location_id');
+      sendRequestError(
+        req,
+        res,
+        403,
+        'LOCATION_ACCESS_DENIED',
+        'No access to the specified location_id',
+      );
       return;
     }
     if (!locationId) locationAny = [...locations];
   }
 
-  const rows = await listObsolescenceReport({ location_id: locationId, location_any: locationAny, sku, status, from_date: fromDate, to_date: toDate });
+  const rows = await listObsolescenceReport({
+    location_id: locationId,
+    location_any: locationAny,
+    sku,
+    status,
+    from_date: fromDate,
+    to_date: toDate,
+  });
   sendJson(res, 200, { reports: rows });
 };
 
@@ -365,11 +490,35 @@ const obsolescenceReportBase: RouteHandler = async (req, res) => {
 // Exports
 // ---------------------------------------------------------------------------
 
-export const setPlanningParamsHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(setPlanningParamsBase);
-export const getPlanningParamsHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(getPlanningParamsBase);
-export const computeSafetyStockHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(computeSafetyStockBase);
-export const checkReplenishmentHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(checkReplenishmentBase);
-export const listRecommendationsHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(listRecommendationsBase);
-export const scanObsolescenceHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(scanObsolescenceBase);
-export const checkVmiReplenishmentHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(checkVmiReplenishmentBase);
-export const obsolescenceReportHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(obsolescenceReportBase);
+export const setPlanningParamsHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(setPlanningParamsBase);
+export const getPlanningParamsHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(getPlanningParamsBase);
+export const computeSafetyStockHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(computeSafetyStockBase);
+export const checkReplenishmentHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(checkReplenishmentBase);
+export const listRecommendationsHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(listRecommendationsBase);
+export const scanObsolescenceHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(scanObsolescenceBase);
+export const checkVmiReplenishmentHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(checkVmiReplenishmentBase);
+export const obsolescenceReportHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(obsolescenceReportBase);

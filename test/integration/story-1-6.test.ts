@@ -6,7 +6,10 @@ import { Router } from '../../src/api/router.js';
 import { provisionUserHandler, patchUserHandler } from '../../src/api/v1/scim.js';
 import { devTokenHandler } from '../../src/api/v1/auth-dev.js';
 import { postEventHandler, getStreamHandler } from '../../src/api/v1/events.js';
-import { getCurrentLocationHandler, seedExpectedLocationHandler } from '../../src/api/v1/location.js';
+import {
+  getCurrentLocationHandler,
+  seedExpectedLocationHandler,
+} from '../../src/api/v1/location.js';
 import { createTaggingRuleHandler } from '../../src/api/v1/business-stream.js';
 import { closePool, getPool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
 import { readFileSync } from 'node:fs';
@@ -75,7 +78,11 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
@@ -90,9 +97,18 @@ function assertedEnvelope(
   lotId: string,
   userId: string,
   assertedLocation: string,
-  extra: { idempotency_key?: string; confidence?: string; deviceId?: string | null; event_version?: number } = {},
+  extra: {
+    idempotency_key?: string;
+    confidence?: string;
+    deviceId?: string | null;
+    event_version?: number;
+  } = {},
 ) {
-  const payload: Record<string, unknown> = { business_stream: 'production', lot_id: lotId, asserted_location: assertedLocation };
+  const payload: Record<string, unknown> = {
+    business_stream: 'production',
+    lot_id: lotId,
+    asserted_location: assertedLocation,
+  };
   if (extra.confidence !== undefined) payload['confidence'] = extra.confidence;
   if (extra.deviceId !== null) payload['device_id'] = extra.deviceId ?? 'rugged-01';
   return {
@@ -111,7 +127,10 @@ function assertedEnvelope(
 }
 
 async function countRows(table: string, lotId: string): Promise<number> {
-  const result = await getPool().query(`SELECT count(*)::int AS count FROM ${table} WHERE lot_id = $1`, [lotId]);
+  const result = await getPool().query(
+    `SELECT count(*)::int AS count FROM ${table} WHERE lot_id = $1`,
+    [lotId],
+  );
   return result.rows[0]!['count'] as number;
 }
 
@@ -175,7 +194,14 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
         console.error('Unhandled server error:', err);
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error_code: 'INTERNAL_ERROR', message: 'Internal server error', details: {}, trace_id: 'unknown' }));
+          res.end(
+            JSON.stringify({
+              error_code: 'INTERNAL_ERROR',
+              message: 'Internal server error',
+              details: {},
+              trace_id: 'unknown',
+            }),
+          );
         }
       });
     });
@@ -223,7 +249,13 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
 
-    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, inventoryHeaders);
+    const current = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/lots/${lotId}/location`,
+      undefined,
+      inventoryHeaders,
+    );
     assert.strictEqual(current.status, 200, JSON.stringify(current.body));
     assert.strictEqual(current.body['location'], 'BIN-A43', 'asserted location becomes current');
     assert.notStrictEqual(current.body['confidence'], 'none');
@@ -269,13 +301,27 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     const details = second.body['details'] as Record<string, unknown>;
     assert.strictEqual(details['existing_event_id'], firstEventId);
 
-    assert.strictEqual(await countRows('location_asserted_facts', lotId), 1, 'asserted fact recorded exactly once');
-    assert.strictEqual(await countRows('location_current', lotId), 1, 'current projection updated exactly once');
+    assert.strictEqual(
+      await countRows('location_asserted_facts', lotId),
+      1,
+      'asserted fact recorded exactly once',
+    );
+    assert.strictEqual(
+      await countRows('location_current', lotId),
+      1,
+      'current projection updated exactly once',
+    );
   });
 
   it('AC3: querying a lot with no location events returns null location and confidence none', async () => {
     const lotId = randomUUID();
-    const res = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, inventoryHeaders);
+    const res = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/lots/${lotId}/location`,
+      undefined,
+      inventoryHeaders,
+    );
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.deepStrictEqual(res.body, { location: null, confidence: 'none' });
     assert.strictEqual(await countRows('location_current', lotId), 0, 'no current row invented');
@@ -292,9 +338,19 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
 
-    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, inventoryHeaders);
+    const current = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/lots/${lotId}/location`,
+      undefined,
+      inventoryHeaders,
+    );
     assert.strictEqual(current.body['location'], 'BIN-C55');
-    assert.strictEqual((await disputeEventsFor(lotId)).length, 0, 'no dispute without an expected fact');
+    assert.strictEqual(
+      (await disputeEventsFor(lotId)).length,
+      0,
+      'no dispute without an expected fact',
+    );
   });
 
   it('does not dispute when the asserted location matches the expected fact', async () => {
@@ -316,7 +372,11 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
       inventoryHeaders,
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
-    assert.strictEqual((await disputeEventsFor(lotId)).length, 0, 'matching assertion raises no dispute');
+    assert.strictEqual(
+      (await disputeEventsFor(lotId)).length,
+      0,
+      'matching assertion raises no dispute',
+    );
   });
 
   it('keeps the newer current location when an older explicit event_version arrives later', async () => {
@@ -325,7 +385,10 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
       TEST_PORT,
       'POST',
       '/api/v1/events',
-      assertedEnvelope(lotId, inventoryUserId, 'BIN-NEW', { event_version: 2, confidence: 'certain' }),
+      assertedEnvelope(lotId, inventoryUserId, 'BIN-NEW', {
+        event_version: 2,
+        confidence: 'certain',
+      }),
       inventoryHeaders,
     );
     assert.strictEqual(newer.status, 201, JSON.stringify(newer.body));
@@ -339,7 +402,13 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     );
     assert.strictEqual(older.status, 201, JSON.stringify(older.body));
 
-    const current = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, inventoryHeaders);
+    const current = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/lots/${lotId}/location`,
+      undefined,
+      inventoryHeaders,
+    );
     assert.strictEqual(current.body['location'], 'BIN-NEW');
     assert.strictEqual(current.body['confidence'], 'certain');
   });
@@ -350,7 +419,9 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
       TEST_PORT,
       'POST',
       '/api/v1/events',
-      assertedEnvelope(lotId, inventoryUserId, 'BIN-PAYLOAD-DEVICE', { deviceId: 'payload-scanner-9' }),
+      assertedEnvelope(lotId, inventoryUserId, 'BIN-PAYLOAD-DEVICE', {
+        deviceId: 'payload-scanner-9',
+      }),
       inventoryHeaders,
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
@@ -414,7 +485,13 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
 
   it('RBAC boundary: module access is denied for the location endpoints without the inventory role', async () => {
     const lotId = randomUUID();
-    const getRes = await makeRequest(TEST_PORT, 'GET', `/api/v1/lots/${lotId}/location`, undefined, deniedHeaders);
+    const getRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/lots/${lotId}/location`,
+      undefined,
+      deniedHeaders,
+    );
     assert.strictEqual(getRes.status, 403, JSON.stringify(getRes.body));
     assert.strictEqual(getRes.body['error_code'], 'MODULE_ACCESS_DENIED');
 
@@ -442,14 +519,22 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
         payload: { business_stream: 'production', quantity: 5 },
         metadata: {
           correlation_id: randomUUID(),
-          actor: { user_id: inventoryUserId, role: 'warehouse_operator', location_id: ACTOR_LOCATION },
+          actor: {
+            user_id: inventoryUserId,
+            role: 'warehouse_operator',
+            location_id: ACTOR_LOCATION,
+          },
           occurred_at: new Date().toISOString(),
         },
       },
       inventoryHeaders,
     );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    assert.strictEqual(await countRows('location_current', lotId), 0, 'non-location event must not touch location tables');
+    assert.strictEqual(
+      await countRows('location_current', lotId),
+      0,
+      'non-location event must not touch location tables',
+    );
     assert.strictEqual(await countRows('location_asserted_facts', lotId), 0);
   });
 
@@ -466,7 +551,11 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
         payload: { business_stream: 'production', lot_id: lotId },
         metadata: {
           correlation_id: randomUUID(),
-          actor: { user_id: inventoryUserId, role: 'warehouse_operator', location_id: ACTOR_LOCATION },
+          actor: {
+            user_id: inventoryUserId,
+            role: 'warehouse_operator',
+            location_id: ACTOR_LOCATION,
+          },
           occurred_at: new Date().toISOString(),
         },
       },
@@ -474,7 +563,14 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
     );
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
-    const count = await getPool().query(`SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`, [lotId]);
-    assert.strictEqual(count.rows[0]!['count'], 0, 'malformed event must not append to domain_events');
+    const count = await getPool().query(
+      `SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`,
+      [lotId],
+    );
+    assert.strictEqual(
+      count.rows[0]!['count'],
+      0,
+      'malformed event must not append to domain_events',
+    );
   });
 });

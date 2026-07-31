@@ -30,7 +30,12 @@ import {
   standardCostVarianceReviewHandler,
   standardCostVarianceReportHandler,
 } from './api/v1/valuation.js';
-import { createLocationHandler, updateLocationHandler, listLocationsHandler, getLocationHandler } from './api/v1/location-register.js';
+import {
+  createLocationHandler,
+  updateLocationHandler,
+  listLocationsHandler,
+  getLocationHandler,
+} from './api/v1/location-register.js';
 import {
   updateCalibrationStatusHandler,
   createQcResultHandler,
@@ -206,26 +211,47 @@ export function createAppRouter(): Router {
   router.get('/api/v1/stock/:sku/valuation', getValuationHandler);
   router.post('/api/v1/stock/:sku/valuation/nrv-write-down', nrvWriteDownHandler);
   router.post('/api/v1/stock/:sku/valuation/nrv-recovery', nrvRecoveryHandler);
-  router.post('/api/v1/stock/:sku/valuation/standard-cost-variance-review', standardCostVarianceReviewHandler);
+  router.post(
+    '/api/v1/stock/:sku/valuation/standard-cost-variance-review',
+    standardCostVarianceReviewHandler,
+  );
   router.get('/api/v1/valuation/standard-cost-variance-report', standardCostVarianceReportHandler);
   // Story 2.5: Inter-Location Transfer Requests
   router.post('/api/v1/transfer-requests', createTransferRequestHandler);
   router.get('/api/v1/transfer-requests/:transfer_request_id', getTransferRequestHandler);
   router.get('/api/v1/transfer-requests', listTransferRequestsHandler);
-  router.patch('/api/v1/transfer-requests/:transfer_request_id/approve', approveTransferRequestHandler);
-  router.patch('/api/v1/transfer-requests/:transfer_request_id/reject', rejectTransferRequestHandler);
+  router.patch(
+    '/api/v1/transfer-requests/:transfer_request_id/approve',
+    approveTransferRequestHandler,
+  );
+  router.patch(
+    '/api/v1/transfer-requests/:transfer_request_id/reject',
+    rejectTransferRequestHandler,
+  );
   router.post('/api/v1/transfer-requests/:transfer_request_id/ship', shipTransferRequestHandler);
-  router.post('/api/v1/transfer-requests/:transfer_request_id/receive', receiveTransferRequestHandler);
+  router.post(
+    '/api/v1/transfer-requests/:transfer_request_id/receive',
+    receiveTransferRequestHandler,
+  );
   router.get('/api/v1/stock/:sku/in-transit', getInTransitHandler);
   // Story 2.6: Cycle Counting and Physical Inventory
   router.post('/api/v1/cycle-counts', createCycleCountHandler);
   router.get('/api/v1/cycle-counts', listCycleCountsHandler);
   router.get('/api/v1/cycle-counts/:cycle_count_id', getCycleCountHandler);
   router.post('/api/v1/cycle-counts/:cycle_count_id/submit', submitCycleCountHandler);
-  router.patch('/api/v1/cycle-counts/:cycle_count_id/adjustments/:adjustment_id/approve', approveAdjustmentHandler);
-  router.patch('/api/v1/cycle-counts/:cycle_count_id/adjustments/:adjustment_id/reject', rejectAdjustmentHandler);
+  router.patch(
+    '/api/v1/cycle-counts/:cycle_count_id/adjustments/:adjustment_id/approve',
+    approveAdjustmentHandler,
+  );
+  router.patch(
+    '/api/v1/cycle-counts/:cycle_count_id/adjustments/:adjustment_id/reject',
+    rejectAdjustmentHandler,
+  );
   router.post('/api/v1/physical-verifications', completePhysicalVerificationHandler);
-  router.post('/api/v1/physical-verifications/:physical_verification_id/sign-off', signOffPhysicalVerificationHandler);
+  router.post(
+    '/api/v1/physical-verifications/:physical_verification_id/sign-off',
+    signOffPhysicalVerificationHandler,
+  );
   router.get('/api/v1/physical-verification/report', physicalVerificationReportHandler);
   // Story 2.7: Safety Stock, Reorder Points, and Obsolescence Flagging
   router.post('/api/v1/planning/params', setPlanningParamsHandler);
@@ -237,7 +263,10 @@ export function createAppRouter(): Router {
   router.get('/api/v1/planning/obsolescence/report', obsolescenceReportHandler);
   // Story 2.8: Consignment and VMI Stock Segregation
   router.get('/api/v1/ownership-agreements', listOwnershipAgreementsHandler);
-  router.put('/api/v1/ownership-agreements/:sku/:locationId/:stockClass', putOwnershipAgreementHandler);
+  router.put(
+    '/api/v1/ownership-agreements/:sku/:locationId/:stockClass',
+    putOwnershipAgreementHandler,
+  );
   router.post('/api/v1/planning/vmi/check', checkVmiReplenishmentHandler);
   // Story 2.9: ERP Inbound Reference Projections (read-only; INT-ERP-01). Every write verb is
   // registered to an explicit reject handler returning SOURCE_SYSTEM_READ_ONLY (the router 404s
@@ -297,8 +326,14 @@ export function createAppRouter(): Router {
   router.get('/api/v1/replenishment/config', handleGetForwardPickConfig);
   router.put('/api/v1/replenishment/config', handlePutForwardPickConfig);
   router.post('/api/v1/replenishment/check', handleCheckReplenishment);
-  router.post('/api/v1/replenishment-tasks/:replenishmentTaskId/confirm', handleConfirmReplenishmentTask);
-  router.post('/api/v1/replenishment-tasks/:replenishmentTaskId/assign', handleAssignReplenishmentTask);
+  router.post(
+    '/api/v1/replenishment-tasks/:replenishmentTaskId/confirm',
+    handleConfirmReplenishmentTask,
+  );
+  router.post(
+    '/api/v1/replenishment-tasks/:replenishmentTaskId/assign',
+    handleAssignReplenishmentTask,
+  );
 
   router.get('/api/v1/cross-dock-tasks/:crossDockTaskId', handleGetCrossDockTask);
   router.post('/api/v1/cross-dock-tasks/:crossDockTaskId/assign', handleAssignCrossDockTask);
@@ -317,7 +352,10 @@ export function createAppRouter(): Router {
 
   // Story 3.7: Packing, Shipping, and Dispatch Documents
   router.post('/api/v1/dispatch/:dispatchOrderId/pack', postPacked);
-  router.post('/api/v1/dispatch/:dispatchOrderId/generate-documents', postShippingDocumentsGenerated);
+  router.post(
+    '/api/v1/dispatch/:dispatchOrderId/generate-documents',
+    postShippingDocumentsGenerated,
+  );
   router.post('/api/v1/dispatch/:dispatchOrderId/dispatch', postDispatched);
   router.get('/api/v1/dispatch/:dispatchOrderId/packing-records', getPackingRecords);
   router.get('/api/v1/dispatch/:dispatchOrderId/documents', getDispatchDocuments);
@@ -331,7 +369,10 @@ export function createAppRouter(): Router {
   router.delete('/api/v1/lots/:lot_id/quality-hold', clearQualityHoldHandler);
   router.put('/api/v1/instruments/:id/calibration-status', updateCalibrationStatusHandler);
   router.post('/api/v1/qc/results', createQcResultHandler);
-  router.post('/api/v1/instruments/:id/calibration-escalations', createCalibrationEscalationHandler);
+  router.post(
+    '/api/v1/instruments/:id/calibration-escalations',
+    createCalibrationEscalationHandler,
+  );
   router.get('/api/v1/edge/bootstrap', edgeBootstrapHandler);
   router.get('/api/v1/edge/powersync-credentials', powerSyncCredentialsHandler);
   router.post('/api/v1/edge/events', edgeEventUploadHandler);
@@ -357,7 +398,14 @@ export function createAppServer(router: Router = createAppRouter()): Server {
       console.error('Unhandled server error:', err);
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error_code: 'INTERNAL_ERROR', message: 'Internal server error', details: {}, trace_id: 'unknown' }));
+        res.end(
+          JSON.stringify({
+            error_code: 'INTERNAL_ERROR',
+            message: 'Internal server error',
+            details: {},
+            trace_id: 'unknown',
+          }),
+        );
       }
     });
   });
@@ -400,9 +448,18 @@ function startServer(): void {
     console.log(`Environment: ${config.nodeEnv}`);
   });
 
-  dispatchTimer = setInterval(guarded('dispatch', () => runDispatchCycle()), config.notify.dispatchIntervalMs);
-  escalationTimer = setInterval(guarded('escalation', () => runEscalationCycle()), config.notify.escalationIntervalMs);
-  expiryTimer = setInterval(guarded('expiry', () => runExpiryCycle()), config.notify.expiryIntervalMs);
+  dispatchTimer = setInterval(
+    guarded('dispatch', () => runDispatchCycle()),
+    config.notify.dispatchIntervalMs,
+  );
+  escalationTimer = setInterval(
+    guarded('escalation', () => runEscalationCycle()),
+    config.notify.escalationIntervalMs,
+  );
+  expiryTimer = setInterval(
+    guarded('expiry', () => runExpiryCycle()),
+    config.notify.expiryIntervalMs,
+  );
 
   const stopTimers = (): void => {
     clearInterval(dispatchTimer);

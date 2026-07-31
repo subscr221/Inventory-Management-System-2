@@ -86,19 +86,34 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   const token = res.body['token'];
-  assert.strictEqual(typeof token, 'string', `dev-token ${sub} response missing token: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    typeof token,
+    'string',
+    `dev-token ${sub} response missing token: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${token}` };
 }
 
-function inventoryEventEnvelope(streamId: string, eventType: string, payload: Record<string, unknown>) {
+function inventoryEventEnvelope(
+  streamId: string,
+  eventType: string,
+  payload: Record<string, unknown>,
+) {
   return {
     stream_type: 'inventory',
     stream_id: streamId,
@@ -149,7 +164,10 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     }
 
     const router = createAppRouter();
-    const routeSurface = router.listRoutes().map((route) => `${route.method} ${route.path}`).sort();
+    const routeSurface = router
+      .listRoutes()
+      .map((route) => `${route.method} ${route.path}`)
+      .sort();
     const allowedSpineRoutes = [
       'DELETE /api/v1/notifications/push-subscription',
       'DELETE /api/v1/lots/:lot_id/quality-hold',
@@ -307,7 +325,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'PUT /api/v1/lots/:lot_id/quality-hold',
       'PUT /api/v1/notifications/preferences',
     ].sort();
-    assert.deepStrictEqual(routeSurface, allowedSpineRoutes, 'production route surface must stay limited to the platform spine');
+    assert.deepStrictEqual(
+      routeSurface,
+      allowedSpineRoutes,
+      'production route surface must stay limited to the platform spine',
+    );
 
     server = createAppServer(router);
     await new Promise<void>((resolvePromise, reject) => {
@@ -336,7 +358,12 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     ]);
 
     await provisionUser(testPort, 'spine-maintenance@example.com', [
-      { role: 'maintenance_supervisor', module: 'maintenance', functionScope: 'write', locationId: '*' },
+      {
+        role: 'maintenance_supervisor',
+        module: 'maintenance',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     maintenanceHeaders = await authFor(testPort, 'spine-maintenance@example.com');
 
@@ -364,7 +391,10 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
         testPort,
         'POST',
         '/api/v1/events',
-        inventoryEventEnvelope(randomUUID(), eventType, { business_stream: 'production', quantity: 1 }),
+        inventoryEventEnvelope(randomUUID(), eventType, {
+          business_stream: 'production',
+          quantity: 1,
+        }),
         operatorHeaders,
       );
       assert.strictEqual(res.status, 201, JSON.stringify(res.body));
@@ -384,12 +414,28 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     );
     assert.strictEqual(auditRes.status, 200, JSON.stringify(auditRes.body));
     const entries = auditRes.body['entries'];
-    assert.ok(Array.isArray(entries), `audit log response must include entries array: ${JSON.stringify(auditRes.body)}`);
+    assert.ok(
+      Array.isArray(entries),
+      `audit log response must include entries array: ${JSON.stringify(auditRes.body)}`,
+    );
     for (const eventId of submittedEventIds) {
       const entry = entries.find((e: Record<string, unknown>) => e['event_id'] === eventId);
       assert.ok(entry, `submitted event ${eventId} must appear in the edit log`);
-      for (const field of ['trace_id', 'user_id', 'role', 'location_id', 'timestamp', 'endpoint', 'method', 'http_status', 'seq_no']) {
-        assert.ok(entry[field] !== undefined && entry[field] !== null, `audit entry must expose ${field} for an auditor-readable format`);
+      for (const field of [
+        'trace_id',
+        'user_id',
+        'role',
+        'location_id',
+        'timestamp',
+        'endpoint',
+        'method',
+        'http_status',
+        'seq_no',
+      ]) {
+        assert.ok(
+          entry[field] !== undefined && entry[field] !== null,
+          `audit entry must expose ${field} for an auditor-readable format`,
+        );
       }
     }
 
@@ -422,7 +468,13 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
   });
 
   it('Spine 1 (FR-AC-13): a disable attempt is blocked', async () => {
-    const res = await makeRequest(testPort, 'PUT', '/api/v1/config/audit-log-enabled', { audit_log_enabled: false }, operatorHeaders);
+    const res = await makeRequest(
+      testPort,
+      'PUT',
+      '/api/v1/config/audit-log-enabled',
+      { audit_log_enabled: false },
+      operatorHeaders,
+    );
     assert.strictEqual(res.status, 423, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'AUDIT_LOG_DISABLED');
   });
@@ -433,7 +485,12 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       testPort,
       'POST',
       '/api/v1/doa/entries',
-      { role: 'procurement_head', transaction_type: transactionType, value_min: null, value_max: null },
+      {
+        role: 'procurement_head',
+        transaction_type: transactionType,
+        value_min: null,
+        value_max: null,
+      },
       complianceHeaders,
     );
     assert.strictEqual(createRes.status, 201, JSON.stringify(createRes.body));
@@ -447,7 +504,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     );
     assert.strictEqual(resolveRes.status, 200, JSON.stringify(resolveRes.body));
     const approver = resolveRes.body['approver'] as Record<string, unknown>;
-    assert.strictEqual(approver['user_id'], procurementHeadUserId, 'the approver must be resolved from the registry-held role');
+    assert.strictEqual(
+      approver['user_id'],
+      procurementHeadUserId,
+      'the approver must be resolved from the registry-held role',
+    );
 
     // The DOA registry cannot be bypassed by a workflow supplying its own approver mapping for a
     // governed transaction type - this is the functional proof that no hard-coded role path survives.
@@ -487,19 +548,36 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     );
     assert.strictEqual(asserted.status, 201, JSON.stringify(asserted.body));
 
-    const current = await makeRequest(testPort, 'GET', `/api/v1/lots/${lotId}/location`, undefined, operatorHeaders);
-    assert.strictEqual(current.body['location'], 'BIN-SPINE-ACTUAL', 'the asserted fact becomes the current location');
+    const current = await makeRequest(
+      testPort,
+      'GET',
+      `/api/v1/lots/${lotId}/location`,
+      undefined,
+      operatorHeaders,
+    );
+    assert.strictEqual(
+      current.body['location'],
+      'BIN-SPINE-ACTUAL',
+      'the asserted fact becomes the current location',
+    );
 
     const disputeRows = await getPool().query(
       `SELECT payload FROM domain_events WHERE stream_id = $1 AND event_type = 'location.disputed'`,
       [lotId],
     );
-    assert.strictEqual(disputeRows.rows.length, 1, 'a discrepancy between asserted and expected must raise exactly one location.disputed event');
+    assert.strictEqual(
+      disputeRows.rows.length,
+      1,
+      'a discrepancy between asserted and expected must raise exactly one location.disputed event',
+    );
     const disputePayload = disputeRows.rows[0]!['payload'] as Record<string, unknown>;
     assert.strictEqual(disputePayload['asserted_location'], 'BIN-SPINE-ACTUAL');
     assert.strictEqual(disputePayload['expected_location'], 'BIN-SPINE-EXPECTED');
 
-    const expectedRow = await getPool().query(`SELECT expected_location FROM location_expected_facts WHERE lot_id = $1`, [lotId]);
+    const expectedRow = await getPool().query(
+      `SELECT expected_location FROM location_expected_facts WHERE lot_id = $1`,
+      [lotId],
+    );
     assert.strictEqual(expectedRow.rows.length, 1);
     assert.strictEqual(
       expectedRow.rows[0]!['expected_location'],
@@ -519,20 +597,39 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     );
     assert.strictEqual(lock.status, 200, JSON.stringify(lock.body));
 
-    const qcBody = { instrument_id: instrumentId, lot_id: 'SPINE-LOT-1', parameter: 'weight', value: 1 };
+    const qcBody = {
+      instrument_id: instrumentId,
+      lot_id: 'SPINE-LOT-1',
+      parameter: 'weight',
+      value: 1,
+    };
     const rejected = await makeRequest(testPort, 'POST', '/api/v1/qc/results', qcBody, qcHeaders);
     assert.strictEqual(rejected.status, 423, JSON.stringify(rejected.body));
     assert.strictEqual(rejected.body['error_code'], 'CALIBRATION_LOCKOUT');
 
-    const overrideAttempt = await makeRequest(testPort, 'POST', '/api/v1/qc/results', qcBody, qcHeadHeaders);
+    const overrideAttempt = await makeRequest(
+      testPort,
+      'POST',
+      '/api/v1/qc/results',
+      qcBody,
+      qcHeadHeaders,
+    );
     assert.strictEqual(overrideAttempt.status, 423, JSON.stringify(overrideAttempt.body));
-    assert.strictEqual(overrideAttempt.body['error_code'], 'CALIBRATION_LOCKOUT', 'qc_head must not be able to override the lockout');
+    assert.strictEqual(
+      overrideAttempt.body['error_code'],
+      'CALIBRATION_LOCKOUT',
+      'qc_head must not be able to override the lockout',
+    );
 
     const count = await getPool().query(
       `SELECT count(*)::int AS count FROM domain_events WHERE event_type = 'qc.result_recorded' AND payload->>'instrument_id' = $1`,
       [instrumentId],
     );
-    assert.strictEqual(count.rows[0]!['count'], 0, 'no QC result may persist while the instrument is locked out');
+    assert.strictEqual(
+      count.rows[0]!['count'],
+      0,
+      'no QC result may persist while the instrument is locked out',
+    );
   });
 
   it('Spine 5 (FR-AC-01): an inventory movement without business_stream is rejected with UNTAGGED_TRANSACTION identifying the missing tag', async () => {
@@ -547,9 +644,16 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'UNTAGGED_TRANSACTION');
     const details = res.body['details'] as Record<string, unknown>;
-    assert.strictEqual(details['missing_tag'], 'business_stream', 'the rejection must identify the missing tag');
+    assert.strictEqual(
+      details['missing_tag'],
+      'business_stream',
+      'the rejection must identify the missing tag',
+    );
 
-    const count = await getPool().query(`SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`, [streamId]);
+    const count = await getPool().query(
+      `SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`,
+      [streamId],
+    );
     assert.strictEqual(count.rows[0]!['count'], 0, 'an untagged movement must not be persisted');
   });
 });

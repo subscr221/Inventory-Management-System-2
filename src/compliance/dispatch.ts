@@ -1,12 +1,27 @@
 import type { PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
-import type { DispatchDispatchedEnvelope, DispatchPackedEnvelope, DispatchShippingDocumentsGeneratedEnvelope } from '../events/schema.js';
+import type {
+  DispatchDispatchedEnvelope,
+  DispatchPackedEnvelope,
+  DispatchShippingDocumentsGeneratedEnvelope,
+} from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
-import { createPackingRecord, updatePackingRecordsStatusByDispatchOrder } from '../read/projections/packing_record.js';
-import { createDispatchDocument, clearDocumentsByDispatchOrder } from '../read/projections/dispatch_document.js';
+import {
+  createPackingRecord,
+  updatePackingRecordsStatusByDispatchOrder,
+} from '../read/projections/packing_record.js';
+import {
+  createDispatchDocument,
+  clearDocumentsByDispatchOrder,
+} from '../read/projections/dispatch_document.js';
 import { getSalesOrderLineById } from '../read/projections/erp_sales_order.js';
-import { renderBOL, renderPackingSlip, renderCommercialInvoice, renderLabels } from '../warehouse/document-renderer.js';
+import {
+  renderBOL,
+  renderPackingSlip,
+  renderCommercialInvoice,
+  renderLabels,
+} from '../warehouse/document-renderer.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DOCUMENT_TYPES = ['bol', 'packing_slip', 'commercial_invoice', 'label'];
@@ -19,7 +34,8 @@ function isUuid(value: unknown): value is string {
 const NUMERIC_REGEX = /^-?\d+(\.\d{1,3})?$/;
 
 function isPositiveFiniteQuantity(value: unknown): value is string | number {
-  if (typeof value === 'number') return Number.isFinite(value) && value > 0 && toScaled3(String(value)) !== null;
+  if (typeof value === 'number')
+    return Number.isFinite(value) && value > 0 && toScaled3(String(value)) !== null;
   if (typeof value !== 'string' || value.length === 0) return false;
   if (!NUMERIC_REGEX.test(value)) return false;
   const scaled = toScaled3(value);
@@ -47,26 +63,53 @@ function reject(code: string, message: string, details: Record<string, unknown> 
 
 export function assertDispatchPackedShape(envelope: DispatchPackedEnvelope): void {
   const p = envelope.payload;
-  if (!isUuid(p.packing_record_id)) reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'packing_record_id is required and must be a UUID');
-  if (!isUuid(p.dispatch_order_id)) reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'dispatch_order_id is required and must be a UUID');
-  if (typeof p.sku !== 'string' || p.sku.length === 0) reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'sku is required');
-  if (!isPositiveFiniteQuantity(p.packed_qty)) reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'packed_qty is required and must be a positive finite numeric value');
-  if (!isUuid(p.lot_id)) reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'lot_id is required and must be a UUID');
-  if (!Number.isInteger(p.carton_count) || p.carton_count < 0) reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'carton_count is required and must be a non-negative integer');
+  if (!isUuid(p.packing_record_id))
+    reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'packing_record_id is required and must be a UUID');
+  if (!isUuid(p.dispatch_order_id))
+    reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'dispatch_order_id is required and must be a UUID');
+  if (typeof p.sku !== 'string' || p.sku.length === 0)
+    reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'sku is required');
+  if (!isPositiveFiniteQuantity(p.packed_qty))
+    reject(
+      'DISPATCH_PACKED_INVALID_PAYLOAD',
+      'packed_qty is required and must be a positive finite numeric value',
+    );
+  if (!isUuid(p.lot_id))
+    reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'lot_id is required and must be a UUID');
+  if (!Number.isInteger(p.carton_count) || p.carton_count < 0)
+    reject(
+      'DISPATCH_PACKED_INVALID_PAYLOAD',
+      'carton_count is required and must be a non-negative integer',
+    );
 }
 
-export function assertDispatchShippingDocumentsGeneratedShape(envelope: DispatchShippingDocumentsGeneratedEnvelope): void {
+export function assertDispatchShippingDocumentsGeneratedShape(
+  envelope: DispatchShippingDocumentsGeneratedEnvelope,
+): void {
   const p = envelope.payload;
-  if (!isUuid(p.dispatch_order_id)) reject('DISPATCH_DOCUMENTS_INVALID_PAYLOAD', 'dispatch_order_id is required and must be a UUID');
-  if (!Array.isArray(p.document_types) || p.document_types.length === 0) reject('DISPATCH_DOCUMENTS_INVALID_PAYLOAD', 'document_types is required and must be a non-empty array');
+  if (!isUuid(p.dispatch_order_id))
+    reject(
+      'DISPATCH_DOCUMENTS_INVALID_PAYLOAD',
+      'dispatch_order_id is required and must be a UUID',
+    );
+  if (!Array.isArray(p.document_types) || p.document_types.length === 0)
+    reject(
+      'DISPATCH_DOCUMENTS_INVALID_PAYLOAD',
+      'document_types is required and must be a non-empty array',
+    );
   for (const dt of p.document_types) {
-    if (!DOCUMENT_TYPES.includes(dt)) reject('DISPATCH_DOCUMENTS_INVALID_PAYLOAD', `invalid document_type: ${dt}`);
+    if (!DOCUMENT_TYPES.includes(dt))
+      reject('DISPATCH_DOCUMENTS_INVALID_PAYLOAD', `invalid document_type: ${dt}`);
   }
 }
 
 export function assertDispatchDispatchedShape(envelope: DispatchDispatchedEnvelope): void {
   const p = envelope.payload;
-  if (!isUuid(p.dispatch_order_id)) reject('DISPATCH_DISPATCHED_INVALID_PAYLOAD', 'dispatch_order_id is required and must be a UUID');
+  if (!isUuid(p.dispatch_order_id))
+    reject(
+      'DISPATCH_DISPATCHED_INVALID_PAYLOAD',
+      'dispatch_order_id is required and must be a UUID',
+    );
 }
 
 export async function applyDispatchPackedProjection(
@@ -77,10 +120,9 @@ export async function applyDispatchPackedProjection(
   const p = envelope.payload;
 
   // Idempotent replay guard: if this packing_record already exists, skip (replay of same event).
-  const existing = await client.query(
-    `SELECT 1 FROM packing_record WHERE packing_record_id = $1`,
-    [p.packing_record_id],
-  );
+  const existing = await client.query(`SELECT 1 FROM packing_record WHERE packing_record_id = $1`, [
+    p.packing_record_id,
+  ]);
   if (existing.rows.length > 0) {
     return;
   }
@@ -92,10 +134,18 @@ export async function applyDispatchPackedProjection(
     [p.dispatch_order_id],
   );
   if (pickedResult.rows.length === 0 || pickedResult.rows[0].picked_at === null) {
-    throw new AppError(400, 'DISPATCH_ORDER_NOT_PICKED', 'Dispatch order must be fully picked before packing');
+    throw new AppError(
+      400,
+      'DISPATCH_ORDER_NOT_PICKED',
+      'Dispatch order must be fully picked before packing',
+    );
   }
   if (pickedResult.rows[0].dispatched_at !== null) {
-    throw new AppError(400, 'DISPATCH_ORDER_ALREADY_DISPATCHED', 'Dispatch order has already been dispatched');
+    throw new AppError(
+      400,
+      'DISPATCH_ORDER_ALREADY_DISPATCHED',
+      'Dispatch order has already been dispatched',
+    );
   }
 
   // Verify cumulative packed quantity (across all packing lines/SKUs/lots already recorded for
@@ -122,7 +172,11 @@ export async function applyDispatchPackedProjection(
   const alreadyPacked = packedResult.rows[0].already_packed;
   const cumulativeScaled = (toScaled3(alreadyPacked) ?? 0n) + (toScaled3(p.packed_qty) ?? 0n);
   if (cumulativeScaled > (toScaled3(totalConfirmed) ?? 0n)) {
-    throw new AppError(400, 'PACKED_QTY_MISMATCH', 'Cumulative packed quantity exceeds total confirmed pick quantity');
+    throw new AppError(
+      400,
+      'PACKED_QTY_MISMATCH',
+      'Cumulative packed quantity exceeds total confirmed pick quantity',
+    );
   }
 
   await createPackingRecord(
@@ -181,7 +235,11 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
     [p.dispatch_order_id],
   );
   if (statusResult.rows.length === 0 || statusResult.rows[0].packed_at === null) {
-    throw new AppError(400, 'DISPATCH_ORDER_NOT_PACKED', 'Dispatch order must be packed before generating documents');
+    throw new AppError(
+      400,
+      'DISPATCH_ORDER_NOT_PACKED',
+      'Dispatch order must be packed before generating documents',
+    );
   }
 
   // LOT_ON_HOLD check: lock every candidate lot for this order FIRST (before filtering by hold
@@ -195,9 +253,16 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
      FOR UPDATE OF lm`,
     [p.dispatch_order_id],
   );
-  const heldLots = holdResult.rows.filter((r: Record<string, unknown>) => r['quality_hold_status'] === 'held').map((r: Record<string, unknown>) => r['lot_id'] as string);
+  const heldLots = holdResult.rows
+    .filter((r: Record<string, unknown>) => r['quality_hold_status'] === 'held')
+    .map((r: Record<string, unknown>) => r['lot_id'] as string);
   if (heldLots.length > 0) {
-    throw new AppError(400, 'LOT_ON_HOLD', 'Cannot generate documents: one or more lots are on quality hold', { held_lot_ids: heldLots });
+    throw new AppError(
+      400,
+      'LOT_ON_HOLD',
+      'Cannot generate documents: one or more lots are on quality hold',
+      { held_lot_ids: heldLots },
+    );
   }
 
   // Clear existing documents
@@ -209,53 +274,69 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
 
   if (docTypes.includes('bol')) {
     const bolContent = await renderBOL(p.dispatch_order_id, client);
-    await createDispatchDocument({
-      document_id: randomUUID(),
-      dispatch_order_id: p.dispatch_order_id,
-      document_type: 'bol',
-      document_content: bolContent,
-      generated_by: generatedBy,
-    }, client);
+    await createDispatchDocument(
+      {
+        document_id: randomUUID(),
+        dispatch_order_id: p.dispatch_order_id,
+        document_type: 'bol',
+        document_content: bolContent,
+        generated_by: generatedBy,
+      },
+      client,
+    );
   }
 
   if (docTypes.includes('packing_slip')) {
     const psContent = await renderPackingSlip(p.dispatch_order_id, client);
-    await createDispatchDocument({
-      document_id: randomUUID(),
-      dispatch_order_id: p.dispatch_order_id,
-      document_type: 'packing_slip',
-      document_content: psContent,
-      generated_by: generatedBy,
-    }, client);
+    await createDispatchDocument(
+      {
+        document_id: randomUUID(),
+        dispatch_order_id: p.dispatch_order_id,
+        document_type: 'packing_slip',
+        document_content: psContent,
+        generated_by: generatedBy,
+      },
+      client,
+    );
   }
 
   if (docTypes.includes('commercial_invoice')) {
     const invoiceDate = envelope.metadata.occurred_at.slice(0, 10);
     const ciContent = await renderCommercialInvoice(p.dispatch_order_id, client, invoiceDate);
-    await createDispatchDocument({
-      document_id: randomUUID(),
-      dispatch_order_id: p.dispatch_order_id,
-      document_type: 'commercial_invoice',
-      document_content: ciContent,
-      generated_by: generatedBy,
-    }, client);
+    await createDispatchDocument(
+      {
+        document_id: randomUUID(),
+        dispatch_order_id: p.dispatch_order_id,
+        document_type: 'commercial_invoice',
+        document_content: ciContent,
+        generated_by: generatedBy,
+      },
+      client,
+    );
   }
 
   if (docTypes.includes('label')) {
     const labels = await renderLabels(p.dispatch_order_id, client);
     for (const label of labels) {
-      await createDispatchDocument({
-        document_id: randomUUID(),
-        dispatch_order_id: p.dispatch_order_id,
-        document_type: 'label',
-        document_content: label,
-        generated_by: generatedBy,
-      }, client);
+      await createDispatchDocument(
+        {
+          document_id: randomUUID(),
+          dispatch_order_id: p.dispatch_order_id,
+          document_type: 'label',
+          document_content: label,
+          generated_by: generatedBy,
+        },
+        client,
+      );
     }
   }
 
   // Update packing record statuses
-  await updatePackingRecordsStatusByDispatchOrder(p.dispatch_order_id, 'documents_generated', client);
+  await updatePackingRecordsStatusByDispatchOrder(
+    p.dispatch_order_id,
+    'documents_generated',
+    client,
+  );
 }
 
 export async function applyDispatchDispatchedProjection(
@@ -272,13 +353,25 @@ export async function applyDispatchDispatchedProjection(
     [p.dispatch_order_id],
   );
   if (statusResult.rows.length === 0) {
-    throw new AppError(400, 'DISPATCH_ORDER_NOT_PACKED', 'Dispatch order must be packed before dispatch');
+    throw new AppError(
+      400,
+      'DISPATCH_ORDER_NOT_PACKED',
+      'Dispatch order must be packed before dispatch',
+    );
   }
   if (statusResult.rows[0].packed_at === null) {
-    throw new AppError(400, 'DISPATCH_ORDER_NOT_PACKED', 'Dispatch order must be packed before dispatch');
+    throw new AppError(
+      400,
+      'DISPATCH_ORDER_NOT_PACKED',
+      'Dispatch order must be packed before dispatch',
+    );
   }
   if (statusResult.rows[0].dispatched_at !== null) {
-    throw new AppError(400, 'DISPATCH_ORDER_ALREADY_DISPATCHED', 'Dispatch order has already been dispatched');
+    throw new AppError(
+      400,
+      'DISPATCH_ORDER_ALREADY_DISPATCHED',
+      'Dispatch order has already been dispatched',
+    );
   }
 
   // Verify documents have been generated
@@ -288,7 +381,11 @@ export async function applyDispatchDispatchedProjection(
   );
   const docCount = Number(docResult.rows[0].cnt);
   if (docCount === 0) {
-    throw new AppError(400, 'DISPATCH_DOCUMENTS_NOT_GENERATED', 'Shipping documents must be generated before dispatch');
+    throw new AppError(
+      400,
+      'DISPATCH_DOCUMENTS_NOT_GENERATED',
+      'Shipping documents must be generated before dispatch',
+    );
   }
 
   // Re-run LOT_ON_HOLD check — lock every candidate lot first, same race fix as the generate-documents check.
@@ -334,7 +431,11 @@ export async function applyDispatchDispatchedProjection(
     [p.dispatch_order_id],
   );
   if ((decResult.rowCount ?? 0) < packingCount) {
-    throw new AppError(500, 'STOCK_DECREMENT_FAILED', 'Stock balance not found for one or more dispatched lots; inventory may be inconsistent');
+    throw new AppError(
+      500,
+      'STOCK_DECREMENT_FAILED',
+      'Stock balance not found for one or more dispatched lots; inventory may be inconsistent',
+    );
   }
 
   // Update dispatch_order_status

@@ -105,12 +105,13 @@ function mapRow(row: Record<string, unknown>): PutawayTask {
     updated_at: ts(row['updated_at']),
     directed_location_id: (row['directed_location_id'] as string | null) ?? null,
     directed_location_code: (row['directed_location_code'] as string | null) ?? null,
-    velocity_class_at_suggestion: (row['velocity_class_at_suggestion'] as 'A' | 'B' | 'C' | null) ?? null,
+    velocity_class_at_suggestion:
+      (row['velocity_class_at_suggestion'] as 'A' | 'B' | 'C' | null) ?? null,
     actual_location_id: (row['actual_location_id'] as string | null) ?? null,
     actual_location_code: (row['actual_location_code'] as string | null) ?? null,
     override_reason_code: (row['override_reason_code'] as string | null) ?? null,
     override_confidence: (row['override_confidence'] as 'certain' | 'uncertain' | null) ?? null,
-    completed_at: (row['completed_at'] ? ts(row['completed_at']) : null),
+    completed_at: row['completed_at'] ? ts(row['completed_at']) : null,
     completed_by: (row['completed_by'] as string | null) ?? null,
     priority: (row['priority'] as TaskPriority | null) ?? 'normal',
     assigned_to: (row['assigned_to'] as string | null) ?? null,
@@ -120,18 +121,33 @@ function mapRow(row: Record<string, unknown>): PutawayTask {
   };
 }
 
-export async function getPutawayTaskById(putawayTaskId: string, client?: PoolClient): Promise<PutawayTask | null> {
-  const result = await runner(client).query(`SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task WHERE putaway_task_id = $1`, [putawayTaskId]);
+export async function getPutawayTaskById(
+  putawayTaskId: string,
+  client?: PoolClient,
+): Promise<PutawayTask | null> {
+  const result = await runner(client).query(
+    `SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task WHERE putaway_task_id = $1`,
+    [putawayTaskId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 /** Story 3.5: Lock the putaway task row FOR UPDATE inside a transaction to serialise concurrent completions. */
-export async function getPutawayTaskByIdForUpdate(putawayTaskId: string, client: PoolClient): Promise<PutawayTask | null> {
-  const result = await client.query(`SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task WHERE putaway_task_id = $1 FOR UPDATE`, [putawayTaskId]);
+export async function getPutawayTaskByIdForUpdate(
+  putawayTaskId: string,
+  client: PoolClient,
+): Promise<PutawayTask | null> {
+  const result = await client.query(
+    `SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task WHERE putaway_task_id = $1 FOR UPDATE`,
+    [putawayTaskId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
-export async function getPutawayTaskByGrnLine(grnLineId: string, client?: PoolClient): Promise<PutawayTask | null> {
+export async function getPutawayTaskByGrnLine(
+  grnLineId: string,
+  client?: PoolClient,
+): Promise<PutawayTask | null> {
   const result = await runner(client).query(
     `SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task WHERE grn_line_id = $1 ORDER BY created_at DESC LIMIT 1`,
     [grnLineId],
@@ -139,7 +155,10 @@ export async function getPutawayTaskByGrnLine(grnLineId: string, client?: PoolCl
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
-export async function listPutawayTasks(filters: ListPutawayTasksFilters = {}, client?: PoolClient): Promise<PutawayTask[]> {
+export async function listPutawayTasks(
+  filters: ListPutawayTasksFilters = {},
+  client?: PoolClient,
+): Promise<PutawayTask[]> {
   const clauses: string[] = [];
   const values: unknown[] = [];
   const add = (sql: string, value: unknown): void => {
@@ -147,7 +166,8 @@ export async function listPutawayTasks(filters: ListPutawayTasksFilters = {}, cl
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('site_id = ?', filters.siteId);
-  if (filters.siteAny !== undefined && filters.siteAny !== null) add('site_id = ANY(?::uuid[])', filters.siteAny);
+  if (filters.siteAny !== undefined && filters.siteAny !== null)
+    add('site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.status) add('status = ?', filters.status);
   if (filters.assignedTo) add('assigned_to = ?', filters.assignedTo);
   if (filters.priority) add('priority = ?', filters.priority);
@@ -156,12 +176,18 @@ export async function listPutawayTasks(filters: ListPutawayTasksFilters = {}, cl
   const orderBy = filters.orderByPriority
     ? `ORDER BY ${priorityRankSql('priority')}, created_at ASC`
     : 'ORDER BY created_at DESC';
-  const result = await runner(client).query(`SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task ${where} ${orderBy}`, values);
+  const result = await runner(client).query(
+    `SELECT ${PUTAWAY_TASK_COLUMNS} FROM putaway_task ${where} ${orderBy}`,
+    values,
+  );
   return result.rows.map(mapRow);
 }
 
 /** Idempotent, replay-safe upsert keyed on putaway_task_id. quantity bound as a NUMERIC string. */
-export async function insertPutawayTask(input: InsertPutawayTaskInput, client: PoolClient): Promise<void> {
+export async function insertPutawayTask(
+  input: InsertPutawayTaskInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO putaway_task
        (putaway_task_id, grn_line_id, sku, lot_id, quantity, from_location_id, site_id, status,
@@ -308,7 +334,14 @@ export async function assignPutawayTask(
       WHERE putaway_task_id = $1
         AND status = 'ready'
         AND ($5::boolean OR assigned_to IS NULL OR assigned_to = $2)`,
-    [input.putawayTaskId, input.assignedTo, input.assignedBy, input.priority ?? null, input.allowReassign ?? false, input.assignedAt ?? null],
+    [
+      input.putawayTaskId,
+      input.assignedTo,
+      input.assignedBy,
+      input.priority ?? null,
+      input.allowReassign ?? false,
+      input.assignedAt ?? null,
+    ],
   );
   return (result.rowCount ?? 0) > 0;
 }

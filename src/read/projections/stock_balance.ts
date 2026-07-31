@@ -58,29 +58,29 @@ export interface StockAllocationInput {
 }
 
 export interface StockIssueInput {
-   sku: string;
-   location_id: string;
-   lot_id?: string | null;
-   /** Story 2.8: see StockAllocationInput.stock_class - one class per issue, default 'owned'. */
-   stock_class?: string;
-   quantity: string | number;
-   /**
-    * Story 2.7: the event's business timestamp, stamped onto last_issue_at for every balance row at
-    * this (sku, location_id) so the obsolescence scan can read MAX(last_issue_at) across lots. Only
-    * stock.issued resets the obsolescence clock - receipts, allocations, transfers and adjustments do
-    * not pass through here.
-    */
-   occurred_at?: string | null;
- }
+  sku: string;
+  location_id: string;
+  lot_id?: string | null;
+  /** Story 2.8: see StockAllocationInput.stock_class - one class per issue, default 'owned'. */
+  stock_class?: string;
+  quantity: string | number;
+  /**
+   * Story 2.7: the event's business timestamp, stamped onto last_issue_at for every balance row at
+   * this (sku, location_id) so the obsolescence scan can read MAX(last_issue_at) across lots. Only
+   * stock.issued resets the obsolescence clock - receipts, allocations, transfers and adjustments do
+   * not pass through here.
+   */
+  occurred_at?: string | null;
+}
 
- export interface StockDeallocationInput {
-   sku: string;
-   location_id: string;
-   lot_id?: string | null;
-   /** Story 2.8: see StockAllocationInput.stock_class - one class per deallocation, default 'owned'. */
-   stock_class?: string;
-   quantity: string | number;
- }
+export interface StockDeallocationInput {
+  sku: string;
+  location_id: string;
+  lot_id?: string | null;
+  /** Story 2.8: see StockAllocationInput.stock_class - one class per deallocation, default 'owned'. */
+  stock_class?: string;
+  quantity: string | number;
+}
 
 /** Story 3.6: moves a quantity already in `allocated` into `picked` at a single (sku, location, lot). */
 export interface StockPickInput {
@@ -102,7 +102,8 @@ const BALANCE_COLUMNS = `balance_id, sku, location_id, location_code, lot_id, st
        on_hand, allocated, picked, available, in_transit, updated_at`;
 
 function mapRow(row: Record<string, unknown>): StockBalance {
-  const updatedAt = row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
+  const updatedAt =
+    row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
   return {
     balance_id: row['balance_id'] as string,
     sku: row['sku'] as string,
@@ -121,7 +122,10 @@ function mapRow(row: Record<string, unknown>): StockBalance {
 }
 
 /** All balance rows for a SKU (one per location+lot), deterministically ordered. */
-export async function getStockBalancesBySku(sku: string, client?: PoolClient): Promise<StockBalance[]> {
+export async function getStockBalancesBySku(
+  sku: string,
+  client?: PoolClient,
+): Promise<StockBalance[]> {
   const result = await runner(client).query(
     `SELECT ${BALANCE_COLUMNS} FROM stock_balance WHERE sku = $1 ORDER BY location_id, lot_id NULLS FIRST`,
     [sku],
@@ -138,7 +142,11 @@ export async function getStockBalancesBySku(sku: string, client?: PoolClient): P
  * eligible for internal replenishment since the platform does not own it. Returns a NUMERIC
  * string, never coerced to a JS number, so a large balance cannot lose precision.
  */
-export async function getForwardPickBalance(sku: string, zoneId: string, client?: PoolClient): Promise<string> {
+export async function getForwardPickBalance(
+  sku: string,
+  zoneId: string,
+  client?: PoolClient,
+): Promise<string> {
   const result = await runner(client).query(
     `WITH RECURSIVE descendants AS (
        SELECT location_id, 0 AS depth FROM location_register WHERE location_id = $1
@@ -161,7 +169,10 @@ export async function getForwardPickBalance(sku: string, zoneId: string, client?
  * by the received quantity. The upsert takes a row lock on conflict, so concurrent receipts to
  * the same grain serialize. Must run on the SAME client/transaction as the domain event insert.
  */
-export async function applyStockReceipt(input: StockReceiptInput, client: PoolClient): Promise<StockBalance> {
+export async function applyStockReceipt(
+  input: StockReceiptInput,
+  client: PoolClient,
+): Promise<StockBalance> {
   const stockClass = input.stock_class ?? 'owned';
   const result = await client.query(
     `INSERT INTO stock_balance (sku, location_id, location_code, lot_id, stock_class, on_hand)
@@ -171,7 +182,14 @@ export async function applyStockReceipt(input: StockReceiptInput, client: PoolCl
                    location_code = COALESCE(EXCLUDED.location_code, stock_balance.location_code),
                    updated_at = now()
      RETURNING ${BALANCE_COLUMNS}`,
-    [input.sku, input.location_id, input.location_code ?? null, input.lot_id ?? null, stockClass, input.quantity],
+    [
+      input.sku,
+      input.location_id,
+      input.location_code ?? null,
+      input.lot_id ?? null,
+      stockClass,
+      input.quantity,
+    ],
   );
   return mapRow(result.rows[0]!);
 }
@@ -191,7 +209,10 @@ export async function applyStockReceipt(input: StockReceiptInput, client: PoolCl
  * cumulative sum so every row update preserves NUMERIC(18,6) precision. Two transactions racing
  * for the last unit therefore have exactly one winner.
  */
-export async function applyStockAllocation(input: StockAllocationInput, client: PoolClient): Promise<void> {
+export async function applyStockAllocation(
+  input: StockAllocationInput,
+  client: PoolClient,
+): Promise<void> {
   const lotId = input.lot_id ?? null;
   // Story 2.8: every lock/check/drain below is scoped to ONE stock class. A command without an
   // explicit stock_class draws from owned stock only - consignment/vmi/job_work rows are invisible
@@ -213,14 +234,19 @@ export async function applyStockAllocation(input: StockAllocationInput, client: 
   );
   const totalAvailable = Number(checkResult.rows[0]!['total_available'] as string);
   if (checkResult.rows[0]!['sufficient'] !== true) {
-    throw new AppError(409, 'INSUFFICIENT_STOCK', 'Available stock does not cover the requested allocation', {
-      sku: input.sku,
-      location_id: input.location_id,
-      stock_class: stockClass,
-      ...(lotId !== null ? { lot_id: lotId } : {}),
-      requested_quantity: input.quantity,
-      available_quantity: totalAvailable,
-    });
+    throw new AppError(
+      409,
+      'INSUFFICIENT_STOCK',
+      'Available stock does not cover the requested allocation',
+      {
+        sku: input.sku,
+        location_id: input.location_id,
+        stock_class: stockClass,
+        ...(lotId !== null ? { lot_id: lotId } : {}),
+        requested_quantity: input.quantity,
+        available_quantity: totalAvailable,
+      },
+    );
   }
 
   await client.query(
@@ -261,18 +287,23 @@ export async function applyStockIssue(input: StockIssueInput, client: PoolClient
   );
   const totalAvailable = Number(checkResult.rows[0]!['total_available'] as string);
   if (checkResult.rows[0]!['sufficient'] !== true) {
-    throw new AppError(409, 'INSUFFICIENT_STOCK', 'Available stock does not cover the requested issue', {
-      sku: input.sku,
-      location_id: input.location_id,
-      stock_class: stockClass,
-      ...(lotId !== null ? { lot_id: lotId } : {}),
-      requested_quantity: input.quantity,
-      available_quantity: totalAvailable,
-    });
+    throw new AppError(
+      409,
+      'INSUFFICIENT_STOCK',
+      'Available stock does not cover the requested issue',
+      {
+        sku: input.sku,
+        location_id: input.location_id,
+        stock_class: stockClass,
+        ...(lotId !== null ? { lot_id: lotId } : {}),
+        requested_quantity: input.quantity,
+        available_quantity: totalAvailable,
+      },
+    );
   }
 
-await client.query(
-     `WITH ranked AS (
+  await client.query(
+    `WITH ranked AS (
         SELECT balance_id, available AS available_qty,
                SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
         FROM stock_balance
@@ -284,7 +315,7 @@ await client.query(
       FROM ranked
       WHERE stock_balance.balance_id = ranked.balance_id
         AND ranked.cumulative - ranked.available_qty < $4`,
-     [input.sku, input.location_id, lotId, input.quantity, stockClass],
+    [input.sku, input.location_id, lotId, input.quantity, stockClass],
   );
 
   // Story 2.7: stamp last_issue_at for every balance row at this (sku, location_id) so the
@@ -309,7 +340,10 @@ await client.query(
  * (allocation is rolled back). Must run on the SAME client/transaction as the caller's
  * event insert.
  */
-export async function applyStockDeallocation(input: StockDeallocationInput, client: PoolClient): Promise<void> {
+export async function applyStockDeallocation(
+  input: StockDeallocationInput,
+  client: PoolClient,
+): Promise<void> {
   const lotId = input.lot_id ?? null;
   const stockClass = input.stock_class ?? 'owned';
   await client.query(
@@ -347,12 +381,17 @@ export async function applyStockPick(input: StockPickInput, client: PoolClient):
     [quantity, input.sku, input.location_id, lotId, stockClass],
   );
   if ((result.rowCount ?? 0) === 0) {
-    throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', 'No allocation covers this pick at the given bin and lot', {
-      sku: input.sku,
-      location_id: input.location_id,
-      ...(lotId !== null ? { lot_id: lotId } : {}),
-      stock_class: stockClass,
-      requested_quantity: quantity,
-    });
+    throw new AppError(
+      409,
+      'INSUFFICIENT_STOCK_FOR_PICK',
+      'No allocation covers this pick at the given bin and lot',
+      {
+        sku: input.sku,
+        location_id: input.location_id,
+        ...(lotId !== null ? { lot_id: lotId } : {}),
+        stock_class: stockClass,
+        requested_quantity: quantity,
+      },
+    );
   }
 }

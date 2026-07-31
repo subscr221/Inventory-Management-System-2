@@ -10,7 +10,11 @@ describe('retentionCutoff (Task 5.5)', () => {
   it('an entry exactly 8 years old is not archived', () => {
     const cutoff = retentionCutoff(now, 8);
     const exactlyEightYears = new Date('2026-07-18T12:00:00.000Z');
-    assert.strictEqual(cutoff.getTime(), exactlyEightYears.getTime(), 'cutoff is exactly now minus 8 years');
+    assert.strictEqual(
+      cutoff.getTime(),
+      exactlyEightYears.getTime(),
+      'cutoff is exactly now minus 8 years',
+    );
     // created_at < cutoff is FALSE for an entry created exactly at the boundary.
     assert.strictEqual(exactlyEightYears.getTime() < cutoff.getTime(), false);
   });

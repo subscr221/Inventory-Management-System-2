@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -85,7 +90,13 @@ function parseOptionalBound(value: unknown, name: string): number | null {
 const createDoaEntryBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!body || !isNonEmptyString(body['role']) || !isNonEmptyString(body['transaction_type'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'role and transaction_type are required non-empty strings');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'role and transaction_type are required non-empty strings',
+    );
     return;
   }
   const valueMin = parseOptionalBound(body['value_min'], 'value_min');
@@ -101,7 +112,12 @@ const createDoaEntryBase: RouteHandler = async (req, res, _params) => {
   try {
     await client.query('BEGIN');
     const entry = await createDoaEntry(
-      { role: body['role'], transaction_type: body['transaction_type'], value_min: valueMin, value_max: valueMax },
+      {
+        role: body['role'],
+        transaction_type: body['transaction_type'],
+        value_min: valueMin,
+        value_max: valueMax,
+      },
       client,
     );
     await persistEvent(
@@ -145,7 +161,13 @@ const updateDoaEntryBase: RouteHandler = async (req, res, params) => {
   }
 
   // Build the validated patch from only the fields present in the body.
-  const patch: { role?: string; transaction_type?: string; value_min?: number | null; value_max?: number | null; active?: boolean } = {};
+  const patch: {
+    role?: string;
+    transaction_type?: string;
+    value_min?: number | null;
+    value_max?: number | null;
+    active?: boolean;
+  } = {};
   if (body['role'] !== undefined) {
     if (!isNonEmptyString(body['role'])) {
       sendRequestError(req, res, 400, 'INVALID_PARAMS', 'role must be a non-empty string');
@@ -155,13 +177,21 @@ const updateDoaEntryBase: RouteHandler = async (req, res, params) => {
   }
   if (body['transaction_type'] !== undefined) {
     if (!isNonEmptyString(body['transaction_type'])) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transaction_type must be a non-empty string');
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'transaction_type must be a non-empty string',
+      );
       return;
     }
     patch.transaction_type = body['transaction_type'];
   }
-  if (body['value_min'] !== undefined) patch.value_min = parseOptionalBound(body['value_min'], 'value_min');
-  if (body['value_max'] !== undefined) patch.value_max = parseOptionalBound(body['value_max'], 'value_max');
+  if (body['value_min'] !== undefined)
+    patch.value_min = parseOptionalBound(body['value_min'], 'value_min');
+  if (body['value_max'] !== undefined)
+    patch.value_max = parseOptionalBound(body['value_max'], 'value_max');
   if (body['active'] !== undefined) {
     if (typeof body['active'] !== 'boolean') {
       sendRequestError(req, res, 400, 'INVALID_PARAMS', 'active must be a boolean');
@@ -227,13 +257,30 @@ const createDelegationBase: RouteHandler = async (req, res, _params) => {
     !isNonEmptyString(body['start_date']) ||
     !isNonEmptyString(body['end_date'])
   ) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'delegator_external_id, delegate_external_id, start_date, end_date are required');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'delegator_external_id, delegate_external_id, start_date, end_date are required',
+    );
     return;
   }
   const startDate = body['start_date'];
   const endDate = body['end_date'];
-  if (!DATE_REGEX.test(startDate) || Number.isNaN(Date.parse(startDate)) || !DATE_REGEX.test(endDate) || Number.isNaN(Date.parse(endDate))) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'start_date and end_date must be valid YYYY-MM-DD dates');
+  if (
+    !DATE_REGEX.test(startDate) ||
+    Number.isNaN(Date.parse(startDate)) ||
+    !DATE_REGEX.test(endDate) ||
+    Number.isNaN(Date.parse(endDate))
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'start_date and end_date must be valid YYYY-MM-DD dates',
+    );
     return;
   }
   if (endDate < startDate) {
@@ -246,12 +293,24 @@ const createDelegationBase: RouteHandler = async (req, res, _params) => {
   // single reused query - a delegation naming a deprovisioned delegator/delegate is not creatable.
   const delegator = await lookupActiveUserWithRoles(body['delegator_external_id']);
   if (!delegator) {
-    sendRequestError(req, res, 404, 'NOT_FOUND', `No active user with externalId "${body['delegator_external_id']}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'NOT_FOUND',
+      `No active user with externalId "${body['delegator_external_id']}"`,
+    );
     return;
   }
   const delegate = await lookupActiveUserWithRoles(body['delegate_external_id']);
   if (!delegate) {
-    sendRequestError(req, res, 404, 'NOT_FOUND', `No active user with externalId "${body['delegate_external_id']}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'NOT_FOUND',
+      `No active user with externalId "${body['delegate_external_id']}"`,
+    );
     return;
   }
 
@@ -261,7 +320,12 @@ const createDelegationBase: RouteHandler = async (req, res, _params) => {
   try {
     await client.query('BEGIN');
     const delegation = await createVacationDelegation(
-      { delegator_user_id: delegator.userId, delegate_user_id: delegate.userId, start_date: startDate, end_date: endDate },
+      {
+        delegator_user_id: delegator.userId,
+        delegate_user_id: delegate.userId,
+        start_date: startDate,
+        end_date: endDate,
+      },
       client,
     );
     await persistEvent(
@@ -305,7 +369,13 @@ const resolveDoaBase: RouteHandler = async (req, res, _params) => {
     return;
   }
   if (typeof body['value'] !== 'number' || !Number.isFinite(body['value'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'value is required and must be a finite number');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'value is required and must be a finite number',
+    );
     return;
   }
   // as_of_date exists purely to make AC2's dated delegation window deterministically testable;
@@ -313,7 +383,11 @@ const resolveDoaBase: RouteHandler = async (req, res, _params) => {
   let asOfDate: string;
   if (body['as_of_date'] === undefined) {
     asOfDate = new Date().toISOString().slice(0, 10);
-  } else if (isNonEmptyString(body['as_of_date']) && DATE_REGEX.test(body['as_of_date']) && !Number.isNaN(Date.parse(body['as_of_date']))) {
+  } else if (
+    isNonEmptyString(body['as_of_date']) &&
+    DATE_REGEX.test(body['as_of_date']) &&
+    !Number.isNaN(Date.parse(body['as_of_date']))
+  ) {
     asOfDate = body['as_of_date'];
   } else {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'as_of_date must be a valid YYYY-MM-DD date');
@@ -325,12 +399,24 @@ const resolveDoaBase: RouteHandler = async (req, res, _params) => {
 
   const entry = await findMatchingDoaEntry(transactionType, value);
   if (!entry) {
-    sendRequestError(req, res, 404, 'NO_DOA_ENTRY_MATCH', `No DOA entry governs "${transactionType}" at value ${value}`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'NO_DOA_ENTRY_MATCH',
+      `No DOA entry governs "${transactionType}" at value ${value}`,
+    );
     return;
   }
   const holder = await findRoleHolder(entry.role);
   if (!holder) {
-    sendRequestError(req, res, 404, 'NO_APPROVER_FOUND', `No active user holds role "${entry.role}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'NO_APPROVER_FOUND',
+      `No active user holds role "${entry.role}"`,
+    );
     return;
   }
 
@@ -339,7 +425,10 @@ const resolveDoaBase: RouteHandler = async (req, res, _params) => {
   let delegationApplied: boolean;
   let delegatedFrom: string | null;
   if (delegation) {
-    approver = { user_id: delegation.delegate_user_id, external_id: await getExternalIdByUserId(delegation.delegate_user_id) };
+    approver = {
+      user_id: delegation.delegate_user_id,
+      external_id: await getExternalIdByUserId(delegation.delegate_user_id),
+    };
     delegationApplied = true;
     delegatedFrom = holder.user_id;
   } else {
@@ -395,12 +484,21 @@ const workflowConfigBase: RouteHandler = async (req, res, _params) => {
         endpoint: req.url ?? null,
         method: req.method ?? null,
         error_code: 'DOA_OVERRIDE_BLOCKED',
-        details: { transaction_type: transactionType, reason: 'Workflow config attempted to override a DOA-governed transaction type' },
+        details: {
+          transaction_type: transactionType,
+          reason: 'Workflow config attempted to override a DOA-governed transaction type',
+        },
       });
     } finally {
       client.release();
     }
-    sendRequestError(req, res, 409, 'DOA_OVERRIDE_BLOCKED', `Transaction type "${transactionType}" is governed by the DOA registry and cannot be overridden`);
+    sendRequestError(
+      req,
+      res,
+      409,
+      'DOA_OVERRIDE_BLOCKED',
+      `Transaction type "${transactionType}" is governed by the DOA registry and cannot be overridden`,
+    );
     return;
   }
 
@@ -409,8 +507,23 @@ const workflowConfigBase: RouteHandler = async (req, res, _params) => {
   sendJson(res, 200, { accepted: true });
 };
 
-export const createDoaEntryHandler: RouteHandler = requireRole({ module: 'compliance', functionScope: 'write' })(createDoaEntryBase);
-export const updateDoaEntryHandler: RouteHandler = requireRole({ module: 'compliance', functionScope: 'write' })(updateDoaEntryBase);
-export const createDelegationHandler: RouteHandler = requireRole({ module: 'compliance', functionScope: 'write' })(createDelegationBase);
-export const resolveDoaHandler: RouteHandler = requireRole({ module: 'compliance', functionScope: 'read' })(resolveDoaBase);
-export const workflowConfigHandler: RouteHandler = requireRole({ module: 'compliance', functionScope: 'write' })(workflowConfigBase);
+export const createDoaEntryHandler: RouteHandler = requireRole({
+  module: 'compliance',
+  functionScope: 'write',
+})(createDoaEntryBase);
+export const updateDoaEntryHandler: RouteHandler = requireRole({
+  module: 'compliance',
+  functionScope: 'write',
+})(updateDoaEntryBase);
+export const createDelegationHandler: RouteHandler = requireRole({
+  module: 'compliance',
+  functionScope: 'write',
+})(createDelegationBase);
+export const resolveDoaHandler: RouteHandler = requireRole({
+  module: 'compliance',
+  functionScope: 'read',
+})(resolveDoaBase);
+export const workflowConfigHandler: RouteHandler = requireRole({
+  module: 'compliance',
+  functionScope: 'write',
+})(workflowConfigBase);

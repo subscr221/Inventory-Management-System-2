@@ -8,7 +8,11 @@ import { getPool } from '../../config/db.js';
  * against the Story 1.5 business_streams vocabulary, never re-declared here.
  */
 
-export const ALLOWED_VALUATION_METHODS = ['fifo', 'weighted_average', 'specific_identification'] as const;
+export const ALLOWED_VALUATION_METHODS = [
+  'fifo',
+  'weighted_average',
+  'specific_identification',
+] as const;
 export type ValuationMethod = (typeof ALLOWED_VALUATION_METHODS)[number];
 
 export const ITEM_STATUSES = ['active', 'inactive'] as const;
@@ -99,8 +103,10 @@ function toNumberOrNull(value: unknown): number | null {
 }
 
 function mapRow(row: Record<string, unknown>): ItemMaster {
-  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
-  const updatedAt = row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
+  const createdAt =
+    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  const updatedAt =
+    row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
   return {
     item_id: row['item_id'] as string,
     sku: row['sku'] as string,
@@ -127,7 +133,7 @@ function mapRow(row: Record<string, unknown>): ItemMaster {
 /** Inserts an item row and returns it. Participates in `client`'s transaction when given. */
 export async function createItem(input: CreateItemInput, client?: PoolClient): Promise<ItemMaster> {
   const result = await runner(client).query(
-      `INSERT INTO item_master
+    `INSERT INTO item_master
        (sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required, bis_licence_required,
         valuation_method, business_stream, status,
         standard_cost_designation, standard_cost_amount, variance_review_cadence, variance_tolerance_percent,
@@ -157,7 +163,11 @@ export async function createItem(input: CreateItemInput, client?: PoolClient): P
 }
 
 /** Applies a partial update by SKU and returns the updated row, or null when the SKU is unknown. */
-export async function updateItem(sku: string, patch: UpdateItemPatch, client?: PoolClient): Promise<ItemMaster | null> {
+export async function updateItem(
+  sku: string,
+  patch: UpdateItemPatch,
+  client?: PoolClient,
+): Promise<ItemMaster | null> {
   const sets: string[] = [];
   const values: unknown[] = [sku];
   const push = (column: string, value: unknown): void => {
@@ -168,16 +178,23 @@ export async function updateItem(sku: string, patch: UpdateItemPatch, client?: P
   if (patch.lot_controlled !== undefined) push('lot_controlled', patch.lot_controlled);
   if (patch.serial_controlled !== undefined) push('serial_controlled', patch.serial_controlled);
   if (patch.hazmat !== undefined) push('hazmat', patch.hazmat);
-  if (patch.quarantine_required !== undefined) push('quarantine_required', patch.quarantine_required);
-  if (patch.bis_licence_required !== undefined) push('bis_licence_required', patch.bis_licence_required);
+  if (patch.quarantine_required !== undefined)
+    push('quarantine_required', patch.quarantine_required);
+  if (patch.bis_licence_required !== undefined)
+    push('bis_licence_required', patch.bis_licence_required);
   if (patch.valuation_method !== undefined) push('valuation_method', patch.valuation_method);
   if (patch.business_stream !== undefined) push('business_stream', patch.business_stream);
   if (patch.status !== undefined) push('status', patch.status);
-  if (patch.standard_cost_designation !== undefined) push('standard_cost_designation', patch.standard_cost_designation);
-  if (patch.standard_cost_amount !== undefined) push('standard_cost_amount', patch.standard_cost_amount);
-  if (patch.variance_review_cadence !== undefined) push('variance_review_cadence', patch.variance_review_cadence);
-  if (patch.variance_tolerance_percent !== undefined) push('variance_tolerance_percent', patch.variance_tolerance_percent);
-  if (patch.count_variance_tolerance_percent !== undefined) push('count_variance_tolerance_percent', patch.count_variance_tolerance_percent);
+  if (patch.standard_cost_designation !== undefined)
+    push('standard_cost_designation', patch.standard_cost_designation);
+  if (patch.standard_cost_amount !== undefined)
+    push('standard_cost_amount', patch.standard_cost_amount);
+  if (patch.variance_review_cadence !== undefined)
+    push('variance_review_cadence', patch.variance_review_cadence);
+  if (patch.variance_tolerance_percent !== undefined)
+    push('variance_tolerance_percent', patch.variance_tolerance_percent);
+  if (patch.count_variance_tolerance_percent !== undefined)
+    push('count_variance_tolerance_percent', patch.count_variance_tolerance_percent);
   if (patch.size_class !== undefined) push('size_class', patch.size_class);
   if (sets.length === 0) return getItemBySku(sku, client);
 
@@ -189,17 +206,25 @@ export async function updateItem(sku: string, patch: UpdateItemPatch, client?: P
 }
 
 export async function getItemBySku(sku: string, client?: PoolClient): Promise<ItemMaster | null> {
-  const result = await runner(client).query(`SELECT ${ITEM_COLUMNS} FROM item_master WHERE sku = $1`, [sku]);
+  const result = await runner(client).query(
+    `SELECT ${ITEM_COLUMNS} FROM item_master WHERE sku = $1`,
+    [sku],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 export async function getItemById(itemId: string, client?: PoolClient): Promise<ItemMaster | null> {
-  const result = await runner(client).query(`SELECT ${ITEM_COLUMNS} FROM item_master WHERE item_id = $1`, [itemId]);
+  const result = await runner(client).query(
+    `SELECT ${ITEM_COLUMNS} FROM item_master WHERE item_id = $1`,
+    [itemId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
 /** Existence probe used by the central inventory-master validation seam. */
 export async function itemExistsBySku(sku: string, client?: PoolClient): Promise<boolean> {
-  const result = await runner(client).query(`SELECT 1 FROM item_master WHERE sku = $1 LIMIT 1`, [sku]);
+  const result = await runner(client).query(`SELECT 1 FROM item_master WHERE sku = $1 LIMIT 1`, [
+    sku,
+  ]);
   return result.rows.length > 0;
 }

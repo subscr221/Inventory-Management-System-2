@@ -12,7 +12,9 @@ export interface DispatchOrderStatus {
   status?: 'picked' | 'packed' | 'documents_generated' | 'dispatched';
 }
 
-export async function getDispatchOrderStatus(dispatchOrderId: string): Promise<DispatchOrderStatus | null> {
+export async function getDispatchOrderStatus(
+  dispatchOrderId: string,
+): Promise<DispatchOrderStatus | null> {
   const pool = getPool();
   const result = await pool.query(
     `SELECT dos.dispatch_order_id, dos.picked_at, dos.picked_by,

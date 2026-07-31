@@ -105,7 +105,12 @@ export async function getSlaConfig(
  * board must not be able to disagree about whether a zone has an SLA.
  */
 export async function listSlaConfig(
-  filters: { siteId?: string | null; siteAny?: string[] | null; taskType?: WarehouseTaskType | null; zoneId?: string | null } = {},
+  filters: {
+    siteId?: string | null;
+    siteAny?: string[] | null;
+    taskType?: WarehouseTaskType | null;
+    zoneId?: string | null;
+  } = {},
   client?: PoolClient,
 ): Promise<TaskSlaConfig[]> {
   const clauses: string[] = [];
@@ -115,7 +120,8 @@ export async function listSlaConfig(
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('site_id = ?', filters.siteId);
-  else if (filters.siteAny && filters.siteAny.length > 0) add('site_id = ANY(?::uuid[])', filters.siteAny);
+  else if (filters.siteAny && filters.siteAny.length > 0)
+    add('site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.taskType) add('task_type = ?', filters.taskType);
   if (filters.zoneId) add('(zone_id = ? OR zone_id IS NULL)', filters.zoneId);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -141,7 +147,10 @@ export async function listSlaConfig(
  * suppresses RETURNING, the current row is read back so callers always receive the authoritative
  * state rather than undefined.
  */
-export async function upsertSlaConfig(input: UpsertTaskSlaConfigInput, client: PoolClient): Promise<TaskSlaConfig> {
+export async function upsertSlaConfig(
+  input: UpsertTaskSlaConfigInput,
+  client: PoolClient,
+): Promise<TaskSlaConfig> {
   const values = [
     input.id,
     input.site_id,

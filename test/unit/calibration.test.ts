@@ -36,7 +36,11 @@ const unreachableDeps: CalibrationDeps = {
   },
 };
 
-async function expectAppError(fn: () => Promise<void>, statusCode: number, errorCode: string): Promise<void> {
+async function expectAppError(
+  fn: () => Promise<void>,
+  statusCode: number,
+  errorCode: string,
+): Promise<void> {
   await assert.rejects(fn, (err: unknown) => {
     assert.ok(err instanceof AppError);
     assert.strictEqual(err.statusCode, statusCode);
@@ -48,34 +52,59 @@ async function expectAppError(fn: () => Promise<void>, statusCode: number, error
 describe('assertCalibrationLockout (Story 1.7, AD-8)', () => {
   it('passes non-QC stream types through with no projection lookup', async () => {
     await assertCalibrationLockout(
-      makeEnvelope({ stream_type: 'inventory', event_type: 'stock.allocated', payload: { business_stream: 'production' } }),
+      makeEnvelope({
+        stream_type: 'inventory',
+        event_type: 'stock.allocated',
+        payload: { business_stream: 'production' },
+      }),
       unreachableDeps,
     );
   });
 
   it('passes QC events that are not result capture through with no projection lookup', async () => {
-    await assertCalibrationLockout(makeEnvelope({ event_type: 'qc.plan_created', payload: {} }), unreachableDeps);
+    await assertCalibrationLockout(
+      makeEnvelope({ event_type: 'qc.plan_created', payload: {} }),
+      unreachableDeps,
+    );
   });
 
   it('rejects missing or empty instrument_id as INVALID_PARAMS', async () => {
     await expectAppError(
-      () => assertCalibrationLockout(makeEnvelope({ payload: { lot_id: 'LOT-1', parameter: 'weight', value: 42 } }), unreachableDeps),
+      () =>
+        assertCalibrationLockout(
+          makeEnvelope({ payload: { lot_id: 'LOT-1', parameter: 'weight', value: 42 } }),
+          unreachableDeps,
+        ),
       400,
       'INVALID_PARAMS',
     );
     await expectAppError(
-      () => assertCalibrationLockout(makeEnvelope({ payload: { instrument_id: ' ', lot_id: 'LOT-1', parameter: 'weight', value: 42 } }), unreachableDeps),
+      () =>
+        assertCalibrationLockout(
+          makeEnvelope({
+            payload: { instrument_id: ' ', lot_id: 'LOT-1', parameter: 'weight', value: 42 },
+          }),
+          unreachableDeps,
+        ),
       400,
       'INVALID_PARAMS',
     );
   });
 
   it('blocks unknown instruments as CALIBRATION_LOCKOUT', async () => {
-    await expectAppError(() => assertCalibrationLockout(makeEnvelope(), depsWith(null)), 423, 'CALIBRATION_LOCKOUT');
+    await expectAppError(
+      () => assertCalibrationLockout(makeEnvelope(), depsWith(null)),
+      423,
+      'CALIBRATION_LOCKOUT',
+    );
   });
 
   it('blocks out-of-calibration instruments as CALIBRATION_LOCKOUT', async () => {
-    await expectAppError(() => assertCalibrationLockout(makeEnvelope(), depsWith('out_of_calibration')), 423, 'CALIBRATION_LOCKOUT');
+    await expectAppError(
+      () => assertCalibrationLockout(makeEnvelope(), depsWith('out_of_calibration')),
+      423,
+      'CALIBRATION_LOCKOUT',
+    );
   });
 
   it('does not allow qc_head role to bypass lockout', async () => {

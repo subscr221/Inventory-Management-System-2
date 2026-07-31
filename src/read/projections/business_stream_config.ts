@@ -64,7 +64,8 @@ function toDateStringOrNull(v: unknown): string | null {
 }
 
 function mapStream(row: Record<string, unknown>): BusinessStream {
-  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  const createdAt =
+    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
   return {
     stream_code: row['stream_code'] as string,
     display_name: row['display_name'] as string,
@@ -74,8 +75,10 @@ function mapStream(row: Record<string, unknown>): BusinessStream {
 }
 
 function mapRule(row: Record<string, unknown>): TransactionTaggingRule {
-  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
-  const updatedAt = row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
+  const createdAt =
+    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  const updatedAt =
+    row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
   return {
     rule_id: row['rule_id'] as string,
     transaction_type: row['transaction_type'] as string,
@@ -89,7 +92,10 @@ function mapRule(row: Record<string, unknown>): TransactionTaggingRule {
 }
 
 /** Returns true if `streamCode` exists and is active in the business_streams vocabulary. */
-export async function isValidBusinessStream(streamCode: string, client?: PoolClient): Promise<boolean> {
+export async function isValidBusinessStream(
+  streamCode: string,
+  client?: PoolClient,
+): Promise<boolean> {
   const result = await runner(client).query(
     `SELECT 1 FROM business_streams WHERE stream_code = $1 AND active = true LIMIT 1`,
     [streamCode],
@@ -131,11 +137,16 @@ export async function findActiveTaggingRule(
   );
   if (result.rows.length === 0) return null;
   if (result.rows.length > 1) {
-    throw new AppError(500, 'TAGGING_CONFIG_CONFLICT', `More than one tagging rule is effective for "${transactionType}" on ${date}`, {
-      transaction_type: transactionType,
-      as_of_date: date,
-      conflicting_rule_ids: result.rows.map((r) => r['rule_id'] as string),
-    });
+    throw new AppError(
+      500,
+      'TAGGING_CONFIG_CONFLICT',
+      `More than one tagging rule is effective for "${transactionType}" on ${date}`,
+      {
+        transaction_type: transactionType,
+        as_of_date: date,
+        conflicting_rule_ids: result.rows.map((r) => r['rule_id'] as string),
+      },
+    );
   }
   return mapRule(result.rows[0]!);
 }
@@ -178,7 +189,13 @@ export async function createTaggingRule(
      VALUES ($1, $2, $3, $4, $5)
      RETURNING rule_id, transaction_type, cost_centre_required, project_code_required,
                effective_from, effective_to, created_at, updated_at`,
-    [input.transaction_type, input.cost_centre_required, input.project_code_required, input.effective_from, input.effective_to],
+    [
+      input.transaction_type,
+      input.cost_centre_required,
+      input.project_code_required,
+      input.effective_from,
+      input.effective_to,
+    ],
   );
   return mapRule(result.rows[0]!);
 }

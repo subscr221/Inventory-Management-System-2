@@ -85,7 +85,9 @@ function mapRow(row: Record<string, unknown>): Grn {
 }
 
 export async function getGrnById(grnId: string, client?: PoolClient): Promise<Grn | null> {
-  const result = await runner(client).query(`SELECT ${GRN_COLUMNS} FROM grn WHERE grn_id = $1`, [grnId]);
+  const result = await runner(client).query(`SELECT ${GRN_COLUMNS} FROM grn WHERE grn_id = $1`, [
+    grnId,
+  ]);
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
@@ -97,11 +99,15 @@ export async function listGrns(filters: ListGrnsFilters = {}, client?: PoolClien
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('site_id = ?', filters.siteId);
-  if (filters.siteAny !== undefined && filters.siteAny !== null) add('site_id = ANY(?::uuid[])', filters.siteAny);
+  if (filters.siteAny !== undefined && filters.siteAny !== null)
+    add('site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.poRefExt) add('po_ref_ext = ?', filters.poRefExt);
   if (filters.status) add('status = ?', filters.status);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-  const result = await runner(client).query(`SELECT ${GRN_COLUMNS} FROM grn ${where} ORDER BY created_at DESC`, values);
+  const result = await runner(client).query(
+    `SELECT ${GRN_COLUMNS} FROM grn ${where} ORDER BY created_at DESC`,
+    values,
+  );
   return result.rows.map(mapRow);
 }
 
@@ -113,7 +119,10 @@ export async function listGrns(filters: ListGrnsFilters = {}, client?: PoolClien
  * that identity set: the ON CONFLICT clause deliberately leaves it alone, so the receipt instant is
  * the first line's capture instant and a later line can neither move it nor null it out.
  */
-export async function insertGrnHeader(input: InsertGrnHeaderInput, client: PoolClient): Promise<void> {
+export async function insertGrnHeader(
+  input: InsertGrnHeaderInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO grn
        (grn_id, correlation_id, po_ref_ext, source_document, source_ref_ext, site_id, site_code_ext,

@@ -79,13 +79,20 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -162,7 +169,12 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
 
     // counter: enters and submits counts (SOD "enterer").
     counterUserId = await provisionUser(port, 'counter-2-6@example.com', [
-      { role: 'inventory_controller', module: 'inventory', functionScope: 'write', locationId: locAId },
+      {
+        role: 'inventory_controller',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: locAId,
+      },
     ]);
     counterHeaders = await authFor(port, 'counter-2-6@example.com');
 
@@ -193,14 +205,24 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
 
     // DOA band for count adjustments: any variance value -> warehouse_manager.
     await provisionUser(port, 'doa-admin-2-6@example.com', [
-      { role: 'compliance_admin_2_6', module: 'compliance', functionScope: 'write', locationId: '*' },
+      {
+        role: 'compliance_admin_2_6',
+        module: 'compliance',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     const doaHeaders = await authFor(port, 'doa-admin-2-6@example.com');
     const doa = await makeRequest(
       port,
       'POST',
       '/api/v1/doa/entries',
-      { transaction_type: 'inventory.count_adjustment', role: 'warehouse_manager', value_min: null, value_max: null },
+      {
+        transaction_type: 'inventory.count_adjustment',
+        role: 'warehouse_manager',
+        value_min: null,
+        value_max: null,
+      },
       doaHeaders,
     );
     assert.strictEqual(doa.status, 201, `DOA entry failed: ${JSON.stringify(doa.body)}`);
@@ -214,7 +236,10 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
 
   // --- seeding helpers -----------------------------------------------------
 
-  async function seedItem(sku: string, opts: { lot?: boolean; serial?: boolean; countTolerance?: number | null } = {}): Promise<void> {
+  async function seedItem(
+    sku: string,
+    opts: { lot?: boolean; serial?: boolean; countTolerance?: number | null } = {},
+  ): Promise<void> {
     await getPool().query(
       `INSERT INTO item_master (sku, uom, lot_controlled, serial_controlled, valuation_method, business_stream, status, count_variance_tolerance_percent)
        VALUES ($1, 'EA', $2, $3, 'weighted_average', 'production', 'active', $4)`,
@@ -222,7 +247,13 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     );
   }
 
-  async function seedStock(sku: string, locationId: string, onHand: number, lotId: string | null, allocated = 0): Promise<void> {
+  async function seedStock(
+    sku: string,
+    locationId: string,
+    onHand: number,
+    lotId: string | null,
+    allocated = 0,
+  ): Promise<void> {
     await getPool().query(
       `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand, allocated) VALUES ($1, $2, $3, 'owned', $4, $5)`,
       [sku, locationId, lotId, onHand, allocated],
@@ -237,25 +268,48 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
   }
 
   async function seedLot(lotNumber: string, sku: string): Promise<void> {
-    await getPool().query(`INSERT INTO lot_master (lot_id, lot_number, sku) VALUES ($1, $2, $3)`, [randomUUID(), lotNumber, sku]);
+    await getPool().query(`INSERT INTO lot_master (lot_id, lot_number, sku) VALUES ($1, $2, $3)`, [
+      randomUUID(),
+      lotNumber,
+      sku,
+    ]);
   }
 
-  async function balance(sku: string, locationId: string, lotId: string | null): Promise<{ on_hand: number; allocated: number; available: number } | null> {
+  async function balance(
+    sku: string,
+    locationId: string,
+    lotId: string | null,
+  ): Promise<{ on_hand: number; allocated: number; available: number } | null> {
     const r = await getPool().query(
-       `SELECT on_hand, allocated, available FROM stock_balance
+      `SELECT on_hand, allocated, available FROM stock_balance
         WHERE sku = $1 AND location_id = $2 AND lot_id IS NOT DISTINCT FROM $3::text`,
       [sku, locationId, lotId],
     );
     if (r.rows.length === 0) return null;
-    return { on_hand: Number(r.rows[0]!['on_hand']), allocated: Number(r.rows[0]!['allocated']), available: Number(r.rows[0]!['available']) };
+    return {
+      on_hand: Number(r.rows[0]!['on_hand']),
+      allocated: Number(r.rows[0]!['allocated']),
+      available: Number(r.rows[0]!['available']),
+    };
   }
 
-  async function createCount(sku: string[], headers: Record<string, string>, extra: Record<string, unknown> = {}): Promise<string> {
+  async function createCount(
+    sku: string[],
+    headers: Record<string, string>,
+    extra: Record<string, unknown> = {},
+  ): Promise<string> {
     const res = await makeRequest(
       port,
       'POST',
       '/api/v1/cycle-counts',
-      { location_id: locAId, sku_scope: sku, count_type: 'cycle', business_date: BUSINESS_DATE, business_stream: 'production', ...extra },
+      {
+        location_id: locAId,
+        sku_scope: sku,
+        count_type: 'cycle',
+        business_date: BUSINESS_DATE,
+        business_stream: 'production',
+        ...extra,
+      },
       headers,
     );
     assert.strictEqual(res.status, 201, `create count failed: ${JSON.stringify(res.body)}`);
@@ -272,12 +326,18 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-AC1-B', locAId, 40, null);
 
     const countId = await createCount(['CC-AC1-A', 'CC-AC1-B'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [
-        { sku: 'CC-AC1-A', counted_quantity: 95 },
-        { sku: 'CC-AC1-B', counted_quantity: 40 },
-      ],
-    }, counterHeaders);
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [
+          { sku: 'CC-AC1-A', counted_quantity: 95 },
+          { sku: 'CC-AC1-B', counted_quantity: 40 },
+        ],
+      },
+      counterHeaders,
+    );
     assert.strictEqual(submit.status, 201, JSON.stringify(submit.body));
 
     const lines = submit.body['lines'] as Array<Record<string, unknown>>;
@@ -297,9 +357,15 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedItem('CC-ALLOC');
     await seedStock('CC-ALLOC', locAId, 30, null, 12); // 12 allocated
     const countId = await createCount(['CC-ALLOC'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-ALLOC', counted_quantity: 30 }],
-    }, counterHeaders);
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-ALLOC', counted_quantity: 30 }],
+      },
+      counterHeaders,
+    );
     const line = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!;
     assert.strictEqual(line['book_quantity'], 30, 'book uses on_hand, not on_hand - allocated');
     assert.strictEqual(line['allocated_quantity'], 12, 'allocated reported separately');
@@ -309,28 +375,34 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
   it('AC2: a stock.adjusted event without an approved adjustment is rejected centrally with APPROVAL_REQUIRED', async () => {
     await seedItem('CC-AC2');
     await seedStock('CC-AC2', locAId, 50, null);
-    const res = await makeRequest(port, 'POST', '/api/v1/events', {
-      stream_type: 'inventory',
-      stream_id: randomUUID(),
-      event_type: 'stock.adjusted',
-      payload: {
-        adjustment_id: randomUUID(),
-        cycle_count_id: randomUUID(),
-        sku: 'CC-AC2',
-        target_location_id: locAId,
-        stock_class: 'owned',
-        delta_quantity: -5,
-        reason_code: 'shrinkage',
-        approver_actor_id: approverUserId,
-        business_stream: 'production',
-        placement_confirmed: true,
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'inventory',
+        stream_id: randomUUID(),
+        event_type: 'stock.adjusted',
+        payload: {
+          adjustment_id: randomUUID(),
+          cycle_count_id: randomUUID(),
+          sku: 'CC-AC2',
+          target_location_id: locAId,
+          stock_class: 'owned',
+          delta_quantity: -5,
+          reason_code: 'shrinkage',
+          approver_actor_id: approverUserId,
+          business_stream: 'production',
+          placement_confirmed: true,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: counterUserId, role: 'warehouse_operator', location_id: locAId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: counterUserId, role: 'warehouse_operator', location_id: locAId },
-        occurred_at: new Date().toISOString(),
-      },
-    }, operatorHeaders);
+      operatorHeaders,
+    );
     assert.strictEqual(res.status, 403, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'APPROVAL_REQUIRED');
     const bal = await balance('CC-AC2', locAId, null);
@@ -342,10 +414,18 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-AC3', locAId, 100, null);
     await seedValuation('CC-AC3', 100, 10);
     const countId = await createCount(['CC-AC3'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-AC3', counted_quantity: 95 }],
-    }, counterHeaders);
-    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!['adjustment_id'] as string;
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-AC3', counted_quantity: 95 }],
+      },
+      counterHeaders,
+    );
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]![
+      'adjustment_id'
+    ] as string;
 
     const approve = await makeRequest(
       port,
@@ -359,15 +439,26 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     const bal = await balance('CC-AC3', locAId, null);
     assert.strictEqual(bal?.on_hand, 95, 'on_hand adjusted down to the counted quantity');
 
-    const val = await getPool().query(`SELECT quantity_on_hand, carrying_value FROM inventory_valuation WHERE sku = $1`, ['CC-AC3']);
-    assert.strictEqual(Number(val.rows[0]!['quantity_on_hand']), 95, 'valuation quantity moves with on_hand');
+    const val = await getPool().query(
+      `SELECT quantity_on_hand, carrying_value FROM inventory_valuation WHERE sku = $1`,
+      ['CC-AC3'],
+    );
+    assert.strictEqual(
+      Number(val.rows[0]!['quantity_on_hand']),
+      95,
+      'valuation quantity moves with on_hand',
+    );
     assert.strictEqual(Number(val.rows[0]!['carrying_value']), 950, 'carrying value = 95 * avg 10');
 
     const evt = await getPool().query(
       `SELECT payload FROM domain_events WHERE event_type = 'stock.adjusted' AND payload->>'adjustment_id' = $1`,
       [adjustmentId],
     );
-    assert.strictEqual(evt.rows.length, 1, 'the adjustment is recorded in the append-only event log');
+    assert.strictEqual(
+      evt.rows.length,
+      1,
+      'the adjustment is recorded in the append-only event log',
+    );
     const payload = evt.rows[0]!['payload'] as Record<string, unknown>;
     assert.strictEqual(payload['approver_actor_id'], approverUserId);
     assert.strictEqual(payload['reason_code'], 'shrinkage');
@@ -385,10 +476,18 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-SOD', locAId, 20, null);
     await seedValuation('CC-SOD', 20, 5);
     const countId = await createCount(['CC-SOD'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-SOD', counted_quantity: 18 }],
-    }, counterHeaders);
-    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!['adjustment_id'] as string;
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-SOD', counted_quantity: 18 }],
+      },
+      counterHeaders,
+    );
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]![
+      'adjustment_id'
+    ] as string;
 
     // inventory_controller is itself an approve-eligible role, so the SOD guard - not a role gate -
     // is what blocks the submitter from approving the variance they entered.
@@ -408,10 +507,18 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-DOA', locAId, 20, null);
     await seedValuation('CC-DOA', 20, 5);
     const countId = await createCount(['CC-DOA'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-DOA', counted_quantity: 15 }],
-    }, counterHeaders);
-    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!['adjustment_id'] as string;
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-DOA', counted_quantity: 15 }],
+      },
+      counterHeaders,
+    );
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]![
+      'adjustment_id'
+    ] as string;
 
     const attempt = await makeRequest(
       port,
@@ -429,10 +536,18 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-NEG', locAId, 10, null, 8); // 8 allocated
     await seedValuation('CC-NEG', 10, 1);
     const countId = await createCount(['CC-NEG'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-NEG', counted_quantity: 0 }],
-    }, counterHeaders);
-    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!['adjustment_id'] as string;
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-NEG', counted_quantity: 0 }],
+      },
+      counterHeaders,
+    );
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]![
+      'adjustment_id'
+    ] as string;
 
     const approve = await makeRequest(
       port,
@@ -453,9 +568,15 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedLot('LOT-CC', 'CC-LOT');
     await seedStock('CC-LOT', locAId, 30, 'LOT-CC');
     const countId = await createCount(['CC-LOT'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-LOT', counted_quantity: 28 }],
-    }, counterHeaders);
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-LOT', counted_quantity: 28 }],
+      },
+      counterHeaders,
+    );
     assert.strictEqual(submit.status, 400, JSON.stringify(submit.body));
     assert.strictEqual(submit.body['error_code'], 'LOT_REQUIRED');
   });
@@ -465,15 +586,30 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-IDEM', locAId, 50, null);
     await seedValuation('CC-IDEM', 50, 2);
     const countId = await createCount(['CC-IDEM'], counterHeaders);
-    const first = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-IDEM', counted_quantity: 47 }],
-    }, counterHeaders);
+    const first = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-IDEM', counted_quantity: 47 }],
+      },
+      counterHeaders,
+    );
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
-    const second = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-IDEM', counted_quantity: 47 }],
-    }, counterHeaders);
+    const second = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-IDEM', counted_quantity: 47 }],
+      },
+      counterHeaders,
+    );
     assert.strictEqual(second.status, 200, 'a re-submit is a no-op returning the recorded count');
-    const rows = await getPool().query(`SELECT count(*)::int AS c FROM cycle_count_line WHERE cycle_count_id = $1`, [countId]);
+    const rows = await getPool().query(
+      `SELECT count(*)::int AS c FROM cycle_count_line WHERE cycle_count_id = $1`,
+      [countId],
+    );
     assert.strictEqual(rows.rows[0]!['c'], 1, 'exactly one line row for the count');
   });
 
@@ -482,24 +618,50 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-PV', locAId, 100, null);
     await seedValuation('CC-PV', 100, 4);
     const countId = await createCount(['CC-PV'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-PV', counted_quantity: 90 }],
-    }, counterHeaders);
-    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!['adjustment_id'] as string;
-    await makeRequest(port, 'PATCH', `/api/v1/cycle-counts/${countId}/adjustments/${adjustmentId}/approve`, { reason_code: 'shrinkage' }, approverHeaders);
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-PV', counted_quantity: 90 }],
+      },
+      counterHeaders,
+    );
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]![
+      'adjustment_id'
+    ] as string;
+    await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/cycle-counts/${countId}/adjustments/${adjustmentId}/approve`,
+      { reason_code: 'shrinkage' },
+      approverHeaders,
+    );
 
     const pvId = randomUUID();
-    const complete = await makeRequest(port, 'POST', '/api/v1/physical-verifications', {
-      physical_verification_id: pvId,
-      location_id: locAId,
-      count_refs: [countId],
-      coverage_percentage: 100,
-      business_date: BUSINESS_DATE,
-      business_stream: 'production',
-    }, counterHeaders);
+    const complete = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/physical-verifications',
+      {
+        physical_verification_id: pvId,
+        location_id: locAId,
+        count_refs: [countId],
+        coverage_percentage: 100,
+        business_date: BUSINESS_DATE,
+        business_stream: 'production',
+      },
+      counterHeaders,
+    );
     assert.strictEqual(complete.status, 201, JSON.stringify(complete.body));
 
-    const report = await makeRequest(port, 'GET', `/api/v1/physical-verification/report?location_id=${locAId}`, undefined, operatorHeaders);
+    const report = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/physical-verification/report?location_id=${locAId}`,
+      undefined,
+      operatorHeaders,
+    );
     assert.strictEqual(report.status, 200, JSON.stringify(report.body));
     const reports = report.body['reports'] as Array<Record<string, unknown>>;
     const rep = reports.find((r) => r['physical_verification_id'] === pvId)!;
@@ -512,19 +674,42 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     assert.strictEqual(repLine['counted_quantity'], 90);
     assert.strictEqual(repLine['variance_quantity'], -10);
     assert.strictEqual(Number(repLine['variance_value']), 40, '|−10| * avg 4');
-    assert.ok(repLine['adjustment_event_ref'], 'the applied adjustment event is referenced as evidence');
+    assert.ok(
+      repLine['adjustment_event_ref'],
+      'the applied adjustment event is referenced as evidence',
+    );
     assert.strictEqual(repLine['count_date'], BUSINESS_DATE, 'count date is a local business date');
 
     // Sign off -> period locked.
-    const signoff = await makeRequest(port, 'POST', `/api/v1/physical-verifications/${pvId}/sign-off`, { business_date: BUSINESS_DATE }, signerHeaders);
+    const signoff = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/physical-verifications/${pvId}/sign-off`,
+      { business_date: BUSINESS_DATE },
+      signerHeaders,
+    );
     assert.strictEqual(signoff.status, 200, JSON.stringify(signoff.body));
 
-    const locked = await makeRequest(port, 'POST', `/api/v1/physical-verifications/${pvId}/sign-off`, { business_date: BUSINESS_DATE }, signerHeaders);
+    const locked = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/physical-verifications/${pvId}/sign-off`,
+      { business_date: BUSINESS_DATE },
+      signerHeaders,
+    );
     assert.strictEqual(locked.status, 409, JSON.stringify(locked.body));
     assert.strictEqual(locked.body['error_code'], 'PERIOD_LOCKED');
 
-    const after = await makeRequest(port, 'GET', `/api/v1/physical-verification/report?location_id=${locAId}`, undefined, operatorHeaders);
-    const repAfter = (after.body['reports'] as Array<Record<string, unknown>>).find((r) => r['physical_verification_id'] === pvId)!;
+    const after = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/physical-verification/report?location_id=${locAId}`,
+      undefined,
+      operatorHeaders,
+    );
+    const repAfter = (after.body['reports'] as Array<Record<string, unknown>>).find(
+      (r) => r['physical_verification_id'] === pvId,
+    )!;
     assert.strictEqual(repAfter['management_signoff_status'], 'signed_off');
     assert.strictEqual(repAfter['period_locked'], true);
   });
@@ -534,9 +719,15 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-TOL', locAId, 100, null);
     await seedValuation('CC-TOL', 100, 3);
     const countId = await createCount(['CC-TOL'], counterHeaders, { tolerance_percent: 0 });
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-TOL', counted_quantity: 95 }],
-    }, counterHeaders);
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-TOL', counted_quantity: 95 }],
+      },
+      counterHeaders,
+    );
     assert.strictEqual(submit.status, 201, JSON.stringify(submit.body));
     const line = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!;
     assert.strictEqual(line['variance_quantity'], -5);
@@ -551,53 +742,73 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-MATCH-OTHER', locAId, 100, null);
     await seedValuation('CC-MATCH', 100, 2);
     const countId = await createCount(['CC-MATCH'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-MATCH', counted_quantity: 90 }],
-    }, counterHeaders);
-    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!['adjustment_id'] as string;
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-MATCH', counted_quantity: 90 }],
+      },
+      counterHeaders,
+    );
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]![
+      'adjustment_id'
+    ] as string;
 
-    const approve = await makeRequest(port, 'POST', '/api/v1/events', {
-      stream_type: 'inventory',
-      stream_id: countId,
-      event_type: 'cycle_count.adjustment_approved',
-      payload: {
-        adjustment_id: adjustmentId,
-        cycle_count_id: countId,
-        approver_actor_id: approverUserId,
-        reason_code: 'central-approval',
-        approved_at: new Date().toISOString(),
-        business_stream: 'production',
+    const approve = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'inventory',
+        stream_id: countId,
+        event_type: 'cycle_count.adjustment_approved',
+        payload: {
+          adjustment_id: adjustmentId,
+          cycle_count_id: countId,
+          approver_actor_id: approverUserId,
+          reason_code: 'central-approval',
+          approved_at: new Date().toISOString(),
+          business_stream: 'production',
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
-        occurred_at: new Date().toISOString(),
-      },
-    }, approverHeaders);
+      approverHeaders,
+    );
     assert.strictEqual(approve.status, 201, JSON.stringify(approve.body));
 
-    const wrong = await makeRequest(port, 'POST', '/api/v1/events', {
-      stream_type: 'inventory',
-      stream_id: countId,
-      event_type: 'stock.adjusted',
-      payload: {
-        adjustment_id: adjustmentId,
-        cycle_count_id: countId,
-        sku: 'CC-MATCH-OTHER',
-        target_location_id: locAId,
-        stock_class: 'owned',
-        delta_quantity: -10,
-        reason_code: 'wrong-grain',
-        approver_actor_id: approverUserId,
-        business_stream: 'production',
-        placement_confirmed: true,
+    const wrong = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'inventory',
+        stream_id: countId,
+        event_type: 'stock.adjusted',
+        payload: {
+          adjustment_id: adjustmentId,
+          cycle_count_id: countId,
+          sku: 'CC-MATCH-OTHER',
+          target_location_id: locAId,
+          stock_class: 'owned',
+          delta_quantity: -10,
+          reason_code: 'wrong-grain',
+          approver_actor_id: approverUserId,
+          business_stream: 'production',
+          placement_confirmed: true,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
-        occurred_at: new Date().toISOString(),
-      },
-    }, approverHeaders);
+      approverHeaders,
+    );
     assert.strictEqual(wrong.status, 403, JSON.stringify(wrong.body));
     assert.strictEqual(wrong.body['error_code'], 'APPROVAL_REQUIRED');
     assert.strictEqual((await balance('CC-MATCH-OTHER', locAId, null))?.on_hand, 100);
@@ -608,51 +819,75 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedStock('CC-ACTOR', locAId, 50, null);
     await seedValuation('CC-ACTOR', 50, 2);
     const countId = await createCount(['CC-ACTOR'], counterHeaders);
-    const submit = await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-ACTOR', counted_quantity: 45 }],
-    }, counterHeaders);
-    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!['adjustment_id'] as string;
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-ACTOR', counted_quantity: 45 }],
+      },
+      counterHeaders,
+    );
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]![
+      'adjustment_id'
+    ] as string;
 
-    const spoof = await makeRequest(port, 'POST', '/api/v1/events', {
-      stream_type: 'inventory',
-      stream_id: countId,
-      event_type: 'cycle_count.adjustment_approved',
-      payload: {
-        adjustment_id: adjustmentId,
-        cycle_count_id: countId,
-        approver_actor_id: approverUserId,
-        reason_code: 'spoofed',
-        approved_at: new Date().toISOString(),
-        business_stream: 'production',
+    const spoof = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'inventory',
+        stream_id: countId,
+        event_type: 'cycle_count.adjustment_approved',
+        payload: {
+          adjustment_id: adjustmentId,
+          cycle_count_id: countId,
+          approver_actor_id: approverUserId,
+          reason_code: 'spoofed',
+          approved_at: new Date().toISOString(),
+          business_stream: 'production',
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
-        occurred_at: new Date().toISOString(),
-      },
-    }, operatorHeaders);
+      operatorHeaders,
+    );
     assert.strictEqual(spoof.status, 403, JSON.stringify(spoof.body));
     assert.strictEqual(spoof.body['error_code'], 'APPROVAL_REQUIRED');
 
-    const rejectByWrongApprover = await makeRequest(port, 'POST', '/api/v1/events', {
-      stream_type: 'inventory',
-      stream_id: countId,
-      event_type: 'cycle_count.adjustment_rejected',
-      payload: {
-        adjustment_id: adjustmentId,
-        cycle_count_id: countId,
-        approver_actor_id: approverUserId,
-        reason_code: 'wrong-user',
-        rejected_at: new Date().toISOString(),
-        business_stream: 'production',
+    const rejectByWrongApprover = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'inventory',
+        stream_id: countId,
+        event_type: 'cycle_count.adjustment_rejected',
+        payload: {
+          adjustment_id: adjustmentId,
+          cycle_count_id: countId,
+          approver_actor_id: approverUserId,
+          reason_code: 'wrong-user',
+          rejected_at: new Date().toISOString(),
+          business_stream: 'production',
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
-        occurred_at: new Date().toISOString(),
-      },
-    }, approver2Headers);
-    assert.strictEqual(rejectByWrongApprover.status, 403, JSON.stringify(rejectByWrongApprover.body));
+      approver2Headers,
+    );
+    assert.strictEqual(
+      rejectByWrongApprover.status,
+      403,
+      JSON.stringify(rejectByWrongApprover.body),
+    );
     assert.strictEqual(rejectByWrongApprover.body['error_code'], 'APPROVAL_REQUIRED');
   });
 
@@ -660,65 +895,98 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     await seedItem('CC-PV-ACTOR');
     await seedStock('CC-PV-ACTOR', locAId, 20, null);
     const countId = await createCount(['CC-PV-ACTOR'], counterHeaders);
-    await makeRequest(port, 'POST', `/api/v1/cycle-counts/${countId}/submit`, {
-      lines: [{ sku: 'CC-PV-ACTOR', counted_quantity: 20 }],
-    }, counterHeaders);
+    await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      {
+        lines: [{ sku: 'CC-PV-ACTOR', counted_quantity: 20 }],
+      },
+      counterHeaders,
+    );
     const pvId = randomUUID();
-    const complete = await makeRequest(port, 'POST', '/api/v1/physical-verifications', {
-      physical_verification_id: pvId,
-      location_id: locAId,
-      count_refs: [countId],
-      coverage_percentage: 100,
-      business_date: BUSINESS_DATE,
-      business_stream: 'production',
-    }, counterHeaders);
-    assert.strictEqual(complete.status, 201, JSON.stringify(complete.body));
-
-    const spoof = await makeRequest(port, 'POST', '/api/v1/events', {
-      stream_type: 'inventory',
-      stream_id: pvId,
-      event_type: 'physical_verification.signed_off',
-      payload: {
+    const complete = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/physical-verifications',
+      {
         physical_verification_id: pvId,
-        management_signoff_actor_id: approverUserId,
-        signed_off_at: new Date().toISOString(),
+        location_id: locAId,
+        count_refs: [countId],
+        coverage_percentage: 100,
         business_date: BUSINESS_DATE,
         business_stream: 'production',
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
-        occurred_at: new Date().toISOString(),
+      counterHeaders,
+    );
+    assert.strictEqual(complete.status, 201, JSON.stringify(complete.body));
+
+    const spoof = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'inventory',
+        stream_id: pvId,
+        event_type: 'physical_verification.signed_off',
+        payload: {
+          physical_verification_id: pvId,
+          management_signoff_actor_id: approverUserId,
+          signed_off_at: new Date().toISOString(),
+          business_date: BUSINESS_DATE,
+          business_stream: 'production',
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: approverUserId, role: 'warehouse_manager', location_id: locAId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-    }, operatorHeaders);
+      operatorHeaders,
+    );
     assert.strictEqual(spoof.status, 403, JSON.stringify(spoof.body));
     assert.strictEqual(spoof.body['error_code'], 'FUNCTION_ACCESS_DENIED');
   });
 
   it('physical verification rejects missing count references before creating evidence headers', async () => {
     const pvId = randomUUID();
-    const res = await makeRequest(port, 'POST', '/api/v1/physical-verifications', {
-      physical_verification_id: pvId,
-      location_id: locAId,
-      count_refs: [randomUUID()],
-      coverage_percentage: 100,
-      business_date: BUSINESS_DATE,
-      business_stream: 'production',
-    }, counterHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/physical-verifications',
+      {
+        physical_verification_id: pvId,
+        location_id: locAId,
+        count_refs: [randomUUID()],
+        coverage_percentage: 100,
+        business_date: BUSINESS_DATE,
+        business_stream: 'production',
+      },
+      counterHeaders,
+    );
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
-    const row = await getPool().query(`SELECT 1 FROM physical_verification WHERE physical_verification_id = $1`, [pvId]);
+    const row = await getPool().query(
+      `SELECT 1 FROM physical_verification WHERE physical_verification_id = $1`,
+      [pvId],
+    );
     assert.strictEqual(row.rows.length, 0);
   });
 
   it('location scoping: a non-wildcard actor cannot create a count for an unassigned location', async () => {
-    const res = await makeRequest(port, 'POST', '/api/v1/cycle-counts', {
-      location_id: locBId,
-      sku_scope: ['CC-AC1-A'],
-      count_type: 'cycle',
-      business_date: BUSINESS_DATE,
-      business_stream: 'production',
-    }, counterHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/cycle-counts',
+      {
+        location_id: locBId,
+        sku_scope: ['CC-AC1-A'],
+        count_type: 'cycle',
+        business_date: BUSINESS_DATE,
+        business_stream: 'production',
+      },
+      counterHeaders,
+    );
     assert.strictEqual(res.status, 403, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'LOCATION_ACCESS_DENIED');
   });

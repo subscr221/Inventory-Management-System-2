@@ -32,7 +32,8 @@ export interface EmitNotificationInput {
   escalation?: EscalationDefinition;
 }
 
-export type EmitNotificationResult = { ok: true; event: PersistedEvent } | { ok: false; error: unknown };
+export type EmitNotificationResult =
+  { ok: true; event: PersistedEvent } | { ok: false; error: unknown };
 
 /**
  * Normalizes an escalation definition into the persisted payload shape, dropping it entirely if
@@ -41,15 +42,23 @@ export type EmitNotificationResult = { ok: true; event: PersistedEvent } | { ok:
  * caller's programming error (window <= 0) degrades to "notification without escalation" plus a
  * warning, rather than a poison-pill event the dispatcher can never mark dispatched.
  */
-function normalizeEscalation(escalation: EscalationDefinition | undefined): { target_role: string; acknowledgment_window_seconds: number } | null {
+function normalizeEscalation(
+  escalation: EscalationDefinition | undefined,
+): { target_role: string; acknowledgment_window_seconds: number } | null {
   if (!escalation) return null;
-  if (!Number.isInteger(escalation.acknowledgment_window_seconds) || escalation.acknowledgment_window_seconds <= 0) {
+  if (
+    !Number.isInteger(escalation.acknowledgment_window_seconds) ||
+    escalation.acknowledgment_window_seconds <= 0
+  ) {
     console.warn(
       `emitNotification: dropping escalation with non-positive acknowledgment_window_seconds (${escalation.acknowledgment_window_seconds}) for role ${escalation.target_role}`,
     );
     return null;
   }
-  return { target_role: escalation.target_role, acknowledgment_window_seconds: escalation.acknowledgment_window_seconds };
+  return {
+    target_role: escalation.target_role,
+    acknowledgment_window_seconds: escalation.acknowledgment_window_seconds,
+  };
 }
 
 /**
@@ -62,7 +71,9 @@ function normalizeEscalation(escalation: EscalationDefinition | undefined): { ta
  * resolves - it never throws - so a broken database, an unreachable dispatcher, or any other
  * failure here can never block the emitting module's own write path (AC4).
  */
-export async function emitNotification(input: EmitNotificationInput): Promise<EmitNotificationResult> {
+export async function emitNotification(
+  input: EmitNotificationInput,
+): Promise<EmitNotificationResult> {
   try {
     const event = await persistEvent({
       stream_type: 'notification',
@@ -100,7 +111,10 @@ export async function emitNotification(input: EmitNotificationInput): Promise<Em
  * on that connection; callers who need the non-blocking guarantee must use emitNotification()
  * instead.
  */
-export async function emitNotificationInTransaction(input: EmitNotificationInput, client: PoolClient): Promise<PersistedEvent> {
+export async function emitNotificationInTransaction(
+  input: EmitNotificationInput,
+  client: PoolClient,
+): Promise<PersistedEvent> {
   return persistEvent(
     {
       stream_type: 'notification',

@@ -44,7 +44,11 @@ export const OWNER_PARTY_CODE_REGEX = /^[A-Z0-9][A-Z0-9-]{1,31}$/;
 const MAX_VMI_MIN_QTY = 99_999_999_999.999;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const OWNERSHIP_CONFIG_ROLES = ['inventory_planner', 'demand_planner', 'inventory_controller'];
+export const OWNERSHIP_CONFIG_ROLES = [
+  'inventory_planner',
+  'demand_planner',
+  'inventory_controller',
+];
 
 export const OWNERSHIP_ERROR_CODES = {
   OWNERSHIP_AGREEMENT_NOT_FOUND: 'OWNERSHIP_AGREEMENT_NOT_FOUND',
@@ -76,27 +80,51 @@ export function assertOwnershipShape(envelope: EventEnvelope): void {
   if (!type) return;
   const p = envelope.payload as Record<string, unknown>;
 
-  if (!isUuid(p['agreement_id'])) throw new AppError(400, 'INVALID_PARAMS', 'agreement_id is required and must be a UUID');
+  if (!isUuid(p['agreement_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'agreement_id is required and must be a UUID');
   if (!isNonEmptyString(p['sku'])) throw new AppError(400, 'INVALID_PARAMS', 'sku is required');
-  if (!isUuid(p['location_id'])) throw new AppError(400, 'INVALID_PARAMS', 'location_id is required and must be a UUID');
+  if (!isUuid(p['location_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'location_id is required and must be a UUID');
   if (p['stock_class'] !== 'consignment' && p['stock_class'] !== 'vmi') {
-    throw new AppError(400, 'INVALID_PARAMS', "stock_class must be 'consignment' or 'vmi' for an ownership agreement", {
-      stock_class: p['stock_class'] ?? null,
-    });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      "stock_class must be 'consignment' or 'vmi' for an ownership agreement",
+      {
+        stock_class: p['stock_class'] ?? null,
+      },
+    );
   }
-  const ownerPartyCode = typeof p['owner_party_code'] === 'string' ? p['owner_party_code'].trim() : null;
+  const ownerPartyCode =
+    typeof p['owner_party_code'] === 'string' ? p['owner_party_code'].trim() : null;
   if (ownerPartyCode === null || !OWNER_PARTY_CODE_REGEX.test(ownerPartyCode)) {
-    throw new AppError(400, 'INVALID_PARAMS', 'owner_party_code is required and must be 2-32 uppercase alphanumeric/hyphen characters', {
-      owner_party_code: p['owner_party_code'] ?? null,
-    });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'owner_party_code is required and must be 2-32 uppercase alphanumeric/hyphen characters',
+      {
+        owner_party_code: p['owner_party_code'] ?? null,
+      },
+    );
   }
   p['owner_party_code'] = ownerPartyCode;
   if (p['vmi_min_qty'] !== undefined && p['vmi_min_qty'] !== null) {
     const min = p['vmi_min_qty'];
-    if (typeof min !== 'number' || !Number.isFinite(min) || min <= 0 || min > MAX_VMI_MIN_QTY || !Number.isInteger(min * 1000)) {
-      throw new AppError(400, OWNERSHIP_ERROR_CODES.VMI_MIN_NOT_CONFIGURED, `vmi_min_qty must be a positive NUMERIC(14,3) value no greater than ${MAX_VMI_MIN_QTY}`, {
-        vmi_min_qty: min,
-      });
+    if (
+      typeof min !== 'number' ||
+      !Number.isFinite(min) ||
+      min <= 0 ||
+      min > MAX_VMI_MIN_QTY ||
+      !Number.isInteger(min * 1000)
+    ) {
+      throw new AppError(
+        400,
+        OWNERSHIP_ERROR_CODES.VMI_MIN_NOT_CONFIGURED,
+        `vmi_min_qty must be a positive NUMERIC(14,3) value no greater than ${MAX_VMI_MIN_QTY}`,
+        {
+          vmi_min_qty: min,
+        },
+      );
     }
     if (p['stock_class'] !== 'vmi') {
       throw new AppError(400, 'INVALID_PARAMS', 'vmi_min_qty applies only to vmi agreements');
@@ -123,7 +151,10 @@ async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Pr
   return existing.rows.length > 0;
 }
 
-export async function applyOwnershipProjection(envelope: EventEnvelope, client: PoolClient): Promise<void> {
+export async function applyOwnershipProjection(
+  envelope: EventEnvelope,
+  client: PoolClient,
+): Promise<void> {
   const type = ownershipEventType(envelope);
   if (!type) return;
   if (await alreadyPersisted(envelope, client)) return;
@@ -131,24 +162,45 @@ export async function applyOwnershipProjection(envelope: EventEnvelope, client: 
   const p = envelope.payload as Record<string, unknown>;
   const item = await getItemBySku(p['sku'] as string, client);
   if (!item || item.status !== 'active') {
-    throw new AppError(400, 'ITEM_NOT_FOUND', `No active item master record exists for sku "${p['sku'] as string}"`, { sku: p['sku'] as string });
+    throw new AppError(
+      400,
+      'ITEM_NOT_FOUND',
+      `No active item master record exists for sku "${p['sku'] as string}"`,
+      { sku: p['sku'] as string },
+    );
   }
   const location = await getLocationById(p['location_id'] as string, client);
   if (!location || location.status !== 'active') {
-    throw new AppError(400, 'LOCATION_NOT_FOUND', 'ownership agreement location does not exist or is inactive', { location_id: p['location_id'] as string });
+    throw new AppError(
+      400,
+      'LOCATION_NOT_FOUND',
+      'ownership agreement location does not exist or is inactive',
+      { location_id: p['location_id'] as string },
+    );
   }
   const existing = await client.query(
     `SELECT vmi_min_qty, active FROM ownership_agreement WHERE agreement_id = $1`,
     [p['agreement_id'] as string],
   );
-  const existingRow = existing.rows[0] as { vmi_min_qty: string | null; active: boolean } | undefined;
+  const existingRow = existing.rows[0] as
+    { vmi_min_qty: string | null; active: boolean } | undefined;
   const effectiveActive = p['active'] === undefined ? (existingRow?.active ?? true) : p['active'];
-  const effectiveVmiMinQty = p['vmi_min_qty'] === undefined ? existingRow?.vmi_min_qty : p['vmi_min_qty'];
-  if (p['stock_class'] === 'vmi' && effectiveActive !== false && (effectiveVmiMinQty === undefined || effectiveVmiMinQty === null)) {
-    throw new AppError(400, OWNERSHIP_ERROR_CODES.VMI_MIN_NOT_CONFIGURED, 'vmi_min_qty is required for an active vmi ownership agreement', {
-      sku: p['sku'] as string,
-      location_id: p['location_id'] as string,
-    });
+  const effectiveVmiMinQty =
+    p['vmi_min_qty'] === undefined ? existingRow?.vmi_min_qty : p['vmi_min_qty'];
+  if (
+    p['stock_class'] === 'vmi' &&
+    effectiveActive !== false &&
+    (effectiveVmiMinQty === undefined || effectiveVmiMinQty === null)
+  ) {
+    throw new AppError(
+      400,
+      OWNERSHIP_ERROR_CODES.VMI_MIN_NOT_CONFIGURED,
+      'vmi_min_qty is required for an active vmi ownership agreement',
+      {
+        sku: p['sku'] as string,
+        location_id: p['location_id'] as string,
+      },
+    );
   }
   await upsertAgreement(
     {
@@ -160,7 +212,8 @@ export async function applyOwnershipProjection(envelope: EventEnvelope, client: 
       ...(p['vmi_min_qty'] !== undefined ? { vmi_min_qty: p['vmi_min_qty'] as number | null } : {}),
       ...(p['active'] !== undefined ? { active: p['active'] as boolean } : {}),
       business_stream: p['business_stream'] as string,
-      set_by_actor_id: (p['set_by_actor_id'] as string | undefined) ?? envelope.metadata.actor.user_id,
+      set_by_actor_id:
+        (p['set_by_actor_id'] as string | undefined) ?? envelope.metadata.actor.user_id,
     },
     client,
   );
@@ -194,22 +247,35 @@ export async function assertConsignmentReceiptOwnership(
 ): Promise<void> {
   if (!SUPPLIER_OWNED_STOCK_CLASSES.has(stockClass)) return;
 
-  const ownerPartyCode = typeof envelope.payload['owner_party_code'] === 'string' ? envelope.payload['owner_party_code'].trim() : envelope.payload['owner_party_code'];
+  const ownerPartyCode =
+    typeof envelope.payload['owner_party_code'] === 'string'
+      ? envelope.payload['owner_party_code'].trim()
+      : envelope.payload['owner_party_code'];
   if (typeof ownerPartyCode === 'string') envelope.payload['owner_party_code'] = ownerPartyCode;
   const agreement = await getActiveAgreement(sku, locationId, stockClass, client, true);
   if (!agreement) {
-    throw new AppError(404, OWNERSHIP_ERROR_CODES.OWNERSHIP_AGREEMENT_NOT_FOUND, `No active ${stockClass} ownership agreement exists for sku "${sku}" at this location`, {
-      sku,
-      location_id: locationId,
-      stock_class: stockClass,
-    });
+    throw new AppError(
+      404,
+      OWNERSHIP_ERROR_CODES.OWNERSHIP_AGREEMENT_NOT_FOUND,
+      `No active ${stockClass} ownership agreement exists for sku "${sku}" at this location`,
+      {
+        sku,
+        location_id: locationId,
+        stock_class: stockClass,
+      },
+    );
   }
   if (ownerPartyCode !== agreement.owner_party_code) {
-    throw new AppError(409, OWNERSHIP_ERROR_CODES.OWNER_PARTY_MISMATCH, `owner_party_code does not match the active ${stockClass} agreement for sku "${sku}" at this location`, {
-      sku,
-      location_id: locationId,
-      stock_class: stockClass,
-      supplied_owner_party_code: typeof ownerPartyCode === 'string' ? ownerPartyCode : null,
-    });
+    throw new AppError(
+      409,
+      OWNERSHIP_ERROR_CODES.OWNER_PARTY_MISMATCH,
+      `owner_party_code does not match the active ${stockClass} agreement for sku "${sku}" at this location`,
+      {
+        sku,
+        location_id: locationId,
+        stock_class: stockClass,
+        supplied_owner_party_code: typeof ownerPartyCode === 'string' ? ownerPartyCode : null,
+      },
+    );
   }
 }

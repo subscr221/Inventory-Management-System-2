@@ -2,14 +2,27 @@ import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getAuthContext, getAuthorizedAssignment, getParsedBody, getTraceId } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModule, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import {
+  getAuthContext,
+  getAuthorizedAssignment,
+  getParsedBody,
+  getTraceId,
+} from '../../middleware/context.js';
+import {
+  requireRole,
+  permittedLocationsForModule,
+  permittedLocationsForModuleScope,
+} from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
 import { getPurchaseOrderByRef } from '../../read/projections/erp_purchase_order.js';
 import { getLocationByCode } from '../../read/projections/location_register.js';
-import { getGateEventById, getGateEventByIdempotencyKey, listGateEvents } from '../../read/projections/gate_event.js';
+import {
+  getGateEventById,
+  getGateEventByIdempotencyKey,
+  listGateEvents,
+} from '../../read/projections/gate_event.js';
 import type { GateEvent } from '../../read/projections/gate_event.js';
 import { logAuditEntry } from '../../read/projections/audit_log.js';
 
@@ -36,7 +49,11 @@ function actorContext(req: IncomingMessage): ActorContext {
   return { userId, role, auditLocationId, eventLocationId };
 }
 
-function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
+function auditCtxFor(
+  req: IncomingMessage,
+  actor: ActorContext,
+  httpStatus: number,
+): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
   return {
     trace_id: getTraceId(req) ?? '',
     user_id: actor.userId,
@@ -48,26 +65,54 @@ function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: numb
   };
 }
 
-function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[], functionScope: 'read' | 'write'): void {
+function assertRoleAllowed(
+  req: IncomingMessage,
+  allowedRoles: string[],
+  functionScope: 'read' | 'write',
+): void {
   const authContext = getAuthContext(req);
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
-    (r) => (r.module === 'inventory' || r.module === '*' || r.module === 'gate') && r.functionScope === functionScope && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'inventory' || r.module === '*' || r.module === 'gate') &&
+      r.functionScope === functionScope &&
+      allowedRoles.includes(r.role),
   );
-  if (!ok) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+  if (!ok)
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
 }
 
 function assertSiteAccess(req: IncomingMessage, siteId: string, scope: 'read' | 'write'): void {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
-  const { wildcard, locations } = permittedLocationsForModuleScope(authContext.roles, 'inventory', scope);
+  const { wildcard, locations } = permittedLocationsForModuleScope(
+    authContext.roles,
+    'inventory',
+    scope,
+  );
   const gateScope = permittedLocationsForModuleScope(authContext.roles, 'gate', scope);
-  if (!wildcard && !gateScope.wildcard && !locations.has(siteId) && !gateScope.locations.has(siteId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No ${scope} assignment grants access to site "${siteId}"`);
+  if (
+    !wildcard &&
+    !gateScope.wildcard &&
+    !locations.has(siteId) &&
+    !gateScope.locations.has(siteId)
+  ) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No ${scope} assignment grants access to site "${siteId}"`,
+    );
   }
 }
 
-function gateEventToJson(row: GateEvent, poSummary?: Record<string, unknown> | null): Record<string, unknown> {
+function gateEventToJson(
+  row: GateEvent,
+  poSummary?: Record<string, unknown> | null,
+): Record<string, unknown> {
   return {
     gate_event_id: row.gate_event_id,
     site_id: row.site_id,
@@ -98,7 +143,11 @@ async function poSummary(row: GateEvent): Promise<Record<string, unknown> | null
   if (!row.po_ref_ext) return null;
   const po = await getPurchaseOrderByRef(row.po_ref_ext);
   if (!po) return null;
-  return { po_number_ext: po.po_number_ext, supplier_ref_ext: po.supplier_ref_ext, status: po.status };
+  return {
+    po_number_ext: po.po_number_ext,
+    supplier_ref_ext: po.supplier_ref_ext,
+    status: po.status,
+  };
 }
 
 const createGateEventBase: RouteHandler = async (req, res) => {
@@ -110,7 +159,10 @@ const createGateEventBase: RouteHandler = async (req, res) => {
   }
   const siteCode = typeof body['site_code_ext'] === 'string' ? body['site_code_ext'].trim() : '';
   const site = siteCode ? await getLocationByCode(siteCode) : null;
-  if (!site || site.status !== 'active' || site.level !== 'site') throw new AppError(404, 'GATE_SITE_NOT_FOUND', `No active site exists for "${siteCode}"`, { site_code_ext: siteCode });
+  if (!site || site.status !== 'active' || site.level !== 'site')
+    throw new AppError(404, 'GATE_SITE_NOT_FOUND', `No active site exists for "${siteCode}"`, {
+      site_code_ext: siteCode,
+    });
   assertSiteAccess(req, site.location_id, 'write');
   const actor = actorContext(req);
 
@@ -127,31 +179,64 @@ const createGateEventBase: RouteHandler = async (req, res) => {
   // same-submission replay short-circuits with 200.
   const idempotencyKeyHeader = req.headers['idempotency-key'];
   if (Array.isArray(idempotencyKeyHeader) && new Set(idempotencyKeyHeader).size > 1) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Idempotency-Key header must not repeat with different values');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'Idempotency-Key header must not repeat with different values',
+    );
     return;
   }
-  const idempotencyKey = (Array.isArray(idempotencyKeyHeader) ? idempotencyKeyHeader[0] ?? '' : idempotencyKeyHeader ?? '').trim();
+  const idempotencyKey = (
+    Array.isArray(idempotencyKeyHeader)
+      ? (idempotencyKeyHeader[0] ?? '')
+      : (idempotencyKeyHeader ?? '')
+  ).trim();
   if (idempotencyKey.length > 255) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Idempotency-Key header must be at most 255 characters');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'Idempotency-Key header must be at most 255 characters',
+    );
     return;
   }
 
   const replayIfMatch = async (): Promise<GateEvent | null> => {
     const replay = await getGateEventByIdempotencyKey(idempotencyKey);
     if (!replay) return null;
-    const expectedPoRef = typeof body['po_ref_ext'] === 'string' && body['po_ref_ext'].trim() && body['po_ref_ext'].trim() !== 'UNKNOWN' ? body['po_ref_ext'].trim() : null;
+    const expectedPoRef =
+      typeof body['po_ref_ext'] === 'string' &&
+      body['po_ref_ext'].trim() &&
+      body['po_ref_ext'].trim() !== 'UNKNOWN'
+        ? body['po_ref_ext'].trim()
+        : null;
     const bodyMatches =
       replay.site_id === site!.location_id &&
-      replay.vehicle_reg_ext === (typeof body['vehicle_reg_ext'] === 'string' ? body['vehicle_reg_ext'].trim().toUpperCase() : '') &&
+      replay.vehicle_reg_ext ===
+        (typeof body['vehicle_reg_ext'] === 'string'
+          ? body['vehicle_reg_ext'].trim().toUpperCase()
+          : '') &&
       replay.gate_id === (typeof body['gate_id'] === 'string' ? body['gate_id'].trim() : '') &&
-      replay.challan_photo_ref === (typeof body['challan_photo_ref'] === 'string' ? body['challan_photo_ref'].trim() : '') &&
+      replay.challan_photo_ref ===
+        (typeof body['challan_photo_ref'] === 'string' ? body['challan_photo_ref'].trim() : '') &&
       replay.po_ref_ext === expectedPoRef;
     if (!bodyMatches) {
-      throw new AppError(409, 'IDEMPOTENCY_KEY_CONFLICT', 'Idempotency-Key was already used for a different gate event submission');
+      throw new AppError(
+        409,
+        'IDEMPOTENCY_KEY_CONFLICT',
+        'Idempotency-Key was already used for a different gate event submission',
+      );
     }
     const auditClient = await getPool().connect();
     try {
-      await logAuditEntry(auditClient, { ...auditCtxFor(req, actor, 200), event_id: replay.source_event_id, error_code: null });
+      await logAuditEntry(auditClient, {
+        ...auditCtxFor(req, actor, 200),
+        event_id: replay.source_event_id,
+        error_code: null,
+      });
     } finally {
       auditClient.release();
     }
@@ -223,7 +308,10 @@ const reverseGateEventBase: RouteHandler = async (req, res, params) => {
     return;
   }
   const existing = await getGateEventById(gateEventId);
-  if (!existing) throw new AppError(404, 'GATE_EVENT_NOT_FOUND', `No gate event exists for "${gateEventId}"`, { gate_event_id: gateEventId });
+  if (!existing)
+    throw new AppError(404, 'GATE_EVENT_NOT_FOUND', `No gate event exists for "${gateEventId}"`, {
+      gate_event_id: gateEventId,
+    });
   assertSiteAccess(req, existing.site_id, 'write');
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   const actor = actorContext(req);
@@ -232,7 +320,11 @@ const reverseGateEventBase: RouteHandler = async (req, res, params) => {
       stream_type: 'gate',
       stream_id: gateEventId,
       event_type: 'gate.reversed',
-      payload: { gate_event_id: gateEventId, reversal_reason: body?.['reversal_reason'], reversed_by: actor.userId },
+      payload: {
+        gate_event_id: gateEventId,
+        reversal_reason: body?.['reversal_reason'],
+        reversed_by: actor.userId,
+      },
       metadata: {
         correlation_id: existing.correlation_id,
         actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
@@ -254,7 +346,13 @@ const getGateEventBase: RouteHandler = async (req, res, params) => {
   }
   const row = await getGateEventById(gateEventId);
   if (!row) {
-    sendRequestError(req, res, 404, 'GATE_EVENT_NOT_FOUND', `No gate event exists for "${gateEventId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'GATE_EVENT_NOT_FOUND',
+      `No gate event exists for "${gateEventId}"`,
+    );
     return;
   }
   assertSiteAccess(req, row.site_id, 'read');
@@ -267,7 +365,13 @@ const listGateEventsBase: RouteHandler = async (req, res) => {
   const status = url.searchParams.get('status');
   const siteCode = url.searchParams.get('site');
   if (binding !== null && binding !== 'matched' && binding !== 'unmatched') {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', "binding filter must be 'matched' or 'unmatched'");
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      "binding filter must be 'matched' or 'unmatched'",
+    );
     return;
   }
   if (status !== null && status !== 'open' && status !== 'reversed') {
@@ -285,7 +389,11 @@ const listGateEventsBase: RouteHandler = async (req, res) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'offset must be a non-negative integer');
     return;
   }
-  assertRoleAllowed(req, binding === 'unmatched' ? UNMATCHED_READ_ROLES : GENERAL_READ_ROLES, 'read');
+  assertRoleAllowed(
+    req,
+    binding === 'unmatched' ? UNMATCHED_READ_ROLES : GENERAL_READ_ROLES,
+    'read',
+  );
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   const inventoryScope = permittedLocationsForModule(authContext.roles, 'inventory');
@@ -296,8 +404,16 @@ const listGateEventsBase: RouteHandler = async (req, res) => {
   let siteAny: string[] | null = null;
   if (siteCode) {
     const site = await getLocationByCode(siteCode);
-    if (!site || site.status !== 'active' || site.level !== 'site') throw new AppError(404, 'GATE_SITE_NOT_FOUND', `No active site exists for "${siteCode}"`, { site_code_ext: siteCode });
-    if (!wildcard && !locations.has(site.location_id)) throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No read assignment grants access to site "${site.location_id}"`);
+    if (!site || site.status !== 'active' || site.level !== 'site')
+      throw new AppError(404, 'GATE_SITE_NOT_FOUND', `No active site exists for "${siteCode}"`, {
+        site_code_ext: siteCode,
+      });
+    if (!wildcard && !locations.has(site.location_id))
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `No read assignment grants access to site "${site.location_id}"`,
+      );
     siteId = site.location_id;
   } else if (!wildcard) {
     siteAny = [...locations];
@@ -305,11 +421,31 @@ const listGateEventsBase: RouteHandler = async (req, res) => {
   // Review D3 (AC3): the unmatched worklist defaults oldest-first so long-stuck vehicles surface
   // before newer arrivals; every other listing stays newest-first. An explicit order param wins.
   const order = (orderParam as 'asc' | 'desc' | null) ?? (binding === 'unmatched' ? 'asc' : 'desc');
-  const rows = await listGateEvents({ siteId, siteAny, status: status as 'open' | 'reversed' | null, bindingStatus: binding as 'matched' | 'unmatched' | null, limit: 200, offset, order });
+  const rows = await listGateEvents({
+    siteId,
+    siteAny,
+    status: status as 'open' | 'reversed' | null,
+    bindingStatus: binding as 'matched' | 'unmatched' | null,
+    limit: 200,
+    offset,
+    order,
+  });
   sendJson(res, 200, { gate_events: rows.map((row) => gateEventToJson(row)) });
 };
 
-export const createGateEventHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(createGateEventBase);
-export const reverseGateEventHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(reverseGateEventBase);
-export const getGateEventHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(getGateEventBase);
-export const listGateEventsHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(listGateEventsBase);
+export const createGateEventHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(createGateEventBase);
+export const reverseGateEventHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(reverseGateEventBase);
+export const getGateEventHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(getGateEventBase);
+export const listGateEventsHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(listGateEventsBase);

@@ -109,12 +109,21 @@ function mapRow(row: Record<string, unknown>): CrossDockTask {
   };
 }
 
-export async function getCrossDockTaskById(crossDockTaskId: string, client?: PoolClient): Promise<CrossDockTask | null> {
-  const result = await runner(client).query(`SELECT ${COLUMNS} FROM cross_dock_task WHERE cross_dock_task_id = $1`, [crossDockTaskId]);
+export async function getCrossDockTaskById(
+  crossDockTaskId: string,
+  client?: PoolClient,
+): Promise<CrossDockTask | null> {
+  const result = await runner(client).query(
+    `SELECT ${COLUMNS} FROM cross_dock_task WHERE cross_dock_task_id = $1`,
+    [crossDockTaskId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
-export async function getCrossDockTaskDetailById(crossDockTaskId: string, client?: PoolClient): Promise<CrossDockTaskDetail | null> {
+export async function getCrossDockTaskDetailById(
+  crossDockTaskId: string,
+  client?: PoolClient,
+): Promise<CrossDockTaskDetail | null> {
   const result = await runner(client).query(
     `SELECT cdt.cross_dock_task_id, cdt.grn_line_id, cdt.dispatch_order_line_id, cdt.sku, cdt.lot_id,
             cdt.quantity::text AS quantity, cdt.site_id, cdt.from_location_id, cdt.staging_zone_id,
@@ -147,17 +156,32 @@ export async function getCrossDockTaskDetailById(crossDockTaskId: string, client
   };
 }
 
-export async function getCrossDockTaskByIdForUpdate(crossDockTaskId: string, client: PoolClient): Promise<CrossDockTask | null> {
-  const result = await client.query(`SELECT ${COLUMNS} FROM cross_dock_task WHERE cross_dock_task_id = $1 FOR UPDATE`, [crossDockTaskId]);
+export async function getCrossDockTaskByIdForUpdate(
+  crossDockTaskId: string,
+  client: PoolClient,
+): Promise<CrossDockTask | null> {
+  const result = await client.query(
+    `SELECT ${COLUMNS} FROM cross_dock_task WHERE cross_dock_task_id = $1 FOR UPDATE`,
+    [crossDockTaskId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
-export async function getCrossDockTaskByGrnLine(grnLineId: string, client?: PoolClient): Promise<CrossDockTask | null> {
-  const result = await runner(client).query(`SELECT ${COLUMNS} FROM cross_dock_task WHERE grn_line_id = $1`, [grnLineId]);
+export async function getCrossDockTaskByGrnLine(
+  grnLineId: string,
+  client?: PoolClient,
+): Promise<CrossDockTask | null> {
+  const result = await runner(client).query(
+    `SELECT ${COLUMNS} FROM cross_dock_task WHERE grn_line_id = $1`,
+    [grnLineId],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
-export async function listCrossDockTasks(filters: ListCrossDockTasksFilters = {}, client?: PoolClient): Promise<CrossDockTask[]> {
+export async function listCrossDockTasks(
+  filters: ListCrossDockTasksFilters = {},
+  client?: PoolClient,
+): Promise<CrossDockTask[]> {
   const clauses: string[] = [];
   const values: unknown[] = [];
   const add = (sql: string, value: unknown): void => {
@@ -165,18 +189,27 @@ export async function listCrossDockTasks(filters: ListCrossDockTasksFilters = {}
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('site_id = ?', filters.siteId);
-  if (filters.siteAny !== undefined && filters.siteAny !== null) add('site_id = ANY(?::uuid[])', filters.siteAny);
+  if (filters.siteAny !== undefined && filters.siteAny !== null)
+    add('site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.stagingZoneId) add('staging_zone_id = ?', filters.stagingZoneId);
   if (filters.status) add('status = ?', filters.status);
   if (filters.assignedTo) add('assigned_to = ?', filters.assignedTo);
   if (filters.priority) add('priority = ?', filters.priority);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-  const orderBy = filters.orderByPriority ? `ORDER BY ${priorityRankSql('priority')}, created_at ASC` : 'ORDER BY created_at DESC';
-  const result = await runner(client).query(`SELECT ${COLUMNS} FROM cross_dock_task ${where} ${orderBy}`, values);
+  const orderBy = filters.orderByPriority
+    ? `ORDER BY ${priorityRankSql('priority')}, created_at ASC`
+    : 'ORDER BY created_at DESC';
+  const result = await runner(client).query(
+    `SELECT ${COLUMNS} FROM cross_dock_task ${where} ${orderBy}`,
+    values,
+  );
   return result.rows.map(mapRow);
 }
 
-export async function insertCrossDockTask(input: InsertCrossDockTaskInput, client: PoolClient): Promise<boolean> {
+export async function insertCrossDockTask(
+  input: InsertCrossDockTaskInput,
+  client: PoolClient,
+): Promise<boolean> {
   const result = await client.query(
     `INSERT INTO cross_dock_task
        (cross_dock_task_id, grn_line_id, dispatch_order_line_id, sku, lot_id, quantity, site_id,
@@ -220,7 +253,14 @@ export async function assignCrossDockTask(
             priority = COALESCE($5, priority), updated_at = $4::timestamptz
       WHERE cross_dock_task_id = $1 AND status = 'ready'
         AND ($6::boolean OR assigned_to IS NULL OR assigned_to = $2)`,
-    [input.crossDockTaskId, input.assignedTo, input.assignedBy, input.assignedAt, input.priority ?? null, input.allowReassign ?? false],
+    [
+      input.crossDockTaskId,
+      input.assignedTo,
+      input.assignedBy,
+      input.assignedAt,
+      input.priority ?? null,
+      input.allowReassign ?? false,
+    ],
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -240,7 +280,13 @@ export async function completeCrossDockTask(
         SET status = 'completed', to_location_id = $2, completed_by = $3,
             completed_at = $4::timestamptz, completion_event_id = $5, updated_at = $4::timestamptz
       WHERE cross_dock_task_id = $1 AND status = 'ready'`,
-    [input.crossDockTaskId, input.toLocationId, input.completedBy, input.completedAt, input.completionEventId],
+    [
+      input.crossDockTaskId,
+      input.toLocationId,
+      input.completedBy,
+      input.completedAt,
+      input.completionEventId,
+    ],
   );
   return (result.rowCount ?? 0) > 0;
 }

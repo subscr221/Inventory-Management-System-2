@@ -8,7 +8,10 @@ import {
   upsertPurchaseOrderLine,
   closePurchaseOrdersNotIn,
 } from '../../read/projections/erp_purchase_order.js';
-import { upsertSalesOrderLine, closeSalesOrdersNotIn } from '../../read/projections/erp_sales_order.js';
+import {
+  upsertSalesOrderLine,
+  closeSalesOrdersNotIn,
+} from '../../read/projections/erp_sales_order.js';
 import {
   markSyncAttempt,
   markSyncSuccess,
@@ -128,16 +131,27 @@ function isLocalDate(value: unknown): value is string {
 
 async function assertSkuActive(sku: unknown, client: PoolClient): Promise<string> {
   if (!isNonEmptyString(sku)) {
-    throw new AppError(400, 'INVALID_PARAMS', 'sku is required and must be a non-empty string', { sku: sku ?? null });
+    throw new AppError(400, 'INVALID_PARAMS', 'sku is required and must be a non-empty string', {
+      sku: sku ?? null,
+    });
   }
   const item = await getItemBySku(sku, client);
   if (!item || item.status !== 'active') {
-    throw new AppError(400, 'ITEM_NOT_FOUND', `No active item master record exists for sku "${sku}"`, { sku });
+    throw new AppError(
+      400,
+      'ITEM_NOT_FOUND',
+      `No active item master record exists for sku "${sku}"`,
+      { sku },
+    );
   }
   return sku;
 }
 
-async function withSavepoint<T>(client: PoolClient, name: string, fn: () => Promise<T>): Promise<T> {
+async function withSavepoint<T>(
+  client: PoolClient,
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   await client.query(`SAVEPOINT ${name}`);
   try {
     const result = await fn();
@@ -162,11 +176,22 @@ function reasonOf(err: unknown): string {
 // ---------------------------------------------------------------------------
 
 async function applyPurchaseOrder(po: SourcePurchaseOrder, client: PoolClient): Promise<void> {
-  if (!isNonEmptyString(po.po_number_ext)) throw new AppError(400, 'INVALID_PARAMS', 'po_number_ext is required');
-  if (!isNonEmptyString(po.supplier_ref_ext)) throw new AppError(400, 'INVALID_PARAMS', 'supplier_ref_ext is required');
-  if (!isNonEmptyString(po.currency)) throw new AppError(400, 'INVALID_PARAMS', 'currency is required');
-  if (po.expected_delivery_date !== undefined && po.expected_delivery_date !== null && !isLocalDate(po.expected_delivery_date)) {
-    throw new AppError(400, 'INVALID_PARAMS', 'expected_delivery_date must be a real YYYY-MM-DD date');
+  if (!isNonEmptyString(po.po_number_ext))
+    throw new AppError(400, 'INVALID_PARAMS', 'po_number_ext is required');
+  if (!isNonEmptyString(po.supplier_ref_ext))
+    throw new AppError(400, 'INVALID_PARAMS', 'supplier_ref_ext is required');
+  if (!isNonEmptyString(po.currency))
+    throw new AppError(400, 'INVALID_PARAMS', 'currency is required');
+  if (
+    po.expected_delivery_date !== undefined &&
+    po.expected_delivery_date !== null &&
+    !isLocalDate(po.expected_delivery_date)
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'expected_delivery_date must be a real YYYY-MM-DD date',
+    );
   }
   if (!Array.isArray(po.lines) || po.lines.length === 0) {
     throw new AppError(400, 'INVALID_PARAMS', 'a purchase order must carry at least one line');
@@ -175,19 +200,41 @@ async function applyPurchaseOrder(po: SourcePurchaseOrder, client: PoolClient): 
   // atomic): the whole PO is rejected and no partial header/line rows survive.
   const seenLineNos = new Set<number>();
   for (const line of po.lines) {
-    if (!isPositiveInt(line.line_no)) throw new AppError(400, 'INVALID_PARAMS', 'line_no must be a positive integer');
-    if (seenLineNos.has(line.line_no)) throw new AppError(400, 'INVALID_PARAMS', `duplicate line_no ${line.line_no}`);
+    if (!isPositiveInt(line.line_no))
+      throw new AppError(400, 'INVALID_PARAMS', 'line_no must be a positive integer');
+    if (seenLineNos.has(line.line_no))
+      throw new AppError(400, 'INVALID_PARAMS', `duplicate line_no ${line.line_no}`);
     seenLineNos.add(line.line_no);
     await assertSkuActive(line.sku, client);
-    if (!isBoundedNumber(line.ordered_qty, MAX_QUANTITY)) throw new AppError(400, 'INVALID_PARAMS', 'ordered_qty must be a non-negative finite number');
-    if (!isBoundedNumber(line.open_qty, MAX_QUANTITY)) throw new AppError(400, 'INVALID_PARAMS', 'open_qty must be a non-negative finite number');
-    if (line.open_qty > line.ordered_qty) throw new AppError(400, 'INVALID_PARAMS', 'open_qty may not exceed ordered_qty');
-    if (!isBoundedNumber(line.unit_price, MAX_PRICE)) throw new AppError(400, 'INVALID_PARAMS', 'unit_price must be a non-negative finite number');
-    if (line.over_receipt_tolerance_pct !== undefined && line.over_receipt_tolerance_pct !== null && !isBoundedNumber(line.over_receipt_tolerance_pct, MAX_TOLERANCE_PCT)) {
-      throw new AppError(400, 'INVALID_PARAMS', 'over_receipt_tolerance_pct must be a non-negative finite number when supplied');
+    if (!isBoundedNumber(line.ordered_qty, MAX_QUANTITY))
+      throw new AppError(400, 'INVALID_PARAMS', 'ordered_qty must be a non-negative finite number');
+    if (!isBoundedNumber(line.open_qty, MAX_QUANTITY))
+      throw new AppError(400, 'INVALID_PARAMS', 'open_qty must be a non-negative finite number');
+    if (line.open_qty > line.ordered_qty)
+      throw new AppError(400, 'INVALID_PARAMS', 'open_qty may not exceed ordered_qty');
+    if (!isBoundedNumber(line.unit_price, MAX_PRICE))
+      throw new AppError(400, 'INVALID_PARAMS', 'unit_price must be a non-negative finite number');
+    if (
+      line.over_receipt_tolerance_pct !== undefined &&
+      line.over_receipt_tolerance_pct !== null &&
+      !isBoundedNumber(line.over_receipt_tolerance_pct, MAX_TOLERANCE_PCT)
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'over_receipt_tolerance_pct must be a non-negative finite number when supplied',
+      );
     }
-    if (line.under_receipt_tolerance_pct !== undefined && line.under_receipt_tolerance_pct !== null && !isBoundedNumber(line.under_receipt_tolerance_pct, MAX_TOLERANCE_PCT)) {
-      throw new AppError(400, 'INVALID_PARAMS', 'under_receipt_tolerance_pct must be a non-negative finite number when supplied');
+    if (
+      line.under_receipt_tolerance_pct !== undefined &&
+      line.under_receipt_tolerance_pct !== null &&
+      !isBoundedNumber(line.under_receipt_tolerance_pct, MAX_TOLERANCE_PCT)
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'under_receipt_tolerance_pct must be a non-negative finite number when supplied',
+      );
     }
   }
 
@@ -219,19 +266,28 @@ async function applyPurchaseOrder(po: SourcePurchaseOrder, client: PoolClient): 
 }
 
 async function applySalesOrderLine(so: SourceSalesOrderLine, client: PoolClient): Promise<void> {
-  if (!isNonEmptyString(so.so_number_ext)) throw new AppError(400, 'INVALID_PARAMS', 'so_number_ext is required');
-  if (!isPositiveInt(so.line_no)) throw new AppError(400, 'INVALID_PARAMS', 'line_no must be a positive integer');
+  if (!isNonEmptyString(so.so_number_ext))
+    throw new AppError(400, 'INVALID_PARAMS', 'so_number_ext is required');
+  if (!isPositiveInt(so.line_no))
+    throw new AppError(400, 'INVALID_PARAMS', 'line_no must be a positive integer');
   await assertSkuActive(so.sku, client);
-  if (!isBoundedNumber(so.quantity, MAX_QUANTITY)) throw new AppError(400, 'INVALID_PARAMS', 'quantity must be a non-negative finite number');
+  if (!isBoundedNumber(so.quantity, MAX_QUANTITY))
+    throw new AppError(400, 'INVALID_PARAMS', 'quantity must be a non-negative finite number');
   if (so.required_by !== undefined && so.required_by !== null && !isLocalDate(so.required_by)) {
     throw new AppError(400, 'INVALID_PARAMS', 'required_by must be a real YYYY-MM-DD date');
   }
-  if (!isNonEmptyString(so.ship_from_site_code_ext)) throw new AppError(400, 'INVALID_PARAMS', 'ship_from_site_code_ext is required');
+  if (!isNonEmptyString(so.ship_from_site_code_ext))
+    throw new AppError(400, 'INVALID_PARAMS', 'ship_from_site_code_ext is required');
   const site = await getLocationByCode(so.ship_from_site_code_ext, client);
   if (!site || site.status !== 'active' || site.level !== 'site') {
-    throw new AppError(400, 'INVALID_PARAMS', `ship_from_site_code_ext "${so.ship_from_site_code_ext}" is not an active site`, {
-      ship_from_site_code_ext: so.ship_from_site_code_ext,
-    });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `ship_from_site_code_ext "${so.ship_from_site_code_ext}" is not an active site`,
+      {
+        ship_from_site_code_ext: so.ship_from_site_code_ext,
+      },
+    );
   }
   await upsertSalesOrderLine(
     {
@@ -282,8 +338,10 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
   try {
     await client.query('BEGIN');
     // Serialize the read-decide-persist window per projection against a concurrent cycle.
-    if (syncsPo) await client.query('SELECT pg_advisory_xact_lock($1)', [ADVISORY_LOCK_KEYS.purchase_orders]);
-    if (syncsSo) await client.query('SELECT pg_advisory_xact_lock($1)', [ADVISORY_LOCK_KEYS.sales_orders]);
+    if (syncsPo)
+      await client.query('SELECT pg_advisory_xact_lock($1)', [ADVISORY_LOCK_KEYS.purchase_orders]);
+    if (syncsSo)
+      await client.query('SELECT pg_advisory_xact_lock($1)', [ADVISORY_LOCK_KEYS.sales_orders]);
 
     if (syncsPo) {
       const purchaseOrders = batch.purchase_orders ?? [];
@@ -296,7 +354,10 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
           applied += 1;
           // The record synced cleanly: drain any prior open exception for it (regardless of the
           // error code it previously failed with), so a corrected record leaves the queue.
-          await resolveOpenExceptionsByGrain({ record_type: 'purchase_order', source_record_ref: po.po_number_ext }, client).catch(() => undefined);
+          await resolveOpenExceptionsByGrain(
+            { record_type: 'purchase_order', source_record_ref: po.po_number_ext },
+            client,
+          ).catch(() => undefined);
         } catch (err) {
           failed += 1;
           // A natural ref keeps distinct malformed records from colliding under NULLS NOT DISTINCT;
@@ -317,7 +378,9 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
         }
       }
       if (applied > 0) {
-        const presentRefs = purchaseOrders.map((po) => po?.po_number_ext).filter((ref): ref is string => typeof ref === 'string');
+        const presentRefs = purchaseOrders
+          .map((po) => po?.po_number_ext)
+          .filter((ref): ref is string => typeof ref === 'string');
         await closePurchaseOrdersNotIn(presentRefs, client);
       }
       appliedPo.count = applied;
@@ -331,12 +394,20 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
       for (let index = 0; index < salesOrders.length; index++) {
         const so = salesOrders[index]!;
         try {
-          await withSavepoint(client, `sp_${savepointSeq++}`, () => applySalesOrderLine(so, client));
+          await withSavepoint(client, `sp_${savepointSeq++}`, () =>
+            applySalesOrderLine(so, client),
+          );
           applied += 1;
-          await resolveOpenExceptionsByGrain({ record_type: 'sales_order', source_record_ref: `${so.so_number_ext}:${so.line_no}` }, client).catch(() => undefined);
+          await resolveOpenExceptionsByGrain(
+            { record_type: 'sales_order', source_record_ref: `${so.so_number_ext}:${so.line_no}` },
+            client,
+          ).catch(() => undefined);
         } catch (err) {
           failed += 1;
-          const ref = typeof so?.so_number_ext === 'string' ? `${so.so_number_ext}:${so?.line_no ?? '?'}` : `so#${index}`;
+          const ref =
+            typeof so?.so_number_ext === 'string'
+              ? `${so.so_number_ext}:${so?.line_no ?? '?'}`
+              : `so#${index}`;
           await raiseException(
             {
               record_type: 'sales_order',
@@ -350,8 +421,14 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
         }
       }
       if (applied > 0) {
-        const present = salesOrders.filter((so) => typeof so?.so_number_ext === 'string' && Number.isInteger(so?.line_no));
-        await closeSalesOrdersNotIn(present.map((so) => so.so_number_ext), present.map((so) => so.line_no), client);
+        const present = salesOrders.filter(
+          (so) => typeof so?.so_number_ext === 'string' && Number.isInteger(so?.line_no),
+        );
+        await closeSalesOrdersNotIn(
+          present.map((so) => so.so_number_ext),
+          present.map((so) => so.line_no),
+          client,
+        );
       }
       appliedSo.count = applied;
       result.sales_orders = { applied, failed };
@@ -364,8 +441,13 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
     // heartbeats and raise a deduped stale alert on fresh statements, then re-throw.
     if (syncsPo) await markSyncFailure('purchase_orders', reasonOf(err)).catch(() => undefined);
     if (syncsSo) await markSyncFailure('sales_orders', reasonOf(err)).catch(() => undefined);
-    for (const projection of [...(syncsPo ? ['purchase_orders'] : []), ...(syncsSo ? ['sales_orders'] : [])]) {
-      await raiseErpSyncStale(projection, `ERP sync cycle failed: ${reasonOf(err)}`).catch(() => undefined);
+    for (const projection of [
+      ...(syncsPo ? ['purchase_orders'] : []),
+      ...(syncsSo ? ['sales_orders'] : []),
+    ]) {
+      await raiseErpSyncStale(projection, `ERP sync cycle failed: ${reasonOf(err)}`).catch(
+        () => undefined,
+      );
     }
     throw err;
   } finally {
@@ -379,19 +461,32 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
   if (syncsPo && appliedPo.count > 0) {
     try {
       await markSyncSuccess('purchase_orders');
-      await resolveOpenExceptionsByGrain({ record_type: 'sync_batch', source_record_ref: 'purchase_orders', error_code: 'ERP_SYNC_STALE' });
+      await resolveOpenExceptionsByGrain({
+        record_type: 'sync_batch',
+        source_record_ref: 'purchase_orders',
+        error_code: 'ERP_SYNC_STALE',
+      });
     } catch (err) {
       await markSyncFailure('purchase_orders', reasonOf(err)).catch(() => undefined);
-      await raiseErpSyncStale('purchase_orders', `ERP sync heartbeat failed: ${reasonOf(err)}`).catch(() => undefined);
+      await raiseErpSyncStale(
+        'purchase_orders',
+        `ERP sync heartbeat failed: ${reasonOf(err)}`,
+      ).catch(() => undefined);
     }
   }
   if (syncsSo && appliedSo.count > 0) {
     try {
       await markSyncSuccess('sales_orders');
-      await resolveOpenExceptionsByGrain({ record_type: 'sync_batch', source_record_ref: 'sales_orders', error_code: 'ERP_SYNC_STALE' });
+      await resolveOpenExceptionsByGrain({
+        record_type: 'sync_batch',
+        source_record_ref: 'sales_orders',
+        error_code: 'ERP_SYNC_STALE',
+      });
     } catch (err) {
       await markSyncFailure('sales_orders', reasonOf(err)).catch(() => undefined);
-      await raiseErpSyncStale('sales_orders', `ERP sync heartbeat failed: ${reasonOf(err)}`).catch(() => undefined);
+      await raiseErpSyncStale('sales_orders', `ERP sync heartbeat failed: ${reasonOf(err)}`).catch(
+        () => undefined,
+      );
     }
   }
 
@@ -405,7 +500,11 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
  * emitNotification (NOT emitNotificationInTransaction) because a sync-freshness alert is not part of
  * a business write. Callers that already hold a transaction client may pass it for the exception row.
  */
-export async function raiseErpSyncStale(projectionName: string, reason: string, client?: PoolClient): Promise<void> {
+export async function raiseErpSyncStale(
+  projectionName: string,
+  reason: string,
+  client?: PoolClient,
+): Promise<void> {
   const created = await raiseException(
     {
       record_type: 'sync_batch',

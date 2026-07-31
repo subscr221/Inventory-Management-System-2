@@ -73,7 +73,7 @@ export function compareDecimal(a: string, b: string): -1 | 0 | 1 {
   const xNeg = x.neg && !xZero;
   const yNeg = y.neg && !yZero;
   if (xNeg !== yNeg) return xNeg ? -1 : 1;
-  const flip = (r: -1 | 0 | 1): -1 | 0 | 1 => (xNeg ? ((-r) as -1 | 0 | 1) : r);
+  const flip = (r: -1 | 0 | 1): -1 | 0 | 1 => (xNeg ? (-r as -1 | 0 | 1) : r);
   if (x.whole.length !== y.whole.length) return flip(x.whole.length > y.whole.length ? 1 : -1);
   if (x.whole !== y.whole) return flip(x.whole > y.whole ? 1 : -1);
   const width = Math.max(x.frac.length, y.frac.length);
@@ -101,7 +101,10 @@ export function isSlaBreached(ageMinutesExact: string, thresholdMinutes: string 
  * minutes is on target, not over it. A null median means the shift has no resolved dwell to measure
  * (no vehicle reached weighbridge acceptance or GRN yet), which is not an exception either.
  */
-export function exceedsGateDwellTarget(medianMinutes: string | null, targetMinutes: number = GATE_DWELL_TARGET_MINUTES): boolean {
+export function exceedsGateDwellTarget(
+  medianMinutes: string | null,
+  targetMinutes: number = GATE_DWELL_TARGET_MINUTES,
+): boolean {
   if (medianMinutes === null) return false;
   return compareDecimal(medianMinutes, String(targetMinutes)) > 0;
 }
@@ -275,13 +278,23 @@ const TASK_SOURCES: readonly TaskSource[] = [
   },
 ];
 
-export const SUPPORTED_TASK_TYPES: readonly WarehouseTaskType[] = TASK_SOURCES.map((s) => s.taskType);
+export const SUPPORTED_TASK_TYPES: readonly WarehouseTaskType[] = TASK_SOURCES.map(
+  (s) => s.taskType,
+);
 
-function assertSiteScoped(filters: { siteId?: string | null; siteAny?: string[] | null; allowAllSites?: boolean }): void {
+function assertSiteScoped(filters: {
+  siteId?: string | null;
+  siteAny?: string[] | null;
+  allowAllSites?: boolean;
+}): void {
   if (filters.allowAllSites === true) return;
   if (filters.siteId) return;
   if (filters.siteAny && filters.siteAny.length > 0) return;
-  throw new AppError(403, 'LOCATION_ACCESS_DENIED', 'No role assignment grants access to any site for this module');
+  throw new AppError(
+    403,
+    'LOCATION_ACCESS_DENIED',
+    'No role assignment grants access to any site for this module',
+  );
 }
 
 export interface OpenTaskBoard {
@@ -298,7 +311,10 @@ export interface OpenTaskBoard {
  * Ordering is most-urgent-first then oldest-first, so the row a supervisor should act on next is at
  * the top regardless of which domain it came from.
  */
-export async function listOpenTasks(filters: ListOpenTasksFilters = {}, client?: PoolClient): Promise<OpenTaskBoard> {
+export async function listOpenTasks(
+  filters: ListOpenTasksFilters = {},
+  client?: PoolClient,
+): Promise<OpenTaskBoard> {
   assertSiteScoped(filters);
 
   const sources = filters.taskType
@@ -313,7 +329,8 @@ export async function listOpenTasks(filters: ListOpenTasksFilters = {}, client?:
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('t.site_id = ?', filters.siteId);
-  else if (!filters.allowAllSites && filters.siteAny) add('t.site_id = ANY(?::uuid[])', filters.siteAny);
+  else if (!filters.allowAllSites && filters.siteAny)
+    add('t.site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.assignedTo) add('t.assigned_to = ?', filters.assignedTo);
   if (filters.zoneId) add('t.zone_id = ?', filters.zoneId);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -322,7 +339,10 @@ export async function listOpenTasks(filters: ListOpenTasksFilters = {}, client?:
   // the full array twice more, so a site with a large backlog had no ceiling on its response size at
   // all. The cap is applied after ordering, so what survives is always the most urgent and oldest
   // work - the rows a supervisor should act on first - never an arbitrary slice.
-  const limit = Math.min(Math.max(filters.limit ?? OPEN_TASK_DEFAULT_LIMIT, 1), OPEN_TASK_MAX_LIMIT);
+  const limit = Math.min(
+    Math.max(filters.limit ?? OPEN_TASK_DEFAULT_LIMIT, 1),
+    OPEN_TASK_MAX_LIMIT,
+  );
   values.push(limit);
   const limitClause = `LIMIT $${values.length}`;
 
@@ -374,7 +394,10 @@ export async function listOpenTasks(filters: ListOpenTasksFilters = {}, client?:
       assigned_to: (row['assigned_to'] as string | null) ?? null,
       priority: (row['priority'] as TaskPriority | null) ?? 'normal',
       status: row['status'] as string,
-      created_at: row['created_at'] instanceof Date ? (row['created_at'] as Date).toISOString() : String(row['created_at']),
+      created_at:
+        row['created_at'] instanceof Date
+          ? (row['created_at'] as Date).toISOString()
+          : String(row['created_at']),
       age_minutes: Number(ageExact),
       age_minutes_exact: ageExact,
       sla_threshold_minutes: threshold,
@@ -390,7 +413,12 @@ export function groupOpenTasks(tasks: OpenTask[]): Array<{
   task_type: WarehouseTaskType;
   open_count: number;
   breached_count: number;
-  operators: Array<{ assigned_to: string | null; open_count: number; breached_count: number; tasks: OpenTask[] }>;
+  operators: Array<{
+    assigned_to: string | null;
+    open_count: number;
+    breached_count: number;
+    tasks: OpenTask[];
+  }>;
 }> {
   const byType = new Map<WarehouseTaskType, Map<string, OpenTask[]>>();
   for (const task of tasks) {
@@ -498,13 +526,18 @@ function buildProductivityQuery(
   filters: ConfirmationRateFilters,
 ): { sql: string; values: unknown[] } {
   const values: unknown[] = [filters.periodStart, filters.periodEnd];
-  const clauses = ['s.created_at >= $1::timestamptz', 's.created_at < $2::timestamptz', 's.operator_id IS NOT NULL'];
+  const clauses = [
+    's.created_at >= $1::timestamptz',
+    's.created_at < $2::timestamptz',
+    's.operator_id IS NOT NULL',
+  ];
   const add = (sql: string, value: unknown): void => {
     values.push(value);
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('s.site_id = ?', filters.siteId);
-  else if (!filters.allowAllSites && filters.siteAny) add('s.site_id = ANY(?::uuid[])', filters.siteAny);
+  else if (!filters.allowAllSites && filters.siteAny)
+    add('s.site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.zoneId) add('s.zone_id = ?', filters.zoneId);
   if (filters.operatorId) add('s.operator_id = ?', filters.operatorId);
 
@@ -653,7 +686,8 @@ export async function computeGateDwellExceptions(
   };
   if (filters.businessDate) add('business_date = ?::date', filters.businessDate);
   if (filters.siteId) add('site_id = ?', filters.siteId);
-  else if (!filters.allowAllSites && filters.siteAny) add('site_id = ANY(?::uuid[])', filters.siteAny);
+  else if (!filters.allowAllSites && filters.siteAny)
+    add('site_id = ANY(?::uuid[])', filters.siteAny);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
 
   const shifts = await runner(client).query(
@@ -748,8 +782,15 @@ export async function listGateDwellBreachesBulk(
       site_id: row['site_id'] as string,
       vehicle_reg_ext: row['vehicle_reg_ext'] as string,
       po_ref_ext: (row['po_ref_ext'] as string | null) ?? null,
-      gate_entered_at: row['gate_entered_at'] instanceof Date ? (row['gate_entered_at'] as Date).toISOString() : String(row['gate_entered_at']),
-      resolved_at: row['resolved_at'] ? (row['resolved_at'] instanceof Date ? (row['resolved_at'] as Date).toISOString() : String(row['resolved_at'])) : null,
+      gate_entered_at:
+        row['gate_entered_at'] instanceof Date
+          ? (row['gate_entered_at'] as Date).toISOString()
+          : String(row['gate_entered_at']),
+      resolved_at: row['resolved_at']
+        ? row['resolved_at'] instanceof Date
+          ? (row['resolved_at'] as Date).toISOString()
+          : String(row['resolved_at'])
+        : null,
       resolution_source: (row['resolution_source'] as 'weighbridge' | 'grn' | null) ?? null,
       dwell_minutes: String(row['dwell_minutes']),
       challan_photo_present: Boolean(row['challan_photo_present']),
@@ -789,8 +830,15 @@ export async function listGateDwellBreaches(
     site_id: row['site_id'] as string,
     vehicle_reg_ext: row['vehicle_reg_ext'] as string,
     po_ref_ext: (row['po_ref_ext'] as string | null) ?? null,
-    gate_entered_at: row['gate_entered_at'] instanceof Date ? (row['gate_entered_at'] as Date).toISOString() : String(row['gate_entered_at']),
-    resolved_at: row['resolved_at'] ? (row['resolved_at'] instanceof Date ? (row['resolved_at'] as Date).toISOString() : String(row['resolved_at'])) : null,
+    gate_entered_at:
+      row['gate_entered_at'] instanceof Date
+        ? (row['gate_entered_at'] as Date).toISOString()
+        : String(row['gate_entered_at']),
+    resolved_at: row['resolved_at']
+      ? row['resolved_at'] instanceof Date
+        ? (row['resolved_at'] as Date).toISOString()
+        : String(row['resolved_at'])
+      : null,
     resolution_source: (row['resolution_source'] as 'weighbridge' | 'grn' | null) ?? null,
     dwell_minutes: String(row['dwell_minutes']),
     challan_photo_present: Boolean(row['challan_photo_present']),
@@ -811,7 +859,12 @@ export async function listGateDwellBreaches(
 export function assertValidTaskFilters(params: URLSearchParams): void {
   const taskType = params.get('task_type');
   if (taskType !== null && !SUPPORTED_TASK_TYPES.includes(taskType as WarehouseTaskType)) {
-    throw new AppError(400, 'INVALID_PARAMS', `task_type must be one of: ${SUPPORTED_TASK_TYPES.join(', ')}`, { task_type: taskType });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `task_type must be one of: ${SUPPORTED_TASK_TYPES.join(', ')}`,
+      { task_type: taskType },
+    );
   }
   // `site` is the accepted alias for `site_id` in every handler (`params.get('site_id') ?? ...`),
   // so it must be validated here too. Omitting it let a wildcard-scoped caller send `?site=abc`
@@ -830,7 +883,12 @@ export function assertValidTaskFilters(params: URLSearchParams): void {
   if (limit !== null) {
     const n = Number(limit);
     if (!Number.isInteger(n) || n < 1 || n > OPEN_TASK_MAX_LIMIT) {
-      throw new AppError(400, 'INVALID_PARAMS', `limit must be a positive integer not exceeding ${OPEN_TASK_MAX_LIMIT}`, { limit });
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `limit must be a positive integer not exceeding ${OPEN_TASK_MAX_LIMIT}`,
+        { limit },
+      );
     }
   }
   // Shape alone is not enough: `2026-13-45` matches the pattern and then raises Postgres 22008
@@ -841,11 +899,18 @@ export function assertValidTaskFilters(params: URLSearchParams): void {
     const shaped = /^\d{4}-\d{2}-\d{2}$/.test(businessDate);
     const parsed = shaped ? new Date(`${businessDate}T00:00:00Z`) : null;
     const roundTrips =
-      parsed !== null && !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === businessDate;
+      parsed !== null &&
+      !Number.isNaN(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === businessDate;
     if (!roundTrips) {
-      throw new AppError(400, 'INVALID_PARAMS', 'business_date must be an ISO calendar date (YYYY-MM-DD)', {
-        business_date: businessDate,
-      });
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'business_date must be an ISO calendar date (YYYY-MM-DD)',
+        {
+          business_date: businessDate,
+        },
+      );
     }
   }
   for (const key of ['period_start', 'period_end'] as const) {
@@ -854,14 +919,24 @@ export function assertValidTaskFilters(params: URLSearchParams): void {
     // Date.parse accepts many non-ISO inputs (RFC 2822, etc) that PostgreSQL's timestamptz parser
     // does not. Reject anything that does not round-trip as a true ISO 8601 / RFC 3339 instant,
     // so a query that calls Date.parse OK but fails on ::timestamptz never reaches the database.
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(value)
-        || Number.isNaN(Date.parse(value))) {
-      throw new AppError(400, 'INVALID_PARAMS', `${key} must be an ISO 8601 timestamp with timezone`, { [key]: value });
+    if (
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(value) ||
+      Number.isNaN(Date.parse(value))
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `${key} must be an ISO 8601 timestamp with timezone`,
+        { [key]: value },
+      );
     }
   }
   const start = params.get('period_start');
   const end = params.get('period_end');
   if (start !== null && end !== null && Date.parse(start) >= Date.parse(end)) {
-    throw new AppError(400, 'INVALID_PARAMS', 'period_start must be strictly before period_end', { period_start: start, period_end: end });
+    throw new AppError(400, 'INVALID_PARAMS', 'period_start must be strictly before period_end', {
+      period_start: start,
+      period_end: end,
+    });
   }
 }

@@ -79,7 +79,7 @@ function mapHeader(row: Record<string, unknown>): PhysicalVerificationHeaderRow 
     signed_off_at:
       row['signed_off_at'] instanceof Date
         ? row['signed_off_at'].toISOString()
-        : (row['signed_off_at'] as string | null) ?? null,
+        : ((row['signed_off_at'] as string | null) ?? null),
     period_locked: row['period_locked'] === true,
     source_event_id: (row['source_event_id'] as string | null) ?? null,
   };

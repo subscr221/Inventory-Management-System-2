@@ -17,7 +17,10 @@ export interface ArchiveRunResult {
  * Exported separately from the CLI entry point so integration tests can exercise the full
  * selection/export/marker flow against a real database.
  */
-export async function runArchiveAuditLog(pool: pg.Pool, now: Date = new Date()): Promise<ArchiveRunResult> {
+export async function runArchiveAuditLog(
+  pool: pg.Pool,
+  now: Date = new Date(),
+): Promise<ArchiveRunResult> {
   const cutoff = retentionCutoff(now, auditConfig.retentionYears);
   const client = await pool.connect();
 

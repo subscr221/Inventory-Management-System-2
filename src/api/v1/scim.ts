@@ -4,7 +4,12 @@ import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
 import { getParsedBody, getTraceId } from '../../middleware/context.js';
 import { config } from '../../config/index.js';
-import { provisionUser, updateUserRoles, deprovisionUser, reactivateUser } from '../../adapters/iam/scim.js';
+import {
+  provisionUser,
+  updateUserRoles,
+  deprovisionUser,
+  reactivateUser,
+} from '../../adapters/iam/scim.js';
 import type { RoleAssignment } from '../../read/projections/users.js';
 
 /** Constant-time string compare. Returns false on length mismatch (length is not secret). */
@@ -42,16 +47,32 @@ function parseRoles(value: unknown): RoleAssignment[] {
     const locationId = obj['locationId'];
 
     if (typeof role !== 'string' || !role) {
-      throw new AppError(400, 'INVALID_SCIM_REQUEST', `roles[${index}].role must be a non-empty string`);
+      throw new AppError(
+        400,
+        'INVALID_SCIM_REQUEST',
+        `roles[${index}].role must be a non-empty string`,
+      );
     }
     if (typeof module !== 'string' || !module) {
-      throw new AppError(400, 'INVALID_SCIM_REQUEST', `roles[${index}].module must be a non-empty string`);
+      throw new AppError(
+        400,
+        'INVALID_SCIM_REQUEST',
+        `roles[${index}].module must be a non-empty string`,
+      );
     }
     if (functionScope !== 'read' && functionScope !== 'write') {
-      throw new AppError(400, 'INVALID_SCIM_REQUEST', `roles[${index}].functionScope must be "read" or "write"`);
+      throw new AppError(
+        400,
+        'INVALID_SCIM_REQUEST',
+        `roles[${index}].functionScope must be "read" or "write"`,
+      );
     }
     if (typeof locationId !== 'string' || !locationId) {
-      throw new AppError(400, 'INVALID_SCIM_REQUEST', `roles[${index}].locationId must be a non-empty string`);
+      throw new AppError(
+        400,
+        'INVALID_SCIM_REQUEST',
+        `roles[${index}].locationId must be a non-empty string`,
+      );
     }
 
     return { role, module, functionScope, locationId };
@@ -115,7 +136,11 @@ export const patchUserHandler: RouteHandler = async (req, res, params) => {
   // A single PATCH must not both change activation and replace roles - that would let one of the
   // two intents be silently dropped. Require separate requests.
   if (hasActive && hasRoles) {
-    throw new AppError(400, 'INVALID_SCIM_REQUEST', 'Provide either "active" or "roles", not both in one request');
+    throw new AppError(
+      400,
+      'INVALID_SCIM_REQUEST',
+      'Provide either "active" or "roles", not both in one request',
+    );
   }
 
   const traceId = getTraceId(req);
@@ -139,5 +164,9 @@ export const patchUserHandler: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  throw new AppError(400, 'INVALID_SCIM_REQUEST', 'PATCH body must include "active" (boolean) or "roles"');
+  throw new AppError(
+    400,
+    'INVALID_SCIM_REQUEST',
+    'PATCH body must include "active" (boolean) or "roles"',
+  );
 };

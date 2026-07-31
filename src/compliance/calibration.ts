@@ -18,21 +18,34 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-export async function assertCalibrationLockout(envelope: EventEnvelope, deps: CalibrationDeps = defaultDeps): Promise<void> {
+export async function assertCalibrationLockout(
+  envelope: EventEnvelope,
+  deps: CalibrationDeps = defaultDeps,
+): Promise<void> {
   if (!QC_STREAM_TYPES.has(envelope.stream_type)) return;
   if (envelope.event_type !== QC_RESULT_RECORDED) return;
 
   const instrumentId = envelope.payload['instrument_id'];
   if (!isNonEmptyString(instrumentId)) {
-    throw new AppError(400, 'INVALID_PARAMS', 'qc.result_recorded payload is missing instrument_id', {
-      missing_field: 'instrument_id',
-    });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'qc.result_recorded payload is missing instrument_id',
+      {
+        missing_field: 'instrument_id',
+      },
+    );
   }
 
   const status = await deps.getCalibrationStatus(instrumentId);
   if (status !== 'calibrated') {
-    throw new AppError(423, 'CALIBRATION_LOCKOUT', 'Instrument calibration status blocks QC result persistence', {
-      instrument_id: instrumentId,
-    });
+    throw new AppError(
+      423,
+      'CALIBRATION_LOCKOUT',
+      'Instrument calibration status blocks QC result persistence',
+      {
+        instrument_id: instrumentId,
+      },
+    );
   }
 }

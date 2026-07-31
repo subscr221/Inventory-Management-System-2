@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { AppError } from '../middleware/error.js';
 import { persistEvent } from '../events/store.js';
-import { getRemainingDemand, getSalesOrderLineById, lockSalesOrderDemandLine, type ErpSalesOrderRow } from '../read/projections/erp_sales_order.js';
+import {
+  getRemainingDemand,
+  getSalesOrderLineById,
+  lockSalesOrderDemandLine,
+  type ErpSalesOrderRow,
+} from '../read/projections/erp_sales_order.js';
 import { getVelocityClass } from '../read/projections/velocity_class.js';
 import type { PickLineInput } from '../events/schema.js';
 
@@ -91,7 +96,11 @@ function isNonNegativeMicro(value: string | number): boolean {
  * expiry ordering and to location_register for the bin's pick_sequence and zone ancestor. The
  * zone ancestor walks the bin -> rack -> aisle -> zone parent chain.
  */
-async function fefoCandidates(sku: string, siteId: string, client: PoolClient): Promise<FefoCandidateRow[]> {
+async function fefoCandidates(
+  sku: string,
+  siteId: string,
+  client: PoolClient,
+): Promise<FefoCandidateRow[]> {
   const result = await client.query(
     `WITH RECURSIVE zone_of AS (
        SELECT lr.location_id AS start_id, lr.location_id, lr.level, lr.parent_location_id
@@ -144,10 +153,15 @@ async function allocateForLine(
   requestedQuantity = line.quantity,
 ): Promise<LotAllocation[]> {
   if (!isNonNegativeMicro(requestedQuantity) || numericToMicro(requestedQuantity) === 0n) {
-    throw new AppError(400, 'PICK_TASK_INVALID_PAYLOAD', 'Dispatch-order line quantity must be a positive numeric value', {
-      dispatch_order_line_id: line.id,
-      quantity: line.quantity,
-    });
+    throw new AppError(
+      400,
+      'PICK_TASK_INVALID_PAYLOAD',
+      'Dispatch-order line quantity must be a positive numeric value',
+      {
+        dispatch_order_line_id: line.id,
+        quantity: line.quantity,
+      },
+    );
   }
   const candidates = await fefoCandidates(line.sku, siteId, client);
 
@@ -188,9 +202,14 @@ async function allocateForLine(
     const available = numericToMicro(c.available) - alreadyConsumed;
     if (available <= 0n) continue;
     if (!c.zone_id) {
-      throw new AppError(409, 'PICK_TASK_INVALID_PAYLOAD', `Bin "${c.location_code}" has no zone ancestor; cannot route the pick`, {
-        location_id: c.location_id,
-      });
+      throw new AppError(
+        409,
+        'PICK_TASK_INVALID_PAYLOAD',
+        `Bin "${c.location_code}" has no zone ancestor; cannot route the pick`,
+        {
+          location_id: c.location_id,
+        },
+      );
     }
     // Review pass 2: truncate to milli precision. stock_balance.available is NUMERIC(18,6) while
     // pick quantities persist into NUMERIC(14,3), so an untruncated take from a bin holding
@@ -212,9 +231,10 @@ async function allocateForLine(
   }
 
   if (remaining > 0n) {
-    const detail = candidates.length === 0
-      ? 'No pickable stock found for this SKU at the site; stock may exist in restricted or quarantined bins'
-      : `Shortfall of ${microToNumeric(remaining)} after allocating from ${allocations.length} lot-location(s)`;
+    const detail =
+      candidates.length === 0
+        ? 'No pickable stock found for this SKU at the site; stock may exist in restricted or quarantined bins'
+        : `Shortfall of ${microToNumeric(remaining)} after allocating from ${allocations.length} lot-location(s)`;
     throw new AppError(409, 'INSUFFICIENT_STOCK_FOR_PICK', detail, {
       dispatch_order_line_id: line.id,
       sku: line.sku,
@@ -254,7 +274,12 @@ interface TaskDraft {
   waveId: string | null;
   batchId: string | null;
   strategy: 'single' | 'batch' | 'wave' | 'zone';
-  lines: Array<{ allocation: LotAllocation; dispatchOrderLineId: string; sku: string; pickSequence: number }>;
+  lines: Array<{
+    allocation: LotAllocation;
+    dispatchOrderLineId: string;
+    sku: string;
+    pickSequence: number;
+  }>;
 }
 
 async function persistTask(
@@ -308,9 +333,16 @@ async function persistTask(
   return { pickTaskId, pickLineIds: pickLines.map((l) => l.pick_line_id) };
 }
 
-export async function generatePickTasks(input: GeneratePickTasksInput, client: PoolClient): Promise<GeneratePickTasksResult> {
+export async function generatePickTasks(
+  input: GeneratePickTasksInput,
+  client: PoolClient,
+): Promise<GeneratePickTasksResult> {
   if (input.dispatchOrderLineIds.length === 0) {
-    throw new AppError(400, 'DISPATCH_ORDER_LINE_NOT_FOUND', 'dispatchOrderLineIds must not be empty');
+    throw new AppError(
+      400,
+      'DISPATCH_ORDER_LINE_NOT_FOUND',
+      'dispatchOrderLineIds must not be empty',
+    );
   }
 
   // (a) Load and validate every dispatch-order line up front. Lock the open sales-order rows by
@@ -326,21 +358,36 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
   for (const id of input.dispatchOrderLineIds) {
     const line = await getSalesOrderLineById(id, client);
     if (!line || line.status !== 'open') {
-      throw new AppError(404, 'DISPATCH_ORDER_LINE_NOT_FOUND', `No open sales-order line exists for "${id}"`, {
-        dispatch_order_line_id: id,
-      });
+      throw new AppError(
+        404,
+        'DISPATCH_ORDER_LINE_NOT_FOUND',
+        `No open sales-order line exists for "${id}"`,
+        {
+          dispatch_order_line_id: id,
+        },
+      );
     }
     if (line.ship_from_site_id !== input.siteId) {
-      throw new AppError(409, 'DISPATCH_ORDER_LINE_NOT_FOUND', `Sales-order line "${id}" does not ship from site "${input.siteId}"`, {
-        dispatch_order_line_id: id,
-        ship_from_site_id: line.ship_from_site_id,
-      });
+      throw new AppError(
+        409,
+        'DISPATCH_ORDER_LINE_NOT_FOUND',
+        `Sales-order line "${id}" does not ship from site "${input.siteId}"`,
+        {
+          dispatch_order_line_id: id,
+          ship_from_site_id: line.ship_from_site_id,
+        },
+      );
     }
     const remaining = await getRemainingDemand(id, client);
     if (remaining === null || numericToMicro(remaining) <= 0n) {
-      throw new AppError(409, 'PICK_TASK_ALREADY_GENERATED', `No remaining demand exists for sales-order line "${id}"`, {
-        dispatch_order_line_id: id,
-      });
+      throw new AppError(
+        409,
+        'PICK_TASK_ALREADY_GENERATED',
+        `No remaining demand exists for sales-order line "${id}"`,
+        {
+          dispatch_order_line_id: id,
+        },
+      );
     }
     lines.push({ ...line, quantity: remaining });
   }
@@ -349,7 +396,10 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
   const consumed = new Map<string, bigint>();
   const allocated: AllocatedLine[] = [];
   for (const line of lines) {
-    allocated.push({ line, allocations: await allocateForLine(line, input.siteId, consumed, client) });
+    allocated.push({
+      line,
+      allocations: await allocateForLine(line, input.siteId, consumed, client),
+    });
   }
 
   // (d) Sequence bins within each zone across the whole generation run.
@@ -401,7 +451,12 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
           };
           groups.set(key, draft);
         }
-        draft.lines.push({ allocation, dispatchOrderLineId: line.id, sku: line.sku, pickSequence: sequenced.get(allocation)! });
+        draft.lines.push({
+          allocation,
+          dispatchOrderLineId: line.id,
+          sku: line.sku,
+          pickSequence: sequenced.get(allocation)!,
+        });
       }
     }
     drafts.push(...groups.values());
@@ -424,7 +479,12 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
           };
           groups.set(key, draft);
         }
-        draft.lines.push({ allocation, dispatchOrderLineId: line.id, sku: line.sku, pickSequence: sequenced.get(allocation)! });
+        draft.lines.push({
+          allocation,
+          dispatchOrderLineId: line.id,
+          sku: line.sku,
+          pickSequence: sequenced.get(allocation)!,
+        });
       }
     }
     drafts.push(...groups.values());

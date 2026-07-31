@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -82,7 +87,13 @@ const seedExpectedLocationBase: RouteHandler = async (req, res, params) => {
   }
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!body || !isNonEmptyString(body['expected_location'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'expected_location is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'expected_location is required and must be a non-empty string',
+    );
     return;
   }
 
@@ -111,5 +122,11 @@ const seedExpectedLocationBase: RouteHandler = async (req, res, params) => {
   sendJson(res, 201, persisted);
 };
 
-export const getCurrentLocationHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(getCurrentLocationBase);
-export const seedExpectedLocationHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(seedExpectedLocationBase);
+export const getCurrentLocationHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(getCurrentLocationBase);
+export const seedExpectedLocationHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(seedExpectedLocationBase);

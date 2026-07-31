@@ -21,7 +21,13 @@ interface Role {
   locationId: string;
 }
 
-function makeRequest(port: number, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<HttpResult> {
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<HttpResult> {
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -30,7 +36,11 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
         port,
         path,
         method,
-        headers: { 'Content-Type': 'application/json', ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}), ...headers },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+          ...headers,
+        },
       },
       (res: IncomingMessage) => {
         const chunks: Buffer[] = [];
@@ -58,14 +68,27 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
 }
 
 async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
-  const res = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', { externalId, email: externalId, displayName: externalId, roles }, SCIM_HEADERS);
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  const res = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/scim/v2/Users',
+    { externalId, email: externalId, displayName: externalId, roles },
+    SCIM_HEADERS,
+  );
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -115,7 +138,12 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     return result.rows[0]!['lot_id'] as string;
   }
 
-  async function seedStock(sku: string, locationId: string, lotNumber: string, onHand: number): Promise<void> {
+  async function seedStock(
+    sku: string,
+    locationId: string,
+    lotNumber: string,
+    onHand: number,
+  ): Promise<void> {
     await getPool().query(
       `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand)
        VALUES ($1, $2, $3, 'owned', $4)`,
@@ -123,7 +151,12 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     );
   }
 
-  async function seedOrderLine(soNumber: string, lineNo: number, sku: string, quantity: number): Promise<string> {
+  async function seedOrderLine(
+    soNumber: string,
+    lineNo: number,
+    sku: string,
+    quantity: number,
+  ): Promise<string> {
     const result = await getPool().query(
       `INSERT INTO erp_sales_order
          (so_number_ext, line_no, sku, quantity, ship_from_site_id, ship_from_site_code_ext, status, source_system, last_synced_at)
@@ -180,7 +213,12 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedLocation(binC1, `BIN-C1-36-${run}`, 'bin', rackCold, siteAId, 5);
 
     await provisionUser(port, `pick-manager-${run}@example.com`, [
-      { role: 'warehouse_manager', module: 'warehouse', functionScope: 'write', locationId: siteAId },
+      {
+        role: 'warehouse_manager',
+        module: 'warehouse',
+        functionScope: 'write',
+        locationId: siteAId,
+      },
     ]);
     managerHeaders = await authFor(port, `pick-manager-${run}@example.com`);
 
@@ -212,19 +250,34 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA2, lotLate, 100);
     const lineId = await seedOrderLine(`SO36-AC1-${run}`, 1, sku, 100);
 
-    const res = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const taskIds = res.body['pickTaskIds'] as string[];
     assert.strictEqual(taskIds.length, 1);
 
-    const detail = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskIds[0]}`, undefined, managerHeaders);
+    const detail = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/pick-tasks/${taskIds[0]}`,
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(detail.status, 200);
     const lines = detail.body['lines'] as Array<Record<string, unknown>>;
     assert.strictEqual(lines.length, 2);
     // Lines come back ordered by pick_sequence ASC; bin A2 (sequence 10) precedes bin A1 (20).
     assert.strictEqual(lines[0]!['location_id'], binA2);
     assert.strictEqual(lines[1]!['location_id'], binA1);
-    assert.deepStrictEqual(lines.map((l) => l['pick_sequence']), [1, 2]);
+    assert.deepStrictEqual(
+      lines.map((l) => l['pick_sequence']),
+      [1, 2],
+    );
     // FEFO: the earlier-expiry lot covers 60; the later lot covers the remaining 40.
     const early = lines.find((l) => l['location_id'] === binA1)!;
     const late = lines.find((l) => l['location_id'] === binA2)!;
@@ -242,7 +295,13 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA1, lot, 5);
     const lineId = await seedOrderLine(`SO36-SHORT-${run}`, 1, sku, 50);
 
-    const res = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 409, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'INSUFFICIENT_STOCK_FOR_PICK');
     assert.strictEqual(await allocatedFor(sku, binA1, lot), 0);
@@ -258,12 +317,24 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     const line3 = await seedOrderLine(`SO36-B3-${run}`, 1, sku, 30);
 
     const batchId = randomUUID();
-    const res = await makeRequest(port, 'POST', '/api/v1/pick-tasks/batch', { dispatchOrderLineIds: [line1, line2, line3], batchId }, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/batch',
+      { dispatchOrderLineIds: [line1, line2, line3], batchId },
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const taskIds = res.body['pickTaskIds'] as string[];
     assert.strictEqual(taskIds.length, 1, 'one consolidated task per (sku, zone) group');
 
-    const detail = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskIds[0]}`, undefined, managerHeaders);
+    const detail = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/pick-tasks/${taskIds[0]}`,
+      undefined,
+      managerHeaders,
+    );
     const task = detail.body['task'] as Record<string, unknown>;
     assert.strictEqual(task['strategy'], 'batch');
     assert.strictEqual(task['batch_id'], batchId);
@@ -274,7 +345,10 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
       lines.map((l) => l['dispatch_order_line_id']).sort(),
       [line1, line2, line3].sort(),
     );
-    assert.deepStrictEqual(lines.map((l) => Number(l['directed_quantity'])).sort((a, b) => a - b), [10, 20, 30]);
+    assert.deepStrictEqual(
+      lines.map((l) => Number(l['directed_quantity'])).sort((a, b) => a - b),
+      [10, 20, 30],
+    );
   });
 
   it('AC3: wave release stamps wave_id on every task; orders outside the wave stay unreleased', async () => {
@@ -287,17 +361,35 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     const outsideWave = await seedOrderLine(`SO36-W3-${run}`, 1, sku, 20);
 
     const waveId = randomUUID();
-    const res = await makeRequest(port, 'POST', '/api/v1/pick-tasks/wave', { dispatchOrderLineIds: [inWave1, inWave2], waveId }, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/wave',
+      { dispatchOrderLineIds: [inWave1, inWave2], waveId },
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.strictEqual((res.body['pickTaskIds'] as string[]).length, 2);
 
-    const list = await makeRequest(port, 'GET', `/api/v1/pick-tasks?waveId=${waveId}`, undefined, managerHeaders);
+    const list = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/pick-tasks?waveId=${waveId}`,
+      undefined,
+      managerHeaders,
+    );
     const tasks = list.body['pick_tasks'] as Array<Record<string, unknown>>;
     assert.strictEqual(tasks.length, 2);
     for (const t of tasks) assert.strictEqual(t['wave_id'], waveId);
-    assert.ok(!tasks.some((t) => t['dispatch_order_id'] === outsideWave), 'outside-wave order stays unreleased');
+    assert.ok(
+      !tasks.some((t) => t['dispatch_order_id'] === outsideWave),
+      'outside-wave order stays unreleased',
+    );
 
-    const outsideTasks = await getPool().query(`SELECT 1 FROM pick_task WHERE dispatch_order_id = $1`, [outsideWave]);
+    const outsideTasks = await getPool().query(
+      `SELECT 1 FROM pick_task WHERE dispatch_order_id = $1`,
+      [outsideWave],
+    );
     assert.strictEqual(outsideTasks.rows.length, 0);
   });
 
@@ -311,7 +403,13 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binC1, lotCold, 100);
     const lineId = await seedOrderLine(`SO36-Z1-${run}`, 1, sku, 80);
 
-    const res = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'zone' }, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'zone' },
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const taskIds = res.body['pickTaskIds'] as string[];
     assert.strictEqual(taskIds.length, 2, 'one task per zone');
@@ -319,26 +417,53 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     // Confirm every line of both tasks, zone by zone. Each zone task auto-completes on its own
     // last confirmation (AC7's trigger), so no separate supervisor call is needed.
     for (const [i, taskId] of taskIds.entries()) {
-      const detail = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskId}`, undefined, managerHeaders);
+      const detail = await makeRequest(
+        port,
+        'GET',
+        `/api/v1/pick-tasks/${taskId}`,
+        undefined,
+        managerHeaders,
+      );
       const lines = detail.body['lines'] as Array<Record<string, unknown>>;
       for (const line of lines) {
         const confirm = await makeRequest(
           port,
           'POST',
           `/api/v1/pick-tasks/${taskId}/lines/${line['pick_line_id']}/confirm`,
-          { confirmedLotId: line['directed_lot_id'], confirmedQuantity: line['directed_quantity'], captureMethod: 'PWA' },
+          {
+            confirmedLotId: line['directed_lot_id'],
+            confirmedQuantity: line['directed_quantity'],
+            captureMethod: 'PWA',
+          },
           operatorHeaders,
         );
         assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
       }
-      const after = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskId}`, undefined, managerHeaders);
-      assert.strictEqual((after.body['task'] as Record<string, unknown>)['status'], 'completed', 'zone task auto-completes on its last confirmation');
+      const after = await makeRequest(
+        port,
+        'GET',
+        `/api/v1/pick-tasks/${taskId}`,
+        undefined,
+        managerHeaders,
+      );
+      assert.strictEqual(
+        (after.body['task'] as Record<string, unknown>)['status'],
+        'completed',
+        'zone task auto-completes on its last confirmation',
+      );
 
-      const picked = await getPool().query(`SELECT 1 FROM dispatch_order_status WHERE dispatch_order_id = $1`, [lineId]);
+      const picked = await getPool().query(
+        `SELECT 1 FROM dispatch_order_status WHERE dispatch_order_id = $1`,
+        [lineId],
+      );
       if (i === 0) {
         assert.strictEqual(picked.rows.length, 0, 'order is not picked while a zone task is open');
       } else {
-        assert.strictEqual(picked.rows.length, 1, 'order flags picked when every zone task is confirmed');
+        assert.strictEqual(
+          picked.rows.length,
+          1,
+          'order flags picked when every zone task is confirmed',
+        );
       }
     }
   });
@@ -350,11 +475,23 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA1, lot, 50);
     const lineId = await seedOrderLine(`SO36-P1-${run}`, 1, sku, 25);
 
-    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const gen = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
     const pickLineId = (gen.body['pickLineIds'] as string[])[0]!;
 
-    const print = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskId}/print`, undefined, managerHeaders);
+    const print = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/pick-tasks/${taskId}/print`,
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(print.status, 200);
     assert.ok(print.raw.includes('PICK LIST'));
     assert.ok(print.raw.includes(taskId), 'pick list carries the task id');
@@ -385,7 +522,13 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA2, substituteLot, 40);
     const lineId = await seedOrderLine(`SO36-S1-${run}`, 1, sku, 40);
 
-    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const gen = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
     const pickLineId = (gen.body['pickLineIds'] as string[])[0]!;
     assert.strictEqual(await allocatedFor(sku, binA1, directedLot), 40);
@@ -406,7 +549,12 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
       port,
       'POST',
       `/api/v1/pick-tasks/${taskId}/lines/${pickLineId}/confirm`,
-      { confirmedLotId: substituteUuid, confirmedQuantity: '40', overrideReason: 'Directed lot damaged', captureMethod: 'PWA' },
+      {
+        confirmedLotId: substituteUuid,
+        confirmedQuantity: '40',
+        overrideReason: 'Directed lot damaged',
+        captureMethod: 'PWA',
+      },
       operatorHeaders,
     );
     assert.strictEqual(substituted.status, 200, JSON.stringify(substituted.body));
@@ -419,10 +567,18 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     // Original allocation released; the substituted lot carries the quantity (AC8). This is the
     // task's only line, so its confirmation is also the last one: the task auto-completes and AC7
     // moves the substituted lot's stock straight on from `allocated` into `picked`.
-    assert.strictEqual(await allocatedFor(sku, binA1, directedLot), 0, 'directed lot allocation released');
+    assert.strictEqual(
+      await allocatedFor(sku, binA1, directedLot),
+      0,
+      'directed lot allocation released',
+    );
     assert.strictEqual(await pickedFor(sku, binA1, directedLot), 0, 'directed lot is never picked');
     assert.strictEqual(await allocatedFor(sku, binA2, substituteLot), 0);
-    assert.strictEqual(await pickedFor(sku, binA2, substituteLot), 40, 'substituted lot moves to picked on completion');
+    assert.strictEqual(
+      await pickedFor(sku, binA2, substituteLot),
+      40,
+      'substituted lot moves to picked on completion',
+    );
   });
 
   it('AC8: a substitution whose lot lacks available stock rejects INSUFFICIENT_STOCK_FOR_PICK', async () => {
@@ -435,7 +591,13 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA2, thinLot, 5);
     const lineId = await seedOrderLine(`SO36-SX-${run}`, 1, sku, 30);
 
-    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const gen = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
     const pickLineId = (gen.body['pickLineIds'] as string[])[0]!;
 
@@ -443,7 +605,12 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
       port,
       'POST',
       `/api/v1/pick-tasks/${taskId}/lines/${pickLineId}/confirm`,
-      { confirmedLotId: thinUuid, confirmedQuantity: '30', overrideReason: 'Directed lot missing', captureMethod: 'PWA' },
+      {
+        confirmedLotId: thinUuid,
+        confirmedQuantity: '30',
+        overrideReason: 'Directed lot missing',
+        captureMethod: 'PWA',
+      },
       operatorHeaders,
     );
     assert.strictEqual(res.status, 409, JSON.stringify(res.body));
@@ -462,14 +629,32 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA2, lotB, 10);
     const lineId = await seedOrderLine(`SO36-D1-${run}`, 1, sku, 20);
 
-    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const gen = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
-    const detail = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskId}`, undefined, managerHeaders);
+    const detail = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/pick-tasks/${taskId}`,
+      undefined,
+      managerHeaders,
+    );
     const lines = detail.body['lines'] as Array<Record<string, unknown>>;
     assert.strictEqual(lines.length, 2);
 
     // Premature completion is rejected.
-    const early = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/complete`, {}, managerHeaders);
+    const early = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${taskId}/complete`,
+      {},
+      managerHeaders,
+    );
     assert.strictEqual(early.status, 409, JSON.stringify(early.body));
     assert.strictEqual(early.body['error_code'], 'PICK_TASK_NOT_ALL_LINES_CONFIRMED');
 
@@ -479,7 +664,11 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
         port,
         'POST',
         `/api/v1/pick-tasks/${taskId}/lines/${line['pick_line_id']}/confirm`,
-        { confirmedLotId: lotUuid, confirmedQuantity: line['directed_quantity'], captureMethod: 'PWA' },
+        {
+          confirmedLotId: lotUuid,
+          confirmedQuantity: line['directed_quantity'],
+          captureMethod: 'PWA',
+        },
         operatorHeaders,
       );
       assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
@@ -487,12 +676,24 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
 
     // AC7's trigger is the LAST confirmation, so the task is already complete here - no separate
     // supervisor call. The manual endpoint is a fallback and now reports the task already done.
-    const after = await makeRequest(port, 'GET', `/api/v1/pick-tasks/${taskId}`, undefined, managerHeaders);
+    const after = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/pick-tasks/${taskId}`,
+      undefined,
+      managerHeaders,
+    );
     const task = after.body['task'] as Record<string, unknown>;
     assert.strictEqual(task['status'], 'completed', 'task auto-completes on the last confirmation');
     assert.ok(task['completed_at'], 'completed_at is stamped');
 
-    const redundant = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/complete`, {}, managerHeaders);
+    const redundant = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${taskId}/complete`,
+      {},
+      managerHeaders,
+    );
     assert.strictEqual(redundant.status, 409, JSON.stringify(redundant.body));
     assert.strictEqual(redundant.body['error_code'], 'PICK_TASK_ALREADY_COMPLETED');
 
@@ -520,14 +721,32 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA1, lot, 20);
     const lineId = await seedOrderLine(`SO36-I1-${run}`, 1, sku, 20);
 
-    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const gen = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
     const pickLineId = (gen.body['pickLineIds'] as string[])[0]!;
     const payload = { confirmedLotId: lotUuid, confirmedQuantity: '20', captureMethod: 'PWA' };
 
-    const first = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/lines/${pickLineId}/confirm`, payload, operatorHeaders);
+    const first = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${taskId}/lines/${pickLineId}/confirm`,
+      payload,
+      operatorHeaders,
+    );
     assert.strictEqual(first.status, 200, JSON.stringify(first.body));
-    const replay = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/lines/${pickLineId}/confirm`, payload, operatorHeaders);
+    const replay = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${taskId}/lines/${pickLineId}/confirm`,
+      payload,
+      operatorHeaders,
+    );
     assert.strictEqual(replay.status, 200, JSON.stringify(replay.body));
     // The single line's confirmation also completes the task, so the quantity has moved on to
     // `picked`; the replay must not move it a second time.
@@ -553,7 +772,13 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA1, lot, 500);
     const lineId = await seedOrderLine(`SO36-Q1-${run}`, 1, sku, 100);
 
-    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const gen = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
     const pickLineId = (gen.body['pickLineIds'] as string[])[0]!;
 
@@ -581,7 +806,11 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     assert.strictEqual(over.body['error_code'], 'PICK_QUANTITY_MISMATCH');
 
     // Neither rejection may disturb the standing allocation.
-    assert.strictEqual(await allocatedFor(sku, binA1, lot), 100, 'allocation untouched by rejected confirmations');
+    assert.strictEqual(
+      await allocatedFor(sku, binA1, lot),
+      100,
+      'allocation untouched by rejected confirmations',
+    );
     assert.strictEqual(await pickedFor(sku, binA1, lot), 0);
   });
 
@@ -592,11 +821,23 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA1, lot, 100);
     const lineId = await seedOrderLine(`SO36-RG-${run}`, 1, sku, 10);
 
-    const first = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const first = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
     assert.strictEqual(await allocatedFor(sku, binA1, lot), 10);
 
-    const second = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const second = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     assert.strictEqual(second.status, 409, JSON.stringify(second.body));
     assert.strictEqual(second.body['error_code'], 'PICK_TASK_ALREADY_GENERATED');
     assert.strictEqual(await allocatedFor(sku, binA1, lot), 10, 'demand allocated exactly once');
@@ -609,27 +850,57 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     await seedStock(sku, binA1, lot, 40);
     const lineId = await seedOrderLine(`SO36-AS-${run}`, 1, sku, 10);
 
-    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const gen = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
 
     // Assignment is supervisor-only (Task 8.1's assign RBAC coverage).
-    const byOperator = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/assign`, { assignedTo: operatorUserId }, operatorHeaders);
+    const byOperator = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${taskId}/assign`,
+      { assignedTo: operatorUserId },
+      operatorHeaders,
+    );
     assert.strictEqual(byOperator.status, 403, JSON.stringify(byOperator.body));
     assert.strictEqual(byOperator.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
     // A well-formed UUID that is nobody must not leave the task looking assigned.
-    const ghost = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/assign`, { assignedTo: randomUUID() }, managerHeaders);
+    const ghost = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${taskId}/assign`,
+      { assignedTo: randomUUID() },
+      managerHeaders,
+    );
     assert.strictEqual(ghost.status, 404, JSON.stringify(ghost.body));
     assert.strictEqual(ghost.body['error_code'], 'ASSIGNEE_NOT_FOUND');
 
-    const ok = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${taskId}/assign`, { assignedTo: operatorUserId }, managerHeaders);
+    const ok = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${taskId}/assign`,
+      { assignedTo: operatorUserId },
+      managerHeaders,
+    );
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     assert.strictEqual((ok.body['task'] as Record<string, unknown>)['assigned_to'], operatorUserId);
   });
 
   it('Review: non-UUID list filters are a 400, not a 500', async () => {
     for (const key of ['assignedTo', 'zoneId', 'waveId', 'batchId']) {
-      const res = await makeRequest(port, 'GET', `/api/v1/pick-tasks?${key}=not-a-uuid`, undefined, managerHeaders);
+      const res = await makeRequest(
+        port,
+        'GET',
+        `/api/v1/pick-tasks?${key}=not-a-uuid`,
+        undefined,
+        managerHeaders,
+      );
       assert.strictEqual(res.status, 400, `${key}: ${JSON.stringify(res.body)}`);
       assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS', key);
     }
@@ -643,11 +914,23 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     const lineId = await seedOrderLine(`SO36-R1-${run}`, 1, sku, 10);
 
     // Generation is supervisor-only.
-    const denied = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, operatorHeaders);
+    const denied = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      operatorHeaders,
+    );
     assert.strictEqual(denied.status, 403, JSON.stringify(denied.body));
     assert.strictEqual(denied.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
-    const gen = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [lineId], strategy: 'single' }, managerHeaders);
+    const gen = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [lineId], strategy: 'single' },
+      managerHeaders,
+    );
     assert.strictEqual(gen.status, 201, JSON.stringify(gen.body));
     const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
     const pickLineId = (gen.body['pickLineIds'] as string[])[0]!;
@@ -664,7 +947,13 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     assert.strictEqual(crossSite.body['error_code'], 'LOCATION_ACCESS_DENIED');
 
     // Unknown dispatch-order line rejects with a stable code.
-    const missing = await makeRequest(port, 'POST', '/api/v1/pick-tasks/generate', { dispatchOrderLineIds: [randomUUID()], strategy: 'single' }, managerHeaders);
+    const missing = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [randomUUID()], strategy: 'single' },
+      managerHeaders,
+    );
     assert.strictEqual(missing.status, 404, JSON.stringify(missing.body));
     assert.strictEqual(missing.body['error_code'], 'DISPATCH_ORDER_LINE_NOT_FOUND');
   });

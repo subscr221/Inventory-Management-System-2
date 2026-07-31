@@ -50,30 +50,54 @@ export function assertTransferRequestShape(envelope: EventEnvelope): void {
   const p = envelope.payload as Record<string, unknown>;
 
   if (!isNonEmptyString(p['transfer_request_id'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'transfer_request_id is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'transfer_request_id is required and must be a non-empty string',
+    );
   }
   if (!isNonEmptyString(p['sku_id'])) {
     throw new AppError(400, 'INVALID_PARAMS', 'sku_id is required and must be a non-empty string');
   }
   if (!isNonEmptyString(p['from_location_id'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'from_location_id is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'from_location_id is required and must be a non-empty string',
+    );
   }
   if (!isNonEmptyString(p['to_location_id'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'to_location_id is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'to_location_id is required and must be a non-empty string',
+    );
   }
   if (!isNonEmptyString(p['business_stream'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'business_stream is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'business_stream is required and must be a non-empty string',
+    );
   }
 
   if (p['from_location_id'] === p['to_location_id']) {
-    throw new AppError(400, 'INVALID_LOCATION', 'from_location_id and to_location_id must be different');
+    throw new AppError(
+      400,
+      'INVALID_LOCATION',
+      'from_location_id and to_location_id must be different',
+    );
   }
 
   if (!isPositiveFiniteNumber(p['quantity'])) {
     throw new AppError(400, 'INVALID_PARAMS', 'quantity is required and must be a positive number');
   }
   if (p['quantity'] > MAX_QUANTITY) {
-    throw new AppError(400, 'INVALID_PARAMS', `quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`);
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`,
+    );
   }
 
   if (p['lot_id'] !== undefined && !isNonEmptyString(p['lot_id'])) {
@@ -82,7 +106,11 @@ export function assertTransferRequestShape(envelope: EventEnvelope): void {
 
   if (p['serial_ids'] !== undefined) {
     if (!Array.isArray(p['serial_ids']) || p['serial_ids'].length === 0) {
-      throw new AppError(400, 'INVALID_PARAMS', 'serial_ids must be a non-empty array when supplied');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'serial_ids must be a non-empty array when supplied',
+      );
     }
     for (const s of p['serial_ids']) {
       if (!isNonEmptyString(s)) {
@@ -112,11 +140,11 @@ export async function applyTransferRequestProjection(
   const quantity = p['quantity'] as number;
   const fromLocationId = p['from_location_id'] as string;
   const toLocationId = p['to_location_id'] as string;
-  const lotId = p['lot_id'] as string | undefined ?? null;
-  const serialIds = p['serial_ids'] as string[] | undefined ?? null;
+  const lotId = (p['lot_id'] as string | undefined) ?? null;
+  const serialIds = (p['serial_ids'] as string[] | undefined) ?? null;
   const businessStream = p['business_stream'] as string;
-  const notes = p['notes'] as string | undefined ?? null;
-  const approverActorId = p['approver_actor_id'] as string | undefined ?? null;
+  const notes = (p['notes'] as string | undefined) ?? null;
+  const approverActorId = (p['approver_actor_id'] as string | undefined) ?? null;
 
   // Idempotency guard: skip if this transfer_request_id already exists
   const existing = await client.query(
@@ -128,32 +156,46 @@ export async function applyTransferRequestProjection(
   // Validate locations
   const fromLocation = await getLocationById(fromLocationId, client);
   if (!fromLocation || fromLocation.status !== 'active') {
-    throw new AppError(400, 'LOCATION_NOT_FOUND', 'from_location_id does not exist or is not active', {
-      from_location_id: fromLocationId,
-    });
+    throw new AppError(
+      400,
+      'LOCATION_NOT_FOUND',
+      'from_location_id does not exist or is not active',
+      {
+        from_location_id: fromLocationId,
+      },
+    );
   }
 
   const toLocation = await getLocationById(toLocationId, client);
   if (!toLocation || toLocation.status !== 'active') {
-    throw new AppError(400, 'LOCATION_NOT_FOUND', 'to_location_id does not exist or is not active', {
-      to_location_id: toLocationId,
-    });
+    throw new AppError(
+      400,
+      'LOCATION_NOT_FOUND',
+      'to_location_id does not exist or is not active',
+      {
+        to_location_id: toLocationId,
+      },
+    );
   }
 
   // Validate lot
   if (lotId) {
-    const lotResult = await client.query(
-      `SELECT lot_id, sku FROM lot_master WHERE lot_id = $1`,
-      [lotId],
-    );
+    const lotResult = await client.query(`SELECT lot_id, sku FROM lot_master WHERE lot_id = $1`, [
+      lotId,
+    ]);
     if (lotResult.rows.length === 0) {
       throw new AppError(400, 'LOT_NOT_FOUND', `Lot "${lotId}" not found`, { lot_id: lotId });
     }
     if (lotResult.rows[0].sku !== skuId) {
-      throw new AppError(400, 'LOT_SKU_MISMATCH', `Lot "${lotId}" does not belong to SKU "${skuId}"`, {
-        lot_id: lotId,
-        sku_id: skuId,
-      });
+      throw new AppError(
+        400,
+        'LOT_SKU_MISMATCH',
+        `Lot "${lotId}" does not belong to SKU "${skuId}"`,
+        {
+          lot_id: lotId,
+          sku_id: skuId,
+        },
+      );
     }
   }
 
@@ -166,19 +208,31 @@ export async function applyTransferRequestProjection(
       [serialIds],
     );
     if (serialResult.rows.length !== serialIds.length) {
-      const foundSet = new Set(serialResult.rows.map((s: { serial_number: string }) => s.serial_number));
+      const foundSet = new Set(
+        serialResult.rows.map((s: { serial_number: string }) => s.serial_number),
+      );
       const missing = serialIds.filter((s: string) => !foundSet.has(s));
-      throw new AppError(400, 'SERIAL_NOT_FOUND', `Serial numbers not found: ${missing.join(', ')}`, {
-        serial_ids: missing,
-      });
+      throw new AppError(
+        400,
+        'SERIAL_NOT_FOUND',
+        `Serial numbers not found: ${missing.join(', ')}`,
+        {
+          serial_ids: missing,
+        },
+      );
     }
     if (lotId) {
       for (const s of serialResult.rows) {
         if (s.lot_id !== lotId) {
-          throw new AppError(400, 'SERIAL_NOT_AVAILABLE', `Serial "${s.serial_number}" does not belong to lot "${lotId}"`, {
-            serial_number: s.serial_number,
-            lot_id: lotId,
-          });
+          throw new AppError(
+            400,
+            'SERIAL_NOT_AVAILABLE',
+            `Serial "${s.serial_number}" does not belong to lot "${lotId}"`,
+            {
+              serial_number: s.serial_number,
+              lot_id: lotId,
+            },
+          );
         }
       }
     }
@@ -226,20 +280,36 @@ export function assertTransferShipShape(envelope: EventEnvelope): void {
   const p = envelope.payload as Record<string, unknown>;
 
   if (!isNonEmptyString(p['transfer_request_id'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'transfer_request_id is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'transfer_request_id is required and must be a non-empty string',
+    );
   }
   if (!isNonEmptyString(p['lot_id'])) {
     throw new AppError(400, 'INVALID_PARAMS', 'lot_id is required and must be a non-empty string');
   }
   if (!isPositiveFiniteNumber(p['shipped_quantity'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'shipped_quantity is required and must be a positive number');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'shipped_quantity is required and must be a positive number',
+    );
   }
   if (p['shipped_quantity'] > MAX_QUANTITY) {
-    throw new AppError(400, 'INVALID_PARAMS', `shipped_quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`);
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `shipped_quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`,
+    );
   }
   if (p['serial_ids'] !== undefined) {
     if (!Array.isArray(p['serial_ids']) || p['serial_ids'].length === 0) {
-      throw new AppError(400, 'INVALID_PARAMS', 'serial_ids must be a non-empty array when supplied');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'serial_ids must be a non-empty array when supplied',
+      );
     }
     for (const s of p['serial_ids']) {
       if (!isNonEmptyString(s)) {
@@ -248,7 +318,11 @@ export function assertTransferShipShape(envelope: EventEnvelope): void {
     }
   }
   if (!isNonEmptyString(p['correlation_id'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'correlation_id is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'correlation_id is required and must be a non-empty string',
+    );
   }
 }
 
@@ -268,7 +342,7 @@ export async function applyTransferShipProjection(
   const lotId = p['lot_id'] as string;
   const shippedQuantity = p['shipped_quantity'] as number;
   const correlationId = p['correlation_id'] as string;
-  const shipSerialIds = p['serial_ids'] as string[] | undefined ?? null;
+  const shipSerialIds = (p['serial_ids'] as string[] | undefined) ?? null;
 
   // Lock the transfer request row FIRST so concurrent ships serialize (Story 2.5 review). The
   // in_transit unique constraint on transfer_request_id is the ultimate backstop, but taking the
@@ -287,9 +361,14 @@ export async function applyTransferShipProjection(
 
   // AC4: Must be approved or pending_shipment
   if (reqRow.status !== 'approved' && reqRow.status !== 'pending_shipment') {
-    throw new AppError(403, 'APPROVAL_REQUIRED', 'Transfer request must be approved before shipping', {
-      current_status: reqRow.status,
-    });
+    throw new AppError(
+      403,
+      'APPROVAL_REQUIRED',
+      'Transfer request must be approved before shipping',
+      {
+        current_status: reqRow.status,
+      },
+    );
   }
 
   // AC5: Quantity check
@@ -304,10 +383,15 @@ export async function applyTransferShipProjection(
 
   // Lot matching (ship side)
   if (reqRow.lot_id && reqRow.lot_id !== lotId) {
-    throw new AppError(400, 'LOT_MISMATCH', `Ship lot_id "${lotId}" does not match request lot_id "${reqRow.lot_id}"`, {
-      request_lot_id: reqRow.lot_id,
-      ship_lot_id: lotId,
-    });
+    throw new AppError(
+      400,
+      'LOT_MISMATCH',
+      `Ship lot_id "${lotId}" does not match request lot_id "${reqRow.lot_id}"`,
+      {
+        request_lot_id: reqRow.lot_id,
+        ship_lot_id: lotId,
+      },
+    );
   }
 
   // Serial traceability: shipped serials must be a subset of the request's serials (Story 2.5 review).
@@ -315,9 +399,14 @@ export async function applyTransferShipProjection(
     const requestSet = new Set(reqRow.serial_ids);
     const stray = shipSerialIds.filter((s) => !requestSet.has(s));
     if (stray.length > 0) {
-      throw new AppError(400, 'SERIAL_MISMATCH', `Shipped serials are not part of the request: ${stray.join(', ')}`, {
-        stray_serials: stray,
-      });
+      throw new AppError(
+        400,
+        'SERIAL_MISMATCH',
+        `Shipped serials are not part of the request: ${stray.join(', ')}`,
+        {
+          stray_serials: stray,
+        },
+      );
     }
   }
 
@@ -356,11 +445,16 @@ export async function applyTransferShipProjection(
     [shippedQuantity, reqRow.sku_id, reqRow.from_location_id, sourceLot],
   );
   if (inTransitUpdate.rowCount === 0) {
-    throw new AppError(500, 'STOCK_BALANCE_MISSING', 'No stock_balance row to record in-transit quantity against', {
-      sku: reqRow.sku_id,
-      location_id: reqRow.from_location_id,
-      lot_id: sourceLot,
-    });
+    throw new AppError(
+      500,
+      'STOCK_BALANCE_MISSING',
+      'No stock_balance row to record in-transit quantity against',
+      {
+        sku: reqRow.sku_id,
+        location_id: reqRow.from_location_id,
+        lot_id: sourceLot,
+      },
+    );
   }
 
   // Record the in-transit row for tracking and querying. ship_event_id is a UUID column, so the
@@ -368,7 +462,11 @@ export async function applyTransferShipProjection(
   // a UUID syntax error and 500'd every real ship (Story 2.5 review).
   const resolvedEventId = eventId ?? envelope.event_id;
   if (!resolvedEventId) {
-    throw new AppError(500, 'EVENT_ID_MISSING', 'ship_event_id could not be resolved for in-transit record');
+    throw new AppError(
+      500,
+      'EVENT_ID_MISSING',
+      'ship_event_id could not be resolved for in-transit record',
+    );
   }
   await insertInTransitRecord(
     {
@@ -398,20 +496,36 @@ export function assertTransferReceiveShape(envelope: EventEnvelope): void {
   const p = envelope.payload as Record<string, unknown>;
 
   if (!isNonEmptyString(p['transfer_request_id'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'transfer_request_id is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'transfer_request_id is required and must be a non-empty string',
+    );
   }
   if (!isNonEmptyString(p['lot_id'])) {
     throw new AppError(400, 'INVALID_PARAMS', 'lot_id is required and must be a non-empty string');
   }
   if (!isPositiveFiniteNumber(p['received_quantity'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'received_quantity is required and must be a positive number');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'received_quantity is required and must be a positive number',
+    );
   }
   if (p['received_quantity'] > MAX_QUANTITY) {
-    throw new AppError(400, 'INVALID_PARAMS', `received_quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`);
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `received_quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`,
+    );
   }
   if (p['serial_ids'] !== undefined) {
     if (!Array.isArray(p['serial_ids']) || p['serial_ids'].length === 0) {
-      throw new AppError(400, 'INVALID_PARAMS', 'serial_ids must be a non-empty array when supplied');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'serial_ids must be a non-empty array when supplied',
+      );
     }
     for (const s of p['serial_ids']) {
       if (!isNonEmptyString(s)) {
@@ -420,10 +534,18 @@ export function assertTransferReceiveShape(envelope: EventEnvelope): void {
     }
   }
   if (!isNonEmptyString(p['received_at_location_id'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'received_at_location_id is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'received_at_location_id is required and must be a non-empty string',
+    );
   }
   if (!isNonEmptyString(p['correlation_id'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'correlation_id is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'correlation_id is required and must be a non-empty string',
+    );
   }
 }
 
@@ -442,7 +564,7 @@ export async function applyTransferReceiveProjection(
   const lotId = p['lot_id'] as string;
   const receivedQuantity = p['received_quantity'] as number;
   const receiveLocationId = p['received_at_location_id'] as string;
-  const receiveSerialIds = p['serial_ids'] as string[] | undefined ?? null;
+  const receiveSerialIds = (p['serial_ids'] as string[] | undefined) ?? null;
 
   // Lock the transfer request row so concurrent receives serialize (Story 2.5 review).
   const reqRow = await getTransferRequestById(transferRequestId, client, true);
@@ -462,9 +584,14 @@ export async function applyTransferReceiveProjection(
   // Validate receive location
   const receiveLocation = await getLocationById(receiveLocationId, client);
   if (!receiveLocation || receiveLocation.status !== 'active') {
-    throw new AppError(400, 'LOCATION_NOT_FOUND', 'Receive location does not exist or is not active', {
-      location_id: receiveLocationId,
-    });
+    throw new AppError(
+      400,
+      'LOCATION_NOT_FOUND',
+      'Receive location does not exist or is not active',
+      {
+        location_id: receiveLocationId,
+      },
+    );
   }
 
   // The in-transit tracking row carries the lot actually shipped, which is the authority for
@@ -497,9 +624,14 @@ export async function applyTransferReceiveProjection(
     const requestSet = new Set(reqRow.serial_ids);
     const stray = receiveSerialIds.filter((s) => !requestSet.has(s));
     if (stray.length > 0) {
-      throw new AppError(400, 'SERIAL_MISMATCH', `Received serials are not part of the request: ${stray.join(', ')}`, {
-        stray_serials: stray,
-      });
+      throw new AppError(
+        400,
+        'SERIAL_MISMATCH',
+        `Received serials are not part of the request: ${stray.join(', ')}`,
+        {
+          stray_serials: stray,
+        },
+      );
     }
   }
 
@@ -524,8 +656,7 @@ export async function applyTransferReceiveProjection(
     `UPDATE stock_balance
      SET in_transit = GREATEST(in_transit - $1, 0), updated_at = now()
       WHERE sku = $2 AND location_id = $3 AND stock_class = 'owned' AND ($4::text IS NULL OR lot_id = $4)`,
-     [receivedQuantity, reqRow.sku_id, reqRow.from_location_id, reqRow.lot_id],
-
+    [receivedQuantity, reqRow.sku_id, reqRow.from_location_id, reqRow.lot_id],
   );
 
   // Receipt at destination: increment on_hand

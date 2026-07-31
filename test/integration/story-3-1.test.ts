@@ -291,7 +291,11 @@ describe('Story 3.1 Warehouse Topology Setup', () => {
       },
       managerHeaders,
     );
-    assert.strictEqual(managerRestrictedCreate.status, 403, JSON.stringify(managerRestrictedCreate.body));
+    assert.strictEqual(
+      managerRestrictedCreate.status,
+      403,
+      JSON.stringify(managerRestrictedCreate.body),
+    );
     assert.strictEqual(managerRestrictedCreate.body['error_code'], 'ZONE_ACCESS_RESTRICTED');
 
     const managerZone = await makeRequest(
@@ -313,7 +317,11 @@ describe('Story 3.1 Warehouse Topology Setup', () => {
       { access_restricted: true },
       managerHeaders,
     );
-    assert.strictEqual(managerRestrictedPatch.status, 403, JSON.stringify(managerRestrictedPatch.body));
+    assert.strictEqual(
+      managerRestrictedPatch.status,
+      403,
+      JSON.stringify(managerRestrictedPatch.body),
+    );
     assert.strictEqual(managerRestrictedPatch.body['error_code'], 'ZONE_ACCESS_RESTRICTED');
 
     const zone = await makeRequest(

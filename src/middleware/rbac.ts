@@ -1,6 +1,11 @@
 import type { RouteHandler } from './error.js';
 import { AppError } from './error.js';
-import { getAuthContext, getParsedBody, setAuthorizedRole, setAuthorizedAssignment } from './context.js';
+import {
+  getAuthContext,
+  getParsedBody,
+  setAuthorizedRole,
+  setAuthorizedAssignment,
+} from './context.js';
 import type { RoleAssignment } from '../read/projections/users.js';
 
 /**
@@ -67,7 +72,8 @@ export function requireRole(options: RbacOptions): (handler: RouteHandler) => Ro
       }
 
       const body = getParsedBody(req);
-      const resolvedModule = typeof options.module === 'function' ? options.module(params, body) : options.module;
+      const resolvedModule =
+        typeof options.module === 'function' ? options.module(params, body) : options.module;
 
       // A request that does not resolve to a concrete module must be rejected outright - a
       // wildcard ('*') assignment must not be allowed to satisfy an unknown/empty module.
@@ -75,7 +81,9 @@ export function requireRole(options: RbacOptions): (handler: RouteHandler) => Ro
         throw new AppError(400, 'INVALID_MODULE', 'Request does not resolve to a known module');
       }
 
-      const moduleMatches = authContext.roles.filter((r) => r.module === resolvedModule || r.module === '*');
+      const moduleMatches = authContext.roles.filter(
+        (r) => r.module === resolvedModule || r.module === '*',
+      );
       if (moduleMatches.length === 0) {
         throw new AppError(
           403,
@@ -84,7 +92,9 @@ export function requireRole(options: RbacOptions): (handler: RouteHandler) => Ro
         );
       }
 
-      const functionMatches = moduleMatches.filter((r) => satisfiesFunctionScope(r, options.functionScope));
+      const functionMatches = moduleMatches.filter((r) =>
+        satisfiesFunctionScope(r, options.functionScope),
+      );
       if (functionMatches.length === 0) {
         throw new AppError(
           403,

@@ -25,7 +25,18 @@ function getLocalSecretKey(): KeyObject {
 // Asymmetric signature algorithms accepted from an OIDC identity provider. Pinning the set
 // (rather than accepting whatever the token header claims) is defense in depth against
 // algorithm-substitution; jose already rejects `alg:none`.
-const OIDC_ALGORITHMS = ['RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512', 'PS256', 'PS384', 'PS512', 'EdDSA'];
+const OIDC_ALGORITHMS = [
+  'RS256',
+  'RS384',
+  'RS512',
+  'ES256',
+  'ES384',
+  'ES512',
+  'PS256',
+  'PS384',
+  'PS512',
+  'EdDSA',
+];
 // Small allowance for clock drift between this server and the token issuer.
 const CLOCK_TOLERANCE = '30s';
 
@@ -89,7 +100,12 @@ export async function authenticateRequest(req: IncomingMessage): Promise<AuthCon
     throw new AppError(401, 'UNAUTHORIZED', 'No active account for this identity');
   }
 
-  return { userId: user.userId, externalId: user.externalId, displayName: user.displayName, roles: user.roles };
+  return {
+    userId: user.userId,
+    externalId: user.externalId,
+    displayName: user.displayName,
+    roles: user.roles,
+  };
 }
 
 /**

@@ -78,7 +78,11 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
@@ -164,21 +168,36 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
     router.post('/api/v1/doa/entries', createDoaEntryHandler);
     router.put('/api/v1/instruments/:id/calibration-status', updateCalibrationStatusHandler);
     router.post('/api/v1/qc/results', createQcResultHandler);
-    router.post('/api/v1/instruments/:id/calibration-escalations', createCalibrationEscalationHandler);
+    router.post(
+      '/api/v1/instruments/:id/calibration-escalations',
+      createCalibrationEscalationHandler,
+    );
 
     server = createServer((req, res) => {
       router.handle(req, res).catch((err) => {
         console.error('Unhandled server error:', err);
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error_code: 'INTERNAL_ERROR', message: 'Internal server error', details: {}, trace_id: 'unknown' }));
+          res.end(
+            JSON.stringify({
+              error_code: 'INTERNAL_ERROR',
+              message: 'Internal server error',
+              details: {},
+              trace_id: 'unknown',
+            }),
+          );
         }
       });
     });
     await new Promise<void>((resolvePromise) => server.listen(TEST_PORT, () => resolvePromise()));
 
     await provisionUser(TEST_PORT, 'cal-maintenance@example.com', [
-      { role: 'maintenance_supervisor', module: 'maintenance', functionScope: 'write', locationId: '*' },
+      {
+        role: 'maintenance_supervisor',
+        module: 'maintenance',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     qcUserId = await provisionUser(TEST_PORT, 'cal-qc@example.com', [
       { role: 'qc_inspector', module: 'qc', functionScope: 'write', locationId: ACTOR_LOCATION },
@@ -190,7 +209,12 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
       { role: 'compliance_admin', module: 'compliance', functionScope: 'write', locationId: '*' },
     ]);
     await provisionUser(TEST_PORT, 'cal-scheduler@example.com', [
-      { role: 'calibration_scheduler', module: 'maintenance', functionScope: 'write', locationId: '*' },
+      {
+        role: 'calibration_scheduler',
+        module: 'maintenance',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     await provisionUser(TEST_PORT, 'cal-denied@example.com', [
       { role: 'viewer', module: 'inventory', functionScope: 'read', locationId: '*' },
@@ -221,7 +245,10 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
     const statusEvent = await getPool().query(
       `SELECT payload FROM domain_events WHERE event_type = 'instrument.calibration_status_updated' AND payload->>'instrument_id' = 'INS-0042' ORDER BY created_at ASC LIMIT 1`,
     );
-    assert.strictEqual((statusEvent.rows[0]!['payload'] as Record<string, unknown>)['previous_status'], 'unknown');
+    assert.strictEqual(
+      (statusEvent.rows[0]!['payload'] as Record<string, unknown>)['previous_status'],
+      'unknown',
+    );
 
     const blocked = await makeRequest(TEST_PORT, 'POST', '/api/v1/qc/results', qcBody(), qcHeaders);
     assert.strictEqual(blocked.status, 423, JSON.stringify(blocked.body));
@@ -230,7 +257,13 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
   });
 
   it('AC2: qc_head cannot override the calibration lockout', async () => {
-    const blocked = await makeRequest(TEST_PORT, 'POST', '/api/v1/qc/results', qcBody(), qcHeadHeaders);
+    const blocked = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/qc/results',
+      qcBody(),
+      qcHeadHeaders,
+    );
     assert.strictEqual(blocked.status, 423, JSON.stringify(blocked.body));
     assert.strictEqual(blocked.body['error_code'], 'CALIBRATION_LOCKOUT');
     assert.strictEqual(await eventCount('qc.result_recorded', 'INS-0042'), 0);
@@ -246,7 +279,13 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
     );
     assert.strictEqual(setCalibrated.status, 200, JSON.stringify(setCalibrated.body));
 
-    const accepted = await makeRequest(TEST_PORT, 'POST', '/api/v1/qc/results', qcBody(), qcHeaders);
+    const accepted = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/qc/results',
+      qcBody(),
+      qcHeaders,
+    );
     assert.strictEqual(accepted.status, 201, JSON.stringify(accepted.body));
     assert.strictEqual(accepted.body['event_type'], 'qc.result_recorded');
     assert.strictEqual(await eventCount('qc.result_recorded', 'INS-0042'), 1);
@@ -284,7 +323,13 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
     );
     assert.strictEqual(setLocked.status, 200, JSON.stringify(setLocked.body));
 
-    const blocked = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', directQcEnvelope(qcUserId, 'INS-DIRECT'), qcHeaders);
+    const blocked = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      directQcEnvelope(qcUserId, 'INS-DIRECT'),
+      qcHeaders,
+    );
     assert.strictEqual(blocked.status, 423, JSON.stringify(blocked.body));
     assert.strictEqual(blocked.body['error_code'], 'CALIBRATION_LOCKOUT');
     assert.strictEqual(await eventCount('qc.result_recorded', 'INS-DIRECT'), 0);
@@ -295,7 +340,12 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
       TEST_PORT,
       'POST',
       '/api/v1/doa/entries',
-      { role: 'calibration_scheduler', transaction_type: 'calibration.escalation', value_min: null, value_max: null },
+      {
+        role: 'calibration_scheduler',
+        transaction_type: 'calibration.escalation',
+        value_min: null,
+        value_max: null,
+      },
       complianceHeaders,
     );
     assert.strictEqual(doa.status, 201, JSON.stringify(doa.body));
@@ -313,7 +363,13 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
     assert.strictEqual(await eventCount('calibration.escalation_requested', 'INS-DIRECT'), 1);
     assert.strictEqual(await calibrationStatus('INS-DIRECT'), 'out_of_calibration');
 
-    const stillBlocked = await makeRequest(TEST_PORT, 'POST', '/api/v1/qc/results', qcBody('INS-DIRECT'), qcHeaders);
+    const stillBlocked = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/qc/results',
+      qcBody('INS-DIRECT'),
+      qcHeaders,
+    );
     assert.strictEqual(stillBlocked.status, 423, JSON.stringify(stillBlocked.body));
   });
 
@@ -331,7 +387,12 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
       TEST_PORT,
       'POST',
       '/api/v1/doa/entries',
-      { role: 'calibration_scheduler', transaction_type: 'calibration.escalation', value_min: 0, value_max: null },
+      {
+        role: 'calibration_scheduler',
+        transaction_type: 'calibration.escalation',
+        value_min: 0,
+        value_max: null,
+      },
       complianceHeaders,
     );
     assert.strictEqual(doa.status, 201, JSON.stringify(doa.body));
@@ -357,7 +418,13 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
     );
     assert.strictEqual(status.status, 403, JSON.stringify(status.body));
 
-    const result = await makeRequest(TEST_PORT, 'POST', '/api/v1/qc/results', qcBody('INS-RBAC'), deniedHeaders);
+    const result = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/qc/results',
+      qcBody('INS-RBAC'),
+      deniedHeaders,
+    );
     assert.strictEqual(result.status, 403, JSON.stringify(result.body));
 
     const escalation = await makeRequest(

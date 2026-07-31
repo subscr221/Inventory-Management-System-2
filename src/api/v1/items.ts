@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -16,7 +21,12 @@ import {
   ITEM_STATUSES,
   STANDARD_COST_DESIGNATION,
 } from '../../read/projections/item_master.js';
-import type { CreateItemInput, UpdateItemPatch, ValuationMethod, ItemStatus } from '../../read/projections/item_master.js';
+import type {
+  CreateItemInput,
+  UpdateItemPatch,
+  ValuationMethod,
+  ItemStatus,
+} from '../../read/projections/item_master.js';
 
 // Sentinel used ONLY for the domain-event envelope's actor.location_id when the acting admin's
 // authorizing assignment is enterprise-wide ('*'), which is not a UUID. The audit_log.location_id
@@ -63,7 +73,9 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isValuationMethod(value: unknown): value is ValuationMethod {
-  return typeof value === 'string' && (ALLOWED_VALUATION_METHODS as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' && (ALLOWED_VALUATION_METHODS as readonly string[]).includes(value)
+  );
 }
 
 function isItemStatus(value: unknown): value is ItemStatus {
@@ -71,7 +83,11 @@ function isItemStatus(value: unknown): value is ItemStatus {
 }
 
 /** Parses an optional boolean field: absent becomes `fallback`; a non-boolean is a 400. */
-function parseBooleanField(body: Record<string, unknown>, field: string, fallback: boolean): boolean {
+function parseBooleanField(
+  body: Record<string, unknown>,
+  field: string,
+  fallback: boolean,
+): boolean {
   const value = body[field];
   if (value === undefined) return fallback;
   if (typeof value !== 'boolean') {
@@ -99,10 +115,15 @@ function assertValuationMethod(value: unknown): asserts value is ValuationMethod
       allowed: [...ALLOWED_VALUATION_METHODS],
     });
   }
-  throw new AppError(400, 'INVALID_VALUATION_METHOD', 'valuation_method must be one of fifo, weighted_average, specific_identification', {
-    supplied: typeof value === 'string' ? value : null,
-    allowed: [...ALLOWED_VALUATION_METHODS],
-  });
+  throw new AppError(
+    400,
+    'INVALID_VALUATION_METHOD',
+    'valuation_method must be one of fifo, weighted_average, specific_identification',
+    {
+      supplied: typeof value === 'string' ? value : null,
+      allowed: [...ALLOWED_VALUATION_METHODS],
+    },
+  );
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -110,7 +131,10 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 /** Parses an optional nullable non-empty-string field: absent is `undefined`, `null` clears it. */
-function parseOptionalNullableString(body: Record<string, unknown>, field: string): string | null | undefined {
+function parseOptionalNullableString(
+  body: Record<string, unknown>,
+  field: string,
+): string | null | undefined {
   const value = body[field];
   if (value === undefined) return undefined;
   if (value === null) return null;
@@ -121,23 +145,37 @@ function parseOptionalNullableString(body: Record<string, unknown>, field: strin
 }
 
 /** Parses an optional nullable non-negative-number field: absent is `undefined`, `null` clears it. */
-function parseOptionalNonNegativeNumber(body: Record<string, unknown>, field: string): number | null | undefined {
+function parseOptionalNonNegativeNumber(
+  body: Record<string, unknown>,
+  field: string,
+): number | null | undefined {
   const value = body[field];
   if (value === undefined) return undefined;
   if (value === null) return null;
   if (!isFiniteNumber(value) || value < 0) {
-    throw new AppError(400, 'INVALID_PARAMS', `${field} must be a non-negative finite number or null`);
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `${field} must be a non-negative finite number or null`,
+    );
   }
   return value;
 }
 
 /** Parses an optional nullable 0-100 percentage field: absent is `undefined`, `null` clears it. */
-function parseOptionalPercent(body: Record<string, unknown>, field: string): number | null | undefined {
+function parseOptionalPercent(
+  body: Record<string, unknown>,
+  field: string,
+): number | null | undefined {
   const value = body[field];
   if (value === undefined) return undefined;
   if (value === null) return null;
   if (!isFiniteNumber(value) || value < 0 || value > 100) {
-    throw new AppError(400, 'INVALID_PARAMS', `${field} must be a finite number between 0 and 100, or null`);
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `${field} must be a finite number between 0 and 100, or null`,
+    );
   }
   return value;
 }
@@ -173,26 +211,40 @@ function parseStandardCostFields(body: Record<string, unknown>): StandardCostFie
  */
 function assertStandardCostConfig(designation: string | null, amount: number | null): void {
   if (designation !== null && designation !== STANDARD_COST_DESIGNATION) {
-    throw new AppError(400, 'VALUATION_METHOD_NOT_PERMITTED', `standard_cost_designation must be exactly "${STANDARD_COST_DESIGNATION}"`, {
-      supplied: designation,
-      required: STANDARD_COST_DESIGNATION,
-    });
+    throw new AppError(
+      400,
+      'VALUATION_METHOD_NOT_PERMITTED',
+      `standard_cost_designation must be exactly "${STANDARD_COST_DESIGNATION}"`,
+      {
+        supplied: designation,
+        required: STANDARD_COST_DESIGNATION,
+      },
+    );
   }
   if (amount !== null && designation !== STANDARD_COST_DESIGNATION) {
     throw new AppError(
       400,
       'VALUATION_METHOD_NOT_PERMITTED',
       'standard_cost_amount may only be configured together with standard_cost_designation set to the Ind AS 2 paragraph 21 measurement technique',
-      { standard_cost_amount: amount, standard_cost_designation: designation, required_designation: STANDARD_COST_DESIGNATION },
+      {
+        standard_cost_amount: amount,
+        standard_cost_designation: designation,
+        required_designation: STANDARD_COST_DESIGNATION,
+      },
     );
   }
 }
 
 async function assertBusinessStream(value: string): Promise<void> {
   if (!(await isValidBusinessStream(value))) {
-    throw new AppError(400, 'INVALID_BUSINESS_STREAM', 'business_stream is not a recognized active stream', {
-      invalid_value: value,
-    });
+    throw new AppError(
+      400,
+      'INVALID_BUSINESS_STREAM',
+      'business_stream is not a recognized active stream',
+      {
+        invalid_value: value,
+      },
+    );
   }
 }
 
@@ -218,12 +270,24 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
   }
   const sku = body['sku'];
   if (!SKU_REGEX.test(sku)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku must be 1-64 URL-safe characters (letters, digits, ".", "_", "-")');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku must be 1-64 URL-safe characters (letters, digits, ".", "_", "-")',
+    );
     return;
   }
   assertValuationMethod(body['valuation_method']);
   if (!isNonEmptyString(body['business_stream'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_stream is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'business_stream is required and must be a non-empty string',
+    );
     return;
   }
   await assertBusinessStream(body['business_stream']);
@@ -232,7 +296,10 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
     return;
   }
   const standardCost = parseStandardCostFields(body);
-  assertStandardCostConfig(standardCost.standard_cost_designation ?? null, standardCost.standard_cost_amount ?? null);
+  assertStandardCostConfig(
+    standardCost.standard_cost_designation ?? null,
+    standardCost.standard_cost_amount ?? null,
+  );
 
   const input: CreateItemInput = {
     sku,
@@ -288,7 +355,13 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
 const updateItemBase: RouteHandler = async (req, res, params) => {
   const sku = params['sku'];
   if (!sku || !SKU_REGEX.test(sku)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku path parameter must be 1-64 URL-safe characters');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku path parameter must be 1-64 URL-safe characters',
+    );
     return;
   }
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
@@ -305,7 +378,13 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
     }
     patch.uom = body['uom'];
   }
-  for (const field of ['lot_controlled', 'serial_controlled', 'hazmat', 'quarantine_required', 'bis_licence_required'] as const) {
+  for (const field of [
+    'lot_controlled',
+    'serial_controlled',
+    'hazmat',
+    'quarantine_required',
+    'bis_licence_required',
+  ] as const) {
     if (body[field] !== undefined) {
       if (typeof body[field] !== 'boolean') {
         sendRequestError(req, res, 400, 'INVALID_PARAMS', `${field} must be a boolean`);
@@ -320,7 +399,13 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
   }
   if (body['business_stream'] !== undefined) {
     if (!isNonEmptyString(body['business_stream'])) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_stream must be a non-empty string');
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'business_stream must be a non-empty string',
+      );
       return;
     }
     await assertBusinessStream(body['business_stream']);
@@ -346,13 +431,21 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
     await client.query('BEGIN');
     const before = await getItemBySku(sku, client);
     if (!before) {
-      throw new AppError(404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, { sku });
+      throw new AppError(404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, {
+        sku,
+      });
     }
     // AC6 merged validation (mirrors src/api/v1/doa.ts's value-band check): a patch that only
     // touches standard_cost_amount must still be checked against the EXISTING designation, and
     // vice versa - neither field alone tells the whole story.
-    const mergedDesignation = patch.standard_cost_designation !== undefined ? patch.standard_cost_designation : before.standard_cost_designation;
-    const mergedAmount = patch.standard_cost_amount !== undefined ? patch.standard_cost_amount : before.standard_cost_amount;
+    const mergedDesignation =
+      patch.standard_cost_designation !== undefined
+        ? patch.standard_cost_designation
+        : before.standard_cost_designation;
+    const mergedAmount =
+      patch.standard_cost_amount !== undefined
+        ? patch.standard_cost_amount
+        : before.standard_cost_amount;
     assertStandardCostConfig(mergedDesignation, mergedAmount);
     const after = await updateItem(sku, patch, client);
     await persistEvent(
@@ -386,17 +479,39 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
 const getItemBase: RouteHandler = async (req, res, params) => {
   const sku = params['sku'];
   if (!sku || !SKU_REGEX.test(sku)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku path parameter must be 1-64 URL-safe characters');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku path parameter must be 1-64 URL-safe characters',
+    );
     return;
   }
   const item = await getItemBySku(sku);
   if (!item) {
-    sendRequestError(req, res, 404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, { sku });
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ITEM_NOT_FOUND',
+      `No item master record exists for sku "${sku}"`,
+      { sku },
+    );
     return;
   }
   sendJson(res, 200, item);
 };
 
-export const createItemHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(createItemBase);
-export const updateItemHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(updateItemBase);
-export const getItemHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(getItemBase);
+export const createItemHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(createItemBase);
+export const updateItemHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(updateItemBase);
+export const getItemHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(getItemBase);

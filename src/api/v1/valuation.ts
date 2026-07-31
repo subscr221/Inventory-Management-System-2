@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { permittedLocationsForModule, requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -62,10 +67,20 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function validSku(params: Record<string, string>, req: IncomingMessage, res: Parameters<RouteHandler>[1]): string | null {
+function validSku(
+  params: Record<string, string>,
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+): string | null {
   const sku = params['sku'];
   if (!sku || !SKU_REGEX.test(sku)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku path parameter must be 1-64 URL-safe characters');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku path parameter must be 1-64 URL-safe characters',
+    );
     return null;
   }
   return sku;
@@ -80,7 +95,14 @@ const getValuationBase: RouteHandler = async (req, res, params) => {
 
   const item = await getItemBySku(sku);
   if (!item) {
-    sendRequestError(req, res, 404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, { sku });
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ITEM_NOT_FOUND',
+      `No item master record exists for sku "${sku}"`,
+      { sku },
+    );
     return;
   }
 
@@ -109,11 +131,15 @@ const getValuationBase: RouteHandler = async (req, res, params) => {
       unit_cost: Number(sc.unit_cost),
     }));
   } else if (item.valuation_method === 'weighted_average') {
-    methodDetail['running_average_cost'] = summary.running_average_cost !== null ? Number(summary.running_average_cost) : null;
+    methodDetail['running_average_cost'] =
+      summary.running_average_cost !== null ? Number(summary.running_average_cost) : null;
   }
 
   let standardCost: Record<string, unknown> | null = null;
-  if (item.standard_cost_designation === STANDARD_COST_DESIGNATION && item.standard_cost_amount !== null) {
+  if (
+    item.standard_cost_designation === STANDARD_COST_DESIGNATION &&
+    item.standard_cost_amount !== null
+  ) {
     const latestReview = await getLatestStandardCostVariance(sku);
     standardCost = {
       standard_cost_amount: item.standard_cost_amount,
@@ -142,7 +168,11 @@ const getValuationBase: RouteHandler = async (req, res, params) => {
     seen.add(row.location_id);
     visibleLocations.push({ location_id: row.location_id, location_code: row.location_code });
   }
-  visibleLocations = visibleLocations.sort((a, b) => (a.location_code ?? a.location_id).localeCompare(b.location_code ?? b.location_id, 'en', { sensitivity: 'base' }));
+  visibleLocations = visibleLocations.sort((a, b) =>
+    (a.location_code ?? a.location_id).localeCompare(b.location_code ?? b.location_id, 'en', {
+      sensitivity: 'base',
+    }),
+  );
 
   // Story 2.8 (AC4): non-owned quantities are REPORTED but contribute zero to the owned carrying
   // value - the valuation projection itself never ingested them (inventory-valuation.ts gates to
@@ -150,16 +180,32 @@ const getValuationBase: RouteHandler = async (req, res, params) => {
   // ownership agreements; scoping follows the same visible-locations rule as the rest of this
   // endpoint. The customer-owned 'job_work' class (Epic 9) is likewise non-valuated and included
   // for completeness when present, without an owner agreement.
-  const { wildcard: agreementWildcard, locations: agreementLocations } = authContext ? permittedLocationsForModule(authContext.roles, 'inventory') : { wildcard: true, locations: new Set<string>() };
-  const agreements = await listAgreements({ sku, active: true, location_any: agreementWildcard ? null : [...agreementLocations] });
+  const { wildcard: agreementWildcard, locations: agreementLocations } = authContext
+    ? permittedLocationsForModule(authContext.roles, 'inventory')
+    : { wildcard: true, locations: new Set<string>() };
+  const agreements = await listAgreements({
+    sku,
+    active: true,
+    location_any: agreementWildcard ? null : [...agreementLocations],
+  });
   const ownerByGrain = new Map<string, string>();
   for (const agreement of agreements) {
-    ownerByGrain.set(`${agreement.location_id}|${agreement.stock_class}`, agreement.owner_party_code);
+    ownerByGrain.set(
+      `${agreement.location_id}|${agreement.stock_class}`,
+      agreement.owner_party_code,
+    );
   }
-  const nonOwnedTotals = new Map<string, { stock_class: string; quantity_on_hand: number; owner_parties: Set<string> }>();
+  const nonOwnedTotals = new Map<
+    string,
+    { stock_class: string; quantity_on_hand: number; owner_parties: Set<string> }
+  >();
   for (const row of scopedBalances) {
     if (row.stock_class === 'owned') continue;
-    const entry = nonOwnedTotals.get(row.stock_class) ?? { stock_class: row.stock_class, quantity_on_hand: 0, owner_parties: new Set<string>() };
+    const entry = nonOwnedTotals.get(row.stock_class) ?? {
+      stock_class: row.stock_class,
+      quantity_on_hand: 0,
+      owner_parties: new Set<string>(),
+    };
     entry.quantity_on_hand += row.on_hand;
     const owner = ownerByGrain.get(`${row.location_id}|${row.stock_class}`);
     if (owner) entry.owner_parties.add(owner);
@@ -171,7 +217,9 @@ const getValuationBase: RouteHandler = async (req, res, params) => {
       stock_class: entry.stock_class,
       quantity_on_hand: entry.quantity_on_hand,
       carrying_value_contribution: 0,
-      owner_party_codes: SUPPLIER_OWNED_STOCK_CLASSES.has(entry.stock_class) ? [...entry.owner_parties].sort() : [],
+      owner_party_codes: SUPPLIER_OWNED_STOCK_CLASSES.has(entry.stock_class)
+        ? [...entry.owner_parties].sort()
+        : [],
     }));
 
   sendJson(res, 200, {
@@ -179,7 +227,8 @@ const getValuationBase: RouteHandler = async (req, res, params) => {
     valuation_method: item.valuation_method,
     quantity_on_hand: Number(summary.quantity_on_hand),
     carrying_value: Number(summary.carrying_value),
-    pre_writedown_cost: summary.pre_writedown_cost !== null ? Number(summary.pre_writedown_cost) : null,
+    pre_writedown_cost:
+      summary.pre_writedown_cost !== null ? Number(summary.pre_writedown_cost) : null,
     cumulative_write_down: Number(summary.cumulative_write_down),
     updated_at: summary.updated_at,
     ...methodDetail,
@@ -190,7 +239,10 @@ const getValuationBase: RouteHandler = async (req, res, params) => {
   });
 };
 
-export const getValuationHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(getValuationBase);
+export const getValuationHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(getValuationBase);
 
 // -----------------------------------------------------------------------------------------------
 // POST /api/v1/stock/:sku/valuation/nrv-write-down and /nrv-recovery (AC4)
@@ -205,25 +257,60 @@ export const getValuationHandler: RouteHandler = requireRole({ module: 'inventor
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function validateNrvCommonBody(body: Record<string, unknown> | undefined, req: IncomingMessage, res: Parameters<RouteHandler>[1]): boolean {
+function validateNrvCommonBody(
+  body: Record<string, unknown> | undefined,
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+): boolean {
   if (!body || typeof body !== 'object') {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body must be a JSON object');
     return false;
   }
   if (typeof body['effective_date'] !== 'string' || !DATE_REGEX.test(body['effective_date'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'effective_date is required and must be YYYY-MM-DD');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'effective_date is required and must be YYYY-MM-DD',
+    );
     return false;
   }
-  if (typeof body['authoriser_actor_id'] !== 'string' || !UUID_REGEX.test(body['authoriser_actor_id'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'authoriser_actor_id is required and must be a valid UUID');
+  if (
+    typeof body['authoriser_actor_id'] !== 'string' ||
+    !UUID_REGEX.test(body['authoriser_actor_id'])
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'authoriser_actor_id is required and must be a valid UUID',
+    );
     return false;
   }
   if (!isNonEmptyString(body['reason'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'reason is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'reason is required and must be a non-empty string',
+    );
     return false;
   }
-  if (body['evidence_ref'] !== undefined && body['evidence_ref'] !== null && typeof body['evidence_ref'] !== 'string') {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'evidence_ref must be a string when supplied');
+  if (
+    body['evidence_ref'] !== undefined &&
+    body['evidence_ref'] !== null &&
+    typeof body['evidence_ref'] !== 'string'
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'evidence_ref must be a string when supplied',
+    );
     return false;
   }
   return true;
@@ -234,13 +321,26 @@ const nrvWriteDownBase: RouteHandler = async (req, res, params) => {
   if (!sku) return;
   const item = await getItemBySku(sku);
   if (!item) {
-    sendRequestError(req, res, 404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, { sku });
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ITEM_NOT_FOUND',
+      `No item master record exists for sku "${sku}"`,
+      { sku },
+    );
     return;
   }
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!validateNrvCommonBody(body, req, res)) return;
   if (!isFiniteNumber(body!['nrv_amount']) || (body!['nrv_amount'] as number) < 0) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'nrv_amount is required and must be a non-negative finite number');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'nrv_amount is required and must be a non-negative finite number',
+    );
     return;
   }
 
@@ -270,20 +370,36 @@ const nrvWriteDownBase: RouteHandler = async (req, res, params) => {
   sendJson(res, 201, persisted);
 };
 
-export const nrvWriteDownHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(nrvWriteDownBase);
+export const nrvWriteDownHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(nrvWriteDownBase);
 
 const nrvRecoveryBase: RouteHandler = async (req, res, params) => {
   const sku = validSku(params, req, res);
   if (!sku) return;
   const item = await getItemBySku(sku);
   if (!item) {
-    sendRequestError(req, res, 404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, { sku });
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ITEM_NOT_FOUND',
+      `No item master record exists for sku "${sku}"`,
+      { sku },
+    );
     return;
   }
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!validateNrvCommonBody(body, req, res)) return;
   if (!isFiniteNumber(body!['recovery_amount']) || (body!['recovery_amount'] as number) <= 0) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'recovery_amount is required and must be a positive finite number');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'recovery_amount is required and must be a positive finite number',
+    );
     return;
   }
 
@@ -313,7 +429,10 @@ const nrvRecoveryBase: RouteHandler = async (req, res, params) => {
   sendJson(res, 201, persisted);
 };
 
-export const nrvRecoveryHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(nrvRecoveryBase);
+export const nrvRecoveryHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(nrvRecoveryBase);
 
 // -----------------------------------------------------------------------------------------------
 // POST /api/v1/stock/:sku/valuation/standard-cost-variance-review (AC6)
@@ -323,12 +442,25 @@ const standardCostVarianceReviewBase: RouteHandler = async (req, res, params) =>
   if (!sku) return;
   const item = await getItemBySku(sku);
   if (!item) {
-    sendRequestError(req, res, 404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${sku}"`, { sku });
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ITEM_NOT_FOUND',
+      `No item master record exists for sku "${sku}"`,
+      { sku },
+    );
     return;
   }
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!body || !isNonEmptyString(body['period'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'period is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'period is required and must be a non-empty string',
+    );
     return;
   }
 
@@ -350,7 +482,10 @@ const standardCostVarianceReviewBase: RouteHandler = async (req, res, params) =>
   sendJson(res, 201, persisted);
 };
 
-export const standardCostVarianceReviewHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(standardCostVarianceReviewBase);
+export const standardCostVarianceReviewHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(standardCostVarianceReviewBase);
 
 // -----------------------------------------------------------------------------------------------
 // GET /api/v1/valuation/standard-cost-variance-report (Task 6.4): period-end standard-versus-
@@ -361,4 +496,7 @@ const standardCostVarianceReportBase: RouteHandler = async (_req, res, _params) 
   sendJson(res, 200, { items: rows });
 };
 
-export const standardCostVarianceReportHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(standardCostVarianceReportBase);
+export const standardCostVarianceReportHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(standardCostVarianceReportBase);

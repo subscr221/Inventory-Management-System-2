@@ -17,7 +17,11 @@ let vapidConfigured = false;
 function ensureVapidConfigured(): boolean {
   if (vapidConfigured) return true;
   if (!config.notify.vapidPublicKey || !config.notify.vapidPrivateKey) return false;
-  webpush.setVapidDetails(config.notify.vapidSubject, config.notify.vapidPublicKey, config.notify.vapidPrivateKey);
+  webpush.setVapidDetails(
+    config.notify.vapidSubject,
+    config.notify.vapidPublicKey,
+    config.notify.vapidPrivateKey,
+  );
   vapidConfigured = true;
   return true;
 }
@@ -28,7 +32,10 @@ function ensureVapidConfigured(): boolean {
  * (Task 3) can always record a delivery outcome and move on to the next recipient instead of
  * aborting the whole fan-out (AC4: emission/delivery must never block on a single failure).
  */
-export async function sendPushNotification(subscription: PushSubscriptionTarget, payload: Record<string, unknown>): Promise<PushSendResult> {
+export async function sendPushNotification(
+  subscription: PushSubscriptionTarget,
+  payload: Record<string, unknown>,
+): Promise<PushSendResult> {
   if (!ensureVapidConfigured()) {
     return { ok: false, failureReason: 'push_not_configured' };
   }

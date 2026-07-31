@@ -41,7 +41,8 @@ function runner(client?: PoolClient): Queryable {
 const TRACE_COLUMNS = `trace_id, lot_id, event_id, event_type, sku, location_id, location_code, quantity_change, business_stream, timestamp`;
 
 function mapRow(row: Record<string, unknown>): LotTrace {
-  const timestamp = row['timestamp'] instanceof Date ? row['timestamp'].toISOString() : String(row['timestamp']);
+  const timestamp =
+    row['timestamp'] instanceof Date ? row['timestamp'].toISOString() : String(row['timestamp']);
   return {
     trace_id: row['trace_id'] as string,
     lot_id: row['lot_id'] as string,
@@ -62,7 +63,10 @@ function mapRow(row: Record<string, unknown>): LotTrace {
  * non-unique index (Story 2.3 re-review). Returns null when a row for this event_id already
  * exists - callers that don't need the row back can ignore the return value.
  */
-export async function appendTraceEntry(input: CreateLotTraceInput, client?: PoolClient): Promise<LotTrace | null> {
+export async function appendTraceEntry(
+  input: CreateLotTraceInput,
+  client?: PoolClient,
+): Promise<LotTrace | null> {
   const result = await runner(client).query(
     `INSERT INTO lot_trace
        (lot_id, event_id, event_type, sku, location_id, location_code, quantity_change, business_stream, timestamp)
@@ -96,6 +100,8 @@ export async function getTraceForLot(lotId: string, client?: PoolClient): Promis
 }
 
 export async function traceEntryExists(eventId: string, client?: PoolClient): Promise<boolean> {
-  const result = await runner(client).query(`SELECT 1 FROM lot_trace WHERE event_id = $1 LIMIT 1`, [eventId]);
+  const result = await runner(client).query(`SELECT 1 FROM lot_trace WHERE event_id = $1 LIMIT 1`, [
+    eventId,
+  ]);
   return result.rows.length > 0;
 }

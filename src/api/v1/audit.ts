@@ -24,11 +24,23 @@ const auditLogBase: RouteHandler = async (req, res, _params) => {
   // --- Parameter validation (fail with 400 INVALID_PARAMS rather than letting malformed input
   // reach Postgres and surface as a 500). ---
   if (!startDate || !endDate) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'start_date and end_date are required (ISO 8601)');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'start_date and end_date are required (ISO 8601)',
+    );
     return;
   }
   if (!isValidIsoDate(startDate) || !isValidIsoDate(endDate)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'start_date and end_date must be valid ISO 8601 timestamps');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'start_date and end_date must be valid ISO 8601 timestamps',
+    );
     return;
   }
   // Normalize to canonical UTC ISO before binding: JS Date.parse accepts formats Postgres's
@@ -39,7 +51,13 @@ const auditLogBase: RouteHandler = async (req, res, _params) => {
   // Expanded-year dates (e.g. "+010000-...", "-000500-...") survive normalization in a form
   // Postgres's timestamptz parser rejects - catch them here as 400 instead of a downstream 500.
   if (!/^\d{4}-/.test(startIso) || !/^\d{4}-/.test(endIso)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'start_date and end_date must fall within the 4-digit year range');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'start_date and end_date must fall within the 4-digit year range',
+    );
     return;
   }
   if (userId !== null && !UUID_REGEX.test(userId)) {
@@ -61,7 +79,13 @@ const auditLogBase: RouteHandler = async (req, res, _params) => {
   if (cursorRaw !== null) {
     const parsed = Number(cursorRaw);
     if (cursorRaw.trim() === '' || !Number.isInteger(parsed) || parsed < 0) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'cursor must be a non-negative integer seq_no');
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'cursor must be a non-negative integer seq_no',
+      );
       return;
     }
     cursor = parsed;

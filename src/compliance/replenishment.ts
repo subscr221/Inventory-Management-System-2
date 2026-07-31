@@ -75,22 +75,39 @@ function normalizeNonNegativeQuantity(value: unknown): string | null {
  * and replenishment task creation (Task 5.2) - both must reject the same way against a config or a
  * task pointed at a non-forward-pick zone.
  */
-async function assertForwardPickZone(zoneId: string, client: PoolClient): Promise<{ siteId: string }> {
+async function assertForwardPickZone(
+  zoneId: string,
+  client: PoolClient,
+): Promise<{ siteId: string }> {
   const zone = await client.query(
     `SELECT level, status, zone_type, site_id FROM location_register WHERE location_id = $1`,
     [zoneId],
   );
   if (zone.rows.length === 0) {
-    throw new AppError(404, 'LOCATION_NOT_FOUND', `No location register entry exists for "${zoneId}"`, { zone_id: zoneId });
+    throw new AppError(
+      404,
+      'LOCATION_NOT_FOUND',
+      `No location register entry exists for "${zoneId}"`,
+      { zone_id: zoneId },
+    );
   }
   const row = zone.rows[0]!;
-  if (row['level'] !== 'zone' || row['zone_type'] !== 'forward_pick' || row['status'] !== 'active') {
-    throw new AppError(400, 'FORWARD_PICK_ZONE_INVALID', `Location "${zoneId}" is not an active forward-pick zone`, {
-      zone_id: zoneId,
-      level: row['level'],
-      zone_type: row['zone_type'],
-      status: row['status'],
-    });
+  if (
+    row['level'] !== 'zone' ||
+    row['zone_type'] !== 'forward_pick' ||
+    row['status'] !== 'active'
+  ) {
+    throw new AppError(
+      400,
+      'FORWARD_PICK_ZONE_INVALID',
+      `Location "${zoneId}" is not an active forward-pick zone`,
+      {
+        zone_id: zoneId,
+        level: row['level'],
+        zone_type: row['zone_type'],
+        status: row['status'],
+      },
+    );
   }
   return { siteId: row['site_id'] as string };
 }
@@ -99,7 +116,9 @@ async function assertForwardPickZone(zoneId: string, client: PoolClient): Promis
 // Task 2/6: forward_pick_config.updated
 // ---------------------------------------------------------------------------
 
-export function assertForwardPickConfigUpdatedShape(envelope: ForwardPickConfigUpdatedEnvelope): void {
+export function assertForwardPickConfigUpdatedShape(
+  envelope: ForwardPickConfigUpdatedEnvelope,
+): void {
   const p = envelope.payload;
   if (typeof p !== 'object' || p === null) {
     reject('FORWARD_PICK_CONFIG_INVALID_PAYLOAD', 'payload is required and must be an object');
@@ -108,18 +127,32 @@ export function assertForwardPickConfigUpdatedShape(envelope: ForwardPickConfigU
     reject('FORWARD_PICK_CONFIG_INVALID_PAYLOAD', 'sku is required and must be a non-empty string');
   }
   if (!isNonEmptyString(p.zone_id)) {
-    reject('FORWARD_PICK_CONFIG_INVALID_PAYLOAD', 'zone_id is required and must be a non-empty string');
+    reject(
+      'FORWARD_PICK_CONFIG_INVALID_PAYLOAD',
+      'zone_id is required and must be a non-empty string',
+    );
   }
   const minQty = normalizeNonNegativeQuantity(p.min_qty);
   if (minQty === null) {
-    reject('FORWARD_PICK_CONFIG_INVALID_PAYLOAD', 'min_qty is required and must be a non-negative number', { min_qty: p.min_qty });
+    reject(
+      'FORWARD_PICK_CONFIG_INVALID_PAYLOAD',
+      'min_qty is required and must be a non-negative number',
+      { min_qty: p.min_qty },
+    );
   }
   const maxQty = normalizeQuantity(p.max_qty);
   if (maxQty === null) {
-    reject('FORWARD_PICK_CONFIG_INVALID_PAYLOAD', 'max_qty is required and must be a positive number', { max_qty: p.max_qty });
+    reject(
+      'FORWARD_PICK_CONFIG_INVALID_PAYLOAD',
+      'max_qty is required and must be a positive number',
+      { max_qty: p.max_qty },
+    );
   }
   if (Number(maxQty) <= Number(minQty)) {
-    reject('FORWARD_PICK_CONFIG_INVALID_PAYLOAD', 'max_qty must be greater than min_qty', { min_qty: p.min_qty, max_qty: p.max_qty });
+    reject('FORWARD_PICK_CONFIG_INVALID_PAYLOAD', 'max_qty must be greater than min_qty', {
+      min_qty: p.min_qty,
+      max_qty: p.max_qty,
+    });
   }
 }
 
@@ -156,32 +189,51 @@ export async function applyForwardPickConfigUpdatedProjection(
 
 const SIGNAL_TYPES = ['min_max', 'demand_signal'];
 
-export function assertReplenishmentTaskCreatedShape(envelope: ReplenishmentTaskCreatedEnvelope): void {
+export function assertReplenishmentTaskCreatedShape(
+  envelope: ReplenishmentTaskCreatedEnvelope,
+): void {
   const p = envelope.payload;
   if (typeof p !== 'object' || p === null) {
     reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'payload is required and must be an object');
   }
   if (!isNonEmptyString(p.replenishment_task_id)) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'replenishment_task_id is required and must be a non-empty string');
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      'replenishment_task_id is required and must be a non-empty string',
+    );
   }
   if (!isNonEmptyString(p.sku)) {
     reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'sku is required and must be a non-empty string');
   }
   if (!isNonEmptyString(p.zone_id)) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'zone_id is required and must be a non-empty string');
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      'zone_id is required and must be a non-empty string',
+    );
   }
   if (!isNonEmptyString(p.site_id)) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'site_id is required and must be a non-empty string');
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      'site_id is required and must be a non-empty string',
+    );
   }
   if (normalizeQuantity(p.quantity) === null) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', `quantity is required and must be a positive number not exceeding ${MAX_QUANTITY}`, {
-      quantity: p.quantity,
-    });
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      `quantity is required and must be a positive number not exceeding ${MAX_QUANTITY}`,
+      {
+        quantity: p.quantity,
+      },
+    );
   }
   if (!SIGNAL_TYPES.includes(p.signal_type)) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', `signal_type is required and must be one of: ${SIGNAL_TYPES.join(', ')}`, {
-      signal_type: p.signal_type,
-    });
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      `signal_type is required and must be one of: ${SIGNAL_TYPES.join(', ')}`,
+      {
+        signal_type: p.signal_type,
+      },
+    );
   }
 }
 
@@ -207,19 +259,29 @@ export async function applyReplenishmentTaskCreatedProjection(
 
   const { siteId } = await assertForwardPickZone(p.zone_id, client);
   if (siteId !== p.site_id) {
-    throw new AppError(400, 'FORWARD_PICK_ZONE_INVALID', `Zone "${p.zone_id}" does not belong to site "${p.site_id}"`, {
-      zone_id: p.zone_id,
-      zone_site_id: siteId,
-      site_id: p.site_id,
-    });
+    throw new AppError(
+      400,
+      'FORWARD_PICK_ZONE_INVALID',
+      `Zone "${p.zone_id}" does not belong to site "${p.site_id}"`,
+      {
+        zone_id: p.zone_id,
+        zone_site_id: siteId,
+        site_id: p.site_id,
+      },
+    );
   }
 
   if (p.from_location_id) {
     const source = await getLocationById(p.from_location_id, client);
     if (!source || source.status !== 'active') {
-      throw new AppError(400, 'LOCATION_NOT_FOUND', `from_location_id "${p.from_location_id}" does not exist or is not active`, {
-        from_location_id: p.from_location_id,
-      });
+      throw new AppError(
+        400,
+        'LOCATION_NOT_FOUND',
+        `from_location_id "${p.from_location_id}" does not exist or is not active`,
+        {
+          from_location_id: p.from_location_id,
+        },
+      );
     }
   }
 
@@ -240,21 +302,37 @@ export async function applyReplenishmentTaskCreatedProjection(
   );
 }
 
-export function assertReplenishmentTaskAssignedShape(envelope: ReplenishmentTaskAssignedEnvelope): void {
+export function assertReplenishmentTaskAssignedShape(
+  envelope: ReplenishmentTaskAssignedEnvelope,
+): void {
   const p = envelope.payload;
   if (typeof p !== 'object' || p === null) {
     reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'payload is required and must be an object');
   }
   if (!isNonEmptyString(p.replenishment_task_id)) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'replenishment_task_id is required and must be a non-empty string');
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      'replenishment_task_id is required and must be a non-empty string',
+    );
   }
   if (!isNonEmptyString(p.assigned_to)) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'assigned_to is required and must be a non-empty string');
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      'assigned_to is required and must be a non-empty string',
+    );
   }
-  if (p.priority !== undefined && p.priority !== null && !['low', 'normal', 'high', 'urgent'].includes(p.priority)) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'priority must be one of: low, normal, high, urgent, or null', {
-      priority: p.priority,
-    });
+  if (
+    p.priority !== undefined &&
+    p.priority !== null &&
+    !['low', 'normal', 'high', 'urgent'].includes(p.priority)
+  ) {
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      'priority must be one of: low, normal, high, urgent, or null',
+      {
+        priority: p.priority,
+      },
+    );
   }
 }
 
@@ -275,22 +353,33 @@ export async function applyReplenishmentTaskAssignedProjection(
   );
 }
 
-export function assertReplenishmentTaskCompletedShape(envelope: ReplenishmentTaskCompletedEnvelope): void {
+export function assertReplenishmentTaskCompletedShape(
+  envelope: ReplenishmentTaskCompletedEnvelope,
+): void {
   const p = envelope.payload;
   if (typeof p !== 'object' || p === null) {
     reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'payload is required and must be an object');
   }
   if (!isNonEmptyString(p.replenishment_task_id)) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'replenishment_task_id is required and must be a non-empty string');
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      'replenishment_task_id is required and must be a non-empty string',
+    );
   }
   const hasId = isNonEmptyString(p.to_location_id);
   const hasCode = isNonEmptyString(p.to_location_code);
 
   if (!hasId && !hasCode) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'Either to_location_id or to_location_code is required');
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      'Either to_location_id or to_location_code is required',
+    );
   }
   if (hasId && hasCode) {
-    reject('REPLENISHMENT_TASK_INVALID_PAYLOAD', 'Provide exactly one of to_location_id or to_location_code, not both');
+    reject(
+      'REPLENISHMENT_TASK_INVALID_PAYLOAD',
+      'Provide exactly one of to_location_id or to_location_code, not both',
+    );
   }
 }
 
@@ -313,31 +402,51 @@ export async function applyReplenishmentTaskCompletedProjection(
 
   const task = await getReplenishmentTaskByIdForUpdate(p.replenishment_task_id, client);
   if (!task) {
-    throw new AppError(404, 'REPLENISHMENT_TASK_NOT_FOUND', `No replenishment task exists for "${p.replenishment_task_id}"`, {
-      replenishment_task_id: p.replenishment_task_id,
-    });
+    throw new AppError(
+      404,
+      'REPLENISHMENT_TASK_NOT_FOUND',
+      `No replenishment task exists for "${p.replenishment_task_id}"`,
+      {
+        replenishment_task_id: p.replenishment_task_id,
+      },
+    );
   }
   if (task.status === 'completed') return;
   if (task.status !== 'ready') {
-    throw new AppError(409, 'REPLENISHMENT_TASK_NOT_READY', `Replenishment task "${p.replenishment_task_id}" is not ready`, {
-      replenishment_task_id: p.replenishment_task_id,
-      status: task.status,
-    });
+    throw new AppError(
+      409,
+      'REPLENISHMENT_TASK_NOT_READY',
+      `Replenishment task "${p.replenishment_task_id}" is not ready`,
+      {
+        replenishment_task_id: p.replenishment_task_id,
+        status: task.status,
+      },
+    );
   }
   if (!task.from_location_id) {
-    throw new AppError(409, 'REPLENISHMENT_TASK_NOT_READY', `Replenishment task "${p.replenishment_task_id}" has no source location resolved`, {
-      replenishment_task_id: p.replenishment_task_id,
-    });
+    throw new AppError(
+      409,
+      'REPLENISHMENT_TASK_NOT_READY',
+      `Replenishment task "${p.replenishment_task_id}" has no source location resolved`,
+      {
+        replenishment_task_id: p.replenishment_task_id,
+      },
+    );
   }
 
   const destination = p.to_location_code
     ? await getLocationByCode(p.to_location_code, client)
     : await getLocationById(p.to_location_id!, client);
   if (!destination || destination.status !== 'active') {
-    throw new AppError(404, 'LOCATION_NOT_FOUND', `Destination location does not exist or is not active`, {
-      to_location_id: p.to_location_id,
-      to_location_code: p.to_location_code,
-    });
+    throw new AppError(
+      404,
+      'LOCATION_NOT_FOUND',
+      `Destination location does not exist or is not active`,
+      {
+        to_location_id: p.to_location_id,
+        to_location_code: p.to_location_code,
+      },
+    );
   }
 
   // Verify the destination bin descends from the task's own zone (the mirror-image descendant
@@ -370,17 +479,31 @@ export async function applyReplenishmentTaskCompletedProjection(
     client,
   );
   await applyStockReceipt(
-    { sku: task.sku, location_id: destination.location_id, location_code: destination.location_code, quantity: Number(task.quantity) },
+    {
+      sku: task.sku,
+      location_id: destination.location_id,
+      location_code: destination.location_code,
+      quantity: Number(task.quantity),
+    },
     client,
   );
 
   const completed = await completeReplenishmentTask(
-    { replenishmentTaskId: p.replenishment_task_id, toLocationId: destination.location_id, completedBy },
+    {
+      replenishmentTaskId: p.replenishment_task_id,
+      toLocationId: destination.location_id,
+      completedBy,
+    },
     client,
   );
   if (!completed) {
-    throw new AppError(409, 'REPLENISHMENT_TASK_NOT_READY', `Replenishment task "${p.replenishment_task_id}" could not be completed`, {
-      replenishment_task_id: p.replenishment_task_id,
-    });
+    throw new AppError(
+      409,
+      'REPLENISHMENT_TASK_NOT_READY',
+      `Replenishment task "${p.replenishment_task_id}" could not be completed`,
+      {
+        replenishment_task_id: p.replenishment_task_id,
+      },
+    );
   }
 }

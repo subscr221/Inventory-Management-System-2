@@ -3,7 +3,10 @@ import { getPool } from '../config/db.js';
 import { persistEvent } from '../events/store.js';
 import type { EventEnvelope } from '../events/store.js';
 import type { AuditEntryPayload } from '../read/projections/audit_log.js';
-import { listForwardPickConfigs, getForwardPickConfigForUpdate } from '../read/projections/forward_pick_config.js';
+import {
+  listForwardPickConfigs,
+  getForwardPickConfigForUpdate,
+} from '../read/projections/forward_pick_config.js';
 import { getForwardPickBalance } from '../read/projections/stock_balance.js';
 import { getOpenPickDemand } from '../read/projections/erp_sales_order.js';
 
@@ -32,11 +35,20 @@ export interface ReplenishmentCheckScope {
 }
 
 export interface ReplenishmentCheckResult {
-  created: Array<{ sku: string; zone_id: string; replenishment_task_id: string; signal_type: 'min_max' | 'demand_signal'; quantity: string }>;
+  created: Array<{
+    sku: string;
+    zone_id: string;
+    replenishment_task_id: string;
+    signal_type: 'min_max' | 'demand_signal';
+    quantity: string;
+  }>;
   skipped: Array<{ sku: string; zone_id: string; reason: string }>;
 }
 
-function eventMetadata(actor: ReplenishmentCheckActor, correlationId: string): EventEnvelope['metadata'] {
+function eventMetadata(
+  actor: ReplenishmentCheckActor,
+  correlationId: string,
+): EventEnvelope['metadata'] {
   return {
     correlation_id: correlationId,
     actor,
@@ -44,8 +56,14 @@ function eventMetadata(actor: ReplenishmentCheckActor, correlationId: string): E
   };
 }
 
-export async function runForwardPickReplenishmentCheck(scope: ReplenishmentCheckScope): Promise<ReplenishmentCheckResult> {
-  const configs = await listForwardPickConfigs({ siteId: scope.siteId ?? null, zoneId: scope.zoneId ?? null, sku: scope.sku ?? null });
+export async function runForwardPickReplenishmentCheck(
+  scope: ReplenishmentCheckScope,
+): Promise<ReplenishmentCheckResult> {
+  const configs = await listForwardPickConfigs({
+    siteId: scope.siteId ?? null,
+    zoneId: scope.zoneId ?? null,
+    sku: scope.sku ?? null,
+  });
   const created: ReplenishmentCheckResult['created'] = [];
   const skipped: ReplenishmentCheckResult['skipped'] = [];
 
@@ -58,7 +76,13 @@ export async function runForwardPickReplenishmentCheck(scope: ReplenishmentCheck
 }
 
 type ZoneCheckOutcome =
-  | { sku: string; zone_id: string; replenishment_task_id: string; signal_type: 'min_max' | 'demand_signal'; quantity: string }
+  | {
+      sku: string;
+      zone_id: string;
+      replenishment_task_id: string;
+      signal_type: 'min_max' | 'demand_signal';
+      quantity: string;
+    }
   | { sku: string; zone_id: string; reason: string }
   | null;
 
@@ -86,21 +110,33 @@ async function checkOneZone(
     let signalType: 'min_max' | 'demand_signal';
     let quantity: string;
 
-    const balRes = await client.query(`SELECT $1::numeric < $2::numeric AS below_min`, [balance, config.min_qty]);
+    const balRes = await client.query(`SELECT $1::numeric < $2::numeric AS below_min`, [
+      balance,
+      config.min_qty,
+    ]);
     if (balRes.rows[0]!['below_min'] === true) {
       signalType = 'min_max';
-      const qtyRes = await client.query(`SELECT ($1::numeric - $2::numeric)::text AS qty`, [config.max_qty, balance]);
+      const qtyRes = await client.query(`SELECT ($1::numeric - $2::numeric)::text AS qty`, [
+        config.max_qty,
+        balance,
+      ]);
       quantity = qtyRes.rows[0]!['qty'] as string;
     } else {
       const demand = await getOpenPickDemand(sku, config.site_id, client);
-      const demandRes = await client.query(`SELECT $1::numeric > $2::numeric AS demand_exceeds`, [demand, balance]);
+      const demandRes = await client.query(`SELECT $1::numeric > $2::numeric AS demand_exceeds`, [
+        demand,
+        balance,
+      ]);
       if (demandRes.rows[0]!['demand_exceeds'] !== true) {
         await client.query('COMMIT');
         committed = true;
         return null;
       }
       signalType = 'demand_signal';
-      const qtyRes = await client.query(`SELECT ($1::numeric - $2::numeric)::text AS qty`, [demand, balance]);
+      const qtyRes = await client.query(`SELECT ($1::numeric - $2::numeric)::text AS qty`, [
+        demand,
+        balance,
+      ]);
       quantity = qtyRes.rows[0]!['qty'] as string;
     }
 
@@ -149,7 +185,8 @@ async function checkOneZone(
         LIMIT 1`,
       [config.site_id, sku, quantity],
     );
-    const fromLocationId = sourceRes.rows.length > 0 ? (sourceRes.rows[0]!['location_id'] as string) : null;
+    const fromLocationId =
+      sourceRes.rows.length > 0 ? (sourceRes.rows[0]!['location_id'] as string) : null;
 
     const replenishmentTaskId = randomUUID();
     const correlationId = randomUUID();
@@ -175,7 +212,13 @@ async function checkOneZone(
 
     await client.query('COMMIT');
     committed = true;
-    return { sku, zone_id: zoneId, replenishment_task_id: replenishmentTaskId, signal_type: signalType, quantity };
+    return {
+      sku,
+      zone_id: zoneId,
+      replenishment_task_id: replenishmentTaskId,
+      signal_type: signalType,
+      quantity,
+    };
   } catch (err) {
     if (!committed) await client.query('ROLLBACK').catch(() => undefined);
     throw err;

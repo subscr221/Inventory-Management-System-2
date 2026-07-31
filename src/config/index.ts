@@ -28,7 +28,9 @@ function parsePowerSyncTokenTtlSeconds(raw: string): number {
   const multiplier = unit === 's' ? 1 : unit === 'm' ? 60 : unit === 'h' ? 3600 : 86400;
   const seconds = value * multiplier;
   if (!Number.isInteger(seconds) || seconds <= 0) {
-    throw new Error(`Invalid POWERSYNC_TOKEN_TTL "${raw}": must resolve to a positive number of seconds.`);
+    throw new Error(
+      `Invalid POWERSYNC_TOKEN_TTL "${raw}": must resolve to a positive number of seconds.`,
+    );
   }
   return seconds;
 }
@@ -65,14 +67,20 @@ if (authMode === 'local' && !LOCAL_AUTH_ALLOWED_ENVS.has(rawNodeEnv ?? '')) {
 }
 
 if (authMode === 'oidc') {
-  const missing = ['AUTH_JWKS_URI', 'AUTH_ISSUER', 'AUTH_AUDIENCE'].filter((key) => !process.env[key]);
+  const missing = ['AUTH_JWKS_URI', 'AUTH_ISSUER', 'AUTH_AUDIENCE'].filter(
+    (key) => !process.env[key],
+  );
   if (missing.length > 0) {
-    throw new Error(`AUTH_MODE=oidc requires the following env vars to be set: ${missing.join(', ')}`);
+    throw new Error(
+      `AUTH_MODE=oidc requires the following env vars to be set: ${missing.join(', ')}`,
+    );
   }
 }
 
 if (authMode === 'local' && !process.env['AUTH_LOCAL_SECRET']) {
-  throw new Error('AUTH_MODE=local requires AUTH_LOCAL_SECRET to be set (no default value permitted)');
+  throw new Error(
+    'AUTH_MODE=local requires AUTH_LOCAL_SECRET to be set (no default value permitted)',
+  );
 }
 
 if (!process.env['SCIM_BEARER_TOKEN']) {

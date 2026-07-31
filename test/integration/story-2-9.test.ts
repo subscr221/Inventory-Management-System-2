@@ -30,7 +30,13 @@ interface Role {
   locationId: string;
 }
 
-function makeRequest(port: number, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<HttpResult> {
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<HttpResult> {
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -71,14 +77,27 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
 }
 
 async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
-  const res = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', { externalId, email: externalId, displayName: externalId, roles }, SCIM_HEADERS);
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  const res = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/scim/v2/Users',
+    { externalId, email: externalId, displayName: externalId, roles },
+    SCIM_HEADERS,
+  );
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -109,7 +128,15 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
           currency: 'INR',
           expected_delivery_date: '2026-08-15',
           lines: [
-            { line_no: 1, sku: 'SKU-ERP-1', ordered_qty: 100.5, open_qty: 40.25, unit_price: 12.3456, over_receipt_tolerance_pct: 150.5, under_receipt_tolerance_pct: 5.25 },
+            {
+              line_no: 1,
+              sku: 'SKU-ERP-1',
+              ordered_qty: 100.5,
+              open_qty: 40.25,
+              unit_price: 12.3456,
+              over_receipt_tolerance_pct: 150.5,
+              under_receipt_tolerance_pct: 5.25,
+            },
             { line_no: 2, sku: 'SKU-ERP-2', ordered_qty: 10, open_qty: 10, unit_price: 999.9999 },
           ],
         },
@@ -190,7 +217,12 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
     }
 
     await provisionUser(port, 'erp-admin-2-9@example.com', [
-      { role: 'system_administrator', module: 'inventory', functionScope: 'write', locationId: '*' },
+      {
+        role: 'system_administrator',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     adminHeaders = await authFor(port, 'erp-admin-2-9@example.com');
 
@@ -239,21 +271,38 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
     assert.strictEqual(sync.status, 200, JSON.stringify(sync.body));
     assert.deepStrictEqual(sync.body['purchase_orders'], { applied: 1, failed: 0 });
 
-    const res = await makeRequest(port, 'GET', '/api/v1/erp/purchase-orders/PO-2026-0042', undefined, siteAReaderHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/purchase-orders/PO-2026-0042',
+      undefined,
+      siteAReaderHeaders,
+    );
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body['supplier_ref_ext'], 'SUPPLIER-X');
     assert.strictEqual(res.body['currency'], 'INR');
     assert.strictEqual(res.body['expected_delivery_date'], '2026-08-15');
     assert.strictEqual(res.body['source_system'], 'ERP');
-    assert.ok(typeof res.body['last_synced_at'] === 'string' && (res.body['last_synced_at'] as string).length > 0);
+    assert.ok(
+      typeof res.body['last_synced_at'] === 'string' &&
+        (res.body['last_synced_at'] as string).length > 0,
+    );
     const lines = res.body['lines'] as Array<Record<string, unknown>>;
     assert.strictEqual(lines.length, 2);
     const l1 = lines.find((l) => l['line_no'] === 1)!;
     assert.strictEqual(l1['sku'], 'SKU-ERP-1');
     assert.strictEqual(l1['ordered_qty'], 100.5);
     assert.strictEqual(l1['open_qty'], 40.25);
-    assert.strictEqual(l1['unit_price'], 12.3456, 'unit_price NUMERIC(18,4) must survive without float drift');
-    assert.strictEqual(l1['over_receipt_tolerance_pct'], 150.5, 'over-receipt tolerance may exceed 100%');
+    assert.strictEqual(
+      l1['unit_price'],
+      12.3456,
+      'unit_price NUMERIC(18,4) must survive without float drift',
+    );
+    assert.strictEqual(
+      l1['over_receipt_tolerance_pct'],
+      150.5,
+      'over-receipt tolerance may exceed 100%',
+    );
     assert.strictEqual(l1['under_receipt_tolerance_pct'], 5.25);
     assert.strictEqual(l1['source_system'], 'ERP');
     const l2 = lines.find((l) => l['line_no'] === 2)!;
@@ -265,47 +314,138 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
     await resetErp();
     const batch = {
       sales_orders: [
-        { so_number_ext: 'SO-1', line_no: 1, sku: 'SKU-ERP-1', quantity: 5, required_by: '2026-08-01', ship_to_ext: 'CUST-1', ship_from_site_code_ext: 'site-A' },
-        { so_number_ext: 'SO-1', line_no: 2, sku: 'SKU-ERP-2', quantity: 3, required_by: '2026-08-02', ship_to_ext: 'CUST-1', ship_from_site_code_ext: 'site-A' },
-        { so_number_ext: 'SO-2', line_no: 1, sku: 'SKU-ERP-1', quantity: 7, required_by: '2026-08-03', ship_to_ext: 'CUST-2', ship_from_site_code_ext: 'site-B' },
+        {
+          so_number_ext: 'SO-1',
+          line_no: 1,
+          sku: 'SKU-ERP-1',
+          quantity: 5,
+          required_by: '2026-08-01',
+          ship_to_ext: 'CUST-1',
+          ship_from_site_code_ext: 'site-A',
+        },
+        {
+          so_number_ext: 'SO-1',
+          line_no: 2,
+          sku: 'SKU-ERP-2',
+          quantity: 3,
+          required_by: '2026-08-02',
+          ship_to_ext: 'CUST-1',
+          ship_from_site_code_ext: 'site-A',
+        },
+        {
+          so_number_ext: 'SO-2',
+          line_no: 1,
+          sku: 'SKU-ERP-1',
+          quantity: 7,
+          required_by: '2026-08-03',
+          ship_to_ext: 'CUST-2',
+          ship_from_site_code_ext: 'site-B',
+        },
       ],
     };
     const sync = await makeRequest(port, 'POST', '/api/v1/erp/sync', batch, adminHeaders);
     assert.strictEqual(sync.status, 200, JSON.stringify(sync.body));
     assert.deepStrictEqual(sync.body['sales_orders'], { applied: 3, failed: 0 });
 
-    const listA = await makeRequest(port, 'GET', '/api/v1/erp/sales-orders?site=site-A&status=open', undefined, siteAReaderHeaders);
+    const listA = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/sales-orders?site=site-A&status=open',
+      undefined,
+      siteAReaderHeaders,
+    );
     assert.strictEqual(listA.status, 200, JSON.stringify(listA.body));
     const rowsA = listA.body['sales_orders'] as Array<Record<string, unknown>>;
     assert.strictEqual(rowsA.length, 2, 'site-A caller sees only site-A lines');
     assert.ok(rowsA.every((r) => r['ship_from_site_code'] === 'site-A'));
     assert.deepStrictEqual(
-      rowsA.map((r) => ({ sku: r['sku'], quantity: r['quantity'], required_by: r['required_by'], ship_to: r['ship_to'] })).sort((a, b) => a.required_by! < b.required_by! ? -1 : 1),
+      rowsA
+        .map((r) => ({
+          sku: r['sku'],
+          quantity: r['quantity'],
+          required_by: r['required_by'],
+          ship_to: r['ship_to'],
+        }))
+        .sort((a, b) => (a.required_by! < b.required_by! ? -1 : 1)),
       [
         { sku: 'SKU-ERP-1', quantity: '5.000', required_by: '2026-08-01', ship_to: 'CUST-1' },
         { sku: 'SKU-ERP-2', quantity: '3.000', required_by: '2026-08-02', ship_to: 'CUST-1' },
       ],
     );
 
-    const denied = await makeRequest(port, 'GET', '/api/v1/erp/sales-orders?site=site-A&status=open', undefined, siteBReaderHeaders);
+    const denied = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/sales-orders?site=site-A&status=open',
+      undefined,
+      siteBReaderHeaders,
+    );
     assert.strictEqual(denied.status, 403, JSON.stringify(denied.body));
     assert.strictEqual(denied.body['error_code'], 'LOCATION_ACCESS_DENIED');
 
     // status=open excludes a closed line; empty result is [].
-    const listBOpen = await makeRequest(port, 'GET', '/api/v1/erp/sales-orders?site=site-B&status=open', undefined, adminHeaders);
+    const listBOpen = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/sales-orders?site=site-B&status=open',
+      undefined,
+      adminHeaders,
+    );
     assert.strictEqual((listBOpen.body['sales_orders'] as unknown[]).length, 1);
     // Re-sync a NON-EMPTY snapshot that omits SO-2 -> SO-2 soft-closes. (An EMPTY batch is a no-op
     // and never mass-closes the book - review decision 2026-07-22; covered by its own test below.)
-    await makeRequest(port, 'POST', '/api/v1/erp/sync', {
-      sales_orders: [
-        { so_number_ext: 'SO-1', line_no: 1, sku: 'SKU-ERP-1', quantity: 5, required_by: '2026-08-01', ship_to_ext: 'CUST-1', ship_from_site_code_ext: 'site-A' },
-        { so_number_ext: 'SO-1', line_no: 2, sku: 'SKU-ERP-2', quantity: 3, required_by: '2026-08-02', ship_to_ext: 'CUST-1', ship_from_site_code_ext: 'site-A' },
-      ],
-    }, adminHeaders);
-    const listBAfter = await makeRequest(port, 'GET', '/api/v1/erp/sales-orders?site=site-B&status=open', undefined, adminHeaders);
-    assert.deepStrictEqual(listBAfter.body['sales_orders'], [], 'closed lines are excluded and empty result is []');
-    const listBClosed = await makeRequest(port, 'GET', '/api/v1/erp/sales-orders?site=site-B&status=closed', undefined, adminHeaders);
-    assert.strictEqual((listBClosed.body['sales_orders'] as unknown[]).length, 1, 'soft-closed line resolves under status=closed, never hard-deleted');
+    await makeRequest(
+      port,
+      'POST',
+      '/api/v1/erp/sync',
+      {
+        sales_orders: [
+          {
+            so_number_ext: 'SO-1',
+            line_no: 1,
+            sku: 'SKU-ERP-1',
+            quantity: 5,
+            required_by: '2026-08-01',
+            ship_to_ext: 'CUST-1',
+            ship_from_site_code_ext: 'site-A',
+          },
+          {
+            so_number_ext: 'SO-1',
+            line_no: 2,
+            sku: 'SKU-ERP-2',
+            quantity: 3,
+            required_by: '2026-08-02',
+            ship_to_ext: 'CUST-1',
+            ship_from_site_code_ext: 'site-A',
+          },
+        ],
+      },
+      adminHeaders,
+    );
+    const listBAfter = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/sales-orders?site=site-B&status=open',
+      undefined,
+      adminHeaders,
+    );
+    assert.deepStrictEqual(
+      listBAfter.body['sales_orders'],
+      [],
+      'closed lines are excluded and empty result is []',
+    );
+    const listBClosed = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/sales-orders?site=site-B&status=closed',
+      undefined,
+      adminHeaders,
+    );
+    assert.strictEqual(
+      (listBClosed.body['sales_orders'] as unknown[]).length,
+      1,
+      'soft-closed line resolves under status=closed, never hard-deleted',
+    );
   });
 
   it('AC3: stale reads carry stale:true + age, raise exactly one dedup alert; fresh sync clears it; never-synced is stale/null', async () => {
@@ -313,34 +453,83 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
     await makeRequest(port, 'POST', '/api/v1/erp/sync', poBatch(), adminHeaders);
 
     // Within threshold -> not stale.
-    await getAdminPool().query(`UPDATE erp_sync_state SET last_successful_at = now() - interval '5 minutes' WHERE projection_name = 'purchase_orders'`);
-    const fresh = await makeRequest(port, 'GET', '/api/v1/erp/purchase-orders/PO-2026-0042', undefined, adminHeaders);
-    assert.strictEqual(fresh.body['stale'], false, 'within the 15-minute threshold a read is not stale (strict >)');
+    await getAdminPool().query(
+      `UPDATE erp_sync_state SET last_successful_at = now() - interval '5 minutes' WHERE projection_name = 'purchase_orders'`,
+    );
+    const fresh = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/purchase-orders/PO-2026-0042',
+      undefined,
+      adminHeaders,
+    );
+    assert.strictEqual(
+      fresh.body['stale'],
+      false,
+      'within the 15-minute threshold a read is not stale (strict >)',
+    );
 
     // Past threshold -> stale + age, and an alert is raised.
-    await getAdminPool().query(`UPDATE erp_sync_state SET last_successful_at = now() - interval '20 minutes' WHERE projection_name = 'purchase_orders'`);
-    const stale1 = await makeRequest(port, 'GET', '/api/v1/erp/purchase-orders/PO-2026-0042', undefined, adminHeaders);
+    await getAdminPool().query(
+      `UPDATE erp_sync_state SET last_successful_at = now() - interval '20 minutes' WHERE projection_name = 'purchase_orders'`,
+    );
+    const stale1 = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/purchase-orders/PO-2026-0042',
+      undefined,
+      adminHeaders,
+    );
     assert.strictEqual(stale1.body['stale'], true);
-    assert.ok((stale1.body['last_synced_at_age_seconds'] as number) > 900, 'age exceeds the freshness threshold');
+    assert.ok(
+      (stale1.body['last_synced_at_age_seconds'] as number) > 900,
+      'age exceeds the freshness threshold',
+    );
     // Repeated stale reads must not stack duplicate open alerts.
-    await makeRequest(port, 'GET', '/api/v1/erp/purchase-orders/PO-2026-0042', undefined, adminHeaders);
+    await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/purchase-orders/PO-2026-0042',
+      undefined,
+      adminHeaders,
+    );
     const openAlerts = await getPool().query(
       `SELECT count(*)::int AS c FROM integration_exception WHERE record_type = 'sync_batch' AND error_code = 'ERP_SYNC_STALE' AND source_record_ref = 'purchase_orders' AND status = 'open'`,
     );
-    assert.strictEqual(openAlerts.rows[0]!['c'], 1, 'repeated stale reads raise exactly one open alert (deduped)');
+    assert.strictEqual(
+      openAlerts.rows[0]!['c'],
+      1,
+      'repeated stale reads raise exactly one open alert (deduped)',
+    );
 
     // A fresh sync clears the alert and reads report not stale.
     await makeRequest(port, 'POST', '/api/v1/erp/sync', poBatch(), adminHeaders);
     const cleared = await getPool().query(
       `SELECT count(*)::int AS c FROM integration_exception WHERE record_type = 'sync_batch' AND error_code = 'ERP_SYNC_STALE' AND source_record_ref = 'purchase_orders' AND status = 'open'`,
     );
-    assert.strictEqual(cleared.rows[0]!['c'], 0, 'a fresh in-threshold sync resolves the open stale alert');
-    const afterSync = await makeRequest(port, 'GET', '/api/v1/erp/purchase-orders/PO-2026-0042', undefined, adminHeaders);
+    assert.strictEqual(
+      cleared.rows[0]!['c'],
+      0,
+      'a fresh in-threshold sync resolves the open stale alert',
+    );
+    const afterSync = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/purchase-orders/PO-2026-0042',
+      undefined,
+      adminHeaders,
+    );
     assert.strictEqual(afterSync.body['stale'], false);
 
     // Never-synced zero-row feed: stale with null age.
     await resetErp();
-    const neverSynced = await makeRequest(port, 'GET', '/api/v1/erp/sales-orders?site=site-A', undefined, siteAReaderHeaders);
+    const neverSynced = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/sales-orders?site=site-A',
+      undefined,
+      siteAReaderHeaders,
+    );
     assert.strictEqual(neverSynced.body['stale'], true);
     assert.strictEqual(neverSynced.body['last_synced_at_age_seconds'], null);
     assert.deepStrictEqual(neverSynced.body['sales_orders'], []);
@@ -357,68 +546,145 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
       ['PATCH', '/api/v1/erp/sales-orders'],
       ['DELETE', '/api/v1/erp/sales-orders'],
     ] as const) {
-      const res = await makeRequest(port, method, path, method === 'DELETE' ? undefined : { any: 'thing' }, adminHeaders);
+      const res = await makeRequest(
+        port,
+        method,
+        path,
+        method === 'DELETE' ? undefined : { any: 'thing' },
+        adminHeaders,
+      );
       assert.strictEqual(res.status, 405, `${method} ${path}: ${JSON.stringify(res.body)}`);
       assert.strictEqual(res.body['error_code'], 'SOURCE_SYSTEM_READ_ONLY', `${method} ${path}`);
     }
 
     // Unauthenticated write short-circuits at global auth with 401.
-    const unauth = await makeRequest(port, 'PUT', '/api/v1/erp/purchase-orders/PO-2026-0042', { any: 'thing' });
+    const unauth = await makeRequest(port, 'PUT', '/api/v1/erp/purchase-orders/PO-2026-0042', {
+      any: 'thing',
+    });
     assert.strictEqual(unauth.status, 401, JSON.stringify(unauth.body));
 
     // A direct authenticated POST /api/v1/events with an erp stream_type is rejected by the central guard.
-    const directEvent = await makeRequest(port, 'POST', '/api/v1/events', {
-      stream_type: 'erp',
-      stream_id: randomUUID(),
-      event_type: 'erp.purchase_order_synced',
-      payload: { po_number_ext: 'PO-HACK' },
-      metadata: { correlation_id: randomUUID(), actor: { user_id: randomUUID(), role: 'system_administrator', location_id: locAId }, occurred_at: new Date().toISOString() },
-    }, superHeaders);
-    assert.strictEqual(directEvent.body['error_code'], 'SOURCE_SYSTEM_READ_ONLY', JSON.stringify(directEvent.body));
+    const directEvent = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'erp',
+        stream_id: randomUUID(),
+        event_type: 'erp.purchase_order_synced',
+        payload: { po_number_ext: 'PO-HACK' },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: randomUUID(), role: 'system_administrator', location_id: locAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      superHeaders,
+    );
+    assert.strictEqual(
+      directEvent.body['error_code'],
+      'SOURCE_SYSTEM_READ_ONLY',
+      JSON.stringify(directEvent.body),
+    );
 
     // An edge upload with an erp stream_type is likewise rejected (never fabricates ERP rows).
-    const edgeEvent = await makeRequest(port, 'POST', '/api/v1/edge/events', {
-      event_id: randomUUID(),
-      stream_type: 'erp',
-      stream_id: randomUUID(),
-      event_type: 'erp.sales_order_synced',
-      payload: { so_number_ext: 'SO-HACK' },
-      metadata: { correlation_id: randomUUID(), actor: { user_id: randomUUID(), role: 'system_administrator', location_id: locAId }, device_id: 'EDGE-1', occurred_at: new Date().toISOString() },
-      idempotency_key: `edge-erp-${randomUUID()}`,
-    }, superHeaders);
-    assert.strictEqual(edgeEvent.body['error_code'], 'SOURCE_SYSTEM_READ_ONLY', JSON.stringify(edgeEvent.body));
+    const edgeEvent = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/edge/events',
+      {
+        event_id: randomUUID(),
+        stream_type: 'erp',
+        stream_id: randomUUID(),
+        event_type: 'erp.sales_order_synced',
+        payload: { so_number_ext: 'SO-HACK' },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: randomUUID(), role: 'system_administrator', location_id: locAId },
+          device_id: 'EDGE-1',
+          occurred_at: new Date().toISOString(),
+        },
+        idempotency_key: `edge-erp-${randomUUID()}`,
+      },
+      superHeaders,
+    );
+    assert.strictEqual(
+      edgeEvent.body['error_code'],
+      'SOURCE_SYSTEM_READ_ONLY',
+      JSON.stringify(edgeEvent.body),
+    );
   });
 
   it('AC5: a malformed record routes to the exception queue while the rest of the batch syncs; a bad line isolates at the PO grain', async () => {
     await resetErp();
     const batch = {
       purchase_orders: [
-        { po_number_ext: 'PO-GOOD', supplier_ref_ext: 'SUP-1', currency: 'INR', lines: [{ line_no: 1, sku: 'SKU-ERP-1', ordered_qty: 5, open_qty: 5, unit_price: 1 }] },
+        {
+          po_number_ext: 'PO-GOOD',
+          supplier_ref_ext: 'SUP-1',
+          currency: 'INR',
+          lines: [{ line_no: 1, sku: 'SKU-ERP-1', ordered_qty: 5, open_qty: 5, unit_price: 1 }],
+        },
         // One good line + one unknown-SKU line: the WHOLE PO is rejected (PO-grain atomicity).
-        { po_number_ext: 'PO-BAD', supplier_ref_ext: 'SUP-1', currency: 'INR', lines: [
-          { line_no: 1, sku: 'SKU-ERP-1', ordered_qty: 5, open_qty: 5, unit_price: 1 },
-          { line_no: 2, sku: 'SKU-DOES-NOT-EXIST', ordered_qty: 5, open_qty: 5, unit_price: 1 },
-        ] },
-        { po_number_ext: 'PO-BAD-2', supplier_ref_ext: 'SUP-1', currency: 'INR', lines: [{ line_no: 1, sku: 'ALSO-MISSING', ordered_qty: 5, open_qty: 5, unit_price: 1 }] },
+        {
+          po_number_ext: 'PO-BAD',
+          supplier_ref_ext: 'SUP-1',
+          currency: 'INR',
+          lines: [
+            { line_no: 1, sku: 'SKU-ERP-1', ordered_qty: 5, open_qty: 5, unit_price: 1 },
+            { line_no: 2, sku: 'SKU-DOES-NOT-EXIST', ordered_qty: 5, open_qty: 5, unit_price: 1 },
+          ],
+        },
+        {
+          po_number_ext: 'PO-BAD-2',
+          supplier_ref_ext: 'SUP-1',
+          currency: 'INR',
+          lines: [{ line_no: 1, sku: 'ALSO-MISSING', ordered_qty: 5, open_qty: 5, unit_price: 1 }],
+        },
       ],
     };
     const sync = await makeRequest(port, 'POST', '/api/v1/erp/sync', batch, adminHeaders);
     assert.strictEqual(sync.status, 200, JSON.stringify(sync.body));
-    assert.deepStrictEqual(sync.body['purchase_orders'], { applied: 1, failed: 2 }, 'good PO applied; two malformed POs failed');
+    assert.deepStrictEqual(
+      sync.body['purchase_orders'],
+      { applied: 1, failed: 2 },
+      'good PO applied; two malformed POs failed',
+    );
 
-    const good = await makeRequest(port, 'GET', '/api/v1/erp/purchase-orders/PO-GOOD', undefined, adminHeaders);
+    const good = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/purchase-orders/PO-GOOD',
+      undefined,
+      adminHeaders,
+    );
     assert.strictEqual(good.status, 200);
-    const bad = await makeRequest(port, 'GET', '/api/v1/erp/purchase-orders/PO-BAD', undefined, adminHeaders);
-    assert.strictEqual(bad.status, 404, 'the malformed PO is not partially applied - no header, no first line');
+    const bad = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/purchase-orders/PO-BAD',
+      undefined,
+      adminHeaders,
+    );
+    assert.strictEqual(
+      bad.status,
+      404,
+      'the malformed PO is not partially applied - no header, no first line',
+    );
 
     const exc = await getPool().query(
       `SELECT source_record_ref, error_code FROM integration_exception WHERE record_type = 'purchase_order' AND status = 'open' ORDER BY source_record_ref`,
     );
     assert.strictEqual(exc.rows.length, 2, 'each malformed PO queues independently');
-    assert.deepStrictEqual(exc.rows.map((r) => r['source_record_ref']), ['PO-BAD', 'PO-BAD-2']);
+    assert.deepStrictEqual(
+      exc.rows.map((r) => r['source_record_ref']),
+      ['PO-BAD', 'PO-BAD-2'],
+    );
     assert.ok(exc.rows.every((r) => r['error_code'] === 'ITEM_NOT_FOUND'));
 
-    const lineCount = await getPool().query(`SELECT count(*)::int AS c FROM erp_purchase_order_line WHERE po_number_ext = 'PO-BAD'`);
+    const lineCount = await getPool().query(
+      `SELECT count(*)::int AS c FROM erp_purchase_order_line WHERE po_number_ext = 'PO-BAD'`,
+    );
     assert.strictEqual(lineCount.rows[0]!['c'], 0, 'no line of the rejected PO survives');
   });
 
@@ -426,11 +692,21 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
     await resetErp();
     await makeRequest(port, 'POST', '/api/v1/erp/sync', poBatch(), adminHeaders);
     await makeRequest(port, 'POST', '/api/v1/erp/sync', poBatch(), adminHeaders);
-    const headers = await getPool().query(`SELECT count(*)::int AS c FROM erp_purchase_order WHERE po_number_ext = 'PO-2026-0042'`);
+    const headers = await getPool().query(
+      `SELECT count(*)::int AS c FROM erp_purchase_order WHERE po_number_ext = 'PO-2026-0042'`,
+    );
     assert.strictEqual(headers.rows[0]!['c'], 1, 're-sync upserts by grain - no duplicate header');
-    const lines = await getPool().query(`SELECT count(*)::int AS c FROM erp_purchase_order_line WHERE po_number_ext = 'PO-2026-0042'`);
-    assert.strictEqual(lines.rows[0]!['c'], 2, 're-sync upserts lines by grain - no duplicate lines');
-    const alerts = await getPool().query(`SELECT count(*)::int AS c FROM integration_exception WHERE status = 'open'`);
+    const lines = await getPool().query(
+      `SELECT count(*)::int AS c FROM erp_purchase_order_line WHERE po_number_ext = 'PO-2026-0042'`,
+    );
+    assert.strictEqual(
+      lines.rows[0]!['c'],
+      2,
+      're-sync upserts lines by grain - no duplicate lines',
+    );
+    const alerts = await getPool().query(
+      `SELECT count(*)::int AS c FROM integration_exception WHERE status = 'open'`,
+    );
     assert.strictEqual(alerts.rows[0]!['c'], 0, 'a clean idempotent re-sync raises no alert');
 
     // Concurrent syncs racing the same grain still yield exactly one row (ON CONFLICT upsert).
@@ -439,15 +715,27 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
       makeRequest(port, 'POST', '/api/v1/erp/sync', poBatch(), adminHeaders),
       makeRequest(port, 'POST', '/api/v1/erp/sync', poBatch(), adminHeaders),
     ]);
-    const raced = await getPool().query(`SELECT count(*)::int AS c FROM erp_purchase_order WHERE po_number_ext = 'PO-2026-0042'`);
-    assert.strictEqual(raced.rows[0]!['c'], 1, 'concurrent syncs for the same grain yield exactly one row');
+    const raced = await getPool().query(
+      `SELECT count(*)::int AS c FROM erp_purchase_order WHERE po_number_ext = 'PO-2026-0042'`,
+    );
+    assert.strictEqual(
+      raced.rows[0]!['c'],
+      1,
+      'concurrent syncs for the same grain yield exactly one row',
+    );
   });
 
   it('AC5/RBAC: the sync trigger is restricted to svc_erp_adapter / system_administrator; a normal inventory writer is denied', async () => {
     await resetErp();
     const svc = await makeRequest(port, 'POST', '/api/v1/erp/sync', poBatch(), svcErpHeaders);
     assert.strictEqual(svc.status, 200, JSON.stringify(svc.body));
-    const denied = await makeRequest(port, 'POST', '/api/v1/erp/sync', poBatch(), normalWriterHeaders);
+    const denied = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/erp/sync',
+      poBatch(),
+      normalWriterHeaders,
+    );
     assert.strictEqual(denied.status, 403, JSON.stringify(denied.body));
     assert.strictEqual(denied.body['error_code'], 'FUNCTION_ACCESS_DENIED');
   });
@@ -456,24 +744,79 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
     await resetErp();
     await makeRequest(port, 'POST', '/api/v1/erp/sync', poBatch(), adminHeaders);
     // Drive the heartbeat stale so a wrongful "fresh success" stamp would be observable.
-    await getAdminPool().query(`UPDATE erp_sync_state SET last_successful_at = now() - interval '20 minutes' WHERE projection_name = 'purchase_orders'`);
+    await getAdminPool().query(
+      `UPDATE erp_sync_state SET last_successful_at = now() - interval '20 minutes' WHERE projection_name = 'purchase_orders'`,
+    );
 
     // Empty batch: applied 0 / failed 0 - must NOT close the open PO and must NOT refresh the heartbeat.
-    const empty = await makeRequest(port, 'POST', '/api/v1/erp/sync', { purchase_orders: [] }, adminHeaders);
+    const empty = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/erp/sync',
+      { purchase_orders: [] },
+      adminHeaders,
+    );
     assert.deepStrictEqual(empty.body['purchase_orders'], { applied: 0, failed: 0 });
-    const afterEmpty = await makeRequest(port, 'GET', '/api/v1/erp/purchase-orders/PO-2026-0042', undefined, adminHeaders);
-    assert.strictEqual(afterEmpty.status, 200, 'the open PO survives an empty batch (never mass-closed)');
-    assert.strictEqual(afterEmpty.body['status'], 'open', 'the PO is not soft-closed by an empty batch');
-    assert.strictEqual(afterEmpty.body['stale'], true, 'an empty batch does not stamp a fresh success heartbeat');
+    const afterEmpty = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/purchase-orders/PO-2026-0042',
+      undefined,
+      adminHeaders,
+    );
+    assert.strictEqual(
+      afterEmpty.status,
+      200,
+      'the open PO survives an empty batch (never mass-closed)',
+    );
+    assert.strictEqual(
+      afterEmpty.body['status'],
+      'open',
+      'the PO is not soft-closed by an empty batch',
+    );
+    assert.strictEqual(
+      afterEmpty.body['stale'],
+      true,
+      'an empty batch does not stamp a fresh success heartbeat',
+    );
 
     // All-failed batch: one unknown-SKU PO -> applied 0 / failed 1 - same no-op guarantees.
-    const allBad = await makeRequest(port, 'POST', '/api/v1/erp/sync', {
-      purchase_orders: [{ po_number_ext: 'PO-ALLBAD', supplier_ref_ext: 'SUP-1', currency: 'INR', lines: [{ line_no: 1, sku: 'SKU-DOES-NOT-EXIST', ordered_qty: 1, open_qty: 1, unit_price: 1 }] }],
-    }, adminHeaders);
+    const allBad = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/erp/sync',
+      {
+        purchase_orders: [
+          {
+            po_number_ext: 'PO-ALLBAD',
+            supplier_ref_ext: 'SUP-1',
+            currency: 'INR',
+            lines: [
+              { line_no: 1, sku: 'SKU-DOES-NOT-EXIST', ordered_qty: 1, open_qty: 1, unit_price: 1 },
+            ],
+          },
+        ],
+      },
+      adminHeaders,
+    );
     assert.deepStrictEqual(allBad.body['purchase_orders'], { applied: 0, failed: 1 });
-    const afterAllBad = await makeRequest(port, 'GET', '/api/v1/erp/purchase-orders/PO-2026-0042', undefined, adminHeaders);
-    assert.strictEqual(afterAllBad.body['status'], 'open', 'a batch whose every record failed does not mass-close the book');
-    assert.strictEqual(afterAllBad.body['stale'], true, 'an all-failed batch does not report a fresh, healthy heartbeat');
+    const afterAllBad = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/purchase-orders/PO-2026-0042',
+      undefined,
+      adminHeaders,
+    );
+    assert.strictEqual(
+      afterAllBad.body['status'],
+      'open',
+      'a batch whose every record failed does not mass-close the book',
+    );
+    assert.strictEqual(
+      afterAllBad.body['stale'],
+      true,
+      'an all-failed batch does not report a fresh, healthy heartbeat',
+    );
   });
 
   it('Task 7: creating an ownership agreement never raises a premature OWNER_PARTY_NOT_IN_ERP warning (removed - review decision 2026-07-22)', async () => {
@@ -483,22 +826,60 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
     // owner_party_code and supplier_ref_ext are DIFFERENT identifier namespaces, so the old
     // supplier-ref comparison false-positived. The warning is removed pending the Epic 4.1 governed
     // supplier registry: agreements create cleanly and the exception queue stays empty either way.
-    const unknownOwner = await makeRequest(port, 'PUT', '/api/v1/ownership-agreements/SKU-ERP-1/' + locAId + '/consignment', { owner_party_code: 'SUPPLIER-Y', business_stream: 'production' }, plannerHeaders);
-    assert.ok(unknownOwner.status === 200 || unknownOwner.status === 201, `agreement must still be created: ${JSON.stringify(unknownOwner.body)}`);
-    const knownOwner = await makeRequest(port, 'PUT', '/api/v1/ownership-agreements/SKU-ERP-2/' + locAId + '/consignment', { owner_party_code: 'SUPPLIER-X', business_stream: 'production' }, plannerHeaders);
-    assert.ok(knownOwner.status === 200 || knownOwner.status === 201, JSON.stringify(knownOwner.body));
+    const unknownOwner = await makeRequest(
+      port,
+      'PUT',
+      '/api/v1/ownership-agreements/SKU-ERP-1/' + locAId + '/consignment',
+      { owner_party_code: 'SUPPLIER-Y', business_stream: 'production' },
+      plannerHeaders,
+    );
+    assert.ok(
+      unknownOwner.status === 200 || unknownOwner.status === 201,
+      `agreement must still be created: ${JSON.stringify(unknownOwner.body)}`,
+    );
+    const knownOwner = await makeRequest(
+      port,
+      'PUT',
+      '/api/v1/ownership-agreements/SKU-ERP-2/' + locAId + '/consignment',
+      { owner_party_code: 'SUPPLIER-X', business_stream: 'production' },
+      plannerHeaders,
+    );
+    assert.ok(
+      knownOwner.status === 200 || knownOwner.status === 201,
+      JSON.stringify(knownOwner.body),
+    );
 
     const warn = await getPool().query(
       `SELECT count(*)::int AS c FROM integration_exception WHERE error_code = 'OWNER_PARTY_NOT_IN_ERP'`,
     );
-    assert.strictEqual(warn.rows[0]!['c'], 0, 'no owner-party warning is raised - the premature supplier-ref comparison is removed');
+    assert.strictEqual(
+      warn.rows[0]!['c'],
+      0,
+      'no owner-party warning is raised - the premature supplier-ref comparison is removed',
+    );
   });
 
   it('Task 9.4: Story 2.7 lead-time integration stays optional-additive - safety stock still fails closed with LEAD_TIME_NOT_CONFIGURED with zero 2.9 data', async () => {
-    const params = await makeRequest(port, 'POST', '/api/v1/planning/params', { sku: 'SKU-ERP-1', location_id: locAId, service_level: 0.95, business_stream: 'production' }, plannerHeaders);
+    const params = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/planning/params',
+      { sku: 'SKU-ERP-1', location_id: locAId, service_level: 0.95, business_stream: 'production' },
+      plannerHeaders,
+    );
     assert.ok(params.status === 200 || params.status === 201, JSON.stringify(params.body));
-    const compute = await makeRequest(port, 'POST', '/api/v1/planning/safety-stock/compute', { sku: 'SKU-ERP-1', location_id: locAId, business_date: BUSINESS_DATE }, plannerHeaders);
+    const compute = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/planning/safety-stock/compute',
+      { sku: 'SKU-ERP-1', location_id: locAId, business_date: BUSINESS_DATE },
+      plannerHeaders,
+    );
     assert.strictEqual(compute.status, 400, JSON.stringify(compute.body));
-    assert.strictEqual(compute.body['error_code'], 'LEAD_TIME_NOT_CONFIGURED', '2.7 fails closed without ERP-derived lead time - 2.9 is not a hard dependency');
+    assert.strictEqual(
+      compute.body['error_code'],
+      'LEAD_TIME_NOT_CONFIGURED',
+      '2.7 fails closed without ERP-derived lead time - 2.9 is not a hard dependency',
+    );
   });
 });

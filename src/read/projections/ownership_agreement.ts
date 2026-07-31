@@ -107,7 +107,10 @@ export interface AgreementFilters {
   active?: boolean | null;
 }
 
-export async function listAgreements(filters: AgreementFilters, client?: PoolClient): Promise<OwnershipAgreementRow[]> {
+export async function listAgreements(
+  filters: AgreementFilters,
+  client?: PoolClient,
+): Promise<OwnershipAgreementRow[]> {
   const conditions: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -162,7 +165,10 @@ export interface UpsertAgreementInput {
  * the minimum. The partial unique index uq_ownership_agreement_active is the concurrency backstop
  * against two racing creates for the same active grain (loser raises 23505 and rolls back).
  */
-export async function upsertAgreement(input: UpsertAgreementInput, client: PoolClient): Promise<void> {
+export async function upsertAgreement(
+  input: UpsertAgreementInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO ownership_agreement (
        agreement_id, sku, location_id, stock_class, owner_party_code, vmi_min_qty, active,
@@ -181,7 +187,9 @@ export async function upsertAgreement(input: UpsertAgreementInput, client: PoolC
       input.location_id,
       input.stock_class,
       input.owner_party_code ?? null,
-      input.vmi_min_qty === undefined || input.vmi_min_qty === null ? null : String(input.vmi_min_qty),
+      input.vmi_min_qty === undefined || input.vmi_min_qty === null
+        ? null
+        : String(input.vmi_min_qty),
       input.active ?? null,
       input.business_stream,
       input.set_by_actor_id ?? null,

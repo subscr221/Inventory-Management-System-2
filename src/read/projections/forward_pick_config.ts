@@ -55,7 +55,11 @@ function mapRow(row: Record<string, unknown>): ForwardPickConfig {
   };
 }
 
-export async function getForwardPickConfig(sku: string, zoneId: string, client?: PoolClient): Promise<ForwardPickConfig | null> {
+export async function getForwardPickConfig(
+  sku: string,
+  zoneId: string,
+  client?: PoolClient,
+): Promise<ForwardPickConfig | null> {
   const result = await runner(client).query(
     `SELECT ${FORWARD_PICK_CONFIG_COLUMNS} FROM forward_pick_config WHERE sku = $1 AND zone_id = $2`,
     [sku, zoneId],
@@ -64,7 +68,11 @@ export async function getForwardPickConfig(sku: string, zoneId: string, client?:
 }
 
 /** Lock variant for the replenishment job's read-decide-persist cycle (Task 5.4). */
-export async function getForwardPickConfigForUpdate(sku: string, zoneId: string, client: PoolClient): Promise<ForwardPickConfig | null> {
+export async function getForwardPickConfigForUpdate(
+  sku: string,
+  zoneId: string,
+  client: PoolClient,
+): Promise<ForwardPickConfig | null> {
   const result = await client.query(
     `SELECT ${FORWARD_PICK_CONFIG_COLUMNS} FROM forward_pick_config WHERE sku = $1 AND zone_id = $2 FOR UPDATE`,
     [sku, zoneId],
@@ -94,7 +102,10 @@ export async function listForwardPickConfigs(
 }
 
 /** Idempotent upsert on the (sku, zone_id) grain. min_qty/max_qty are bound as NUMERIC strings. */
-export async function upsertForwardPickConfig(input: UpsertForwardPickConfigInput, client: PoolClient): Promise<ForwardPickConfig> {
+export async function upsertForwardPickConfig(
+  input: UpsertForwardPickConfigInput,
+  client: PoolClient,
+): Promise<ForwardPickConfig> {
   const result = await client.query(
     `INSERT INTO forward_pick_config (sku, zone_id, site_id, min_qty, max_qty, updated_by)
      VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6)

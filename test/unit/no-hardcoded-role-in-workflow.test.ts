@@ -16,9 +16,13 @@ describe('no-hardcoded-role-in-workflow ESLint rule (FR-DOA-01)', () => {
         // targets the specific role-branching pattern, not every string comparison.
         { code: `if (transactionType === 'po_approval') { doThing(); }` },
         // Resolving through the DOA registry instead of branching on a role name is the sanctioned path.
-        { code: `const approver = await resolveDoa({ transaction_type: 'po_approval', value: 600000 });` },
+        {
+          code: `const approver = await resolveDoa({ transaction_type: 'po_approval', value: 600000 });`,
+        },
         // Carrying a role as data (assignment, comparison of non-role fields) is fine.
-        { code: `const r = { role: 'procurement_head', module: 'compliance' }; if (r.module === 'compliance') {}` },
+        {
+          code: `const r = { role: 'procurement_head', module: 'compliance' }; if (r.module === 'compliance') {}`,
+        },
         // typeof guard on a variable named role is not a role-name branch.
         { code: `function f(role) { if (typeof role !== 'string') throw new Error('bad'); }` },
         // switch on something other than a role.

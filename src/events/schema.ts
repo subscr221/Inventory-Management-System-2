@@ -574,7 +574,8 @@ export interface DispatchDispatchedEnvelope extends Omit<EventEnvelope, 'payload
 // ---------------------------------------------------------------------------
 // Story 3.8: warehouse task management - configurable SLA thresholds
 // ---------------------------------------------------------------------------
-export type WarehouseTaskType = 'receiving' | 'putaway' | 'picking' | 'packing' | 'replenishment' | 'cross_docking';
+export type WarehouseTaskType =
+  'receiving' | 'putaway' | 'picking' | 'packing' | 'replenishment' | 'cross_docking';
 
 export interface TaskSlaConfigUpdatedPayload {
   /**

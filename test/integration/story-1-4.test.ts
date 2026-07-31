@@ -13,7 +13,11 @@ import {
 } from '../../src/api/v1/doa.js';
 import { readStream } from '../../src/events/store.js';
 import { closePool, getPool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
-import { findActiveDelegation, findMatchingDoaEntry, findRoleHolder } from '../../src/read/projections/doa_registry.js';
+import {
+  findActiveDelegation,
+  findMatchingDoaEntry,
+  findRoleHolder,
+} from '../../src/read/projections/doa_registry.js';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,7 +84,11 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
@@ -104,7 +112,12 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
 
   before(async () => {
     const adminPool = getAdminPool();
-    for (const file of ['../../events/domain_events.sql', '../../read/projections/users.sql', '../../read/projections/audit_log.sql', '../../read/projections/doa_registry.sql']) {
+    for (const file of [
+      '../../events/domain_events.sql',
+      '../../read/projections/users.sql',
+      '../../read/projections/audit_log.sql',
+      '../../read/projections/doa_registry.sql',
+    ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
     // The audit tables carry unconditional TRUNCATE protection; use the documented superuser escape
@@ -138,14 +151,26 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
         console.error('Unhandled server error:', err);
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error_code: 'INTERNAL_ERROR', message: 'Internal server error', details: {}, trace_id: 'unknown' }));
+          res.end(
+            JSON.stringify({
+              error_code: 'INTERNAL_ERROR',
+              message: 'Internal server error',
+              details: {},
+              trace_id: 'unknown',
+            }),
+          );
         }
       });
     });
     await new Promise<void>((resolvePromise) => server.listen(TEST_PORT, () => resolvePromise()));
 
     adminUserId = await provisionUser(TEST_PORT, 'doa-admin@example.com', [
-      { role: 'system_administrator', module: 'compliance', functionScope: 'write', locationId: '*' },
+      {
+        role: 'system_administrator',
+        module: 'compliance',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     userAId = await provisionUser(TEST_PORT, userAExt, [
       { role: 'procurement_head', module: 'procurement', functionScope: 'write', locationId: '*' },
@@ -172,13 +197,22 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
       TEST_PORT,
       'POST',
       '/api/v1/doa/entries',
-      { role: 'procurement_head', transaction_type: 'po_approval', value_min: 500000, value_max: null },
+      {
+        role: 'procurement_head',
+        transaction_type: 'po_approval',
+        value_min: 500000,
+        value_max: null,
+      },
       adminHeaders,
     );
     assert.strictEqual(createRes.status, 201, JSON.stringify(createRes.body));
     entryId = createRes.body['entry_id'] as string;
     assert.ok(entryId, 'entry_id should be returned');
-    assert.strictEqual(createRes.body['value_min'], 500000, 'value_min should be a JS number, not a string');
+    assert.strictEqual(
+      createRes.body['value_min'],
+      500000,
+      'value_min should be a JS number, not a string',
+    );
 
     const resolveRes = await makeRequest(
       TEST_PORT,
@@ -191,7 +225,11 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
     const matched = resolveRes.body['matched_entry'] as Record<string, unknown>;
     const approver = resolveRes.body['approver'] as Record<string, unknown>;
     assert.strictEqual(matched['entry_id'], entryId);
-    assert.strictEqual(approver['user_id'], userAId, 'approver should be the procurement_head holder (User A)');
+    assert.strictEqual(
+      approver['user_id'],
+      userAId,
+      'approver should be the procurement_head holder (User A)',
+    );
     assert.strictEqual(resolveRes.body['delegation_applied'], false);
     assert.strictEqual(resolveRes.body['delegated_from'], null);
   });
@@ -201,7 +239,12 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
       TEST_PORT,
       'POST',
       '/api/v1/doa/delegations',
-      { delegator_external_id: userAExt, delegate_external_id: userBExt, start_date: '2026-08-01', end_date: '2026-08-10' },
+      {
+        delegator_external_id: userAExt,
+        delegate_external_id: userBExt,
+        start_date: '2026-08-01',
+        end_date: '2026-08-10',
+      },
       adminHeaders,
     );
     assert.strictEqual(delegationRes.status, 201, JSON.stringify(delegationRes.body));
@@ -236,12 +279,21 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
       { transaction_type: 'po_approval', value: 600000, as_of_date: '2026-07-15' },
       adminHeaders,
     );
-    assert.strictEqual((resolveOutOfWindow.body['approver'] as Record<string, unknown>)['user_id'], userAId);
+    assert.strictEqual(
+      (resolveOutOfWindow.body['approver'] as Record<string, unknown>)['user_id'],
+      userAId,
+    );
     assert.strictEqual(resolveOutOfWindow.body['delegation_applied'], false);
 
     // Deprovisioned-delegate edge (Task 1.2): deactivate User B, then resolving in-window must fall
     // back to User A rather than returning a deprovisioned approver.
-    const deactivate = await makeRequest(TEST_PORT, 'PATCH', `/api/v1/scim/v2/Users/${encodeURIComponent(userBExt)}`, { active: false }, SCIM_HEADERS);
+    const deactivate = await makeRequest(
+      TEST_PORT,
+      'PATCH',
+      `/api/v1/scim/v2/Users/${encodeURIComponent(userBExt)}`,
+      { active: false },
+      SCIM_HEADERS,
+    );
     assert.strictEqual(deactivate.status, 200, JSON.stringify(deactivate.body));
     const resolveAfterDeactivate = await makeRequest(
       TEST_PORT,
@@ -250,7 +302,11 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
       { transaction_type: 'po_approval', value: 600000, as_of_date: '2026-08-05' },
       adminHeaders,
     );
-    assert.strictEqual((resolveAfterDeactivate.body['approver'] as Record<string, unknown>)['user_id'], userAId, 'deprovisioned delegate must not be resolved; falls back to holder');
+    assert.strictEqual(
+      (resolveAfterDeactivate.body['approver'] as Record<string, unknown>)['user_id'],
+      userAId,
+      'deprovisioned delegate must not be resolved; falls back to holder',
+    );
     assert.strictEqual(resolveAfterDeactivate.body['delegation_applied'], false);
   });
 
@@ -274,7 +330,10 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
       adminHeaders,
     );
     assert.strictEqual(resolveRes.status, 200, JSON.stringify(resolveRes.body));
-    assert.strictEqual((resolveRes.body['approver'] as Record<string, unknown>)['user_id'], userAId);
+    assert.strictEqual(
+      (resolveRes.body['approver'] as Record<string, unknown>)['user_id'],
+      userAId,
+    );
 
     // Every DOA registry change is edit-logged with the administrator's identity (AC3 second clause).
     const pool = getPool();
@@ -283,9 +342,16 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
       [`/api/v1/doa/entries/${entryId}`],
     );
     assert.strictEqual(auditRows.rows.length, 1, 'the PATCH must produce an audit-log row');
-    assert.strictEqual(auditRows.rows[0]!['user_id'], adminUserId, 'audit row must attribute the change to the admin, not a body value');
+    assert.strictEqual(
+      auditRows.rows[0]!['user_id'],
+      adminUserId,
+      'audit row must attribute the change to the admin, not a body value',
+    );
     assert.strictEqual(auditRows.rows[0]!['role'], 'system_administrator');
-    assert.ok(auditRows.rows[0]!['event_id'], 'the entry_updated event id should be recorded on the audit row');
+    assert.ok(
+      auditRows.rows[0]!['event_id'],
+      'the entry_updated event id should be recorded on the audit row',
+    );
   });
 
   it('AC4: workflow config cannot override a DOA-governed transaction type', async () => {
@@ -323,7 +389,16 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
     const calls: Array<[string, string, unknown]> = [
       ['POST', '/api/v1/doa/entries', { role: 'x', transaction_type: 'y' }],
       ['PATCH', `/api/v1/doa/entries/${entryId}`, { active: false }],
-      ['POST', '/api/v1/doa/delegations', { delegator_external_id: userAExt, delegate_external_id: userBExt, start_date: '2026-08-01', end_date: '2026-08-10' }],
+      [
+        'POST',
+        '/api/v1/doa/delegations',
+        {
+          delegator_external_id: userAExt,
+          delegate_external_id: userBExt,
+          start_date: '2026-08-01',
+          end_date: '2026-08-10',
+        },
+      ],
       ['POST', '/api/v1/doa/resolve', { transaction_type: 'po_approval', value: 600000 }],
       ['POST', '/api/v1/doa/workflow-config', { transaction_type: 'po_approval' }],
     ];
@@ -346,13 +421,18 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
     assert.strictEqual(res.body['error_code'], 'NO_DOA_ENTRY_MATCH');
   });
 
-  it('resolve returns NO_APPROVER_FOUND when the matched entry\'s role has no active holder', async () => {
+  it("resolve returns NO_APPROVER_FOUND when the matched entry's role has no active holder", async () => {
     // Create an entry for a role nobody holds.
     const createRes = await makeRequest(
       TEST_PORT,
       'POST',
       '/api/v1/doa/entries',
-      { role: 'nonexistent_role', transaction_type: 'orphan_approval', value_min: null, value_max: null },
+      {
+        role: 'nonexistent_role',
+        transaction_type: 'orphan_approval',
+        value_min: null,
+        value_max: null,
+      },
       adminHeaders,
     );
     assert.strictEqual(createRes.status, 201);
@@ -386,7 +466,8 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
          VALUES ($1, $2, $3, $4)`,
         ['procurement_head', 'invalid_direct_write', 500, 400],
       ),
-      (error: unknown) => (error as { constraint?: string }).constraint === 'chk_doa_registry_entries_value_band',
+      (error: unknown) =>
+        (error as { constraint?: string }).constraint === 'chk_doa_registry_entries_value_band',
     );
   });
 
@@ -395,7 +476,12 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
       TEST_PORT,
       'POST',
       '/api/v1/doa/entries',
-      { role: 'procurement_head', transaction_type: 'concurrent_patch', value_min: 100, value_max: null },
+      {
+        role: 'procurement_head',
+        transaction_type: 'concurrent_patch',
+        value_min: 100,
+        value_max: null,
+      },
       adminHeaders,
     );
     assert.strictEqual(createRes.status, 201, JSON.stringify(createRes.body));
@@ -417,23 +503,43 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
     `);
     try {
       const responses = await Promise.all([
-        makeRequest(TEST_PORT, 'PATCH', `/api/v1/doa/entries/${concurrentEntryId}`, { value_max: 150 }, adminHeaders),
-        makeRequest(TEST_PORT, 'PATCH', `/api/v1/doa/entries/${concurrentEntryId}`, { value_min: 200 }, adminHeaders),
+        makeRequest(
+          TEST_PORT,
+          'PATCH',
+          `/api/v1/doa/entries/${concurrentEntryId}`,
+          { value_max: 150 },
+          adminHeaders,
+        ),
+        makeRequest(
+          TEST_PORT,
+          'PATCH',
+          `/api/v1/doa/entries/${concurrentEntryId}`,
+          { value_min: 200 },
+          adminHeaders,
+        ),
       ]);
       assert.deepStrictEqual(
         responses.map((response) => response.status).sort((a, b) => a - b),
         [200, 400],
         responses.map((response) => JSON.stringify(response.body)).join('\n'),
       );
-      assert.strictEqual(responses.find((response) => response.status === 400)?.body['error_code'], 'INVALID_PARAMS');
+      assert.strictEqual(
+        responses.find((response) => response.status === 400)?.body['error_code'],
+        'INVALID_PARAMS',
+      );
 
       const row = await getPool().query(
         `SELECT value_min, value_max FROM doa_registry_entries WHERE entry_id = $1`,
         [concurrentEntryId],
       );
-      const valueMin = row.rows[0]!['value_min'] === null ? null : Number(row.rows[0]!['value_min']);
-      const valueMax = row.rows[0]!['value_max'] === null ? null : Number(row.rows[0]!['value_max']);
-      assert.ok(valueMin === null || valueMax === null || valueMin < valueMax, 'the committed value band must remain valid');
+      const valueMin =
+        row.rows[0]!['value_min'] === null ? null : Number(row.rows[0]!['value_min']);
+      const valueMax =
+        row.rows[0]!['value_max'] === null ? null : Number(row.rows[0]!['value_max']);
+      assert.ok(
+        valueMin === null || valueMax === null || valueMin < valueMax,
+        'the committed value band must remain valid',
+      );
     } finally {
       await adminPool.query('DROP TRIGGER IF EXISTS test_delay_doa_update ON doa_registry_entries');
       await adminPool.query('DROP FUNCTION IF EXISTS test_delay_doa_update()');
@@ -481,8 +587,14 @@ describe('Story 1.4 Enterprise DOA Registry Integration Tests', () => {
         [firstDelegationId, secondDelegationId, userAId, firstUserId, secondUserId, timestamp],
       );
 
-      assert.strictEqual((await findMatchingDoaEntry('tie_approval', 1, client))?.entry_id, firstEntryId);
-      assert.strictEqual((await findActiveDelegation(userAId, '2026-08-05', client))?.delegation_id, firstDelegationId);
+      assert.strictEqual(
+        (await findMatchingDoaEntry('tie_approval', 1, client))?.entry_id,
+        firstEntryId,
+      );
+      assert.strictEqual(
+        (await findActiveDelegation(userAId, '2026-08-05', client))?.delegation_id,
+        firstDelegationId,
+      );
       assert.strictEqual((await findRoleHolder('tie_role', client))?.user_id, firstUserId);
     } finally {
       await client.query('ROLLBACK');

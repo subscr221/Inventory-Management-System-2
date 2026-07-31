@@ -26,7 +26,10 @@ async function seedUser(userId: string, role: string): Promise<void> {
   );
 }
 
-function actor(userId: string, role: string): { user_id: string; role: string; location_id: string } {
+function actor(
+  userId: string,
+  role: string,
+): { user_id: string; role: string; location_id: string } {
   return { user_id: userId, role, location_id: siteId };
 }
 
@@ -40,7 +43,16 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
          ($3, $4, 'zone', $1, $1, 'general', 'ambient', 'standard', false, false, false, 'active'),
          ($5, $6, 'zone', $1, $1, 'staging', 'ambient', 'standard', false, false, false, 'active'),
          ($7, $8, 'bin', $5, $1, 'staging', 'ambient', 'standard', false, false, false, 'active')`,
-      [siteId, `SITE-310-${run}`, receivingLocationId, `RECV-310-${run}`, stagingZoneId, `STAGE-310-${run}`, stagingBinId, `STAGE-BIN-310-${run}`],
+      [
+        siteId,
+        `SITE-310-${run}`,
+        receivingLocationId,
+        `RECV-310-${run}`,
+        stagingZoneId,
+        `STAGE-310-${run}`,
+        stagingBinId,
+        `STAGE-BIN-310-${run}`,
+      ],
     );
     await Promise.all([
       seedUser(receiverId, 'store_assistant'),
@@ -79,7 +91,16 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
          (weighbridge_event_id, correlation_id, gate_event_id, site_id, site_code_ext, po_ref_ext, line_no,
           tare_kg, gross_kg, net_kg, status, device_id, capture_method, weighed_by, business_date, source_event_id)
        VALUES ($1, $2, $3, $4, $5, $6, 1, 1, 3, 2, 'accepted', 'WB-310', 'MANUAL', $7, '2026-07-31', $8)`,
-      [randomUUID(), correlationId, randomUUID(), siteId, `SITE-310-${run}`, poRef, receiverId, randomUUID()],
+      [
+        randomUUID(),
+        correlationId,
+        randomUUID(),
+        siteId,
+        `SITE-310-${run}`,
+        poRef,
+        receiverId,
+        randomUUID(),
+      ],
     );
     await persistEvent({
       event_id: randomUUID(),
@@ -101,7 +122,11 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
         staging_zone_id: stagingZoneId,
         cross_dock_task_id: randomUUID(),
       },
-      metadata: { correlation_id: correlationId, actor: actor(receiverId, 'store_assistant'), occurred_at: '2026-07-31T07:00:00.000Z' },
+      metadata: {
+        correlation_id: correlationId,
+        actor: actor(receiverId, 'store_assistant'),
+        occurred_at: '2026-07-31T07:00:00.000Z',
+      },
     });
     const outcome = await getPool().query(
       `SELECT gl.cross_dock, gl.cross_dock_nonqualification_reason,
@@ -138,7 +163,16 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
          (weighbridge_event_id, correlation_id, gate_event_id, site_id, site_code_ext, po_ref_ext, line_no,
           tare_kg, gross_kg, net_kg, status, device_id, capture_method, weighed_by, business_date, source_event_id)
        VALUES ($1, $2, $3, $4, $5, $6, 1, 1, 2, 1, 'accepted', 'WB-310', 'MANUAL', $7, '2026-07-31', $8)`,
-      [randomUUID(), correlationId, randomUUID(), siteId, `SITE-310-${run}`, poRef, receiverId, randomUUID()],
+      [
+        randomUUID(),
+        correlationId,
+        randomUUID(),
+        siteId,
+        `SITE-310-${run}`,
+        poRef,
+        receiverId,
+        randomUUID(),
+      ],
     );
     await assert.rejects(
       persistEvent({
@@ -161,9 +195,17 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
           staging_zone_id: receivingLocationId,
           cross_dock_task_id: randomUUID(),
         },
-        metadata: { correlation_id: correlationId, actor: actor(receiverId, 'store_assistant'), occurred_at: '2026-07-31T07:30:00.000Z' },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(receiverId, 'store_assistant'),
+          occurred_at: '2026-07-31T07:30:00.000Z',
+        },
       }),
-      (error: unknown) => typeof error === 'object' && error !== null && 'errorCode' in error && error.errorCode === 'CROSS_DOCK_STAGING_INVALID',
+      (error: unknown) =>
+        typeof error === 'object' &&
+        error !== null &&
+        'errorCode' in error &&
+        error.errorCode === 'CROSS_DOCK_STAGING_INVALID',
     );
     const writes = await getPool().query(
       `SELECT
@@ -208,7 +250,16 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
          (weighbridge_event_id, correlation_id, gate_event_id, site_id, site_code_ext, po_ref_ext, line_no,
           tare_kg, gross_kg, net_kg, status, device_id, capture_method, weighed_by, business_date, source_event_id)
        VALUES ($1, $2, $3, $4, $5, $6, 1, 1, 11, 10, 'accepted', 'WB-310', 'MANUAL', $7, '2026-07-31', $8)`,
-      [randomUUID(), correlationId, randomUUID(), siteId, `SITE-310-${run}`, poRef, receiverId, randomUUID()],
+      [
+        randomUUID(),
+        correlationId,
+        randomUUID(),
+        siteId,
+        `SITE-310-${run}`,
+        poRef,
+        receiverId,
+        randomUUID(),
+      ],
     );
 
     await persistEvent({
@@ -231,7 +282,11 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
         staging_zone_id: stagingZoneId,
         cross_dock_task_id: taskId,
       },
-      metadata: { correlation_id: correlationId, actor: actor(receiverId, 'store_assistant'), occurred_at: receivedAt },
+      metadata: {
+        correlation_id: correlationId,
+        actor: actor(receiverId, 'store_assistant'),
+        occurred_at: receivedAt,
+      },
     });
 
     const receipt = await getPool().query(
@@ -246,7 +301,9 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
       status: 'ready',
       quantity: '10.000',
     });
-    const putaway = await getPool().query(`SELECT 1 FROM putaway_task WHERE grn_line_id = $1`, [grnLineId]);
+    const putaway = await getPool().query(`SELECT 1 FROM putaway_task WHERE grn_line_id = $1`, [
+      grnLineId,
+    ]);
     assert.strictEqual(putaway.rows.length, 0);
 
     await persistEvent({
@@ -255,10 +312,18 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
       stream_id: taskId,
       event_type: 'cross_dock_task.assigned',
       payload: { cross_dock_task_id: taskId, assigned_to: operatorId, assigned_by: receiverId },
-      metadata: { correlation_id: correlationId, actor: actor(managerId, 'warehouse_manager'), occurred_at: '2026-07-31T08:01:00.000Z' },
+      metadata: {
+        correlation_id: correlationId,
+        actor: actor(managerId, 'warehouse_manager'),
+        occurred_at: '2026-07-31T08:01:00.000Z',
+      },
     });
 
-    const readyBoard = await listOpenTasks({ siteId, taskType: 'cross_docking', zoneId: stagingZoneId });
+    const readyBoard = await listOpenTasks({
+      siteId,
+      taskType: 'cross_docking',
+      zoneId: stagingZoneId,
+    });
     const readyTask = readyBoard.tasks.filter((row) => row.task_id === taskId);
     assert.equal(readyTask.length, 1);
     assert.equal(readyTask[0]!.assigned_to, operatorId);
@@ -282,8 +347,19 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
       stream_type: 'warehouse',
       stream_id: taskId,
       event_type: 'cross_dock_task.completed',
-      payload: { cross_dock_task_id: taskId, to_location_id: stagingBinId, pick_task_id: pickTaskId, pick_line_id: pickLineId, completed_by: managerId },
-      metadata: { correlation_id: correlationId, actor: actor(operatorId, 'warehouse_operator'), device_id: `DEV-${run}`, occurred_at: completedAt },
+      payload: {
+        cross_dock_task_id: taskId,
+        to_location_id: stagingBinId,
+        pick_task_id: pickTaskId,
+        pick_line_id: pickLineId,
+        completed_by: managerId,
+      },
+      metadata: {
+        correlation_id: correlationId,
+        actor: actor(operatorId, 'warehouse_operator'),
+        device_id: `DEV-${run}`,
+        occurred_at: completedAt,
+      },
     });
 
     const completed = await getPool().query(
@@ -298,20 +374,31 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
     );
     assert.strictEqual(completed.rows[0]!['status'], 'completed');
     assert.strictEqual(completed.rows[0]!['completed_by'], operatorId);
-    assert.strictEqual(new Date(completed.rows[0]!['completed_at'] as string).toISOString(), completedAt);
+    assert.strictEqual(
+      new Date(completed.rows[0]!['completed_at'] as string).toISOString(),
+      completedAt,
+    );
     assert.strictEqual(completed.rows[0]!['pick_status'], 'completed');
     assert.strictEqual(completed.rows[0]!['fulfillment_source'], 'cross_dock');
     assert.strictEqual(completed.rows[0]!['line_status'], 'confirmed');
     assert.strictEqual(completed.rows[0]!['confirmed_quantity'], '10.000');
     assert.strictEqual(completed.rows[0]!['confirmed_location_id'], stagingBinId);
-    assert.strictEqual(new Date(completed.rows[0]!['picked_at'] as string).toISOString(), completedAt);
+    assert.strictEqual(
+      new Date(completed.rows[0]!['picked_at'] as string).toISOString(),
+      completedAt,
+    );
 
     const balances = await getPool().query(
       `SELECT location_id, on_hand::text, allocated::text, picked::text FROM stock_balance WHERE sku = $1 AND lot_id = $2 ORDER BY location_id`,
       [sku, lotNumber],
     );
     assert.deepStrictEqual(
-      balances.rows.map((row) => [row['location_id'], row['on_hand'], row['allocated'], row['picked']]),
+      balances.rows.map((row) => [
+        row['location_id'],
+        row['on_hand'],
+        row['allocated'],
+        row['picked'],
+      ]),
       [
         [receivingLocationId, '0.000000', '0.000000', '0.000000'],
         [stagingBinId, '10.000000', '0.000000', '10.000000'],
@@ -328,13 +415,27 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
             stream_type: 'warehouse',
             stream_id: taskId,
             event_type: 'cross_dock_task.completed',
-            payload: { cross_dock_task_id: taskId, to_location_id: stagingBinId, pick_task_id: pickTaskId, pick_line_id: pickLineId },
-            metadata: { correlation_id: correlationId, actor: actor(operatorId, 'warehouse_operator'), device_id: `DEV-${run}`, occurred_at: completedAt },
+            payload: {
+              cross_dock_task_id: taskId,
+              to_location_id: stagingBinId,
+              pick_task_id: pickTaskId,
+              pick_line_id: pickLineId,
+            },
+            metadata: {
+              correlation_id: correlationId,
+              actor: actor(operatorId, 'warehouse_operator'),
+              device_id: `DEV-${run}`,
+              occurred_at: completedAt,
+            },
           },
           undefined,
           identicalClient,
         ),
-        (error: unknown) => typeof error === 'object' && error !== null && 'errorCode' in error && error.errorCode === 'DUPLICATE_EVENT',
+        (error: unknown) =>
+          typeof error === 'object' &&
+          error !== null &&
+          'errorCode' in error &&
+          error.errorCode === 'DUPLICATE_EVENT',
       );
       await identicalClient.query('ROLLBACK');
     } finally {
@@ -351,13 +452,27 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
             stream_type: 'warehouse',
             stream_id: taskId,
             event_type: 'cross_dock_task.completed',
-            payload: { cross_dock_task_id: taskId, to_location_id: stagingBinId, pick_task_id: randomUUID(), pick_line_id: randomUUID() },
-            metadata: { correlation_id: correlationId, actor: actor(operatorId, 'warehouse_operator'), device_id: `DEV-${run}`, occurred_at: completedAt },
+            payload: {
+              cross_dock_task_id: taskId,
+              to_location_id: stagingBinId,
+              pick_task_id: randomUUID(),
+              pick_line_id: randomUUID(),
+            },
+            metadata: {
+              correlation_id: correlationId,
+              actor: actor(operatorId, 'warehouse_operator'),
+              device_id: `DEV-${run}`,
+              occurred_at: completedAt,
+            },
           },
           undefined,
           conflictingClient,
         ),
-        (error: unknown) => typeof error === 'object' && error !== null && 'errorCode' in error && error.errorCode === 'CROSS_DOCK_TASK_ALREADY_COMPLETED',
+        (error: unknown) =>
+          typeof error === 'object' &&
+          error !== null &&
+          'errorCode' in error &&
+          error.errorCode === 'CROSS_DOCK_TASK_ALREADY_COMPLETED',
       );
       await conflictingClient.query('ROLLBACK');
     } finally {
@@ -368,10 +483,18 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
       `SELECT on_hand::text, allocated::text, picked::text FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id = $3`,
       [sku, stagingBinId, lotNumber],
     );
-    assert.deepStrictEqual(afterReplay.rows[0], { on_hand: '10.000000', allocated: '0.000000', picked: '10.000000' });
+    assert.deepStrictEqual(afterReplay.rows[0], {
+      on_hand: '10.000000',
+      allocated: '0.000000',
+      picked: '10.000000',
+    });
 
     const board = await listOpenTasks({ siteId, taskType: 'cross_docking' });
-    assert.equal(board.tasks.some((row) => row.task_id === taskId), false, 'completed cross-dock work must leave the open board');
+    assert.equal(
+      board.tasks.some((row) => row.task_id === taskId),
+      false,
+      'completed cross-dock work must leave the open board',
+    );
 
     const productivity = await computeConfirmationRate({
       periodStart: '2026-07-31T07:59:59.999Z',
@@ -380,14 +503,16 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
       zoneId: stagingZoneId,
       operatorId,
     });
-    assert.deepStrictEqual(productivity.by_operator, [{
-      operator_id: operatorId,
-      zone_id: null,
-      assigned_count: 1,
-      completed_count: 1,
-      confirmation_rate: '1.0000',
-      avg_duration_seconds: '300.000',
-      median_duration_seconds: '300.000',
-    }]);
+    assert.deepStrictEqual(productivity.by_operator, [
+      {
+        operator_id: operatorId,
+        zone_id: null,
+        assigned_count: 1,
+        completed_count: 1,
+        confirmation_rate: '1.0000',
+        avg_duration_seconds: '300.000',
+        median_duration_seconds: '300.000',
+      },
+    ]);
   });
 });

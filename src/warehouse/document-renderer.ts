@@ -13,10 +13,9 @@ async function resolveShipFrom(dispatchOrderId: string, client: PoolClient): Pro
 }
 
 async function resolveConsignee(dispatchOrderId: string, client: PoolClient): Promise<string> {
-  const result = await client.query(
-    `SELECT ship_to_ext FROM erp_sales_order WHERE id = $1`,
-    [dispatchOrderId],
-  );
+  const result = await client.query(`SELECT ship_to_ext FROM erp_sales_order WHERE id = $1`, [
+    dispatchOrderId,
+  ]);
   if (result.rows.length === 0) return 'Unknown';
   return result.rows[0].ship_to_ext || 'Unknown';
 }
@@ -24,12 +23,14 @@ async function resolveConsignee(dispatchOrderId: string, client: PoolClient): Pr
 async function resolvePackingLines(
   dispatchOrderId: string,
   client: PoolClient,
-): Promise<Array<{
-  sku: string;
-  packed_qty: string;
-  lot_number: string;
-  lot_expiry: string | null;
-}>> {
+): Promise<
+  Array<{
+    sku: string;
+    packed_qty: string;
+    lot_number: string;
+    lot_expiry: string | null;
+  }>
+> {
   const result = await client.query(
     `SELECT pr.sku, pr.packed_qty,
             lm.lot_number, to_char(lm.expiry_date, 'YYYY-MM-DD') AS expiry_date
@@ -69,7 +70,7 @@ export async function renderBOL(dispatchOrderId: string, client: PoolClient): Pr
     `SELECT so_number_ext, quantity, sku FROM erp_sales_order WHERE id = $1`,
     [dispatchOrderId],
   );
-  const soNumber = soResult.rows.length > 0 ? soResult.rows[0].so_number_ext as string : 'N/A';
+  const soNumber = soResult.rows.length > 0 ? (soResult.rows[0].so_number_ext as string) : 'N/A';
   const shipFrom = await resolveShipFrom(dispatchOrderId, client);
   const consignee = await resolveConsignee(dispatchOrderId, client);
   const lines = await resolvePackingLines(dispatchOrderId, client);
@@ -94,12 +95,14 @@ Issued without recourse. E. & O. E.
   return content;
 }
 
-export async function renderPackingSlip(dispatchOrderId: string, client: PoolClient): Promise<string> {
-  const soResult = await client.query(
-    `SELECT so_number_ext FROM erp_sales_order WHERE id = $1`,
-    [dispatchOrderId],
-  );
-  const soNumber = soResult.rows.length > 0 ? soResult.rows[0].so_number_ext as string : 'N/A';
+export async function renderPackingSlip(
+  dispatchOrderId: string,
+  client: PoolClient,
+): Promise<string> {
+  const soResult = await client.query(`SELECT so_number_ext FROM erp_sales_order WHERE id = $1`, [
+    dispatchOrderId,
+  ]);
+  const soNumber = soResult.rows.length > 0 ? (soResult.rows[0].so_number_ext as string) : 'N/A';
   const shipFrom = await resolveShipFrom(dispatchOrderId, client);
   const lines = await resolvePackingLines(dispatchOrderId, client);
   const totals = await resolveTotals(dispatchOrderId, client);
@@ -124,12 +127,16 @@ Total Weight: ${totals.totalWeightKg ?? 'N/A'} kg
 
 // invoiceDate must be a deterministic caller-supplied value (e.g. the persisted event's
 // metadata.occurred_at) — never generated inside the renderer, per Task 5.6's determinism requirement.
-export async function renderCommercialInvoice(dispatchOrderId: string, client: PoolClient, invoiceDate?: string): Promise<string> {
+export async function renderCommercialInvoice(
+  dispatchOrderId: string,
+  client: PoolClient,
+  invoiceDate?: string,
+): Promise<string> {
   const soResult = await client.query(
     `SELECT so_number_ext, sku, quantity FROM erp_sales_order WHERE id = $1`,
     [dispatchOrderId],
   );
-  const soNumber = soResult.rows.length > 0 ? soResult.rows[0].so_number_ext as string : 'N/A';
+  const soNumber = soResult.rows.length > 0 ? (soResult.rows[0].so_number_ext as string) : 'N/A';
   const shipFrom = await resolveShipFrom(dispatchOrderId, client);
   const consignee = await resolveConsignee(dispatchOrderId, client);
   const lines = await resolvePackingLines(dispatchOrderId, client);
@@ -163,8 +170,9 @@ export async function renderLabels(dispatchOrderId: string, client: PoolClient):
     `SELECT so_number_ext, ship_from_site_code_ext FROM erp_sales_order WHERE id = $1`,
     [dispatchOrderId],
   );
-  const soNumber = soResult.rows.length > 0 ? soResult.rows[0].so_number_ext as string : 'N/A';
-  const siteCode = soResult.rows.length > 0 ? soResult.rows[0].ship_from_site_code_ext as string : 'N/A';
+  const soNumber = soResult.rows.length > 0 ? (soResult.rows[0].so_number_ext as string) : 'N/A';
+  const siteCode =
+    soResult.rows.length > 0 ? (soResult.rows[0].ship_from_site_code_ext as string) : 'N/A';
 
   // Task 5.5: labels must include the correct SKU and lot number per carton — group cartons by
   // their own packing record rather than stamping every carton with the first lot found.
@@ -189,7 +197,9 @@ export async function renderLabels(dispatchOrderId: string, client: PoolClient):
   for (const record of records) {
     for (let i = 1; i <= record.carton_count; i++) {
       cartonNumber += 1;
-      labels.push(`[${siteCode}] SO: ${soNumber} | Carton ${cartonNumber}/${totalCartons} | SKU: ${record.sku} | Lot: ${record.lot_number}`);
+      labels.push(
+        `[${siteCode}] SO: ${soNumber} | Carton ${cartonNumber}/${totalCartons} | SKU: ${record.sku} | Lot: ${record.lot_number}`,
+      );
     }
   }
 

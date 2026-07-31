@@ -8,7 +8,10 @@ import {
   CROSS_DOCK_ERROR_CODES,
   isCrossDockQuantityCapacity,
 } from '../../src/compliance/cross-dock.js';
-import { findCrossDockDemandMatch, lockSalesOrderDemandLine } from '../../src/read/projections/erp_sales_order.js';
+import {
+  findCrossDockDemandMatch,
+  lockSalesOrderDemandLine,
+} from '../../src/read/projections/erp_sales_order.js';
 import type {
   CrossDockTaskAssignedEnvelope,
   CrossDockTaskCompletedEnvelope,
@@ -115,10 +118,28 @@ describe('Story 3.10 Task 2 cross-dock event contracts', () => {
   });
 
   it('rejects malformed or contradictory cross-dock receipt shapes', () => {
-    expectInvalid(() => assertGoodsReceivedShape(goodsReceived({ cross_dock: 'true' })), 'non-boolean flag');
-    expectInvalid(() => assertGoodsReceivedShape(goodsReceived({ staging_zone_code: 'STAGE-1' })), 'selector without flag');
-    expectInvalid(() => assertGoodsReceivedShape(goodsReceived({ cross_dock: false, cross_dock_task_id: randomUUID() })), 'task id with false flag');
-    expectInvalid(() => assertGoodsReceivedShape(goodsReceived({ cross_dock: true, cross_dock_task_id: randomUUID() })), 'missing selector');
+    expectInvalid(
+      () => assertGoodsReceivedShape(goodsReceived({ cross_dock: 'true' })),
+      'non-boolean flag',
+    );
+    expectInvalid(
+      () => assertGoodsReceivedShape(goodsReceived({ staging_zone_code: 'STAGE-1' })),
+      'selector without flag',
+    );
+    expectInvalid(
+      () =>
+        assertGoodsReceivedShape(
+          goodsReceived({ cross_dock: false, cross_dock_task_id: randomUUID() }),
+        ),
+      'task id with false flag',
+    );
+    expectInvalid(
+      () =>
+        assertGoodsReceivedShape(
+          goodsReceived({ cross_dock: true, cross_dock_task_id: randomUUID() }),
+        ),
+      'missing selector',
+    );
     expectInvalid(
       () =>
         assertGoodsReceivedShape(
@@ -132,35 +153,80 @@ describe('Story 3.10 Task 2 cross-dock event contracts', () => {
       'two selectors',
     );
     expectInvalid(
-      () => assertGoodsReceivedShape(goodsReceived({ cross_dock: true, staging_zone_id: 'bad', cross_dock_task_id: randomUUID() })),
+      () =>
+        assertGoodsReceivedShape(
+          goodsReceived({
+            cross_dock: true,
+            staging_zone_id: 'bad',
+            cross_dock_task_id: randomUUID(),
+          }),
+        ),
       'malformed staging UUID',
     );
     expectInvalid(
-      () => assertGoodsReceivedShape(goodsReceived({ cross_dock: true, staging_zone_code: 'STAGE-1', cross_dock_task_id: 'bad' })),
+      () =>
+        assertGoodsReceivedShape(
+          goodsReceived({
+            cross_dock: true,
+            staging_zone_code: 'STAGE-1',
+            cross_dock_task_id: 'bad',
+          }),
+        ),
       'malformed task UUID',
     );
     assert.throws(
       () => assertGoodsReceivedShape(goodsReceived({ received_qty: '10.0001' })),
-      (error: unknown) => error instanceof AppError && error.statusCode === 400 && error.errorCode === 'RECEIVING_QTY_REQUIRED',
+      (error: unknown) =>
+        error instanceof AppError &&
+        error.statusCode === 400 &&
+        error.errorCode === 'RECEIVING_QTY_REQUIRED',
       'inexact receipt quantity',
     );
   });
 
   it('validates assignment identifiers and priority', () => {
     assert.doesNotThrow(() => assertCrossDockTaskAssignedShape(assigned({ priority: 'urgent' })));
-    expectInvalid(() => assertCrossDockTaskAssignedShape(assigned({ cross_dock_task_id: 'bad' })), 'assignment task id');
-    expectInvalid(() => assertCrossDockTaskAssignedShape(assigned({ assigned_to: 'bad' })), 'assignment assignee');
-    expectInvalid(() => assertCrossDockTaskAssignedShape(assigned({ priority: 'rush' })), 'assignment priority');
+    expectInvalid(
+      () => assertCrossDockTaskAssignedShape(assigned({ cross_dock_task_id: 'bad' })),
+      'assignment task id',
+    );
+    expectInvalid(
+      () => assertCrossDockTaskAssignedShape(assigned({ assigned_to: 'bad' })),
+      'assignment assignee',
+    );
+    expectInvalid(
+      () => assertCrossDockTaskAssignedShape(assigned({ priority: 'rush' })),
+      'assignment priority',
+    );
   });
 
   it('requires deterministic fulfillment ids and exactly one completion destination selector', () => {
     assert.doesNotThrow(() => assertCrossDockTaskCompletedShape(completed()));
-    assert.doesNotThrow(() => assertCrossDockTaskCompletedShape(completed({ to_location_id: undefined, to_location_code: 'STAGE-BIN-1' })));
-    expectInvalid(() => assertCrossDockTaskCompletedShape(completed({ cross_dock_task_id: 'bad' })), 'completion task id');
-    expectInvalid(() => assertCrossDockTaskCompletedShape(completed({ pick_task_id: 'bad' })), 'synthetic pick task id');
-    expectInvalid(() => assertCrossDockTaskCompletedShape(completed({ pick_line_id: 'bad' })), 'synthetic pick line id');
-    expectInvalid(() => assertCrossDockTaskCompletedShape(completed({ to_location_id: undefined })), 'missing destination');
-    expectInvalid(() => assertCrossDockTaskCompletedShape(completed({ to_location_code: 'STAGE-BIN-1' })), 'two destinations');
+    assert.doesNotThrow(() =>
+      assertCrossDockTaskCompletedShape(
+        completed({ to_location_id: undefined, to_location_code: 'STAGE-BIN-1' }),
+      ),
+    );
+    expectInvalid(
+      () => assertCrossDockTaskCompletedShape(completed({ cross_dock_task_id: 'bad' })),
+      'completion task id',
+    );
+    expectInvalid(
+      () => assertCrossDockTaskCompletedShape(completed({ pick_task_id: 'bad' })),
+      'synthetic pick task id',
+    );
+    expectInvalid(
+      () => assertCrossDockTaskCompletedShape(completed({ pick_line_id: 'bad' })),
+      'synthetic pick line id',
+    );
+    expectInvalid(
+      () => assertCrossDockTaskCompletedShape(completed({ to_location_id: undefined })),
+      'missing destination',
+    );
+    expectInvalid(
+      () => assertCrossDockTaskCompletedShape(completed({ to_location_code: 'STAGE-BIN-1' })),
+      'two destinations',
+    );
   });
 
   it('exposes only the bounded stable cross-dock failure vocabulary', () => {
@@ -224,7 +290,10 @@ describe('Story 3.10 Tasks 3-5 exact demand contracts', () => {
     const sql = calls.map((call) => call.text).join('\n');
     assert.match(sql, /pl\.status <> 'cancelled'/);
     assert.match(sql, /cdt\.status = 'ready'/);
-    assert.match(sql, /required_by ASC NULLS LAST,\s*eso\.so_number_ext ASC,\s*eso\.line_no ASC,\s*eso\.id ASC/);
+    assert.match(
+      sql,
+      /required_by ASC NULLS LAST,\s*eso\.so_number_ext ASC,\s*eso\.line_no ASC,\s*eso\.id ASC/,
+    );
     assert.match(sql, /FOR UPDATE OF eso/);
     assert.doesNotMatch(sql, /::float|double precision/i);
   });

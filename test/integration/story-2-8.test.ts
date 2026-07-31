@@ -28,7 +28,13 @@ interface Role {
   locationId: string;
 }
 
-function makeRequest(port: number, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<HttpResult> {
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<HttpResult> {
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -69,14 +75,27 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
 }
 
 async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
-  const res = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', { externalId, email: externalId, displayName: externalId, roles }, SCIM_HEADERS);
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  const res = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/scim/v2/Users',
+    { externalId, email: externalId, displayName: externalId, roles },
+    SCIM_HEADERS,
+  );
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -163,14 +182,29 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
     plannerHeaders = await authFor(port, 'planner-2-8@example.com');
 
     await provisionUser(port, 'scoped-planner-2-8@example.com', [
-      { role: 'inventory_planner', module: 'inventory', functionScope: 'write', locationId: locAId },
+      {
+        role: 'inventory_planner',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: locAId,
+      },
       { role: 'inventory_planner', module: 'inventory', functionScope: 'read', locationId: locAId },
     ]);
     scopedPlannerHeaders = await authFor(port, 'scoped-planner-2-8@example.com');
 
     await provisionUser(port, 'warehouse-writer-2-8@example.com', [
-      { role: 'warehouse_operator', module: 'inventory', functionScope: 'write', locationId: locAId },
-      { role: 'warehouse_operator', module: 'inventory', functionScope: 'read', locationId: locAId },
+      {
+        role: 'warehouse_operator',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: locAId,
+      },
+      {
+        role: 'warehouse_operator',
+        module: 'inventory',
+        functionScope: 'read',
+        locationId: locAId,
+      },
     ]);
     warehouseWriterHeaders = await authFor(port, 'warehouse-writer-2-8@example.com');
   });
@@ -191,7 +225,11 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
     );
   }
 
-  async function postStockEvent(eventType: string, payload: Record<string, unknown>, eventId?: string): Promise<HttpResult> {
+  async function postStockEvent(
+    eventType: string,
+    payload: Record<string, unknown>,
+    eventId?: string,
+  ): Promise<HttpResult> {
     return makeRequest(
       port,
       'POST',
@@ -212,8 +250,20 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
     );
   }
 
-  async function putAgreement(sku: string, locationId: string, stockClass: string, body: Record<string, unknown>, headers = plannerHeaders): Promise<HttpResult> {
-    return makeRequest(port, 'PUT', `/api/v1/ownership-agreements/${sku}/${locationId}/${stockClass}`, body, headers);
+  async function putAgreement(
+    sku: string,
+    locationId: string,
+    stockClass: string,
+    body: Record<string, unknown>,
+    headers = plannerHeaders,
+  ): Promise<HttpResult> {
+    return makeRequest(
+      port,
+      'PUT',
+      `/api/v1/ownership-agreements/${sku}/${locationId}/${stockClass}`,
+      body,
+      headers,
+    );
   }
 
   async function getStock(sku: string): Promise<Record<string, unknown>> {
@@ -222,11 +272,17 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
     return res.body;
   }
 
-  function classEntry(stock: Record<string, unknown>, locationId: string, stockClass: string): Record<string, unknown> | undefined {
+  function classEntry(
+    stock: Record<string, unknown>,
+    locationId: string,
+    stockClass: string,
+  ): Record<string, unknown> | undefined {
     const locations = stock['locations'] as Array<Record<string, unknown>>;
     const loc = locations.find((l) => l['location_id'] === locationId);
     if (!loc) return undefined;
-    return (loc['classes'] as Array<Record<string, unknown>>).find((c) => c['stock_class'] === stockClass);
+    return (loc['classes'] as Array<Record<string, unknown>>).find(
+      (c) => c['stock_class'] === stockClass,
+    );
   }
 
   // --- AC1: consignment receipt segregated with supplier reference --------
@@ -234,12 +290,20 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('AC1: a consignment receipt lands under stock_class consignment with the supplier reference and leaves owned unchanged', async () => {
     const sku = 'RM-0099-A';
     await seedItem(sku);
-    const created = await putAgreement(sku, locAId, 'consignment', { owner_party_code: 'SUP-007', business_stream: 'production' });
+    const created = await putAgreement(sku, locAId, 'consignment', {
+      owner_party_code: 'SUP-007',
+      business_stream: 'production',
+    });
     assert.strictEqual(created.status, 201, JSON.stringify(created.body));
     assert.strictEqual(created.body['owner_party_code'], 'SUP-007');
     assert.strictEqual(created.body['active'], true);
 
-    const ownedReceipt = await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 40, unit_cost: 5 });
+    const ownedReceipt = await postStockEvent('stock.received', {
+      sku,
+      target_location_id: locAId,
+      quantity: 40,
+      unit_cost: 5,
+    });
     assert.strictEqual(ownedReceipt.status, 201, JSON.stringify(ownedReceipt.body));
     const consignmentReceipt = await postStockEvent('stock.received', {
       sku,
@@ -252,7 +316,9 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
 
     const stock = await getStock(sku);
     assert.strictEqual((stock['consolidated'] as Record<string, unknown>)['on_hand'], 40);
-    const location = (stock['locations'] as Array<Record<string, unknown>>).find((l) => l['location_id'] === locAId)!;
+    const location = (stock['locations'] as Array<Record<string, unknown>>).find(
+      (l) => l['location_id'] === locAId,
+    )!;
     assert.strictEqual(location['on_hand'], 40);
     const owned = classEntry(stock, locAId, 'owned');
     const consignment = classEntry(stock, locAId, 'consignment');
@@ -303,7 +369,12 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
 
   it('AC1 guard: a consignment receipt without owner_party_code fails shape validation', async () => {
     const sku = 'RM-0099-A';
-    const res = await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 10, stock_class: 'consignment' });
+    const res = await postStockEvent('stock.received', {
+      sku,
+      target_location_id: locAId,
+      quantity: 10,
+      stock_class: 'consignment',
+    });
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
   });
@@ -311,7 +382,12 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('job_work receipts stay outside the ownership gate (Epic 9 flow untouched)', async () => {
     const sku = 'RM-0099-JW';
     await seedItem(sku);
-    const res = await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 5, stock_class: 'job_work' });
+    const res = await postStockEvent('stock.received', {
+      sku,
+      target_location_id: locAId,
+      quantity: 5,
+      stock_class: 'job_work',
+    });
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const stock = await getStock(sku);
     assert.strictEqual(classEntry(stock, locAId, 'job_work')!['on_hand'], 5);
@@ -321,7 +397,11 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
 
   it('AC2: an issue without stock_class draws from owned stock only', async () => {
     const sku = 'RM-0099-A';
-    const res = await postStockEvent('stock.issued', { sku, target_location_id: locAId, quantity: 30 });
+    const res = await postStockEvent('stock.issued', {
+      sku,
+      target_location_id: locAId,
+      quantity: 30,
+    });
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const stock = await getStock(sku);
     assert.strictEqual(classEntry(stock, locAId, 'owned')!['on_hand'], 10);
@@ -331,7 +411,11 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('AC2 guard: a classless issue larger than owned availability is INSUFFICIENT_STOCK even when consignment stock could cover it', async () => {
     const sku = 'RM-0099-A';
     // owned = 10, consignment = 100: a classless issue of 50 must NOT touch consignment.
-    const res = await postStockEvent('stock.issued', { sku, target_location_id: locAId, quantity: 50 });
+    const res = await postStockEvent('stock.issued', {
+      sku,
+      target_location_id: locAId,
+      quantity: 50,
+    });
     assert.strictEqual(res.status, 409, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'INSUFFICIENT_STOCK');
     const details = res.body['details'] as Record<string, unknown>;
@@ -344,31 +428,55 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('AC2 transfer regression: lot-less owned transfer does not mark consignment in_transit', async () => {
     const sku = 'RM-0099-XFER';
     await seedItem(sku);
-    assert.strictEqual((await putAgreement(sku, locAId, 'consignment', { owner_party_code: 'SUP-055', business_stream: 'production' })).status, 201);
-    assert.strictEqual((await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 20 })).status, 201);
     assert.strictEqual(
-      (await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 20, stock_class: 'consignment', owner_party_code: 'SUP-055' })).status,
+      (
+        await putAgreement(sku, locAId, 'consignment', {
+          owner_party_code: 'SUP-055',
+          business_stream: 'production',
+        })
+      ).status,
+      201,
+    );
+    assert.strictEqual(
+      (await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 20 }))
+        .status,
+      201,
+    );
+    assert.strictEqual(
+      (
+        await postStockEvent('stock.received', {
+          sku,
+          target_location_id: locAId,
+          quantity: 20,
+          stock_class: 'consignment',
+          owner_party_code: 'SUP-055',
+        })
+      ).status,
       201,
     );
     const transferRequestId = randomUUID();
     assert.strictEqual(
-      (await postStockEvent('transfer_request.created', {
-        transfer_request_id: transferRequestId,
-        sku_id: sku,
-        quantity: 5,
-        from_location_id: locAId,
-        to_location_id: locBId,
-        status: 'pending_shipment',
-      })).status,
+      (
+        await postStockEvent('transfer_request.created', {
+          transfer_request_id: transferRequestId,
+          sku_id: sku,
+          quantity: 5,
+          from_location_id: locAId,
+          to_location_id: locBId,
+          status: 'pending_shipment',
+        })
+      ).status,
       201,
     );
     assert.strictEqual(
-      (await postStockEvent('transfer_ship.created', {
-        transfer_request_id: transferRequestId,
-        lot_id: 'SHIP-LOT-XFER',
-        shipped_quantity: 5,
-        correlation_id: randomUUID(),
-      })).status,
+      (
+        await postStockEvent('transfer_ship.created', {
+          transfer_request_id: transferRequestId,
+          lot_id: 'SHIP-LOT-XFER',
+          shipped_quantity: 5,
+          correlation_id: randomUUID(),
+        })
+      ).status,
       201,
     );
     const stock = await getStock(sku);
@@ -380,7 +488,12 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
 
   it('AC5: a consignment issue exceeding consignment on-hand is rejected INSUFFICIENT_STOCK without drawing owned stock', async () => {
     const sku = 'RM-0099-A';
-    const res = await postStockEvent('stock.issued', { sku, target_location_id: locAId, quantity: 120, stock_class: 'consignment' });
+    const res = await postStockEvent('stock.issued', {
+      sku,
+      target_location_id: locAId,
+      quantity: 120,
+      stock_class: 'consignment',
+    });
     assert.strictEqual(res.status, 409, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'INSUFFICIENT_STOCK');
     const details = res.body['details'] as Record<string, unknown>;
@@ -393,7 +506,12 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
 
   it('AC5: an explicit consignment issue within availability drains consignment only', async () => {
     const sku = 'RM-0099-A';
-    const res = await postStockEvent('stock.issued', { sku, target_location_id: locAId, quantity: 60, stock_class: 'consignment' });
+    const res = await postStockEvent('stock.issued', {
+      sku,
+      target_location_id: locAId,
+      quantity: 60,
+      stock_class: 'consignment',
+    });
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const stock = await getStock(sku);
     assert.strictEqual(classEntry(stock, locAId, 'owned')!['on_hand'], 10);
@@ -405,15 +523,42 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('AC4: valuation carrying value covers owned units only; consignment units report at zero value in non_owned_quantities', async () => {
     const sku = 'RM-0099-VAL';
     await seedItem(sku);
-    const agr = await putAgreement(sku, locAId, 'consignment', { owner_party_code: 'SUP-007', business_stream: 'production' });
+    const agr = await putAgreement(sku, locAId, 'consignment', {
+      owner_party_code: 'SUP-007',
+      business_stream: 'production',
+    });
     assert.strictEqual(agr.status, 201, JSON.stringify(agr.body));
-    assert.strictEqual((await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 40, unit_cost: 5 })).status, 201);
     assert.strictEqual(
-      (await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 100, stock_class: 'consignment', owner_party_code: 'SUP-007' })).status,
+      (
+        await postStockEvent('stock.received', {
+          sku,
+          target_location_id: locAId,
+          quantity: 40,
+          unit_cost: 5,
+        })
+      ).status,
+      201,
+    );
+    assert.strictEqual(
+      (
+        await postStockEvent('stock.received', {
+          sku,
+          target_location_id: locAId,
+          quantity: 100,
+          stock_class: 'consignment',
+          owner_party_code: 'SUP-007',
+        })
+      ).status,
       201,
     );
 
-    const res = await makeRequest(port, 'GET', `/api/v1/stock/${sku}/valuation`, undefined, plannerHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${sku}/valuation`,
+      undefined,
+      plannerHeaders,
+    );
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body['quantity_on_hand'], 40);
     assert.strictEqual(res.body['carrying_value'], 200);
@@ -430,21 +575,45 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('AC3: vmi stock below the agreed minimum produces a vmi_replenishment signal carrying the owner party, visible in the exception queue', async () => {
     const sku = 'RM-0099-VMI';
     await seedItem(sku);
-    const agr = await putAgreement(sku, locAId, 'vmi', { owner_party_code: 'SUP-042', vmi_min_qty: 50, business_stream: 'production' });
+    const agr = await putAgreement(sku, locAId, 'vmi', {
+      owner_party_code: 'SUP-042',
+      vmi_min_qty: 50,
+      business_stream: 'production',
+    });
     assert.strictEqual(agr.status, 201, JSON.stringify(agr.body));
     assert.strictEqual(
-      (await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 30, stock_class: 'vmi', owner_party_code: 'SUP-042' })).status,
+      (
+        await postStockEvent('stock.received', {
+          sku,
+          target_location_id: locAId,
+          quantity: 30,
+          stock_class: 'vmi',
+          owner_party_code: 'SUP-042',
+        })
+      ).status,
       201,
     );
 
-    const check = await makeRequest(port, 'POST', '/api/v1/planning/vmi/check', { business_date: BUSINESS_DATE, sku }, plannerHeaders);
+    const check = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/planning/vmi/check',
+      { business_date: BUSINESS_DATE, sku },
+      plannerHeaders,
+    );
     assert.strictEqual(check.status, 200, JSON.stringify(check.body));
     const recommended = check.body['recommended'] as Array<Record<string, unknown>>;
     assert.strictEqual(recommended.length, 1);
     assert.strictEqual(recommended[0]!['owner_party_code'], 'SUP-042');
     assert.strictEqual(recommended[0]!['recommended_order_qty'], 20);
 
-    const queue = await makeRequest(port, 'GET', `/api/v1/planning/replenishment/recommendations?sku=${sku}&signal_type=vmi_replenishment`, undefined, plannerHeaders);
+    const queue = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/planning/replenishment/recommendations?sku=${sku}&signal_type=vmi_replenishment`,
+      undefined,
+      plannerHeaders,
+    );
     assert.strictEqual(queue.status, 200, JSON.stringify(queue.body));
     const rows = queue.body['recommendations'] as Array<Record<string, unknown>>;
     assert.strictEqual(rows.length, 1);
@@ -465,7 +634,13 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
 
   it('AC3 idempotency: re-running the vmi check over unchanged state produces no duplicate open signal or alert', async () => {
     const sku = 'RM-0099-VMI';
-    const again = await makeRequest(port, 'POST', '/api/v1/planning/vmi/check', { business_date: BUSINESS_DATE, sku }, plannerHeaders);
+    const again = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/planning/vmi/check',
+      { business_date: BUSINESS_DATE, sku },
+      plannerHeaders,
+    );
     assert.strictEqual(again.status, 200, JSON.stringify(again.body));
     assert.strictEqual((again.body['recommended'] as unknown[]).length, 0);
     const open = await getPool().query(
@@ -505,12 +680,35 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('AC3 threshold: at-or-above the vmi minimum no signal is produced', async () => {
     const sku = 'RM-0099-VMI-OK';
     await seedItem(sku);
-    assert.strictEqual((await putAgreement(sku, locAId, 'vmi', { owner_party_code: 'SUP-042', vmi_min_qty: 50, business_stream: 'production' })).status, 201);
     assert.strictEqual(
-      (await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 50, stock_class: 'vmi', owner_party_code: 'SUP-042' })).status,
+      (
+        await putAgreement(sku, locAId, 'vmi', {
+          owner_party_code: 'SUP-042',
+          vmi_min_qty: 50,
+          business_stream: 'production',
+        })
+      ).status,
       201,
     );
-    const check = await makeRequest(port, 'POST', '/api/v1/planning/vmi/check', { business_date: BUSINESS_DATE, sku }, plannerHeaders);
+    assert.strictEqual(
+      (
+        await postStockEvent('stock.received', {
+          sku,
+          target_location_id: locAId,
+          quantity: 50,
+          stock_class: 'vmi',
+          owner_party_code: 'SUP-042',
+        })
+      ).status,
+      201,
+    );
+    const check = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/planning/vmi/check',
+      { business_date: BUSINESS_DATE, sku },
+      plannerHeaders,
+    );
     assert.strictEqual(check.status, 200, JSON.stringify(check.body));
     assert.strictEqual((check.body['recommended'] as unknown[]).length, 0);
   });
@@ -518,7 +716,10 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('AC3 fail-closed: an active vmi agreement without a minimum is rejected with VMI_MIN_NOT_CONFIGURED', async () => {
     const sku = 'RM-0099-VMI-NOMIN';
     await seedItem(sku);
-    const created = await putAgreement(sku, locAId, 'vmi', { owner_party_code: 'SUP-042', business_stream: 'production' });
+    const created = await putAgreement(sku, locAId, 'vmi', {
+      owner_party_code: 'SUP-042',
+      business_stream: 'production',
+    });
     assert.strictEqual(created.status, 400, JSON.stringify(created.body));
     assert.strictEqual(created.body['error_code'], 'VMI_MIN_NOT_CONFIGURED');
   });
@@ -526,18 +727,50 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('AC3 concurrency: concurrent vmi checks produce exactly one open signal and one alert', async () => {
     const sku = 'RM-0099-VMI-RACE';
     await seedItem(sku);
-    assert.strictEqual((await putAgreement(sku, locAId, 'vmi', { owner_party_code: 'SUP-044', vmi_min_qty: 50, business_stream: 'production' })).status, 201);
     assert.strictEqual(
-      (await postStockEvent('stock.received', { sku, target_location_id: locAId, quantity: 30, stock_class: 'vmi', owner_party_code: 'SUP-044' })).status,
+      (
+        await putAgreement(sku, locAId, 'vmi', {
+          owner_party_code: 'SUP-044',
+          vmi_min_qty: 50,
+          business_stream: 'production',
+        })
+      ).status,
+      201,
+    );
+    assert.strictEqual(
+      (
+        await postStockEvent('stock.received', {
+          sku,
+          target_location_id: locAId,
+          quantity: 30,
+          stock_class: 'vmi',
+          owner_party_code: 'SUP-044',
+        })
+      ).status,
       201,
     );
 
     const checks = await Promise.all([
-      makeRequest(port, 'POST', '/api/v1/planning/vmi/check', { business_date: BUSINESS_DATE, sku }, plannerHeaders),
-      makeRequest(port, 'POST', '/api/v1/planning/vmi/check', { business_date: BUSINESS_DATE, sku }, plannerHeaders),
+      makeRequest(
+        port,
+        'POST',
+        '/api/v1/planning/vmi/check',
+        { business_date: BUSINESS_DATE, sku },
+        plannerHeaders,
+      ),
+      makeRequest(
+        port,
+        'POST',
+        '/api/v1/planning/vmi/check',
+        { business_date: BUSINESS_DATE, sku },
+        plannerHeaders,
+      ),
     ]);
     for (const check of checks) assert.strictEqual(check.status, 200, JSON.stringify(check.body));
-    assert.strictEqual(checks.reduce((sum, check) => sum + ((check.body['recommended'] as unknown[]).length), 0), 1);
+    assert.strictEqual(
+      checks.reduce((sum, check) => sum + (check.body['recommended'] as unknown[]).length, 0),
+      1,
+    );
     const open = await getPool().query(
       `SELECT count(*)::int AS c FROM replenishment_recommendation WHERE sku = $1 AND status = 'open' AND signal_type = 'vmi_replenishment'`,
       [sku],
@@ -556,7 +789,10 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
 
   it('agreement partial edits preserve omitted config', async () => {
     const sku = 'RM-0099-VMI';
-    const edited = await putAgreement(sku, locAId, 'vmi', { vmi_min_qty: 60, business_stream: 'production' });
+    const edited = await putAgreement(sku, locAId, 'vmi', {
+      vmi_min_qty: 60,
+      business_stream: 'production',
+    });
     assert.strictEqual(edited.status, 200, JSON.stringify(edited.body));
     assert.strictEqual(edited.body['owner_party_code'], 'SUP-042');
     assert.strictEqual(edited.body['vmi_min_qty'], 60);
@@ -565,18 +801,30 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
 
   it('agreement shape guards: malformed owner code and misplaced vmi_min_qty are rejected', async () => {
     const sku = 'RM-0099-A';
-    const badCode = await putAgreement(sku, locAId, 'consignment', { owner_party_code: 'sup 7!', business_stream: 'production' });
+    const badCode = await putAgreement(sku, locAId, 'consignment', {
+      owner_party_code: 'sup 7!',
+      business_stream: 'production',
+    });
     assert.strictEqual(badCode.status, 400, JSON.stringify(badCode.body));
-    const minOnConsignment = await putAgreement(sku, locAId, 'consignment', { vmi_min_qty: 10, business_stream: 'production' });
+    const minOnConsignment = await putAgreement(sku, locAId, 'consignment', {
+      vmi_min_qty: 10,
+      business_stream: 'production',
+    });
     assert.strictEqual(minOnConsignment.status, 400, JSON.stringify(minOnConsignment.body));
-    const badClass = await putAgreement(sku, locAId, 'owned', { owner_party_code: 'SUP-007', business_stream: 'production' });
+    const badClass = await putAgreement(sku, locAId, 'owned', {
+      owner_party_code: 'SUP-007',
+      business_stream: 'production',
+    });
     assert.strictEqual(badClass.status, 400, JSON.stringify(badClass.body));
   });
 
   it('agreement owner code is trimmed before validation and persistence', async () => {
     const sku = 'RM-0099-TRIM';
     await seedItem(sku);
-    const created = await putAgreement(sku, locAId, 'consignment', { owner_party_code: ' SUP-TRIM ', business_stream: 'production' });
+    const created = await putAgreement(sku, locAId, 'consignment', {
+      owner_party_code: ' SUP-TRIM ',
+      business_stream: 'production',
+    });
     assert.strictEqual(created.status, 201, JSON.stringify(created.body));
     assert.strictEqual(created.body['owner_party_code'], 'SUP-TRIM');
   });
@@ -584,7 +832,10 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('agreement creation rejects unknown locations', async () => {
     const sku = 'RM-0099-BADLOC';
     await seedItem(sku);
-    const created = await putAgreement(sku, randomUUID(), 'consignment', { owner_party_code: 'SUP-007', business_stream: 'production' });
+    const created = await putAgreement(sku, randomUUID(), 'consignment', {
+      owner_party_code: 'SUP-007',
+      business_stream: 'production',
+    });
     assert.strictEqual(created.status, 400, JSON.stringify(created.body));
     assert.strictEqual(created.body['error_code'], 'LOCATION_NOT_FOUND');
   });
@@ -607,7 +858,10 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
     const replay = await postStockEvent('ownership.agreement_set', payload, eventId);
     assert.strictEqual(replay.status, 409, JSON.stringify(replay.body));
     assert.strictEqual(replay.body['error_code'], 'DUPLICATE_EVENT');
-    const rows = await getPool().query(`SELECT count(*)::int AS c FROM ownership_agreement WHERE sku = $1`, [sku]);
+    const rows = await getPool().query(
+      `SELECT count(*)::int AS c FROM ownership_agreement WHERE sku = $1`,
+      [sku],
+    );
     assert.strictEqual(rows.rows[0]!['c'], 1);
   });
 
@@ -616,10 +870,22 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('RBAC: agreement writes require write access and planning-config role on the HTTP handler and the direct event path', async () => {
     const sku = 'RM-0099-RBAC';
     await seedItem(sku);
-    const viaRole = await putAgreement(sku, locAId, 'consignment', { owner_party_code: 'SUP-007', business_stream: 'production' }, warehouseWriterHeaders);
+    const viaRole = await putAgreement(
+      sku,
+      locAId,
+      'consignment',
+      { owner_party_code: 'SUP-007', business_stream: 'production' },
+      warehouseWriterHeaders,
+    );
     assert.strictEqual(viaRole.status, 403, JSON.stringify(viaRole.body));
     assert.strictEqual(viaRole.body['error_code'], 'FUNCTION_ACCESS_DENIED');
-    const viaHandler = await putAgreement(sku, locBId, 'consignment', { owner_party_code: 'SUP-007', business_stream: 'production' }, scopedPlannerHeaders);
+    const viaHandler = await putAgreement(
+      sku,
+      locBId,
+      'consignment',
+      { owner_party_code: 'SUP-007', business_stream: 'production' },
+      scopedPlannerHeaders,
+    );
     assert.strictEqual(viaHandler.status, 403, JSON.stringify(viaHandler.body));
     assert.strictEqual(viaHandler.body['error_code'], 'LOCATION_ACCESS_DENIED');
 
@@ -681,20 +947,54 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
   it('scoping: the agreement list requires a planning-config role and is filtered to the caller-visible locations', async () => {
     const sku = 'RM-0099-SCOPE';
     await seedItem(sku);
-    assert.strictEqual((await putAgreement(sku, locAId, 'consignment', { owner_party_code: 'SUP-021', business_stream: 'production' })).status, 201);
-    assert.strictEqual((await putAgreement(sku, locBId, 'consignment', { owner_party_code: 'SUP-022', business_stream: 'production' })).status, 201);
+    assert.strictEqual(
+      (
+        await putAgreement(sku, locAId, 'consignment', {
+          owner_party_code: 'SUP-021',
+          business_stream: 'production',
+        })
+      ).status,
+      201,
+    );
+    assert.strictEqual(
+      (
+        await putAgreement(sku, locBId, 'consignment', {
+          owner_party_code: 'SUP-022',
+          business_stream: 'production',
+        })
+      ).status,
+      201,
+    );
 
-    const deniedRole = await makeRequest(port, 'GET', `/api/v1/ownership-agreements?sku=${sku}`, undefined, warehouseWriterHeaders);
+    const deniedRole = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/ownership-agreements?sku=${sku}`,
+      undefined,
+      warehouseWriterHeaders,
+    );
     assert.strictEqual(deniedRole.status, 403, JSON.stringify(deniedRole.body));
     assert.strictEqual(deniedRole.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
-    const scoped = await makeRequest(port, 'GET', `/api/v1/ownership-agreements?sku=${sku}`, undefined, scopedPlannerHeaders);
+    const scoped = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/ownership-agreements?sku=${sku}`,
+      undefined,
+      scopedPlannerHeaders,
+    );
     assert.strictEqual(scoped.status, 200, JSON.stringify(scoped.body));
     const rows = scoped.body['agreements'] as Array<Record<string, unknown>>;
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0]!['location_id'], locAId);
 
-    const denied = await makeRequest(port, 'GET', `/api/v1/ownership-agreements?sku=${sku}&location_id=${locBId}`, undefined, scopedPlannerHeaders);
+    const denied = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/ownership-agreements?sku=${sku}&location_id=${locBId}`,
+      undefined,
+      scopedPlannerHeaders,
+    );
     assert.strictEqual(denied.status, 403, JSON.stringify(denied.body));
   });
 });

@@ -88,7 +88,10 @@ function mapHeader(row: Record<string, unknown>): CycleCountHeaderRow {
     created_by_actor_id: (row['created_by_actor_id'] as string | null) ?? null,
     submitted_by_actor_id: (row['submitted_by_actor_id'] as string | null) ?? null,
     notes: (row['notes'] as string | null) ?? null,
-    created_at: row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']),
+    created_at:
+      row['created_at'] instanceof Date
+        ? row['created_at'].toISOString()
+        : String(row['created_at']),
   };
 }
 
@@ -133,7 +136,10 @@ export async function getCycleCountById(
   return result.rows.length > 0 ? mapHeader(result.rows[0]!) : null;
 }
 
-export async function getCycleCountLines(cycleCountId: string, client?: PoolClient): Promise<CycleCountLineRow[]> {
+export async function getCycleCountLines(
+  cycleCountId: string,
+  client?: PoolClient,
+): Promise<CycleCountLineRow[]> {
   const result = await runner(client).query(
     `SELECT ${LINE_COLUMNS} FROM cycle_count_line WHERE cycle_count_id = $1 ORDER BY sku, lot_id NULLS FIRST`,
     [cycleCountId],
@@ -218,7 +224,10 @@ export interface InsertCycleCountHeaderInput {
   notes: string | null;
 }
 
-export async function insertCycleCountHeader(input: InsertCycleCountHeaderInput, client: PoolClient): Promise<void> {
+export async function insertCycleCountHeader(
+  input: InsertCycleCountHeaderInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO cycle_count (
        cycle_count_id, location_id, zone_id, sku_scope, stock_class, count_type,
@@ -257,7 +266,10 @@ export interface InsertCycleCountLineInput {
   approver_actor_id: string | null;
 }
 
-export async function insertCycleCountLine(input: InsertCycleCountLineInput, client: PoolClient): Promise<void> {
+export async function insertCycleCountLine(
+  input: InsertCycleCountLineInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO cycle_count_line (
        cycle_count_id, sku, lot_id, stock_class, counted_quantity, book_quantity,

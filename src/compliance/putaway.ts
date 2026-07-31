@@ -1,8 +1,16 @@
 import type { PoolClient } from 'pg';
 import type { LocationOverrideEnvelope, PutawayCompletedEnvelope } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
-import { completePutawayTask, getPutawayTaskByIdForUpdate } from '../read/projections/putaway_task.js';
-import { getCurrentLocation, recordAssertedLocation, recordExpectedLocation, updateCurrentLocation } from '../read/projections/location.js';
+import {
+  completePutawayTask,
+  getPutawayTaskByIdForUpdate,
+} from '../read/projections/putaway_task.js';
+import {
+  getCurrentLocation,
+  recordAssertedLocation,
+  recordExpectedLocation,
+  updateCurrentLocation,
+} from '../read/projections/location.js';
 import { getLocationByCode, getLocationById } from '../read/projections/location_register.js';
 import { getLotByNumberAndSku } from '../read/projections/lot_master.js';
 
@@ -15,15 +23,30 @@ export function assertPutawayCompletedShape(envelope: PutawayCompletedEnvelope):
   }
 
   if (!payload.actual_location_id && !payload.actual_location_code) {
-    throw new AppError(400, 'PUTAWAY_LOCATION_REQUIRED', 'Either actual_location_id or actual_location_code is required');
+    throw new AppError(
+      400,
+      'PUTAWAY_LOCATION_REQUIRED',
+      'Either actual_location_id or actual_location_code is required',
+    );
   }
 
   if (payload.override_reason_code && !payload.override_confidence) {
-    throw new AppError(400, 'PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED', 'override_confidence is required when override_reason_code is present');
+    throw new AppError(
+      400,
+      'PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED',
+      'override_confidence is required when override_reason_code is present',
+    );
   }
 
-  if (payload.override_reason_code && !['certain', 'uncertain'].includes(payload.override_confidence!)) {
-    throw new AppError(400, 'PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED', 'override_confidence must be "certain" or "uncertain"');
+  if (
+    payload.override_reason_code &&
+    !['certain', 'uncertain'].includes(payload.override_confidence!)
+  ) {
+    throw new AppError(
+      400,
+      'PUTAWAY_OVERRIDE_CONFIDENCE_REQUIRED',
+      'override_confidence must be "certain" or "uncertain"',
+    );
   }
 }
 
@@ -51,7 +74,15 @@ export async function applyPutawayCompletedProjection(
   input: ApplyPutawayCompletedInput,
   client: PoolClient,
 ): Promise<void> {
-  const { putawayTaskId, actualLocationId, actualLocationCode, overrideReasonCode, overrideConfidence, completedBy, eventId } = input;
+  const {
+    putawayTaskId,
+    actualLocationId,
+    actualLocationCode,
+    overrideReasonCode,
+    overrideConfidence,
+    completedBy,
+    eventId,
+  } = input;
 
   // Step 1: Load the putaway task with FOR UPDATE to serialise concurrent completions
   const task = await getPutawayTaskByIdForUpdate(putawayTaskId, client);
@@ -64,7 +95,11 @@ export async function applyPutawayCompletedProjection(
   }
 
   if (task.status !== 'ready') {
-    throw new AppError(409, 'PUTAWAY_TASK_NOT_READY', `Putaway task ${putawayTaskId} is not in ready state`);
+    throw new AppError(
+      409,
+      'PUTAWAY_TASK_NOT_READY',
+      `Putaway task ${putawayTaskId} is not in ready state`,
+    );
   }
 
   // Step 2: Resolve actual location from code or ID
@@ -74,25 +109,41 @@ export async function applyPutawayCompletedProjection(
   if (actualLocationCode) {
     const location = await getLocationByCode(actualLocationCode, client);
     if (!location) {
-      throw new AppError(404, 'PUTAWAY_LOCATION_NOT_FOUND', `Location ${actualLocationCode} not found`);
+      throw new AppError(
+        404,
+        'PUTAWAY_LOCATION_NOT_FOUND',
+        `Location ${actualLocationCode} not found`,
+      );
     }
     resolvedLocationId = location.location_id;
     resolvedLocationCode = actualLocationCode;
   } else if (actualLocationId) {
     const location = await getLocationById(actualLocationId, client);
     if (!location) {
-      throw new AppError(404, 'PUTAWAY_LOCATION_NOT_FOUND', `Location ${actualLocationId} not found`);
+      throw new AppError(
+        404,
+        'PUTAWAY_LOCATION_NOT_FOUND',
+        `Location ${actualLocationId} not found`,
+      );
     }
     resolvedLocationId = actualLocationId;
     resolvedLocationCode = location.location_code;
   } else {
-    throw new AppError(400, 'PUTAWAY_LOCATION_REQUIRED', 'Either actualLocationId or actualLocationCode must be provided');
+    throw new AppError(
+      400,
+      'PUTAWAY_LOCATION_REQUIRED',
+      'Either actualLocationId or actualLocationCode must be provided',
+    );
   }
 
   // Step 3: Check if override is needed and reason code is present
   const isOverride = task.directed_location_id && task.directed_location_id !== resolvedLocationId;
   if (isOverride && !overrideReasonCode) {
-    throw new AppError(400, 'PUTAWAY_OVERRIDE_REASON_REQUIRED', 'override_reason_code is required when actual location differs from directed suggestion');
+    throw new AppError(
+      400,
+      'PUTAWAY_OVERRIDE_REASON_REQUIRED',
+      'override_reason_code is required when actual location differs from directed suggestion',
+    );
   }
 
   // Step 4: Write location facts (AD-15 Story 1.6 integration)
@@ -135,7 +186,14 @@ export async function applyPutawayCompletedProjection(
       );
 
       if (fact) {
-        await updateCurrentLocation(lotId, resolvedLocationCode, confidence, fact.fact_id, nextVersion, client);
+        await updateCurrentLocation(
+          lotId,
+          resolvedLocationCode,
+          confidence,
+          fact.fact_id,
+          nextVersion,
+          client,
+        );
       }
     }
   }
@@ -155,6 +213,10 @@ export async function applyPutawayCompletedProjection(
   );
 
   if (!completed) {
-    throw new AppError(409, 'PUTAWAY_TASK_NOT_READY', `Putaway task ${putawayTaskId} could not be completed (already completed or released)`);
+    throw new AppError(
+      409,
+      'PUTAWAY_TASK_NOT_READY',
+      `Putaway task ${putawayTaskId} could not be completed (already completed or released)`,
+    );
   }
 }

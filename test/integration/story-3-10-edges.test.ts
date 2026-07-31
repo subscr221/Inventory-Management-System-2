@@ -21,18 +21,21 @@ const controllerId = randomUUID();
 const sku = `SKU-310E-${run}`;
 
 async function seedUser(userId: string, role: string, active = true, site = siteId): Promise<void> {
-  await getPool().query(`INSERT INTO users (user_id, external_id, email, active) VALUES ($1, $2, $2, $3)`, [
-    userId,
-    `${role}-${userId.slice(0, 8)}-${run}@example.com`,
-    active,
-  ]);
+  await getPool().query(
+    `INSERT INTO users (user_id, external_id, email, active) VALUES ($1, $2, $2, $3)`,
+    [userId, `${role}-${userId.slice(0, 8)}-${run}@example.com`, active],
+  );
   await getPool().query(
     `INSERT INTO user_role_assignments (user_id, role, module, function_scope, location_id) VALUES ($1, $2, 'warehouse', 'write', $3)`,
     [userId, role, site],
   );
 }
 
-function actor(userId: string, role: string, site = siteId): { user_id: string; role: string; location_id: string } {
+function actor(
+  userId: string,
+  role: string,
+  site = siteId,
+): { user_id: string; role: string; location_id: string } {
   return { user_id: userId, role, location_id: site };
 }
 
@@ -55,16 +58,40 @@ async function seedWeighment(poRef: string, correlationId: string): Promise<void
        (weighbridge_event_id, correlation_id, gate_event_id, site_id, site_code_ext, po_ref_ext, line_no,
         tare_kg, gross_kg, net_kg, status, device_id, capture_method, weighed_by, business_date, source_event_id)
      VALUES ($1, $2, $3, $4, $5, $6, 1, 1, 11, 10, 'accepted', 'WB', 'MANUAL', $7, '2026-07-31', $8)`,
-    [randomUUID(), correlationId, randomUUID(), siteId, `SITE-310E-${run}`, poRef, receiverId, randomUUID()],
+    [
+      randomUUID(),
+      correlationId,
+      randomUUID(),
+      siteId,
+      `SITE-310E-${run}`,
+      poRef,
+      receiverId,
+      randomUUID(),
+    ],
   );
 }
 
-async function seedSalesOrder(itemSku: string, id: string, soNumber: string, qty: string, requiredBy: string | null, site = siteId): Promise<void> {
+async function seedSalesOrder(
+  itemSku: string,
+  id: string,
+  soNumber: string,
+  qty: string,
+  requiredBy: string | null,
+  site = siteId,
+): Promise<void> {
   await getPool().query(
     `INSERT INTO erp_sales_order
        (id, so_number_ext, line_no, sku, quantity, required_by, ship_from_site_id, ship_from_site_code_ext, status, source_system, last_synced_at)
      VALUES ($1, $2, 1, $3, $4::numeric, $5, $6, $7, 'open', 'ERP', now())`,
-    [id, soNumber, itemSku, qty, requiredBy, site, site === siteId ? `SITE-310E-${run}` : `OTHER-310E-${run}`],
+    [
+      id,
+      soNumber,
+      itemSku,
+      qty,
+      requiredBy,
+      site,
+      site === siteId ? `SITE-310E-${run}` : `OTHER-310E-${run}`,
+    ],
   );
 }
 
@@ -109,12 +136,20 @@ async function receiveCrossDock(opts: {
       ...opts.stagingSelector,
       cross_dock_task_id: opts.taskId,
     },
-    metadata: { correlation_id: opts.correlationId, actor: actor(receiverId, 'store_assistant'), occurred_at: opts.occurredAt },
+    metadata: {
+      correlation_id: opts.correlationId,
+      actor: actor(receiverId, 'store_assistant'),
+      occurred_at: opts.occurredAt,
+    },
   });
 }
 
 function isCode(code: string) {
-  return (error: unknown) => typeof error === 'object' && error !== null && 'errorCode' in error && (error as { errorCode: string }).errorCode === code;
+  return (error: unknown) =>
+    typeof error === 'object' &&
+    error !== null &&
+    'errorCode' in error &&
+    (error as { errorCode: string }).errorCode === code;
 }
 
 describe('Story 3.10 Tasks 3-5 edge coverage', () => {
@@ -131,13 +166,20 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
          ($11, $12, 'zone', $1, $1, 'general', 'ambient', 'standard', false, false, false, 'active'),
          ($13, $14, 'bin', $11, $1, 'general', 'ambient', 'standard', false, false, false, 'active')`,
       [
-        siteId, `SITE-310E-${run}`,
-        receivingLocationId, `RECV-310E-${run}`,
-        stagingZoneId, `STAGE-310E-${run}`,
-        stagingBinId, `STAGE-BIN-310E-${run}`,
-        otherStagingBinId, `STAGE-BIN2-310E-${run}`,
-        generalZoneId, `GEN-ZONE-310E-${run}`,
-        generalBinId, `GEN-BIN-310E-${run}`,
+        siteId,
+        `SITE-310E-${run}`,
+        receivingLocationId,
+        `RECV-310E-${run}`,
+        stagingZoneId,
+        `STAGE-310E-${run}`,
+        stagingBinId,
+        `STAGE-BIN-310E-${run}`,
+        otherStagingBinId,
+        `STAGE-BIN2-310E-${run}`,
+        generalZoneId,
+        `GEN-ZONE-310E-${run}`,
+        generalBinId,
+        `GEN-BIN-310E-${run}`,
       ],
     );
     await getPool().query(
@@ -226,7 +268,10 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
       stagingSelector: { staging_zone_id: stagingZoneId },
       occurredAt: '2026-07-31T09:05:00.000Z',
     });
-    const row = await getPool().query(`SELECT matched_dispatch_order_line_id FROM grn_line WHERE grn_line_id = $1`, [grnLineId]);
+    const row = await getPool().query(
+      `SELECT matched_dispatch_order_line_id FROM grn_line WHERE grn_line_id = $1`,
+      [grnLineId],
+    );
     assert.strictEqual(row.rows[0]!['matched_dispatch_order_line_id'], earlySo);
   });
 
@@ -315,7 +360,11 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         stream_id: taskId,
         event_type: 'cross_dock_task.assigned',
         payload: { cross_dock_task_id: taskId, assigned_to: operatorId },
-        metadata: { correlation_id: correlationId, actor: actor(receiverId, 'store_assistant'), occurred_at: '2026-07-31T09:11:00.000Z' },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(receiverId, 'store_assistant'),
+          occurred_at: '2026-07-31T09:11:00.000Z',
+        },
       }),
       isCode('FUNCTION_ACCESS_DENIED'),
     );
@@ -327,7 +376,11 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
       stream_id: taskId,
       event_type: 'cross_dock_task.assigned',
       payload: { cross_dock_task_id: taskId, assigned_to: operatorId },
-      metadata: { correlation_id: correlationId, actor: actor(controllerId, 'inventory_controller'), occurred_at: '2026-07-31T09:12:00.000Z' },
+      metadata: {
+        correlation_id: correlationId,
+        actor: actor(controllerId, 'inventory_controller'),
+        occurred_at: '2026-07-31T09:12:00.000Z',
+      },
     });
 
     // A second manager assignment to a DIFFERENT operator must not steal the task.
@@ -338,11 +391,18 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         stream_id: taskId,
         event_type: 'cross_dock_task.assigned',
         payload: { cross_dock_task_id: taskId, assigned_to: operator2Id },
-        metadata: { correlation_id: correlationId, actor: actor(managerId, 'warehouse_manager'), occurred_at: '2026-07-31T09:13:00.000Z' },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(managerId, 'warehouse_manager'),
+          occurred_at: '2026-07-31T09:13:00.000Z',
+        },
       }),
       isCode('CROSS_DOCK_TASK_NOT_READY'),
     );
-    const assigned = await getPool().query(`SELECT assigned_to FROM cross_dock_task WHERE cross_dock_task_id = $1`, [taskId]);
+    const assigned = await getPool().query(
+      `SELECT assigned_to FROM cross_dock_task WHERE cross_dock_task_id = $1`,
+      [taskId],
+    );
     assert.strictEqual(assigned.rows[0]!['assigned_to'], operatorId);
 
     await getPool().query(`UPDATE users SET active = false WHERE user_id = $1`, [operatorId]);
@@ -352,8 +412,17 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         stream_type: 'warehouse',
         stream_id: taskId,
         event_type: 'cross_dock_task.completed',
-        payload: { cross_dock_task_id: taskId, to_location_id: stagingBinId, pick_task_id: randomUUID(), pick_line_id: randomUUID() },
-        metadata: { correlation_id: correlationId, actor: actor(operatorId, 'warehouse_operator'), occurred_at: '2026-07-31T09:14:00.000Z' },
+        payload: {
+          cross_dock_task_id: taskId,
+          to_location_id: stagingBinId,
+          pick_task_id: randomUUID(),
+          pick_line_id: randomUUID(),
+        },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(operatorId, 'warehouse_operator'),
+          occurred_at: '2026-07-31T09:14:00.000Z',
+        },
       }),
       isCode('FUNCTION_ACCESS_DENIED'),
     );
@@ -390,7 +459,11 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
       stream_id: taskId,
       event_type: 'cross_dock_task.assigned',
       payload: { cross_dock_task_id: taskId, assigned_to: operatorId },
-      metadata: { correlation_id: correlationId, actor: actor(managerId, 'warehouse_manager'), occurred_at: '2026-07-31T09:21:00.000Z' },
+      metadata: {
+        correlation_id: correlationId,
+        actor: actor(managerId, 'warehouse_manager'),
+        occurred_at: '2026-07-31T09:21:00.000Z',
+      },
     });
 
     // Supervisor role cannot complete.
@@ -400,8 +473,17 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         stream_type: 'warehouse',
         stream_id: taskId,
         event_type: 'cross_dock_task.completed',
-        payload: { cross_dock_task_id: taskId, to_location_id: stagingBinId, pick_task_id: randomUUID(), pick_line_id: randomUUID() },
-        metadata: { correlation_id: correlationId, actor: actor(managerId, 'warehouse_manager'), occurred_at: '2026-07-31T09:22:00.000Z' },
+        payload: {
+          cross_dock_task_id: taskId,
+          to_location_id: stagingBinId,
+          pick_task_id: randomUUID(),
+          pick_line_id: randomUUID(),
+        },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(managerId, 'warehouse_manager'),
+          occurred_at: '2026-07-31T09:22:00.000Z',
+        },
       }),
       isCode('FUNCTION_ACCESS_DENIED'),
     );
@@ -413,8 +495,17 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         stream_type: 'warehouse',
         stream_id: taskId,
         event_type: 'cross_dock_task.completed',
-        payload: { cross_dock_task_id: taskId, to_location_id: stagingZoneId, pick_task_id: randomUUID(), pick_line_id: randomUUID() },
-        metadata: { correlation_id: correlationId, actor: actor(operatorId, 'warehouse_operator'), occurred_at: '2026-07-31T09:23:00.000Z' },
+        payload: {
+          cross_dock_task_id: taskId,
+          to_location_id: stagingZoneId,
+          pick_task_id: randomUUID(),
+          pick_line_id: randomUUID(),
+        },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(operatorId, 'warehouse_operator'),
+          occurred_at: '2026-07-31T09:23:00.000Z',
+        },
       }),
       isCode('CROSS_DOCK_DESTINATION_OUTSIDE_STAGING'),
     );
@@ -426,8 +517,17 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         stream_type: 'warehouse',
         stream_id: taskId,
         event_type: 'cross_dock_task.completed',
-        payload: { cross_dock_task_id: taskId, to_location_id: generalBinId, pick_task_id: randomUUID(), pick_line_id: randomUUID() },
-        metadata: { correlation_id: correlationId, actor: actor(operatorId, 'warehouse_operator'), occurred_at: '2026-07-31T09:24:00.000Z' },
+        payload: {
+          cross_dock_task_id: taskId,
+          to_location_id: generalBinId,
+          pick_task_id: randomUUID(),
+          pick_line_id: randomUUID(),
+        },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(operatorId, 'warehouse_operator'),
+          occurred_at: '2026-07-31T09:24:00.000Z',
+        },
       }),
       isCode('CROSS_DOCK_DESTINATION_OUTSIDE_STAGING'),
     );
@@ -439,22 +539,43 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         stream_type: 'warehouse',
         stream_id: taskId,
         event_type: 'cross_dock_task.completed',
-        payload: { cross_dock_task_id: taskId, to_location_id: stagingBinId, pick_task_id: randomUUID(), pick_line_id: randomUUID() },
-        metadata: { correlation_id: correlationId, actor: actor(operatorId, 'warehouse_operator'), occurred_at: '2026-07-30T00:00:00.000Z' },
+        payload: {
+          cross_dock_task_id: taskId,
+          to_location_id: stagingBinId,
+          pick_task_id: randomUUID(),
+          pick_line_id: randomUUID(),
+        },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(operatorId, 'warehouse_operator'),
+          occurred_at: '2026-07-30T00:00:00.000Z',
+        },
       }),
       (error: unknown) => error instanceof Error,
     );
 
     // Put the lot on hold; completion must be rejected LOT_ON_HOLD.
-    await getPool().query(`UPDATE lot_master SET quality_hold_status = 'held' WHERE lot_number = $1 AND sku = $2`, [lotNumber, compSku]);
+    await getPool().query(
+      `UPDATE lot_master SET quality_hold_status = 'held' WHERE lot_number = $1 AND sku = $2`,
+      [lotNumber, compSku],
+    );
     await assert.rejects(
       persistEvent({
         event_id: randomUUID(),
         stream_type: 'warehouse',
         stream_id: taskId,
         event_type: 'cross_dock_task.completed',
-        payload: { cross_dock_task_id: taskId, to_location_id: stagingBinId, pick_task_id: randomUUID(), pick_line_id: randomUUID() },
-        metadata: { correlation_id: correlationId, actor: actor(operatorId, 'warehouse_operator'), occurred_at: '2026-07-31T09:25:00.000Z' },
+        payload: {
+          cross_dock_task_id: taskId,
+          to_location_id: stagingBinId,
+          pick_task_id: randomUUID(),
+          pick_line_id: randomUUID(),
+        },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(operatorId, 'warehouse_operator'),
+          occurred_at: '2026-07-31T09:25:00.000Z',
+        },
       }),
       isCode('LOT_ON_HOLD'),
     );
@@ -501,7 +622,11 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
       stream_id: taskId,
       event_type: 'cross_dock_task.assigned',
       payload: { cross_dock_task_id: taskId, assigned_to: operatorId },
-      metadata: { correlation_id: correlationId, actor: actor(managerId, 'warehouse_manager'), occurred_at: '2026-07-31T09:31:00.000Z' },
+      metadata: {
+        correlation_id: correlationId,
+        actor: actor(managerId, 'warehouse_manager'),
+        occurred_at: '2026-07-31T09:31:00.000Z',
+      },
     });
     await getPool().query(`UPDATE erp_sales_order SET status = 'closed' WHERE id = $1`, [soId]);
     await assert.rejects(
@@ -510,8 +635,17 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         stream_type: 'warehouse',
         stream_id: taskId,
         event_type: 'cross_dock_task.completed',
-        payload: { cross_dock_task_id: taskId, to_location_id: stagingBinId, pick_task_id: randomUUID(), pick_line_id: randomUUID() },
-        metadata: { correlation_id: correlationId, actor: actor(operatorId, 'warehouse_operator'), occurred_at: '2026-07-31T09:32:00.000Z' },
+        payload: {
+          cross_dock_task_id: taskId,
+          to_location_id: stagingBinId,
+          pick_task_id: randomUUID(),
+          pick_line_id: randomUUID(),
+        },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(operatorId, 'warehouse_operator'),
+          occurred_at: '2026-07-31T09:32:00.000Z',
+        },
       }),
       isCode('CROSS_DOCK_ORDER_NOT_OPEN'),
     );

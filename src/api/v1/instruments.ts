@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { EventEnvelope } from '../../events/store.js';
@@ -54,10 +59,24 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function validInstrumentId(params: Record<string, string>, req: IncomingMessage, res: Parameters<RouteHandler>[1]): string | null {
+function validInstrumentId(
+  params: Record<string, string>,
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+): string | null {
   const instrumentId = params['id'];
-  if (!instrumentId || !isNonEmptyString(instrumentId) || instrumentId.length > MAX_INSTRUMENT_ID_LENGTH) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'instrument id must be a non-empty text identifier no longer than 128 characters');
+  if (
+    !instrumentId ||
+    !isNonEmptyString(instrumentId) ||
+    instrumentId.length > MAX_INSTRUMENT_ID_LENGTH
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'instrument id must be a non-empty text identifier no longer than 128 characters',
+    );
     return null;
   }
   return instrumentId;
@@ -73,12 +92,24 @@ const updateCalibrationStatusBase: RouteHandler = async (req, res, params) => {
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   const calibrationStatus = parseCalibrationStatus(body?.['calibration_status']);
   if (!body || !calibrationStatus) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'calibration_status must be calibrated or out_of_calibration');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'calibration_status must be calibrated or out_of_calibration',
+    );
     return;
   }
   const reason = body['reason'] === undefined || body['reason'] === null ? null : body['reason'];
   if (reason !== null && !isNonEmptyString(reason)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'reason must be a non-empty string when provided');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'reason must be a non-empty string when provided',
+    );
     return;
   }
 
@@ -132,8 +163,19 @@ const updateCalibrationStatusBase: RouteHandler = async (req, res, params) => {
 
 const createQcResultBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
-  if (!body || !isNonEmptyString(body['instrument_id']) || !isNonEmptyString(body['lot_id']) || !isNonEmptyString(body['parameter'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'instrument_id, lot_id, and parameter are required non-empty strings');
+  if (
+    !body ||
+    !isNonEmptyString(body['instrument_id']) ||
+    !isNonEmptyString(body['lot_id']) ||
+    !isNonEmptyString(body['parameter'])
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'instrument_id, lot_id, and parameter are required non-empty strings',
+    );
     return;
   }
   if (body['value'] === undefined || body['value'] === null) {
@@ -167,9 +209,16 @@ const createCalibrationEscalationBase: RouteHandler = async (req, res, params) =
   const instrumentId = validInstrumentId(params, req, res);
   if (!instrumentId) return;
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
-  const reason = body?.['reason'] === undefined || body?.['reason'] === null ? null : body['reason'];
+  const reason =
+    body?.['reason'] === undefined || body?.['reason'] === null ? null : body['reason'];
   if (reason !== null && !isNonEmptyString(reason)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'reason must be a non-empty string when provided');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'reason must be a non-empty string when provided',
+    );
     return;
   }
 
@@ -180,10 +229,18 @@ const createCalibrationEscalationBase: RouteHandler = async (req, res, params) =
     await client.query('BEGIN');
     const status = await getInstrumentCalibrationStatus(instrumentId, client);
     if (!status) {
-      throw new AppError(404, 'NOT_FOUND', `No calibration status exists for instrument "${instrumentId}"`);
+      throw new AppError(
+        404,
+        'NOT_FOUND',
+        `No calibration status exists for instrument "${instrumentId}"`,
+      );
     }
     if (status.calibration_status !== 'out_of_calibration') {
-      throw new AppError(400, 'INVALID_PARAMS', 'calibration escalation requires an out-of-calibration instrument');
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'calibration escalation requires an out-of-calibration instrument',
+      );
     }
 
     const entry = await findFirstActiveDoaEntry('calibration.escalation', client);
@@ -237,6 +294,15 @@ const createCalibrationEscalationBase: RouteHandler = async (req, res, params) =
   }
 };
 
-export const updateCalibrationStatusHandler: RouteHandler = requireRole({ module: 'maintenance', functionScope: 'write' })(updateCalibrationStatusBase);
-export const createQcResultHandler: RouteHandler = requireRole({ module: 'qc', functionScope: 'write' })(createQcResultBase);
-export const createCalibrationEscalationHandler: RouteHandler = requireRole({ module: 'qc', functionScope: 'write' })(createCalibrationEscalationBase);
+export const updateCalibrationStatusHandler: RouteHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(updateCalibrationStatusBase);
+export const createQcResultHandler: RouteHandler = requireRole({
+  module: 'qc',
+  functionScope: 'write',
+})(createQcResultBase);
+export const createCalibrationEscalationHandler: RouteHandler = requireRole({
+  module: 'qc',
+  functionScope: 'write',
+})(createCalibrationEscalationBase);

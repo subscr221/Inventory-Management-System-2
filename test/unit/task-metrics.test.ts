@@ -10,7 +10,10 @@ import {
   SUPPORTED_TASK_TYPES,
   type OpenTask,
 } from '../../src/warehouse/task-metrics.js';
-import { normalizeThresholdMinutes, WAREHOUSE_TASK_SUPERVISE_ROLES } from '../../src/compliance/warehouse-task.js';
+import {
+  normalizeThresholdMinutes,
+  WAREHOUSE_TASK_SUPERVISE_ROLES,
+} from '../../src/compliance/warehouse-task.js';
 import { AppError } from '../../src/middleware/error.js';
 
 /**
@@ -161,7 +164,8 @@ describe('Story 3.8 Task 4.3: filter validation happens before any query', () =>
   it('rejects an unknown task_type with 400 INVALID_PARAMS', () => {
     assert.throws(
       () => validate('task_type=teleportation'),
-      (err: unknown) => err instanceof AppError && err.statusCode === 400 && err.errorCode === 'INVALID_PARAMS',
+      (err: unknown) =>
+        err instanceof AppError && err.statusCode === 400 && err.errorCode === 'INVALID_PARAMS',
     );
   });
 
@@ -169,7 +173,8 @@ describe('Story 3.8 Task 4.3: filter validation happens before any query', () =>
     for (const key of ['zone_id', 'assigned_to', 'site_id', 'operator_id']) {
       assert.throws(
         () => validate(`${key}=not-a-uuid`),
-        (err: unknown) => err instanceof AppError && err.statusCode === 400 && err.errorCode === 'INVALID_PARAMS',
+        (err: unknown) =>
+          err instanceof AppError && err.statusCode === 400 && err.errorCode === 'INVALID_PARAMS',
         `${key} must be rejected`,
       );
     }
@@ -181,9 +186,17 @@ describe('Story 3.8 Task 4.3: filter validation happens before any query', () =>
   });
 
   it('rejects an inverted or empty period window', () => {
-    assert.throws(() => validate('period_start=2026-07-29T10:00:00Z&period_end=2026-07-29T09:00:00Z'), AppError);
-    assert.throws(() => validate('period_start=2026-07-29T10:00:00Z&period_end=2026-07-29T10:00:00Z'), AppError);
-    assert.doesNotThrow(() => validate('period_start=2026-07-29T09:00:00Z&period_end=2026-07-29T10:00:00Z'));
+    assert.throws(
+      () => validate('period_start=2026-07-29T10:00:00Z&period_end=2026-07-29T09:00:00Z'),
+      AppError,
+    );
+    assert.throws(
+      () => validate('period_start=2026-07-29T10:00:00Z&period_end=2026-07-29T10:00:00Z'),
+      AppError,
+    );
+    assert.doesNotThrow(() =>
+      validate('period_start=2026-07-29T09:00:00Z&period_end=2026-07-29T10:00:00Z'),
+    );
   });
 });
 

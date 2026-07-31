@@ -70,7 +70,12 @@ const SCIM_USERS_ENDPOINT = '/api/v1/scim/v2/Users';
  * idempotent no-op - AC1 requires an edit-log record for ANY mutating API request, including ones
  * that changed nothing (e.g. re-deprovisioning an already-inactive user).
  */
-async function logNoOpAuditEntry(endpoint: string, method: string, traceId: string | undefined, detail: string): Promise<void> {
+async function logNoOpAuditEntry(
+  endpoint: string,
+  method: string,
+  traceId: string | undefined,
+  detail: string,
+): Promise<void> {
   const pool = getPool();
   const client = await pool.connect();
   try {
@@ -86,7 +91,10 @@ async function logNoOpAuditEntry(endpoint: string, method: string, traceId: stri
 }
 
 /** Provisions (or reactivates) a user with the given role assignments. Emits `user.provisioned`. */
-export async function provisionUser(input: ProvisionUserRequest, traceId?: string): Promise<string> {
+export async function provisionUser(
+  input: ProvisionUserRequest,
+  traceId?: string,
+): Promise<string> {
   // Directory row + role assignments are written in one transaction (see upsertUserWithRoles).
   // The audit event is emitted after that transaction commits; if it fails the caller gets a 500
   // and the directory is already updated - acceptable for now, tracked as a follow-up to bring
@@ -139,12 +147,21 @@ export async function reactivateUser(externalId: string, traceId?: string): Prom
   } else {
     // Already active: idempotent no-op, no duplicate event - but the mutating request itself
     // still gets an edit-log record (AC1).
-    await logNoOpAuditEntry(`${SCIM_USERS_ENDPOINT}/${externalId}`, 'PATCH', traceId, 'reactivate: user already active');
+    await logNoOpAuditEntry(
+      `${SCIM_USERS_ENDPOINT}/${externalId}`,
+      'PATCH',
+      traceId,
+      'reactivate: user already active',
+    );
   }
 }
 
 /** Replaces a user's role assignments. Emits `user.roles_updated`. */
-export async function updateUserRoles(externalId: string, roles: RoleAssignment[], traceId?: string): Promise<void> {
+export async function updateUserRoles(
+  externalId: string,
+  roles: RoleAssignment[],
+  traceId?: string,
+): Promise<void> {
   const userId = await getUserIdByExternalId(externalId);
   if (!userId) {
     throw new AppError(404, 'NOT_FOUND', `No user found with externalId "${externalId}"`);
@@ -185,6 +202,11 @@ export async function deprovisionUser(externalId: string, traceId?: string): Pro
     );
   } else {
     // Already inactive: idempotent no-op, no duplicate event - but still edit-logged (AC1).
-    await logNoOpAuditEntry(`${SCIM_USERS_ENDPOINT}/${externalId}`, 'PATCH', traceId, 'deprovision: user already inactive');
+    await logNoOpAuditEntry(
+      `${SCIM_USERS_ENDPOINT}/${externalId}`,
+      'PATCH',
+      traceId,
+      'deprovision: user already inactive',
+    );
   }
 }

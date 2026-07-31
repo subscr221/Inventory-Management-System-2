@@ -2,7 +2,12 @@ import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -18,7 +23,12 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 const COMPLETE_ROLES = ['inventory_controller', 'warehouse_manager', 'stock_locator'];
-const SIGNOFF_ROLES = ['inventory_controller', 'warehouse_manager', 'finance_controller', 'audit_signoff'];
+const SIGNOFF_ROLES = [
+  'inventory_controller',
+  'warehouse_manager',
+  'finance_controller',
+  'audit_signoff',
+];
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
@@ -68,10 +78,17 @@ function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[]): void {
   const authContext = getAuthContext(req);
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
-    (r) => (r.module === 'inventory' || r.module === '*') && r.functionScope === 'write' && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'inventory' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      allowedRoles.includes(r.role),
   );
   if (!ok) {
-    throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
   }
 }
 
@@ -82,7 +99,11 @@ function assertLocationAccess(req: IncomingMessage, locationId: string): void {
   }
   const { wildcard, locations } = permittedLocationsForModule(authContext.roles, 'inventory');
   if (!wildcard && !locations.has(locationId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No role assignment grants access to location "${locationId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No role assignment grants access to location "${locationId}"`,
+    );
   }
 }
 
@@ -100,16 +121,35 @@ const completePhysicalVerificationBase: RouteHandler = async (req, res) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'location_id is required and must be a UUID');
     return;
   }
-  if (!Array.isArray(body['count_refs']) || body['count_refs'].length === 0 || !body['count_refs'].every(isNonEmptyString)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'count_refs is required and must be a non-empty array');
+  if (
+    !Array.isArray(body['count_refs']) ||
+    body['count_refs'].length === 0 ||
+    !body['count_refs'].every(isNonEmptyString)
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'count_refs is required and must be a non-empty array',
+    );
     return;
   }
   if (!isNonEmptyString(body['business_stream'])) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_stream is required');
     return;
   }
-  if (body['business_date'] !== undefined && (typeof body['business_date'] !== 'string' || !DATE_REGEX.test(body['business_date'] as string))) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_date must be YYYY-MM-DD when supplied');
+  if (
+    body['business_date'] !== undefined &&
+    (typeof body['business_date'] !== 'string' || !DATE_REGEX.test(body['business_date'] as string))
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'business_date must be YYYY-MM-DD when supplied',
+    );
     return;
   }
 
@@ -119,8 +159,17 @@ const completePhysicalVerificationBase: RouteHandler = async (req, res) => {
 
   let pvId: string;
   if (body['physical_verification_id'] !== undefined) {
-    if (!isNonEmptyString(body['physical_verification_id']) || !UUID_REGEX.test(body['physical_verification_id'] as string)) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'physical_verification_id must be a valid UUID when supplied');
+    if (
+      !isNonEmptyString(body['physical_verification_id']) ||
+      !UUID_REGEX.test(body['physical_verification_id'] as string)
+    ) {
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'physical_verification_id must be a valid UUID when supplied',
+      );
       return;
     }
     pvId = body['physical_verification_id'] as string;
@@ -138,7 +187,10 @@ const completePhysicalVerificationBase: RouteHandler = async (req, res) => {
     if (existing) {
       await client.query('COMMIT');
       committed = true;
-      sendJson(res, 200, { physical_verification_id: pvId, status: existing.period_locked ? 'signed_off' : 'completed' });
+      sendJson(res, 200, {
+        physical_verification_id: pvId,
+        status: existing.period_locked ? 'signed_off' : 'completed',
+      });
       return;
     }
 
@@ -185,7 +237,13 @@ const completePhysicalVerificationBase: RouteHandler = async (req, res) => {
 const signOffPhysicalVerificationBase: RouteHandler = async (req, res, params) => {
   const id = params['physical_verification_id'];
   if (!id || !UUID_REGEX.test(id)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'physical_verification_id must be a valid UUID');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'physical_verification_id must be a valid UUID',
+    );
     return;
   }
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
@@ -203,9 +261,14 @@ const signOffPhysicalVerificationBase: RouteHandler = async (req, res, params) =
     }
     assertLocationAccess(req, header.location_id);
     if (header.period_locked || header.signed_off_at) {
-      throw new AppError(409, 'PERIOD_LOCKED', 'Physical verification is already signed off and locked', {
-        physical_verification_id: id,
-      });
+      throw new AppError(
+        409,
+        'PERIOD_LOCKED',
+        'Physical verification is already signed off and locked',
+        {
+          physical_verification_id: id,
+        },
+      );
     }
 
     await persistEvent(
@@ -231,7 +294,11 @@ const signOffPhysicalVerificationBase: RouteHandler = async (req, res, params) =
     );
     await client.query('COMMIT');
     committed = true;
-    sendJson(res, 200, { physical_verification_id: id, status: 'signed_off', management_signoff_actor_id: actor.userId });
+    sendJson(res, 200, {
+      physical_verification_id: id,
+      status: 'signed_off',
+      management_signoff_actor_id: actor.userId,
+    });
   } catch (err) {
     if (!committed) await client.query('ROLLBACK');
     throw err;
@@ -259,7 +326,13 @@ const physicalVerificationReportBase: RouteHandler = async (req, res) => {
   let locationAny: string[] | null = null;
   if (!wildcard) {
     if (locationId && !locations.has(locationId)) {
-      sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', 'No access to the specified location_id');
+      sendRequestError(
+        req,
+        res,
+        403,
+        'LOCATION_ACCESS_DENIED',
+        'No access to the specified location_id',
+      );
       return;
     }
     if (!locationId) locationAny = [...locations];
@@ -308,6 +381,15 @@ const physicalVerificationReportBase: RouteHandler = async (req, res) => {
   sendJson(res, 200, { reports });
 };
 
-export const completePhysicalVerificationHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(completePhysicalVerificationBase);
-export const signOffPhysicalVerificationHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(signOffPhysicalVerificationBase);
-export const physicalVerificationReportHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(physicalVerificationReportBase);
+export const completePhysicalVerificationHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(completePhysicalVerificationBase);
+export const signOffPhysicalVerificationHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(signOffPhysicalVerificationBase);
+export const physicalVerificationReportHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(physicalVerificationReportBase);

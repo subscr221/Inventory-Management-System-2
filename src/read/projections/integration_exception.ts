@@ -51,7 +51,10 @@ function ts(value: unknown): string | null {
 // erp_sync_state heartbeat
 // ---------------------------------------------------------------------------
 
-export async function getSyncState(projectionName: SyncProjectionName, client?: PoolClient): Promise<SyncStateRow | null> {
+export async function getSyncState(
+  projectionName: SyncProjectionName,
+  client?: PoolClient,
+): Promise<SyncStateRow | null> {
   const result = await runner(client).query(
     `SELECT projection_name, status, last_attempted_at, last_successful_at, last_error
      FROM erp_sync_state WHERE projection_name = $1`,
@@ -69,7 +72,10 @@ export async function getSyncState(projectionName: SyncProjectionName, client?: 
 }
 
 /** Stamps the attempt clock before a sync cycle. Creates a never_synced row on first sight. */
-export async function markSyncAttempt(projectionName: SyncProjectionName, client?: PoolClient): Promise<void> {
+export async function markSyncAttempt(
+  projectionName: SyncProjectionName,
+  client?: PoolClient,
+): Promise<void> {
   await runner(client).query(
     `INSERT INTO erp_sync_state (projection_name, status, last_attempted_at)
      VALUES ($1, 'never_synced', now())
@@ -79,7 +85,10 @@ export async function markSyncAttempt(projectionName: SyncProjectionName, client
 }
 
 /** Marks a projection successfully synced within threshold; clears last_error. */
-export async function markSyncSuccess(projectionName: SyncProjectionName, client?: PoolClient): Promise<void> {
+export async function markSyncSuccess(
+  projectionName: SyncProjectionName,
+  client?: PoolClient,
+): Promise<void> {
   await runner(client).query(
     `INSERT INTO erp_sync_state (projection_name, status, last_attempted_at, last_successful_at, last_error)
      VALUES ($1, 'success', now(), now(), NULL)
@@ -90,7 +99,11 @@ export async function markSyncSuccess(projectionName: SyncProjectionName, client
 }
 
 /** Marks a projection's sync cycle failed, recording the error for the heartbeat. */
-export async function markSyncFailure(projectionName: SyncProjectionName, lastError: string, client?: PoolClient): Promise<void> {
+export async function markSyncFailure(
+  projectionName: SyncProjectionName,
+  lastError: string,
+  client?: PoolClient,
+): Promise<void> {
   await runner(client).query(
     `INSERT INTO erp_sync_state (projection_name, status, last_attempted_at, last_error)
      VALUES ($1, 'failed', now(), $2)
@@ -111,7 +124,11 @@ export interface FreshnessResult {
  * never_synced or missing heartbeat (including an empty projection) is stale with a null age; the
  * boundary is strict (`>`), so exactly-at-threshold resolves to not-stale.
  */
-export async function getFreshness(projectionName: SyncProjectionName, freshnessMs: number, client?: PoolClient): Promise<FreshnessResult> {
+export async function getFreshness(
+  projectionName: SyncProjectionName,
+  freshnessMs: number,
+  client?: PoolClient,
+): Promise<FreshnessResult> {
   const result = await runner(client).query(
     `SELECT
        CASE WHEN last_successful_at IS NULL THEN NULL
@@ -152,7 +169,10 @@ export interface RaiseExceptionInput {
  * xmax = 0 discriminator), so a caller can emit a one-time alert notification without re-notifying
  * while an open exception already exists.
  */
-export async function raiseException(input: RaiseExceptionInput, client?: PoolClient): Promise<boolean> {
+export async function raiseException(
+  input: RaiseExceptionInput,
+  client?: PoolClient,
+): Promise<boolean> {
   const result = await runner(client).query(
     `INSERT INTO integration_exception (source_system, record_type, source_record_ref, error_code, reason, details)
      VALUES ($1, $2, $3, $4, $5, $6::jsonb)
@@ -178,7 +198,10 @@ export interface ExceptionFilters {
   error_code?: string | null;
 }
 
-export async function listExceptions(filters: ExceptionFilters = {}, client?: PoolClient): Promise<IntegrationExceptionRow[]> {
+export async function listExceptions(
+  filters: ExceptionFilters = {},
+  client?: PoolClient,
+): Promise<IntegrationExceptionRow[]> {
   const conditions: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -235,11 +258,25 @@ export async function resolveException(exceptionId: string, client?: PoolClient)
  * cleanly after any prior failure drains its queue entry.
  */
 export async function resolveOpenExceptionsByGrain(
-  grain: { record_type: ExceptionRecordType; source_record_ref?: string | null; error_code?: string; source_system?: string },
+  grain: {
+    record_type: ExceptionRecordType;
+    source_record_ref?: string | null;
+    error_code?: string;
+    source_system?: string;
+  },
   client?: PoolClient,
 ): Promise<number> {
-  const conditions = [`status = 'open'`, `source_system = $1`, `record_type = $2`, `source_record_ref IS NOT DISTINCT FROM $3`];
-  const params: unknown[] = [grain.source_system ?? 'ERP', grain.record_type, grain.source_record_ref ?? null];
+  const conditions = [
+    `status = 'open'`,
+    `source_system = $1`,
+    `record_type = $2`,
+    `source_record_ref IS NOT DISTINCT FROM $3`,
+  ];
+  const params: unknown[] = [
+    grain.source_system ?? 'ERP',
+    grain.record_type,
+    grain.source_record_ref ?? null,
+  ];
   if (grain.error_code !== undefined) {
     conditions.push(`error_code = $${params.length + 1}`);
     params.push(grain.error_code);

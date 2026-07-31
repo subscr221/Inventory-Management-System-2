@@ -38,7 +38,13 @@ interface Role {
   locationId: string;
 }
 
-function makeRequest(port: number, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<HttpResult> {
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<HttpResult> {
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -47,7 +53,11 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
         port,
         path,
         method,
-        headers: { 'Content-Type': 'application/json', ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}), ...headers },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+          ...headers,
+        },
       },
       (res: IncomingMessage) => {
         const chunks: Buffer[] = [];
@@ -75,14 +85,27 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
 }
 
 async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
-  const res = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', { externalId, email: externalId, displayName: externalId, roles }, SCIM_HEADERS);
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  const res = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/scim/v2/Users',
+    { externalId, email: externalId, displayName: externalId, roles },
+    SCIM_HEADERS,
+  );
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -143,7 +166,13 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   const siteCCode = `S38C-${run}`;
   const siteDCode = `S38D-${run}`;
 
-  async function seedLocation(locationId: string, code: string, level: string, parentId: string | null, siteId: string): Promise<void> {
+  async function seedLocation(
+    locationId: string,
+    code: string,
+    level: string,
+    parentId: string | null,
+    siteId: string,
+  ): Promise<void> {
     await getPool().query(
       `INSERT INTO location_register
          (location_id, location_code, level, parent_location_id, site_id, zone_type, temperature_class,
@@ -153,16 +182,18 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     );
   }
 
-  async function seedPutawayTask(overrides: {
-    siteId?: string;
-    zoneId?: string | null;
-    status?: 'ready' | 'held' | 'completed';
-    createdAt?: string;
-    priority?: string;
-    assignedTo?: string | null;
-    completedAt?: string | null;
-    completedBy?: string | null;
-  } = {}): Promise<string> {
+  async function seedPutawayTask(
+    overrides: {
+      siteId?: string;
+      zoneId?: string | null;
+      status?: 'ready' | 'held' | 'completed';
+      createdAt?: string;
+      priority?: string;
+      assignedTo?: string | null;
+      completedAt?: string | null;
+      completedBy?: string | null;
+    } = {},
+  ): Promise<string> {
     const id = randomUUID();
     await getPool().query(
       `INSERT INTO putaway_task
@@ -188,7 +219,11 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     return id;
   }
 
-  async function seedSalesOrderLine(soNumber: string, siteId: string, siteCode: string): Promise<string> {
+  async function seedSalesOrderLine(
+    soNumber: string,
+    siteId: string,
+    siteCode: string,
+  ): Promise<string> {
     const result = await getPool().query(
       `INSERT INTO erp_sales_order
          (so_number_ext, line_no, sku, quantity, ship_from_site_id, ship_from_site_code_ext, status, source_system, last_synced_at)
@@ -199,7 +234,10 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     return result.rows[0]!['id'] as string;
   }
 
-  async function seedPickTask(dispatchOrderId: string, overrides: { createdAt?: string; priority?: string; status?: string } = {}): Promise<string> {
+  async function seedPickTask(
+    dispatchOrderId: string,
+    overrides: { createdAt?: string; priority?: string; status?: string } = {},
+  ): Promise<string> {
     const id = randomUUID();
     await getPool().query(
       `INSERT INTO pick_task
@@ -221,7 +259,10 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   }
 
   /** Creates a real Story 3.2 gate event and returns its binding token plus its business_date. */
-  async function createGateEvent(siteCode: string, enteredAt: string): Promise<{ correlationId: string; businessDate: string; gateEventId: string }> {
+  async function createGateEvent(
+    siteCode: string,
+    enteredAt: string,
+  ): Promise<{ correlationId: string; businessDate: string; gateEventId: string }> {
     const res = await makeRequest(
       port,
       'POST',
@@ -280,12 +321,30 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     await getPool().query(
       `INSERT INTO grn (grn_id, correlation_id, po_ref_ext, source_document, received_at, received_by, site_id, site_code_ext, source_event_id, business_date)
        VALUES ($1, $2, $3, 'PO', $4::timestamptz, $5, $6, $7, $8, $4::date)`,
-      [grnId, randomUUID(), `PO38-REC-${run}`, createdAt, managerUserId, siteAId, siteACode, randomUUID()],
+      [
+        grnId,
+        randomUUID(),
+        `PO38-REC-${run}`,
+        createdAt,
+        managerUserId,
+        siteAId,
+        siteACode,
+        randomUUID(),
+      ],
     );
     await getPool().query(
       `INSERT INTO grn_line (grn_line_id, grn_id, po_ref_ext, line_no, sku, target_location_id, received_qty, uom, status, created_at, source_event_id, weighbridge_correlation_id)
        VALUES ($1, $2, $3, 1, $4, $5, 10, 'KG', 'quarantined', $6::timestamptz, $7, $8)`,
-      [grnLineId, grnId, `PO38-REC-${run}`, `SKU-38-${run}`, dockId, createdAt, randomUUID(), randomUUID()],
+      [
+        grnLineId,
+        grnId,
+        `PO38-REC-${run}`,
+        `SKU-38-${run}`,
+        dockId,
+        createdAt,
+        randomUUID(),
+        randomUUID(),
+      ],
     );
     return grnLineId;
   }
@@ -300,7 +359,13 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     await getPool().query(
       `INSERT INTO packing_record (packing_record_id, dispatch_order_id, sku, packed_qty, status, packed_by, packed_at, carton_count)
        VALUES ($1, $2, $3, 10, 'packed', $4, $5::timestamptz, 1)`,
-      [packingRecordId, orderId, `SKU-38-${run}`, managerUserId, overrides.createdAt ?? minutesAgo(50)],
+      [
+        packingRecordId,
+        orderId,
+        `SKU-38-${run}`,
+        managerUserId,
+        overrides.createdAt ?? minutesAgo(50),
+      ],
     );
     return packingRecordId;
   }
@@ -310,13 +375,26 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
    * Story 3.4 requires an accepted weighment before a GRN may be posted, so this is what lets the
    * GRN-fallback leg of the dwell view be exercised.
    */
-  async function seedWeighmentWithoutInstant(correlationId: string, siteId: string, siteCode: string): Promise<void> {
+  async function seedWeighmentWithoutInstant(
+    correlationId: string,
+    siteId: string,
+    siteCode: string,
+  ): Promise<void> {
     await getPool().query(
       `INSERT INTO weighbridge_event
          (weighbridge_event_id, correlation_id, gate_event_id, site_id, site_code_ext, po_ref_ext, line_no,
           tare_kg, gross_kg, net_kg, status, device_id, capture_method, weighed_by, business_date, source_event_id)
        VALUES ($1, $2, $3, $4, $5, $6, 1, 1000, 1100, 100, 'accepted', 'WB-1', 'MANUAL', $7, CURRENT_DATE, $8)`,
-      [randomUUID(), correlationId, randomUUID(), siteId, siteCode, `PO38-${run}`, managerUserId, randomUUID()],
+      [
+        randomUUID(),
+        correlationId,
+        randomUUID(),
+        siteId,
+        siteCode,
+        `PO38-${run}`,
+        managerUserId,
+        randomUUID(),
+      ],
     );
   }
 
@@ -330,12 +408,18 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     headers = managerHeaders,
     siteId: string = siteAId,
   ): Promise<HttpResult> {
-    return makeRequest(port, 'PUT', '/api/v1/warehouse-tasks/sla-config', {
-      site_id: siteId,
-      task_type: taskType,
-      zone_id: zoneId,
-      threshold_minutes: thresholdMinutes,
-    }, headers);
+    return makeRequest(
+      port,
+      'PUT',
+      '/api/v1/warehouse-tasks/sla-config',
+      {
+        site_id: siteId,
+        task_type: taskType,
+        zone_id: zoneId,
+        threshold_minutes: thresholdMinutes,
+      },
+      headers,
+    );
   }
 
   before(async () => {
@@ -381,40 +465,70 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     managerUserId = await provisionUser(
       port,
       `wt-manager-${run}@example.com`,
-      everySite.map((locationId) => ({ role: 'warehouse_manager', module: 'warehouse', functionScope: 'write' as const, locationId })),
+      everySite.map((locationId) => ({
+        role: 'warehouse_manager',
+        module: 'warehouse',
+        functionScope: 'write' as const,
+        locationId,
+      })),
     );
     managerHeaders = await authFor(port, `wt-manager-${run}@example.com`);
 
     // A frontline role: holds warehouse READ through the unified board, but must not be able to
     // change an SLA threshold or assign work.
     operatorUserId = await provisionUser(port, `wt-frontline-${run}@example.com`, [
-      { role: 'warehouse_operator', module: 'warehouse', functionScope: 'read', locationId: siteAId },
+      {
+        role: 'warehouse_operator',
+        module: 'warehouse',
+        functionScope: 'read',
+        locationId: siteAId,
+      },
     ]);
     frontlineHeaders = await authFor(port, `wt-frontline-${run}@example.com`);
 
     await provisionUser(port, `wt-otherSite-${run}@example.com`, [
-      { role: 'warehouse_manager', module: 'warehouse', functionScope: 'write', locationId: siteBId },
+      {
+        role: 'warehouse_manager',
+        module: 'warehouse',
+        functionScope: 'write',
+        locationId: siteBId,
+      },
     ]);
     otherSiteHeaders = await authFor(port, `wt-otherSite-${run}@example.com`);
 
     await provisionUser(
       port,
       `wt-gate-${run}@example.com`,
-      everySite.map((locationId) => ({ role: 'gate_officer', module: 'inventory', functionScope: 'write' as const, locationId })),
+      everySite.map((locationId) => ({
+        role: 'gate_officer',
+        module: 'inventory',
+        functionScope: 'write' as const,
+        locationId,
+      })),
     );
     gateHeaders = await authFor(port, `wt-gate-${run}@example.com`);
 
     await provisionUser(
       port,
       `wt-weigh-${run}@example.com`,
-      everySite.map((locationId) => ({ role: 'weighbridge_operator', module: 'inventory', functionScope: 'write' as const, locationId })),
+      everySite.map((locationId) => ({
+        role: 'weighbridge_operator',
+        module: 'inventory',
+        functionScope: 'write' as const,
+        locationId,
+      })),
     );
     weighHeaders = await authFor(port, `wt-weigh-${run}@example.com`);
 
     await provisionUser(
       port,
       `wt-store-${run}@example.com`,
-      everySite.map((locationId) => ({ role: 'store_assistant', module: 'receiving', functionScope: 'write' as const, locationId })),
+      everySite.map((locationId) => ({
+        role: 'store_assistant',
+        module: 'receiving',
+        functionScope: 'write' as const,
+        locationId,
+      })),
     );
     storeHeaders = await authFor(port, `wt-store-${run}@example.com`);
 
@@ -422,7 +536,12 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     // so any privileged write through /api/v1/events is rejected by the compliance seam, not by
     // the route RBAC layer. The test on line ~725 needs this user to prove the seam gate holds.
     await provisionUser(port, `wt-nonSupervisorWrite-${run}@example.com`, [
-      { role: 'store_assistant', module: 'warehouse', functionScope: 'write' as const, locationId: siteAId },
+      {
+        role: 'store_assistant',
+        module: 'warehouse',
+        functionScope: 'write' as const,
+        locationId: siteAId,
+      },
     ]);
     nonSupervisorWriteHeaders = await authFor(port, `wt-nonSupervisorWrite-${run}@example.com`);
 
@@ -430,7 +549,12 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     // active-assignee check would otherwise 404 a randomUUID, masking the row-level guard those
     // tests are meant to exercise.
     otherOperatorUserId = await provisionUser(port, `wt-otherOperator-${run}@example.com`, [
-      { role: 'warehouse_operator', module: 'warehouse', functionScope: 'write' as const, locationId: siteAId },
+      {
+        role: 'warehouse_operator',
+        module: 'warehouse',
+        functionScope: 'write' as const,
+        locationId: siteAId,
+      },
     ]);
   });
 
@@ -452,10 +576,24 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     // ranking logic.
     const pickLowId = await seedPickTask(orderId, { createdAt: minutesAgo(20), priority: 'low' });
     await seedPickTask(orderId, { createdAt: minutesAgo(15), priority: 'normal' });
-    await seedPutawayTask({ createdAt: minutesAgo(9), assignedTo: operatorUserId, priority: 'urgent' });
-    const putawayHighId = await seedPutawayTask({ createdAt: minutesAgo(7), assignedTo: operatorUserId, priority: 'high' });
+    await seedPutawayTask({
+      createdAt: minutesAgo(9),
+      assignedTo: operatorUserId,
+      priority: 'urgent',
+    });
+    const putawayHighId = await seedPutawayTask({
+      createdAt: minutesAgo(7),
+      assignedTo: operatorUserId,
+      priority: 'high',
+    });
 
-    const res = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks?site_id=${siteAId}`, undefined, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/warehouse-tasks?site_id=${siteAId}`,
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 200, res.raw);
 
     const tasks = res.body['tasks'] as Array<Record<string, unknown>>;
@@ -467,7 +605,10 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     assert.ok(putaway, 'the seeded putaway task must appear on the board');
 
     // Age is computed in SQL from created_at, so a 20-minute-old task reads as ~20 minutes.
-    assert.ok(Number(picking['age_minutes']) >= 19.9 && Number(picking['age_minutes']) < 25, `unexpected age: ${String(picking['age_minutes'])}`);
+    assert.ok(
+      Number(picking['age_minutes']) >= 19.9 && Number(picking['age_minutes']) < 25,
+      `unexpected age: ${String(picking['age_minutes'])}`,
+    );
     assert.strictEqual(putaway['zone_id'], zoneAId);
     assert.strictEqual(putaway['assigned_to'], operatorUserId);
     assert.strictEqual(picking['site_id'], siteAId);
@@ -479,16 +620,28 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     const highIndex = priorityOrder.indexOf('high');
     const normalIndex = priorityOrder.indexOf('normal');
     const lowIndex = priorityOrder.indexOf('low');
-    assert.ok(urgentIndex < highIndex, `urgent (${urgentIndex}) must precede high (${highIndex}); order=${priorityOrder.join(',')}`);
-    assert.ok(highIndex < normalIndex, `high (${highIndex}) must precede normal (${normalIndex}); order=${priorityOrder.join(',')}`);
-    assert.ok(normalIndex < lowIndex, `normal (${normalIndex}) must precede low (${lowIndex}); order=${priorityOrder.join(',')}`);
+    assert.ok(
+      urgentIndex < highIndex,
+      `urgent (${urgentIndex}) must precede high (${highIndex}); order=${priorityOrder.join(',')}`,
+    );
+    assert.ok(
+      highIndex < normalIndex,
+      `high (${highIndex}) must precede normal (${normalIndex}); order=${priorityOrder.join(',')}`,
+    );
+    assert.ok(
+      normalIndex < lowIndex,
+      `normal (${normalIndex}) must precede low (${lowIndex}); order=${priorityOrder.join(',')}`,
+    );
 
     const groups = res.body['groups'] as Array<Record<string, unknown>>;
     const pickingGroup = groups.find((g) => g['task_type'] === 'picking')!;
     const putawayGroup = groups.find((g) => g['task_type'] === 'putaway')!;
     assert.ok(pickingGroup && putawayGroup, 'the board groups by task type');
     const putawayOperators = putawayGroup['operators'] as Array<Record<string, unknown>>;
-    assert.ok(putawayOperators.some((o) => o['assigned_to'] === operatorUserId), 'the board groups by operator within a type');
+    assert.ok(
+      putawayOperators.some((o) => o['assigned_to'] === operatorUserId),
+      'the board groups by operator within a type',
+    );
   });
 
   it('AC1: receiving and packing sources appear on the unified board with their own priority', async () => {
@@ -499,13 +652,25 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     await seedQuarantinedGrnLine({ createdAt: minutesAgo(40) });
     await seedPackedNotDispatched({ createdAt: minutesAgo(50) });
 
-    const res = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks?site_id=${siteAId}`, undefined, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/warehouse-tasks?site_id=${siteAId}`,
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 200, res.raw);
     const tasks = res.body['tasks'] as Array<Record<string, unknown>>;
     const receiving = tasks.find((t) => t['task_type'] === 'receiving');
     const packing = tasks.find((t) => t['task_type'] === 'packing');
-    assert.ok(receiving, 'a quarantined GRN line must surface as a receiving task on the unified board');
-    assert.ok(packing, 'a packed-but-undispatched packing record must surface as a packing task on the unified board');
+    assert.ok(
+      receiving,
+      'a quarantined GRN line must surface as a receiving task on the unified board',
+    );
+    assert.ok(
+      packing,
+      'a packed-but-undispatched packing record must surface as a packing task on the unified board',
+    );
   });
 
   it('AC1: a task past its configured SLA threshold is flagged with the breached threshold shown', async () => {
@@ -516,7 +681,13 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     const breachingId = await seedPutawayTask({ zoneId: zoneBId, createdAt: minutesAgo(45) });
     const healthyId = await seedPutawayTask({ zoneId: zoneBId, createdAt: minutesAgo(1) });
 
-    const res = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks?site_id=${siteAId}&task_type=putaway&zone_id=${zoneBId}`, undefined, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/warehouse-tasks?site_id=${siteAId}&task_type=putaway&zone_id=${zoneBId}`,
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 200, res.raw);
     const tasks = res.body['tasks'] as Array<Record<string, unknown>>;
 
@@ -545,9 +716,17 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     const orderId = await seedSalesOrderLine(`SO38-ZONE-${run}`, siteAId, siteACode);
     const zoneScoped = await seedPickTask(orderId, { createdAt: minutesAgo(30) });
 
-    const res = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks?site_id=${siteAId}&task_type=picking`, undefined, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/warehouse-tasks?site_id=${siteAId}&task_type=picking`,
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 200, res.raw);
-    const task = (res.body['tasks'] as Array<Record<string, unknown>>).find((t) => t['task_id'] === zoneScoped)!;
+    const task = (res.body['tasks'] as Array<Record<string, unknown>>).find(
+      (t) => t['task_id'] === zoneScoped,
+    )!;
     assert.ok(task);
     // Resolved against the zone row (1 minute), not the site-wide default (600 minutes).
     assert.strictEqual(task['sla_threshold_minutes'], '1.00');
@@ -555,11 +734,23 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   });
 
   it('AC1: a malformed filter is rejected with 400 INVALID_PARAMS before any query runs', async () => {
-    const badType = await makeRequest(port, 'GET', '/api/v1/warehouse-tasks?task_type=teleportation', undefined, managerHeaders);
+    const badType = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/warehouse-tasks?task_type=teleportation',
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(badType.status, 400, badType.raw);
     assert.strictEqual(badType.body['error_code'], 'INVALID_PARAMS');
 
-    const badUuid = await makeRequest(port, 'GET', '/api/v1/warehouse-tasks?zone_id=not-a-uuid', undefined, managerHeaders);
+    const badUuid = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/warehouse-tasks?zone_id=not-a-uuid',
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(badUuid.status, 400, badUuid.raw);
     assert.strictEqual(badUuid.body['error_code'], 'INVALID_PARAMS');
   });
@@ -574,8 +765,22 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
 
     // Four tasks attributed to this operator in the window; two of them completed.
     const op = productivityOperatorId;
-    await seedPutawayTask({ zoneId: zoneBId, createdAt: minutesAgo(120), assignedTo: op, status: 'completed', completedAt: minutesAgo(110), completedBy: op });
-    await seedPutawayTask({ zoneId: zoneBId, createdAt: minutesAgo(100), assignedTo: op, status: 'completed', completedAt: minutesAgo(80), completedBy: op });
+    await seedPutawayTask({
+      zoneId: zoneBId,
+      createdAt: minutesAgo(120),
+      assignedTo: op,
+      status: 'completed',
+      completedAt: minutesAgo(110),
+      completedBy: op,
+    });
+    await seedPutawayTask({
+      zoneId: zoneBId,
+      createdAt: minutesAgo(100),
+      assignedTo: op,
+      status: 'completed',
+      completedAt: minutesAgo(80),
+      completedBy: op,
+    });
     await seedPutawayTask({ zoneId: zoneBId, createdAt: minutesAgo(90), assignedTo: op });
     await seedPutawayTask({ zoneId: zoneBId, createdAt: minutesAgo(85), assignedTo: op });
 
@@ -596,9 +801,18 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     assert.strictEqual(row['confirmation_rate'], '0.5000');
 
     // Durations are computed in SQL: 10 minutes and 20 minutes -> mean 900s, median 900s.
-    assert.ok(row['avg_duration_seconds'] !== null, 'duration must be reported for completed tasks');
-    assert.ok(Math.abs(Number(row['avg_duration_seconds']) - 900) < 2, `unexpected mean duration: ${String(row['avg_duration_seconds'])}`);
-    assert.ok(Math.abs(Number(row['median_duration_seconds']) - 900) < 2, `unexpected median duration: ${String(row['median_duration_seconds'])}`);
+    assert.ok(
+      row['avg_duration_seconds'] !== null,
+      'duration must be reported for completed tasks',
+    );
+    assert.ok(
+      Math.abs(Number(row['avg_duration_seconds']) - 900) < 2,
+      `unexpected mean duration: ${String(row['avg_duration_seconds'])}`,
+    );
+    assert.ok(
+      Math.abs(Number(row['median_duration_seconds']) - 900) < 2,
+      `unexpected median duration: ${String(row['median_duration_seconds'])}`,
+    );
 
     const byZone = res.body['by_zone'] as Array<Record<string, unknown>>;
     const zoneRow = byZone.find((r) => r['zone_id'] === zoneBId)!;
@@ -626,9 +840,15 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     const gate = await createGateEvent(siteACode, minutesAgo(11));
     const weighbridgeEventId = await recordWeighment(gate.correlationId);
 
-    const stored = await getPool().query(`SELECT occurred_at FROM weighbridge_event WHERE weighbridge_event_id = $1`, [weighbridgeEventId]);
+    const stored = await getPool().query(
+      `SELECT occurred_at FROM weighbridge_event WHERE weighbridge_event_id = $1`,
+      [weighbridgeEventId],
+    );
     assert.strictEqual(stored.rows.length, 1);
-    assert.ok(stored.rows[0]!['occurred_at'] !== null, 'Story 3.3 discarded the capture instant; Story 3.8 must persist it');
+    assert.ok(
+      stored.rows[0]!['occurred_at'] !== null,
+      'Story 3.3 discarded the capture instant; Story 3.8 must persist it',
+    );
 
     const view = await getPool().query(
       `SELECT resolution_source, weighment_present, challan_photo_present,
@@ -640,7 +860,10 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     assert.strictEqual(view.rows[0]!['resolution_source'], 'weighbridge');
     assert.strictEqual(view.rows[0]!['weighment_present'], true);
     assert.strictEqual(view.rows[0]!['challan_photo_present'], true);
-    assert.ok(Number(view.rows[0]!['dwell_minutes']) >= 10.9, `expected roughly 11 minutes, got ${String(view.rows[0]!['dwell_minutes'])}`);
+    assert.ok(
+      Number(view.rows[0]!['dwell_minutes']) >= 10.9,
+      `expected roughly 11 minutes, got ${String(view.rows[0]!['dwell_minutes'])}`,
+    );
   });
 
   it('AC3: a shift whose median dwell exceeds 4 minutes is reported as an exception with drill-through', async () => {
@@ -658,7 +881,9 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     assert.strictEqual(Number(res.body['target_minutes']), 4);
 
     const exceptions = res.body['exceptions'] as Array<Record<string, unknown>>;
-    const shift = exceptions.find((s) => s['site_id'] === siteAId && s['business_date'] === gate.businessDate)!;
+    const shift = exceptions.find(
+      (s) => s['site_id'] === siteAId && s['business_date'] === gate.businessDate,
+    )!;
     assert.ok(shift, `expected an exception for site A on ${gate.businessDate}: ${res.raw}`);
     assert.strictEqual(shift['exceeded'], true);
     assert.ok(Number(shift['median_dwell_minutes']) > 4);
@@ -723,9 +948,14 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     );
     assert.strictEqual(grn.status, 201, `grn create failed: ${grn.raw}`);
 
-    const stored = await getPool().query(`SELECT received_at FROM grn WHERE correlation_id = $1`, [gate.correlationId]);
+    const stored = await getPool().query(`SELECT received_at FROM grn WHERE correlation_id = $1`, [
+      gate.correlationId,
+    ]);
     assert.strictEqual(stored.rows.length, 1);
-    assert.ok(stored.rows[0]!['received_at'] !== null, 'Story 3.4 discarded the receipt instant; Story 3.8 must persist it');
+    assert.ok(
+      stored.rows[0]!['received_at'] !== null,
+      'Story 3.4 discarded the receipt instant; Story 3.8 must persist it',
+    );
 
     const view = await getPool().query(
       `SELECT resolution_source, weighment_present, grn_fallback_used FROM gate_dwell_metric WHERE correlation_id = $1`,
@@ -749,11 +979,16 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
       managerHeaders,
     );
     assert.strictEqual(res.status, 200, res.raw);
-    const shift = (res.body['shifts'] as Array<Record<string, unknown>>).find((s) => s['site_id'] === siteDId)!;
+    const shift = (res.body['shifts'] as Array<Record<string, unknown>>).find(
+      (s) => s['site_id'] === siteDId,
+    )!;
     assert.ok(shift);
     assert.strictEqual(shift['exceeded'], true);
     const completeness = shift['capture_completeness'] as Record<string, unknown>;
-    assert.ok(Number(completeness['grn_fallback_count']) >= 1, 'a GRN-fallback resolution must be visible as a capture-completeness counter');
+    assert.ok(
+      Number(completeness['grn_fallback_count']) >= 1,
+      'a GRN-fallback resolution must be visible as a capture-completeness counter',
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -763,17 +998,30 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   it('SLA config: a supervisor sets a threshold through the event seam and can read it back', async () => {
     const res = await setSlaThreshold('packing', '12.50', null);
     assert.strictEqual(res.status, 200, res.raw);
-    assert.ok(typeof res.body['event_id'] === 'string', 'the change must be recorded as a domain event, not a direct UPDATE');
+    assert.ok(
+      typeof res.body['event_id'] === 'string',
+      'the change must be recorded as a domain event, not a direct UPDATE',
+    );
     const config = res.body['sla_config'] as Record<string, unknown>;
     assert.strictEqual(config['threshold_minutes'], '12.50');
     assert.strictEqual(config['zone_id'], null);
     // updated_by is server-set from the authenticated actor, never a client value or a placeholder.
     assert.strictEqual(config['updated_by'], managerUserId);
 
-    const read = await makeRequest(port, 'GET', '/api/v1/warehouse-tasks/sla-config?task_type=packing', undefined, managerHeaders);
+    const read = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/warehouse-tasks/sla-config?task_type=packing',
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(read.status, 200, read.raw);
     const configs = read.body['sla_configs'] as Array<Record<string, unknown>>;
-    assert.strictEqual(configs.length, 1, 'one row per (task_type, zone_id) grain, never a duplicate site-wide row');
+    assert.strictEqual(
+      configs.length,
+      1,
+      'one row per (task_type, zone_id) grain, never a duplicate site-wide row',
+    );
     assert.strictEqual(configs[0]!['threshold_minutes'], '12.50');
   });
 
@@ -781,38 +1029,84 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     assert.strictEqual((await setSlaThreshold('receiving', 20, null)).status, 200);
     assert.strictEqual((await setSlaThreshold('receiving', 35, null)).status, 200);
 
-    const read = await makeRequest(port, 'GET', '/api/v1/warehouse-tasks/sla-config?task_type=receiving', undefined, managerHeaders);
+    const read = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/warehouse-tasks/sla-config?task_type=receiving',
+      undefined,
+      managerHeaders,
+    );
     const configs = read.body['sla_configs'] as Array<Record<string, unknown>>;
-    assert.strictEqual(configs.length, 1, 'NULLS NOT DISTINCT must collapse the site-wide grain to one row');
+    assert.strictEqual(
+      configs.length,
+      1,
+      'NULLS NOT DISTINCT must collapse the site-wide grain to one row',
+    );
     assert.strictEqual(configs[0]!['threshold_minutes'], '35.00');
   });
 
   it('SLA config: a replayed idempotency key does not apply the change twice', async () => {
     const idempotencyKey = `sla-replay-${run}`;
-    const first = await makeRequest(port, 'PUT', '/api/v1/warehouse-tasks/sla-config', {
-      site_id: siteAId, task_type: 'putaway', zone_id: null, threshold_minutes: 42, idempotency_key: idempotencyKey,
-    }, managerHeaders);
+    const first = await makeRequest(
+      port,
+      'PUT',
+      '/api/v1/warehouse-tasks/sla-config',
+      {
+        site_id: siteAId,
+        task_type: 'putaway',
+        zone_id: null,
+        threshold_minutes: 42,
+        idempotency_key: idempotencyKey,
+      },
+      managerHeaders,
+    );
     assert.strictEqual(first.status, 200, first.raw);
 
     // A second PUT with the SAME idempotency key but a different value must be a no-op: the first
     // value stays, the second value never lands, and no second domain event is recorded.
-    const replay = await makeRequest(port, 'PUT', '/api/v1/warehouse-tasks/sla-config', {
-      site_id: siteAId, task_type: 'putaway', zone_id: null, threshold_minutes: 99, idempotency_key: idempotencyKey,
-    }, managerHeaders);
+    const replay = await makeRequest(
+      port,
+      'PUT',
+      '/api/v1/warehouse-tasks/sla-config',
+      {
+        site_id: siteAId,
+        task_type: 'putaway',
+        zone_id: null,
+        threshold_minutes: 99,
+        idempotency_key: idempotencyKey,
+      },
+      managerHeaders,
+    );
     // Either the duplicate is rejected outright or it short-circuits; what must NOT happen is the
     // second value silently landing under a key that already committed a different one.
     assert.ok(replay.status === 409 || replay.status === 200, replay.raw);
 
-    const read = await makeRequest(port, 'GET', '/api/v1/warehouse-tasks/sla-config?task_type=putaway', undefined, managerHeaders);
-    const siteWide = (read.body['sla_configs'] as Array<Record<string, unknown>>).find((c) => c['zone_id'] === null)!;
-    assert.strictEqual(siteWide['threshold_minutes'], '42.00', 'the replayed key must not overwrite the committed threshold');
+    const read = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/warehouse-tasks/sla-config?task_type=putaway',
+      undefined,
+      managerHeaders,
+    );
+    const siteWide = (read.body['sla_configs'] as Array<Record<string, unknown>>).find(
+      (c) => c['zone_id'] === null,
+    )!;
+    assert.strictEqual(
+      siteWide['threshold_minutes'],
+      '42.00',
+      'the replayed key must not overwrite the committed threshold',
+    );
 
     // Exactly one domain event was recorded for this idempotency key, never two.
     const eventCount = await getPool().query(
       `SELECT COUNT(*)::int AS n FROM domain_events WHERE idempotency_key = $1`,
       [idempotencyKey],
     );
-    assert.strictEqual(eventCount.rows[0]!['n'], 1, `a replayed key must produce exactly one domain event; got ${eventCount.rows[0]!['n']}`);
+    assert.strictEqual(
+      eventCount.rows[0]!['n'],
+      1,
+      `a replayed key must produce exactly one domain event; got ${eventCount.rows[0]!['n']}`,
+    );
   });
 
   it('assignment idempotency: a retried assign with the same key does not change the row', async () => {
@@ -823,14 +1117,30 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     const pickTaskId = await seedPickTask(dispatchOrderId, { createdAt: minutesAgo(2) });
 
     const idem = `assign-replay-${run}`;
-    const first = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${pickTaskId}/assign`, {
-      assigned_to: operatorUserId, priority: 'high', idempotency_key: idem,
-    }, managerHeaders);
+    const first = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${pickTaskId}/assign`,
+      {
+        assigned_to: operatorUserId,
+        priority: 'high',
+        idempotency_key: idem,
+      },
+      managerHeaders,
+    );
     assert.strictEqual(first.status, 200, first.raw);
 
-    const second = await makeRequest(port, 'POST', `/api/v1/pick-tasks/${pickTaskId}/assign`, {
-      assigned_to: operatorUserId, priority: 'urgent', idempotency_key: idem,
-    }, managerHeaders);
+    const second = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${pickTaskId}/assign`,
+      {
+        assigned_to: operatorUserId,
+        priority: 'urgent',
+        idempotency_key: idem,
+      },
+      managerHeaders,
+    );
     // The duplicate path is by design a no-op (or a 409) and must not apply the second value.
     assert.ok(second.status === 200 || second.status === 409, second.raw);
 
@@ -838,8 +1148,16 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
       `SELECT priority, assigned_to, status FROM pick_task WHERE pick_task_id = $1`,
       [pickTaskId],
     );
-    assert.strictEqual(read.rows[0]!['priority'], 'high', 'a replay must not overwrite the committed priority');
-    assert.strictEqual(read.rows[0]!['assigned_to'], operatorUserId, 'a replay must not change the assignee');
+    assert.strictEqual(
+      read.rows[0]!['priority'],
+      'high',
+      'a replay must not overwrite the committed priority',
+    );
+    assert.strictEqual(
+      read.rows[0]!['assigned_to'],
+      operatorUserId,
+      'a replay must not change the assignee',
+    );
   });
 
   it('assignment concurrency: only one of two concurrent assigns to the same task wins', async () => {
@@ -850,18 +1168,44 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     const taskId = await seedPutawayTask({ createdAt: minutesAgo(2) });
 
     const [a, b] = await Promise.all([
-      makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: operatorUserId }, managerHeaders),
-      makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: otherOperatorUserId }, managerHeaders),
+      makeRequest(
+        port,
+        'POST',
+        `/api/v1/putaway-tasks/${taskId}/assign`,
+        { assigned_to: operatorUserId },
+        managerHeaders,
+      ),
+      makeRequest(
+        port,
+        'POST',
+        `/api/v1/putaway-tasks/${taskId}/assign`,
+        { assigned_to: otherOperatorUserId },
+        managerHeaders,
+      ),
     ]);
 
     const statuses = [a.status, b.status].sort();
     // One wins (200) and the other loses (409). The exact pair is one each.
-    assert.deepStrictEqual(statuses, [200, 409], `expected one 200 and one 409, got ${statuses.join(',')}: a=${a.raw} b=${b.raw}`);
+    assert.deepStrictEqual(
+      statuses,
+      [200, 409],
+      `expected one 200 and one 409, got ${statuses.join(',')}: a=${a.raw} b=${b.raw}`,
+    );
 
-    const after = await getPool().query(`SELECT assigned_to FROM putaway_task WHERE putaway_task_id = $1`, [taskId]);
-    assert.ok([operatorUserId, otherOperatorUserId].includes(after.rows[0]!['assigned_to'] as string), 'the task must be assigned to exactly one of the two requesters');
+    const after = await getPool().query(
+      `SELECT assigned_to FROM putaway_task WHERE putaway_task_id = $1`,
+      [taskId],
+    );
+    assert.ok(
+      [operatorUserId, otherOperatorUserId].includes(after.rows[0]!['assigned_to'] as string),
+      'the task must be assigned to exactly one of the two requesters',
+    );
     const winner = (a.status === 200 ? a : b).body['task'] as Record<string, unknown>;
-    assert.strictEqual(winner['assigned_to'], after.rows[0]!['assigned_to'], 'the winner row and the row read back must agree on the assignee');
+    assert.strictEqual(
+      winner['assigned_to'],
+      after.rows[0]!['assigned_to'],
+      'the winner row and the row read back must agree on the assignee',
+    );
   });
 
   it('assignment replay: a retried assign with the same idempotency_key yields a deterministic assigned_at', async () => {
@@ -870,29 +1214,61 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     // so the replay yields the SAME assigned_at as the first apply.
     const taskId = await seedPutawayTask({ createdAt: minutesAgo(1) });
     const idem = `assign-replay-ts-${run}`;
-    const first = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, {
-      assigned_to: operatorUserId, priority: 'normal', idempotency_key: idem,
-    }, managerHeaders);
+    const first = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${taskId}/assign`,
+      {
+        assigned_to: operatorUserId,
+        priority: 'normal',
+        idempotency_key: idem,
+      },
+      managerHeaders,
+    );
     assert.strictEqual(first.status, 200, first.raw);
 
     // Re-read what was written.
-    const firstRow = await getPool().query(`SELECT assigned_at FROM putaway_task WHERE putaway_task_id = $1`, [taskId]);
+    const firstRow = await getPool().query(
+      `SELECT assigned_at FROM putaway_task WHERE putaway_task_id = $1`,
+      [taskId],
+    );
     const firstAssignedAt = (firstRow.rows[0]!['assigned_at'] as Date).toISOString();
 
     // The original event's capture instant determines assigned_at, so a fresh request with the
     // same key short-circuits and the row does not move.
-    const second = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, {
-      assigned_to: operatorUserId, priority: 'normal', idempotency_key: idem,
-    }, managerHeaders);
+    const second = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${taskId}/assign`,
+      {
+        assigned_to: operatorUserId,
+        priority: 'normal',
+        idempotency_key: idem,
+      },
+      managerHeaders,
+    );
     assert.ok(second.status === 200 || second.status === 409, second.raw);
 
-    const secondRow = await getPool().query(`SELECT assigned_at FROM putaway_task WHERE putaway_task_id = $1`, [taskId]);
+    const secondRow = await getPool().query(
+      `SELECT assigned_at FROM putaway_task WHERE putaway_task_id = $1`,
+      [taskId],
+    );
     const secondAssignedAt = (secondRow.rows[0]!['assigned_at'] as Date).toISOString();
-    assert.strictEqual(secondAssignedAt, firstAssignedAt, `a replay must not move assigned_at; was ${firstAssignedAt}, now ${secondAssignedAt}`);
+    assert.strictEqual(
+      secondAssignedAt,
+      firstAssignedAt,
+      `a replay must not move assigned_at; was ${firstAssignedAt}, now ${secondAssignedAt}`,
+    );
   });
 
   it('RBAC: a frontline role may read the board but may not change an SLA threshold', async () => {
-    const read = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks?site_id=${siteAId}`, undefined, frontlineHeaders);
+    const read = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/warehouse-tasks?site_id=${siteAId}`,
+      undefined,
+      frontlineHeaders,
+    );
     assert.strictEqual(read.status, 200, `frontline read access must not regress: ${read.raw}`);
 
     const write = await setSlaThreshold('picking', 15, null, frontlineHeaders);
@@ -909,18 +1285,28 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
     // RBAC layer and never reach the seam, leaving the test as a false positive. This user passes
     // /api/v1/events's requireRole check (write on the warehouse module) and is then stopped by
     // assertSupervisor, which is the placement that actually holds against a direct POST.
-    const res = await makeRequest(port, 'POST', '/api/v1/events', {
-      stream_type: 'warehouse',
-      stream_id: randomUUID(),
-      event_type: 'task_sla_config.updated',
-      payload: { site_id: siteAId, task_type: 'picking', zone_id: null, threshold_minutes: 1 },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: operatorUserId, role: 'store_assistant', location_id: siteAId },
-        occurred_at: new Date().toISOString(),
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'warehouse',
+        stream_id: randomUUID(),
+        event_type: 'task_sla_config.updated',
+        payload: { site_id: siteAId, task_type: 'picking', zone_id: null, threshold_minutes: 1 },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: operatorUserId, role: 'store_assistant', location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-    }, nonSupervisorWriteHeaders);
-    assert.strictEqual(res.status, 403, `direct event path must be gated by the seam, got ${res.status}: ${res.raw}`);
+      nonSupervisorWriteHeaders,
+    );
+    assert.strictEqual(
+      res.status,
+      403,
+      `direct event path must be gated by the seam, got ${res.status}: ${res.raw}`,
+    );
     assert.strictEqual(res.body['error_code'], 'FUNCTION_ACCESS_DENIED');
   });
 
@@ -937,11 +1323,27 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   it('RBAC: assignment is supervisor-only and server-sets the assigning identity', async () => {
     const taskId = await seedPutawayTask({ createdAt: minutesAgo(3) });
 
-    const denied = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: operatorUserId }, frontlineHeaders);
+    const denied = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${taskId}/assign`,
+      { assigned_to: operatorUserId },
+      frontlineHeaders,
+    );
     assert.strictEqual(denied.status, 403, denied.raw);
     assert.strictEqual(denied.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
-    const ok = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: operatorUserId, priority: 'high', assigned_by: '00000000-0000-4000-8000-000000000000' }, managerHeaders);
+    const ok = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${taskId}/assign`,
+      {
+        assigned_to: operatorUserId,
+        priority: 'high',
+        assigned_by: '00000000-0000-4000-8000-000000000000',
+      },
+      managerHeaders,
+    );
     assert.strictEqual(ok.status, 200, ok.raw);
     const task = ok.body['task'] as Record<string, unknown>;
     assert.strictEqual(task['assigned_to'], operatorUserId);
@@ -951,8 +1353,19 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   });
 
   it('RBAC: assigning a task that is no longer ready is a 409, never a silent reassignment', async () => {
-    const completedTask = await seedPutawayTask({ status: 'completed', createdAt: minutesAgo(30), completedAt: minutesAgo(5), completedBy: operatorUserId });
-    const res = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${completedTask}/assign`, { assigned_to: operatorUserId }, managerHeaders);
+    const completedTask = await seedPutawayTask({
+      status: 'completed',
+      createdAt: minutesAgo(30),
+      completedAt: minutesAgo(5),
+      completedBy: operatorUserId,
+    });
+    const res = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${completedTask}/assign`,
+      { assigned_to: operatorUserId },
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 409, res.raw);
     // The seam distinguishes the two ways an assignment can fail closed: the task is not in 'ready'
     // status, or it is ready but already held by a different operator. The single
@@ -962,23 +1375,53 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
 
   it('assignment is refused rather than silently stolen when another operator already holds the task', async () => {
     const taskId = await seedPutawayTask({ createdAt: minutesAgo(4) });
-    const first = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: operatorUserId }, managerHeaders);
+    const first = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${taskId}/assign`,
+      { assigned_to: operatorUserId },
+      managerHeaders,
+    );
     assert.strictEqual(first.status, 200, first.raw);
 
-    const steal = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: otherOperatorUserId }, managerHeaders);
+    const steal = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${taskId}/assign`,
+      { assigned_to: otherOperatorUserId },
+      managerHeaders,
+    );
     assert.strictEqual(steal.status, 409, steal.raw);
     assert.strictEqual(steal.body['error_code'], 'PUTAWAY_TASK_ALREADY_ASSIGNED');
 
     // The original assignee must still hold the task: the losing write changed nothing.
-    const after = await makeRequest(port, 'GET', `/api/v1/putaway-tasks/${taskId}`, undefined, managerHeaders);
-    assert.strictEqual((after.body['task'] as Record<string, unknown>)['assigned_to'], operatorUserId);
+    const after = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/putaway-tasks/${taskId}`,
+      undefined,
+      managerHeaders,
+    );
+    assert.strictEqual(
+      (after.body['task'] as Record<string, unknown>)['assigned_to'],
+      operatorUserId,
+    );
   });
 
   it('assignment is recorded as a domain event so a projection rebuild does not lose it', async () => {
     const taskId = await seedPutawayTask({ createdAt: minutesAgo(2) });
-    const res = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: operatorUserId, priority: 'urgent' }, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${taskId}/assign`,
+      { assigned_to: operatorUserId, priority: 'urgent' },
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 200, res.raw);
-    assert.ok(typeof res.body['event_id'] === 'string', 'assignment must carry a domain event, not be a direct read-model write');
+    assert.ok(
+      typeof res.body['event_id'] === 'string',
+      'assignment must carry a domain event, not be a direct read-model write',
+    );
 
     const evt = await getPool().query(
       `SELECT event_type, payload FROM domain_events WHERE event_id = $1`,
@@ -990,11 +1433,23 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
 
   it('RBAC: an invalid assignment payload is a 400, not a database error', async () => {
     const taskId = await seedPutawayTask({ createdAt: minutesAgo(2) });
-    const res = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: 'nobody' }, managerHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${taskId}/assign`,
+      { assigned_to: 'nobody' },
+      managerHeaders,
+    );
     assert.strictEqual(res.status, 400, res.raw);
     assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
 
-    const badPriority = await makeRequest(port, 'POST', `/api/v1/putaway-tasks/${taskId}/assign`, { assigned_to: operatorUserId, priority: 'immediately' }, managerHeaders);
+    const badPriority = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/putaway-tasks/${taskId}/assign`,
+      { assigned_to: operatorUserId, priority: 'immediately' },
+      managerHeaders,
+    );
     assert.strictEqual(badPriority.status, 400, badPriority.raw);
     assert.strictEqual(badPriority.body['error_code'], 'INVALID_PARAMS');
   });
@@ -1022,11 +1477,23 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   it('Metrics RBAC: a frontline warehouse role is denied on the productivity and gate-dwell endpoints', async () => {
     // The metrics endpoints share the board's role list, which let a store_assistant pull
     // per-colleague confirmation rates. They are gated more tightly than the board.
-    const prod = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks/productivity?site_id=${siteAId}`, undefined, frontlineHeaders);
+    const prod = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/warehouse-tasks/productivity?site_id=${siteAId}`,
+      undefined,
+      frontlineHeaders,
+    );
     assert.strictEqual(prod.status, 403, `productivity must refuse a frontline role: ${prod.raw}`);
     assert.strictEqual(prod.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
-    const dwell = await makeRequest(port, 'GET', `/api/v1/warehouse-tasks/exceptions/gate-dwell?site_id=${siteAId}`, undefined, frontlineHeaders);
+    const dwell = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/warehouse-tasks/exceptions/gate-dwell?site_id=${siteAId}`,
+      undefined,
+      frontlineHeaders,
+    );
     assert.strictEqual(dwell.status, 403, `gate-dwell must refuse a frontline role: ${dwell.raw}`);
     assert.strictEqual(dwell.body['error_code'], 'FUNCTION_ACCESS_DENIED');
   });
@@ -1034,10 +1501,19 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
   it('Site scoping: an unfiltered board is narrowed to the sites the caller may see', async () => {
     // The site-B manager holds no assignment at site A, so site A's tasks must not appear even when
     // no site filter is supplied at all.
-    const res = await makeRequest(port, 'GET', '/api/v1/warehouse-tasks', undefined, otherSiteHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/warehouse-tasks',
+      undefined,
+      otherSiteHeaders,
+    );
     assert.strictEqual(res.status, 200, res.raw);
     const tasks = res.body['tasks'] as Array<Record<string, unknown>>;
-    assert.ok(tasks.every((t) => t['site_id'] !== siteAId), 'an unscoped read must not leak another site’s tasks');
+    assert.ok(
+      tasks.every((t) => t['site_id'] !== siteAId),
+      'an unscoped read must not leak another site’s tasks',
+    );
   });
 
   it('Schema: the gate_dwell_metric view exists with the columns the dashboard contract depends on', async () => {
@@ -1060,7 +1536,10 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
       'vehicle_reg_ext',
       'weighment_present',
     ]) {
-      assert.ok(columns.includes(expected), `gate_dwell_metric must expose ${expected}; has ${columns.join(', ')}`);
+      assert.ok(
+        columns.includes(expected),
+        `gate_dwell_metric must expose ${expected}; has ${columns.join(', ')}`,
+      );
     }
   });
 });

@@ -2,7 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { assertLocationInvariant } from '../../src/compliance/location.js';
 import type { LocationDeps } from '../../src/compliance/location.js';
-import type { ExpectedLocationFact, AssertedLocationFact, CurrentLocation } from '../../src/read/projections/location.js';
+import type {
+  ExpectedLocationFact,
+  AssertedLocationFact,
+  CurrentLocation,
+} from '../../src/read/projections/location.js';
 import type { EventEnvelope, PersistedEvent } from '../../src/events/store.js';
 import { AppError } from '../../src/middleware/error.js';
 
@@ -83,7 +87,9 @@ function makeDeps(expected: ExpectedLocationFact | null, calls: string[]): Locat
       } satisfies CurrentLocation;
     },
     emitDisputeEvent: async (event) => {
-      calls.push(`dispute:${event.payload['asserted_location']}:${event.payload['expected_location']}`);
+      calls.push(
+        `dispute:${event.payload['asserted_location']}:${event.payload['expected_location']}`,
+      );
     },
   };
 }
@@ -92,7 +98,11 @@ describe('assertLocationInvariant (Story 1.6, AD-15)', () => {
   it('passes non-inventory stream types through with no projection writes', async () => {
     const calls: string[] = [];
     await assertLocationInvariant(
-      makeEnvelope({ stream_type: 'doa_registry_entry', event_type: 'doa_registry.entry_created', payload: {} }),
+      makeEnvelope({
+        stream_type: 'doa_registry_entry',
+        event_type: 'doa_registry.entry_created',
+        payload: {},
+      }),
       makePersisted(),
       undefined,
       makeDeps(null, calls),
@@ -113,26 +123,55 @@ describe('assertLocationInvariant (Story 1.6, AD-15)', () => {
 
   it('records an asserted location as current without dispute when there is no expected fact', async () => {
     const calls: string[] = [];
-    await assertLocationInvariant(makeEnvelope(), makePersisted(), undefined, makeDeps(null, calls));
+    await assertLocationInvariant(
+      makeEnvelope(),
+      makePersisted(),
+      undefined,
+      makeDeps(null, calls),
+    );
     assert.deepStrictEqual(calls, ['asserted', 'current']);
   });
 
   it('raises a location.disputed event when asserted differs from expected', async () => {
     const calls: string[] = [];
-    await assertLocationInvariant(makeEnvelope(), makePersisted(), undefined, makeDeps(expectedFact('BIN-A47'), calls));
+    await assertLocationInvariant(
+      makeEnvelope(),
+      makePersisted(),
+      undefined,
+      makeDeps(expectedFact('BIN-A47'), calls),
+    );
     assert.deepStrictEqual(calls, ['asserted', 'current', 'dispute:BIN-A43:BIN-A47']);
   });
 
   it('records expected facts without raising dispute', async () => {
     const calls: string[] = [];
-    const envelope = makeEnvelope({ event_type: 'location.expected', payload: { business_stream: 'production', lot_id: LOT_ID, expected_location: 'BIN-A47', source: 'seed' } });
-    await assertLocationInvariant(envelope, makePersisted(envelope), undefined, makeDeps(null, calls));
+    const envelope = makeEnvelope({
+      event_type: 'location.expected',
+      payload: {
+        business_stream: 'production',
+        lot_id: LOT_ID,
+        expected_location: 'BIN-A47',
+        source: 'seed',
+      },
+    });
+    await assertLocationInvariant(
+      envelope,
+      makePersisted(envelope),
+      undefined,
+      makeDeps(null, calls),
+    );
     assert.deepStrictEqual(calls, ['expected']);
   });
 
   it('rejects malformed location.asserted payloads with INVALID_PARAMS', async () => {
     await assert.rejects(
-      () => assertLocationInvariant(makeEnvelope({ payload: { business_stream: 'production', lot_id: LOT_ID } }), makePersisted(), undefined, makeDeps(null, [])),
+      () =>
+        assertLocationInvariant(
+          makeEnvelope({ payload: { business_stream: 'production', lot_id: LOT_ID } }),
+          makePersisted(),
+          undefined,
+          makeDeps(null, []),
+        ),
       (err: unknown) => {
         assert.ok(err instanceof AppError);
         assert.strictEqual(err.errorCode, 'INVALID_PARAMS');

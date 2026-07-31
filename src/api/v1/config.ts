@@ -1,6 +1,11 @@
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { getPool } from '../../config/db.js';
 import { logAuditEntry, logTamperAttempt } from '../../read/projections/audit_log.js';
 import { requireRole } from '../../middleware/rbac.js';

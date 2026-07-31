@@ -2,11 +2,24 @@ import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getAuthContext, getAuthorizedAssignment, getParsedBody, getTraceId } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModule, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import {
+  getAuthContext,
+  getAuthorizedAssignment,
+  getParsedBody,
+  getTraceId,
+} from '../../middleware/context.js';
+import {
+  requireRole,
+  permittedLocationsForModule,
+  permittedLocationsForModuleScope,
+} from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
-import { listPutawayTasks, getPutawayTaskById, setDirectedSuggestion } from '../../read/projections/putaway_task.js';
+import {
+  listPutawayTasks,
+  getPutawayTaskById,
+  setDirectedSuggestion,
+} from '../../read/projections/putaway_task.js';
 import { isTaskPriority, TASK_PRIORITIES } from '../../read/projections/pick_task.js';
 import { listVelocityClasses } from '../../read/projections/velocity_class.js';
 import { activeUserExistsById } from '../../read/projections/users.js';
@@ -15,7 +28,12 @@ import { runReslottingJob } from '../../warehouse/reslotting-job.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PUTAWAY_READ_ROLES = ['store_assistant', 'unloading_supervisor', 'warehouse_manager', 'inventory_controller'];
+const PUTAWAY_READ_ROLES = [
+  'store_assistant',
+  'unloading_supervisor',
+  'warehouse_manager',
+  'inventory_controller',
+];
 const PUTAWAY_EXECUTE_ROLES = ['store_assistant'];
 const RESLOTTING_ROLES = ['warehouse_manager', 'inventory_controller'];
 /**
@@ -53,14 +71,19 @@ function actorContextForSite(req: IncomingMessage, targetSiteId: string): ActorC
   const base = actorContext(req);
   const authContext = getAuthContext(req);
   const covering = authContext?.roles.find(
-    (r) => (r.module === 'warehouse' || r.module === '*')
-      && r.functionScope === 'write'
-      && (r.locationId === '*' || r.locationId === targetSiteId),
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      (r.locationId === '*' || r.locationId === targetSiteId),
   );
   return { ...base, eventLocationId: targetSiteId, role: covering?.role ?? base.role };
 }
 
-function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
+function auditCtxFor(
+  req: IncomingMessage,
+  actor: ActorContext,
+  httpStatus: number,
+): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
   return {
     trace_id: getTraceId(req) ?? '',
     user_id: actor.userId,
@@ -72,16 +95,31 @@ function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: numb
   };
 }
 
-function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[], functionScope: 'read' | 'write'): void {
+function assertRoleAllowed(
+  req: IncomingMessage,
+  allowedRoles: string[],
+  functionScope: 'read' | 'write',
+): void {
   const authContext = getAuthContext(req);
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
-    (r) => (r.module === 'warehouse' || r.module === '*') && (functionScope === 'read' || r.functionScope === 'write') && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      (functionScope === 'read' || r.functionScope === 'write') &&
+      allowedRoles.includes(r.role),
   );
-  if (!ok) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+  if (!ok)
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
 }
 
-function warehouseScope(req: IncomingMessage, scope: 'read' | 'write'): { wildcard: boolean; locations: Set<string> } {
+function warehouseScope(
+  req: IncomingMessage,
+  scope: 'read' | 'write',
+): { wildcard: boolean; locations: Set<string> } {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   return scope === 'read'
@@ -92,7 +130,11 @@ function warehouseScope(req: IncomingMessage, scope: 'read' | 'write'): { wildca
 function assertSiteAccess(req: IncomingMessage, siteId: string, scope: 'read' | 'write'): void {
   const s = warehouseScope(req, scope);
   if (!s.wildcard && !s.locations.has(siteId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No ${scope} assignment grants access to site "${siteId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No ${scope} assignment grants access to site "${siteId}"`,
+    );
   }
 }
 
@@ -101,13 +143,23 @@ const listPutawayTasksBase: RouteHandler = async (req, res) => {
   const url = new URL(req.url ?? '', `http://${req.headers.host ?? 'localhost'}`);
   const status = url.searchParams.get('status');
   if (status !== null && status !== 'ready' && status !== 'held' && status !== 'completed') {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', "status filter must be 'ready', 'held' or 'completed'");
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      "status filter must be 'ready', 'held' or 'completed'",
+    );
     return;
   }
   const scope = warehouseScope(req, 'read');
   const siteId = url.searchParams.get('site');
   if (siteId && !scope.wildcard && !scope.locations.has(siteId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No read assignment grants access to site "${siteId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No read assignment grants access to site "${siteId}"`,
+    );
   }
   const tasks = await listPutawayTasks({
     siteId,
@@ -121,12 +173,24 @@ const getPutawayTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PUTAWAY_READ_ROLES, 'read');
   const putawayTaskId = params['putawayTaskId'];
   if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'putawayTaskId path parameter must be a UUID');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'putawayTaskId path parameter must be a UUID',
+    );
     return;
   }
   const task = await getPutawayTaskById(putawayTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'PUTAWAY_TASK_NOT_FOUND', `No putaway task exists for "${putawayTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'PUTAWAY_TASK_NOT_FOUND',
+      `No putaway task exists for "${putawayTaskId}"`,
+    );
     return;
   }
   assertSiteAccess(req, task.site_id, 'read');
@@ -137,12 +201,24 @@ const getPutawaySuggestionBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PUTAWAY_EXECUTE_ROLES, 'read');
   const putawayTaskId = params['putawayTaskId'];
   if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'putawayTaskId path parameter must be a UUID');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'putawayTaskId path parameter must be a UUID',
+    );
     return;
   }
   const task = await getPutawayTaskById(putawayTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'PUTAWAY_TASK_NOT_FOUND', `No putaway task exists for "${putawayTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'PUTAWAY_TASK_NOT_FOUND',
+      `No putaway task exists for "${putawayTaskId}"`,
+    );
     return;
   }
   assertSiteAccess(req, task.site_id, 'read');
@@ -152,7 +228,13 @@ const getPutawaySuggestionBase: RouteHandler = async (req, res, params) => {
     const pool = (await import('../../config/db.js')).getPool();
     const client = await pool.connect();
     try {
-      await setDirectedSuggestion(putawayTaskId, suggestion.locationId, suggestion.locationCode, suggestion.velocityClass, client);
+      await setDirectedSuggestion(
+        putawayTaskId,
+        suggestion.locationId,
+        suggestion.locationCode,
+        suggestion.velocityClass,
+        client,
+      );
     } finally {
       client.release();
     }
@@ -164,13 +246,25 @@ const completePutawayBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PUTAWAY_EXECUTE_ROLES, 'write');
   const putawayTaskId = params['putawayTaskId'];
   if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'putawayTaskId path parameter must be a UUID');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'putawayTaskId path parameter must be a UUID',
+    );
     return;
   }
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
   const task = await getPutawayTaskById(putawayTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'PUTAWAY_TASK_NOT_FOUND', `No putaway task exists for "${putawayTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'PUTAWAY_TASK_NOT_FOUND',
+      `No putaway task exists for "${putawayTaskId}"`,
+    );
     return;
   }
   assertSiteAccess(req, task.site_id, 'write');
@@ -183,11 +277,19 @@ const completePutawayBase: RouteHandler = async (req, res, params) => {
       event_type: 'putaway.completed',
       payload: {
         putaway_task_id: putawayTaskId,
-        actual_location_id: typeof body['actual_location_id'] === 'string' ? body['actual_location_id'] : undefined,
-        actual_location_code: typeof body['actual_location_code'] === 'string' ? body['actual_location_code'] : undefined,
+        actual_location_id:
+          typeof body['actual_location_id'] === 'string' ? body['actual_location_id'] : undefined,
+        actual_location_code:
+          typeof body['actual_location_code'] === 'string'
+            ? body['actual_location_code']
+            : undefined,
         correlation_id: task.grn_line_id,
-        override_reason_code: typeof body['override_reason_code'] === 'string' ? body['override_reason_code'] : undefined,
-        override_confidence: typeof body['override_confidence'] === 'string' ? body['override_confidence'] : undefined,
+        override_reason_code:
+          typeof body['override_reason_code'] === 'string'
+            ? body['override_reason_code']
+            : undefined,
+        override_confidence:
+          typeof body['override_confidence'] === 'string' ? body['override_confidence'] : undefined,
         completed_by: actor.userId,
       },
       metadata: {
@@ -214,9 +316,16 @@ const listVelocityClassificationBase: RouteHandler = async (req, res) => {
   }
   const scope = warehouseScope(req, 'read');
   if (siteId && !scope.wildcard && !scope.locations.has(siteId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No read assignment grants access to site "${siteId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No read assignment grants access to site "${siteId}"`,
+    );
   }
-  const classes = await listVelocityClasses({ siteId, velocityClass: velocityClass as 'A' | 'B' | 'C' | null });
+  const classes = await listVelocityClasses({
+    siteId,
+    velocityClass: velocityClass as 'A' | 'B' | 'C' | null,
+  });
   const filtered = scope.wildcard ? classes : classes.filter((c) => scope.locations.has(c.site_id));
   sendJson(res, 200, { velocity_classifications: filtered });
 };
@@ -239,7 +348,13 @@ const assignPutawayTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PUTAWAY_SUPERVISE_ROLES, 'write');
   const putawayTaskId = params['putawayTaskId'];
   if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'putawayTaskId path parameter must be a UUID');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'putawayTaskId path parameter must be a UUID',
+    );
     return;
   }
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
@@ -250,19 +365,37 @@ const assignPutawayTaskBase: RouteHandler = async (req, res, params) => {
   }
   const priority = body['priority'];
   if (priority !== undefined && priority !== null && !isTaskPriority(priority)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', `priority must be one of: ${TASK_PRIORITIES.join(', ')}`);
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      `priority must be one of: ${TASK_PRIORITIES.join(', ')}`,
+    );
     return;
   }
   // Mirrors the pick assignment route: a well-formed UUID for a nonexistent user previously left
   // the task looking assigned while no operator could ever see it.
   if (!(await activeUserExistsById(assignedTo))) {
-    sendRequestError(req, res, 404, 'ASSIGNEE_NOT_FOUND', `No active user exists for "${assignedTo}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ASSIGNEE_NOT_FOUND',
+      `No active user exists for "${assignedTo}"`,
+    );
     return;
   }
 
   const task = await getPutawayTaskById(putawayTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'PUTAWAY_TASK_NOT_FOUND', `No putaway task exists for "${putawayTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'PUTAWAY_TASK_NOT_FOUND',
+      `No putaway task exists for "${putawayTaskId}"`,
+    );
     return;
   }
   assertSiteAccess(req, task.site_id, 'write');
@@ -302,10 +435,31 @@ const reslottingJobBase: RouteHandler = async (req, res) => {
   sendJson(res, 200, { results });
 };
 
-export const handleListPutawayTasks: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(listPutawayTasksBase);
-export const handleGetPutawayTask: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(getPutawayTaskBase);
-export const handleGetPutawaySuggestion: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(getPutawaySuggestionBase);
-export const handleCompletePutaway: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(completePutawayBase);
-export const handleAssignPutawayTask: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(assignPutawayTaskBase);
-export const handleListVelocityClassification: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(listVelocityClassificationBase);
-export const handleReslottingJob: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(reslottingJobBase);
+export const handleListPutawayTasks: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(listPutawayTasksBase);
+export const handleGetPutawayTask: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(getPutawayTaskBase);
+export const handleGetPutawaySuggestion: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(getPutawaySuggestionBase);
+export const handleCompletePutaway: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(completePutawayBase);
+export const handleAssignPutawayTask: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(assignPutawayTaskBase);
+export const handleListVelocityClassification: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(listVelocityClassificationBase);
+export const handleReslottingJob: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(reslottingJobBase);

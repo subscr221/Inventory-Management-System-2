@@ -39,24 +39,47 @@ const PLANNING_EVENT_TYPES = new Set([
 const DISPATCH_DENIED_FRONTLINE_ROLES = ['store_assistant', 'warehouse_operator'];
 const CROSS_DOCK_EXECUTE_ROLES = ['store_assistant', 'warehouse_operator'];
 
-function planningPayloadLocation(body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): string | null {
+function planningPayloadLocation(body: {
+  stream_type: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+}): string | null {
   if (body.stream_type !== 'inventory' || !PLANNING_EVENT_TYPES.has(body.event_type)) return null;
   const locationId = body.payload['location_id'];
   return typeof locationId === 'string' ? locationId : null;
 }
 
-function assertPlanningPayloadWriteLocation(authContext: AuthContext, body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): void {
+function assertPlanningPayloadWriteLocation(
+  authContext: AuthContext,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): void {
   const locationId = planningPayloadLocation(body);
   if (!locationId) return;
   if (body.event_type === 'ownership.agreement_set') {
     const allowed = authContext.roles.some(
-      (r) => (r.module === 'inventory' || r.module === '*') && r.functionScope === 'write' && OWNERSHIP_CONFIG_ROLES.includes(r.role),
+      (r) =>
+        (r.module === 'inventory' || r.module === '*') &&
+        r.functionScope === 'write' &&
+        OWNERSHIP_CONFIG_ROLES.includes(r.role),
     );
-    if (!allowed) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${OWNERSHIP_CONFIG_ROLES.join(', ')}`);
+    if (!allowed)
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        `This operation is restricted to roles: ${OWNERSHIP_CONFIG_ROLES.join(', ')}`,
+      );
   }
-  const { wildcard, locations } = permittedLocationsForModuleScope(authContext.roles, 'inventory', 'write');
+  const { wildcard, locations } = permittedLocationsForModuleScope(
+    authContext.roles,
+    'inventory',
+    'write',
+  );
   if (!wildcard && !locations.has(locationId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to planning payload location "${locationId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No write assignment grants access to planning payload location "${locationId}"`,
+    );
   }
 }
 
@@ -96,7 +119,9 @@ function selectOperatingAssignment(authContext: AuthContext): OperatingAssignmen
   const assignment = concrete
     .filter((r) => r.locationId === locationId)
     .sort((a, b) =>
-      [a.role, a.module, a.functionScope].join('\0').localeCompare([b.role, b.module, b.functionScope].join('\0')),
+      [a.role, a.module, a.functionScope]
+        .join('\0')
+        .localeCompare([b.role, b.module, b.functionScope].join('\0')),
     )[0]!;
   return { role: assignment.role, locationId };
 }
@@ -115,7 +140,8 @@ function resolveLocationFromBody(
 ): string | undefined {
   if (typeof body !== 'object' || body === null) return undefined;
   const record = body as Record<string, unknown>;
-  if (record['stream_type'] === 'warehouse' && record['event_type'] === 'cross_dock_task.completed') return undefined;
+  if (record['stream_type'] === 'warehouse' && record['event_type'] === 'cross_dock_task.completed')
+    return undefined;
   const metadata = record['metadata'];
   if (typeof metadata !== 'object' || metadata === null) return undefined;
   const actor = (metadata as Record<string, unknown>)['actor'];
@@ -188,22 +214,39 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   let authoritativeSiteId: string | null = null;
   if (body.stream_type === 'warehouse' && body.event_type === 'cross_dock_task.completed') {
     const taskId = body.payload['cross_dock_task_id'];
-    if (typeof taskId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId)) {
-      throw new AppError(400, 'INVALID_PARAMS', 'cross_dock_task_id is required and must be a UUID');
+    if (
+      typeof taskId !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId)
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'cross_dock_task_id is required and must be a UUID',
+      );
     }
     const task = await getCrossDockTaskById(taskId);
     if (!task) throw new AppError(404, 'CROSS_DOCK_TASK_NOT_FOUND', 'Cross-dock task not found');
     const permitted = permittedLocationsForModuleScope(authContext.roles, 'warehouse', 'write');
     if (!permitted.wildcard && !permitted.locations.has(task.site_id)) {
-      throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to task site "${task.site_id}"`);
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `No write assignment grants access to task site "${task.site_id}"`,
+      );
     }
     const covering = authContext.roles.find(
-      (role) => (role.module === 'warehouse' || role.module === '*')
-        && role.functionScope === 'write'
-        && CROSS_DOCK_EXECUTE_ROLES.includes(role.role)
-        && (role.locationId === '*' || role.locationId === task.site_id),
+      (role) =>
+        (role.module === 'warehouse' || role.module === '*') &&
+        role.functionScope === 'write' &&
+        CROSS_DOCK_EXECUTE_ROLES.includes(role.role) &&
+        (role.locationId === '*' || role.locationId === task.site_id),
     );
-    if (!covering) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', 'Cross-dock completion requires an operator role');
+    if (!covering)
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        'Cross-dock completion requires an operator role',
+      );
     body.metadata.actor.role = covering.role;
     body.metadata.actor.location_id = task.site_id;
     body.payload['completed_by'] = authContext.userId;
@@ -242,21 +285,36 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     body.payload['packed_by'] = authContext.userId;
     const role = assignment.role;
     if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
-      throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to pack a dispatch order`);
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        `Role "${role}" is not authorized to pack a dispatch order`,
+      );
     }
   }
-  if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.shipping_documents_generated') {
+  if (
+    body.stream_type === 'warehouse' &&
+    body.event_type === 'dispatch.shipping_documents_generated'
+  ) {
     body.payload['generated_by'] = authContext.userId;
     const role = assignment.role;
     if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
-      throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to generate shipping documents`);
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        `Role "${role}" is not authorized to generate shipping documents`,
+      );
     }
   }
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.dispatched') {
     body.payload['dispatched_by'] = authContext.userId;
     const role = assignment.role;
     if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
-      throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to confirm dispatch`);
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        `Role "${role}" is not authorized to confirm dispatch`,
+      );
     }
   }
   if (authoritativeSiteId !== null) {
@@ -268,7 +326,8 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   }
   if (
     body.stream_type === 'inventory' &&
-    (body.payload['target_location_id'] !== undefined || body.payload['target_location_code'] !== undefined)
+    (body.payload['target_location_id'] !== undefined ||
+      body.payload['target_location_code'] !== undefined)
   ) {
     body.payload['placement_confirmed'] = true;
   }
@@ -276,9 +335,9 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   try {
     const persisted = await persistEvent(body, {
       trace_id: getTraceId(req) ?? '',
-       user_id: authContext.userId,
-       role: auditRole,
-       location_id: auditLocationId,
+      user_id: authContext.userId,
+      role: auditRole,
+      location_id: auditLocationId,
       endpoint: req.url ?? '',
       method: req.method ?? 'POST',
       http_status: 201,

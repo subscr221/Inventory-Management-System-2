@@ -67,10 +67,17 @@ const COMPUTE_BUSINESS_CODES = new Set<string>([
   PLANNING_ERROR_CODES.INVALID_SERVICE_LEVEL,
 ]);
 
-function planningEventMetadata(scope: PlanningJobScope, correlationId = randomUUID()): EventEnvelope['metadata'] {
+function planningEventMetadata(
+  scope: PlanningJobScope,
+  correlationId = randomUUID(),
+): EventEnvelope['metadata'] {
   return {
     correlation_id: correlationId,
-    actor: { user_id: scope.actor.user_id, role: scope.actor.role, location_id: scope.actor.location_id },
+    actor: {
+      user_id: scope.actor.user_id,
+      role: scope.actor.role,
+      location_id: scope.actor.location_id,
+    },
     occurred_at: new Date().toISOString(),
   };
 }
@@ -80,12 +87,23 @@ function planningEventMetadata(scope: PlanningJobScope, correlationId = randomUU
 // ---------------------------------------------------------------------------
 
 export interface SafetyStockComputationResult {
-  computed: Array<{ sku: string; location_id: string; safety_stock: number; reorder_point: number }>;
+  computed: Array<{
+    sku: string;
+    location_id: string;
+    safety_stock: number;
+    reorder_point: number;
+  }>;
   skipped: Array<{ sku: string; location_id: string; reason: string }>;
 }
 
-export async function runSafetyStockComputation(scope: PlanningJobScope): Promise<SafetyStockComputationResult> {
-  const rows = await listPlanningParams({ location_id: scope.location_id ?? null, location_any: scope.location_any ?? null, sku: scope.sku ?? null });
+export async function runSafetyStockComputation(
+  scope: PlanningJobScope,
+): Promise<SafetyStockComputationResult> {
+  const rows = await listPlanningParams({
+    location_id: scope.location_id ?? null,
+    location_any: scope.location_any ?? null,
+    sku: scope.sku ?? null,
+  });
   // A single-SKU targeted compute surfaces the business rejection to the caller; a broad scope
   // records it per grain and continues so one unconfigured SKU never aborts the batch.
   const targeted = Boolean(scope.sku);
@@ -119,27 +137,47 @@ async function computeOneGrain(
     await client.query('BEGIN');
     const locked = await getPlanningParams(row.sku, row.location_id, client, true);
     if (!locked) {
-      throw new AppError(404, PLANNING_ERROR_CODES.PLANNING_PARAMS_NOT_FOUND, `No planning params configured for sku "${row.sku}" at this location`, {
-        sku: row.sku,
-        location_id: row.location_id,
-      });
+      throw new AppError(
+        404,
+        PLANNING_ERROR_CODES.PLANNING_PARAMS_NOT_FOUND,
+        `No planning params configured for sku "${row.sku}" at this location`,
+        {
+          sku: row.sku,
+          location_id: row.location_id,
+        },
+      );
     }
     row = locked;
     if (row.lead_time_days === null || row.lead_time_days <= 0) {
-      throw new AppError(400, PLANNING_ERROR_CODES.LEAD_TIME_NOT_CONFIGURED, `lead_time_days is not configured for sku "${row.sku}" at this location`, {
-        sku: row.sku,
-        location_id: row.location_id,
-      });
+      throw new AppError(
+        400,
+        PLANNING_ERROR_CODES.LEAD_TIME_NOT_CONFIGURED,
+        `lead_time_days is not configured for sku "${row.sku}" at this location`,
+        {
+          sku: row.sku,
+          location_id: row.location_id,
+        },
+      );
     }
     if (row.service_level === null) {
-      throw new AppError(400, PLANNING_ERROR_CODES.INVALID_SERVICE_LEVEL, `service_level is not configured for sku "${row.sku}"`, { sku: row.sku });
+      throw new AppError(
+        400,
+        PLANNING_ERROR_CODES.INVALID_SERVICE_LEVEL,
+        `service_level is not configured for sku "${row.sku}"`,
+        { sku: row.sku },
+      );
     }
     const z = lookupZ(row.service_level);
     if (z === null) {
-      throw new AppError(400, PLANNING_ERROR_CODES.INVALID_SERVICE_LEVEL, `service_level ${row.service_level} is not one of the supported values (0.90, 0.95, 0.975, 0.99)`, {
-        sku: row.sku,
-        service_level: row.service_level,
-      });
+      throw new AppError(
+        400,
+        PLANNING_ERROR_CODES.INVALID_SERVICE_LEVEL,
+        `service_level ${row.service_level} is not one of the supported values (0.90, 0.95, 0.975, 0.99)`,
+        {
+          sku: row.sku,
+          service_level: row.service_level,
+        },
+      );
     }
 
     const windowDays = row.demand_window_days ?? 90;
@@ -171,12 +209,17 @@ async function computeOneGrain(
     const sigmaDaily = statsRes.rows[0]!['sigma_daily'] as string;
 
     if (sampleDayCount < DEFAULT_MIN_SAMPLE_DAYS) {
-      throw new AppError(400, PLANNING_ERROR_CODES.INSUFFICIENT_DEMAND_HISTORY, `Demand history for sku "${row.sku}" covers ${sampleDayCount} day(s); at least ${DEFAULT_MIN_SAMPLE_DAYS} are required`, {
-        sku: row.sku,
-        location_id: row.location_id,
-        sample_day_count: sampleDayCount,
-        minimum_required: DEFAULT_MIN_SAMPLE_DAYS,
-      });
+      throw new AppError(
+        400,
+        PLANNING_ERROR_CODES.INSUFFICIENT_DEMAND_HISTORY,
+        `Demand history for sku "${row.sku}" covers ${sampleDayCount} day(s); at least ${DEFAULT_MIN_SAMPLE_DAYS} are required`,
+        {
+          sku: row.sku,
+          location_id: row.location_id,
+          sample_day_count: sampleDayCount,
+          minimum_required: DEFAULT_MIN_SAMPLE_DAYS,
+        },
+      );
     }
 
     const calcRes = await client.query(
@@ -202,11 +245,16 @@ async function computeOneGrain(
     };
     const unchanged =
       row.last_computed_at !== null &&
-      row.safety_stock !== null && Math.abs(row.safety_stock - Number(safetyStock)) < 1e-9 &&
-      row.reorder_point !== null && Math.abs(row.reorder_point - Number(reorderPoint)) < 1e-9 &&
-      row.avg_daily_demand !== null && Math.abs(row.avg_daily_demand - Number(avgDailyDemand)) < 1e-9 &&
-      row.demand_std_dev !== null && Math.abs(row.demand_std_dev - Number(sigmaDaily)) < 1e-9 &&
-      Number((row.computation_inputs?.['sample_day_count'] as number | undefined) ?? -1) === sampleDayCount;
+      row.safety_stock !== null &&
+      Math.abs(row.safety_stock - Number(safetyStock)) < 1e-9 &&
+      row.reorder_point !== null &&
+      Math.abs(row.reorder_point - Number(reorderPoint)) < 1e-9 &&
+      row.avg_daily_demand !== null &&
+      Math.abs(row.avg_daily_demand - Number(avgDailyDemand)) < 1e-9 &&
+      row.demand_std_dev !== null &&
+      Math.abs(row.demand_std_dev - Number(sigmaDaily)) < 1e-9 &&
+      Number((row.computation_inputs?.['sample_day_count'] as number | undefined) ?? -1) ===
+        sampleDayCount;
     if (!unchanged) {
       await persistEvent(
         {
@@ -235,7 +283,12 @@ async function computeOneGrain(
     }
     await client.query('COMMIT');
     committed = true;
-    return { sku: row.sku, location_id: row.location_id, safety_stock: Number(safetyStock), reorder_point: Number(reorderPoint) };
+    return {
+      sku: row.sku,
+      location_id: row.location_id,
+      safety_stock: Number(safetyStock),
+      reorder_point: Number(reorderPoint),
+    };
   } catch (err) {
     if (!committed) await client.query('ROLLBACK').catch(() => undefined);
     throw err;
@@ -249,12 +302,23 @@ async function computeOneGrain(
 // ---------------------------------------------------------------------------
 
 export interface ReplenishmentCheckResult {
-  recommended: Array<{ sku: string; location_id: string; recommendation_id: string; recommended_order_qty: number }>;
+  recommended: Array<{
+    sku: string;
+    location_id: string;
+    recommendation_id: string;
+    recommended_order_qty: number;
+  }>;
   skipped: Array<{ sku: string; location_id: string; reason: string }>;
 }
 
-export async function runReplenishmentCheck(scope: PlanningJobScope): Promise<ReplenishmentCheckResult> {
-  const rows = await listPlanningParams({ location_id: scope.location_id ?? null, location_any: scope.location_any ?? null, sku: scope.sku ?? null });
+export async function runReplenishmentCheck(
+  scope: PlanningJobScope,
+): Promise<ReplenishmentCheckResult> {
+  const rows = await listPlanningParams({
+    location_id: scope.location_id ?? null,
+    location_any: scope.location_any ?? null,
+    sku: scope.sku ?? null,
+  });
   const recommended: ReplenishmentCheckResult['recommended'] = [];
   const skipped: ReplenishmentCheckResult['skipped'] = [];
 
@@ -273,7 +337,10 @@ type ReplenishmentGrainOutcome =
   | { sku: string; location_id: string; reason: string }
   | null;
 
-async function checkOneGrain(row: PlanningParamsRow, scope: PlanningJobScope): Promise<ReplenishmentGrainOutcome> {
+async function checkOneGrain(
+  row: PlanningParamsRow,
+  scope: PlanningJobScope,
+): Promise<ReplenishmentGrainOutcome> {
   const pool = getPool();
   const client = await pool.connect();
   let committed = false;
@@ -285,12 +352,20 @@ async function checkOneGrain(row: PlanningParamsRow, scope: PlanningJobScope): P
     if (!locked || locked.reorder_point === null) {
       await client.query('COMMIT');
       committed = true;
-      return { sku: row.sku, location_id: row.location_id, reason: PLANNING_ERROR_CODES.PLANNING_PARAMS_NOT_FOUND };
+      return {
+        sku: row.sku,
+        location_id: row.location_id,
+        reason: PLANNING_ERROR_CODES.PLANNING_PARAMS_NOT_FOUND,
+      };
     }
     if (locked.standard_order_qty === null || locked.standard_order_qty <= 0) {
       await client.query('COMMIT');
       committed = true;
-      return { sku: row.sku, location_id: row.location_id, reason: 'STANDARD_ORDER_QTY_NOT_CONFIGURED' };
+      return {
+        sku: row.sku,
+        location_id: row.location_id,
+        reason: 'STANDARD_ORDER_QTY_NOT_CONFIGURED',
+      };
     }
 
     // Compare on_hand against reorder_point in SQL NUMERIC (not JS float).
@@ -369,7 +444,12 @@ async function checkOneGrain(row: PlanningParamsRow, scope: PlanningJobScope): P
 
     await client.query('COMMIT');
     committed = true;
-    return { sku: row.sku, location_id: row.location_id, recommendation_id: recommendationId, recommended_order_qty: locked.standard_order_qty };
+    return {
+      sku: row.sku,
+      location_id: row.location_id,
+      recommendation_id: recommendationId,
+      recommended_order_qty: locked.standard_order_qty,
+    };
   } catch (err) {
     if (!committed) await client.query('ROLLBACK').catch(() => undefined);
     throw err;
@@ -383,7 +463,13 @@ async function checkOneGrain(row: PlanningParamsRow, scope: PlanningJobScope): P
 // ---------------------------------------------------------------------------
 
 export interface VmiReplenishmentCheckResult {
-  recommended: Array<{ sku: string; location_id: string; recommendation_id: string; owner_party_code: string; recommended_order_qty: number }>;
+  recommended: Array<{
+    sku: string;
+    location_id: string;
+    recommendation_id: string;
+    owner_party_code: string;
+    recommended_order_qty: number;
+  }>;
   skipped: Array<{ sku: string; location_id: string; reason: string }>;
 }
 
@@ -398,7 +484,9 @@ export interface VmiReplenishmentCheckResult {
  * concurrent runs for the same grain serialize; the widened partial unique index
  * uq_replenishment_recommendation_open_signal is the backstop.
  */
-export async function runVmiReplenishmentCheck(scope: PlanningJobScope): Promise<VmiReplenishmentCheckResult> {
+export async function runVmiReplenishmentCheck(
+  scope: PlanningJobScope,
+): Promise<VmiReplenishmentCheckResult> {
   const agreements = await listAgreements({
     location_id: scope.location_id ?? null,
     location_any: scope.location_any ?? null,
@@ -420,11 +508,20 @@ export async function runVmiReplenishmentCheck(scope: PlanningJobScope): Promise
 }
 
 type VmiGrainOutcome =
-  | { sku: string; location_id: string; recommendation_id: string; owner_party_code: string; recommended_order_qty: number }
+  | {
+      sku: string;
+      location_id: string;
+      recommendation_id: string;
+      owner_party_code: string;
+      recommended_order_qty: number;
+    }
   | { sku: string; location_id: string; reason: string }
   | null;
 
-async function checkOneVmiGrain(agreement: OwnershipAgreementRow, scope: PlanningJobScope): Promise<VmiGrainOutcome> {
+async function checkOneVmiGrain(
+  agreement: OwnershipAgreementRow,
+  scope: PlanningJobScope,
+): Promise<VmiGrainOutcome> {
   const pool = getPool();
   const client = await pool.connect();
   let committed = false;
@@ -432,16 +529,30 @@ async function checkOneVmiGrain(agreement: OwnershipAgreementRow, scope: Plannin
     await client.query('BEGIN');
     // Lock the agreement row so a concurrent VMI check for this grain serializes: the loser waits,
     // then sees the open vmi signal the winner committed and skips it.
-    const locked = await getActiveAgreement(agreement.sku, agreement.location_id, 'vmi', client, true);
+    const locked = await getActiveAgreement(
+      agreement.sku,
+      agreement.location_id,
+      'vmi',
+      client,
+      true,
+    );
     if (!locked) {
       await client.query('COMMIT');
       committed = true;
-      return { sku: agreement.sku, location_id: agreement.location_id, reason: OWNERSHIP_ERROR_CODES.OWNERSHIP_AGREEMENT_NOT_FOUND };
+      return {
+        sku: agreement.sku,
+        location_id: agreement.location_id,
+        reason: OWNERSHIP_ERROR_CODES.OWNERSHIP_AGREEMENT_NOT_FOUND,
+      };
     }
     if (locked.vmi_min_qty === null || locked.vmi_min_qty <= 0) {
       await client.query('COMMIT');
       committed = true;
-      return { sku: agreement.sku, location_id: agreement.location_id, reason: OWNERSHIP_ERROR_CODES.VMI_MIN_NOT_CONFIGURED };
+      return {
+        sku: agreement.sku,
+        location_id: agreement.location_id,
+        reason: OWNERSHIP_ERROR_CODES.VMI_MIN_NOT_CONFIGURED,
+      };
     }
 
     await client.query(
@@ -468,17 +579,33 @@ async function checkOneVmiGrain(agreement: OwnershipAgreementRow, scope: Plannin
     }
 
     // Replenish back up to the agreed minimum, computed in SQL NUMERIC.
-    const qtyRes = await client.query(`SELECT ($1::numeric - $2::numeric)::text AS order_qty`, [String(locked.vmi_min_qty), onHand]);
+    const qtyRes = await client.query(`SELECT ($1::numeric - $2::numeric)::text AS order_qty`, [
+      String(locked.vmi_min_qty),
+      onHand,
+    ]);
     const orderQty = qtyRes.rows[0]!['order_qty'] as string;
 
-    const openRec = await getOpenRecommendation(locked.sku, locked.location_id, client, true, 'vmi_replenishment');
+    const openRec = await getOpenRecommendation(
+      locked.sku,
+      locked.location_id,
+      client,
+      true,
+      'vmi_replenishment',
+    );
     if (openRec) {
       // Idempotent per crossing: refresh only when the minimum, order qty, or owner changed.
       const unchangedRes = await client.query(
         `SELECT $1::numeric = $2::numeric AND $3::numeric = $4::numeric AS unchanged`,
-        [String(openRec.reorder_point), String(locked.vmi_min_qty), String(openRec.recommended_order_qty), orderQty],
+        [
+          String(openRec.reorder_point),
+          String(locked.vmi_min_qty),
+          String(openRec.recommended_order_qty),
+          orderQty,
+        ],
       );
-      const unchanged = unchangedRes.rows[0]!['unchanged'] === true && openRec.owner_party_code === locked.owner_party_code;
+      const unchanged =
+        unchangedRes.rows[0]!['unchanged'] === true &&
+        openRec.owner_party_code === locked.owner_party_code;
       if (unchanged) {
         await client.query('COMMIT');
         committed = true;
@@ -559,24 +686,40 @@ export interface ObsolescenceScanResult {
   skipped: Array<{ sku: string; location_id: string; reason: string }>;
 }
 
-type ObsolescenceGrainOutcome = { status: 'flagged'; days_since_issue: number } | 'cleared' | string | null;
+type ObsolescenceGrainOutcome =
+  { status: 'flagged'; days_since_issue: number } | 'cleared' | string | null;
 
-export async function runObsolescenceScan(scope: PlanningJobScope): Promise<ObsolescenceScanResult> {
-  const rows = await listPlanningParams({ location_id: scope.location_id ?? null, location_any: scope.location_any ?? null, sku: scope.sku ?? null });
+export async function runObsolescenceScan(
+  scope: PlanningJobScope,
+): Promise<ObsolescenceScanResult> {
+  const rows = await listPlanningParams({
+    location_id: scope.location_id ?? null,
+    location_any: scope.location_any ?? null,
+    sku: scope.sku ?? null,
+  });
   const flagged: ObsolescenceScanResult['flagged'] = [];
   const cleared: ObsolescenceScanResult['cleared'] = [];
   const skipped: ObsolescenceScanResult['skipped'] = [];
 
   for (const row of rows) {
     const outcome = await scanOneGrain(row, scope);
-    if (outcome && typeof outcome === 'object' && outcome.status === 'flagged') flagged.push({ sku: row.sku, location_id: row.location_id, days_since_issue: outcome.days_since_issue });
+    if (outcome && typeof outcome === 'object' && outcome.status === 'flagged')
+      flagged.push({
+        sku: row.sku,
+        location_id: row.location_id,
+        days_since_issue: outcome.days_since_issue,
+      });
     else if (outcome === 'cleared') cleared.push({ sku: row.sku, location_id: row.location_id });
-    else if (typeof outcome === 'string') skipped.push({ sku: row.sku, location_id: row.location_id, reason: outcome });
+    else if (typeof outcome === 'string')
+      skipped.push({ sku: row.sku, location_id: row.location_id, reason: outcome });
   }
   return { flagged, cleared, skipped };
 }
 
-async function scanOneGrain(row: PlanningParamsRow, scope: PlanningJobScope): Promise<ObsolescenceGrainOutcome> {
+async function scanOneGrain(
+  row: PlanningParamsRow,
+  scope: PlanningJobScope,
+): Promise<ObsolescenceGrainOutcome> {
   if (row.obsolescence_threshold_days === null || row.obsolescence_threshold_days <= 0) {
     return PLANNING_ERROR_CODES.OBSOLESCENCE_THRESHOLD_NOT_CONFIGURED;
   }
@@ -629,7 +772,8 @@ async function scanOneGrain(row: PlanningParamsRow, scope: PlanningJobScope): Pr
       committed = true;
       return null;
     }
-    const lastIssueAt = clockRaw instanceof Date ? clockRaw.toISOString() : new Date(String(clockRaw)).toISOString();
+    const lastIssueAt =
+      clockRaw instanceof Date ? clockRaw.toISOString() : new Date(String(clockRaw)).toISOString();
 
     if (daysSinceIssue > threshold) {
       if (currentFlag && currentFlag.status === 'aging') {
@@ -672,7 +816,8 @@ async function scanOneGrain(row: PlanningParamsRow, scope: PlanningJobScope): Pr
           object_type: 'sku',
           object_id: row.sku,
           actor_label: 'Inventory Planning',
-          next_step: 'Review NRV; the item is pending disposition (Epic 16 delivers the disposition feed)',
+          next_step:
+            'Review NRV; the item is pending disposition (Epic 16 delivers the disposition feed)',
           actor: scope.actor,
         },
         client,

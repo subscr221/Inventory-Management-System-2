@@ -29,8 +29,8 @@ export function cmpMonetary(a: string, b: string): number {
   const bNorm = b.includes('.') ? b : b + '.0';
   const [aInt, aFrac = ''] = aNorm.split('.');
   const [bInt, bFrac = ''] = bNorm.split('.');
-  const aPadded = aInt + (aFrac.padEnd(6, '0').slice(0, 6));
-  const bPadded = bInt + (bFrac.padEnd(6, '0').slice(0, 6));
+  const aPadded = aInt + aFrac.padEnd(6, '0').slice(0, 6);
+  const bPadded = bInt + bFrac.padEnd(6, '0').slice(0, 6);
   if (aPadded.length !== bPadded.length) return aPadded.length > bPadded.length ? 1 : -1;
   if (aPadded > bPadded) return 1;
   if (aPadded < bPadded) return -1;
@@ -58,20 +58,29 @@ export interface InventoryValuationRow {
 const VALUATION_COLUMNS = `sku, quantity_on_hand, running_average_cost, carrying_value, pre_writedown_cost, cumulative_write_down, updated_at`;
 
 function mapValuationRow(row: Record<string, unknown>): InventoryValuationRow {
-  const updatedAt = row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
+  const updatedAt =
+    row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
   return {
     sku: row['sku'] as string,
     quantity_on_hand: String(row['quantity_on_hand']),
-    running_average_cost: row['running_average_cost'] !== null ? String(row['running_average_cost']) : null,
+    running_average_cost:
+      row['running_average_cost'] !== null ? String(row['running_average_cost']) : null,
     carrying_value: String(row['carrying_value']),
-    pre_writedown_cost: row['pre_writedown_cost'] !== null ? String(row['pre_writedown_cost']) : null,
+    pre_writedown_cost:
+      row['pre_writedown_cost'] !== null ? String(row['pre_writedown_cost']) : null,
     cumulative_write_down: String(row['cumulative_write_down']),
     updated_at: updatedAt,
   };
 }
 
-export async function getInventoryValuation(sku: string, client?: PoolClient): Promise<InventoryValuationRow | null> {
-  const result = await runner(client).query(`SELECT ${VALUATION_COLUMNS} FROM inventory_valuation WHERE sku = $1`, [sku]);
+export async function getInventoryValuation(
+  sku: string,
+  client?: PoolClient,
+): Promise<InventoryValuationRow | null> {
+  const result = await runner(client).query(
+    `SELECT ${VALUATION_COLUMNS} FROM inventory_valuation WHERE sku = $1`,
+    [sku],
+  );
   return result.rows.length > 0 ? mapValuationRow(result.rows[0]!) : null;
 }
 
@@ -81,12 +90,18 @@ export async function getInventoryValuation(sku: string, client?: PoolClient): P
  * write-down/recovery, standard-cost variance review) must call this first, inside their own
  * transaction, before reading `carrying_value`/`pre_writedown_cost`.
  */
-export async function lockInventoryValuation(sku: string, client: PoolClient): Promise<InventoryValuationRow> {
+export async function lockInventoryValuation(
+  sku: string,
+  client: PoolClient,
+): Promise<InventoryValuationRow> {
   await client.query(
     `INSERT INTO inventory_valuation (sku) VALUES ($1) ON CONFLICT (sku) DO NOTHING`,
     [sku],
   );
-  const result = await client.query(`SELECT ${VALUATION_COLUMNS} FROM inventory_valuation WHERE sku = $1 FOR UPDATE`, [sku]);
+  const result = await client.query(
+    `SELECT ${VALUATION_COLUMNS} FROM inventory_valuation WHERE sku = $1 FOR UPDATE`,
+    [sku],
+  );
   return mapValuationRow(result.rows[0]!);
 }
 
@@ -98,7 +113,12 @@ export async function lockInventoryValuation(sku: string, client: PoolClient): P
  * always reflects total cost basis, even for FIFO/specific-identification items whose per-unit
  * cost detail lives in the layer/serial tables instead.
  */
-export async function applyValuationReceipt(sku: string, quantity: number, unitCost: number, client: PoolClient): Promise<InventoryValuationRow> {
+export async function applyValuationReceipt(
+  sku: string,
+  quantity: number,
+  unitCost: number,
+  client: PoolClient,
+): Promise<InventoryValuationRow> {
   const result = await client.query(
     `INSERT INTO inventory_valuation (sku, quantity_on_hand, running_average_cost, carrying_value)
      VALUES ($1, $2::numeric, $3::numeric, $2::numeric * $3::numeric)
@@ -123,7 +143,12 @@ export async function applyValuationReceipt(sku: string, quantity: number, unitC
  * issue (Dev Notes: a valued item whose receipt omitted unit_cost) cannot drive carrying_value or
  * quantity negative.
  */
-export async function applyValuationIssue(sku: string, quantity: number, cost: number, client: PoolClient): Promise<InventoryValuationRow> {
+export async function applyValuationIssue(
+  sku: string,
+  quantity: number,
+  cost: number,
+  client: PoolClient,
+): Promise<InventoryValuationRow> {
   const result = await client.query(
     `UPDATE inventory_valuation
      SET quantity_on_hand = GREATEST(0, quantity_on_hand - $2::numeric),
@@ -133,7 +158,9 @@ export async function applyValuationIssue(sku: string, quantity: number, cost: n
      RETURNING ${VALUATION_COLUMNS}`,
     [sku, quantity, cost],
   );
-  return result.rows.length > 0 ? mapValuationRow(result.rows[0]!) : await lockInventoryValuation(sku, client);
+  return result.rows.length > 0
+    ? mapValuationRow(result.rows[0]!)
+    : await lockInventoryValuation(sku, client);
 }
 
 /**
@@ -181,7 +208,8 @@ export interface FifoLayer {
 const FIFO_LAYER_COLUMNS = `layer_id, sku, sequence_no, unit_cost, original_quantity, remaining_quantity, event_id, created_at`;
 
 function mapFifoLayer(row: Record<string, unknown>): FifoLayer {
-  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  const createdAt =
+    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
   return {
     layer_id: row['layer_id'] as string,
     sku: row['sku'] as string,
@@ -219,8 +247,15 @@ export async function lockOpenFifoLayers(sku: string, client: PoolClient): Promi
   return result.rows.map(mapFifoLayer);
 }
 
-export async function setFifoLayerRemaining(layerId: string, remainingQuantity: string, client: PoolClient): Promise<void> {
-  await client.query(`UPDATE inventory_valuation_fifo_layer SET remaining_quantity = $2 WHERE layer_id = $1`, [layerId, remainingQuantity]);
+export async function setFifoLayerRemaining(
+  layerId: string,
+  remainingQuantity: string,
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `UPDATE inventory_valuation_fifo_layer SET remaining_quantity = $2 WHERE layer_id = $1`,
+    [layerId, remainingQuantity],
+  );
 }
 
 /** Read-only (no lock) listing of open FIFO layers for the valuation detail view - GET routes must not take row locks. */
@@ -238,7 +273,10 @@ export async function listOpenFifoLayers(sku: string, client?: PoolClient): Prom
 // inventory_valuation_serial_cost
 // -----------------------------------------------------------------------------------------------
 
-export async function upsertSerialCost(input: { sku: string; serial_number: string; unit_cost: number }, client: PoolClient): Promise<void> {
+export async function upsertSerialCost(
+  input: { sku: string; serial_number: string; unit_cost: number },
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO inventory_valuation_serial_cost (sku, serial_number, unit_cost)
      VALUES ($1, $2, $3)
@@ -253,7 +291,11 @@ export async function upsertSerialCost(input: { sku: string; serial_number: stri
  * stamped rather than deleted so received-cost history stays queryable (and app_user needs no
  * DELETE grant on this table).
  */
-export async function takeSerialCost(sku: string, serialNumber: string, client: PoolClient): Promise<number | null> {
+export async function takeSerialCost(
+  sku: string,
+  serialNumber: string,
+  client: PoolClient,
+): Promise<number | null> {
   const result = await client.query(
     `UPDATE inventory_valuation_serial_cost SET consumed_at = now()
      WHERE sku = $1 AND serial_number = $2 AND consumed_at IS NULL
@@ -272,12 +314,18 @@ export async function sumSerialCosts(sku: string, client?: PoolClient): Promise<
   return toNumber(result.rows[0]!['total']);
 }
 
-export async function listSerialCosts(sku: string, client?: PoolClient): Promise<Array<{ serial_number: string; unit_cost: number }>> {
+export async function listSerialCosts(
+  sku: string,
+  client?: PoolClient,
+): Promise<Array<{ serial_number: string; unit_cost: number }>> {
   const result = await runner(client).query(
     `SELECT serial_number, unit_cost FROM inventory_valuation_serial_cost WHERE sku = $1 AND consumed_at IS NULL ORDER BY serial_number`,
     [sku],
   );
-  return result.rows.map((row) => ({ serial_number: row['serial_number'] as string, unit_cost: toNumber(row['unit_cost']) }));
+  return result.rows.map((row) => ({
+    serial_number: row['serial_number'] as string,
+    unit_cost: toNumber(row['unit_cost']),
+  }));
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -317,7 +365,8 @@ export interface InsertNrvAdjustmentInput {
 }
 
 function mapNrvAdjustment(row: Record<string, unknown>): NrvAdjustment {
-  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  const createdAt =
+    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
   const toDateString = (v: unknown): string => {
     if (v instanceof Date) {
       const y = v.getFullYear();
@@ -345,7 +394,10 @@ function mapNrvAdjustment(row: Record<string, unknown>): NrvAdjustment {
   };
 }
 
-export async function insertNrvAdjustment(input: InsertNrvAdjustmentInput, client: PoolClient): Promise<NrvAdjustment> {
+export async function insertNrvAdjustment(
+  input: InsertNrvAdjustmentInput,
+  client: PoolClient,
+): Promise<NrvAdjustment> {
   const result = await client.query(
     `INSERT INTO inventory_valuation_nrv_adjustment
        (sku, adjustment_type, effective_date, authoriser_actor_id, original_cost, carrying_value_before,
@@ -372,7 +424,10 @@ export async function insertNrvAdjustment(input: InsertNrvAdjustmentInput, clien
   return mapNrvAdjustment(result.rows[0]!);
 }
 
-export async function listNrvAdjustments(sku: string, client?: PoolClient): Promise<NrvAdjustment[]> {
+export async function listNrvAdjustments(
+  sku: string,
+  client?: PoolClient,
+): Promise<NrvAdjustment[]> {
   const result = await runner(client).query(
     `SELECT adjustment_id, sku, adjustment_type, effective_date, authoriser_actor_id, original_cost,
        carrying_value_before, carrying_value_after, amount, cumulative_write_down_after, reason, evidence_ref,
@@ -414,7 +469,10 @@ export interface InsertStandardCostVarianceInput {
 }
 
 function mapStandardCostVariance(row: Record<string, unknown>): StandardCostVarianceRow {
-  const reviewedAt = row['reviewed_at'] instanceof Date ? row['reviewed_at'].toISOString() : String(row['reviewed_at']);
+  const reviewedAt =
+    row['reviewed_at'] instanceof Date
+      ? row['reviewed_at'].toISOString()
+      : String(row['reviewed_at']);
   return {
     variance_id: row['variance_id'] as string,
     sku: row['sku'] as string,
@@ -430,7 +488,10 @@ function mapStandardCostVariance(row: Record<string, unknown>): StandardCostVari
   };
 }
 
-export async function insertStandardCostVarianceReview(input: InsertStandardCostVarianceInput, client: PoolClient): Promise<StandardCostVarianceRow> {
+export async function insertStandardCostVarianceReview(
+  input: InsertStandardCostVarianceInput,
+  client: PoolClient,
+): Promise<StandardCostVarianceRow> {
   const result = await client.query(
     `INSERT INTO inventory_valuation_standard_cost_variance
        (sku, period, standard_cost, actual_cost, variance_amount, variance_percent, tolerance_percent, breached, event_id)
@@ -451,7 +512,10 @@ export async function insertStandardCostVarianceReview(input: InsertStandardCost
   return mapStandardCostVariance(result.rows[0]!);
 }
 
-export async function getLatestStandardCostVariance(sku: string, client?: PoolClient): Promise<StandardCostVarianceRow | null> {
+export async function getLatestStandardCostVariance(
+  sku: string,
+  client?: PoolClient,
+): Promise<StandardCostVarianceRow | null> {
   const result = await runner(client).query(
     `SELECT variance_id, sku, period, standard_cost, actual_cost, variance_amount, variance_percent, tolerance_percent, breached, event_id, reviewed_at
      FROM inventory_valuation_standard_cost_variance WHERE sku = $1 ORDER BY reviewed_at DESC LIMIT 1`,
@@ -461,7 +525,9 @@ export async function getLatestStandardCostVariance(sku: string, client?: PoolCl
 }
 
 /** Latest review row per SKU, for the period-end variance report (Task 6.4). */
-export async function listLatestStandardCostVariancePerSku(client?: PoolClient): Promise<StandardCostVarianceRow[]> {
+export async function listLatestStandardCostVariancePerSku(
+  client?: PoolClient,
+): Promise<StandardCostVarianceRow[]> {
   const result = await runner(client).query(
     `SELECT DISTINCT ON (sku) variance_id, sku, period, standard_cost, actual_cost, variance_amount, variance_percent, tolerance_percent, breached, event_id, reviewed_at
      FROM inventory_valuation_standard_cost_variance

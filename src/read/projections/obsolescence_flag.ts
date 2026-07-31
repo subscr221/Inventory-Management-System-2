@@ -48,8 +48,14 @@ function mapRow(row: Record<string, unknown>): ObsolescenceFlagRow {
     location_id: row['location_id'] as string,
     status: row['status'] as string,
     last_issue_at: ts(row['last_issue_at']),
-    days_since_issue: row['days_since_issue'] === null || row['days_since_issue'] === undefined ? null : Number(row['days_since_issue']),
-    threshold_days: row['threshold_days'] === null || row['threshold_days'] === undefined ? null : Number(row['threshold_days']),
+    days_since_issue:
+      row['days_since_issue'] === null || row['days_since_issue'] === undefined
+        ? null
+        : Number(row['days_since_issue']),
+    threshold_days:
+      row['threshold_days'] === null || row['threshold_days'] === undefined
+        ? null
+        : Number(row['threshold_days']),
     disposition_status: (row['disposition_status'] as string | null) ?? null,
     nrv_testing_triggered: row['nrv_testing_triggered'] === true,
     flagged_at: ts(row['flagged_at']),
@@ -89,7 +95,10 @@ export interface ObsolescenceFilters {
   to_date?: string | null;
 }
 
-export async function listObsolescenceReport(filters: ObsolescenceFilters, client?: PoolClient): Promise<ObsolescenceFlagRow[]> {
+export async function listObsolescenceReport(
+  filters: ObsolescenceFilters,
+  client?: PoolClient,
+): Promise<ObsolescenceFlagRow[]> {
   const conditions: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -146,7 +155,10 @@ export interface FlagObsolescenceInput {
  * grain flips to aging and its planning_flag_id is preserved. nrv_testing_triggered is set true; the
  * DOA-gated write-down stays in inventory-valuation.ts.
  */
-export async function flagObsolescence(input: FlagObsolescenceInput, client: PoolClient): Promise<void> {
+export async function flagObsolescence(
+  input: FlagObsolescenceInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO obsolescence_flag (
        obsolescence_flag_id, sku, location_id, status, last_issue_at, days_since_issue, threshold_days,
@@ -185,7 +197,10 @@ export interface ClearObsolescenceInput {
 }
 
 /** Clears an aging flag: status back to active, disposition_status null, nrv_testing_triggered false. */
-export async function clearObsolescence(input: ClearObsolescenceInput, client: PoolClient): Promise<void> {
+export async function clearObsolescence(
+  input: ClearObsolescenceInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `UPDATE obsolescence_flag
      SET status = 'active',

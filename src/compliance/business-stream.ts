@@ -1,6 +1,9 @@
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
-import { isValidBusinessStream, findActiveTaggingRule } from '../read/projections/business_stream_config.js';
+import {
+  isValidBusinessStream,
+  findActiveTaggingRule,
+} from '../read/projections/business_stream_config.js';
 import type { TransactionTaggingRule } from '../read/projections/business_stream_config.js';
 
 /**
@@ -25,12 +28,16 @@ const INVENTORY_MOVEMENT_STREAM_TYPES = new Set(['inventory']);
  */
 export interface TaggingDeps {
   isValidBusinessStream: (streamCode: string) => Promise<boolean>;
-  findActiveTaggingRule: (transactionType: string, asOfDate?: string) => Promise<TransactionTaggingRule | null>;
+  findActiveTaggingRule: (
+    transactionType: string,
+    asOfDate?: string,
+  ) => Promise<TransactionTaggingRule | null>;
 }
 
 const defaultDeps: TaggingDeps = {
   isValidBusinessStream: (streamCode) => isValidBusinessStream(streamCode),
-  findActiveTaggingRule: (transactionType, asOfDate) => findActiveTaggingRule(transactionType, asOfDate),
+  findActiveTaggingRule: (transactionType, asOfDate) =>
+    findActiveTaggingRule(transactionType, asOfDate),
 };
 
 function isNonEmptyString(value: unknown): value is string {
@@ -45,20 +52,33 @@ function isNonEmptyString(value: unknown): value is string {
  * `details.invalid_value`) so the Spine Acceptance Contract test #5's "rejection message
  * identifies the missing tag" requirement is observable.
  */
-export async function assertInventoryTagging(envelope: EventEnvelope, deps: TaggingDeps = defaultDeps): Promise<void> {
+export async function assertInventoryTagging(
+  envelope: EventEnvelope,
+  deps: TaggingDeps = defaultDeps,
+): Promise<void> {
   if (!INVENTORY_MOVEMENT_STREAM_TYPES.has(envelope.stream_type)) return;
 
   const businessStream = envelope.payload['business_stream'];
   if (!isNonEmptyString(businessStream)) {
-    throw new AppError(400, 'UNTAGGED_TRANSACTION', 'Inventory movement event is missing the business_stream tag', {
-      missing_tag: 'business_stream',
-    });
+    throw new AppError(
+      400,
+      'UNTAGGED_TRANSACTION',
+      'Inventory movement event is missing the business_stream tag',
+      {
+        missing_tag: 'business_stream',
+      },
+    );
   }
 
   if (!(await deps.isValidBusinessStream(businessStream))) {
-    throw new AppError(400, 'INVALID_BUSINESS_STREAM', 'business_stream is not a recognized active stream', {
-      invalid_value: businessStream,
-    });
+    throw new AppError(
+      400,
+      'INVALID_BUSINESS_STREAM',
+      'business_stream is not a recognized active stream',
+      {
+        invalid_value: businessStream,
+      },
+    );
   }
 
   // The transaction type is the envelope event_type (past-tense dot-separated, e.g. stock.moved).
@@ -78,9 +98,14 @@ export async function assertInventoryTagging(envelope: EventEnvelope, deps: Tagg
   }
 
   if (rule.project_code_required && !isNonEmptyString(envelope.payload['project_code'])) {
-    throw new AppError(400, 'UNTAGGED_TRANSACTION', 'Transaction type requires a project_code tag', {
-      missing_tag: 'project_code',
-      transaction_type: envelope.event_type,
-    });
+    throw new AppError(
+      400,
+      'UNTAGGED_TRANSACTION',
+      'Transaction type requires a project_code tag',
+      {
+        missing_tag: 'project_code',
+        transaction_type: envelope.event_type,
+      },
+    );
   }
 }

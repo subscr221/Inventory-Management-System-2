@@ -57,7 +57,11 @@ function mapRow(row: Record<string, unknown>): VelocityClass {
   };
 }
 
-export async function getVelocityClass(sku: string, siteId: string, client?: PoolClient): Promise<VelocityClass | null> {
+export async function getVelocityClass(
+  sku: string,
+  siteId: string,
+  client?: PoolClient,
+): Promise<VelocityClass | null> {
   const result = await runner(client).query(
     `SELECT ${VELOCITY_CLASS_COLUMNS} FROM velocity_class WHERE sku = $1 AND site_id = $2`,
     [sku, siteId],
@@ -78,12 +82,18 @@ export async function listVelocityClasses(
   if (filters.siteId) add('site_id = ?', filters.siteId);
   if (filters.velocityClass) add('velocity_class = ?', filters.velocityClass);
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-  const result = await runner(client).query(`SELECT ${VELOCITY_CLASS_COLUMNS} FROM velocity_class ${where} ORDER BY sku`, values);
+  const result = await runner(client).query(
+    `SELECT ${VELOCITY_CLASS_COLUMNS} FROM velocity_class ${where} ORDER BY sku`,
+    values,
+  );
   return result.rows.map(mapRow);
 }
 
 /** Idempotent upsert keyed on (sku, site_id). */
-export async function upsertVelocityClass(input: UpsertVelocityClassInput, client?: PoolClient): Promise<void> {
+export async function upsertVelocityClass(
+  input: UpsertVelocityClassInput,
+  client?: PoolClient,
+): Promise<void> {
   await runner(client).query(
     `INSERT INTO velocity_class
        (sku, site_id, velocity_class, putaway_count_30d, override_count_30d,

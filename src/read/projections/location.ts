@@ -72,7 +72,10 @@ function runner(client?: PoolClient): Queryable {
 }
 
 function mapAsserted(row: Record<string, unknown>): AssertedLocationFact {
-  const recordedAt = row['recorded_at'] instanceof Date ? row['recorded_at'].toISOString() : String(row['recorded_at']);
+  const recordedAt =
+    row['recorded_at'] instanceof Date
+      ? row['recorded_at'].toISOString()
+      : String(row['recorded_at']);
   return {
     fact_id: row['fact_id'] as string,
     lot_id: row['lot_id'] as string,
@@ -87,7 +90,10 @@ function mapAsserted(row: Record<string, unknown>): AssertedLocationFact {
 }
 
 function mapExpected(row: Record<string, unknown>): ExpectedLocationFact {
-  const recordedAt = row['recorded_at'] instanceof Date ? row['recorded_at'].toISOString() : String(row['recorded_at']);
+  const recordedAt =
+    row['recorded_at'] instanceof Date
+      ? row['recorded_at'].toISOString()
+      : String(row['recorded_at']);
   return {
     fact_id: row['fact_id'] as string,
     lot_id: row['lot_id'] as string,
@@ -99,7 +105,8 @@ function mapExpected(row: Record<string, unknown>): ExpectedLocationFact {
 }
 
 function mapCurrent(row: Record<string, unknown>): CurrentLocation {
-  const updatedAt = row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
+  const updatedAt =
+    row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
   return {
     lot_id: row['lot_id'] as string,
     location: (row['location'] as string | null) ?? null,
@@ -111,7 +118,10 @@ function mapCurrent(row: Record<string, unknown>): CurrentLocation {
 }
 
 /** Returns the current expected-location fact for a lot, or null if none has been recorded. */
-export async function getExpectedLocation(lotId: string, client?: PoolClient): Promise<ExpectedLocationFact | null> {
+export async function getExpectedLocation(
+  lotId: string,
+  client?: PoolClient,
+): Promise<ExpectedLocationFact | null> {
   const result = await runner(client).query(
     `SELECT fact_id, lot_id, expected_location, source, source_event_id, recorded_at
      FROM location_expected_facts WHERE lot_id = $1`,
@@ -125,7 +135,10 @@ export async function getExpectedLocation(lotId: string, client?: PoolClient): P
  * received the row does not exist and the caller returns { location: null, confidence: 'none' }
  * (AC3) - no default location is invented here.
  */
-export async function getCurrentLocation(lotId: string, client?: PoolClient): Promise<CurrentLocation | null> {
+export async function getCurrentLocation(
+  lotId: string,
+  client?: PoolClient,
+): Promise<CurrentLocation | null> {
   const result = await runner(client).query(
     `SELECT lot_id, location, confidence, asserted_fact_id, source_event_version, updated_at
      FROM location_current WHERE lot_id = $1`,
@@ -140,7 +153,10 @@ export async function getCurrentLocation(lotId: string, client?: PoolClient): Pr
  * a mutable domain column - every assertion is also an immutable `location.asserted` event in
  * domain_events, and a divergence from the expected fact raises `location.disputed`.
  */
-export async function recordAssertedLocation(input: RecordAssertedInput, client?: PoolClient): Promise<AssertedLocationFact | null> {
+export async function recordAssertedLocation(
+  input: RecordAssertedInput,
+  client?: PoolClient,
+): Promise<AssertedLocationFact | null> {
   const result = await runner(client).query(
     `INSERT INTO location_asserted_facts (lot_id, asserted_location, recorded_by, device_id, confidence, source_event_id, source_event_version)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -154,7 +170,15 @@ export async function recordAssertedLocation(input: RecordAssertedInput, client?
        recorded_at = now()
      WHERE EXCLUDED.source_event_version > location_asserted_facts.source_event_version
      RETURNING fact_id, lot_id, asserted_location, recorded_by, device_id, recorded_at, confidence, source_event_id, source_event_version`,
-    [input.lot_id, input.asserted_location, input.recorded_by, input.device_id, input.confidence, input.source_event_id, input.source_event_version],
+    [
+      input.lot_id,
+      input.asserted_location,
+      input.recorded_by,
+      input.device_id,
+      input.confidence,
+      input.source_event_id,
+      input.source_event_version,
+    ],
   );
   return result.rows.length > 0 ? mapAsserted(result.rows[0]!) : null;
 }
@@ -164,7 +188,10 @@ export async function recordAssertedLocation(input: RecordAssertedInput, client?
  * expected facts arrive from Epic 3 ASN/putaway plans; in the Epic 1 spine they are seeded
  * synthetically via the seeding endpoint. Recording an expected fact never raises a dispute.
  */
-export async function recordExpectedLocation(input: RecordExpectedInput, client?: PoolClient): Promise<ExpectedLocationFact> {
+export async function recordExpectedLocation(
+  input: RecordExpectedInput,
+  client?: PoolClient,
+): Promise<ExpectedLocationFact> {
   const result = await runner(client).query(
     `INSERT INTO location_expected_facts (lot_id, expected_location, source, source_event_id)
      VALUES ($1, $2, $3, $4)

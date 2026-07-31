@@ -73,9 +73,15 @@ function mapRow(row: Record<string, unknown>): GateDwellMetricRow {
     vehicle_reg_ext: row['vehicle_reg_ext'] as string,
     po_ref_ext: (row['po_ref_ext'] as string | null) ?? null,
     gate_entered_at: ts(row['gate_entered_at']),
-    resolved_at: row['resolved_at'] === null || row['resolved_at'] === undefined ? null : ts(row['resolved_at']),
+    resolved_at:
+      row['resolved_at'] === null || row['resolved_at'] === undefined
+        ? null
+        : ts(row['resolved_at']),
     resolution_source: (row['resolution_source'] as 'weighbridge' | 'grn' | null) ?? null,
-    dwell_minutes: row['dwell_minutes'] === null || row['dwell_minutes'] === undefined ? null : String(row['dwell_minutes']),
+    dwell_minutes:
+      row['dwell_minutes'] === null || row['dwell_minutes'] === undefined
+        ? null
+        : String(row['dwell_minutes']),
     dwell_open: row['dwell_open'] === true,
     clock_skew_detected: row['clock_skew_detected'] === true,
     weighment_present: row['weighment_present'] === true,
@@ -106,7 +112,8 @@ export async function listGateDwellMetrics(
     clauses.push(sql.replace('?', `$${values.length}`));
   };
   if (filters.siteId) add('site_id = ?', filters.siteId);
-  else if (filters.siteAny && filters.siteAny.length > 0) add('site_id = ANY(?::uuid[])', filters.siteAny);
+  else if (filters.siteAny && filters.siteAny.length > 0)
+    add('site_id = ANY(?::uuid[])', filters.siteAny);
   if (filters.businessDate) add('business_date = ?::date', filters.businessDate);
   if (filters.correlationId) add('correlation_id = ?', filters.correlationId);
   if (filters.openOnly) clauses.push('dwell_open');

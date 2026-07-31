@@ -16,7 +16,13 @@ describe('Story 3.9 getForwardPickBalance boundary cases', () => {
   const siteId = randomUUID();
   const sku = `SKU-39-UNIT-${run}`;
 
-  async function seedLocation(locationId: string, code: string, level: string, parentId: string | null, zoneType = 'general'): Promise<void> {
+  async function seedLocation(
+    locationId: string,
+    code: string,
+    level: string,
+    parentId: string | null,
+    zoneType = 'general',
+  ): Promise<void> {
     await getPool().query(
       `INSERT INTO location_register
          (location_id, location_code, level, parent_location_id, site_id, zone_type, temperature_class,
@@ -68,11 +74,21 @@ describe('Story 3.9 getForwardPickBalance boundary cases', () => {
     await seedLocation(zoneBId, `SIBZONEB-${run}`, 'zone', siteId, 'forward_pick');
     await seedLocation(binAId, `SIBBINA-${run}`, 'bin', zoneAId);
     await seedLocation(binBId, `SIBBINB-${run}`, 'bin', zoneBId);
-    await getPool().query(`INSERT INTO stock_balance (sku, location_id, stock_class, on_hand) VALUES ($1, $2, 'owned', 15)`, [sku, binAId]);
-    await getPool().query(`INSERT INTO stock_balance (sku, location_id, stock_class, on_hand) VALUES ($1, $2, 'owned', 99)`, [sku, binBId]);
+    await getPool().query(
+      `INSERT INTO stock_balance (sku, location_id, stock_class, on_hand) VALUES ($1, $2, 'owned', 15)`,
+      [sku, binAId],
+    );
+    await getPool().query(
+      `INSERT INTO stock_balance (sku, location_id, stock_class, on_hand) VALUES ($1, $2, 'owned', 99)`,
+      [sku, binBId],
+    );
 
     const balanceA = await getForwardPickBalance(sku, zoneAId);
-    assert.strictEqual(balanceA, '15.000000', "zone B's stock must not be summed into zone A's balance");
+    assert.strictEqual(
+      balanceA,
+      '15.000000',
+      "zone B's stock must not be summed into zone A's balance",
+    );
   });
 
   it('consignment/vmi stock is excluded - only stock_class owned is eligible for internal replenishment', async () => {
@@ -80,9 +96,16 @@ describe('Story 3.9 getForwardPickBalance boundary cases', () => {
     const binId = randomUUID();
     await seedLocation(zoneId, `NONOWNEDZONE-${run}`, 'zone', siteId, 'forward_pick');
     await seedLocation(binId, `NONOWNEDBIN-${run}`, 'bin', zoneId);
-    await getPool().query(`INSERT INTO stock_balance (sku, location_id, stock_class, on_hand) VALUES ($1, $2, 'consignment', 500)`, [sku, binId]);
+    await getPool().query(
+      `INSERT INTO stock_balance (sku, location_id, stock_class, on_hand) VALUES ($1, $2, 'consignment', 500)`,
+      [sku, binId],
+    );
 
     const balance = await getForwardPickBalance(sku, zoneId);
-    assert.strictEqual(balance, '0', 'non-owned stock must not count toward the forward-pick balance');
+    assert.strictEqual(
+      balance,
+      '0',
+      'non-owned stock must not count toward the forward-pick balance',
+    );
   });
 });

@@ -69,7 +69,10 @@ export async function upsertUserWithRoles(input: ProvisionUserInput): Promise<st
 }
 
 /** Replaces all role assignments for a user with the provided list (delete + insert, transactional). */
-export async function replaceRoleAssignments(userId: string, roles: RoleAssignment[]): Promise<void> {
+export async function replaceRoleAssignments(
+  userId: string,
+  roles: RoleAssignment[],
+): Promise<void> {
   const pool = getPool();
   const client = await pool.connect();
   try {
@@ -165,6 +168,9 @@ export async function getUserIdByExternalId(externalId: string): Promise<string 
 /** True when the user_id belongs to an existing, still-active user. */
 export async function activeUserExistsById(userId: string): Promise<boolean> {
   const pool = getPool();
-  const result = await pool.query(`SELECT 1 FROM users WHERE user_id = $1 AND active = true LIMIT 1`, [userId]);
+  const result = await pool.query(
+    `SELECT 1 FROM users WHERE user_id = $1 AND active = true LIMIT 1`,
+    [userId],
+  );
   return result.rows.length > 0;
 }

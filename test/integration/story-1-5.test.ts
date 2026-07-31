@@ -78,7 +78,11 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
@@ -89,7 +93,12 @@ async function authFor(port: number, sub: string): Promise<Record<string, string
 }
 
 /** Builds a valid inventory-movement envelope; payload is caller-controlled per test case. */
-function inventoryEnvelope(streamId: string, userId: string, payload: Record<string, unknown>, eventType = 'stock.moved') {
+function inventoryEnvelope(
+  streamId: string,
+  userId: string,
+  payload: Record<string, unknown>,
+  eventType = 'stock.moved',
+) {
   return {
     stream_type: 'inventory',
     stream_id: streamId,
@@ -104,7 +113,10 @@ function inventoryEnvelope(streamId: string, userId: string, payload: Record<str
 }
 
 async function domainEventCount(streamId: string): Promise<number> {
-  const result = await getPool().query(`SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`, [streamId]);
+  const result = await getPool().query(
+    `SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`,
+    [streamId],
+  );
   return result.rows[0]!['count'] as number;
 }
 
@@ -158,7 +170,14 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
         console.error('Unhandled server error:', err);
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error_code: 'INTERNAL_ERROR', message: 'Internal server error', details: {}, trace_id: 'unknown' }));
+          res.end(
+            JSON.stringify({
+              error_code: 'INTERNAL_ERROR',
+              message: 'Internal server error',
+              details: {},
+              trace_id: 'unknown',
+            }),
+          );
         }
       });
     });
@@ -168,7 +187,12 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
       { role: 'warehouse_operator', module: 'inventory', functionScope: 'write', locationId: '*' },
     ]);
     await provisionUser(TEST_PORT, 'bst-compliance@example.com', [
-      { role: 'system_administrator', module: 'compliance', functionScope: 'write', locationId: '*' },
+      {
+        role: 'system_administrator',
+        module: 'compliance',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     await provisionUser(TEST_PORT, 'bst-denied@example.com', [
       { role: 'qc_inspector', module: 'quality', functionScope: 'write', locationId: '*' },
@@ -197,8 +221,16 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'UNTAGGED_TRANSACTION');
     const details = res.body['details'] as Record<string, unknown>;
-    assert.strictEqual(details['missing_tag'], 'business_stream', 'rejection must identify the missing tag');
-    assert.strictEqual(await domainEventCount(streamId), 0, 'no event may be appended to domain_events');
+    assert.strictEqual(
+      details['missing_tag'],
+      'business_stream',
+      'rejection must identify the missing tag',
+    );
+    assert.strictEqual(
+      await domainEventCount(streamId),
+      0,
+      'no event may be appended to domain_events',
+    );
   });
 
   it('AC2: persists a valid business_stream and returns it intact on the Story 1.1 stream read', async () => {
@@ -212,12 +244,22 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
     );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
 
-    const read = await makeRequest(TEST_PORT, 'GET', `/api/v1/events/inventory/${streamId}`, undefined, inventoryHeaders);
+    const read = await makeRequest(
+      TEST_PORT,
+      'GET',
+      `/api/v1/events/inventory/${streamId}`,
+      undefined,
+      inventoryHeaders,
+    );
     assert.strictEqual(read.status, 200, JSON.stringify(read.body));
     const events = read.body['events'] as Array<Record<string, unknown>>;
     assert.strictEqual(events.length, 1);
     const payload = events[0]!['payload'] as Record<string, unknown>;
-    assert.strictEqual(payload['business_stream'], 'production', 'the tag must survive the round trip');
+    assert.strictEqual(
+      payload['business_stream'],
+      'production',
+      'the tag must survive the round trip',
+    );
   });
 
   it('AC3: rejects an unrecognized business_stream as INVALID_BUSINESS_STREAM and appends nothing', async () => {
@@ -265,7 +307,10 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
       TEST_PORT,
       'POST',
       '/api/v1/events',
-      inventoryEnvelope(streamId, inventoryUserId, { business_stream: 'production', cost_centre: 'CC-100' }),
+      inventoryEnvelope(streamId, inventoryUserId, {
+        business_stream: 'production',
+        cost_centre: 'CC-100',
+      }),
       inventoryHeaders,
     );
     assert.strictEqual(tagged.status, 201, JSON.stringify(tagged.body));
@@ -276,7 +321,11 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
       TEST_PORT,
       'POST',
       '/api/v1/business-streams/rules',
-      { transaction_type: 'rd.consumed', project_code_required: true, effective_from: '2026-01-01' },
+      {
+        transaction_type: 'rd.consumed',
+        project_code_required: true,
+        effective_from: '2026-01-01',
+      },
       complianceHeaders,
     );
     assert.strictEqual(ruleRes.status, 201, JSON.stringify(ruleRes.body));
@@ -299,7 +348,12 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
       TEST_PORT,
       'POST',
       '/api/v1/events',
-      inventoryEnvelope(streamId, inventoryUserId, { business_stream: 'research', project_code: 'PROJ-42' }, 'rd.consumed'),
+      inventoryEnvelope(
+        streamId,
+        inventoryUserId,
+        { business_stream: 'research', project_code: 'PROJ-42' },
+        'rd.consumed',
+      ),
       inventoryHeaders,
     );
     assert.strictEqual(tagged.status, 201, JSON.stringify(tagged.body));
@@ -310,21 +364,47 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
       TEST_PORT,
       'POST',
       '/api/v1/business-streams/rules',
-      { transaction_type: 'stock.counted', cost_centre_required: true, effective_from: '2099-01-01' },
+      {
+        transaction_type: 'stock.counted',
+        cost_centre_required: true,
+        effective_from: '2099-01-01',
+      },
       complianceHeaders,
     );
     assert.strictEqual(ruleRes.status, 201, JSON.stringify(ruleRes.body));
 
     const beforeStreamId = randomUUID();
-    const beforeRule = inventoryEnvelope(beforeStreamId, inventoryUserId, { business_stream: 'production' }, 'stock.counted');
+    const beforeRule = inventoryEnvelope(
+      beforeStreamId,
+      inventoryUserId,
+      { business_stream: 'production' },
+      'stock.counted',
+    );
     beforeRule.metadata.occurred_at = '2098-12-31T23:30:00+05:30';
-    const beforeRes = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', beforeRule, inventoryHeaders);
+    const beforeRes = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      beforeRule,
+      inventoryHeaders,
+    );
     assert.strictEqual(beforeRes.status, 201, JSON.stringify(beforeRes.body));
 
     const afterStreamId = randomUUID();
-    const afterRule = inventoryEnvelope(afterStreamId, inventoryUserId, { business_stream: 'production' }, 'stock.counted');
+    const afterRule = inventoryEnvelope(
+      afterStreamId,
+      inventoryUserId,
+      { business_stream: 'production' },
+      'stock.counted',
+    );
     afterRule.metadata.occurred_at = '2099-01-01T00:00:00+05:30';
-    const afterRes = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', afterRule, inventoryHeaders);
+    const afterRes = await makeRequest(
+      TEST_PORT,
+      'POST',
+      '/api/v1/events',
+      afterRule,
+      inventoryHeaders,
+    );
     assert.strictEqual(afterRes.status, 400, JSON.stringify(afterRes.body));
     assert.strictEqual(afterRes.body['error_code'], 'UNTAGGED_TRANSACTION');
     const details = afterRes.body['details'] as Record<string, unknown>;
@@ -338,7 +418,11 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
       TEST_PORT,
       'POST',
       '/api/v1/business-streams/rules',
-      { transaction_type: 'stock.moved', project_code_required: true, effective_from: '2026-06-01' },
+      {
+        transaction_type: 'stock.moved',
+        project_code_required: true,
+        effective_from: '2026-06-01',
+      },
       complianceHeaders,
     );
     assert.strictEqual(res.status, 409, JSON.stringify(res.body));
@@ -356,7 +440,11 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
     assert.strictEqual(ruleRes.status, 200, JSON.stringify(ruleRes.body));
     assert.strictEqual(ruleRes.body['transaction_type'], 'stock.moved');
     assert.strictEqual(ruleRes.body['cost_centre_required'], true);
-    assert.strictEqual(ruleRes.body['effective_from'], '2026-01-01', 'DATE must not shift across timezones');
+    assert.strictEqual(
+      ruleRes.body['effective_from'],
+      '2026-01-01',
+      'DATE must not shift across timezones',
+    );
 
     const noRule = await makeRequest(
       TEST_PORT,
@@ -368,7 +456,13 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
     assert.strictEqual(noRule.status, 404);
     assert.strictEqual(noRule.body['error_code'], 'NOT_FOUND');
 
-    const streams = await makeRequest(TEST_PORT, 'GET', '/api/v1/business-streams', undefined, complianceHeaders);
+    const streams = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/business-streams',
+      undefined,
+      complianceHeaders,
+    );
     assert.strictEqual(streams.status, 200, JSON.stringify(streams.body));
     const list = streams.body['streams'] as Array<Record<string, unknown>>;
     const codes = list.map((s) => s['stream_code']).sort();
@@ -402,7 +496,13 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
     // this is what keeps Stories 1.1-1.4 (DOA, SCIM, audit) byte-for-byte unaffected. The
     // compliance admin holds the 'compliance' module, so use a compliance-typed stream.
     const streamId = randomUUID();
-    const complianceUserRes = await makeRequest(TEST_PORT, 'GET', '/api/v1/business-streams', undefined, complianceHeaders);
+    const complianceUserRes = await makeRequest(
+      TEST_PORT,
+      'GET',
+      '/api/v1/business-streams',
+      undefined,
+      complianceHeaders,
+    );
     assert.strictEqual(complianceUserRes.status, 200);
 
     const res = await makeRequest(
@@ -416,7 +516,11 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
         payload: { note: 'no business_stream here' },
         metadata: {
           correlation_id: randomUUID(),
-          actor: { user_id: inventoryUserId, role: 'system_administrator', location_id: ACTOR_LOCATION },
+          actor: {
+            user_id: inventoryUserId,
+            role: 'system_administrator',
+            location_id: ACTOR_LOCATION,
+          },
           occurred_at: new Date().toISOString(),
         },
       },

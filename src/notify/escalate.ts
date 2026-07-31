@@ -3,7 +3,12 @@ import { config } from '../config/index.js';
 import { getPool } from '../config/db.js';
 import { persistEvent } from '../events/store.js';
 import { findRoleHolder } from '../read/projections/doa_registry.js';
-import { findDueEscalationDefs, resolveEscalationDef, recordEscalation, getAnyNotificationBySourceEvent } from '../read/projections/notification.js';
+import {
+  findDueEscalationDefs,
+  resolveEscalationDef,
+  recordEscalation,
+  getAnyNotificationBySourceEvent,
+} from '../read/projections/notification.js';
 import { emitNotificationInTransaction } from './emit.js';
 
 // The escalation clock is a system process, not a user action - there is no human actor to
@@ -89,13 +94,20 @@ export async function runEscalationCycle(limit = 50): Promise<EscalationCycleRes
           status_verb: 'Escalated',
           object_type: original?.object_type ?? def.origin_target_role,
           object_id: original?.object_id ?? def.source_event_id,
-          actor_label: original ? `Unacknowledged by ${def.origin_target_role}` : 'Notification Foundation',
+          actor_label: original
+            ? `Unacknowledged by ${def.origin_target_role}`
+            : 'Notification Foundation',
           next_step: 'Acknowledge to stop further escalation',
           actor: SYSTEM_ACTOR,
           causation_id: def.source_event_id,
           ...(isFinalTier
             ? {}
-            : { escalation: { target_role: fallbackRole, acknowledgment_window_seconds: def.acknowledgment_window_seconds } }),
+            : {
+                escalation: {
+                  target_role: fallbackRole,
+                  acknowledgment_window_seconds: def.acknowledgment_window_seconds,
+                },
+              }),
         },
         client,
       );
@@ -141,7 +153,10 @@ export async function runEscalationCycle(limit = 50): Promise<EscalationCycleRes
       escalated += 1;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => undefined);
-      console.error(`Escalation failed for notification event ${def.source_event_id} - claim released, will retry next cycle:`, err);
+      console.error(
+        `Escalation failed for notification event ${def.source_event_id} - claim released, will retry next cycle:`,
+        err,
+      );
     } finally {
       client.release();
     }

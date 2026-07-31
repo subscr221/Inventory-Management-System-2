@@ -2,12 +2,23 @@ import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getAuthContext, getAuthorizedAssignment, getParsedBody, getTraceId } from '../../middleware/context.js';
+import {
+  getAuthContext,
+  getAuthorizedAssignment,
+  getParsedBody,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
-import { getForwardPickConfig, listForwardPickConfigs } from '../../read/projections/forward_pick_config.js';
-import { getReplenishmentTaskById, assignReplenishmentTask } from '../../read/projections/replenishment_task.js';
+import {
+  getForwardPickConfig,
+  listForwardPickConfigs,
+} from '../../read/projections/forward_pick_config.js';
+import {
+  getReplenishmentTaskById,
+  assignReplenishmentTask,
+} from '../../read/projections/replenishment_task.js';
 import { isTaskPriority, TASK_PRIORITIES } from '../../read/projections/pick_task.js';
 import { activeUserExistsById } from '../../read/projections/users.js';
 import { runForwardPickReplenishmentCheck } from '../../warehouse/replenishment-job.js';
@@ -63,14 +74,19 @@ function actorContextForSite(req: IncomingMessage, targetSiteId: string): ActorC
   const base = actorContext(req);
   const authContext = getAuthContext(req);
   const covering = authContext?.roles.find(
-    (r) => (r.module === 'warehouse' || r.module === '*')
-      && r.functionScope === 'write'
-      && (r.locationId === '*' || r.locationId === targetSiteId),
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      (r.locationId === '*' || r.locationId === targetSiteId),
   );
   return { ...base, eventLocationId: targetSiteId, role: covering?.role ?? base.role };
 }
 
-function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: number): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
+function auditCtxFor(
+  req: IncomingMessage,
+  actor: ActorContext,
+  httpStatus: number,
+): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
   return {
     trace_id: getTraceId(req) ?? '',
     user_id: actor.userId,
@@ -82,16 +98,31 @@ function auditCtxFor(req: IncomingMessage, actor: ActorContext, httpStatus: numb
   };
 }
 
-function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[], functionScope: 'read' | 'write'): void {
+function assertRoleAllowed(
+  req: IncomingMessage,
+  allowedRoles: string[],
+  functionScope: 'read' | 'write',
+): void {
   const authContext = getAuthContext(req);
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
-    (r) => (r.module === 'warehouse' || r.module === '*') && (functionScope === 'read' || r.functionScope === 'write') && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      (functionScope === 'read' || r.functionScope === 'write') &&
+      allowedRoles.includes(r.role),
   );
-  if (!ok) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+  if (!ok)
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
 }
 
-function warehouseScope(req: IncomingMessage, scope: 'read' | 'write'): { wildcard: boolean; locations: Set<string> } {
+function warehouseScope(
+  req: IncomingMessage,
+  scope: 'read' | 'write',
+): { wildcard: boolean; locations: Set<string> } {
   const authContext = getAuthContext(req);
   if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   return permittedLocationsForModuleScope(authContext.roles, 'warehouse', scope);
@@ -100,7 +131,11 @@ function warehouseScope(req: IncomingMessage, scope: 'read' | 'write'): { wildca
 function assertSiteAccess(req: IncomingMessage, siteId: string, scope: 'read' | 'write'): void {
   const s = warehouseScope(req, scope);
   if (!s.wildcard && !s.locations.has(siteId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No ${scope} assignment grants access to site "${siteId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No ${scope} assignment grants access to site "${siteId}"`,
+    );
   }
 }
 
@@ -132,10 +167,15 @@ const getConfigBase: RouteHandler = async (req, res) => {
 
   const scope = warehouseScope(req, 'read');
   if (siteId && !scope.wildcard && !scope.locations.has(siteId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No read assignment grants access to site "${siteId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No read assignment grants access to site "${siteId}"`,
+    );
   }
   const configs = await listForwardPickConfigs({ siteId, zoneId });
-  const filtered = scope.wildcard || siteId ? configs : configs.filter((c) => scope.locations.has(c.site_id));
+  const filtered =
+    scope.wildcard || siteId ? configs : configs.filter((c) => scope.locations.has(c.site_id));
   sendJson(res, 200, { forward_pick_configs: filtered });
 };
 
@@ -152,7 +192,13 @@ const putConfigBase: RouteHandler = async (req, res) => {
 
   const sku = body['sku'];
   if (typeof sku !== 'string' || sku.length === 0) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku is required and must be a non-empty string',
+    );
     return;
   }
   const zoneId = body['zone_id'];
@@ -161,9 +207,18 @@ const putConfigBase: RouteHandler = async (req, res) => {
     return;
   }
 
-  const zone = await getPool().query(`SELECT site_id FROM location_register WHERE location_id = $1`, [zoneId]);
+  const zone = await getPool().query(
+    `SELECT site_id FROM location_register WHERE location_id = $1`,
+    [zoneId],
+  );
   if (zone.rows.length === 0) {
-    sendRequestError(req, res, 404, 'LOCATION_NOT_FOUND', `No location register entry exists for "${zoneId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'LOCATION_NOT_FOUND',
+      `No location register entry exists for "${zoneId}"`,
+    );
     return;
   }
   const siteId = zone.rows[0]!['site_id'] as string;
@@ -225,13 +280,25 @@ const confirmReplenishmentBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, REPLENISHMENT_READ_ROLES, 'write');
   const replenishmentTaskId = params['replenishmentTaskId'];
   if (!replenishmentTaskId || !UUID_REGEX.test(replenishmentTaskId)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'replenishmentTaskId path parameter must be a UUID');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'replenishmentTaskId path parameter must be a UUID',
+    );
     return;
   }
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
   const task = await getReplenishmentTaskById(replenishmentTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'REPLENISHMENT_TASK_NOT_FOUND', `No replenishment task exists for "${replenishmentTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'REPLENISHMENT_TASK_NOT_FOUND',
+      `No replenishment task exists for "${replenishmentTaskId}"`,
+    );
     return;
   }
   assertSiteAccess(req, task.site_id, 'write');
@@ -244,8 +311,10 @@ const confirmReplenishmentBase: RouteHandler = async (req, res, params) => {
       event_type: 'replenishment_task.completed',
       payload: {
         replenishment_task_id: replenishmentTaskId,
-        to_location_id: typeof body['to_location_id'] === 'string' ? body['to_location_id'] : undefined,
-        to_location_code: typeof body['to_location_code'] === 'string' ? body['to_location_code'] : undefined,
+        to_location_id:
+          typeof body['to_location_id'] === 'string' ? body['to_location_id'] : undefined,
+        to_location_code:
+          typeof body['to_location_code'] === 'string' ? body['to_location_code'] : undefined,
         completed_by: actor.userId,
       },
       metadata: {
@@ -270,7 +339,13 @@ const assignReplenishmentTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, REPLENISHMENT_SUPERVISE_ROLES, 'write');
   const replenishmentTaskId = params['replenishmentTaskId'];
   if (!replenishmentTaskId || !UUID_REGEX.test(replenishmentTaskId)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'replenishmentTaskId path parameter must be a UUID');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'replenishmentTaskId path parameter must be a UUID',
+    );
     return;
   }
   const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
@@ -281,17 +356,35 @@ const assignReplenishmentTaskBase: RouteHandler = async (req, res, params) => {
   }
   const priority = body['priority'];
   if (priority !== undefined && priority !== null && !isTaskPriority(priority)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', `priority must be one of: ${TASK_PRIORITIES.join(', ')}`);
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      `priority must be one of: ${TASK_PRIORITIES.join(', ')}`,
+    );
     return;
   }
   if (!(await activeUserExistsById(assignedTo))) {
-    sendRequestError(req, res, 404, 'ASSIGNEE_NOT_FOUND', `No active user exists for "${assignedTo}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'ASSIGNEE_NOT_FOUND',
+      `No active user exists for "${assignedTo}"`,
+    );
     return;
   }
 
   const task = await getReplenishmentTaskById(replenishmentTaskId);
   if (!task) {
-    sendRequestError(req, res, 404, 'REPLENISHMENT_TASK_NOT_FOUND', `No replenishment task exists for "${replenishmentTaskId}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'REPLENISHMENT_TASK_NOT_FOUND',
+      `No replenishment task exists for "${replenishmentTaskId}"`,
+    );
     return;
   }
   assertSiteAccess(req, task.site_id, 'write');
@@ -300,11 +393,22 @@ const assignReplenishmentTaskBase: RouteHandler = async (req, res, params) => {
   const client = await getPool().connect();
   try {
     const assigned = await assignReplenishmentTask(
-      { replenishmentTaskId, assignedTo, assignedBy: actor.userId, priority: isTaskPriority(priority) ? priority : null },
+      {
+        replenishmentTaskId,
+        assignedTo,
+        assignedBy: actor.userId,
+        priority: isTaskPriority(priority) ? priority : null,
+      },
       client,
     );
     if (!assigned) {
-      sendRequestError(req, res, 409, 'REPLENISHMENT_TASK_NOT_READY', `Replenishment task "${replenishmentTaskId}" is not ready or is already assigned`);
+      sendRequestError(
+        req,
+        res,
+        409,
+        'REPLENISHMENT_TASK_NOT_READY',
+        `Replenishment task "${replenishmentTaskId}" is not ready or is already assigned`,
+      );
       return;
     }
   } finally {
@@ -315,8 +419,23 @@ const assignReplenishmentTaskBase: RouteHandler = async (req, res, params) => {
   sendJson(res, 200, { task: updated });
 };
 
-export const handleGetForwardPickConfig: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'read' })(getConfigBase);
-export const handlePutForwardPickConfig: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(putConfigBase);
-export const handleCheckReplenishment: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(checkReplenishmentBase);
-export const handleConfirmReplenishmentTask: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(confirmReplenishmentBase);
-export const handleAssignReplenishmentTask: RouteHandler = requireRole({ module: 'warehouse', functionScope: 'write' })(assignReplenishmentTaskBase);
+export const handleGetForwardPickConfig: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'read',
+})(getConfigBase);
+export const handlePutForwardPickConfig: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(putConfigBase);
+export const handleCheckReplenishment: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(checkReplenishmentBase);
+export const handleConfirmReplenishmentTask: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(confirmReplenishmentBase);
+export const handleAssignReplenishmentTask: RouteHandler = requireRole({
+  module: 'warehouse',
+  functionScope: 'write',
+})(assignReplenishmentTaskBase);

@@ -69,8 +69,10 @@ function toNumberOrNull(value: unknown): number | null {
 }
 
 function mapEntry(row: Record<string, unknown>): DoaRegistryEntry {
-  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
-  const updatedAt = row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
+  const createdAt =
+    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  const updatedAt =
+    row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
   return {
     entry_id: row['entry_id'] as string,
     role: row['role'] as string,
@@ -96,7 +98,8 @@ function mapDelegation(row: Record<string, unknown>): VacationDelegation {
     }
     return String(v);
   };
-  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  const createdAt =
+    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
   return {
     delegation_id: row['delegation_id'] as string,
     delegator_user_id: row['delegator_user_id'] as string,
@@ -109,7 +112,10 @@ function mapDelegation(row: Record<string, unknown>): VacationDelegation {
 }
 
 /** Inserts a new DOA registry entry and returns it. Participates in `client`'s transaction if given. */
-export async function createDoaEntry(input: CreateDoaEntryInput, client?: PoolClient): Promise<DoaRegistryEntry> {
+export async function createDoaEntry(
+  input: CreateDoaEntryInput,
+  client?: PoolClient,
+): Promise<DoaRegistryEntry> {
   const result = await runner(client).query(
     `INSERT INTO doa_registry_entries (role, transaction_type, value_min, value_max)
      VALUES ($1, $2, $3, $4)
@@ -152,7 +158,10 @@ export async function updateDoaEntry(
 }
 
 /** Returns a single DOA entry by primary key, or null, locking it when called in a transaction. */
-export async function getDoaEntry(entryId: string, client?: PoolClient): Promise<DoaRegistryEntry | null> {
+export async function getDoaEntry(
+  entryId: string,
+  client?: PoolClient,
+): Promise<DoaRegistryEntry | null> {
   const result = await runner(client).query(
     `SELECT entry_id, role, transaction_type, value_min, value_max, active, created_at, updated_at
      FROM doa_registry_entries WHERE entry_id = $1${client ? ' FOR UPDATE' : ''}`,
@@ -187,7 +196,10 @@ export async function findMatchingDoaEntry(
 }
 
 /** Returns true if any active DOA entry governs `transactionType` (existence check, not band match). */
-export async function transactionTypeIsGoverned(transactionType: string, client?: PoolClient): Promise<boolean> {
+export async function transactionTypeIsGoverned(
+  transactionType: string,
+  client?: PoolClient,
+): Promise<boolean> {
   const result = await runner(client).query(
     `SELECT 1 FROM doa_registry_entries WHERE transaction_type = $1 AND active = true LIMIT 1`,
     [transactionType],
@@ -201,7 +213,10 @@ export async function transactionTypeIsGoverned(transactionType: string, client?
  * band-matched role has no active holder, callers walk this list to the next authority that does
  * (Story 2.5 review).
  */
-export async function listActiveDoaEntries(transactionType: string, client?: PoolClient): Promise<DoaRegistryEntry[]> {
+export async function listActiveDoaEntries(
+  transactionType: string,
+  client?: PoolClient,
+): Promise<DoaRegistryEntry[]> {
   const result = await runner(client).query(
     `SELECT entry_id, role, transaction_type, value_min, value_max, active, created_at, updated_at
      FROM doa_registry_entries
@@ -212,7 +227,10 @@ export async function listActiveDoaEntries(transactionType: string, client?: Poo
   return result.rows.map(mapEntry);
 }
 
-export async function findFirstActiveDoaEntry(transactionType: string, client?: PoolClient): Promise<DoaRegistryEntry | null> {
+export async function findFirstActiveDoaEntry(
+  transactionType: string,
+  client?: PoolClient,
+): Promise<DoaRegistryEntry | null> {
   const result = await runner(client).query(
     `SELECT entry_id, role, transaction_type, value_min, value_max, active, created_at, updated_at
      FROM doa_registry_entries
@@ -275,7 +293,10 @@ export interface RoleHolder {
  * active user holds the same role, the earliest-assigned wins (deterministic tie-break) - a Phase-1
  * simplification with no location dimension; Epic 4 workflows may add location-scoped resolution.
  */
-export async function findRoleHolder(role: string, client?: PoolClient): Promise<RoleHolder | null> {
+export async function findRoleHolder(
+  role: string,
+  client?: PoolClient,
+): Promise<RoleHolder | null> {
   const result = await runner(client).query(
     `SELECT u.user_id, u.external_id
      FROM user_role_assignments a
@@ -291,7 +312,12 @@ export async function findRoleHolder(role: string, client?: PoolClient): Promise
 }
 
 /** Returns the external_id for a user_id, or null. Used to enrich a resolved approver. */
-export async function getExternalIdByUserId(userId: string, client?: PoolClient): Promise<string | null> {
-  const result = await runner(client).query(`SELECT external_id FROM users WHERE user_id = $1`, [userId]);
+export async function getExternalIdByUserId(
+  userId: string,
+  client?: PoolClient,
+): Promise<string | null> {
+  const result = await runner(client).query(`SELECT external_id FROM users WHERE user_id = $1`, [
+    userId,
+  ]);
   return result.rows.length > 0 ? (result.rows[0]!['external_id'] as string) : null;
 }

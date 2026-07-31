@@ -82,13 +82,20 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -117,7 +124,10 @@ function movementEnvelope(
 }
 
 async function domainEventCount(streamId: string): Promise<number> {
-  const result = await getPool().query(`SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`, [streamId]);
+  const result = await getPool().query(
+    `SELECT count(*)::int AS count FROM domain_events WHERE stream_id = $1`,
+    [streamId],
+  );
   return result.rows[0]!['count'] as number;
 }
 
@@ -179,7 +189,12 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     });
 
     adminUserId = await provisionUser(port, 'im-admin@example.com', [
-      { role: 'inventory_controller', module: 'inventory', functionScope: 'write', locationId: '*' },
+      {
+        role: 'inventory_controller',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     adminHeaders = await authFor(port, 'im-admin@example.com');
 
@@ -195,7 +210,13 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     deniedHeaders = await authFor(port, 'im-denied@example.com');
 
     // Warehouse topology used across the suite: site > zone > two bins (one hazmat-zoned).
-    const site = await makeRequest(port, 'POST', '/api/v1/locations', { location_code: 'SITE-A', level: 'site' }, adminHeaders);
+    const site = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/locations',
+      { location_code: 'SITE-A', level: 'site' },
+      adminHeaders,
+    );
     assert.strictEqual(site.status, 201, JSON.stringify(site.body));
     siteId = site.body['location_id'] as string;
 
@@ -221,7 +242,11 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       port,
       'POST',
       '/api/v1/locations',
-      { location_code: 'RACK-A1-01-R1', level: 'rack', parent_location_id: aisle.body['location_id'] as string },
+      {
+        location_code: 'RACK-A1-01-R1',
+        level: 'rack',
+        parent_location_id: aisle.body['location_id'] as string,
+      },
       adminHeaders,
     );
     assert.strictEqual(rack.status, 201, JSON.stringify(rack.body));
@@ -248,7 +273,11 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       port,
       'POST',
       '/api/v1/locations',
-      { location_code: 'BIN-GEN-01', level: 'bin', parent_location_id: rack.body['location_id'] as string },
+      {
+        location_code: 'BIN-GEN-01',
+        level: 'bin',
+        parent_location_id: rack.body['location_id'] as string,
+      },
       adminHeaders,
     );
     assert.strictEqual(plainBin.status, 201, JSON.stringify(plainBin.body));
@@ -282,7 +311,13 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       port,
       'POST',
       '/api/v1/items',
-      { sku: 'RM-0042', uom: 'kg', lot_controlled: true, valuation_method: 'weighted_average', business_stream: 'production' },
+      {
+        sku: 'RM-0042',
+        uom: 'kg',
+        lot_controlled: true,
+        valuation_method: 'weighted_average',
+        business_stream: 'production',
+      },
       adminHeaders,
     );
     assert.strictEqual(create.status, 201, JSON.stringify(create.body));
@@ -300,8 +335,14 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     assert.strictEqual(res.body['business_stream'], 'production');
     assert.strictEqual(res.body['status'], 'active');
     assert.ok(typeof res.body['item_id'] === 'string' && res.body['item_id'].length > 0);
-    assert.ok(typeof res.body['created_at'] === 'string' && !Number.isNaN(Date.parse(res.body['created_at'] as string)));
-    assert.ok(typeof res.body['updated_at'] === 'string' && !Number.isNaN(Date.parse(res.body['updated_at'] as string)));
+    assert.ok(
+      typeof res.body['created_at'] === 'string' &&
+        !Number.isNaN(Date.parse(res.body['created_at'] as string)),
+    );
+    assert.ok(
+      typeof res.body['updated_at'] === 'string' &&
+        !Number.isNaN(Date.parse(res.body['updated_at'] as string)),
+    );
 
     // The projection row, the item.created domain event, and the audit entry committed together.
     const itemId = res.body['item_id'] as string;
@@ -312,7 +353,9 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     assert.strictEqual(events.rows.length, 1);
     assert.strictEqual(events.rows[0]!['event_type'], 'item.created');
     assert.strictEqual(events.rows[0]!['stream_type'], 'item_master');
-    const audit = await getPool().query(`SELECT 1 FROM audit_log WHERE event_id = $1`, [events.rows[0]!['event_id']]);
+    const audit = await getPool().query(`SELECT 1 FROM audit_log WHERE event_id = $1`, [
+      events.rows[0]!['event_id'],
+    ]);
     assert.strictEqual(audit.rows.length, 1, 'audit entry must exist for item.created');
   });
 
@@ -346,7 +389,12 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
         port,
         'POST',
         '/api/v1/items',
-        { sku: `RM-BAD-${randomUUID().slice(0, 8)}`, uom: 'ea', valuation_method: method, business_stream: 'production' },
+        {
+          sku: `RM-BAD-${randomUUID().slice(0, 8)}`,
+          uom: 'ea',
+          valuation_method: method,
+          business_stream: 'production',
+        },
         adminHeaders,
       );
       assert.strictEqual(res.status, 400, JSON.stringify(res.body));
@@ -357,7 +405,12 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       port,
       'POST',
       '/api/v1/items',
-      { sku: `RM-BAD-${randomUUID().slice(0, 8)}`, uom: 'ea', valuation_method: '', business_stream: 'production' },
+      {
+        sku: `RM-BAD-${randomUUID().slice(0, 8)}`,
+        uom: 'ea',
+        valuation_method: '',
+        business_stream: 'production',
+      },
       adminHeaders,
     );
     assert.strictEqual(malformed.status, 400, JSON.stringify(malformed.body));
@@ -369,7 +422,12 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       port,
       'POST',
       '/api/v1/items',
-      { sku: 'RM-BAD-STREAM', uom: 'ea', valuation_method: 'fifo', business_stream: 'not_a_stream' },
+      {
+        sku: 'RM-BAD-STREAM',
+        uom: 'ea',
+        valuation_method: 'fifo',
+        business_stream: 'not_a_stream',
+      },
       adminHeaders,
     );
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
@@ -387,7 +445,13 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     assert.strictEqual(create.status, 201, JSON.stringify(create.body));
     const itemId = create.body['item_id'] as string;
 
-    const patch = await makeRequest(port, 'PATCH', '/api/v1/items/RM-PATCH-1', { uom: 'kg', hazmat: true }, adminHeaders);
+    const patch = await makeRequest(
+      port,
+      'PATCH',
+      '/api/v1/items/RM-PATCH-1',
+      { uom: 'kg', hazmat: true },
+      adminHeaders,
+    );
     assert.strictEqual(patch.status, 200, JSON.stringify(patch.body));
     assert.strictEqual(patch.body['uom'], 'kg');
     assert.strictEqual(patch.body['hazmat'], true);
@@ -428,9 +492,17 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       assert.strictEqual(res.status, 500, JSON.stringify(res.body));
 
       const row = await getPool().query(`SELECT 1 FROM item_master WHERE sku = 'ROLLBACK-SKU'`);
-      assert.strictEqual(row.rows.length, 0, 'projection row must roll back with the failed event write');
+      assert.strictEqual(
+        row.rows.length,
+        0,
+        'projection row must roll back with the failed event write',
+      );
       const auditAfter = await getPool().query(`SELECT count(*)::int AS count FROM audit_log`);
-      assert.strictEqual(auditAfter.rows[0]!['count'], auditBefore.rows[0]!['count'], 'no audit entry may survive the rollback');
+      assert.strictEqual(
+        auditAfter.rows[0]!['count'],
+        auditBefore.rows[0]!['count'],
+        'no audit entry may survive the rollback',
+      );
     } finally {
       await adminPool.query(`DROP TRIGGER IF EXISTS trg_story21_forced_failure ON domain_events`);
       await adminPool.query(`DROP FUNCTION IF EXISTS story21_forced_failure()`);
@@ -442,7 +514,13 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
   // ---------------------------------------------------------------------------------------------
 
   it('AC3 (read side): returns zone and temperature attributes from GET /api/v1/locations/:locationId', async () => {
-    const res = await makeRequest(port, 'GET', `/api/v1/locations/${hazmatBinId}`, undefined, adminHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/locations/${hazmatBinId}`,
+      undefined,
+      adminHeaders,
+    );
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body['location_code'], hazmatBinCode);
     assert.strictEqual(res.body['level'], 'bin');
@@ -474,15 +552,31 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     assert.strictEqual(binUnderSite.status, 400, JSON.stringify(binUnderSite.body));
     assert.strictEqual(binUnderSite.body['error_code'], 'INVALID_HIERARCHY');
 
-    const inactiveSite = await makeRequest(port, 'POST', '/api/v1/locations', { location_code: 'SITE-INACTIVE', level: 'site' }, adminHeaders);
+    const inactiveSite = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/locations',
+      { location_code: 'SITE-INACTIVE', level: 'site' },
+      adminHeaders,
+    );
     assert.strictEqual(inactiveSite.status, 201, JSON.stringify(inactiveSite.body));
-    const inactivePatch = await makeRequest(port, 'PATCH', `/api/v1/locations/${inactiveSite.body['location_id'] as string}`, { status: 'inactive' }, adminHeaders);
+    const inactivePatch = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/locations/${inactiveSite.body['location_id'] as string}`,
+      { status: 'inactive' },
+      adminHeaders,
+    );
     assert.strictEqual(inactivePatch.status, 200, JSON.stringify(inactivePatch.body));
     const childUnderInactive = await makeRequest(
       port,
       'POST',
       '/api/v1/locations',
-      { location_code: 'ZONE-INACTIVE-PARENT', level: 'zone', parent_location_id: inactiveSite.body['location_id'] as string },
+      {
+        location_code: 'ZONE-INACTIVE-PARENT',
+        level: 'zone',
+        parent_location_id: inactiveSite.body['location_id'] as string,
+      },
       adminHeaders,
     );
     assert.strictEqual(childUnderInactive.status, 400, JSON.stringify(childUnderInactive.body));
@@ -529,7 +623,10 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     );
     assert.deepStrictEqual(
       events.rows.map((r) => `${r['stream_type']}:${r['event_type']}`),
-      ['location_register:location_register.created', 'location_register:location_register.updated'],
+      [
+        'location_register:location_register.created',
+        'location_register:location_register.updated',
+      ],
     );
 
     const revert = await makeRequest(
@@ -543,7 +640,13 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
   });
 
   it('returns 404 LOCATION_NOT_FOUND for an unknown location id', async () => {
-    const res = await makeRequest(port, 'GET', `/api/v1/locations/${randomUUID()}`, undefined, adminHeaders);
+    const res = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/locations/${randomUUID()}`,
+      undefined,
+      adminHeaders,
+    );
     assert.strictEqual(res.status, 404, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'LOCATION_NOT_FOUND');
   });
@@ -559,20 +662,36 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       port,
       'POST',
       '/api/v1/events',
-      movementEnvelope(streamId, adminUserId, siteId, { sku: 'NONEXISTENT', quantity: 5 }, { idempotency_key: idempotencyKey }),
+      movementEnvelope(
+        streamId,
+        adminUserId,
+        siteId,
+        { sku: 'NONEXISTENT', quantity: 5 },
+        { idempotency_key: idempotencyKey },
+      ),
       adminHeaders,
     );
     assert.strictEqual(rejected.status, 400, JSON.stringify(rejected.body));
     assert.strictEqual(rejected.body['error_code'], 'ITEM_NOT_FOUND');
     assert.strictEqual((rejected.body['details'] as Record<string, unknown>)['sku'], 'NONEXISTENT');
-    assert.strictEqual(await domainEventCount(streamId), 0, 'rejected movement must not touch domain_events');
+    assert.strictEqual(
+      await domainEventCount(streamId),
+      0,
+      'rejected movement must not touch domain_events',
+    );
 
     // The idempotency key was NOT consumed by the rejection: the corrected retry succeeds with it.
     const retry = await makeRequest(
       port,
       'POST',
       '/api/v1/events',
-      movementEnvelope(streamId, adminUserId, siteId, { sku: 'RM-0042', quantity: 5 }, { idempotency_key: idempotencyKey }),
+      movementEnvelope(
+        streamId,
+        adminUserId,
+        siteId,
+        { sku: 'RM-0042', quantity: 5 },
+        { idempotency_key: idempotencyKey },
+      ),
       adminHeaders,
     );
     assert.strictEqual(retry.status, 201, JSON.stringify(retry.body));
@@ -605,12 +724,18 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       port,
       'POST',
       '/api/v1/events',
-      movementEnvelope(streamId, adminUserId, siteId, { sku: 'RM-0042', target_location_id: missing }),
+      movementEnvelope(streamId, adminUserId, siteId, {
+        sku: 'RM-0042',
+        target_location_id: missing,
+      }),
       adminHeaders,
     );
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'LOCATION_NOT_FOUND');
-    assert.strictEqual((res.body['details'] as Record<string, unknown>)['target_location_id'], missing);
+    assert.strictEqual(
+      (res.body['details'] as Record<string, unknown>)['target_location_id'],
+      missing,
+    );
     assert.strictEqual(await domainEventCount(streamId), 0);
   });
 
@@ -624,9 +749,15 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       adminHeaders,
     );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    const row = await getPool().query(`SELECT metadata, stream_id FROM domain_events WHERE stream_id = $1`, [streamId]);
+    const row = await getPool().query(
+      `SELECT metadata, stream_id FROM domain_events WHERE stream_id = $1`,
+      [streamId],
+    );
     assert.strictEqual(row.rows.length, 1);
-    assert.strictEqual(row.rows[0]!['metadata']['actor']['location_id'], '00000000-0000-0000-0000-000000000000');
+    assert.strictEqual(
+      row.rows[0]!['metadata']['actor']['location_id'],
+      '00000000-0000-0000-0000-000000000000',
+    );
   });
 
   // ---------------------------------------------------------------------------------------------
@@ -655,7 +786,11 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
         stream_type: 'config',
         stream_id: streamId,
         event_type: 'config.noted',
-        payload: { sku: 'NONEXISTENT', target_location_id: randomUUID(), note: 'non-inventory streams pass through' },
+        payload: {
+          sku: 'NONEXISTENT',
+          target_location_id: randomUUID(),
+          note: 'non-inventory streams pass through',
+        },
         metadata: {
           correlation_id: randomUUID(),
           actor: { user_id: adminUserId, role: 'system_administrator', location_id: randomUUID() },
@@ -698,8 +833,14 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     assert.strictEqual(details['sku'], 'RM-0042');
     assert.strictEqual(details['target_location_id'], hazmatBinId);
     assert.strictEqual(details['target_location_code'], hazmatBinCode);
-    assert.ok(Array.isArray(details['reasons']) && (details['reasons'] as string[]).includes('non_hazmat_item_in_hazmat_zone'));
-    assert.ok(String(warned.body['message']).includes('placement_confirmed'), 'warning copy must be actionable');
+    assert.ok(
+      Array.isArray(details['reasons']) &&
+        (details['reasons'] as string[]).includes('non_hazmat_item_in_hazmat_zone'),
+    );
+    assert.ok(
+      String(warned.body['message']).includes('placement_confirmed'),
+      'warning copy must be actionable',
+    );
     assert.strictEqual(await domainEventCount(streamId), 0, 'warned movement must not persist');
 
     // Step 2: the confirmed resubmission persists (the warning did not consume the key).
@@ -735,7 +876,11 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     );
     assert.strictEqual(duplicate.status, 409, JSON.stringify(duplicate.body));
     assert.strictEqual(duplicate.body['error_code'], 'DUPLICATE_EVENT');
-    assert.strictEqual(await domainEventCount(streamId), 1, 'confirmed placement must persist exactly once');
+    assert.strictEqual(
+      await domainEventCount(streamId),
+      1,
+      'confirmed placement must persist exactly once',
+    );
   });
 
   it('auto-confirms zone-incompatible edge placements so the outbox cannot mark an unpersisted movement synced', async () => {
@@ -758,7 +903,10 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.strictEqual(res.body['warning_code'], undefined);
     assert.strictEqual(await domainEventCount(streamId), 1);
-    const row = await getPool().query(`SELECT payload, metadata FROM domain_events WHERE event_id = $1`, [eventId]);
+    const row = await getPool().query(
+      `SELECT payload, metadata FROM domain_events WHERE event_id = $1`,
+      [eventId],
+    );
     assert.strictEqual(row.rows.length, 1);
     assert.strictEqual(row.rows[0]!['payload']['placement_confirmed'], true);
     assert.strictEqual(row.rows[0]!['metadata']['actor']['location_id'], siteId);
@@ -769,7 +917,13 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       port,
       'POST',
       '/api/v1/items',
-      { sku: 'RM-INACTIVE', uom: 'ea', valuation_method: 'fifo', business_stream: 'production', status: 'inactive' },
+      {
+        sku: 'RM-INACTIVE',
+        uom: 'ea',
+        valuation_method: 'fifo',
+        business_stream: 'production',
+        status: 'inactive',
+      },
       adminHeaders,
     );
     assert.strictEqual(inactiveItem.status, 201, JSON.stringify(inactiveItem.body));
@@ -783,31 +937,54 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     assert.strictEqual(inactiveItemMove.status, 400, JSON.stringify(inactiveItemMove.body));
     assert.strictEqual(inactiveItemMove.body['error_code'], 'INACTIVE_ITEM');
 
-    const inactiveLocation = await makeRequest(port, 'POST', '/api/v1/locations', { location_code: 'SITE-INACTIVE-ACTOR', level: 'site' }, adminHeaders);
+    const inactiveLocation = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/locations',
+      { location_code: 'SITE-INACTIVE-ACTOR', level: 'site' },
+      adminHeaders,
+    );
     assert.strictEqual(inactiveLocation.status, 201, JSON.stringify(inactiveLocation.body));
     const inactiveLocationId = inactiveLocation.body['location_id'] as string;
-    const patch = await makeRequest(port, 'PATCH', `/api/v1/locations/${inactiveLocationId}`, { status: 'inactive' }, adminHeaders);
+    const patch = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/locations/${inactiveLocationId}`,
+      { status: 'inactive' },
+      adminHeaders,
+    );
     assert.strictEqual(patch.status, 200, JSON.stringify(patch.body));
 
     const inactiveTarget = await makeRequest(
       port,
       'POST',
       '/api/v1/events',
-      movementEnvelope(randomUUID(), adminUserId, siteId, { sku: 'RM-0042', target_location_id: inactiveLocationId }),
+      movementEnvelope(randomUUID(), adminUserId, siteId, {
+        sku: 'RM-0042',
+        target_location_id: inactiveLocationId,
+      }),
       adminHeaders,
     );
     assert.strictEqual(inactiveTarget.status, 400, JSON.stringify(inactiveTarget.body));
     assert.strictEqual(inactiveTarget.body['error_code'], 'INACTIVE_LOCATION');
 
     await provisionUser(port, 'im-inactive-actor@example.com', [
-      { role: 'inactive_site_operator', module: 'inventory', functionScope: 'write', locationId: inactiveLocationId },
+      {
+        role: 'inactive_site_operator',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: inactiveLocationId,
+      },
     ]);
     const inactiveActorHeaders = await authFor(port, 'im-inactive-actor@example.com');
     const inactiveActor = await makeRequest(
       port,
       'POST',
       '/api/v1/events',
-      movementEnvelope(randomUUID(), adminUserId, inactiveLocationId, { sku: 'RM-0042', quantity: 1 }),
+      movementEnvelope(randomUUID(), adminUserId, inactiveLocationId, {
+        sku: 'RM-0042',
+        quantity: 1,
+      }),
       inactiveActorHeaders,
     );
     assert.strictEqual(inactiveActor.status, 400, JSON.stringify(inactiveActor.body));
@@ -820,7 +997,11 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       port,
       'POST',
       '/api/v1/events',
-      movementEnvelope(streamId, adminUserId, siteId, { sku: 'RM-0042', target_location_id: plainBinId, quantity: 2 }),
+      movementEnvelope(streamId, adminUserId, siteId, {
+        sku: 'RM-0042',
+        target_location_id: plainBinId,
+        quantity: 2,
+      }),
       adminHeaders,
     );
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
@@ -851,11 +1032,23 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
   // ---------------------------------------------------------------------------------------------
 
   it('enforces module and function scopes on the item and location master endpoints', async () => {
-    const deniedGet = await makeRequest(port, 'GET', '/api/v1/items/RM-0042', undefined, deniedHeaders);
+    const deniedGet = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/items/RM-0042',
+      undefined,
+      deniedHeaders,
+    );
     assert.strictEqual(deniedGet.status, 403, JSON.stringify(deniedGet.body));
     assert.strictEqual(deniedGet.body['error_code'], 'MODULE_ACCESS_DENIED');
 
-    const readerGet = await makeRequest(port, 'GET', '/api/v1/items/RM-0042', undefined, readerHeaders);
+    const readerGet = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/items/RM-0042',
+      undefined,
+      readerHeaders,
+    );
     assert.strictEqual(readerGet.status, 200, JSON.stringify(readerGet.body));
 
     const readerCreate = await makeRequest(
@@ -878,13 +1071,25 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
     assert.strictEqual(readerLocation.status, 403, JSON.stringify(readerLocation.body));
     assert.strictEqual(readerLocation.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
-    const deniedLocation = await makeRequest(port, 'GET', `/api/v1/locations/${plainBinId}`, undefined, deniedHeaders);
+    const deniedLocation = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/locations/${plainBinId}`,
+      undefined,
+      deniedHeaders,
+    );
     assert.strictEqual(deniedLocation.status, 403, JSON.stringify(deniedLocation.body));
     assert.strictEqual(deniedLocation.body['error_code'], 'MODULE_ACCESS_DENIED');
   });
 
   it('enforces location-scoped movement access and accepts the scoped actor at their registered site', async () => {
-    const otherSite = await makeRequest(port, 'POST', '/api/v1/locations', { location_code: 'SITE-B', level: 'site' }, adminHeaders);
+    const otherSite = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/locations',
+      { location_code: 'SITE-B', level: 'site' },
+      adminHeaders,
+    );
     assert.strictEqual(otherSite.status, 201, JSON.stringify(otherSite.body));
     const otherSiteId = otherSite.body['location_id'] as string;
 

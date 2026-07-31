@@ -31,8 +31,12 @@ function runner(client?: PoolClient): Queryable {
 }
 
 function mapRow(row: Record<string, unknown>): InstrumentCalibrationStatus {
-  const changedAt = row['status_changed_at'] instanceof Date ? row['status_changed_at'].toISOString() : String(row['status_changed_at']);
-  const updatedAt = row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
+  const changedAt =
+    row['status_changed_at'] instanceof Date
+      ? row['status_changed_at'].toISOString()
+      : String(row['status_changed_at']);
+  const updatedAt =
+    row['updated_at'] instanceof Date ? row['updated_at'].toISOString() : String(row['updated_at']);
   return {
     instrument_uuid: row['instrument_uuid'] as string,
     instrument_id: row['instrument_id'] as string,
@@ -46,7 +50,10 @@ function mapRow(row: Record<string, unknown>): InstrumentCalibrationStatus {
   };
 }
 
-export async function getInstrumentCalibrationStatus(instrumentId: string, client?: PoolClient): Promise<InstrumentCalibrationStatus | null> {
+export async function getInstrumentCalibrationStatus(
+  instrumentId: string,
+  client?: PoolClient,
+): Promise<InstrumentCalibrationStatus | null> {
   const result = await runner(client).query(
     `SELECT instrument_uuid, instrument_id, calibration_status, status_event_id, status_event_version, status_changed_by, status_changed_at, reason, updated_at
      FROM instrument_calibration_statuses WHERE instrument_id = $1`,
@@ -55,7 +62,10 @@ export async function getInstrumentCalibrationStatus(instrumentId: string, clien
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
-export async function getCalibrationStatus(instrumentId: string, client?: PoolClient): Promise<CalibrationStatus | null> {
+export async function getCalibrationStatus(
+  instrumentId: string,
+  client?: PoolClient,
+): Promise<CalibrationStatus | null> {
   const row = await getInstrumentCalibrationStatus(instrumentId, client);
   return row?.calibration_status ?? null;
 }
@@ -90,7 +100,14 @@ export async function updateInstrumentCalibrationStatus(
          updated_at = now()
      WHERE instrument_id = $1
      RETURNING instrument_uuid, instrument_id, calibration_status, status_event_id, status_event_version, status_changed_by, status_changed_at, reason, updated_at`,
-    [input.instrument_id, input.calibration_status, input.status_event_id, input.status_event_version, input.status_changed_by, input.reason],
+    [
+      input.instrument_id,
+      input.calibration_status,
+      input.status_event_id,
+      input.status_event_version,
+      input.status_changed_by,
+      input.reason,
+    ],
   );
   return mapRow(result.rows[0]!);
 }

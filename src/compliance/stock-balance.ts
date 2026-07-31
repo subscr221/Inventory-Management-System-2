@@ -3,8 +3,16 @@ import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { getLocationById, getLocationByCode } from '../read/projections/location_register.js';
 import type { LocationRegisterEntry } from '../read/projections/location_register.js';
-import { applyStockReceipt, applyStockAllocation, applyStockIssue } from '../read/projections/stock_balance.js';
-import { assertConsignmentReceiptOwnership, SUPPLIER_OWNED_STOCK_CLASSES, OWNER_PARTY_CODE_REGEX } from './ownership.js';
+import {
+  applyStockReceipt,
+  applyStockAllocation,
+  applyStockIssue,
+} from '../read/projections/stock_balance.js';
+import {
+  assertConsignmentReceiptOwnership,
+  SUPPLIER_OWNED_STOCK_CLASSES,
+  OWNER_PARTY_CODE_REGEX,
+} from './ownership.js';
 
 /**
  * Central stock-balance seam (Story 2.2), split in two because the two halves run at different
@@ -48,8 +56,14 @@ const MAX_QUANTITY = 1e12;
 
 /** The DB-touching lookups, injectable so unit tests can exercise branching without a database. */
 export interface StockBalanceDeps {
-  getLocationById: (locationId: string, client?: PoolClient) => Promise<LocationRegisterEntry | null>;
-  getLocationByCode: (locationCode: string, client?: PoolClient) => Promise<LocationRegisterEntry | null>;
+  getLocationById: (
+    locationId: string,
+    client?: PoolClient,
+  ) => Promise<LocationRegisterEntry | null>;
+  getLocationByCode: (
+    locationCode: string,
+    client?: PoolClient,
+  ) => Promise<LocationRegisterEntry | null>;
 }
 
 const defaultDeps: StockBalanceDeps = {
@@ -63,7 +77,8 @@ export function stockBalanceEventKind(envelope: EventEnvelope): StockBalanceEven
   if (!kind) return null;
   const referencesMasters =
     envelope.payload['sku'] !== undefined &&
-    (envelope.payload['target_location_id'] !== undefined || envelope.payload['target_location_code'] !== undefined);
+    (envelope.payload['target_location_id'] !== undefined ||
+      envelope.payload['target_location_code'] !== undefined);
   return referencesMasters ? kind : null;
 }
 
@@ -82,16 +97,29 @@ export function assertStockBalanceShape(envelope: EventEnvelope): void {
   if (!kind) return;
 
   if (!isPositiveFiniteNumber(envelope.payload['quantity'])) {
-    throw new AppError(400, 'INVALID_PARAMS', 'quantity is required and must be a positive number for stock balance events', {
-      event_type: envelope.event_type,
-      quantity: envelope.payload['quantity'] ?? null,
-    });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'quantity is required and must be a positive number for stock balance events',
+      {
+        event_type: envelope.event_type,
+        quantity: envelope.payload['quantity'] ?? null,
+      },
+    );
   }
-  if (typeof envelope.payload['quantity'] === 'number' && envelope.payload['quantity'] > MAX_QUANTITY) {
-    throw new AppError(400, 'INVALID_PARAMS', `quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`, {
-      event_type: envelope.event_type,
-      quantity: envelope.payload['quantity'],
-    });
+  if (
+    typeof envelope.payload['quantity'] === 'number' &&
+    envelope.payload['quantity'] > MAX_QUANTITY
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`,
+      {
+        event_type: envelope.event_type,
+        quantity: envelope.payload['quantity'],
+      },
+    );
   }
   const targetLocationId = envelope.payload['target_location_id'];
   const targetLocationCode = envelope.payload['target_location_code'];
@@ -101,16 +129,30 @@ export function assertStockBalanceShape(envelope: EventEnvelope): void {
     });
   }
   if (targetLocationCode !== undefined && typeof targetLocationCode !== 'string') {
-    throw new AppError(400, 'INVALID_PARAMS', 'target_location_code must be a string when supplied', {
-      event_type: envelope.event_type,
-    });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'target_location_code must be a string when supplied',
+      {
+        event_type: envelope.event_type,
+      },
+    );
   }
   if (envelope.payload['available'] !== undefined) {
-    throw new AppError(400, 'INVALID_PARAMS', 'available is derived from the projection (on_hand - allocated) and must not be supplied', {
-      event_type: envelope.event_type,
-    });
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'available is derived from the projection (on_hand - allocated) and must not be supplied',
+      {
+        event_type: envelope.event_type,
+      },
+    );
   }
-  if (envelope.payload['lot_id'] !== undefined && (typeof envelope.payload['lot_id'] !== 'string' || envelope.payload['lot_id'].trim().length === 0)) {
+  if (
+    envelope.payload['lot_id'] !== undefined &&
+    (typeof envelope.payload['lot_id'] !== 'string' ||
+      envelope.payload['lot_id'].trim().length === 0)
+  ) {
     throw new AppError(400, 'INVALID_PARAMS', 'lot_id must be a non-empty string when supplied', {
       event_type: envelope.event_type,
     });
@@ -118,31 +160,50 @@ export function assertStockBalanceShape(envelope: EventEnvelope): void {
   if (kind === 'receipt' && envelope.payload['unit_cost'] !== undefined) {
     const unitCost = envelope.payload['unit_cost'];
     if (typeof unitCost !== 'number' || !Number.isFinite(unitCost) || unitCost < 0) {
-      throw new AppError(400, 'INVALID_PARAMS', 'unit_cost must be a non-negative number when supplied', {
-        event_type: envelope.event_type,
-      });
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'unit_cost must be a non-negative number when supplied',
+        {
+          event_type: envelope.event_type,
+        },
+      );
     }
   }
   if (envelope.payload['stock_class'] !== undefined) {
     const stockClass = envelope.payload['stock_class'];
     if (typeof stockClass !== 'string' || !VALID_STOCK_CLASSES.has(stockClass)) {
-      throw new AppError(400, 'INVALID_PARAMS', `stock_class must be one of: ${[...VALID_STOCK_CLASSES].join(', ')}`, {
-        event_type: envelope.event_type,
-        stock_class: stockClass,
-      });
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `stock_class must be one of: ${[...VALID_STOCK_CLASSES].join(', ')}`,
+        {
+          event_type: envelope.event_type,
+          stock_class: stockClass,
+        },
+      );
     }
     // Story 2.8: a supplier-owned receipt (consignment/vmi) must carry a well-formed
     // owner_party_code; the in-transaction gate then matches it against the active ownership
     // agreement. This is the non-DB half, so a malformed receipt never consumes an idempotency key.
     if (kind === 'receipt' && SUPPLIER_OWNED_STOCK_CLASSES.has(stockClass)) {
       const ownerPartyCode = envelope.payload['owner_party_code'];
-      const trimmedOwnerPartyCode = typeof ownerPartyCode === 'string' ? ownerPartyCode.trim() : ownerPartyCode;
-      if (typeof trimmedOwnerPartyCode !== 'string' || !OWNER_PARTY_CODE_REGEX.test(trimmedOwnerPartyCode)) {
-        throw new AppError(400, 'INVALID_PARAMS', `owner_party_code is required for a ${stockClass} receipt and must be 2-32 uppercase alphanumeric/hyphen characters`, {
-          event_type: envelope.event_type,
-          stock_class: stockClass,
-          owner_party_code: typeof ownerPartyCode === 'string' ? ownerPartyCode : null,
-        });
+      const trimmedOwnerPartyCode =
+        typeof ownerPartyCode === 'string' ? ownerPartyCode.trim() : ownerPartyCode;
+      if (
+        typeof trimmedOwnerPartyCode !== 'string' ||
+        !OWNER_PARTY_CODE_REGEX.test(trimmedOwnerPartyCode)
+      ) {
+        throw new AppError(
+          400,
+          'INVALID_PARAMS',
+          `owner_party_code is required for a ${stockClass} receipt and must be 2-32 uppercase alphanumeric/hyphen characters`,
+          {
+            event_type: envelope.event_type,
+            stock_class: stockClass,
+            owner_party_code: typeof ownerPartyCode === 'string' ? ownerPartyCode : null,
+          },
+        );
       }
       envelope.payload['owner_party_code'] = trimmedOwnerPartyCode;
     }
@@ -185,23 +246,35 @@ export async function applyStockBalanceProjection(
   if (!location) {
     // Normally unreachable - assertInventoryMasterReferences rejected unknown locations before
     // the transaction opened - but a concurrent hard delete must fail closed, not corrupt state.
-    throw new AppError(400, 'LOCATION_NOT_FOUND', 'The stock event target location is no longer registered', {
-      target_location_id: typeof targetLocationId === 'string' ? targetLocationId : null,
-      target_location_code: typeof targetLocationCode === 'string' ? targetLocationCode : null,
-    });
+    throw new AppError(
+      400,
+      'LOCATION_NOT_FOUND',
+      'The stock event target location is no longer registered',
+      {
+        target_location_id: typeof targetLocationId === 'string' ? targetLocationId : null,
+        target_location_code: typeof targetLocationCode === 'string' ? targetLocationCode : null,
+      },
+    );
   }
 
   const sku = envelope.payload['sku'] as string;
   const quantity = envelope.payload['quantity'] as string | number;
   const lotId = typeof envelope.payload['lot_id'] === 'string' ? envelope.payload['lot_id'] : null;
 
-  const stockClass = typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : 'owned';
+  const stockClass =
+    typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : 'owned';
 
   if (kind === 'receipt') {
     // Story 2.8: consignment/vmi receipts must match the single active ownership agreement for
     // their grain (owner-party validation) BEFORE any balance mutates. Runs here so every write
     // path - HTTP handler, direct POST /api/v1/events, edge upload - is gated identically.
-    await assertConsignmentReceiptOwnership(envelope, stockClass, sku, location.location_id, client);
+    await assertConsignmentReceiptOwnership(
+      envelope,
+      stockClass,
+      sku,
+      location.location_id,
+      client,
+    );
     await applyStockReceipt(
       {
         sku,
@@ -217,12 +290,22 @@ export async function applyStockBalanceProjection(
   }
 
   if (kind === 'allocation') {
-    await applyStockAllocation({ sku, location_id: location.location_id, lot_id: lotId, stock_class: stockClass, quantity }, client);
+    await applyStockAllocation(
+      { sku, location_id: location.location_id, lot_id: lotId, stock_class: stockClass, quantity },
+      client,
+    );
     return;
   }
 
   await applyStockIssue(
-    { sku, location_id: location.location_id, lot_id: lotId, stock_class: stockClass, quantity, occurred_at: envelope.metadata.occurred_at },
+    {
+      sku,
+      location_id: location.location_id,
+      lot_id: lotId,
+      stock_class: stockClass,
+      quantity,
+      occurred_at: envelope.metadata.occurred_at,
+    },
     client,
   );
 }

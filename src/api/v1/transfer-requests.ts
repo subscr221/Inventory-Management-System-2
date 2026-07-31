@@ -1,7 +1,12 @@
 import type { IncomingMessage } from 'node:http';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getParsedBody, getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getParsedBody,
+  getAuthContext,
+  getAuthorizedAssignment,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -97,7 +102,11 @@ function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[]): void {
       allowedRoles.includes(r.role),
   );
   if (!ok) {
-    throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
   }
 }
 
@@ -113,7 +122,11 @@ function assertWriteLocationAccess(req: IncomingMessage, locationId: string): vo
   }
   const { wildcard, locations } = permittedLocationsForModule(authContext.roles, 'inventory');
   if (!wildcard && !locations.has(locationId)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No role assignment grants access to location "${locationId}"`);
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No role assignment grants access to location "${locationId}"`,
+    );
   }
 }
 
@@ -152,9 +165,14 @@ async function resolveApprover(
   }
 
   if (!approver) {
-    throw new AppError(409, 'APPROVAL_UNRESOLVED', 'Transfer requires approval but no active approver could be resolved', {
-      transaction_type: transactionType,
-    });
+    throw new AppError(
+      409,
+      'APPROVAL_UNRESOLVED',
+      'Transfer requires approval but no active approver could be resolved',
+      {
+        transaction_type: transactionType,
+      },
+    );
   }
   return { requiresApproval: true, approverActorId: approver };
 }
@@ -171,23 +189,59 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
   }
 
   if (!isNonEmptyString(body['sku_id'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku_id is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku_id is required and must be a non-empty string',
+    );
     return;
   }
-  if (!isNonEmptyString(body['from_location_id']) || !UUID_REGEX.test(body['from_location_id'] as string)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'from_location_id is required and must be a valid UUID');
+  if (
+    !isNonEmptyString(body['from_location_id']) ||
+    !UUID_REGEX.test(body['from_location_id'] as string)
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'from_location_id is required and must be a valid UUID',
+    );
     return;
   }
-  if (!isNonEmptyString(body['to_location_id']) || !UUID_REGEX.test(body['to_location_id'] as string)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'to_location_id is required and must be a valid UUID');
+  if (
+    !isNonEmptyString(body['to_location_id']) ||
+    !UUID_REGEX.test(body['to_location_id'] as string)
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'to_location_id is required and must be a valid UUID',
+    );
     return;
   }
   if (!isPositiveFiniteNumber(body['quantity'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'quantity is required and must be a positive number');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'quantity is required and must be a positive number',
+    );
     return;
   }
   if (!isNonEmptyString(body['business_stream'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_stream is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'business_stream is required and must be a non-empty string',
+    );
     return;
   }
 
@@ -201,7 +255,13 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
   const notes = body['notes'] !== undefined ? (body['notes'] as string) : undefined;
 
   if (fromLocationId === toLocationId) {
-    sendRequestError(req, res, 400, 'INVALID_LOCATION', 'from_location_id and to_location_id must be different');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_LOCATION',
+      'from_location_id and to_location_id must be different',
+    );
     return;
   }
 
@@ -209,8 +269,17 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
   // stock twice (Story 2.5 review). Must be a UUID; defaults to a server-generated id.
   let transferRequestId: string;
   if (body['transfer_request_id'] !== undefined) {
-    if (!isNonEmptyString(body['transfer_request_id']) || !UUID_REGEX.test(body['transfer_request_id'] as string)) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID when supplied');
+    if (
+      !isNonEmptyString(body['transfer_request_id']) ||
+      !UUID_REGEX.test(body['transfer_request_id'] as string)
+    ) {
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'transfer_request_id must be a valid UUID when supplied',
+      );
       return;
     }
     transferRequestId = body['transfer_request_id'] as string;
@@ -249,40 +318,56 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
     // Validate within transaction for consistency
     const fromLocation = await getLocationById(fromLocationId, client);
     if (!fromLocation || fromLocation.status !== 'active') {
-      throw new AppError(400, 'LOCATION_NOT_FOUND', 'from_location_id does not exist or is not active', {
-        from_location_id: fromLocationId,
-      });
+      throw new AppError(
+        400,
+        'LOCATION_NOT_FOUND',
+        'from_location_id does not exist or is not active',
+        {
+          from_location_id: fromLocationId,
+        },
+      );
     }
 
     const toLocation = await getLocationById(toLocationId, client);
     if (!toLocation || toLocation.status !== 'active') {
-      throw new AppError(400, 'LOCATION_NOT_FOUND', 'to_location_id does not exist or is not active', {
-        to_location_id: toLocationId,
-      });
+      throw new AppError(
+        400,
+        'LOCATION_NOT_FOUND',
+        'to_location_id does not exist or is not active',
+        {
+          to_location_id: toLocationId,
+        },
+      );
     }
 
     const item = await getItemBySku(skuId);
     if (!item) {
-      throw new AppError(404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${skuId}"`, { sku: skuId });
+      throw new AppError(404, 'ITEM_NOT_FOUND', `No item master record exists for sku "${skuId}"`, {
+        sku: skuId,
+      });
     }
 
     // Validate lot if provided
     let validatedLotId: string | null = null;
     if (lotId) {
-      const lotResult = await client.query(
-        `SELECT lot_id, sku FROM lot_master WHERE lot_id = $1`,
-        [lotId],
-      );
+      const lotResult = await client.query(`SELECT lot_id, sku FROM lot_master WHERE lot_id = $1`, [
+        lotId,
+      ]);
       if (lotResult.rows.length === 0) {
         throw new AppError(400, 'LOT_NOT_FOUND', `Lot "${lotId}" not found`, { lot_id: lotId });
       }
       if (lotResult.rows[0].sku !== skuId) {
         // Distinct from AC6 receive-vs-ship LOT_MISMATCH (Story 2.5 review): this is a lot that
         // does not belong to the requested SKU at creation time.
-        throw new AppError(400, 'LOT_SKU_MISMATCH', `Lot "${lotId}" does not belong to SKU "${skuId}"`, {
-          lot_id: lotId,
-          sku_id: skuId,
-        });
+        throw new AppError(
+          400,
+          'LOT_SKU_MISMATCH',
+          `Lot "${lotId}" does not belong to SKU "${skuId}"`,
+          {
+            lot_id: lotId,
+            sku_id: skuId,
+          },
+        );
       }
       validatedLotId = lotId;
 
@@ -292,25 +377,40 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
           [serialIds],
         );
         if (serialResult.rows.length !== serialIds.length) {
-          const foundSet = new Set(serialResult.rows.map((s: { serial_number: string }) => s.serial_number));
+          const foundSet = new Set(
+            serialResult.rows.map((s: { serial_number: string }) => s.serial_number),
+          );
           const missing = serialIds.filter((s: string) => !foundSet.has(s));
-          throw new AppError(400, 'SERIAL_NOT_FOUND', `Serial numbers not found: ${missing.join(', ')}`, {
-            serial_ids: missing,
-          });
+          throw new AppError(
+            400,
+            'SERIAL_NOT_FOUND',
+            `Serial numbers not found: ${missing.join(', ')}`,
+            {
+              serial_ids: missing,
+            },
+          );
         }
         for (const s of serialResult.rows) {
           if (s.lot_id !== lotId) {
-            throw new AppError(400, 'SERIAL_NOT_AVAILABLE', `Serial "${s.serial_number}" does not belong to lot "${lotId}"`, {
-              serial_number: s.serial_number,
-              lot_id: lotId,
-            });
+            throw new AppError(
+              400,
+              'SERIAL_NOT_AVAILABLE',
+              `Serial "${s.serial_number}" does not belong to lot "${lotId}"`,
+              {
+                serial_number: s.serial_number,
+                lot_id: lotId,
+              },
+            );
           }
         }
       }
     }
 
     // DOA resolution with escalation fallback (Story 2.5 review).
-    const { requiresApproval, approverActorId } = await resolveApprover(TRANSFER_REQUEST_DOA_TYPE, quantity);
+    const { requiresApproval, approverActorId } = await resolveApprover(
+      TRANSFER_REQUEST_DOA_TYPE,
+      quantity,
+    );
 
     const status = requiresApproval ? 'pending_approval' : 'pending_shipment';
     const correlationId = randomUUID();
@@ -385,7 +485,11 @@ const getTransferRequestBase: RouteHandler = async (req, res, params) => {
 
   const { wildcard, locations } = permittedLocationsForModule(authContext.roles, 'inventory');
   if (!wildcard && !locations.has(row.from_location_id) && !locations.has(row.to_location_id)) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', 'No role assignment grants access to the locations in this transfer');
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      'No role assignment grants access to the locations in this transfer',
+    );
   }
 
   sendJson(res, 200, transferRequestRowToJson(row));
@@ -415,11 +519,23 @@ const listTransferRequestsBase: RouteHandler = async (req, res, _params) => {
 
   if (!wildcard) {
     if (fromLocationId && !locations.has(fromLocationId)) {
-      sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', 'No access to the specified from_location_id');
+      sendRequestError(
+        req,
+        res,
+        403,
+        'LOCATION_ACCESS_DENIED',
+        'No access to the specified from_location_id',
+      );
       return;
     }
     if (toLocationId && !locations.has(toLocationId)) {
-      sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', 'No access to the specified to_location_id');
+      sendRequestError(
+        req,
+        res,
+        403,
+        'LOCATION_ACCESS_DENIED',
+        'No access to the specified to_location_id',
+      );
       return;
     }
     if (!fromLocationId && !toLocationId) {
@@ -428,13 +544,13 @@ const listTransferRequestsBase: RouteHandler = async (req, res, _params) => {
     }
   }
 
-const rows = await getTransferRequests({
-     from_location_id: filteredFrom,
-     to_location_id: filteredTo,
-     ...(locationAny !== null ? { location_any: locationAny } : {}),
-     ...(status !== null ? { status } : {}),
-     ...(skuId !== null ? { sku_id: skuId } : {}),
-   });
+  const rows = await getTransferRequests({
+    from_location_id: filteredFrom,
+    to_location_id: filteredTo,
+    ...(locationAny !== null ? { location_any: locationAny } : {}),
+    ...(status !== null ? { status } : {}),
+    ...(skuId !== null ? { sku_id: skuId } : {}),
+  });
 
   sendJson(res, 200, rows.map(transferRequestRowToJson));
 };
@@ -487,20 +603,32 @@ const approveTransferRequestBase: RouteHandler = async (req, res, params) => {
     }
 
     if (row.status !== 'pending_approval') {
-      throw new AppError(400, 'INVALID_STATE', `Transfer request is in status "${row.status}", expected "pending_approval"`);
+      throw new AppError(
+        400,
+        'INVALID_STATE',
+        `Transfer request is in status "${row.status}", expected "pending_approval"`,
+      );
     }
 
     if (row.approver_actor_id !== actor.userId) {
-      throw new AppError(403, 'APPROVAL_REQUIRED', 'Caller is not the resolved approver for this transfer request', {
-        approver_actor_id: row.approver_actor_id,
-        caller_user_id: actor.userId,
-      });
+      throw new AppError(
+        403,
+        'APPROVAL_REQUIRED',
+        'Caller is not the resolved approver for this transfer request',
+        {
+          approver_actor_id: row.approver_actor_id,
+          caller_user_id: actor.userId,
+        },
+      );
     }
 
     const correlationId = randomUUID();
 
     // Update status to approved within the event transaction
-    await client.query('UPDATE transfer_request SET status = $1 WHERE transfer_request_id = $2', ['approved', id]);
+    await client.query('UPDATE transfer_request SET status = $1 WHERE transfer_request_id = $2', [
+      'approved',
+      id,
+    ]);
 
     await persistEvent(
       {
@@ -580,20 +708,32 @@ const rejectTransferRequestBase: RouteHandler = async (req, res, params) => {
     }
 
     if (row.status !== 'pending_approval') {
-      throw new AppError(400, 'INVALID_STATE', `Transfer request is in status "${row.status}", expected "pending_approval"`);
+      throw new AppError(
+        400,
+        'INVALID_STATE',
+        `Transfer request is in status "${row.status}", expected "pending_approval"`,
+      );
     }
 
     if (row.approver_actor_id !== actor.userId) {
-      throw new AppError(403, 'APPROVAL_REQUIRED', 'Caller is not the resolved approver for this transfer request', {
-        approver_actor_id: row.approver_actor_id,
-        caller_user_id: actor.userId,
-      });
+      throw new AppError(
+        403,
+        'APPROVAL_REQUIRED',
+        'Caller is not the resolved approver for this transfer request',
+        {
+          approver_actor_id: row.approver_actor_id,
+          caller_user_id: actor.userId,
+        },
+      );
     }
 
     const correlationId = randomUUID();
 
     // Update status to rejected
-    await client.query('UPDATE transfer_request SET status = $1 WHERE transfer_request_id = $2', ['rejected', id]);
+    await client.query('UPDATE transfer_request SET status = $1 WHERE transfer_request_id = $2', [
+      'rejected',
+      id,
+    ]);
 
     // Revert the allocation: decrease allocated to return the quantity to available
     await client.query(
@@ -665,12 +805,19 @@ const shipTransferRequestBase: RouteHandler = async (req, res, params) => {
   const actor = actorContext(req);
 
   if (!body || !isNonEmptyString(body['lot_id'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'lot_id is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'lot_id is required and must be a non-empty string',
+    );
     return;
   }
   const lotId = body['lot_id'] as string;
 
-  const shippedQuantity = body['shipped_quantity'] !== undefined ? (body['shipped_quantity'] as number) : undefined;
+  const shippedQuantity =
+    body['shipped_quantity'] !== undefined ? (body['shipped_quantity'] as number) : undefined;
   const serialIds = body['serial_ids'] !== undefined ? (body['serial_ids'] as string[]) : undefined;
   const notes = body['notes'] !== undefined ? (body['notes'] as string) : undefined;
 
@@ -691,43 +838,58 @@ const shipTransferRequestBase: RouteHandler = async (req, res, params) => {
     assertWriteLocationAccess(req, row.from_location_id);
 
     if (row.status !== 'approved' && row.status !== 'pending_shipment') {
-      throw new AppError(403, 'APPROVAL_REQUIRED', 'Transfer request must be approved before shipping', {
-        current_status: row.status,
-      });
+      throw new AppError(
+        403,
+        'APPROVAL_REQUIRED',
+        'Transfer request must be approved before shipping',
+        {
+          current_status: row.status,
+        },
+      );
     }
 
     // AC5: Quantity check
     const shipQty = shippedQuantity ?? row.quantity;
     if (shipQty > row.quantity) {
-      throw new AppError(400, 'QUANTITY_EXCEEDS_APPROVED', `Shipped quantity ${shipQty} exceeds approved quantity ${row.quantity}`, {
-        approved_quantity: row.quantity,
-        requested_quantity: shipQty,
-      });
+      throw new AppError(
+        400,
+        'QUANTITY_EXCEEDS_APPROVED',
+        `Shipped quantity ${shipQty} exceeds approved quantity ${row.quantity}`,
+        {
+          approved_quantity: row.quantity,
+          requested_quantity: shipQty,
+        },
+      );
     }
 
     // Lot matching (ship side)
     if (row.lot_id && row.lot_id !== lotId) {
-      throw new AppError(400, 'LOT_MISMATCH', `Ship lot_id "${lotId}" does not match request lot_id "${row.lot_id}"`, {
-        request_lot_id: row.lot_id,
-        ship_lot_id: lotId,
-      });
+      throw new AppError(
+        400,
+        'LOT_MISMATCH',
+        `Ship lot_id "${lotId}" does not match request lot_id "${row.lot_id}"`,
+        {
+          request_lot_id: row.lot_id,
+          ship_lot_id: lotId,
+        },
+      );
     }
 
     const correlationId = randomUUID();
 
-const envelope = {
-       stream_type: 'inventory',
-       stream_id: id,
-       event_type: 'transfer_ship.created',
-       payload: {
-         transfer_request_id: id,
-         shipped_quantity: shipQty,
-         lot_id: lotId,
-         ...(serialIds ? { serial_ids: serialIds } : {}),
-         ...(notes ? { notes } : {}),
-         correlation_id: correlationId,
-         business_stream: row.business_stream,
-       },
+    const envelope = {
+      stream_type: 'inventory',
+      stream_id: id,
+      event_type: 'transfer_ship.created',
+      payload: {
+        transfer_request_id: id,
+        shipped_quantity: shipQty,
+        lot_id: lotId,
+        ...(serialIds ? { serial_ids: serialIds } : {}),
+        ...(notes ? { notes } : {}),
+        correlation_id: correlationId,
+        business_stream: row.business_stream,
+      },
       metadata: {
         correlation_id: correlationId,
         actor: {
@@ -743,13 +905,13 @@ const envelope = {
     await client.query('COMMIT');
     committed = true;
 
-sendJson(res, 201, {
-       transfer_request_id: id,
-       status: 'shipped',
-       lot_id: lotId,
-       shipped_quantity: shipQty,
-       correlation_id: correlationId,
-     });
+    sendJson(res, 201, {
+      transfer_request_id: id,
+      status: 'shipped',
+      lot_id: lotId,
+      shipped_quantity: shipQty,
+      correlation_id: correlationId,
+    });
   } catch (err: unknown) {
     if (!committed) await client.query('ROLLBACK');
     throw err;
@@ -773,15 +935,26 @@ const receiveTransferRequestBase: RouteHandler = async (req, res, params) => {
   const actor = actorContext(req);
 
   if (!body || !isNonEmptyString(body['lot_id'])) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'lot_id is required and must be a non-empty string');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'lot_id is required and must be a non-empty string',
+    );
     return;
   }
   const lotId = body['lot_id'] as string;
 
-  const receivedQuantity = body['received_quantity'] !== undefined ? (body['received_quantity'] as number) : undefined;
+  const receivedQuantity =
+    body['received_quantity'] !== undefined ? (body['received_quantity'] as number) : undefined;
   const serialIds = body['serial_ids'] !== undefined ? (body['serial_ids'] as string[]) : undefined;
-  const receivedAtLocationId = body['received_at_location_id'] !== undefined ? (body['received_at_location_id'] as string) : undefined;
-  const receivedDate = body['received_date'] !== undefined ? (body['received_date'] as string) : undefined;
+  const receivedAtLocationId =
+    body['received_at_location_id'] !== undefined
+      ? (body['received_at_location_id'] as string)
+      : undefined;
+  const receivedDate =
+    body['received_date'] !== undefined ? (body['received_date'] as string) : undefined;
   const notes = body['notes'] !== undefined ? (body['notes'] as string) : undefined;
 
   assertRoleAllowed(req, SHIP_RECEIVE_ROLES);
@@ -801,22 +974,36 @@ const receiveTransferRequestBase: RouteHandler = async (req, res, params) => {
     assertWriteLocationAccess(req, row.to_location_id);
 
     if (row.status !== 'shipped' && row.status !== 'partially_received') {
-      throw new AppError(400, 'INVALID_STATE', `Transfer request must be in "shipped" or "partially_received" status, current status is "${row.status}"`);
+      throw new AppError(
+        400,
+        'INVALID_STATE',
+        `Transfer request must be in "shipped" or "partially_received" status, current status is "${row.status}"`,
+      );
     }
 
     const receiveLocationId = receivedAtLocationId ?? row.to_location_id;
     if (receiveLocationId !== row.to_location_id) {
-      throw new AppError(400, 'INVALID_LOCATION', `Receive location does not match the approved destination location`, {
-        expected_location_id: row.to_location_id,
-        received_location_id: receiveLocationId,
-      });
+      throw new AppError(
+        400,
+        'INVALID_LOCATION',
+        `Receive location does not match the approved destination location`,
+        {
+          expected_location_id: row.to_location_id,
+          received_location_id: receiveLocationId,
+        },
+      );
     }
 
     const receiveLocation = await getLocationById(receiveLocationId, client);
     if (!receiveLocation || receiveLocation.status !== 'active') {
-      throw new AppError(400, 'LOCATION_NOT_FOUND', 'Receive location does not exist or is not active', {
-        location_id: receiveLocationId,
-      });
+      throw new AppError(
+        400,
+        'LOCATION_NOT_FOUND',
+        'Receive location does not exist or is not active',
+        {
+          location_id: receiveLocationId,
+        },
+      );
     }
 
     // Default the received quantity to what actually remains in transit (not the originally
@@ -828,24 +1015,29 @@ const receiveTransferRequestBase: RouteHandler = async (req, res, params) => {
     // lot-less request differs from the (null) request lot (Story 2.5 review).
     const shippedLot = inTransitRow?.lot_id ?? row.lot_id;
     if (lotId !== shippedLot) {
-      throw new AppError(400, 'LOT_MISMATCH', `Receive lot_id "${lotId}" does not match shipped lot_id "${shippedLot}"`, {
-        ship_lot_id: shippedLot,
-        receive_lot_id: lotId,
-      });
+      throw new AppError(
+        400,
+        'LOT_MISMATCH',
+        `Receive lot_id "${lotId}" does not match shipped lot_id "${shippedLot}"`,
+        {
+          ship_lot_id: shippedLot,
+          receive_lot_id: lotId,
+        },
+      );
     }
 
     // AC3: reuse the ship event's correlation_id so ship and receive share one trace id
     // (Story 2.5 review); fall back to a fresh id only if the tracking row is unexpectedly absent.
     const correlationId = inTransitRow?.correlation_id ?? randomUUID();
 
-const envelope = {
-       stream_type: 'inventory',
-       stream_id: id,
-       event_type: 'transfer_receive.created',
-       payload: {
-         transfer_request_id: id,
-         received_quantity: receiveQty,
-         lot_id: lotId,
+    const envelope = {
+      stream_type: 'inventory',
+      stream_id: id,
+      event_type: 'transfer_receive.created',
+      payload: {
+        transfer_request_id: id,
+        received_quantity: receiveQty,
+        lot_id: lotId,
         ...(serialIds ? { serial_ids: serialIds } : {}),
         received_at_location_id: receiveLocationId,
         ...(receivedDate ? { received_date: receivedDate } : {}),
@@ -871,13 +1063,13 @@ const envelope = {
     await client.query('COMMIT');
     committed = true;
 
-sendJson(res, 201, {
-       transfer_request_id: id,
-       status: finalRow?.status ?? 'received',
-       lot_id: lotId,
-       received_quantity: receiveQty,
-       correlation_id: correlationId,
-     });
+    sendJson(res, 201, {
+      transfer_request_id: id,
+      status: finalRow?.status ?? 'received',
+      lot_id: lotId,
+      received_quantity: receiveQty,
+      correlation_id: correlationId,
+    });
   } catch (err: unknown) {
     if (!committed) await client.query('ROLLBACK');
     throw err;
@@ -893,7 +1085,13 @@ sendJson(res, 201, {
 const getInTransitBase: RouteHandler = async (req, res, params) => {
   const sku = params['sku'];
   if (!sku || !SKU_REGEX.test(sku)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku path parameter must be 1-64 URL-safe characters');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sku path parameter must be 1-64 URL-safe characters',
+    );
     return;
   }
 

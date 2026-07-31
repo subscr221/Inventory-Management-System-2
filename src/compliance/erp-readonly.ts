@@ -15,9 +15,14 @@ import { AppError } from '../middleware/error.js';
  */
 export function assertErpReadOnly(envelope: EventEnvelope): void {
   if (envelope.stream_type === 'erp' || envelope.event_type.startsWith('erp.')) {
-    throw new AppError(405, 'SOURCE_SYSTEM_READ_ONLY', 'ERP reference data is read-only on this platform; corrections are made in the ERP and arrive on the next sync', {
-      stream_type: envelope.stream_type,
-      event_type: envelope.event_type,
-    });
+    throw new AppError(
+      405,
+      'SOURCE_SYSTEM_READ_ONLY',
+      'ERP reference data is read-only on this platform; corrections are made in the ERP and arrive on the next sync',
+      {
+        stream_type: envelope.stream_type,
+        event_type: envelope.event_type,
+      },
+    );
   }
 }

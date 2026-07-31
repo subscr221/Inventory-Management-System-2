@@ -13,7 +13,14 @@ import { AppError } from '../../middleware/error.js';
 export const LOCATION_LEVELS = ['site', 'zone', 'aisle', 'rack', 'bin'] as const;
 export type LocationLevel = (typeof LOCATION_LEVELS)[number];
 
-export const ZONE_TYPES = ['general', 'hazmat', 'quarantine', 'staging', 'forward_pick', 'reserve'] as const;
+export const ZONE_TYPES = [
+  'general',
+  'hazmat',
+  'quarantine',
+  'staging',
+  'forward_pick',
+  'reserve',
+] as const;
 export type ZoneType = (typeof ZONE_TYPES)[number];
 
 export const TEMPERATURE_CLASSES = ['ambient', 'cold', 'frozen'] as const;
@@ -135,7 +142,11 @@ export async function findRestrictedAncestorById(
 
 function assertRestrictedZoneActor(actor?: LocationWriteActor): void {
   if (actor && (RESTRICTED_ZONE_ACCESS_ROLES as readonly string[]).includes(actor.role)) return;
-  throw new AppError(403, 'ZONE_ACCESS_RESTRICTED', 'Only restricted-zone roles may change access_restricted');
+  throw new AppError(
+    403,
+    'ZONE_ACCESS_RESTRICTED',
+    'Only restricted-zone roles may change access_restricted',
+  );
 }
 
 export async function assertLocationWritable(

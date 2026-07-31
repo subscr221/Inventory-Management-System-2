@@ -39,7 +39,10 @@ export async function runExpiryCycle(): Promise<ExpiryCycleResult> {
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
-    const expiredRows = await expireStaleNotifications(config.notify.notificationRetentionDays, client);
+    const expiredRows = await expireStaleNotifications(
+      config.notify.notificationRetentionDays,
+      client,
+    );
 
     for (const row of expiredRows) {
       await persistEvent(
@@ -71,7 +74,10 @@ export async function runExpiryCycle(): Promise<ExpiryCycleResult> {
     return { expired: expiredRows.length };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined);
-    console.error('Notification expiry cycle failed - rolled back, rows will be swept again next cycle:', err);
+    console.error(
+      'Notification expiry cycle failed - rolled back, rows will be swept again next cycle:',
+      err,
+    );
     return { expired: 0 };
   } finally {
     client.release();

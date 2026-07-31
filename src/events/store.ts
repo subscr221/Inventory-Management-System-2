@@ -9,9 +9,18 @@ import { assertInventoryTagging } from '../compliance/business-stream.js';
 import { assertCalibrationLockout } from '../compliance/calibration.js';
 import { assertLocationInvariant } from '../compliance/location.js';
 import { assertInventoryMasterReferences } from '../compliance/inventory-master.js';
-import { assertStockBalanceShape, applyStockBalanceProjection } from '../compliance/stock-balance.js';
-import { assertLotSerialShape, applyLotSerialValidation } from '../compliance/lot-serial-validation.js';
-import { assertValuationShape, applyInventoryValuationProjection } from '../compliance/inventory-valuation.js';
+import {
+  assertStockBalanceShape,
+  applyStockBalanceProjection,
+} from '../compliance/stock-balance.js';
+import {
+  assertLotSerialShape,
+  applyLotSerialValidation,
+} from '../compliance/lot-serial-validation.js';
+import {
+  assertValuationShape,
+  applyInventoryValuationProjection,
+} from '../compliance/inventory-valuation.js';
 import {
   assertTransferRequestShape,
   assertTransferShipShape,
@@ -21,17 +30,31 @@ import {
   applyTransferReceiveProjection,
 } from '../compliance/transfer-request.js';
 import { assertCycleCountShape, applyCycleCountProjection } from '../compliance/cycle-count.js';
-import { assertInventoryPlanningShape, applyInventoryPlanningProjection } from '../compliance/inventory-planning.js';
+import {
+  assertInventoryPlanningShape,
+  applyInventoryPlanningProjection,
+} from '../compliance/inventory-planning.js';
 import { assertOwnershipShape, applyOwnershipProjection } from '../compliance/ownership.js';
-import { assertGateEnteredShape, assertGateReversedShape, applyGateProjection } from '../compliance/gate.js';
-import { assertWeighbridgeRecordedShape, applyWeighbridgeProjection } from '../compliance/weighbridge.js';
+import {
+  assertGateEnteredShape,
+  assertGateReversedShape,
+  applyGateProjection,
+} from '../compliance/gate.js';
+import {
+  assertWeighbridgeRecordedShape,
+  applyWeighbridgeProjection,
+} from '../compliance/weighbridge.js';
 import {
   assertGoodsReceivedShape,
   assertGoodsPutawayReleasedShape,
   applyGoodsReceivedProjection,
   applyGoodsPutawayReleasedProjection,
 } from '../compliance/receiving.js';
-import { assertPutawayCompletedShape, assertLocationOverrideShape, applyPutawayCompletedProjection } from '../compliance/putaway.js';
+import {
+  assertPutawayCompletedShape,
+  assertLocationOverrideShape,
+  applyPutawayCompletedProjection,
+} from '../compliance/putaway.js';
 import {
   assertPickTaskCreatedShape,
   assertPickLineConfirmedShape,
@@ -145,74 +168,153 @@ export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
   }
 
   if (!isNonEmptyString(obj['stream_type'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'stream_type is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'stream_type is required and must be a non-empty string',
+    );
   }
 
   if (!isUuid(obj['stream_id'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'stream_id is required and must be a valid UUID');
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'stream_id is required and must be a valid UUID',
+    );
   }
 
   if (!isNonEmptyString(obj['event_type'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'event_type is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'event_type is required and must be a non-empty string',
+    );
   }
 
-  if (obj['event_version'] !== undefined && (!Number.isInteger(obj['event_version']) || (obj['event_version'] as number) <= 0)) {
+  if (
+    obj['event_version'] !== undefined &&
+    (!Number.isInteger(obj['event_version']) || (obj['event_version'] as number) <= 0)
+  ) {
     throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'event_version must be a positive integer');
   }
 
-  if (obj['schema_version'] !== undefined && (!Number.isInteger(obj['schema_version']) || (obj['schema_version'] as number) <= 0)) {
+  if (
+    obj['schema_version'] !== undefined &&
+    (!Number.isInteger(obj['schema_version']) || (obj['schema_version'] as number) <= 0)
+  ) {
     throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'schema_version must be a positive integer');
   }
 
-  if (obj['idempotency_key'] !== undefined && obj['idempotency_key'] !== null && typeof obj['idempotency_key'] !== 'string') {
+  if (
+    obj['idempotency_key'] !== undefined &&
+    obj['idempotency_key'] !== null &&
+    typeof obj['idempotency_key'] !== 'string'
+  ) {
     throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'idempotency_key must be a string or null');
   }
 
-  if (typeof obj['payload'] !== 'object' || obj['payload'] === null || Array.isArray(obj['payload'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'payload is required and must be a JSON object');
+  if (
+    typeof obj['payload'] !== 'object' ||
+    obj['payload'] === null ||
+    Array.isArray(obj['payload'])
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'payload is required and must be a JSON object',
+    );
   }
 
-  if (typeof obj['metadata'] !== 'object' || obj['metadata'] === null || Array.isArray(obj['metadata'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata is required and must be a JSON object');
+  if (
+    typeof obj['metadata'] !== 'object' ||
+    obj['metadata'] === null ||
+    Array.isArray(obj['metadata'])
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata is required and must be a JSON object',
+    );
   }
 
   const meta = obj['metadata'] as Record<string, unknown>;
 
   if (!isUuid(meta['correlation_id'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.correlation_id is required and must be a valid UUID');
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata.correlation_id is required and must be a valid UUID',
+    );
   }
 
   if (typeof meta['actor'] !== 'object' || meta['actor'] === null || Array.isArray(meta['actor'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.actor is required and must be an object');
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata.actor is required and must be an object',
+    );
   }
 
   const actor = meta['actor'] as Record<string, unknown>;
   if (!isUuid(actor['user_id'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.actor.user_id is required and must be a valid UUID');
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata.actor.user_id is required and must be a valid UUID',
+    );
   }
   if (!isNonEmptyString(actor['role'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.actor.role is required and must be a non-empty string');
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata.actor.role is required and must be a non-empty string',
+    );
   }
   if (!isUuid(actor['location_id'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.actor.location_id is required and must be a valid UUID');
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata.actor.location_id is required and must be a valid UUID',
+    );
   }
 
   const ISO8601_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
   if (typeof meta['occurred_at'] !== 'string' || !ISO8601_REGEX.test(meta['occurred_at'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.occurred_at is required and must be a valid ISO-8601 timestamp');
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata.occurred_at is required and must be a valid ISO-8601 timestamp',
+    );
   }
 
-  if (meta['causation_id'] !== undefined && meta['causation_id'] !== null && !isUuid(meta['causation_id'])) {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.causation_id must be a valid UUID or null');
+  if (
+    meta['causation_id'] !== undefined &&
+    meta['causation_id'] !== null &&
+    !isUuid(meta['causation_id'])
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata.causation_id must be a valid UUID or null',
+    );
   }
 
-  if (meta['capture_method'] !== undefined && meta['capture_method'] !== 'AUTO' && meta['capture_method'] !== 'MANUAL') {
-    throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'metadata.capture_method must be AUTO or MANUAL');
+  if (
+    meta['capture_method'] !== undefined &&
+    meta['capture_method'] !== 'AUTO' &&
+    meta['capture_method'] !== 'MANUAL'
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata.capture_method must be AUTO or MANUAL',
+    );
   }
 }
 
 function mapRowToEvent(row: Record<string, unknown>): PersistedEvent {
-  const createdAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  const createdAt =
+    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
   return {
     event_id: row['event_id'] as string,
     stream_type: row['stream_type'] as string,
@@ -253,7 +355,7 @@ export async function persistEvent(
   // Story 2.3: lot/serial shape validation is non-DB and runs with the other pre-transaction
   // asserts, so a malformed lot/serial event never consumes an idempotency key.
   assertLotSerialShape(envelope);
-// Story 2.4: valuation shape validation (NRV write-down/recovery/standard-cost-variance payload
+  // Story 2.4: valuation shape validation (NRV write-down/recovery/standard-cost-variance payload
   // fields) is non-DB and runs with the other pre-transaction asserts, so a malformed valuation
   // event never consumes an idempotency key. stock.received/stock.issued unit_cost shape is
   // already covered by assertStockBalanceShape above.
@@ -315,7 +417,9 @@ export async function persistEvent(
     assertDispatchPackedShape(envelope as unknown as DispatchPackedEnvelope);
   }
   if (envelope.event_type === 'dispatch.shipping_documents_generated') {
-    assertDispatchShippingDocumentsGeneratedShape(envelope as unknown as DispatchShippingDocumentsGeneratedEnvelope);
+    assertDispatchShippingDocumentsGeneratedShape(
+      envelope as unknown as DispatchShippingDocumentsGeneratedEnvelope,
+    );
   }
   if (envelope.event_type === 'dispatch.dispatched') {
     assertDispatchDispatchedShape(envelope as unknown as DispatchDispatchedEnvelope);
@@ -347,7 +451,9 @@ export async function persistEvent(
     assertReplenishmentTaskAssignedShape(envelope as unknown as ReplenishmentTaskAssignedEnvelope);
   }
   if (envelope.event_type === 'replenishment_task.completed') {
-    assertReplenishmentTaskCompletedShape(envelope as unknown as ReplenishmentTaskCompletedEnvelope);
+    assertReplenishmentTaskCompletedShape(
+      envelope as unknown as ReplenishmentTaskCompletedEnvelope,
+    );
   }
   assertCrossDockEventShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
@@ -404,120 +510,174 @@ export async function persistEvent(
     // BEFORE the domain_events insert below - a rejected write-down/recovery therefore writes no
     // event row and consumes no idempotency key (Dev Notes: Valuation Design Guardrails).
     await applyInventoryValuationProjection(envelope, client, eventId);
-// Story 2.5: transfer-request, ship, and receive enforcement run inside the
-      // same transaction as the domain_events insert so that allocation and event commit atomically.
-      await applyTransferRequestProjection(envelope, client);
-      await applyTransferShipProjection(envelope, client, eventId);
-      await applyTransferReceiveProjection(envelope, client);
-      // Story 2.6: cycle-count variance computation, DOA-gated adjustment lifecycle, approved
-      // stock adjustments, and physical-verification evidence run inside this same transaction so
-      // the projection and the domain_events insert commit or roll back together. The AC2 guard
-      // (stock.adjusted requires an approved adjustment) lives in applyCycleCountProjection.
-      await applyCycleCountProjection(envelope, client, eventId);
-      // Story 2.7: inventory-planning params, safety-stock/reorder-point computation, replenishment
-      // recommendation, and obsolescence flag/clear run inside this same transaction so the
-      // projection and the domain_events insert commit or roll back together. The reorder-crossing
-      // and obsolescence-transition decisions (and their transactional planner alerts) live in the
-      // planning jobs, which hold the params/flag row lock across read -> decide -> persist.
-      await applyInventoryPlanningProjection(envelope, client, eventId);
-      // Story 2.8: ownership agreement upsert (consignment/VMI segregation config) runs inside this
-      // same transaction so the registry row and the domain_events insert commit or roll back
-      // together. Receipt-side owner-party enforcement lives in applyStockBalanceProjection above.
-      await applyOwnershipProjection(envelope, client);
-      await applyGateProjection(envelope, client, eventId);
-      // Story 3.3: weighbridge tolerance enforcement resolves the binding token to its gate event,
-      // enforces the site match, computes the tolerance band against the Story 2.9 open-PO line in
-      // SQL NUMERIC, and upserts the weighbridge_event row inside this same transaction.
-      await applyWeighbridgeProjection(envelope, client, eventId);
-      // Story 3.4: goods receiving consumes the accepted-weighment binding token, computes the PO
-      // tolerance band in SQL NUMERIC, routes QC-hold/quarantine/over-tolerance outcomes, and posts
-      // stock through a synthetic stock.received view - all inside this same transaction so the GRN
-      // line, the stock movement, and the domain_events insert commit or roll back together.
-      await applyGoodsReceivedProjection(envelope, client, eventId);
-      await applyGoodsPutawayReleasedProjection(envelope, client, eventId);
-      // Story 3.5: putaway completion records the actual location and any override against the directed
-      // suggestion, updates the Story 1.6 location asserted/expected facts, and completes the putaway
-      // task - all inside this same transaction so the location facts and the domain_events insert
-      // commit or roll back together.
-      if (envelope.event_type === 'putaway.completed') {
-        const payload = envelope.payload as Record<string, unknown>;
-        await applyPutawayCompletedProjection(
-          {
-            putawayTaskId: payload.putaway_task_id as string,
-            actualLocationId: payload.actual_location_id as string | undefined,
-            actualLocationCode: payload.actual_location_code as string | undefined,
-            overrideReasonCode: payload.override_reason_code as string | undefined,
-            overrideConfidence: payload.override_confidence as 'certain' | 'uncertain' | undefined,
-            completedBy: payload.completed_by as string,
-            eventId,
-          },
-          client,
-        );
-      }
-      // Story 3.6: pick task creation inserts the task + pick lines and allocates stock; pick line
-      // confirmation records the picked lot (with substitution release/reallocate); pick task
-      // completion enforces all-lines-confirmed, notifies packing, and flags the dispatch order
-      // picked - all inside this same transaction so the projections, the stock allocation, and
-      // the domain_events insert commit or roll back together.
-      if (envelope.event_type === 'pick_task.created') {
-        await applyPickTaskCreatedProjection(envelope as unknown as PickTaskCreatedEnvelope, client, eventId);
-      }
-      if (envelope.event_type === 'pick_line.confirmed') {
-        await applyPickLineConfirmedProjection(envelope as unknown as PickLineConfirmedEnvelope, client, eventId);
-      }
-      if (envelope.event_type === 'pick_task.completed') {
-        await applyPickTaskCompletedProjection(envelope as unknown as PickTaskCompletedEnvelope, client, eventId);
-      }
-      // Story 3.7: dispatch operations - packing validation, document generation with LOT_ON_HOLD
-      // check, dispatch confirmation with stock decrement - all inside this same transaction so
-      // projections, stock movement, and domain_events insert commit or roll back together.
-      if (envelope.event_type === 'dispatch.packed') {
-        await applyDispatchPackedProjection(envelope as unknown as DispatchPackedEnvelope, client, eventId);
-      }
-      if (envelope.event_type === 'dispatch.shipping_documents_generated') {
-        await applyDispatchShippingDocumentsGeneratedProjection(envelope as unknown as DispatchShippingDocumentsGeneratedEnvelope, client, eventId);
-      }
-      if (envelope.event_type === 'dispatch.dispatched') {
-        await applyDispatchDispatchedProjection(envelope as unknown as DispatchDispatchedEnvelope, client, eventId);
-      }
-      // Story 3.8: the task SLA threshold registry upsert, plus the supervisor-only SOD gate that
-      // governs it. The gate lives in the seam, not only in the HTTP handler, so a direct
-      // POST /api/v1/events call cannot change what counts as an SLA breach.
-      if (envelope.event_type === 'task_sla_config.updated') {
-        await applyTaskSlaConfigUpdatedProjection(envelope as unknown as TaskSlaConfigUpdatedEnvelope, client, eventId);
-      }
-      // Story 3.8 code review: assignment is a domain event rather than a direct read-model write,
-      // so it replays, audits, and passes the same supervisor SOD gate as the threshold registry.
-      if (envelope.event_type === 'putaway_task.assigned') {
-        await applyPutawayTaskAssignedProjection(envelope as unknown as PutawayTaskAssignedEnvelope, client);
-      }
-      if (envelope.event_type === 'pick_task.assigned') {
-        await applyPickTaskAssignedProjection(envelope as unknown as PickTaskAssignedEnvelope, client);
-      }
-      // Story 3.9: forward-pick config upsert, replenishment task creation, and task completion
-      // (which moves stock via applyStockIssue/applyStockReceipt directly) - all inside this same
-      // transaction so the projections, the stock movement, and the domain_events insert commit or
-      // roll back together.
-      if (envelope.event_type === 'forward_pick_config.updated') {
-        await applyForwardPickConfigUpdatedProjection(envelope as unknown as ForwardPickConfigUpdatedEnvelope, client);
-      }
-      if (envelope.event_type === 'replenishment_task.created') {
-        await applyReplenishmentTaskCreatedProjection(envelope as unknown as ReplenishmentTaskCreatedEnvelope, client, eventId);
-      }
-      if (envelope.event_type === 'replenishment_task.assigned') {
-        await applyReplenishmentTaskAssignedProjection(envelope as unknown as ReplenishmentTaskAssignedEnvelope, client);
-      }
-       if (envelope.event_type === 'replenishment_task.completed') {
-         await applyReplenishmentTaskCompletedProjection(envelope as unknown as ReplenishmentTaskCompletedEnvelope, client);
-       }
-       if (envelope.event_type === 'cross_dock_task.assigned') {
-         await applyCrossDockTaskAssignedProjection(envelope as unknown as CrossDockTaskAssignedEnvelope, client);
-       }
-       if (envelope.event_type === 'cross_dock_task.completed') {
-         await applyCrossDockTaskCompletedProjection(envelope as unknown as CrossDockTaskCompletedEnvelope, client, eventId);
-       }
+    // Story 2.5: transfer-request, ship, and receive enforcement run inside the
+    // same transaction as the domain_events insert so that allocation and event commit atomically.
+    await applyTransferRequestProjection(envelope, client);
+    await applyTransferShipProjection(envelope, client, eventId);
+    await applyTransferReceiveProjection(envelope, client);
+    // Story 2.6: cycle-count variance computation, DOA-gated adjustment lifecycle, approved
+    // stock adjustments, and physical-verification evidence run inside this same transaction so
+    // the projection and the domain_events insert commit or roll back together. The AC2 guard
+    // (stock.adjusted requires an approved adjustment) lives in applyCycleCountProjection.
+    await applyCycleCountProjection(envelope, client, eventId);
+    // Story 2.7: inventory-planning params, safety-stock/reorder-point computation, replenishment
+    // recommendation, and obsolescence flag/clear run inside this same transaction so the
+    // projection and the domain_events insert commit or roll back together. The reorder-crossing
+    // and obsolescence-transition decisions (and their transactional planner alerts) live in the
+    // planning jobs, which hold the params/flag row lock across read -> decide -> persist.
+    await applyInventoryPlanningProjection(envelope, client, eventId);
+    // Story 2.8: ownership agreement upsert (consignment/VMI segregation config) runs inside this
+    // same transaction so the registry row and the domain_events insert commit or roll back
+    // together. Receipt-side owner-party enforcement lives in applyStockBalanceProjection above.
+    await applyOwnershipProjection(envelope, client);
+    await applyGateProjection(envelope, client, eventId);
+    // Story 3.3: weighbridge tolerance enforcement resolves the binding token to its gate event,
+    // enforces the site match, computes the tolerance band against the Story 2.9 open-PO line in
+    // SQL NUMERIC, and upserts the weighbridge_event row inside this same transaction.
+    await applyWeighbridgeProjection(envelope, client, eventId);
+    // Story 3.4: goods receiving consumes the accepted-weighment binding token, computes the PO
+    // tolerance band in SQL NUMERIC, routes QC-hold/quarantine/over-tolerance outcomes, and posts
+    // stock through a synthetic stock.received view - all inside this same transaction so the GRN
+    // line, the stock movement, and the domain_events insert commit or roll back together.
+    await applyGoodsReceivedProjection(envelope, client, eventId);
+    await applyGoodsPutawayReleasedProjection(envelope, client, eventId);
+    // Story 3.5: putaway completion records the actual location and any override against the directed
+    // suggestion, updates the Story 1.6 location asserted/expected facts, and completes the putaway
+    // task - all inside this same transaction so the location facts and the domain_events insert
+    // commit or roll back together.
+    if (envelope.event_type === 'putaway.completed') {
+      const payload = envelope.payload as Record<string, unknown>;
+      await applyPutawayCompletedProjection(
+        {
+          putawayTaskId: payload.putaway_task_id as string,
+          actualLocationId: payload.actual_location_id as string | undefined,
+          actualLocationCode: payload.actual_location_code as string | undefined,
+          overrideReasonCode: payload.override_reason_code as string | undefined,
+          overrideConfidence: payload.override_confidence as 'certain' | 'uncertain' | undefined,
+          completedBy: payload.completed_by as string,
+          eventId,
+        },
+        client,
+      );
+    }
+    // Story 3.6: pick task creation inserts the task + pick lines and allocates stock; pick line
+    // confirmation records the picked lot (with substitution release/reallocate); pick task
+    // completion enforces all-lines-confirmed, notifies packing, and flags the dispatch order
+    // picked - all inside this same transaction so the projections, the stock allocation, and
+    // the domain_events insert commit or roll back together.
+    if (envelope.event_type === 'pick_task.created') {
+      await applyPickTaskCreatedProjection(
+        envelope as unknown as PickTaskCreatedEnvelope,
+        client,
+        eventId,
+      );
+    }
+    if (envelope.event_type === 'pick_line.confirmed') {
+      await applyPickLineConfirmedProjection(
+        envelope as unknown as PickLineConfirmedEnvelope,
+        client,
+        eventId,
+      );
+    }
+    if (envelope.event_type === 'pick_task.completed') {
+      await applyPickTaskCompletedProjection(
+        envelope as unknown as PickTaskCompletedEnvelope,
+        client,
+        eventId,
+      );
+    }
+    // Story 3.7: dispatch operations - packing validation, document generation with LOT_ON_HOLD
+    // check, dispatch confirmation with stock decrement - all inside this same transaction so
+    // projections, stock movement, and domain_events insert commit or roll back together.
+    if (envelope.event_type === 'dispatch.packed') {
+      await applyDispatchPackedProjection(
+        envelope as unknown as DispatchPackedEnvelope,
+        client,
+        eventId,
+      );
+    }
+    if (envelope.event_type === 'dispatch.shipping_documents_generated') {
+      await applyDispatchShippingDocumentsGeneratedProjection(
+        envelope as unknown as DispatchShippingDocumentsGeneratedEnvelope,
+        client,
+        eventId,
+      );
+    }
+    if (envelope.event_type === 'dispatch.dispatched') {
+      await applyDispatchDispatchedProjection(
+        envelope as unknown as DispatchDispatchedEnvelope,
+        client,
+        eventId,
+      );
+    }
+    // Story 3.8: the task SLA threshold registry upsert, plus the supervisor-only SOD gate that
+    // governs it. The gate lives in the seam, not only in the HTTP handler, so a direct
+    // POST /api/v1/events call cannot change what counts as an SLA breach.
+    if (envelope.event_type === 'task_sla_config.updated') {
+      await applyTaskSlaConfigUpdatedProjection(
+        envelope as unknown as TaskSlaConfigUpdatedEnvelope,
+        client,
+        eventId,
+      );
+    }
+    // Story 3.8 code review: assignment is a domain event rather than a direct read-model write,
+    // so it replays, audits, and passes the same supervisor SOD gate as the threshold registry.
+    if (envelope.event_type === 'putaway_task.assigned') {
+      await applyPutawayTaskAssignedProjection(
+        envelope as unknown as PutawayTaskAssignedEnvelope,
+        client,
+      );
+    }
+    if (envelope.event_type === 'pick_task.assigned') {
+      await applyPickTaskAssignedProjection(
+        envelope as unknown as PickTaskAssignedEnvelope,
+        client,
+      );
+    }
+    // Story 3.9: forward-pick config upsert, replenishment task creation, and task completion
+    // (which moves stock via applyStockIssue/applyStockReceipt directly) - all inside this same
+    // transaction so the projections, the stock movement, and the domain_events insert commit or
+    // roll back together.
+    if (envelope.event_type === 'forward_pick_config.updated') {
+      await applyForwardPickConfigUpdatedProjection(
+        envelope as unknown as ForwardPickConfigUpdatedEnvelope,
+        client,
+      );
+    }
+    if (envelope.event_type === 'replenishment_task.created') {
+      await applyReplenishmentTaskCreatedProjection(
+        envelope as unknown as ReplenishmentTaskCreatedEnvelope,
+        client,
+        eventId,
+      );
+    }
+    if (envelope.event_type === 'replenishment_task.assigned') {
+      await applyReplenishmentTaskAssignedProjection(
+        envelope as unknown as ReplenishmentTaskAssignedEnvelope,
+        client,
+      );
+    }
+    if (envelope.event_type === 'replenishment_task.completed') {
+      await applyReplenishmentTaskCompletedProjection(
+        envelope as unknown as ReplenishmentTaskCompletedEnvelope,
+        client,
+      );
+    }
+    if (envelope.event_type === 'cross_dock_task.assigned') {
+      await applyCrossDockTaskAssignedProjection(
+        envelope as unknown as CrossDockTaskAssignedEnvelope,
+        client,
+      );
+    }
+    if (envelope.event_type === 'cross_dock_task.completed') {
+      await applyCrossDockTaskCompletedProjection(
+        envelope as unknown as CrossDockTaskCompletedEnvelope,
+        client,
+        eventId,
+      );
+    }
 
-     let nextVersion: number;
+    let nextVersion: number;
 
     if (envelope.event_version !== undefined) {
       nextVersion = envelope.event_version;
@@ -580,9 +740,19 @@ export async function persistEvent(
       }).catch(() => {
         // Never let the tamper-recording failure mask the original error.
       });
-      throw new AppError(500, 'AUDIT_LOG_TAMPER_ATTEMPT', 'Audit log modification was rejected by the database');
+      throw new AppError(
+        500,
+        'AUDIT_LOG_TAMPER_ATTEMPT',
+        'Audit log modification was rejected by the database',
+      );
     }
-    if (err && typeof err === 'object' && 'code' in err && err.code === '23505' && 'constraint' in err) {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      err.code === '23505' &&
+      'constraint' in err
+    ) {
       // Postgres exposes the violated constraint name via err.constraint, not err.detail
       // (err.detail only contains the conflicting key/value, e.g. "Key (idempotency_key)=(...) already exists.").
       const constraint = (err as { constraint?: string }).constraint;
@@ -593,7 +763,8 @@ export async function persistEvent(
             `SELECT event_id FROM domain_events WHERE idempotency_key = $1 OR event_id = $2 LIMIT 1`,
             [envelope.idempotency_key, eventId],
           );
-          existingEventId = existing.rows.length > 0 ? (existing.rows[0]!['event_id'] as string) : 'unknown';
+          existingEventId =
+            existing.rows.length > 0 ? (existing.rows[0]!['event_id'] as string) : 'unknown';
         }
         throw new AppError(409, 'DUPLICATE_EVENT', 'Event already exists', {
           existing_event_id: existingEventId,
@@ -605,7 +776,8 @@ export async function persistEvent(
         });
       } else if (constraint === 'uq_lot_master_lot_number') {
         throw new AppError(400, 'DUPLICATE_LOT', 'Lot already exists', {
-          lot_id: typeof envelope.payload['lot_id'] === 'string' ? envelope.payload['lot_id'] : null,
+          lot_id:
+            typeof envelope.payload['lot_id'] === 'string' ? envelope.payload['lot_id'] : null,
           sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
         });
       } else if (constraint === 'uq_serial_master_sku_serial_number') {
@@ -613,17 +785,39 @@ export async function persistEvent(
           sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
         });
       } else if (constraint === 'uq_ownership_agreement_active') {
-        throw new AppError(409, 'OWNERSHIP_AGREEMENT_CONFLICT', 'An active ownership agreement already exists for this sku/location/stock_class grain', {
-          sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
-          location_id: typeof envelope.payload['location_id'] === 'string' ? envelope.payload['location_id'] : null,
-          stock_class: typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : null,
-        });
+        throw new AppError(
+          409,
+          'OWNERSHIP_AGREEMENT_CONFLICT',
+          'An active ownership agreement already exists for this sku/location/stock_class grain',
+          {
+            sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
+            location_id:
+              typeof envelope.payload['location_id'] === 'string'
+                ? envelope.payload['location_id']
+                : null,
+            stock_class:
+              typeof envelope.payload['stock_class'] === 'string'
+                ? envelope.payload['stock_class']
+                : null,
+          },
+        );
       } else if (constraint === 'uq_replenishment_recommendation_open_signal') {
-        throw new AppError(409, 'REPLENISHMENT_RECOMMENDATION_CONFLICT', 'An open replenishment recommendation already exists for this sku/location/signal_type grain', {
-          sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
-          location_id: typeof envelope.payload['location_id'] === 'string' ? envelope.payload['location_id'] : null,
-          signal_type: typeof envelope.payload['signal_type'] === 'string' ? envelope.payload['signal_type'] : 'internal',
-        });
+        throw new AppError(
+          409,
+          'REPLENISHMENT_RECOMMENDATION_CONFLICT',
+          'An open replenishment recommendation already exists for this sku/location/signal_type grain',
+          {
+            sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
+            location_id:
+              typeof envelope.payload['location_id'] === 'string'
+                ? envelope.payload['location_id']
+                : null,
+            signal_type:
+              typeof envelope.payload['signal_type'] === 'string'
+                ? envelope.payload['signal_type']
+                : 'internal',
+          },
+        );
       }
     }
     throw err;
@@ -632,10 +826,7 @@ export async function persistEvent(
   }
 }
 
-export async function readStream(
-  streamType: string,
-  streamId: string,
-): Promise<PersistedEvent[]> {
+export async function readStream(streamType: string, streamId: string): Promise<PersistedEvent[]> {
   const pool = getPool();
   const result = await pool.query(
     `SELECT event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at

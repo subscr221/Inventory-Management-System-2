@@ -82,13 +82,20 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -163,13 +170,28 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
 
     // Users / roles.
     await provisionUser(port, 'wh-2-5@example.com', [
-      { role: 'warehouse_manager', module: 'inventory', functionScope: 'write', locationId: locAId },
-      { role: 'warehouse_manager', module: 'inventory', functionScope: 'write', locationId: locBId },
+      {
+        role: 'warehouse_manager',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: locAId,
+      },
+      {
+        role: 'warehouse_manager',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: locBId,
+      },
     ]);
     warehouseHeaders = await authFor(port, 'wh-2-5@example.com');
 
     await provisionUser(port, 'logi-2-5@example.com', [
-      { role: 'logistics_manager', module: 'inventory', functionScope: 'write', locationId: locAId },
+      {
+        role: 'logistics_manager',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: locAId,
+      },
     ]);
     logisticsHeaders = await authFor(port, 'logi-2-5@example.com');
 
@@ -184,7 +206,12 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     approverHeaders = await authFor(port, 'approver-2-5@example.com');
 
     await provisionUser(port, 'outsider-2-5@example.com', [
-      { role: 'warehouse_manager', module: 'inventory', functionScope: 'write', locationId: locCId },
+      {
+        role: 'warehouse_manager',
+        module: 'inventory',
+        functionScope: 'write',
+        locationId: locCId,
+      },
     ]);
     outsiderHeaders = await authFor(port, 'outsider-2-5@example.com');
 
@@ -194,7 +221,12 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     //  qty > 500          -> ghost_approver (NO holder) -> escalation walks to transfer_approver
     // DOA entries require compliance-module write access.
     await provisionUser(port, 'doa-admin-2-5@example.com', [
-      { role: 'compliance_admin_2_5', module: 'compliance', functionScope: 'write', locationId: '*' },
+      {
+        role: 'compliance_admin_2_5',
+        module: 'compliance',
+        functionScope: 'write',
+        locationId: '*',
+      },
     ]);
     const doaHeaders = await authFor(port, 'doa-admin-2-5@example.com');
     for (const entry of [
@@ -208,7 +240,11 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
         { transaction_type: 'transfer_request', ...entry },
         doaHeaders,
       );
-      assert.strictEqual(r.status, 201, `DOA entry ${entry.role} failed: ${JSON.stringify(r.body)}`);
+      assert.strictEqual(
+        r.status,
+        201,
+        `DOA entry ${entry.role} failed: ${JSON.stringify(r.body)}`,
+      );
     }
   });
 
@@ -249,14 +285,23 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     }
   }
 
-  async function seedStock(sku: string, locationId: string, onHand: number, lotId: string | null): Promise<void> {
+  async function seedStock(
+    sku: string,
+    locationId: string,
+    onHand: number,
+    lotId: string | null,
+  ): Promise<void> {
     await getPool().query(
       `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand) VALUES ($1, $2, $3, 'owned', $4)`,
       [sku, locationId, lotId, onHand],
     );
   }
 
-  async function balance(sku: string, locationId: string, lotId: string | null): Promise<{ on_hand: number; allocated: number; in_transit: number; available: number } | null> {
+  async function balance(
+    sku: string,
+    locationId: string,
+    lotId: string | null,
+  ): Promise<{ on_hand: number; allocated: number; in_transit: number; available: number } | null> {
     const r = await getPool().query(
       `SELECT on_hand, allocated, in_transit, available FROM stock_balance
        WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)`,
@@ -273,11 +318,19 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
   }
 
   async function eventCount(streamId: string): Promise<number> {
-    const r = await getPool().query(`SELECT count(*)::int AS c FROM domain_events WHERE stream_id = $1`, [streamId]);
+    const r = await getPool().query(
+      `SELECT count(*)::int AS c FROM domain_events WHERE stream_id = $1`,
+      [streamId],
+    );
     return r.rows[0]!['c'] as number;
   }
 
-  function createBody(sku: string, qty: number, lotId: string | null, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  function createBody(
+    sku: string,
+    qty: number,
+    lotId: string | null,
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> {
     return {
       sku_id: sku,
       from_location_id: locAId,
@@ -298,7 +351,13 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedStock(sku, locAId, 300, lot);
 
     // quantity 200 falls in the 100<q<=500 band -> requires approval
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 200, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 200, lot),
+      warehouseHeaders,
+    );
     assert.strictEqual(create.status, 201, JSON.stringify(create.body));
     assert.strictEqual(create.body['status'], 'pending_approval');
     assert.strictEqual(create.body['approver_actor_id'], approverUserId);
@@ -310,7 +369,13 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     const lot = await seedLot('LOT-TR-NOAPPROVAL', sku);
     await seedStock(sku, locAId, 100, lot);
 
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 50, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 50, lot),
+      warehouseHeaders,
+    );
     assert.strictEqual(create.status, 201, JSON.stringify(create.body));
     assert.strictEqual(create.body['status'], 'pending_shipment');
     assert.ok(!create.body['approver_actor_id']);
@@ -325,14 +390,32 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedItem(sku, { lot: true });
     const lot = await seedLot('LOT-TR-APPROVE-GATE', sku);
     await seedStock(sku, locAId, 300, lot);
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 200, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 200, lot),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
 
-    const wrong = await makeRequest(port, 'PATCH', `/api/v1/transfer-requests/${id}/approve`, {}, warehouseHeaders);
+    const wrong = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/transfer-requests/${id}/approve`,
+      {},
+      warehouseHeaders,
+    );
     assert.strictEqual(wrong.status, 403);
     assert.strictEqual(wrong.body['error_code'], 'APPROVAL_REQUIRED');
 
-    const ok = await makeRequest(port, 'PATCH', `/api/v1/transfer-requests/${id}/approve`, {}, approverHeaders);
+    const ok = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/transfer-requests/${id}/approve`,
+      {},
+      approverHeaders,
+    );
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     assert.strictEqual(ok.body['status'], 'approved');
   });
@@ -342,10 +425,22 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedItem(sku, { lot: true });
     const lot = await seedLot('LOT-TR-SHIP-QTY', sku);
     await seedStock(sku, locAId, 100, lot);
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 50, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 50, lot),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
 
-    const ship = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 80 }, warehouseHeaders);
+    const ship = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/ship`,
+      { lot_id: lot, shipped_quantity: 80 },
+      warehouseHeaders,
+    );
     assert.strictEqual(ship.status, 400);
     assert.strictEqual(ship.body['error_code'], 'QUANTITY_EXCEEDS_APPROVED');
   });
@@ -355,10 +450,22 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedItem(sku, { lot: true });
     const lot = await seedLot('LOT-TR-HAPPY', sku);
     await seedStock(sku, locAId, 100, lot);
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 50, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 50, lot),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
 
-    const ship = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 50 }, warehouseHeaders);
+    const ship = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/ship`,
+      { lot_id: lot, shipped_quantity: 50 },
+      warehouseHeaders,
+    );
     assert.strictEqual(ship.status, 201, JSON.stringify(ship.body));
     const shipCorr = ship.body['correlation_id'] as string;
 
@@ -367,10 +474,20 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     assert.strictEqual(src?.on_hand, 50);
     assert.strictEqual(src?.in_transit, 50);
 
-    const recv = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/receive`, { lot_id: lot, received_quantity: 50 }, warehouseHeaders);
+    const recv = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/receive`,
+      { lot_id: lot, received_quantity: 50 },
+      warehouseHeaders,
+    );
     assert.strictEqual(recv.status, 201, JSON.stringify(recv.body));
     assert.strictEqual(recv.body['status'], 'received');
-    assert.strictEqual(recv.body['correlation_id'], shipCorr, 'AC3: receive must reuse the ship correlation_id');
+    assert.strictEqual(
+      recv.body['correlation_id'],
+      shipCorr,
+      'AC3: receive must reuse the ship correlation_id',
+    );
 
     const dest = await balance(sku, locBId, lot);
     assert.strictEqual(dest?.on_hand, 50, 'destination on_hand must reflect the received quantity');
@@ -384,11 +501,29 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     const lotA = await seedLot('LOT-TR-MM-A', sku);
     const lotB = await seedLot('LOT-TR-MM-B', sku);
     await seedStock(sku, locAId, 100, lotA);
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 40, lotA), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 40, lotA),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
-    await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lotA, shipped_quantity: 40 }, warehouseHeaders);
+    await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/ship`,
+      { lot_id: lotA, shipped_quantity: 40 },
+      warehouseHeaders,
+    );
 
-    const recv = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/receive`, { lot_id: lotB, received_quantity: 40 }, warehouseHeaders);
+    const recv = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/receive`,
+      { lot_id: lotB, received_quantity: 40 },
+      warehouseHeaders,
+    );
     assert.strictEqual(recv.status, 400);
     assert.strictEqual(recv.body['error_code'], 'LOT_MISMATCH');
   });
@@ -398,18 +533,42 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedItem(sku, { lot: true });
     const lot = await seedLot('LOT-TR-PARTIAL', sku);
     await seedStock(sku, locAId, 100, lot);
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 50, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 50, lot),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
-    await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 50 }, warehouseHeaders);
+    await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/ship`,
+      { lot_id: lot, shipped_quantity: 50 },
+      warehouseHeaders,
+    );
 
-    const first = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/receive`, { lot_id: lot, received_quantity: 30 }, warehouseHeaders);
+    const first = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/receive`,
+      { lot_id: lot, received_quantity: 30 },
+      warehouseHeaders,
+    );
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
     assert.strictEqual(first.body['status'], 'partially_received');
 
     const mid = await balance(sku, locAId, lot);
     assert.strictEqual(mid?.in_transit, 20, 'remaining quantity stays in transit');
 
-    const second = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/receive`, { lot_id: lot, received_quantity: 20 }, warehouseHeaders);
+    const second = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/receive`,
+      { lot_id: lot, received_quantity: 20 },
+      warehouseHeaders,
+    );
     assert.strictEqual(second.status, 201, JSON.stringify(second.body));
     assert.strictEqual(second.body['status'], 'received');
 
@@ -422,11 +581,29 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedItem(sku, { lot: true });
     const lot = await seedLot('LOT-TR-OVER-RECV', sku);
     await seedStock(sku, locAId, 100, lot);
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 50, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 50, lot),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
-    await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 50 }, warehouseHeaders);
+    await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/ship`,
+      { lot_id: lot, shipped_quantity: 50 },
+      warehouseHeaders,
+    );
 
-    const recv = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/receive`, { lot_id: lot, received_quantity: 80 }, warehouseHeaders);
+    const recv = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/receive`,
+      { lot_id: lot, received_quantity: 80 },
+      warehouseHeaders,
+    );
     assert.strictEqual(recv.status, 400, JSON.stringify(recv.body));
     assert.strictEqual(recv.body['error_code'], 'QUANTITY_EXCEEDS_APPROVED');
   });
@@ -438,9 +615,21 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedStock(sku, locAId, 100, lot);
     const clientId = randomUUID();
 
-    const first = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 40, lot, { transfer_request_id: clientId }), warehouseHeaders);
+    const first = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 40, lot, { transfer_request_id: clientId }),
+      warehouseHeaders,
+    );
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
-    const second = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 40, lot, { transfer_request_id: clientId }), warehouseHeaders);
+    const second = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 40, lot, { transfer_request_id: clientId }),
+      warehouseHeaders,
+    );
     assert.strictEqual(second.status, 200, 'retry returns the existing request');
     assert.strictEqual(second.body['transfer_request_id'], clientId);
 
@@ -454,17 +643,38 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedItem(sku, { lot: true });
     const lot = await seedLot('LOT-TR-CONCURRENT', sku);
     await seedStock(sku, locAId, 100, lot);
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 50, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 50, lot),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
 
     const [a, b] = await Promise.all([
-      makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 50 }, warehouseHeaders),
-      makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 50 }, warehouseHeaders),
+      makeRequest(
+        port,
+        'POST',
+        `/api/v1/transfer-requests/${id}/ship`,
+        { lot_id: lot, shipped_quantity: 50 },
+        warehouseHeaders,
+      ),
+      makeRequest(
+        port,
+        'POST',
+        `/api/v1/transfer-requests/${id}/ship`,
+        { lot_id: lot, shipped_quantity: 50 },
+        warehouseHeaders,
+      ),
     ]);
     const okCount = [a, b].filter((r) => r.status === 201).length;
     assert.ok(okCount >= 1, 'at least one ship must succeed');
 
-    const rows = await getPool().query('SELECT count(*)::int AS c FROM in_transit WHERE transfer_request_id = $1', [id]);
+    const rows = await getPool().query(
+      'SELECT count(*)::int AS c FROM in_transit WHERE transfer_request_id = $1',
+      [id],
+    );
     assert.strictEqual(rows.rows[0]!['c'], 1, 'exactly one in_transit row may exist');
     const src = await balance(sku, locAId, lot);
     assert.strictEqual(src?.on_hand, 50, 'stock may be issued exactly once (100 - 50)');
@@ -476,7 +686,13 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     const lot = await seedLot('LOT-TR-LOC-RBAC', sku);
     await seedStock(sku, locAId, 100, lot);
 
-    const res = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 40, lot), outsiderHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 40, lot),
+      outsiderHeaders,
+    );
     assert.strictEqual(res.status, 403);
     assert.strictEqual(res.body['error_code'], 'LOCATION_ACCESS_DENIED');
   });
@@ -487,11 +703,23 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     const lot = await seedLot('LOT-TR-LOGI', sku);
     await seedStock(sku, locAId, 100, lot);
 
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 50, lot), logisticsHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 50, lot),
+      logisticsHeaders,
+    );
     assert.strictEqual(create.status, 201, JSON.stringify(create.body));
     const id = create.body['transfer_request_id'] as string;
 
-    const ship = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 50 }, logisticsHeaders);
+    const ship = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/ship`,
+      { lot_id: lot, shipped_quantity: 50 },
+      logisticsHeaders,
+    );
     assert.strictEqual(ship.status, 403, JSON.stringify(ship.body));
     assert.strictEqual(ship.body['error_code'], 'FUNCTION_ACCESS_DENIED');
   });
@@ -502,7 +730,13 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     const lot = await seedLot('LOT-TR-ROLE-GATE', sku);
     await seedStock(sku, locAId, 100, lot);
 
-    const res = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 40, lot), readerHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 40, lot),
+      readerHeaders,
+    );
     assert.ok(res.status === 403, `expected 403, got ${res.status}: ${JSON.stringify(res.body)}`);
   });
 
@@ -513,10 +747,20 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedStock(sku, locAId, 700, lot);
 
     // qty 600 matches the ghost_approver band (>500), which has no holder -> escalate to transfer_approver.
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 600, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 600, lot),
+      warehouseHeaders,
+    );
     assert.strictEqual(create.status, 201, JSON.stringify(create.body));
     assert.strictEqual(create.body['status'], 'pending_approval');
-    assert.strictEqual(create.body['approver_actor_id'], approverUserId, 'escalation must resolve to a role holder');
+    assert.strictEqual(
+      create.body['approver_actor_id'],
+      approverUserId,
+      'escalation must resolve to a role holder',
+    );
   });
 
   it('A lot-less request that ships with a concrete lot can be received against that lot (no false LOT_MISMATCH)', async () => {
@@ -525,12 +769,30 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     const lot = await seedLot('LOT-TR-LOTLESS', sku);
     await seedStock(sku, locAId, 100, null); // stock held without a lot grain
 
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 50, null), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 50, null),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
-    const ship = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 50 }, warehouseHeaders);
+    const ship = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/ship`,
+      { lot_id: lot, shipped_quantity: 50 },
+      warehouseHeaders,
+    );
     assert.strictEqual(ship.status, 201, JSON.stringify(ship.body));
 
-    const recv = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/receive`, { lot_id: lot, received_quantity: 50 }, warehouseHeaders);
+    const recv = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/receive`,
+      { lot_id: lot, received_quantity: 50 },
+      warehouseHeaders,
+    );
     assert.strictEqual(recv.status, 201, JSON.stringify(recv.body));
     assert.strictEqual(recv.body['status'], 'received');
   });
@@ -542,11 +804,23 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedSerials(sku, lot, ['SN-1', 'SN-2', 'SN-3']);
     await seedStock(sku, locAId, 100, lot);
 
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 2, lot, { serial_ids: ['SN-1', 'SN-2'] }), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 2, lot, { serial_ids: ['SN-1', 'SN-2'] }),
+      warehouseHeaders,
+    );
     assert.strictEqual(create.status, 201, JSON.stringify(create.body));
     const id = create.body['transfer_request_id'] as string;
 
-    const ship = await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 2, serial_ids: ['SN-1', 'SN-9'] }, warehouseHeaders);
+    const ship = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/ship`,
+      { lot_id: lot, shipped_quantity: 2, serial_ids: ['SN-1', 'SN-9'] },
+      warehouseHeaders,
+    );
     assert.strictEqual(ship.status, 400, JSON.stringify(ship.body));
     assert.strictEqual(ship.body['error_code'], 'SERIAL_MISMATCH');
   });
@@ -556,12 +830,24 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedItem(sku, { lot: true });
     const lot = await seedLot('LOT-TR-REJECT', sku);
     await seedStock(sku, locAId, 300, lot);
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 200, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 200, lot),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
     const beforeReject = await balance(sku, locAId, lot);
     assert.strictEqual(beforeReject?.allocated, 200);
 
-    const reject = await makeRequest(port, 'PATCH', `/api/v1/transfer-requests/${id}/reject`, { reason_code: 'NOT_NEEDED' }, approverHeaders);
+    const reject = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/transfer-requests/${id}/reject`,
+      { reason_code: 'NOT_NEEDED' },
+      approverHeaders,
+    );
     assert.strictEqual(reject.status, 200, JSON.stringify(reject.body));
 
     const afterReject = await balance(sku, locAId, lot);
@@ -574,17 +860,55 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await seedItem(sku, { lot: true });
     const lot = await seedLot('LOT-TR-INTRANSIT-API', sku);
     await seedStock(sku, locAId, 100, lot);
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 50, lot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 50, lot),
+      warehouseHeaders,
+    );
     const id = create.body['transfer_request_id'] as string;
-    await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/ship`, { lot_id: lot, shipped_quantity: 50 }, warehouseHeaders);
+    await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/ship`,
+      { lot_id: lot, shipped_quantity: 50 },
+      warehouseHeaders,
+    );
 
-    const during = await makeRequest(port, 'GET', `/api/v1/stock/${sku}/in-transit`, undefined, readerHeaders);
+    const during = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${sku}/in-transit`,
+      undefined,
+      readerHeaders,
+    );
     assert.strictEqual(during.status, 200, JSON.stringify(during.body));
-    assert.strictEqual((during.body['in_transit'] as unknown[]).length, 1, 'in-transit shows the shipped transfer');
+    assert.strictEqual(
+      (during.body['in_transit'] as unknown[]).length,
+      1,
+      'in-transit shows the shipped transfer',
+    );
 
-    await makeRequest(port, 'POST', `/api/v1/transfer-requests/${id}/receive`, { lot_id: lot, received_quantity: 50 }, warehouseHeaders);
-    const after = await makeRequest(port, 'GET', `/api/v1/stock/${sku}/in-transit`, undefined, readerHeaders);
-    assert.strictEqual((after.body['in_transit'] as unknown[]).length, 0, 'fully-received transfer must not surface as in-transit');
+    await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${id}/receive`,
+      { lot_id: lot, received_quantity: 50 },
+      warehouseHeaders,
+    );
+    const after = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/stock/${sku}/in-transit`,
+      undefined,
+      readerHeaders,
+    );
+    assert.strictEqual(
+      (after.body['in_transit'] as unknown[]).length,
+      0,
+      'fully-received transfer must not surface as in-transit',
+    );
   });
 
   it('A lot that does not belong to the SKU is rejected at create with LOT_SKU_MISMATCH (distinct from AC6 LOT_MISMATCH)', async () => {
@@ -595,7 +919,13 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     const foreignLot = await seedLot('LOT-TR-FOREIGN', otherSku);
     await seedStock(sku, locAId, 100, null);
 
-    const create = await makeRequest(port, 'POST', '/api/v1/transfer-requests', createBody(sku, 40, foreignLot), warehouseHeaders);
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      createBody(sku, 40, foreignLot),
+      warehouseHeaders,
+    );
     assert.strictEqual(create.status, 400, JSON.stringify(create.body));
     assert.strictEqual(create.body['error_code'], 'LOT_SKU_MISMATCH');
   });

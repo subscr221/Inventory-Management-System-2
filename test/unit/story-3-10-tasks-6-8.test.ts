@@ -3,7 +3,10 @@ import { describe, it } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createAppRouter } from '../../src/server.js';
-import { CROSS_DOCK_DURATION_METRIC, SUPPORTED_TASK_TYPES } from '../../src/warehouse/task-metrics.js';
+import {
+  CROSS_DOCK_DURATION_METRIC,
+  SUPPORTED_TASK_TYPES,
+} from '../../src/warehouse/task-metrics.js';
 import { AppError } from '../../src/middleware/error.js';
 import { classifyUploadFailure } from '../../src/sync/upload.js';
 
@@ -42,11 +45,27 @@ describe('Story 3.10 Task 6 task metrics surface', () => {
 
 describe('Story 3.10 Task 7 REST surface', () => {
   it('registers one detail route and dedicated event-sourced mutation routes without a list route', () => {
-    const routes = createAppRouter().listRoutes().map(({ method, path }) => `${method} ${path}`);
-    assert.equal(routes.filter((route) => route === 'GET /api/v1/cross-dock-tasks/:crossDockTaskId').length, 1);
-    assert.equal(routes.filter((route) => route === 'POST /api/v1/cross-dock-tasks/:crossDockTaskId/assign').length, 1);
-    assert.equal(routes.filter((route) => route === 'POST /api/v1/cross-dock-tasks/:crossDockTaskId/confirm').length, 1);
-    assert.equal(routes.some((route) => route === 'GET /api/v1/cross-dock-tasks'), false);
+    const routes = createAppRouter()
+      .listRoutes()
+      .map(({ method, path }) => `${method} ${path}`);
+    assert.equal(
+      routes.filter((route) => route === 'GET /api/v1/cross-dock-tasks/:crossDockTaskId').length,
+      1,
+    );
+    assert.equal(
+      routes.filter((route) => route === 'POST /api/v1/cross-dock-tasks/:crossDockTaskId/assign')
+        .length,
+      1,
+    );
+    assert.equal(
+      routes.filter((route) => route === 'POST /api/v1/cross-dock-tasks/:crossDockTaskId/confirm')
+        .length,
+      1,
+    );
+    assert.equal(
+      routes.some((route) => route === 'GET /api/v1/cross-dock-tasks'),
+      false,
+    );
   });
 
   it('classifies every client-correctable cross-dock failure as permanent without changing duplicate, auth, or retry handling', () => {
@@ -58,8 +77,17 @@ describe('Story 3.10 Task 7 REST surface', () => {
         serverErrorCode: code,
       });
     }
-    assert.equal(classifyUploadFailure(new AppError(409, 'DUPLICATE_EVENT', 'duplicate')).localStatus, 'synced');
-    assert.equal(classifyUploadFailure(new AppError(401, 'UNAUTHORIZED', 'sign in')).localStatus, 'auth_required');
-    assert.equal(classifyUploadFailure(new AppError(503, 'INTERNAL_ERROR', 'retry')).retryable, true);
+    assert.equal(
+      classifyUploadFailure(new AppError(409, 'DUPLICATE_EVENT', 'duplicate')).localStatus,
+      'synced',
+    );
+    assert.equal(
+      classifyUploadFailure(new AppError(401, 'UNAUTHORIZED', 'sign in')).localStatus,
+      'auth_required',
+    );
+    assert.equal(
+      classifyUploadFailure(new AppError(503, 'INTERNAL_ERROR', 'retry')).retryable,
+      true,
+    );
   });
 });

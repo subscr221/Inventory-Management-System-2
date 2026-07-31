@@ -1,7 +1,10 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { closePool } from '../../src/config/db.js';
-import { getVelocityClass, upsertVelocityClass } from '../../src/read/projections/velocity_class.js';
+import {
+  getVelocityClass,
+  upsertVelocityClass,
+} from '../../src/read/projections/velocity_class.js';
 import { runReslottingJob } from '../../src/warehouse/reslotting-job.js';
 import { randomUUID } from 'node:crypto';
 

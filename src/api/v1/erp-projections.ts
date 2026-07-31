@@ -27,14 +27,25 @@ const SITE_CODE_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 // for the access-matrix sync (the matrix has no explicit INT-ERP-01 read-projection row yet).
 const ERP_SYNC_ROLES = ['svc_erp_adapter', 'system_administrator'];
 
-function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[], functionScope: 'read' | 'write'): void {
+function assertRoleAllowed(
+  req: IncomingMessage,
+  allowedRoles: string[],
+  functionScope: 'read' | 'write',
+): void {
   const authContext = getAuthContext(req);
   const roles = authContext?.roles ?? [];
   const ok = roles.some(
-    (r) => (r.module === 'inventory' || r.module === '*') && r.functionScope === functionScope && allowedRoles.includes(r.role),
+    (r) =>
+      (r.module === 'inventory' || r.module === '*') &&
+      r.functionScope === functionScope &&
+      allowedRoles.includes(r.role),
   );
   if (!ok) {
-    throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `This operation is restricted to roles: ${allowedRoles.join(', ')}`);
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${allowedRoles.join(', ')}`,
+    );
   }
 }
 
@@ -45,20 +56,35 @@ function assertRoleAllowed(req: IncomingMessage, allowedRoles: string[], functio
 const getPurchaseOrderBase: RouteHandler = async (req, res, params) => {
   const poNumber = params['poNumber'];
   if (!poNumber || !PO_REF_REGEX.test(poNumber)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'poNumber path parameter must be 1-64 URL-safe characters');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'poNumber path parameter must be 1-64 URL-safe characters',
+    );
     return;
   }
   // Purchase orders are not location-grained in the source contract, so PO GET uses module/function
   // scope only (requireRole wrapper); downstream receiving performs its own location authorization.
   const po = await getPurchaseOrderByRef(poNumber);
   if (!po) {
-    sendRequestError(req, res, 404, 'NOT_FOUND', `No ERP purchase-order projection exists for "${poNumber}"`);
+    sendRequestError(
+      req,
+      res,
+      404,
+      'NOT_FOUND',
+      `No ERP purchase-order projection exists for "${poNumber}"`,
+    );
     return;
   }
   const freshness = await getFreshness('purchase_orders', config.erp.freshnessMs);
   if (freshness.stale) {
     // Best-effort: the stale alert is a side effect of a read; its failure must not 500 a successful GET.
-    await raiseErpSyncStale('purchase_orders', 'ERP purchase-order projection is stale (served past the freshness threshold)').catch(() => undefined);
+    await raiseErpSyncStale(
+      'purchase_orders',
+      'ERP purchase-order projection is stale (served past the freshness threshold)',
+    ).catch(() => undefined);
   }
   sendJson(res, 200, {
     po_number_ext: po.po_number_ext,
@@ -106,7 +132,13 @@ const listSalesOrdersBase: RouteHandler = async (req, res) => {
 
   if (site !== null) {
     if (!SITE_CODE_REGEX.test(site)) {
-      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'site filter must be 1-64 URL-safe characters');
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'site filter must be 1-64 URL-safe characters',
+      );
       return;
     }
     const location = await getLocationByCode(site);
@@ -115,7 +147,13 @@ const listSalesOrdersBase: RouteHandler = async (req, res) => {
       return;
     }
     if (!wildcard && !locations.has(location.location_id)) {
-      sendRequestError(req, res, 403, 'LOCATION_ACCESS_DENIED', `No inventory assignment grants access to site "${site}"`);
+      sendRequestError(
+        req,
+        res,
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `No inventory assignment grants access to site "${site}"`,
+      );
       return;
     }
     shipFromSiteCode = site;
@@ -126,17 +164,31 @@ const listSalesOrdersBase: RouteHandler = async (req, res) => {
     if (locationAny.length === 0) {
       const freshness = await getFreshness('sales_orders', config.erp.freshnessMs);
       if (freshness.stale) {
-        await raiseErpSyncStale('sales_orders', 'ERP sales-order projection is stale (served past the freshness threshold)').catch(() => undefined);
+        await raiseErpSyncStale(
+          'sales_orders',
+          'ERP sales-order projection is stale (served past the freshness threshold)',
+        ).catch(() => undefined);
       }
-      sendJson(res, 200, { sales_orders: [], stale: freshness.stale, last_synced_at_age_seconds: freshness.last_synced_at_age_seconds });
+      sendJson(res, 200, {
+        sales_orders: [],
+        stale: freshness.stale,
+        last_synced_at_age_seconds: freshness.last_synced_at_age_seconds,
+      });
       return;
     }
   }
 
-  const rows = await listSalesOrders({ ship_from_site_code_ext: shipFromSiteCode, status, location_any: locationAny });
+  const rows = await listSalesOrders({
+    ship_from_site_code_ext: shipFromSiteCode,
+    status,
+    location_any: locationAny,
+  });
   const freshness = await getFreshness('sales_orders', config.erp.freshnessMs);
   if (freshness.stale) {
-    await raiseErpSyncStale('sales_orders', 'ERP sales-order projection is stale (served past the freshness threshold)').catch(() => undefined);
+    await raiseErpSyncStale(
+      'sales_orders',
+      'ERP sales-order projection is stale (served past the freshness threshold)',
+    ).catch(() => undefined);
   }
   sendJson(res, 200, {
     sales_orders: rows.map((row) => ({
@@ -164,15 +216,33 @@ const erpSyncTriggerBase: RouteHandler = async (req, res) => {
   assertRoleAllowed(req, ERP_SYNC_ROLES, 'write');
   const body = getParsedBody(req) as ErpSyncBatch | undefined;
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body must be a JSON object with purchase_orders and/or sales_orders');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'Request body must be a JSON object with purchase_orders and/or sales_orders',
+    );
     return;
   }
   if (body.purchase_orders !== undefined && !Array.isArray(body.purchase_orders)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'purchase_orders must be an array when supplied');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'purchase_orders must be an array when supplied',
+    );
     return;
   }
   if (body.sales_orders !== undefined && !Array.isArray(body.sales_orders)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sales_orders must be an array when supplied');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'sales_orders must be an array when supplied',
+    );
     return;
   }
   const result = await runErpSync(body);
@@ -184,9 +254,22 @@ const erpSyncTriggerBase: RouteHandler = async (req, res) => {
 // ---------------------------------------------------------------------------
 
 export const erpReadOnlyRejectHandler: RouteHandler = async () => {
-  throw new AppError(405, 'SOURCE_SYSTEM_READ_ONLY', 'ERP reference data is read-only on this platform; corrections are made in the ERP and arrive on the next sync');
+  throw new AppError(
+    405,
+    'SOURCE_SYSTEM_READ_ONLY',
+    'ERP reference data is read-only on this platform; corrections are made in the ERP and arrive on the next sync',
+  );
 };
 
-export const getPurchaseOrderHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(getPurchaseOrderBase);
-export const listSalesOrdersHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'read' })(listSalesOrdersBase);
-export const erpSyncTriggerHandler: RouteHandler = requireRole({ module: 'inventory', functionScope: 'write' })(erpSyncTriggerBase);
+export const getPurchaseOrderHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(getPurchaseOrderBase);
+export const listSalesOrdersHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(listSalesOrdersBase);
+export const erpSyncTriggerHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(erpSyncTriggerBase);

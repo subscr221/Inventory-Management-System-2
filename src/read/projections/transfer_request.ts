@@ -83,10 +83,10 @@ export async function setTransferRequestLot(
   lotId: string,
   client: PoolClient,
 ): Promise<void> {
-  await client.query(
-    `UPDATE transfer_request SET lot_id = $1 WHERE transfer_request_id = $2`,
-    [lotId, transferRequestId],
-  );
+  await client.query(`UPDATE transfer_request SET lot_id = $1 WHERE transfer_request_id = $2`, [
+    lotId,
+    transferRequestId,
+  ]);
 }
 
 /** List transfer requests with optional filters. */
@@ -117,7 +117,9 @@ export async function getTransferRequests(filters: {
     paramIndex++;
   }
   if (filters.location_any && filters.location_any.length > 0) {
-    conditions.push(`(from_location_id = ANY($${paramIndex}) OR to_location_id = ANY($${paramIndex}))`);
+    conditions.push(
+      `(from_location_id = ANY($${paramIndex}) OR to_location_id = ANY($${paramIndex}))`,
+    );
     params.push(filters.location_any);
     paramIndex++;
   }
@@ -183,7 +185,15 @@ export async function updateTransferRequestStatus(
   status: string,
   client: PoolClient,
 ): Promise<void> {
-  const validStatuses = ['pending_approval', 'approved', 'rejected', 'pending_shipment', 'shipped', 'partially_received', 'received'];
+  const validStatuses = [
+    'pending_approval',
+    'approved',
+    'rejected',
+    'pending_shipment',
+    'shipped',
+    'partially_received',
+    'received',
+  ];
   if (!validStatuses.includes(status)) {
     throw new Error(`Invalid transfer request status: ${status}`);
   }
@@ -245,12 +255,15 @@ function mapInTransitRow(row: Record<string, unknown>): InTransitRow {
     correlation_id: (row['correlation_id'] as string) ?? null,
     ship_event_id: (row['ship_event_id'] as string) ?? null,
     created_at:
-      row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']),
+      row['created_at'] instanceof Date
+        ? row['created_at'].toISOString()
+        : String(row['created_at']),
   };
 }
 
 function mapRow(row: Record<string, unknown>): TransferRequestRow {
-  const updatedAt = row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
+  const updatedAt =
+    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
   return {
     transfer_request_id: row['transfer_request_id'] as string,
     sku_id: row['sku_id'] as string,
@@ -265,7 +278,15 @@ function mapRow(row: Record<string, unknown>): TransferRequestRow {
     approver_actor_id: (row['approver_actor_id'] as string) ?? null,
     correlation_id: row['correlation_id'] as string,
     created_at: updatedAt,
-    shipped_at: row['shipped_at'] ? (row['shipped_at'] instanceof Date ? row['shipped_at'].toISOString() : String(row['shipped_at'])) : null,
-    received_at: row['received_at'] ? (row['received_at'] instanceof Date ? row['received_at'].toISOString() : String(row['received_at'])) : null,
+    shipped_at: row['shipped_at']
+      ? row['shipped_at'] instanceof Date
+        ? row['shipped_at'].toISOString()
+        : String(row['shipped_at'])
+      : null,
+    received_at: row['received_at']
+      ? row['received_at'] instanceof Date
+        ? row['received_at'].toISOString()
+        : String(row['received_at'])
+      : null,
   };
 }

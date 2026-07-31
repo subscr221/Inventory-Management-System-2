@@ -66,7 +66,10 @@ export interface SalesOrderFilters {
   location_any?: string[] | null;
 }
 
-export async function listSalesOrders(filters: SalesOrderFilters, client?: PoolClient): Promise<ErpSalesOrderRow[]> {
+export async function listSalesOrders(
+  filters: SalesOrderFilters,
+  client?: PoolClient,
+): Promise<ErpSalesOrderRow[]> {
   const conditions: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -91,8 +94,14 @@ export async function listSalesOrders(filters: SalesOrderFilters, client?: PoolC
 }
 
 /** Story 3.6: loads a single sales-order line by its UUID surrogate (the dispatch-order id). */
-export async function getSalesOrderLineById(id: string, client?: PoolClient): Promise<ErpSalesOrderRow | null> {
-  const result = await runner(client).query(`SELECT ${COLUMNS} FROM erp_sales_order WHERE id = $1`, [id]);
+export async function getSalesOrderLineById(
+  id: string,
+  client?: PoolClient,
+): Promise<ErpSalesOrderRow | null> {
+  const result = await runner(client).query(
+    `SELECT ${COLUMNS} FROM erp_sales_order WHERE id = $1`,
+    [id],
+  );
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
 
@@ -101,7 +110,11 @@ export async function getSalesOrderLineById(id: string, client?: PoolClient): Pr
  * sales-order line. Returns a NUMERIC string, never coerced to a JS number, matching the
  * codebase-wide convention for balance/demand math (Story 3.8's exact-decimal-string comparison).
  */
-export async function getOpenPickDemand(sku: string, siteId: string, client?: PoolClient): Promise<string> {
+export async function getOpenPickDemand(
+  sku: string,
+  siteId: string,
+  client?: PoolClient,
+): Promise<string> {
   const result = await runner(client).query(
     `SELECT COALESCE(SUM(quantity), 0)::text AS demand
        FROM erp_sales_order
@@ -119,7 +132,11 @@ export async function lockSalesOrderDemandLine(id: string, client: PoolClient): 
   await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [id]);
 }
 
-export async function getRemainingDemand(id: string, client: PoolClient, excludedCrossDockTaskId?: string | null): Promise<string | null> {
+export async function getRemainingDemand(
+  id: string,
+  client: PoolClient,
+  excludedCrossDockTaskId?: string | null,
+): Promise<string | null> {
   await lockSalesOrderDemandLine(id, client);
   const result = await client.query(
     `SELECT (eso.quantity
@@ -155,8 +172,12 @@ export async function findCrossDockDemandMatch(
     );
     if (locked.rows.length === 0) continue;
     const row = locked.rows[0]!;
-    const enough = await client.query(`SELECT $1::numeric >= $2::numeric AS enough`, [row['remaining_demand'], quantity]);
-    if (enough.rows[0]!['enough'] === true) return { ...mapRow(row), remaining_demand: String(row['remaining_demand']) };
+    const enough = await client.query(`SELECT $1::numeric >= $2::numeric AS enough`, [
+      row['remaining_demand'],
+      quantity,
+    ]);
+    if (enough.rows[0]!['enough'] === true)
+      return { ...mapRow(row), remaining_demand: String(row['remaining_demand']) };
   }
   return null;
 }
@@ -179,7 +200,10 @@ export interface UpsertSalesOrderLineInput {
 }
 
 /** Upserts a SO line by (so_number_ext, line_no). source_system/last_synced_at are server-set. */
-export async function upsertSalesOrderLine(input: UpsertSalesOrderLineInput, client: PoolClient): Promise<void> {
+export async function upsertSalesOrderLine(
+  input: UpsertSalesOrderLineInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO erp_sales_order
        (so_number_ext, line_no, sku, quantity, required_by, ship_to_ext, ship_from_site_id,
@@ -218,7 +242,11 @@ export async function upsertSalesOrderLine(input: UpsertSalesOrderLineInput, cli
  * ':' delimiter can never collide with another line's key. Callers gate this on a non-empty applied
  * batch; an empty present set closes all currently-open lines.
  */
-export async function closeSalesOrdersNotIn(presentSoNumbers: string[], presentLineNos: number[], client: PoolClient): Promise<void> {
+export async function closeSalesOrdersNotIn(
+  presentSoNumbers: string[],
+  presentLineNos: number[],
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `UPDATE erp_sales_order SET status = 'closed', updated_at = now()
      WHERE status = 'open'

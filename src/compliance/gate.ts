@@ -3,7 +3,11 @@ import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { getPurchaseOrderByRef } from '../read/projections/erp_purchase_order.js';
 import { getLocationByCode } from '../read/projections/location_register.js';
-import { getGateEventById, markGateEventReversed, upsertGateEvent } from '../read/projections/gate_event.js';
+import {
+  getGateEventById,
+  markGateEventReversed,
+  upsertGateEvent,
+} from '../read/projections/gate_event.js';
 
 const GATE_STREAM_TYPES = new Set(['gate']);
 const GATE_EVENT_TYPES = new Set(['gate.entered', 'gate.reversed']);
@@ -51,12 +55,14 @@ async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Pr
 export function assertGateEnteredShape(envelope: EventEnvelope): void {
   if (gateEventType(envelope) !== 'gate.entered') return;
   const p = envelope.payload;
-  if (!isUuid(p['gate_event_id'])) throw new AppError(400, 'INVALID_PARAMS', 'gate_event_id is required and must be a UUID');
+  if (!isUuid(p['gate_event_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'gate_event_id is required and must be a UUID');
   const vehicle = trimmed(p['vehicle_reg_ext']);
   if (!vehicle) throw new AppError(400, 'GATE_VEHICLE_REG_REQUIRED', 'vehicle_reg_ext is required');
   p['vehicle_reg_ext'] = vehicle.toUpperCase();
   const photo = trimmed(p['challan_photo_ref']);
-  if (!photo) throw new AppError(400, 'GATE_CHALLAN_PHOTO_REQUIRED', 'challan_photo_ref is required');
+  if (!photo)
+    throw new AppError(400, 'GATE_CHALLAN_PHOTO_REQUIRED', 'challan_photo_ref is required');
   p['challan_photo_ref'] = photo;
   const poRef = trimmed(p['po_ref_ext']);
   if (!poRef) throw new AppError(400, 'GATE_PO_REF_REQUIRED', 'po_ref_ext is required');
@@ -67,23 +73,38 @@ export function assertGateEnteredShape(envelope: EventEnvelope): void {
   const gateId = trimmed(p['gate_id']);
   if (!gateId) throw new AppError(400, 'INVALID_PARAMS', 'gate_id is required');
   p['gate_id'] = gateId;
-  if (!isUuid(p['gate_officer_id'])) throw new AppError(400, 'INVALID_PARAMS', 'gate_officer_id is required and must be a UUID');
-  if (!isIsoTimestamp(p['entered_at'])) throw new AppError(400, 'INVALID_PARAMS', 'entered_at is required and must be an ISO timestamp');
-  if (p['driver_name'] !== undefined && p['driver_name'] !== null) p['driver_name'] = trimmed(p['driver_name']);
-  if (p['challan_number_ext'] !== undefined && p['challan_number_ext'] !== null) p['challan_number_ext'] = trimmed(p['challan_number_ext']);
+  if (!isUuid(p['gate_officer_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'gate_officer_id is required and must be a UUID');
+  if (!isIsoTimestamp(p['entered_at']))
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'entered_at is required and must be an ISO timestamp',
+    );
+  if (p['driver_name'] !== undefined && p['driver_name'] !== null)
+    p['driver_name'] = trimmed(p['driver_name']);
+  if (p['challan_number_ext'] !== undefined && p['challan_number_ext'] !== null)
+    p['challan_number_ext'] = trimmed(p['challan_number_ext']);
 }
 
 export function assertGateReversedShape(envelope: EventEnvelope): void {
   if (gateEventType(envelope) !== 'gate.reversed') return;
   const p = envelope.payload;
-  if (!isUuid(p['gate_event_id'])) throw new AppError(400, 'INVALID_PARAMS', 'gate_event_id is required and must be a UUID');
+  if (!isUuid(p['gate_event_id']))
+    throw new AppError(400, 'INVALID_PARAMS', 'gate_event_id is required and must be a UUID');
   const reason = trimmed(p['reversal_reason']);
-  if (!reason) throw new AppError(400, 'GATE_REVERSAL_REASON_REQUIRED', 'reversal_reason is required');
+  if (!reason)
+    throw new AppError(400, 'GATE_REVERSAL_REASON_REQUIRED', 'reversal_reason is required');
   p['reversal_reason'] = reason;
-  if (p['reversed_by'] !== undefined && !isUuid(p['reversed_by'])) throw new AppError(400, 'INVALID_PARAMS', 'reversed_by must be a UUID when supplied');
+  if (p['reversed_by'] !== undefined && !isUuid(p['reversed_by']))
+    throw new AppError(400, 'INVALID_PARAMS', 'reversed_by must be a UUID when supplied');
 }
 
-export async function applyGateProjection(envelope: EventEnvelope, client: PoolClient, eventId: string): Promise<void> {
+export async function applyGateProjection(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   const type = gateEventType(envelope);
   if (!type) return;
   if (await alreadyPersisted(envelope, client)) return;
@@ -93,7 +114,9 @@ export async function applyGateProjection(envelope: EventEnvelope, client: PoolC
     const siteCode = p['site_code_ext'] as string;
     const site = await getLocationByCode(siteCode, client);
     if (!site || site.status !== 'active' || site.level !== 'site') {
-      throw new AppError(404, 'GATE_SITE_NOT_FOUND', `No active site exists for "${siteCode}"`, { site_code_ext: siteCode });
+      throw new AppError(404, 'GATE_SITE_NOT_FOUND', `No active site exists for "${siteCode}"`, {
+        site_code_ext: siteCode,
+      });
     }
     const poRef = p['po_ref_ext'] as string;
     const po = poRef === 'UNKNOWN' ? null : await getPurchaseOrderByRef(poRef, client);
@@ -123,7 +146,13 @@ export async function applyGateProjection(envelope: EventEnvelope, client: PoolC
 
   const gateEventId = p['gate_event_id'] as string;
   const existing = await getGateEventById(gateEventId, client);
-  if (!existing) throw new AppError(404, 'GATE_EVENT_NOT_FOUND', `No gate event exists for "${gateEventId}"`, { gate_event_id: gateEventId });
-  if (existing.status === 'reversed') throw new AppError(409, 'GATE_ALREADY_REVERSED', 'Gate event is already reversed', { gate_event_id: gateEventId });
+  if (!existing)
+    throw new AppError(404, 'GATE_EVENT_NOT_FOUND', `No gate event exists for "${gateEventId}"`, {
+      gate_event_id: gateEventId,
+    });
+  if (existing.status === 'reversed')
+    throw new AppError(409, 'GATE_ALREADY_REVERSED', 'Gate event is already reversed', {
+      gate_event_id: gateEventId,
+    });
   await markGateEventReversed(gateEventId, p['reversal_reason'] as string, client);
 }

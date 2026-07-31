@@ -24,7 +24,13 @@ interface Role {
   locationId: string;
 }
 
-function makeRequest(port: number, method: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<HttpResult> {
+function makeRequest(
+  port: number,
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<HttpResult> {
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -65,14 +71,27 @@ function makeRequest(port: number, method: string, path: string, body?: unknown,
 }
 
 async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
-  const res = await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', { externalId, email: externalId, displayName: externalId, roles }, SCIM_HEADERS);
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  const res = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/scim/v2/Users',
+    { externalId, email: externalId, displayName: externalId, roles },
+    SCIM_HEADERS,
+  );
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
 }
 
@@ -185,7 +204,12 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
     gateHeaders = await authFor(port, 'gate-officer-3-2@example.com');
 
     await provisionUser(port, 'unloading-supervisor-3-2@example.com', [
-      { role: 'unloading_supervisor', module: 'inventory', functionScope: 'read', locationId: siteAId },
+      {
+        role: 'unloading_supervisor',
+        module: 'inventory',
+        functionScope: 'read',
+        locationId: siteAId,
+      },
     ]);
     supervisorHeaders = await authFor(port, 'unloading-supervisor-3-2@example.com');
 
@@ -219,42 +243,87 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
     assert.strictEqual(res.body['binding_status'], 'matched');
     assert.strictEqual(res.body['po_ref_ext'], 'PO-2026-0441');
     assert.strictEqual(res.body['gate_officer_id'], gateOfficerId);
-    assert.ok(typeof res.body['correlation_id'] === 'string' && res.body['correlation_id'] !== gateEventId);
+    assert.ok(
+      typeof res.body['correlation_id'] === 'string' && res.body['correlation_id'] !== gateEventId,
+    );
     assert.strictEqual(res.body['business_date'], '2026-07-22');
 
-    const read = await makeRequest(port, 'GET', `/api/v1/gate-events/${gateEventId}`, undefined, supervisorHeaders);
+    const read = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/gate-events/${gateEventId}`,
+      undefined,
+      supervisorHeaders,
+    );
     assert.strictEqual(read.status, 200, JSON.stringify(read.body));
     assert.strictEqual(read.body['binding_status'], 'matched');
-    assert.deepStrictEqual(read.body['po_summary'], { po_number_ext: 'PO-2026-0441', supplier_ref_ext: 'SUP-1', status: 'open' });
+    assert.deepStrictEqual(read.body['po_summary'], {
+      po_number_ext: 'PO-2026-0441',
+      supplier_ref_ext: 'SUP-1',
+      status: 'open',
+    });
     assert.strictEqual(read.body['correlation_id'], res.body['correlation_id']);
   });
 
   it('AC3: unknown and closed PO references are captured as unmatched and visible to exception owners', async () => {
-    const unknown = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ po_ref_ext: 'UNKNOWN' }), gateHeaders);
+    const unknown = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ po_ref_ext: 'UNKNOWN' }),
+      gateHeaders,
+    );
     assert.strictEqual(unknown.status, 201, JSON.stringify(unknown.body));
     assert.strictEqual(unknown.body['binding_status'], 'unmatched');
     const unknownId = unknown.body['gate_event_id'] as string;
 
-    const closed = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ po_ref_ext: 'PO-CLOSED' }), gateHeaders);
+    const closed = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ po_ref_ext: 'PO-CLOSED' }),
+      gateHeaders,
+    );
     assert.strictEqual(closed.status, 201, JSON.stringify(closed.body));
     assert.strictEqual(closed.body['binding_status'], 'unmatched');
 
-    const list = await makeRequest(port, 'GET', '/api/v1/gate-events?binding=unmatched', undefined, supervisorHeaders);
+    const list = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?binding=unmatched',
+      undefined,
+      supervisorHeaders,
+    );
     assert.strictEqual(list.status, 200, JSON.stringify(list.body));
     const events = list.body['gate_events'] as Record<string, unknown>[];
     assert.ok(events.some((row) => row['gate_event_id'] === unknownId));
 
-    const denied = await makeRequest(port, 'GET', '/api/v1/gate-events?binding=unmatched', undefined, readerHeaders);
+    const denied = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?binding=unmatched',
+      undefined,
+      readerHeaders,
+    );
     assert.strictEqual(denied.status, 403, JSON.stringify(denied.body));
     assert.strictEqual(denied.body['error_code'], 'FUNCTION_ACCESS_DENIED');
   });
 
   it('AC4: challan photo is mandatory and missing photos are rejected before any event is persisted', async () => {
-    const res = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ challan_photo_ref: '  ' }), gateHeaders);
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ challan_photo_ref: '  ' }),
+      gateHeaders,
+    );
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'GATE_CHALLAN_PHOTO_REQUIRED');
 
-    const persisted = await getPool().query('SELECT count(*)::int AS c FROM domain_events WHERE stream_id = $1', [res.body['gate_event_id'] as string]);
+    const persisted = await getPool().query(
+      'SELECT count(*)::int AS c FROM domain_events WHERE stream_id = $1',
+      [res.body['gate_event_id'] as string],
+    );
     assert.strictEqual(persisted.rows[0]!['c'], 0);
   });
 
@@ -263,29 +332,62 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
     assert.strictEqual(created.status, 201, JSON.stringify(created.body));
     const gateEventId = created.body['gate_event_id'] as string;
 
-    const reversed = await makeRequest(port, 'POST', `/api/v1/gate-events/${gateEventId}/reverse`, { reversal_reason: 'wrong vehicle' }, gateHeaders);
+    const reversed = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/gate-events/${gateEventId}/reverse`,
+      { reversal_reason: 'wrong vehicle' },
+      gateHeaders,
+    );
     assert.strictEqual(reversed.status, 200, JSON.stringify(reversed.body));
     assert.strictEqual(reversed.body['status'], 'reversed');
     assert.strictEqual(reversed.body['reversal_reason'], 'wrong vehicle');
 
-    const rows = await getPool().query('SELECT count(*)::int AS c FROM gate_event WHERE gate_event_id = $1', [gateEventId]);
+    const rows = await getPool().query(
+      'SELECT count(*)::int AS c FROM gate_event WHERE gate_event_id = $1',
+      [gateEventId],
+    );
     assert.strictEqual(rows.rows[0]!['c'], 1);
 
-    const repeat = await makeRequest(port, 'POST', `/api/v1/gate-events/${gateEventId}/reverse`, { reversal_reason: 'again' }, gateHeaders);
+    const repeat = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/gate-events/${gateEventId}/reverse`,
+      { reversal_reason: 'again' },
+      gateHeaders,
+    );
     assert.strictEqual(repeat.status, 409, JSON.stringify(repeat.body));
     assert.strictEqual(repeat.body['error_code'], 'GATE_ALREADY_REVERSED');
   });
 
   it('Task 5: RBAC and site scoping reject non-gate roles and out-of-scope sites', async () => {
-    const nonGate = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody(), readerHeaders);
+    const nonGate = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody(),
+      readerHeaders,
+    );
     assert.strictEqual(nonGate.status, 403, JSON.stringify(nonGate.body));
     assert.strictEqual(nonGate.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
-    const outOfScope = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ site_code_ext: 'site-A' }), siteBHeaders);
+    const outOfScope = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ site_code_ext: 'site-A' }),
+      siteBHeaders,
+    );
     assert.strictEqual(outOfScope.status, 403, JSON.stringify(outOfScope.body));
     assert.strictEqual(outOfScope.body['error_code'], 'LOCATION_ACCESS_DENIED');
 
-    const list = await makeRequest(port, 'GET', '/api/v1/gate-events?site=site-A', undefined, managerHeaders);
+    const list = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?site=site-A',
+      undefined,
+      managerHeaders,
+    );
     assert.strictEqual(list.status, 200, JSON.stringify(list.body));
     assert.ok(Array.isArray(list.body['gate_events']));
   });
@@ -300,7 +402,12 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
       stream_id: gateEventId,
       event_type: 'gate.entered',
       payload: gateBody({ gate_event_id: gateEventId }),
-      metadata: { correlation_id: correlationId, actor: { user_id: randomUUID(), role: 'gate_officer', location_id: siteAId }, device_id: 'EDGE-GATE-1', occurred_at: new Date().toISOString() },
+      metadata: {
+        correlation_id: correlationId,
+        actor: { user_id: randomUUID(), role: 'gate_officer', location_id: siteAId },
+        device_id: 'EDGE-GATE-1',
+        occurred_at: new Date().toISOString(),
+      },
       idempotency_key: `gate-edge-${gateEventId}`,
     };
 
@@ -310,7 +417,10 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
     assert.strictEqual(duplicate.status, 409, JSON.stringify(duplicate.body));
     assert.strictEqual(duplicate.body['error_code'], 'DUPLICATE_EVENT');
 
-    const row = await getPool().query('SELECT binding_status, correlation_id FROM gate_event WHERE gate_event_id = $1', [gateEventId]);
+    const row = await getPool().query(
+      'SELECT binding_status, correlation_id FROM gate_event WHERE gate_event_id = $1',
+      [gateEventId],
+    );
     assert.strictEqual(row.rows[0]!['binding_status'], 'matched');
     assert.strictEqual(row.rows[0]!['correlation_id'], correlationId);
     const after = await getPool().query('SELECT count(*)::int AS c FROM erp_purchase_order');
@@ -318,7 +428,13 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
   });
 
   it('Task 4: reverse negative paths - not found, missing reason, RBAC, site scope', async () => {
-    const missing = await makeRequest(port, 'POST', '/api/v1/gate-events/00000000-0000-0000-0000-000000000000/reverse', { reversal_reason: 'x' }, gateHeaders);
+    const missing = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events/00000000-0000-0000-0000-000000000000/reverse',
+      { reversal_reason: 'x' },
+      gateHeaders,
+    );
     assert.strictEqual(missing.status, 404, JSON.stringify(missing.body));
     assert.strictEqual(missing.body['error_code'], 'GATE_EVENT_NOT_FOUND');
 
@@ -326,25 +442,55 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
     assert.strictEqual(created.status, 201, JSON.stringify(created.body));
     const gateEventId = created.body['gate_event_id'] as string;
 
-    const noReason = await makeRequest(port, 'POST', `/api/v1/gate-events/${gateEventId}/reverse`, {}, gateHeaders);
+    const noReason = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/gate-events/${gateEventId}/reverse`,
+      {},
+      gateHeaders,
+    );
     assert.strictEqual(noReason.status, 400, JSON.stringify(noReason.body));
     assert.strictEqual(noReason.body['error_code'], 'GATE_REVERSAL_REASON_REQUIRED');
 
-    const nonGate = await makeRequest(port, 'POST', `/api/v1/gate-events/${gateEventId}/reverse`, { reversal_reason: 'x' }, readerHeaders);
+    const nonGate = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/gate-events/${gateEventId}/reverse`,
+      { reversal_reason: 'x' },
+      readerHeaders,
+    );
     assert.strictEqual(nonGate.status, 403, JSON.stringify(nonGate.body));
     assert.strictEqual(nonGate.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
-    const outOfScope = await makeRequest(port, 'POST', `/api/v1/gate-events/${gateEventId}/reverse`, { reversal_reason: 'x' }, siteBHeaders);
+    const outOfScope = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/gate-events/${gateEventId}/reverse`,
+      { reversal_reason: 'x' },
+      siteBHeaders,
+    );
     assert.strictEqual(outOfScope.status, 403, JSON.stringify(outOfScope.body));
     assert.strictEqual(outOfScope.body['error_code'], 'LOCATION_ACCESS_DENIED');
   });
 
   it('Task 5: list filters reject invalid binding and status values', async () => {
-    const badBinding = await makeRequest(port, 'GET', '/api/v1/gate-events?binding=invalid', undefined, gateHeaders);
+    const badBinding = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?binding=invalid',
+      undefined,
+      gateHeaders,
+    );
     assert.strictEqual(badBinding.status, 400, JSON.stringify(badBinding.body));
     assert.strictEqual(badBinding.body['error_code'], 'INVALID_PARAMS');
 
-    const badStatus = await makeRequest(port, 'GET', '/api/v1/gate-events?status=invalid', undefined, gateHeaders);
+    const badStatus = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?status=invalid',
+      undefined,
+      gateHeaders,
+    );
     assert.strictEqual(badStatus.status, 400, JSON.stringify(badStatus.body));
     assert.strictEqual(badStatus.body['error_code'], 'INVALID_PARAMS');
   });
@@ -352,36 +498,70 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
   it('Review D1: online create with Idempotency-Key replays the original gate event instead of duplicating', async () => {
     const key = `gate-online-${randomUUID()}`;
     const body = gateBody();
-    const first = await makeRequest(port, 'POST', '/api/v1/gate-events', body, { ...gateHeaders, 'Idempotency-Key': key });
+    const first = await makeRequest(port, 'POST', '/api/v1/gate-events', body, {
+      ...gateHeaders,
+      'Idempotency-Key': key,
+    });
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
     const gateEventId = first.body['gate_event_id'] as string;
 
-    const retry = await makeRequest(port, 'POST', '/api/v1/gate-events', body, { ...gateHeaders, 'Idempotency-Key': key });
+    const retry = await makeRequest(port, 'POST', '/api/v1/gate-events', body, {
+      ...gateHeaders,
+      'Idempotency-Key': key,
+    });
     assert.strictEqual(retry.status, 200, JSON.stringify(retry.body));
     assert.strictEqual(retry.body['gate_event_id'], gateEventId);
     assert.strictEqual(retry.body['correlation_id'], first.body['correlation_id']);
 
-    const rows = await getPool().query(`SELECT count(*)::int AS c FROM domain_events WHERE idempotency_key = $1`, [key]);
+    const rows = await getPool().query(
+      `SELECT count(*)::int AS c FROM domain_events WHERE idempotency_key = $1`,
+      [key],
+    );
     assert.strictEqual(rows.rows[0]!['c'], 1);
   });
 
   it('Review re-review: Idempotency-Key reused across sites is rejected, not replayed cross-site', async () => {
     const key = `gate-cross-site-${randomUUID()}`;
-    const first = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody(), { ...gateHeaders, 'Idempotency-Key': key });
+    const first = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody(), {
+      ...gateHeaders,
+      'Idempotency-Key': key,
+    });
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
 
-    const conflict = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ site_code_ext: 'site-B' }), { ...siteBHeaders, 'Idempotency-Key': key });
+    const conflict = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ site_code_ext: 'site-B' }),
+      { ...siteBHeaders, 'Idempotency-Key': key },
+    );
     assert.strictEqual(conflict.status, 409, JSON.stringify(conflict.body));
     assert.strictEqual(conflict.body['error_code'], 'IDEMPOTENCY_KEY_CONFLICT');
-    assert.strictEqual(conflict.body['vehicle_reg_ext'], undefined, 'conflict response must not leak the other site event data');
+    assert.strictEqual(
+      conflict.body['vehicle_reg_ext'],
+      undefined,
+      'conflict response must not leak the other site event data',
+    );
   });
 
   it('Review re-review: Idempotency-Key reused with a different vehicle is rejected, not silently replayed', async () => {
     const key = `gate-body-mismatch-${randomUUID()}`;
-    const first = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ vehicle_reg_ext: 'KA01AB1234' }), { ...gateHeaders, 'Idempotency-Key': key });
+    const first = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ vehicle_reg_ext: 'KA01AB1234' }),
+      { ...gateHeaders, 'Idempotency-Key': key },
+    );
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
 
-    const conflict = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ vehicle_reg_ext: 'KA01AB9999' }), { ...gateHeaders, 'Idempotency-Key': key });
+    const conflict = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ vehicle_reg_ext: 'KA01AB9999' }),
+      { ...gateHeaders, 'Idempotency-Key': key },
+    );
     assert.strictEqual(conflict.status, 409, JSON.stringify(conflict.body));
     assert.strictEqual(conflict.body['error_code'], 'IDEMPOTENCY_KEY_CONFLICT');
   });
@@ -391,41 +571,102 @@ describe('Story 3.2 Gate Event Capture and Vehicle-to-PO Binding', () => {
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.strictEqual(res.body['binding_token'], res.body['correlation_id']);
 
-    const read = await makeRequest(port, 'GET', `/api/v1/gate-events/${res.body['gate_event_id'] as string}`, undefined, supervisorHeaders);
+    const read = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/gate-events/${res.body['gate_event_id'] as string}`,
+      undefined,
+      supervisorHeaders,
+    );
     assert.strictEqual(read.status, 200, JSON.stringify(read.body));
     assert.strictEqual(read.body['binding_token'], read.body['correlation_id']);
   });
 
   it('Review D3: unmatched worklist defaults oldest-first and supports offset pagination', async () => {
-    const older = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ po_ref_ext: 'UNKNOWN', entered_at: '2026-07-20T01:00:00.000Z' }), gateHeaders);
+    const older = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ po_ref_ext: 'UNKNOWN', entered_at: '2026-07-20T01:00:00.000Z' }),
+      gateHeaders,
+    );
     assert.strictEqual(older.status, 201, JSON.stringify(older.body));
-    const newer = await makeRequest(port, 'POST', '/api/v1/gate-events', gateBody({ po_ref_ext: 'UNKNOWN', entered_at: '2026-07-23T01:00:00.000Z' }), gateHeaders);
+    const newer = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/gate-events',
+      gateBody({ po_ref_ext: 'UNKNOWN', entered_at: '2026-07-23T01:00:00.000Z' }),
+      gateHeaders,
+    );
     assert.strictEqual(newer.status, 201, JSON.stringify(newer.body));
 
-    const list = await makeRequest(port, 'GET', '/api/v1/gate-events?binding=unmatched', undefined, supervisorHeaders);
+    const list = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?binding=unmatched',
+      undefined,
+      supervisorHeaders,
+    );
     assert.strictEqual(list.status, 200, JSON.stringify(list.body));
     const events = list.body['gate_events'] as Record<string, unknown>[];
-    const olderIdx = events.findIndex((row) => row['gate_event_id'] === older.body['gate_event_id']);
-    const newerIdx = events.findIndex((row) => row['gate_event_id'] === newer.body['gate_event_id']);
-    assert.ok(olderIdx !== -1 && newerIdx !== -1, 'both unmatched events must appear in the worklist');
-    assert.ok(olderIdx < newerIdx, `oldest-first worklist: older at ${olderIdx}, newer at ${newerIdx}`);
+    const olderIdx = events.findIndex(
+      (row) => row['gate_event_id'] === older.body['gate_event_id'],
+    );
+    const newerIdx = events.findIndex(
+      (row) => row['gate_event_id'] === newer.body['gate_event_id'],
+    );
+    assert.ok(
+      olderIdx !== -1 && newerIdx !== -1,
+      'both unmatched events must appear in the worklist',
+    );
+    assert.ok(
+      olderIdx < newerIdx,
+      `oldest-first worklist: older at ${olderIdx}, newer at ${newerIdx}`,
+    );
 
-    const paged = await makeRequest(port, 'GET', '/api/v1/gate-events?binding=unmatched&offset=1', undefined, supervisorHeaders);
+    const paged = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?binding=unmatched&offset=1',
+      undefined,
+      supervisorHeaders,
+    );
     assert.strictEqual(paged.status, 200, JSON.stringify(paged.body));
     const pagedEvents = paged.body['gate_events'] as Record<string, unknown>[];
     assert.strictEqual(pagedEvents.length, events.length - 1);
     assert.strictEqual(pagedEvents[0]!['gate_event_id'], events[1]!['gate_event_id']);
 
-    const explicitDesc = await makeRequest(port, 'GET', '/api/v1/gate-events?binding=unmatched&order=desc', undefined, supervisorHeaders);
+    const explicitDesc = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?binding=unmatched&order=desc',
+      undefined,
+      supervisorHeaders,
+    );
     assert.strictEqual(explicitDesc.status, 200, JSON.stringify(explicitDesc.body));
     const descEvents = explicitDesc.body['gate_events'] as Record<string, unknown>[];
-    assert.strictEqual(descEvents[descEvents.length - 1]!['gate_event_id'], events[0]!['gate_event_id']);
+    assert.strictEqual(
+      descEvents[descEvents.length - 1]!['gate_event_id'],
+      events[0]!['gate_event_id'],
+    );
 
-    const badOffset = await makeRequest(port, 'GET', '/api/v1/gate-events?offset=-1', undefined, supervisorHeaders);
+    const badOffset = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?offset=-1',
+      undefined,
+      supervisorHeaders,
+    );
     assert.strictEqual(badOffset.status, 400, JSON.stringify(badOffset.body));
     assert.strictEqual(badOffset.body['error_code'], 'INVALID_PARAMS');
 
-    const badOrder = await makeRequest(port, 'GET', '/api/v1/gate-events?order=sideways', undefined, supervisorHeaders);
+    const badOrder = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/gate-events?order=sideways',
+      undefined,
+      supervisorHeaders,
+    );
     assert.strictEqual(badOrder.status, 400, JSON.stringify(badOrder.body));
     assert.strictEqual(badOrder.body['error_code'], 'INVALID_PARAMS');
   });

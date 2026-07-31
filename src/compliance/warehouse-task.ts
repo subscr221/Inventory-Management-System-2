@@ -36,7 +36,14 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  */
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 
-export const WAREHOUSE_TASK_TYPES: readonly WarehouseTaskType[] = ['receiving', 'putaway', 'picking', 'packing', 'replenishment', 'cross_docking'];
+export const WAREHOUSE_TASK_TYPES: readonly WarehouseTaskType[] = [
+  'receiving',
+  'putaway',
+  'picking',
+  'packing',
+  'replenishment',
+  'cross_docking',
+];
 
 /**
  * Changing an SLA threshold changes what counts as a breach, and assigning work directs another
@@ -68,14 +75,23 @@ function reject(code: string, message: string, details: Record<string, unknown> 
  * Fails closed unless the actor's assignment covers the site being written to. A wildcard actor
  * (NO_LOCATION_UUID) is permitted, matching the convention in src/compliance/pick.ts.
  */
-function assertActorSite(actorLocationId: string, siteId: string, context: Record<string, unknown>): void {
+function assertActorSite(
+  actorLocationId: string,
+  siteId: string,
+  context: Record<string, unknown>,
+): void {
   if (actorLocationId === NO_LOCATION_UUID) return;
   if (actorLocationId !== siteId) {
-    throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No assignment grants access to site "${siteId}"`, {
-      ...context,
-      actor_location_id: actorLocationId,
-      site_id: siteId,
-    });
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No assignment grants access to site "${siteId}"`,
+      {
+        ...context,
+        actor_location_id: actorLocationId,
+        site_id: siteId,
+      },
+    );
   }
 }
 
@@ -117,15 +133,24 @@ export function assertTaskSlaConfigUpdatedShape(envelope: TaskSlaConfigUpdatedEn
     reject('TASK_SLA_CONFIG_INVALID_PAYLOAD', 'payload is required and must be an object');
   }
   if (!isUuid(p.site_id)) {
-    reject('TASK_SLA_CONFIG_INVALID_PAYLOAD', 'site_id is required and must be a UUID', { site_id: p.site_id });
-  }
-  if (!WAREHOUSE_TASK_TYPES.includes(p.task_type)) {
-    reject('TASK_SLA_CONFIG_INVALID_PAYLOAD', `task_type is required and must be one of: ${WAREHOUSE_TASK_TYPES.join(', ')}`, {
-      task_type: p.task_type,
+    reject('TASK_SLA_CONFIG_INVALID_PAYLOAD', 'site_id is required and must be a UUID', {
+      site_id: p.site_id,
     });
   }
+  if (!WAREHOUSE_TASK_TYPES.includes(p.task_type)) {
+    reject(
+      'TASK_SLA_CONFIG_INVALID_PAYLOAD',
+      `task_type is required and must be one of: ${WAREHOUSE_TASK_TYPES.join(', ')}`,
+      {
+        task_type: p.task_type,
+      },
+    );
+  }
   if (p.zone_id !== undefined && p.zone_id !== null && !isUuid(p.zone_id)) {
-    reject('TASK_SLA_CONFIG_INVALID_PAYLOAD', 'zone_id must be a UUID when supplied (omit it to set the site-wide default)');
+    reject(
+      'TASK_SLA_CONFIG_INVALID_PAYLOAD',
+      'zone_id must be a UUID when supplied (omit it to set the site-wide default)',
+    );
   }
   if (normalizeThresholdMinutes(p.threshold_minutes) === null) {
     reject(
@@ -155,8 +180,14 @@ export async function applyTaskSlaConfigUpdatedProjection(
 ): Promise<void> {
   const p = envelope.payload;
 
-  assertSupervisor(envelope.metadata.actor.role, envelope.event_type, 'Changing a task SLA threshold');
-  assertActorSite(envelope.metadata.actor.location_id, p.site_id, { event_type: envelope.event_type });
+  assertSupervisor(
+    envelope.metadata.actor.role,
+    envelope.event_type,
+    'Changing a task SLA threshold',
+  );
+  assertActorSite(envelope.metadata.actor.location_id, p.site_id, {
+    event_type: envelope.event_type,
+  });
 
   const zoneId = p.zone_id ?? null;
   if (zoneId !== null) {
@@ -165,14 +196,24 @@ export async function applyTaskSlaConfigUpdatedProjection(
       [zoneId],
     );
     if (zone.rows.length === 0) {
-      throw new AppError(404, 'LOCATION_NOT_FOUND', `No location register entry exists for "${zoneId}"`, { zone_id: zoneId });
+      throw new AppError(
+        404,
+        'LOCATION_NOT_FOUND',
+        `No location register entry exists for "${zoneId}"`,
+        { zone_id: zoneId },
+      );
     }
     const row = zone.rows[0]!;
     if (row['level'] !== 'zone') {
-      throw new AppError(400, 'TASK_SLA_CONFIG_INVALID_PAYLOAD', `Location "${zoneId}" is not a zone`, {
-        zone_id: zoneId,
-        level: row['level'],
-      });
+      throw new AppError(
+        400,
+        'TASK_SLA_CONFIG_INVALID_PAYLOAD',
+        `Location "${zoneId}" is not a zone`,
+        {
+          zone_id: zoneId,
+          level: row['level'],
+        },
+      );
     }
     if (row['status'] !== 'active') {
       throw new AppError(400, 'TASK_SLA_CONFIG_INVALID_PAYLOAD', `Zone "${zoneId}" is not active`, {
@@ -181,11 +222,16 @@ export async function applyTaskSlaConfigUpdatedProjection(
       });
     }
     if (row['site_id'] !== p.site_id) {
-      throw new AppError(403, 'LOCATION_ACCESS_DENIED', `Zone "${zoneId}" does not belong to site "${p.site_id}"`, {
-        zone_id: zoneId,
-        zone_site_id: row['site_id'],
-        site_id: p.site_id,
-      });
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `Zone "${zoneId}" does not belong to site "${p.site_id}"`,
+        {
+          zone_id: zoneId,
+          zone_site_id: row['site_id'],
+          site_id: p.site_id,
+        },
+      );
     }
   }
 
@@ -193,7 +239,11 @@ export async function applyTaskSlaConfigUpdatedProjection(
   // assertTaskSlaConfigUpdatedShape already rejected anything unnormalizable; this is the
   // fail-closed guard for the (impossible) case where the two disagree, never a silent no-op.
   if (threshold === null) {
-    throw new AppError(400, 'TASK_SLA_CONFIG_INVALID_PAYLOAD', 'threshold_minutes is not a valid positive threshold');
+    throw new AppError(
+      400,
+      'TASK_SLA_CONFIG_INVALID_PAYLOAD',
+      'threshold_minutes is not a valid positive threshold',
+    );
   }
 
   // The row id is stable per grain across replays: the ON CONFLICT target is
@@ -231,14 +281,18 @@ function assertAssignmentShape(
     reject(code, `${taskIdField} is required and must be a UUID`, { [taskIdField]: taskId });
   }
   if (!isUuid(payload.assigned_to)) {
-    reject(code, 'assigned_to is required and must be a UUID', { assigned_to: payload.assigned_to });
+    reject(code, 'assigned_to is required and must be a UUID', {
+      assigned_to: payload.assigned_to,
+    });
   }
   if (
     payload.priority !== undefined &&
     payload.priority !== null &&
     !TASK_PRIORITY_VALUES.includes(payload.priority as string)
   ) {
-    reject(code, `priority must be one of: ${TASK_PRIORITY_VALUES.join(', ')}`, { priority: payload.priority });
+    reject(code, `priority must be one of: ${TASK_PRIORITY_VALUES.join(', ')}`, {
+      priority: payload.priority,
+    });
   }
 }
 
@@ -285,9 +339,14 @@ export async function applyPutawayTaskAssignedProjection(
     [p.putaway_task_id],
   );
   if (task.rows.length === 0) {
-    throw new AppError(404, 'PUTAWAY_TASK_NOT_FOUND', `No putaway task exists for "${p.putaway_task_id}"`, {
-      putaway_task_id: p.putaway_task_id,
-    });
+    throw new AppError(
+      404,
+      'PUTAWAY_TASK_NOT_FOUND',
+      `No putaway task exists for "${p.putaway_task_id}"`,
+      {
+        putaway_task_id: p.putaway_task_id,
+      },
+    );
   }
   const current = task.rows[0]!;
   assertActorSite(envelope.metadata.actor.location_id, current['site_id'] as string, {
@@ -307,10 +366,15 @@ export async function applyPutawayTaskAssignedProjection(
 
   if (!assigned) {
     if (current['status'] !== 'ready') {
-      throw new AppError(409, 'PUTAWAY_TASK_NOT_READY', `Putaway task "${p.putaway_task_id}" is not ready for assignment`, {
-        putaway_task_id: p.putaway_task_id,
-        status: current['status'],
-      });
+      throw new AppError(
+        409,
+        'PUTAWAY_TASK_NOT_READY',
+        `Putaway task "${p.putaway_task_id}" is not ready for assignment`,
+        {
+          putaway_task_id: p.putaway_task_id,
+          status: current['status'],
+        },
+      );
     }
     throw new AppError(
       409,
@@ -381,7 +445,11 @@ export async function applyPickTaskAssignedProjection(
       409,
       'PICK_TASK_ALREADY_ASSIGNED',
       `Pick task "${p.pick_task_id}" is not assignable in status "${current['status']}" or is already assigned to another operator`,
-      { pick_task_id: p.pick_task_id, status: current['status'], assigned_to: current['assigned_to'] },
+      {
+        pick_task_id: p.pick_task_id,
+        status: current['status'],
+        assigned_to: current['assigned_to'],
+      },
     );
   }
 }

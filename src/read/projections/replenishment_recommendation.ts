@@ -86,7 +86,10 @@ export interface RecommendationFilters {
   signal_type?: string | null;
 }
 
-export async function listRecommendations(filters: RecommendationFilters, client?: PoolClient): Promise<ReplenishmentRecommendationRow[]> {
+export async function listRecommendations(
+  filters: RecommendationFilters,
+  client?: PoolClient,
+): Promise<ReplenishmentRecommendationRow[]> {
   const conditions: string[] = [];
   const params: unknown[] = [];
   let i = 1;
@@ -142,7 +145,10 @@ export interface InsertRecommendationInput {
  * is the concurrency backstop: two racing checks that both pass the FOR UPDATE gate cannot both land
  * an open row - the loser raises a 23505 that rolls its transaction back.
  */
-export async function insertRecommendation(input: InsertRecommendationInput, client: PoolClient): Promise<void> {
+export async function insertRecommendation(
+  input: InsertRecommendationInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO replenishment_recommendation (
        recommendation_id, sku, location_id, on_hand_at_check, reorder_point, recommended_order_qty,

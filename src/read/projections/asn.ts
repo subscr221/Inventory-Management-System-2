@@ -93,17 +93,29 @@ function mapLine(row: Record<string, unknown>): AsnLine {
 }
 
 /** The ASN header plus its lines (single-header, multi-line assembly), or null when unknown. */
-export async function getAsnByNumber(asnNumberExt: string, client?: PoolClient): Promise<AsnWithLines | null> {
+export async function getAsnByNumber(
+  asnNumberExt: string,
+  client?: PoolClient,
+): Promise<AsnWithLines | null> {
   const q = runner(client);
-  const headerResult = await q.query(`SELECT ${HEADER_COLUMNS} FROM asn WHERE asn_number_ext = $1`, [asnNumberExt]);
+  const headerResult = await q.query(
+    `SELECT ${HEADER_COLUMNS} FROM asn WHERE asn_number_ext = $1`,
+    [asnNumberExt],
+  );
   if (headerResult.rows.length === 0) return null;
   const header = mapHeader(headerResult.rows[0]!);
-  const lineResult = await q.query(`SELECT ${LINE_COLUMNS} FROM asn_line WHERE asn_number_ext = $1 ORDER BY line_no`, [asnNumberExt]);
+  const lineResult = await q.query(
+    `SELECT ${LINE_COLUMNS} FROM asn_line WHERE asn_number_ext = $1 ORDER BY line_no`,
+    [asnNumberExt],
+  );
   return { ...header, lines: lineResult.rows.map(mapLine) };
 }
 
 /** Upserts an ASN header by asn_number_ext. Re-transmitting an unchanged ASN stays idempotent. */
-export async function upsertAsnHeader(input: UpsertAsnHeaderInput, client: PoolClient): Promise<void> {
+export async function upsertAsnHeader(
+  input: UpsertAsnHeaderInput,
+  client: PoolClient,
+): Promise<void> {
   await client.query(
     `INSERT INTO asn
        (asn_number_ext, po_ref_ext, supplier_ref_ext, site_id, status, source_snapshot)
