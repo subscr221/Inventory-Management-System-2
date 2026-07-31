@@ -38,6 +38,15 @@ export interface CreatePickLineInput {
   directed_quantity: string;
   location_id: string;
   pick_sequence: number;
+  cross_dock_task_id?: string | null;
+  confirmed_lot_id?: string | null;
+  confirmed_quantity?: string | null;
+  confirmed_location_id?: string | null;
+  status?: PickLine['status'];
+  capture_method?: PickLine['capture_method'];
+  confirmed_by?: string | null;
+  created_at?: string;
+  confirmed_at?: string | null;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -89,8 +98,10 @@ export async function createPickLine(input: CreatePickLineInput, client: PoolCli
   await client.query(
     `INSERT INTO pick_line
        (pick_line_id, pick_task_id, dispatch_order_line_id, sku, directed_lot_id,
-        directed_quantity, location_id, pick_sequence)
-     VALUES ($1, $2, $3, $4, $5, $6::numeric, $7, $8)
+        directed_quantity, location_id, pick_sequence, cross_dock_task_id, confirmed_lot_id,
+        confirmed_quantity, confirmed_location_id, status, capture_method, confirmed_by, created_at, confirmed_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6::numeric, $7, $8, $9, $10, $11::numeric, $12, $13, $14, $15,
+             COALESCE($16::timestamptz, now()), $17::timestamptz, COALESCE($17::timestamptz, now()))
      ON CONFLICT (pick_line_id) DO NOTHING`,
     [
       input.pick_line_id,
@@ -101,6 +112,15 @@ export async function createPickLine(input: CreatePickLineInput, client: PoolCli
       input.directed_quantity,
       input.location_id,
       input.pick_sequence,
+      input.cross_dock_task_id ?? null,
+      input.confirmed_lot_id ?? null,
+      input.confirmed_quantity ?? null,
+      input.confirmed_location_id ?? null,
+      input.status ?? 'pending',
+      input.capture_method ?? null,
+      input.confirmed_by ?? null,
+      input.created_at ?? null,
+      input.confirmed_at ?? null,
     ],
   );
 }

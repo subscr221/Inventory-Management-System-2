@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { AppError } from '../middleware/error.js';
 import { persistEvent } from '../events/store.js';
-import { getSalesOrderLineById, type ErpSalesOrderRow } from '../read/projections/erp_sales_order.js';
+import { getRemainingDemand, getSalesOrderLineById, lockSalesOrderDemandLine, type ErpSalesOrderRow } from '../read/projections/erp_sales_order.js';
 import { getVelocityClass } from '../read/projections/velocity_class.js';
 import type { PickLineInput } from '../events/schema.js';
 
@@ -141,8 +141,9 @@ async function allocateForLine(
   siteId: string,
   consumed: Map<string, bigint>,
   client: PoolClient,
+  requestedQuantity = line.quantity,
 ): Promise<LotAllocation[]> {
-  if (!isNonNegativeMicro(line.quantity) || numericToMicro(line.quantity) === 0n) {
+  if (!isNonNegativeMicro(requestedQuantity) || numericToMicro(requestedQuantity) === 0n) {
     throw new AppError(400, 'PICK_TASK_INVALID_PAYLOAD', 'Dispatch-order line quantity must be a positive numeric value', {
       dispatch_order_line_id: line.id,
       quantity: line.quantity,
@@ -178,7 +179,7 @@ async function allocateForLine(
     ordered.push(...rows);
   }
 
-  let remaining = numericToMicro(line.quantity.toString());
+  let remaining = numericToMicro(requestedQuantity);
   const allocations: LotAllocation[] = [];
   for (const c of ordered) {
     if (remaining <= 0n) break;
@@ -316,9 +317,11 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
   // their UUID surrogate so concurrent generation runs for the same lines cannot both pass this
   // gate and create duplicate pick tasks.
   const lines: ErpSalesOrderRow[] = [];
+  const orderedIds = [...new Set(input.dispatchOrderLineIds)].sort();
+  for (const id of orderedIds) await lockSalesOrderDemandLine(id, client);
   await client.query(
-    `SELECT id FROM erp_sales_order WHERE id = ANY($1::uuid[]) AND status = 'open' FOR UPDATE`,
-    [input.dispatchOrderLineIds],
+    `SELECT id FROM erp_sales_order WHERE id = ANY($1::uuid[]) AND status = 'open' ORDER BY id FOR UPDATE`,
+    [orderedIds],
   );
   for (const id of input.dispatchOrderLineIds) {
     const line = await getSalesOrderLineById(id, client);
@@ -333,27 +336,13 @@ export async function generatePickTasks(input: GeneratePickTasksInput, client: P
         ship_from_site_id: line.ship_from_site_id,
       });
     }
-    // Review pass 2: generation must be idempotent. Nothing marks a demand line consumed - the
-    // FOR UPDATE above only serializes concurrent runs, it does not stop a second run from
-    // re-allocating the same demand - so a repeated submission previously produced a second task
-    // holding a second allocation for the same order line. An existing live pick line for this
-    // order line is the consumption record.
-    const existing = await client.query(
-      `SELECT 1
-         FROM pick_line pl
-         JOIN pick_task pt ON pt.pick_task_id = pl.pick_task_id
-        WHERE pl.dispatch_order_line_id = $1
-          AND pl.status <> 'cancelled'
-          AND pt.status <> 'cancelled'
-        LIMIT 1`,
-      [id],
-    );
-    if (existing.rows.length > 0) {
-      throw new AppError(409, 'PICK_TASK_ALREADY_GENERATED', `Pick tasks already exist for sales-order line "${id}"`, {
+    const remaining = await getRemainingDemand(id, client);
+    if (remaining === null || numericToMicro(remaining) <= 0n) {
+      throw new AppError(409, 'PICK_TASK_ALREADY_GENERATED', `No remaining demand exists for sales-order line "${id}"`, {
         dispatch_order_line_id: id,
       });
     }
-    lines.push(line);
+    lines.push({ ...line, quantity: remaining });
   }
 
   // (b)-(c) FEFO allocation per line with shared in-run availability tracking.

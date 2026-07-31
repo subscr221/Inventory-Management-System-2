@@ -16,6 +16,7 @@ import {
   computeGateDwellExceptions,
   assertValidTaskFilters,
   GATE_DWELL_TARGET_MINUTES,
+  CROSS_DOCK_DURATION_METRIC,
 } from '../../warehouse/task-metrics.js';
 
 /**
@@ -258,6 +259,7 @@ const getProductivityBase: RouteHandler = async (req, res) => {
 
   sendJson(res, 200, {
     period: { start: periodStart, end: periodEnd },
+    metric_definitions: { cross_docking: CROSS_DOCK_DURATION_METRIC },
     ...productivity,
   });
 };

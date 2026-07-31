@@ -111,6 +111,56 @@ export async function getOpenPickDemand(sku: string, siteId: string, client?: Po
   return String(result.rows[0]!['demand']);
 }
 
+export interface CrossDockDemandMatch extends ErpSalesOrderRow {
+  remaining_demand: string;
+}
+
+export async function lockSalesOrderDemandLine(id: string, client: PoolClient): Promise<void> {
+  await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [id]);
+}
+
+export async function getRemainingDemand(id: string, client: PoolClient, excludedCrossDockTaskId?: string | null): Promise<string | null> {
+  await lockSalesOrderDemandLine(id, client);
+  const result = await client.query(
+    `SELECT (eso.quantity
+       - COALESCE((SELECT SUM(pl.directed_quantity) FROM pick_line pl WHERE pl.dispatch_order_line_id = eso.id AND pl.status <> 'cancelled'), 0)
+       - COALESCE((SELECT SUM(cdt.quantity) FROM cross_dock_task cdt WHERE cdt.dispatch_order_line_id = eso.id AND cdt.status = 'ready' AND ($2::uuid IS NULL OR cdt.cross_dock_task_id <> $2)), 0))::text AS remaining_demand
+       FROM erp_sales_order eso WHERE eso.id = $1 AND eso.status = 'open' FOR UPDATE OF eso`,
+    [id, excludedCrossDockTaskId ?? null],
+  );
+  return result.rows.length > 0 ? String(result.rows[0]!['remaining_demand']) : null;
+}
+
+export async function findCrossDockDemandMatch(
+  sku: string,
+  siteId: string,
+  quantity: string,
+  client: PoolClient,
+): Promise<CrossDockDemandMatch | null> {
+  const candidates = await client.query(
+    `SELECT id FROM erp_sales_order eso
+      WHERE eso.sku = $1 AND eso.ship_from_site_id = $2 AND eso.status = 'open'
+      ORDER BY eso.required_by ASC NULLS LAST, eso.so_number_ext ASC, eso.line_no ASC, eso.id ASC`,
+    [sku, siteId],
+  );
+  for (const candidate of candidates.rows) {
+    const id = candidate['id'] as string;
+    await lockSalesOrderDemandLine(id, client);
+    const locked = await client.query(
+      `SELECT ${COLUMNS}, (eso.quantity
+       - COALESCE((SELECT SUM(pl.directed_quantity) FROM pick_line pl WHERE pl.dispatch_order_line_id = eso.id AND pl.status <> 'cancelled'), 0)
+       - COALESCE((SELECT SUM(cdt.quantity) FROM cross_dock_task cdt WHERE cdt.dispatch_order_line_id = eso.id AND cdt.status = 'ready'), 0))::text AS remaining_demand
+       FROM erp_sales_order eso WHERE eso.id = $1 AND eso.status = 'open' FOR UPDATE OF eso`,
+      [id],
+    );
+    if (locked.rows.length === 0) continue;
+    const row = locked.rows[0]!;
+    const enough = await client.query(`SELECT $1::numeric >= $2::numeric AS enough`, [row['remaining_demand'], quantity]);
+    if (enough.rows[0]!['enough'] === true) return { ...mapRow(row), remaining_demand: String(row['remaining_demand']) };
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Adapter-only mutation helpers (direct SQL upsert; NOT event-sourced)
 // ---------------------------------------------------------------------------

@@ -358,7 +358,7 @@ const EXPECTED = [
     canonical: 'read/projections/pick_task.sql',
     table: 'pick_task',
     // Story 3.8 added chk_pick_task_priority; every other value in this entry is unchanged.
-    constraints: ['chk_pick_task_strategy', 'chk_pick_task_status', 'chk_pick_task_priority'],
+    constraints: ['chk_pick_task_strategy', 'chk_pick_task_status', 'chk_pick_task_priority', 'chk_pick_task_fulfillment_source'],
     indexes: [
       'idx_pick_task_dispatch_order',
       'idx_pick_task_zone_status',
@@ -448,11 +448,63 @@ const EXPECTED = [
       'idx_replenishment_task_assigned_status',
     ],
   },
+  {
+    canonical: 'read/projections/cross_dock_task.sql',
+    table: 'cross_dock_task',
+    constraints: [
+      'uq_cross_dock_task_grn_line',
+      'chk_cross_dock_task_status',
+      'chk_cross_dock_task_priority',
+      'chk_cross_dock_task_quantity_positive',
+      'chk_cross_dock_task_completion_fields',
+    ],
+    indexes: [
+      'idx_cross_dock_task_site_status',
+      'idx_cross_dock_task_staging_status',
+      'idx_cross_dock_task_assigned_status',
+      'idx_cross_dock_task_dispatch_status',
+      'idx_cross_dock_task_correlation',
+    ],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
   const migrateSource = read('src/events/migrate.ts');
   const initDb = read('deploy/compose/init-db.sql');
+
+  it('Story 3.10 applies dependency-safe additive cross-dock alterations in final vocabulary order', () => {
+    const grnSql = read('read/projections/grn_line.sql');
+    const pickTaskSql = read('read/projections/pick_task.sql');
+    const pickLineSql = read('read/projections/pick_line.sql');
+    const slaSql = read('read/projections/task_sla_config.sql');
+    const constraintsSql = read('read/projections/cross_dock_constraints.sql');
+    const crossDockMigration = "'../../read/projections/cross_dock_task.sql'";
+    const pickLineMigration = "'../../read/projections/pick_line.sql'";
+
+    assert.ok(grnSql.includes('ADD COLUMN IF NOT EXISTS cross_dock BOOLEAN NOT NULL DEFAULT false'));
+    assert.ok(grnSql.includes('ADD COLUMN IF NOT EXISTS matched_dispatch_order_line_id UUID'));
+    assert.ok(grnSql.includes('ADD COLUMN IF NOT EXISTS cross_dock_nonqualification_reason TEXT'));
+    assert.ok(pickTaskSql.includes("ADD COLUMN IF NOT EXISTS fulfillment_source TEXT NOT NULL DEFAULT 'standard'"));
+    assert.ok(pickTaskSql.includes("CHECK (fulfillment_source IN ('standard', 'cross_dock'))"));
+    assert.ok(pickLineSql.includes('ADD COLUMN IF NOT EXISTS cross_dock_task_id UUID'));
+    const deferredConstraintsSql = read('read/projections/cross_dock_constraints.sql');
+    assert.ok(deferredConstraintsSql.includes('ADD CONSTRAINT fk_pick_line_cross_dock_task'));
+    assert.ok(deferredConstraintsSql.includes('REFERENCES cross_dock_task(cross_dock_task_id)'));
+    assert.ok(pickLineSql.includes('CREATE UNIQUE INDEX IF NOT EXISTS uq_pick_line_cross_dock_task'));
+    assert.ok(pickLineSql.includes('WHERE cross_dock_task_id IS NOT NULL'));
+    assert.ok(migrateSource.indexOf(crossDockMigration) > migrateSource.indexOf("'../../read/projections/replenishment_task.sql'"));
+    assert.ok(migrateSource.lastIndexOf(pickLineMigration) > migrateSource.indexOf(crossDockMigration));
+    assert.ok(migrateSource.indexOf("'../../read/projections/cross_dock_constraints.sql'") > migrateSource.lastIndexOf(pickLineMigration));
+    assert.match(
+      slaSql,
+      /CHECK \(task_type IN \('receiving', 'putaway', 'picking', 'packing', 'replenishment', 'cross_docking'\)\)/,
+    );
+    assert.match(
+      initDb,
+      /CHECK \(task_type IN \('receiving', 'putaway', 'picking', 'packing', 'replenishment', 'cross_docking'\)\)/,
+    );
+    assert.ok(normalizeSql(initDb).includes(normalizeSql(constraintsSql)), 'init-db must mirror the deferred cross-dock FK block');
+  });
 
   for (const entry of EXPECTED) {
     if (entry.isView) continue;

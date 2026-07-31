@@ -41,7 +41,7 @@ export interface StockReceiptInput {
   location_code?: string | null;
   lot_id?: string | null;
   stock_class?: string;
-  quantity: number;
+  quantity: string | number;
 }
 
 export interface StockAllocationInput {
@@ -54,7 +54,7 @@ export interface StockAllocationInput {
    * consignment/vmi shortfall and vice versa (class-scoped INSUFFICIENT_STOCK).
    */
   stock_class?: string;
-  quantity: number;
+  quantity: string | number;
 }
 
 export interface StockIssueInput {
@@ -63,7 +63,7 @@ export interface StockIssueInput {
    lot_id?: string | null;
    /** Story 2.8: see StockAllocationInput.stock_class - one class per issue, default 'owned'. */
    stock_class?: string;
-   quantity: number;
+   quantity: string | number;
    /**
     * Story 2.7: the event's business timestamp, stamped onto last_issue_at for every balance row at
     * this (sku, location_id) so the obsolescence scan can read MAX(last_issue_at) across lots. Only
@@ -79,7 +79,7 @@ export interface StockIssueInput {
    lot_id?: string | null;
    /** Story 2.8: see StockAllocationInput.stock_class - one class per deallocation, default 'owned'. */
    stock_class?: string;
-   quantity: number;
+   quantity: string | number;
  }
 
 /** Story 3.6: moves a quantity already in `allocated` into `picked` at a single (sku, location, lot). */

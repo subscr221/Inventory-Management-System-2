@@ -96,7 +96,7 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
 
   async function resetErp(): Promise<void> {
     await getAdminPool().query(
-      'TRUNCATE integration_exception, erp_sync_state, erp_sales_order, erp_purchase_order_line, erp_purchase_order',
+      'TRUNCATE pick_line, cross_dock_task, integration_exception, erp_sync_state, erp_sales_order, erp_purchase_order_line, erp_purchase_order',
     );
   }
 

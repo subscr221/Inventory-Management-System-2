@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PowerSyncDatabase } from '@powersync/web';
 import { createTestCaptureEvent } from '../capture/test-capture';
+import { createCrossDockCompletionEvent } from '../capture/cross-dock';
 import { AppShell } from './app-shell';
+import type { CrossDockTaskContext } from './cross-dock-capture';
 import { t } from '../i18n/locale';
 import { createEdgeDatabase } from '../local-db/database';
 import {
@@ -190,6 +192,30 @@ export function EdgeClient() {
     await refreshLocalState(db);
   }, [refreshLocalState, state.role, state.siteId, state.userId]);
 
+  const loadCrossDockTask = useCallback(async (taskId: string): Promise<CrossDockTaskContext | null> => {
+    const response = await fetch(`/api/v1/cross-dock-tasks/${encodeURIComponent(taskId)}`, { credentials: 'include' });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { task?: CrossDockTaskContext };
+    return body.task ?? null;
+  }, []);
+
+  const confirmCrossDock = useCallback(async (task: CrossDockTaskContext, stagingBinCode: string): Promise<string> => {
+    const db = database.current;
+    if (!db || !state.userId || !state.siteId) return task.cross_dock_task_id;
+    const event = createCrossDockCompletionEvent({
+      taskId: task.cross_dock_task_id,
+      stagingBinCode,
+      userId: state.userId,
+      role: state.role,
+      siteId: state.siteId,
+      correlationId: task.correlation_id,
+      deviceId: deviceId(),
+    });
+    await insertCaptureEvent(db, event);
+    await refreshLocalState(db);
+    return event.event_id;
+  }, [refreshLocalState, state.role, state.siteId, state.userId]);
+
   return (
     <AppShell
       userName={state.userName || t('app.defaultUserName')}
@@ -203,6 +229,8 @@ export function EdgeClient() {
       authRequired={state.authRequired}
       setupError={state.setupError}
       onCapture={() => void capture()}
+      onLoadCrossDockTask={loadCrossDockTask}
+      onConfirmCrossDock={confirmCrossDock}
       onRetry={() => {
         const db = database.current;
         if (db) void refreshLocalState(db);

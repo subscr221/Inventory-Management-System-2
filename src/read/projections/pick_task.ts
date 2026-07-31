@@ -48,6 +48,10 @@ export interface CreatePickTaskInput {
   status?: 'pending' | 'in_progress' | 'completed' | 'cancelled';
   priority?: TaskPriority;
   created_by: string;
+  fulfillment_source?: 'standard' | 'cross_dock';
+  created_at?: string;
+  completed_at?: string | null;
+  completed_by?: string | null;
 }
 
 export interface ListPickTasksFilters {
@@ -130,10 +134,11 @@ export async function getPickTaskByIdForUpdate(pickTaskId: string, client: PoolC
 /** Idempotent, replay-safe insert keyed on pick_task_id. total_quantity bound as a NUMERIC string. */
 export async function createPickTask(input: CreatePickTaskInput, client: PoolClient): Promise<void> {
   await client.query(
-    `INSERT INTO pick_task
-       (pick_task_id, dispatch_order_id, sku, total_quantity, strategy, wave_id, batch_id, zone_id,
-        status, priority, created_by)
-     VALUES ($1, $2, $3, $4::numeric, $5, $6, $7, $8, $9, $10, $11)
+     `INSERT INTO pick_task
+        (pick_task_id, dispatch_order_id, sku, total_quantity, strategy, wave_id, batch_id, zone_id,
+         status, priority, created_by, fulfillment_source, created_at, completed_at, completed_by)
+      VALUES ($1, $2, $3, $4::numeric, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13::timestamptz, now()), $14::timestamptz, $15)
+
      ON CONFLICT (pick_task_id) DO NOTHING`,
     [
       input.pick_task_id,
@@ -147,6 +152,10 @@ export async function createPickTask(input: CreatePickTaskInput, client: PoolCli
       input.status ?? 'pending',
       input.priority ?? 'normal',
       input.created_by,
+      input.fulfillment_source ?? 'standard',
+      input.created_at ?? null,
+      input.completed_at ?? null,
+      input.completed_by ?? null,
     ],
   );
 }

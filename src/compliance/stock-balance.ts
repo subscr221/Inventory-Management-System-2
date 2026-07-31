@@ -67,8 +67,9 @@ export function stockBalanceEventKind(envelope: EventEnvelope): StockBalanceEven
   return referencesMasters ? kind : null;
 }
 
-function isPositiveFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+function isPositiveFiniteNumber(value: unknown): value is number | string {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+  return typeof value === 'string' && /^\d+(\.\d+)?$/.test(value) && !/^0+(\.0+)?$/.test(value);
 }
 
 /**
@@ -86,7 +87,7 @@ export function assertStockBalanceShape(envelope: EventEnvelope): void {
       quantity: envelope.payload['quantity'] ?? null,
     });
   }
-  if (envelope.payload['quantity'] > MAX_QUANTITY) {
+  if (typeof envelope.payload['quantity'] === 'number' && envelope.payload['quantity'] > MAX_QUANTITY) {
     throw new AppError(400, 'INVALID_PARAMS', `quantity exceeds the maximum allowed value of ${MAX_QUANTITY}`, {
       event_type: envelope.event_type,
       quantity: envelope.payload['quantity'],
@@ -191,7 +192,7 @@ export async function applyStockBalanceProjection(
   }
 
   const sku = envelope.payload['sku'] as string;
-  const quantity = envelope.payload['quantity'] as number;
+  const quantity = envelope.payload['quantity'] as string | number;
   const lotId = typeof envelope.payload['lot_id'] === 'string' ? envelope.payload['lot_id'] : null;
 
   const stockClass = typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : 'owned';

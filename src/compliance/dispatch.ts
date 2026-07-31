@@ -322,7 +322,14 @@ export async function applyDispatchDispatchedProjection(
      JOIN lot_master lm ON lm.lot_id = pr.lot_id
      WHERE sb.sku = pr.sku
        AND sb.lot_id = lm.lot_number
+       AND sb.location_id = COALESCE(
+         (SELECT pl.confirmed_location_id FROM pick_line pl
+           WHERE pl.dispatch_order_line_id = pr.dispatch_order_id AND pl.confirmed_lot_id = pr.lot_id
+             AND pl.status IN ('confirmed', 'substituted')
+           ORDER BY pl.confirmed_at DESC NULLS LAST, pl.pick_line_id LIMIT 1),
+         sb.location_id)
        AND sb.stock_class = 'owned'
+       AND sb.picked >= pr.packed_qty::numeric
        AND pr.dispatch_order_id = $1`,
     [p.dispatch_order_id],
   );

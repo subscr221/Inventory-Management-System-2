@@ -36,7 +36,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  */
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 
-export const WAREHOUSE_TASK_TYPES: readonly WarehouseTaskType[] = ['receiving', 'putaway', 'picking', 'packing', 'replenishment'];
+export const WAREHOUSE_TASK_TYPES: readonly WarehouseTaskType[] = ['receiving', 'putaway', 'picking', 'packing', 'replenishment', 'cross_docking'];
 
 /**
  * Changing an SLA threshold changes what counts as a breach, and assigning work directs another

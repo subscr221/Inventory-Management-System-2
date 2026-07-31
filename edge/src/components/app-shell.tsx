@@ -2,6 +2,7 @@ import { SyncStatusBadge } from './sync-status-badge';
 import { TestCaptureButton } from './test-capture-button';
 import { SyncFailureList, type SyncFailureItem } from './sync-failure-list';
 import { ServiceWorkerRegistration } from './service-worker-registration';
+import { CrossDockCapture, type CrossDockTaskContext } from './cross-dock-capture';
 import { t, type MessageKey } from '../i18n/locale';
 import type { SyncUiState } from '../sync/sync-status';
 
@@ -23,6 +24,8 @@ export interface AppShellProps {
   setupError?: boolean;
   onCapture?: () => void;
   onRetry?: () => void;
+  onLoadCrossDockTask?: (taskId: string) => Promise<CrossDockTaskContext | null>;
+  onConfirmCrossDock?: (task: CrossDockTaskContext, stagingBinCode: string) => Promise<string>;
 }
 
 export function AppShell({
@@ -38,6 +41,8 @@ export function AppShell({
   setupError = false,
   onCapture,
   onRetry,
+  onLoadCrossDockTask,
+  onConfirmCrossDock,
 }: AppShellProps) {
   const links = navigation.flatMap((item) => (NAVIGATION[item] ? [NAVIGATION[item]] : []));
   return (
@@ -100,6 +105,11 @@ export function AppShell({
               </dl>
             </section>
             <section id="frontline">
+              <CrossDockCapture
+                syncState={syncState}
+                {...(onLoadCrossDockTask ? { onLoad: onLoadCrossDockTask } : {})}
+                {...(onConfirmCrossDock ? { onConfirm: onConfirmCrossDock } : {})}
+              />
               <TestCaptureButton {...(onCapture ? { onCapture } : {})} />
             </section>
           </div>

@@ -18,11 +18,12 @@ export function SyncFailureList({
   return (
     <section className="edge-card" aria-labelledby="sync-failure-heading">
       <h2 id="sync-failure-heading">{t('sync.failedNeedsAttention')}</h2>
-      <ul>
+      <ul aria-live="assertive">
         {failures.map((failure) => (
           <li key={failure.eventId}>
             <strong>{failure.eventType}</strong>: {errorMessage(failure.errorCode)} (
             {failure.errorCode}) <span>{formatDateTime(failure.failedAt)}</span>
+            {failure.eventType === 'cross_dock_task.completed' ? <p>{t('crossDock.correction')}</p> : null}
           </li>
         ))}
       </ul>

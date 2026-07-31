@@ -17,3 +17,14 @@ test('shell exposes synchronization status through the accessibility tree', asyn
   await expect(page.getByRole('button', { name: 'Capture Shell Test Event' })).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
 });
+
+test('cross-dock capture is keyboard operable with visible focus and 44px controls', async ({ page }) => {
+  await page.goto('/');
+  const taskInput = page.getByLabel('Cross-dock task ID');
+  const loadButton = page.getByRole('button', { name: 'Load known task' });
+  await taskInput.focus();
+  await expect(taskInput).toBeFocused();
+  await expect(taskInput).toHaveCSS('min-height', '44px');
+  await expect(loadButton).toHaveCSS('min-height', '44px');
+  await expect(taskInput).toHaveCSS('outline-style', 'solid');
+});

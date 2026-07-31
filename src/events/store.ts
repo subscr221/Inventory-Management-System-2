@@ -66,6 +66,11 @@ import {
   assertReplenishmentTaskCompletedShape,
   applyReplenishmentTaskCompletedProjection,
 } from '../compliance/replenishment.js';
+import {
+  assertCrossDockEventShape,
+  applyCrossDockTaskAssignedProjection,
+  applyCrossDockTaskCompletedProjection,
+} from '../compliance/cross-dock.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -82,6 +87,8 @@ import type {
   ReplenishmentTaskCreatedEnvelope,
   ReplenishmentTaskAssignedEnvelope,
   ReplenishmentTaskCompletedEnvelope,
+  CrossDockTaskAssignedEnvelope,
+  CrossDockTaskCompletedEnvelope,
 } from './schema.js';
 import { assertErpReadOnly } from '../compliance/erp-readonly.js';
 
@@ -342,6 +349,7 @@ export async function persistEvent(
   if (envelope.event_type === 'replenishment_task.completed') {
     assertReplenishmentTaskCompletedShape(envelope as unknown as ReplenishmentTaskCompletedEnvelope);
   }
+  assertCrossDockEventShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -496,11 +504,21 @@ export async function persistEvent(
       if (envelope.event_type === 'replenishment_task.created') {
         await applyReplenishmentTaskCreatedProjection(envelope as unknown as ReplenishmentTaskCreatedEnvelope, client, eventId);
       }
-      if (envelope.event_type === 'replenishment_task.completed') {
-        await applyReplenishmentTaskCompletedProjection(envelope as unknown as ReplenishmentTaskCompletedEnvelope, client);
+      if (envelope.event_type === 'replenishment_task.assigned') {
+        await applyReplenishmentTaskAssignedProjection(envelope as unknown as ReplenishmentTaskAssignedEnvelope, client);
       }
+       if (envelope.event_type === 'replenishment_task.completed') {
+         await applyReplenishmentTaskCompletedProjection(envelope as unknown as ReplenishmentTaskCompletedEnvelope, client);
+       }
+       if (envelope.event_type === 'cross_dock_task.assigned') {
+         await applyCrossDockTaskAssignedProjection(envelope as unknown as CrossDockTaskAssignedEnvelope, client);
+       }
+       if (envelope.event_type === 'cross_dock_task.completed') {
+         await applyCrossDockTaskCompletedProjection(envelope as unknown as CrossDockTaskCompletedEnvelope, client, eventId);
+       }
 
-    let nextVersion: number;
+     let nextVersion: number;
+
     if (envelope.event_version !== undefined) {
       nextVersion = envelope.event_version;
     } else {

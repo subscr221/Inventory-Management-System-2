@@ -102,6 +102,20 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_pick_task_priority_status ON pick_task (priority, status);
 
+ALTER TABLE IF EXISTS pick_task ADD COLUMN IF NOT EXISTS fulfillment_source TEXT NOT NULL DEFAULT 'standard';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_pick_task_fulfillment_source'
+      AND conrelid = 'pick_task'::regclass
+  ) THEN
+    ALTER TABLE pick_task
+      ADD CONSTRAINT chk_pick_task_fulfillment_source CHECK (fulfillment_source IN ('standard', 'cross_dock'));
+  END IF;
+END $$;
+
 -- Story 3.6 (AC4 scope extension): minimal dispatch-order picked flag. No dispatch-order status
 -- projection existed before this story; Story 3.7 (packing) may extend or replace it.
 CREATE TABLE IF NOT EXISTS dispatch_order_status (

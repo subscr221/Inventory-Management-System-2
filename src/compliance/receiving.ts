@@ -12,6 +12,9 @@ import { findMatchingDoaEntry, findRoleHolder, findActiveDelegation, listActiveD
 import { insertGrnHeader } from '../read/projections/grn.js';
 import { insertGrnLine } from '../read/projections/grn_line.js';
 import { insertPutawayTask, getPutawayTaskById, markPutawayReleased } from '../read/projections/putaway_task.js';
+import { findCrossDockDemandMatch } from '../read/projections/erp_sales_order.js';
+import { insertCrossDockTask } from '../read/projections/cross_dock_task.js';
+import { isCrossDockQuantityCapacity } from './cross-dock.js';
 import { applyLotSerialValidation } from './lot-serial-validation.js';
 import { applyStockBalanceProjection } from './stock-balance.js';
 
@@ -31,7 +34,7 @@ import { applyStockBalanceProjection } from './stock-balance.js';
 const RECEIVING_STREAM_TYPES = new Set(['receiving']);
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
-const NUMERIC_REGEX = /^\d+(\.\d+)?$/;
+const NUMERIC_REGEX = /^\d{1,15}(\.\d{1,3})?$/;
 
 const QC_HOLD_ZONE_CODE = 'ZONE-QC-HOLD';
 const DISCREPANCY_TARGET_ROLE = 'unloading_supervisor';
@@ -63,7 +66,7 @@ function normalizeQty(value: unknown): string | null {
   if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? String(value) : null;
   if (typeof value === 'string') {
     const s = value.trim();
-    return NUMERIC_REGEX.test(s) && Number(s) > 0 ? s : null;
+    return NUMERIC_REGEX.test(s) && !/^0+(\.0+)?$/.test(s) ? s : null;
   }
   return null;
 }
@@ -169,6 +172,30 @@ export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
 
   if (p['quarantine_approved'] === true && !isNonEmptyString(p['quarantine_reason_code'])) {
     throw new AppError(400, 'INVALID_PARAMS', 'quarantine_reason_code is required when quarantine_approved is true');
+  }
+
+  if (p['cross_dock'] !== undefined && typeof p['cross_dock'] !== 'boolean') {
+    throw new AppError(400, 'INVALID_PARAMS', 'cross_dock must be a boolean when supplied');
+  }
+  const hasStagingId = p['staging_zone_id'] !== undefined;
+  const hasStagingCode = p['staging_zone_code'] !== undefined;
+  const hasCrossDockTaskId = p['cross_dock_task_id'] !== undefined;
+  if (p['cross_dock'] !== true && (hasStagingId || hasStagingCode || hasCrossDockTaskId)) {
+    throw new AppError(400, 'INVALID_PARAMS', 'cross-dock-only fields require cross_dock to be true');
+  }
+  if (p['cross_dock'] === true) {
+    if (hasStagingId === hasStagingCode) {
+      throw new AppError(400, 'INVALID_PARAMS', 'exactly one of staging_zone_id or staging_zone_code is required when cross_dock is true');
+    }
+    if (hasStagingId && !isUuid(p['staging_zone_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'staging_zone_id must be a UUID when supplied');
+    }
+    if (hasStagingCode && !isNonEmptyString(p['staging_zone_code'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'staging_zone_code must be non-empty when supplied');
+    }
+    if (!isUuid(p['cross_dock_task_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'cross_dock_task_id is required and must be a server-generated UUID when cross_dock is true');
+    }
   }
 }
 
@@ -343,6 +370,16 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
   const qcHold = needsQcHold;
   const lineStatus: 'posted' | 'quarantined' = quarantined ? 'quarantined' : 'posted';
   const putawayStatus: 'ready' | 'held' = needsQcHold ? 'held' : 'ready';
+  const crossDockRequested = p['cross_dock'] === true;
+  let stagingZone: LocationRegisterEntry | null = null;
+  if (crossDockRequested) {
+    stagingZone = isUuid(p['staging_zone_id'])
+      ? await getLocationById(p['staging_zone_id'] as string, client)
+      : await getLocationByCode(p['staging_zone_code'] as string, client);
+    if (!stagingZone || stagingZone.status !== 'active' || stagingZone.level !== 'zone' || stagingZone.zone_type !== 'staging' || stagingZone.site_id !== siteId) {
+      throw new AppError(400, 'CROSS_DOCK_STAGING_INVALID', 'The selected cross-dock staging location must be an active staging zone at the receiving site');
+    }
+  }
 
   // 6. Post the stock movement through a synthetic stock.received view so all existing Story 2.2/2.3/
   //    2.8 enforcement (lot auto-create from expiry_date, serial receipt, owner-party gate, NUMERIC
@@ -356,7 +393,7 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
     payload: {
       sku,
       target_location_id: target.location_id,
-      quantity: Number(receivedQty),
+      quantity: receivedQty,
       ...(isNonEmptyString(p['lot_id']) ? { lot_id: p['lot_id'] } : {}),
       ...(expiryDate ? { expiry_date: expiryDate } : {}),
       ...(Array.isArray(p['serials']) ? { serials: p['serials'] } : {}),
@@ -372,6 +409,35 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
   // 7. Persist the GRN header, GRN line, and putaway task (posted/quarantined lines only). NEVER
   //    writes any erp_* projection (AC6). The lot_id may have been auto-resolved onto the view above.
   const resolvedLotId = isNonEmptyString(stockView.payload['lot_id']) ? (stockView.payload['lot_id'] as string) : null;
+  let nonqualificationReason: string | null = null;
+  let matchedOrderLineId: string | null = null;
+  let matchedLotUuid: string | null = null;
+  if (crossDockRequested) {
+    if (needsQcHold) nonqualificationReason = quarantined || item.quarantine_required ? 'quarantine_required' : 'qc_blocked';
+    else if (stockClass !== 'owned') nonqualificationReason = 'non_owned_stock';
+    else if (!resolvedLotId) nonqualificationReason = 'lot_required';
+    else if (!isCrossDockQuantityCapacity(receivedQty)) nonqualificationReason = 'quantity_out_of_pick_range';
+    else {
+      const lot = await client.query(
+        `SELECT lot_id FROM lot_master WHERE lot_number = $1 AND sku = $2 AND quality_hold_status = 'none' FOR UPDATE`,
+        [resolvedLotId, sku],
+      );
+      if (lot.rows.length === 0) nonqualificationReason = 'lot_required';
+      else {
+        matchedLotUuid = lot.rows[0]!['lot_id'] as string;
+        const demand = await findCrossDockDemandMatch(sku, siteId, receivedQty, client);
+        if (demand) matchedOrderLineId = demand.id;
+        else {
+          const anyDemand = await client.query(
+            `SELECT 1 FROM erp_sales_order WHERE sku = $1 AND ship_from_site_id = $2 AND status = 'open' LIMIT 1`,
+            [sku, siteId],
+          );
+          nonqualificationReason = anyDemand.rows.length === 0 ? 'no_open_demand' : 'insufficient_single_line_demand';
+        }
+      }
+    }
+  }
+  const qualifiedCrossDock = matchedOrderLineId !== null && matchedLotUuid !== null;
   await insertGrnHeader(
     {
       grn_id: p['grn_id'] as string,
@@ -408,25 +474,49 @@ export async function applyGoodsReceivedProjection(envelope: EventEnvelope, clie
       target_location_id: target.location_id,
       status: lineStatus,
       rejection_reason: null,
+      cross_dock: qualifiedCrossDock,
+      matched_dispatch_order_line_id: matchedOrderLineId,
+      cross_dock_nonqualification_reason: nonqualificationReason,
       source_event_id: eventId,
     },
     client,
   );
-  await insertPutawayTask(
-    {
-      putaway_task_id: randomUUID(),
-      grn_line_id: p['grn_line_id'] as string,
-      sku,
-      lot_id: resolvedLotId,
-      quantity: receivedQty,
-      from_location_id: target.location_id,
-      site_id: siteId,
-      status: putawayStatus,
-      owner_role: needsQcHold ? QC_INSPECTION_TARGET_ROLE : null,
-      source_event_id: eventId,
-    },
-    client,
-  );
+  if (qualifiedCrossDock) {
+    await insertCrossDockTask(
+      {
+        cross_dock_task_id: p['cross_dock_task_id'] as string,
+        grn_line_id: p['grn_line_id'] as string,
+        dispatch_order_line_id: matchedOrderLineId!,
+        sku,
+        lot_id: matchedLotUuid!,
+        quantity: receivedQty,
+        site_id: siteId,
+        from_location_id: target.location_id,
+        staging_zone_id: stagingZone!.location_id,
+        created_by: receivedBy,
+        created_at: occurredAt.toISOString(),
+        correlation_id: correlationId,
+        source_event_id: eventId,
+      },
+      client,
+    );
+  } else {
+    await insertPutawayTask(
+      {
+        putaway_task_id: randomUUID(),
+        grn_line_id: p['grn_line_id'] as string,
+        sku,
+        lot_id: resolvedLotId,
+        quantity: receivedQty,
+        from_location_id: target.location_id,
+        site_id: siteId,
+        status: putawayStatus,
+        owner_role: needsQcHold ? QC_INSPECTION_TARGET_ROLE : null,
+        source_event_id: eventId,
+      },
+      client,
+    );
+  }
 
   // AC3: the held putaway task plus this qc_inspector notification ARE the interim QC-inspection task
   //      representation (the durable QC inspection table is Epic 8).

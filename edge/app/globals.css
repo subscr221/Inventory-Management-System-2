@@ -35,13 +35,15 @@ a {
 }
 
 button,
-a {
+a,
+input {
   min-height: 44px;
   min-width: 44px;
 }
 
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+input:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 3px;
 }
@@ -193,6 +195,49 @@ a:focus-visible {
   color: var(--primary);
   font-weight: 700;
   padding: 10px 16px;
+}
+
+.cross-dock-capture form {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.cross-dock-capture input {
+  width: 100%;
+  border: 2px solid var(--neutral-500);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.cross-dock-context dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.cross-dock-context dl div {
+  padding: 12px;
+  border: 1px solid var(--neutral-500);
+  border-radius: 8px;
+}
+
+.cross-dock-context dd {
+  margin: 4px 0 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.operator-status {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  border-radius: 9999px;
+  background: var(--info-strong);
+  color: white;
+  padding: 8px 16px;
+  font-weight: 700;
 }
 
 .skip-link {

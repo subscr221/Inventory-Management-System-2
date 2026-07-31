@@ -1,5 +1,15 @@
 # generated: 2026-07-12
-# last_updated: '2026-07-30'
+# last_updated: '2026-07-31'
+# story 3-10 created 2026-07-31 via create-story workflow: Cross-Docking Execution (FR-W-09);
+#   qualifying owned, lot-resolved, non-QC receipt lines bind deterministically to one same-site open
+#   Story 2.9 sales-order line with sufficient exact remaining demand, create one cross-dock task,
+#   and suppress ordinary putaway. Completion validates an active staging bin, atomically moves the
+#   lot through staging allocation to picked, materializes cross-dock-sourced completed pick rows so
+#   Story 3.7 packing remains unchanged, updates exact quantity-based dispatch readiness, and records
+#   honest receipt-to-staging task duration on Story 3.8's unified board. Includes event-sourced
+#   assignment, compliance-seam RBAC/site checks, deterministic locks and replay, known-task edge
+#   completion upload, additive schema/route guards, and ordinary-putaway fallback when optimization
+#   cannot safely apply; ready-for-dev
 # story 3-9 dev-story 2026-07-30: implemented all 7 tasks (44 subtasks) from baseline e97d657.
 #   forward_pick_config (site_id denormalized from the zone) and replenishment_task (partial
 #   unique open-per-signal index) projections; location_register.zone_type and
@@ -238,7 +248,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-07-29'
+last_updated: '2026-07-31'
 # story 3-6 created 2026-07-25 via create-story workflow: Pick Task Generation and Execution (FR-W-04);
 #   system-generated pick tasks with optimized paths (single-order, batch, wave, zone strategies);
 #   FEFO lot selection, bin pick-sequence ordering, paper-directed picking; real-time stock allocation
@@ -525,7 +535,7 @@ development_status:
   3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: done   # PILOT
   3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: done   # PILOT
   3-9-forward-pick-replenishment-fr-w-08: review   # PILOT
-  3-10-cross-docking-execution-fr-w-09: backlog   # PILOT
+  3-10-cross-docking-execution-fr-w-09: in-progress   # PILOT
   epic-3-retrospective: optional
   # story 3-2 code review 2026-07-23: 2 decisions resolved + 7 patches applied (server-generated gate_event_id, IST-based localYmd, removed redundant binding_token alias, UNIQUE correlation_id, pagination limit, negative-path tests); 1 patch reverted (alreadyPersisted null-key throw broke HTTP path); moved to done
 

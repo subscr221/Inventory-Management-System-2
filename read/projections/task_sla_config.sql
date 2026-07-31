@@ -122,6 +122,20 @@ END $$;
 
 DO $$
 BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_task_sla_config_task_type'
+      AND conrelid = 'task_sla_config'::regclass
+  ) THEN
+    ALTER TABLE task_sla_config DROP CONSTRAINT chk_task_sla_config_task_type;
+  END IF;
+  ALTER TABLE task_sla_config
+    ADD CONSTRAINT chk_task_sla_config_task_type
+    CHECK (task_type IN ('receiving', 'putaway', 'picking', 'packing', 'replenishment', 'cross_docking'));
+END $$;
+
+DO $$
+BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
     GRANT INSERT, SELECT, UPDATE ON task_sla_config TO app_user;
   END IF;

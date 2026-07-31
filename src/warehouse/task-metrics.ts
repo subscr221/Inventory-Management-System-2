@@ -26,6 +26,11 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 /** AC3 / SM-13: the median gate dwell target. Strictly greater than this breaches. */
 export const GATE_DWELL_TARGET_MINUTES = 4;
+export const CROSS_DOCK_DURATION_METRIC = {
+  label: 'cross_dock_task_duration',
+  starts_at: 'receipt_confirmation',
+  ends_at: 'staging_confirmation',
+} as const;
 
 /**
  * Bounds on the unified task board. The query was previously unbounded and the handler materialized
@@ -254,6 +259,20 @@ const TASK_SOURCES: readonly TaskSource[] = [
             FROM replenishment_task rt
            WHERE rt.status = 'ready'`,
   },
+  {
+    taskType: 'cross_docking',
+    sql: `SELECT 'cross_docking'::text AS task_type,
+                 cdt.cross_dock_task_id AS task_id,
+                 cdt.site_id,
+                 cdt.staging_zone_id AS zone_id,
+                 cdt.assigned_to,
+                 cdt.priority,
+                 cdt.status,
+                 cdt.created_at,
+                 ${AGE_MINUTES_SQL('cdt.created_at')} AS age_minutes
+            FROM cross_dock_task cdt
+           WHERE cdt.status = 'ready'`,
+  },
 ];
 
 export const SUPPORTED_TASK_TYPES: readonly WarehouseTaskType[] = TASK_SOURCES.map((s) => s.taskType);
@@ -455,14 +474,23 @@ const COMPLETION_SOURCES = `
          (pt.status = 'completed') AS completed
     FROM pick_task pt
     LEFT JOIN erp_sales_order eso ON eso.id = pt.dispatch_order_id
+   WHERE pt.fulfillment_source = 'standard'
   UNION ALL
-  SELECT COALESCE(put.assigned_to, put.completed_by) AS operator_id,
-         put.zone_id,
-         put.site_id,
-         put.created_at,
-         put.completed_at,
-         (put.status = 'completed') AS completed
-    FROM putaway_task put
+   SELECT COALESCE(put.assigned_to, put.completed_by) AS operator_id,
+          put.zone_id,
+          put.site_id,
+          put.created_at,
+          put.completed_at,
+          (put.status = 'completed') AS completed
+     FROM putaway_task put
+   UNION ALL
+   SELECT COALESCE(cdt.assigned_to, cdt.completed_by) AS operator_id,
+          cdt.staging_zone_id AS zone_id,
+          cdt.site_id,
+          cdt.created_at,
+          cdt.completed_at,
+          (cdt.status = 'completed') AS completed
+     FROM cross_dock_task cdt
 `;
 
 function buildProductivityQuery(

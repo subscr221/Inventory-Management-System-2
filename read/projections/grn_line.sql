@@ -56,6 +56,10 @@ CREATE INDEX IF NOT EXISTS idx_grn_line_po_line ON grn_line (po_ref_ext, line_no
 CREATE INDEX IF NOT EXISTS idx_grn_line_sku ON grn_line (sku);
 CREATE INDEX IF NOT EXISTS idx_grn_line_shortage ON grn_line (shortage_variance_qty);
 
+ALTER TABLE IF EXISTS grn_line ADD COLUMN IF NOT EXISTS cross_dock BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE IF EXISTS grn_line ADD COLUMN IF NOT EXISTS matched_dispatch_order_line_id UUID;
+ALTER TABLE IF EXISTS grn_line ADD COLUMN IF NOT EXISTS cross_dock_nonqualification_reason TEXT;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN

@@ -8,9 +8,9 @@ stepsCompleted:
   - step-04-ux-alignment
   - step-05-epic-quality-review
   - step-06-final-assessment
-readinessStatus: READY (Phase 1 pilot slice) — governance sign-offs pending
+readinessStatus: READY (Phase 1 pilot slice) — all governance sign-offs closed 2026-07-31
 findingsCount: 6 (0 critical, 1 major, 5 minor); 3 resolved 2026-07-12 (PRD-1, PRD-2, UX-2)
-openGovernanceQuestions: OQ7 CLOSED 2026-07-12; OQ9 (phase boundary) + OQ10 (budget/sourcing) open
+openGovernanceQuestions: none — OQ7 CLOSED 2026-07-12; OQ9 + OQ10 CLOSED 2026-07-31
 relatedArtifacts:
   - business-objective-traceability-map-2026-07-12.md (closes PRD-1/PRD-2)
   - access-matrix-frontline-draft-2026-07-11.md (finalized v1.0, closes OQ7)
@@ -304,9 +304,9 @@ Epic 6 (Production Orders) depends on Epic 8 (QC) — `FR-Q-05` disposition must
 
 ### Overall Readiness Status
 
-# ✅ READY FOR IMPLEMENTATION (Phase 1 pilot slice) — with governance sign-offs pending
+# ✅ READY FOR IMPLEMENTATION (Phase 1 pilot slice)
 
-The planning artifacts are complete, internally consistent, and mutually traceable. PRD → Epics → UX → Architecture form a coherent chain. **No critical defects were found in any dimension.** The residual items are stakeholder sign-off decisions, not planning gaps.
+The planning artifacts are complete, internally consistent, and mutually traceable. PRD → Epics → UX → Architecture form a coherent chain. **No critical defects were found in any dimension.** All stakeholder sign-offs (OQ7, OQ9, OQ10) closed as of 2026-07-31; no governance items remain open.
 
 ### Dimension Scorecard
 
@@ -337,8 +337,8 @@ An initial automated coverage pass reported a false "28% coverage / NOT READY" c
 ### Open Governance Questions (external sign-offs, from PRD §14)
 
 1. **OQ7** — Access matrix. **[✅ CLOSED 2026-07-12]** — `access-matrix-frontline-draft-2026-07-11.md` finalized to v1.0: all seven §6 open items resolved with named owners, all seven department heads signed off (§7), DOA value bands set (§8), traceability audit passed with CI lint gate live, external roles formally excluded. Release-ready for Stories 1.2, 1.4, 1.9.
-2. **OQ9** — Phase-1/Phase-2 boundary sign-off. **[OPEN]** — the epics' embedded cut matches the PRD's proposed cut, still awaiting approval.
-3. **OQ10** — Custom-build budget envelope + build sourcing (in-house/partner/hybrid). **[OPEN]**
+2. **OQ9** — Phase-1/Phase-2 boundary sign-off. **[✅ CLOSED 2026-07-31]** — the epics' embedded cut approved as-is.
+3. **OQ10** — Custom-build budget envelope + build sourcing (in-house/partner/hybrid). **[✅ CLOSED 2026-07-31]**
 
 ### Critical Issues Requiring Immediate Action
 

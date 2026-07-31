@@ -11,6 +11,7 @@ import { getLocationByCode } from '../../read/projections/location_register.js';
 import { getGrnById, listGrns } from '../../read/projections/grn.js';
 import { getGrnLineById, listGrnLinesByGrn, listDiscrepancyLines } from '../../read/projections/grn_line.js';
 import { getPutawayTaskById, getPutawayTaskByGrnLine } from '../../read/projections/putaway_task.js';
+import { getCrossDockTaskByGrnLine } from '../../read/projections/cross_dock_task.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -108,6 +109,11 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
   const actor = actorContext(req);
   const grnId = typeof body['grn_id'] === 'string' && UUID_REGEX.test(body['grn_id']) ? body['grn_id'] : randomUUID();
   const grnLineId = typeof body['grn_line_id'] === 'string' && UUID_REGEX.test(body['grn_line_id']) ? body['grn_line_id'] : randomUUID();
+  const crossDockTaskId = body['cross_dock'] === true
+    ? typeof body['cross_dock_task_id'] === 'string' && UUID_REGEX.test(body['cross_dock_task_id'])
+      ? body['cross_dock_task_id']
+      : randomUUID()
+    : undefined;
 
   // A client-supplied grn_id/grn_line_id must belong to a GRN this actor already has write access to
   // (idempotent replay of the caller's own receipt); otherwise it could target another site's record.
@@ -133,8 +139,9 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
           ...body,
           grn_id: grnId,
           grn_line_id: grnLineId,
-          correlation_id: correlationId,
-          received_by: actor.userId,
+           correlation_id: correlationId,
+           ...(crossDockTaskId ? { cross_dock_task_id: crossDockTaskId } : {}),
+           received_by: actor.userId,
         },
         metadata: {
           correlation_id: correlationId,
@@ -148,15 +155,28 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
     const line = await getGrnLineById(grnLineId, client);
     const grn = line ? await getGrnById(line.grn_id, client) : null;
     const putaway = await getPutawayTaskByGrnLine(grnLineId, client);
+    const crossDockTask = await getCrossDockTaskByGrnLine(grnLineId, client);
     await client.query('COMMIT');
     committed = true;
     // AC5: an over-tolerance line is a committed business outcome, not a rollback - surface the code
     // in a 2xx body alongside the durable rejected line.
     if (line && line.status === 'rejected') {
-      sendJson(res, 200, { grn, grn_line: line, error_code: 'RECEIPT_TOLERANCE_EXCEEDED' });
+      sendJson(res, 200, {
+        grn,
+        grn_line: line,
+        error_code: 'RECEIPT_TOLERANCE_EXCEEDED',
+        cross_dock_task: crossDockTask,
+        cross_dock_nonqualification_reason: line.cross_dock_nonqualification_reason ?? null,
+      });
       return;
     }
-    sendJson(res, 201, { grn, grn_line: line, putaway_task: putaway });
+    sendJson(res, 201, {
+      grn,
+      grn_line: line,
+      putaway_task: putaway,
+      cross_dock_task: crossDockTask,
+      cross_dock_nonqualification_reason: line?.cross_dock_nonqualification_reason ?? null,
+    });
   } catch (err) {
     if (!committed) await client.query('ROLLBACK');
     throw err;

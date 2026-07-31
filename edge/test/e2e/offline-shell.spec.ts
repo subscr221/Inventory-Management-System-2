@@ -25,6 +25,29 @@ async function provision(page: Page) {
           { status: 200, headers: { 'Content-Type': 'application/json' } },
         );
       }
+      if (url.includes('/api/v1/cross-dock-tasks/') && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify({
+            task: {
+              cross_dock_task_id: '11111111-1111-4111-8111-111111111111',
+              grn_line_id: '22222222-2222-4222-8222-222222222222',
+              grn_line_no: 1,
+              po_ref_ext: 'GRN-2026-0042',
+              sku: 'SKU-EDGE-01',
+              lot_number: 'LOT-EDGE-01',
+              quantity: '10.000',
+              uom: 'EA',
+              dispatch_order_line_id: '33333333-3333-4333-8333-333333333333',
+              sales_order_number: 'SO-2026-0091',
+              sales_order_line_no: 1,
+              staging_zone_id: '44444444-4444-4444-8444-444444444444',
+              staging_zone_code: 'OUTBOUND-STAGING',
+              correlation_id: '55555555-5555-4555-8555-555555555555',
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
       if (url.endsWith('/api/v1/edge/events')) {
         throw new TypeError('offline');
       }
@@ -80,7 +103,34 @@ test('keyboard navigation reaches role navigation and capture action', async ({ 
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Frontline' })).toBeFocused();
   await page.keyboard.press('Tab');
+  await expect(page.getByLabel('Cross-dock task ID')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Load known task' })).toBeFocused();
+  await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Capture Shell Test Event' })).toBeFocused();
+});
+
+test('known cross-dock task capture displays context and scan-first pending result', async ({ page }) => {
+  await provision(page);
+  await page.goto('/');
+  await page.getByLabel('Cross-dock task ID').focus();
+  await expect(page.getByLabel('Cross-dock task ID')).toBeFocused();
+  await page.getByLabel('Cross-dock task ID').fill('11111111-1111-4111-8111-111111111111');
+  await page.getByRole('button', { name: 'Load known task' }).click();
+  await expect(page.getByText('22222222-2222-4222-8222-222222222222 / 1')).toBeVisible();
+  await expect(page.getByText('SKU-EDGE-01')).toBeVisible();
+  await expect(page.getByText('LOT-EDGE-01')).toBeVisible();
+  await expect(page.getByText('10.000 EA')).toBeVisible();
+  await expect(page.getByText('SO-2026-0091 / 1')).toBeVisible();
+  await expect(page.getByText('OUTBOUND-STAGING')).toBeVisible();
+  await expect(page.getByText('Cross-dock task duration')).toBeVisible();
+  await expect(page.getByText('Receipt confirmation to staging confirmation')).toBeVisible();
+  await expect(page.getByLabel('Scan staging bin')).toBeFocused();
+  await page.getByLabel('Scan staging bin').fill('STAGE-BIN-01');
+  await page.getByRole('button', { name: 'Confirm staging' }).click();
+  await expect(page.getByRole('status', { name: 'Cross-dock capture result' })).toContainText('pending sync');
+  await expect(page.getByRole('status', { name: 'Cross-dock capture result' })).toContainText('STAGE-BIN-01');
+  await expect(page.getByRole('status', { name: 'Synchronization status' })).toBeVisible();
 });
 
 test('never-provisioned device shows first sync state', async ({ page }) => {

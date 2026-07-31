@@ -55,7 +55,10 @@ END $$;
 -- than confirmation used, which could resolve to another bin (and another task's allocation) when
 -- a lot is allocated across several bins. Null until the line is confirmed.
 ALTER TABLE IF EXISTS pick_line ADD COLUMN IF NOT EXISTS confirmed_location_id UUID;
+ALTER TABLE IF EXISTS pick_line ADD COLUMN IF NOT EXISTS cross_dock_task_id UUID;
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pick_line_cross_dock_task
+  ON pick_line (cross_dock_task_id) WHERE cross_dock_task_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_pick_line_task ON pick_line (pick_task_id);
 CREATE INDEX IF NOT EXISTS idx_pick_line_location_status ON pick_line (location_id, status);
 CREATE INDEX IF NOT EXISTS idx_pick_line_directed_lot ON pick_line (directed_lot_id);

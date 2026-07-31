@@ -133,6 +133,11 @@ import {
   handleAssignReplenishmentTask,
 } from './api/v1/replenishment.js';
 import {
+  handleGetCrossDockTask,
+  handleAssignCrossDockTask,
+  handleConfirmCrossDockTask,
+} from './api/v1/cross-dock.js';
+import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
   generateBatchPickTasksHandler,
@@ -294,6 +299,10 @@ export function createAppRouter(): Router {
   router.post('/api/v1/replenishment/check', handleCheckReplenishment);
   router.post('/api/v1/replenishment-tasks/:replenishmentTaskId/confirm', handleConfirmReplenishmentTask);
   router.post('/api/v1/replenishment-tasks/:replenishmentTaskId/assign', handleAssignReplenishmentTask);
+
+  router.get('/api/v1/cross-dock-tasks/:crossDockTaskId', handleGetCrossDockTask);
+  router.post('/api/v1/cross-dock-tasks/:crossDockTaskId/assign', handleAssignCrossDockTask);
+  router.post('/api/v1/cross-dock-tasks/:crossDockTaskId/confirm', handleConfirmCrossDockTask);
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

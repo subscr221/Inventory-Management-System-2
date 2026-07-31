@@ -379,6 +379,11 @@ export interface GoodsReceivedPayload {
   unit_cost?: number | string;
   quarantine_approved?: boolean;
   quarantine_reason_code?: string;
+  cross_dock?: boolean;
+  staging_zone_id?: string;
+  staging_zone_code?: string;
+  /** Server-generated before persistence; projection identifiers are never generated during replay. */
+  cross_dock_task_id?: string;
   /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
   received_by?: string;
 }
@@ -569,7 +574,7 @@ export interface DispatchDispatchedEnvelope extends Omit<EventEnvelope, 'payload
 // ---------------------------------------------------------------------------
 // Story 3.8: warehouse task management - configurable SLA thresholds
 // ---------------------------------------------------------------------------
-export type WarehouseTaskType = 'receiving' | 'putaway' | 'picking' | 'packing' | 'replenishment';
+export type WarehouseTaskType = 'receiving' | 'putaway' | 'picking' | 'packing' | 'replenishment' | 'cross_docking';
 
 export interface TaskSlaConfigUpdatedPayload {
   /**
@@ -694,6 +699,35 @@ export interface ReplenishmentTaskAssignedPayload {
 export interface ReplenishmentTaskAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'replenishment_task.assigned';
   payload: ReplenishmentTaskAssignedPayload;
+}
+
+export interface CrossDockTaskAssignedPayload {
+  cross_dock_task_id: string;
+  assigned_to: string;
+  priority?: 'low' | 'normal' | 'high' | 'urgent' | null;
+  /** Server-set from metadata.actor.user_id; never trusted from the client. */
+  assigned_by?: string;
+}
+
+export interface CrossDockTaskAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'cross_dock_task.assigned';
+  payload: CrossDockTaskAssignedPayload;
+}
+
+export interface CrossDockTaskCompletedPayload {
+  cross_dock_task_id: string;
+  to_location_id?: string;
+  to_location_code?: string;
+  /** Server-generated deterministic identifiers carried in the stored event for replay. */
+  pick_task_id: string;
+  pick_line_id: string;
+  /** Server-set from metadata.actor.user_id; never trusted from the client. */
+  completed_by?: string;
+}
+
+export interface CrossDockTaskCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'cross_dock_task.completed';
+  payload: CrossDockTaskCompletedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -879,6 +913,14 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'replenishment_task.completed': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'cross_dock_task.assigned': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  'cross_dock_task.completed': {
     streamType: 'warehouse',
     requiresBusinessStream: false,
   },

@@ -15,6 +15,8 @@ import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/i
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 import { config } from '../../config/index.js';
 import type { AuthContext } from '../../middleware/context.js';
+import { getCrossDockTaskById } from '../../read/projections/cross_dock_task.js';
+import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const PLANNING_EVENT_TYPES = new Set([
@@ -35,6 +37,7 @@ const PLANNING_EVENT_TYPES = new Set([
  * doa/no-hardcoded-role-in-workflow lint rule rejects (it was failing `npm run lint` at HEAD).
  */
 const DISPATCH_DENIED_FRONTLINE_ROLES = ['store_assistant', 'warehouse_operator'];
+const CROSS_DOCK_EXECUTE_ROLES = ['store_assistant', 'warehouse_operator'];
 
 function planningPayloadLocation(body: { stream_type: string; event_type: string; payload: Record<string, unknown> }): string | null {
   if (body.stream_type !== 'inventory' || !PLANNING_EVENT_TYPES.has(body.event_type)) return null;
@@ -111,7 +114,9 @@ function resolveLocationFromBody(
   body: unknown,
 ): string | undefined {
   if (typeof body !== 'object' || body === null) return undefined;
-  const metadata = (body as Record<string, unknown>)['metadata'];
+  const record = body as Record<string, unknown>;
+  if (record['stream_type'] === 'warehouse' && record['event_type'] === 'cross_dock_task.completed') return undefined;
+  const metadata = record['metadata'];
   if (typeof metadata !== 'object' || metadata === null) return undefined;
   const actor = (metadata as Record<string, unknown>)['actor'];
   if (typeof actor !== 'object' || actor === null) return undefined;
@@ -168,6 +173,7 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   const body = getParsedBody(req);
   validateEnvelope(body);
   validateEdgeEnvelope(body);
+  assertCrossDockEventShape(body);
 
   const authContext = getAuthContext(req);
   const assignment = getAuthorizedAssignment(req);
@@ -177,6 +183,34 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
 
   body.metadata.actor.user_id = authContext.userId;
   body.metadata.actor.role = assignment.role;
+  let auditRole = assignment.role;
+  let auditLocationId = assignment.locationId;
+  let authoritativeSiteId: string | null = null;
+  if (body.stream_type === 'warehouse' && body.event_type === 'cross_dock_task.completed') {
+    const taskId = body.payload['cross_dock_task_id'];
+    if (typeof taskId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'cross_dock_task_id is required and must be a UUID');
+    }
+    const task = await getCrossDockTaskById(taskId);
+    if (!task) throw new AppError(404, 'CROSS_DOCK_TASK_NOT_FOUND', 'Cross-dock task not found');
+    const permitted = permittedLocationsForModuleScope(authContext.roles, 'warehouse', 'write');
+    if (!permitted.wildcard && !permitted.locations.has(task.site_id)) {
+      throw new AppError(403, 'LOCATION_ACCESS_DENIED', `No write assignment grants access to task site "${task.site_id}"`);
+    }
+    const covering = authContext.roles.find(
+      (role) => (role.module === 'warehouse' || role.module === '*')
+        && role.functionScope === 'write'
+        && CROSS_DOCK_EXECUTE_ROLES.includes(role.role)
+        && (role.locationId === '*' || role.locationId === task.site_id),
+    );
+    if (!covering) throw new AppError(403, 'FUNCTION_ACCESS_DENIED', 'Cross-dock completion requires an operator role');
+    body.metadata.actor.role = covering.role;
+    body.metadata.actor.location_id = task.site_id;
+    body.payload['completed_by'] = authContext.userId;
+    auditRole = covering.role;
+    auditLocationId = task.site_id;
+    authoritativeSiteId = task.site_id;
+  }
   if (body.stream_type === 'gate' && body.event_type === 'gate.entered') {
     body.payload['gate_officer_id'] = authContext.userId;
   }
@@ -225,7 +259,9 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
       throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Role "${role}" is not authorized to confirm dispatch`);
     }
   }
-  if (assignment.locationId !== '*') {
+  if (authoritativeSiteId !== null) {
+    body.metadata.actor.location_id = authoritativeSiteId;
+  } else if (assignment.locationId !== '*') {
     body.metadata.actor.location_id = assignment.locationId;
   } else if (body.stream_type === 'inventory') {
     body.metadata.actor.location_id = NO_LOCATION_UUID;
@@ -240,9 +276,9 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   try {
     const persisted = await persistEvent(body, {
       trace_id: getTraceId(req) ?? '',
-      user_id: authContext.userId,
-      role: assignment.role,
-      location_id: assignment.locationId,
+       user_id: authContext.userId,
+       role: auditRole,
+       location_id: auditLocationId,
       endpoint: req.url ?? '',
       method: req.method ?? 'POST',
       http_status: 201,
