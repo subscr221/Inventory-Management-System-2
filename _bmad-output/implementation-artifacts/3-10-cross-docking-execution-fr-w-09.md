@@ -317,6 +317,7 @@ fugu-ultra
 - 2026-07-31 Tasks 6 through 8 red phase: tests failed for missing `cross_docking` metrics and routes, missing edge capture and generic outbox builders, and the absent duration label.
 - 2026-07-31 Tasks 6 through 8 green phase: targeted backend tests passed 14/14, full backend passed 538/538, edge unit tests passed 26/26, edge end-to-end tests passed 6/6, and accessibility tests passed 5/5. Backend build/lint, edge typecheck/lint/build, `git diff --check`, and graph update passed.
 - 2026-07-31 Repository-wide `npm run format:check` reports 169 pre-existing formatting failures; changed Story 3.10 files are validated separately before completion.
+- 2026-08-01 Task 10 verification gate: targeted Story 3.10 tests 69/69; backend `npm run build` exit 0; backend `npm run lint` exit 0; backend `npm run format:check` exit 0; backend `npm test` 538/538 pass; backend `npm run spine-acceptance-contract` 6/6 pass; edge `npm run edge:typecheck` exit 0; edge `npm run edge:lint` exit 0; edge `npm run edge:test` 26/26 pass; edge `npm run edge:build` exit 0; edge `npm run edge:test:e2e` 6/6 pass; edge `npm run edge:accessibility` 5/5 pass; `node --env-file=.env.test --import tsx src/events/migrate.ts` exit 0 on first and second run (idempotent); `git diff --check` exit 0; `git status --short` showed no unintended files after resetting `package.json`.
 
 ### Completion Notes List
 
@@ -325,6 +326,7 @@ fugu-ultra
 - Mirrored schema changes into the Compose initializer and strengthened schema-drift coverage without changing the PowerSync publication.
 - Implemented exact, locked demand matching shared with normal pick generation, safe receiving fallback, event-sourced assignment, atomic staging movement, deterministic synthetic pick fulfillment, exact dispatch readiness, location provenance, and location-scoped dispatch stock decrement.
 - Added cross-docking to the unified task board and honest productivity metrics, dedicated event-sourced REST and edge intake, permanent failure classification and localization, and a minimal accessible known-task capture flow using the existing generic outbox and shell.
+- Completed exhaustive regression, concurrency, authorization, destination, downstream dispatch, atomicity, edge sync, schema/route, and task-metric coverage. All acceptance criteria pass and all verification gates are green.
 
 ### File List
 
