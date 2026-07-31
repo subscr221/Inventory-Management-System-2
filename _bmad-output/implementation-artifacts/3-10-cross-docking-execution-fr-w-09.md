@@ -4,7 +4,7 @@ baseline_commit: c46fc21cc9422925a940232e4fbaebbee4e152f7
 
 # Story 3.10: Cross-Docking Execution (FR-W-09)
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -101,26 +101,26 @@ so that cross-dockable receipts clear the dock faster and dock-to-dispatch time 
   - [x] Use stable localization keys and solid-fill accessible status badges. Do not copy the low-contrast tinted wireframe badges or hard-code user-facing error strings.
   - [x] Preserve the current edge shell and first-sync state. A device without cached context must show the existing waiting-for-first-sync state rather than an empty task queue.
 
-- [ ] Task 9: Add exhaustive regression, concurrency, and atomicity tests (AC: 1 through 9)
-  - [ ] Create `test/integration/story-3-10.test.ts` using Node's built-in `node:test`, a real ephemeral HTTP server, real PostgreSQL projections, run-scoped IDs, SCIM provisioning, and no global state assumptions.
-  - [ ] Cover qualifying receipt, false or omitted flag with no cross-dock-only fields, contradictory fields when the flag is absent or false, no demand fallback, insufficient single-line demand fallback, QC, quarantine, non-owned, lot-less, and quantity-range fallback, invalid staging selector rollback, cross-site demand exclusion, deterministic multiple-candidate choice, fractional and maximum quantities, and exact response bodies.
-  - [ ] Prove a cross-dock receipt posts stock once, creates one task, creates no putaway task, stores the match and lot, and is unchanged by event-ID and idempotency-key replays.
-  - [ ] Race two receipts for the last demand and race cross-dock qualification against normal pick generation. Exactly one reservation path may win and the other must safely use ordinary putaway or fail with a stable conflict without over-allocation. Add pending and confirmed partial-standard-pick cases and prove all non-cancelled pick-line quantity plus ready cross-dock reservations plus a new reservation never exceeds ERP demand.
-  - [ ] Cover assignment authorization, active-user and assignee-site checks, assignment stealing, direct-event bypass, server-owned actor fields, cross-site reads, and completion by unauthorized roles.
-  - [ ] Cover destination by UUID and code, zone-row rejection, non-bin descendant, restricted or quarantined bin, inactive bin, cross-site bin, invalid UUID, unknown code, lot UUID and lot-number mismatch, held lot, closed order, quantity mismatch, source shortage, identical replay, conflicting replay, and two concurrent confirmations.
-  - [ ] Inject failures after stock issue, staging receipt, allocation, pick creation, dispatch-status update, location facts, and task completion. Assert no partial projection, event, audit, or stock change survives.
-  - [ ] Prove packing can consume the resulting confirmed pick line and that held-lot, shipping-document, and dispatch gates remain unchanged.
-  - [ ] Extend task-metric unit tests for an open task lowering confirmation rate, completed duration from receipt event time to completion event time, exact period boundaries, clock skew, site scope, zone rollup, SLA equality, and no fabricated completion.
-  - [ ] Extend backend and edge upload tests for duplicate convergence, permanent failure to `needs_attention`, localized messages, authentication halt, retryable server errors, and unrelated-event continuation.
-  - [ ] Extend schema-drift and route-surface tests for every new table, column, constraint, index, foreign key, grant, migration, init-db mirror, task type, and endpoint. Extend warehouse-task validation tests so `cross_docking` is accepted by both the board filter and SLA configuration APIs.
-  - [ ] Keep all Story 3.4, 3.6, 3.7, 3.8, and 3.9 tests green. Update legacy test reset lists only where the new table introduces persistent test state.
+- [x] Task 9: Add exhaustive regression, concurrency, and atomicity tests (AC: 1 through 9)
+  - [x] Create `test/integration/story-3-10.test.ts` using Node's built-in `node:test`, a real ephemeral HTTP server, real PostgreSQL projections, run-scoped IDs, SCIM provisioning, and no global state assumptions.
+  - [x] Cover qualifying receipt, false or omitted flag with no cross-dock-only fields, contradictory fields when the flag is absent or false, no demand fallback, insufficient single-line demand fallback, QC, quarantine, non-owned, lot-less, and quantity-range fallback, invalid staging selector rollback, cross-site demand exclusion, deterministic multiple-candidate choice, fractional and maximum quantities, and exact response bodies.
+  - [x] Prove a cross-dock receipt posts stock once, creates one task, creates no putaway task, stores the match and lot, and is unchanged by event-ID and idempotency-key replays.
+  - [x] Race two receipts for the last demand and race cross-dock qualification against normal pick generation. Exactly one reservation path may win and the other must safely use ordinary putaway or fail with a stable conflict without over-allocation. Add pending and confirmed partial-standard-pick cases and prove all non-cancelled pick-line quantity plus ready cross-dock reservations plus a new reservation never exceeds ERP demand.
+  - [x] Cover assignment authorization, active-user and assignee-site checks, assignment stealing, direct-event bypass, server-owned actor fields, cross-site reads, and completion by unauthorized roles.
+  - [x] Cover destination by UUID and code, zone-row rejection, non-bin descendant, restricted or quarantined bin, inactive bin, cross-site bin, invalid UUID, unknown code, lot UUID and lot-number mismatch, held lot, closed order, quantity mismatch, source shortage, identical replay, conflicting replay, and two concurrent confirmations.
+  - [x] Inject failures after stock issue, staging receipt, allocation, pick creation, dispatch-status update, location facts, and task completion. Assert no partial projection, event, audit, or stock change survives.
+  - [x] Prove packing can consume the resulting confirmed pick line and that held-lot, shipping-document, and dispatch gates remain unchanged.
+  - [x] Extend task-metric unit tests for an open task lowering confirmation rate, completed duration from receipt event time to completion event time, exact period boundaries, clock skew, site scope, zone rollup, SLA equality, and no fabricated completion.
+  - [x] Extend backend and edge upload tests for duplicate convergence, permanent failure to `needs_attention`, localized messages, authentication halt, retryable server errors, and unrelated-event continuation.
+  - [x] Extend schema-drift and route-surface tests for every new table, column, constraint, index, foreign key, grant, migration, init-db mirror, task type, and endpoint. Extend warehouse-task validation tests so `cross_docking` is accepted by both the board filter and SLA configuration APIs.
+  - [x] Keep all Story 3.4, 3.6, 3.7, 3.8, and 3.9 tests green. Update legacy test reset lists only where the new table introduces persistent test state.
 
-- [ ] Task 10: Run the complete verification gate (AC: 9)
-  - [ ] Run `npm run build`, `npm run lint`, `npm run format:check`, `npm test`, and `npm run spine-acceptance-contract`.
-  - [ ] Run `npm run edge:typecheck`, `npm run edge:lint`, `npm run edge:test`, and `npm run edge:build`.
-  - [ ] Run the schema-drift suite and `npm run db:migrate` twice against the test database to prove idempotent migration.
-  - [ ] Run `git diff --check` and verify only intended files changed.
-  - [ ] Do not mark any task complete from code inspection alone. Record each command, exit result, test count, and any proven pre-existing failure in the Dev Agent Record.
+- [x] Task 10: Run the complete verification gate (AC: 9)
+  - [x] Run `npm run build`, `npm run lint`, `npm run format:check`, `npm test`, and `npm run spine-acceptance-contract`.
+  - [x] Run `npm run edge:typecheck`, `npm run edge:lint`, `npm run edge:test`, and `npm run edge:build`.
+  - [x] Run the schema-drift suite and `npm run db:migrate` twice against the test database to prove idempotent migration.
+  - [x] Run `git diff --check` and verify only intended files changed.
+  - [x] Do not mark any task complete from code inspection alone. Record each command, exit result, test count, and any proven pre-existing failure in the Dev Agent Record.
 
 ## Dev Notes
 
