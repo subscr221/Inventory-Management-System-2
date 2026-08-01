@@ -146,5 +146,12 @@
   "errors.CROSS_DOCK_SITE_MISMATCH": "This task belongs to a different site. Stop and contact a supervisor.",
   "errors.CROSS_DOCK_ORDER_NOT_OPEN": "The matched sales order is no longer open. Stop and contact a supervisor.",
   "errors.CROSS_DOCK_DEMAND_ALREADY_ALLOCATED": "The matched demand was allocated elsewhere. Stop and contact a supervisor.",
-  "errors.CROSS_DOCK_QUANTITY_MISMATCH": "The receipt, lot, or task quantity no longer matches. Stop and contact a supervisor."
+  "errors.CROSS_DOCK_QUANTITY_MISMATCH": "The receipt, lot, or task quantity no longer matches. Stop and contact a supervisor.",
+  "errors.DUPLICATE_SUPPLIER_GSTIN": "A supplier with this GSTIN already exists. Check the supplier registry and try again.",
+  "errors.SUPPLIER_NOT_FOUND": "The specified supplier was not found in the system.",
+  "errors.SUPPLIER_NOT_ACTIVE": "Only active suppliers can be updated. Ensure the supplier is active first.",
+  "errors.SUPPLIER_ALREADY_ACTIVE": "This supplier is already active and does not require onboarding.",
+  "errors.SUPPLIER_ALREADY_APPROVED": "This supplier has already been approved.",
+  "errors.SUPPLIER_ONBOARDING_NOT_SUBMITTED": "Onboarding has not been submitted for this supplier.",
+  "errors.IMMUTABLE_FIELD": "Cannot modify immutable fields on this supplier record."
 }

@@ -548,7 +548,7 @@ development_status:
 
   # --- Epic 4: Procurement and Supplier Management (wave 1, post-pilot) ---
   epic-4: in-progress
-  4-1-supplier-registry-and-onboarding: in-progress
+  4-1-supplier-registry-and-onboarding: review
   4-2-supplier-performance-scorecards: backlog
   4-3-purchase-requisition-and-indent-loop: backlog
   4-4-purchase-order-management: backlog

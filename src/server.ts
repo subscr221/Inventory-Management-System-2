@@ -143,6 +143,16 @@ import {
   handleConfirmCrossDockTask,
 } from './api/v1/cross-dock.js';
 import {
+  createSupplierHandler,
+  getSupplierHandler,
+  listSuppliersHandler,
+  submitOnboardingHandler,
+  approveOnboardingHandler,
+  rejectOnboardingHandler,
+  updateSupplierHandler,
+  deactivateSupplierHandler,
+} from './api/v1/suppliers.js';
+import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
   generateBatchPickTasksHandler,
@@ -338,6 +348,16 @@ export function createAppRouter(): Router {
   router.get('/api/v1/cross-dock-tasks/:crossDockTaskId', handleGetCrossDockTask);
   router.post('/api/v1/cross-dock-tasks/:crossDockTaskId/assign', handleAssignCrossDockTask);
   router.post('/api/v1/cross-dock-tasks/:crossDockTaskId/confirm', handleConfirmCrossDockTask);
+
+  // Story 4.1: Supplier Registry and Onboarding
+  router.post('/api/v1/suppliers', createSupplierHandler);
+  router.get('/api/v1/suppliers/:supplierId', getSupplierHandler);
+  router.get('/api/v1/suppliers', listSuppliersHandler);
+  router.post('/api/v1/suppliers/:supplierId/onboarding/submit', submitOnboardingHandler);
+  router.post('/api/v1/suppliers/:supplierId/onboarding/approve', approveOnboardingHandler);
+  router.post('/api/v1/suppliers/:supplierId/onboarding/reject', rejectOnboardingHandler);
+  router.patch('/api/v1/suppliers/:supplierId', updateSupplierHandler);
+  router.post('/api/v1/suppliers/:supplierId/deactivate', deactivateSupplierHandler);
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

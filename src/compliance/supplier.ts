@@ -2,8 +2,6 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import {
-  getSupplierById,
-  getSupplierByGstin,
   getSupplierByOwnerPartyCode,
   insertSupplier,
   updateSupplierStatus,
@@ -354,7 +352,6 @@ async function applySupplierOnboardingSubmitted(
   }
 
   const submittedAt = (typeof p['submitted_at'] === 'string') ? p['submitted_at'] : new Date().toISOString();
-  const submittedBy = (typeof p['submitted_by'] === 'string') ? p['submitted_by'] : envelope.metadata.actor.user_id;
 
   await updateSupplierStatus(supplierId, 'onboarding', {
     onboarding_submitted_at: submittedAt,

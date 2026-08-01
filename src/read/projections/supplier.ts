@@ -62,8 +62,8 @@ export async function getSupplierByGstin(
 }
 
 export interface ListSuppliersParams {
-  status?: 'onboarding' | 'active' | 'inactive';
-  search?: string;
+  status?: 'onboarding' | 'active' | 'inactive' | undefined;
+  search?: string | undefined;
 }
 
 export async function listSuppliers(

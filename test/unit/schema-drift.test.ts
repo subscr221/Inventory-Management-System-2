@@ -486,6 +486,21 @@ const EXPECTED = [
       'idx_cross_dock_task_correlation',
     ],
   },
+  // Story 4.1: Supplier Registry and Onboarding
+  {
+    canonical: 'read/projections/supplier.sql',
+    table: 'supplier',
+    constraints: [
+      'chk_supplier_status',
+      'chk_supplier_credit_period_non_negative',
+      'chk_supplier_deactivation_reason',
+      'chk_supplier_owner_party_code',
+    ],
+    indexes: [
+      'uq_supplier_gstin',
+      'uq_supplier_owner_party_code',
+    ],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

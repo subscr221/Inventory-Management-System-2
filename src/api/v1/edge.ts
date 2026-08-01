@@ -321,6 +321,11 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
       );
     }
   }
+  // Story 4.1: supplier creation identity is the authenticated actor. Supplier GSTIN uniqueness
+  // is enforced inside the compliance seam (not here), so both HTTP and edge paths are guarded.
+  if (body.stream_type === 'procurement' && body.event_type === 'supplier.registered') {
+    body.payload['created_by'] = authContext.userId;
+  }
   if (authoritativeSiteId !== null) {
     body.metadata.actor.location_id = authoritativeSiteId;
   } else if (assignment.locationId !== '*') {

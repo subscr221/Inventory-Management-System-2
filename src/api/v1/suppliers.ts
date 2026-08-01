@@ -14,7 +14,6 @@ import { randomUUID } from 'node:crypto';
 
 import {
   getSupplierById,
-  getSupplierByOwnerPartyCode,
   listSuppliers,
 } from '../../read/projections/supplier.js';
 import {
@@ -55,9 +54,8 @@ function auditCtxFor(
     role: actor.role,
     location_id: actor.auditLocationId,
     endpoint: req.url ?? '',
-    method: req.method ?? '',
+    method: req.method ?? 'POST',
     http_status: httpStatus,
-    metadata: {},
   };
 }
 
@@ -99,7 +97,7 @@ async function resolveApprover(
   return { requiresApproval: true, approverActorId: approver };
 }
 
-const createSupplierBase: RouteHandler = async (req, res, _params) => {
+export const createSupplierBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!body) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
@@ -110,11 +108,12 @@ const createSupplierBase: RouteHandler = async (req, res, _params) => {
   const supplierId = randomUUID();
   const now = new Date().toISOString();
 
-  const envelope = {
+  const eventId = randomUUID();
+  const persisted = await persistEvent({
     stream_type: 'procurement',
     stream_id: supplierId,
     event_type: 'supplier.registered',
-    event_id: randomUUID(),
+    event_id: eventId,
     payload: {
       supplier_id: supplierId,
       legal_name: body.legal_name,
@@ -137,19 +136,17 @@ const createSupplierBase: RouteHandler = async (req, res, _params) => {
       },
       occurred_at: now,
     },
-  };
+  }, auditCtxFor(req, actor, 201));
 
-  const persisted = await persistEvent(envelope, auditCtxFor(req, actor, 201));
   const supplier = await getSupplierById(supplierId);
-
-  sendJson(req, res, 201, {
+  sendJson(res, 201, {
     event_id: persisted.event_id,
     supplier: supplier ?? null,
   });
 };
 
-const getSupplierBase: RouteHandler = async (req, res, params) => {
-  const supplierId = params?.['supplierId'] as string | undefined;
+export const getSupplierBase: RouteHandler = async (req, res, params) => {
+  const supplierId = params?.['supplierId'];
   if (!supplierId) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId is required');
     return;
@@ -161,29 +158,34 @@ const getSupplierBase: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  sendJson(req, res, 200, { supplier });
+  sendJson(res, 200, { supplier });
 };
 
-const listSuppliersBase: RouteHandler = async (req, res, _params) => {
+export const listSuppliersBase: RouteHandler = async (req, res, _params) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
-  const status = url.searchParams.get('status') as 'onboarding' | 'active' | 'inactive' | null;
+  const statusParam = url.searchParams.get('status');
   const search = url.searchParams.get('search');
 
-  if (status && !['onboarding', 'active', 'inactive'].includes(status)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'status must be one of: onboarding, active, inactive', { status });
-    return;
+  let status: 'onboarding' | 'active' | 'inactive' | undefined;
+  if (statusParam) {
+    if (statusParam === 'onboarding' || statusParam === 'active' || statusParam === 'inactive') {
+      status = statusParam;
+    } else {
+      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'status must be one of: onboarding, active, inactive', { status: statusParam });
+      return;
+    }
   }
 
   const results = await listSuppliers({
-    status: status ?? undefined,
+    status,
     search: search ?? undefined,
   });
 
-  sendJson(req, res, 200, { suppliers: results });
+  sendJson(res, 200, { suppliers: results });
 };
 
-const submitOnboardingBase: RouteHandler = async (req, res, params) => {
-  const supplierId = params?.['supplierId'] as string | undefined;
+export const submitOnboardingBase: RouteHandler = async (req, res, params) => {
+  const supplierId = params?.['supplierId'];
   if (!supplierId) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId is required');
     return;
@@ -207,13 +209,14 @@ const submitOnboardingBase: RouteHandler = async (req, res, params) => {
 
   const actor = actorContext(req);
   const now = new Date().toISOString();
+  const eventId = randomUUID();
 
   if (!approval.requiresApproval) {
-    const envelope = {
+    const persisted = await persistEvent({
       stream_type: 'procurement',
       stream_id: supplierId,
       event_type: 'supplier.onboarding_approved',
-      event_id: randomUUID(),
+      event_id: eventId,
       payload: {
         supplier_id: supplierId,
         approver_actor_id: actor.userId,
@@ -227,12 +230,10 @@ const submitOnboardingBase: RouteHandler = async (req, res, params) => {
         },
         occurred_at: now,
       },
-    };
+    }, auditCtxFor(req, actor, 200));
 
-    const persisted = await persistEvent(envelope, auditCtxFor(req, actor, 200));
     const updated = await getSupplierById(supplierId);
-
-    sendJson(req, res, 200, {
+    sendJson(res, 200, {
       event_id: persisted.event_id,
       requires_approval: false,
       supplier: updated,
@@ -240,11 +241,11 @@ const submitOnboardingBase: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  const envelope = {
+  const persisted = await persistEvent({
     stream_type: 'procurement',
     stream_id: supplierId,
     event_type: 'supplier.onboarding_submitted',
-    event_id: randomUUID(),
+    event_id: eventId,
     payload: {
       supplier_id: supplierId,
       documents,
@@ -258,11 +259,9 @@ const submitOnboardingBase: RouteHandler = async (req, res, params) => {
       },
       occurred_at: now,
     },
-  };
+  }, auditCtxFor(req, actor, 200));
 
-  const persisted = await persistEvent(envelope, auditCtxFor(req, actor, 200));
-
-  sendJson(req, res, 200, {
+  sendJson(res, 200, {
     event_id: persisted.event_id,
     error_code: 'APPROVAL_REQUIRED',
     message: 'Onboarding submitted for approval',
@@ -273,8 +272,8 @@ const submitOnboardingBase: RouteHandler = async (req, res, params) => {
   });
 };
 
-const approveOnboardingBase: RouteHandler = async (req, res, params) => {
-  const supplierId = params?.['supplierId'] as string | undefined;
+export const approveOnboardingBase: RouteHandler = async (req, res, params) => {
+  const supplierId = params?.['supplierId'];
   if (!supplierId) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId is required');
     return;
@@ -288,18 +287,13 @@ const approveOnboardingBase: RouteHandler = async (req, res, params) => {
 
   const actor = actorContext(req);
   const now = new Date().toISOString();
+  const eventId = randomUUID();
 
-  const doaEntry = await findMatchingDoaEntry(SUPPLIER_DOA_TYPE, 0);
-  if (!doaEntry) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'No DOA entry governs supplier onboarding - approval not required', { supplier_id: supplierId });
-    return;
-  }
-
-  const envelope = {
+  const persisted = await persistEvent({
     stream_type: 'procurement',
     stream_id: supplierId,
     event_type: 'supplier.onboarding_approved',
-    event_id: randomUUID(),
+    event_id: eventId,
     payload: {
       supplier_id: supplierId,
       approver_actor_id: actor.userId,
@@ -313,19 +307,17 @@ const approveOnboardingBase: RouteHandler = async (req, res, params) => {
       },
       occurred_at: now,
     },
-  };
+  }, auditCtxFor(req, actor, 200));
 
-  const persisted = await persistEvent(envelope, auditCtxFor(req, actor, 200));
   const updated = await getSupplierById(supplierId);
-
-  sendJson(req, res, 200, {
+  sendJson(res, 200, {
     event_id: persisted.event_id,
     supplier: updated,
   });
 };
 
-const rejectOnboardingBase: RouteHandler = async (req, res, params) => {
-  const supplierId = params?.['supplierId'] as string | undefined;
+export const rejectOnboardingBase: RouteHandler = async (req, res, params) => {
+  const supplierId = params?.['supplierId'];
   if (!supplierId) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId is required');
     return;
@@ -346,12 +338,13 @@ const rejectOnboardingBase: RouteHandler = async (req, res, params) => {
 
   const actor = actorContext(req);
   const now = new Date().toISOString();
+  const eventId = randomUUID();
 
-  const envelope = {
+  const persisted = await persistEvent({
     stream_type: 'procurement',
     stream_id: supplierId,
     event_type: 'supplier.onboarding_rejected',
-    event_id: randomUUID(),
+    event_id: eventId,
     payload: {
       supplier_id: supplierId,
       rejection_reason: reason.trim(),
@@ -366,19 +359,17 @@ const rejectOnboardingBase: RouteHandler = async (req, res, params) => {
       },
       occurred_at: now,
     },
-  };
+  }, auditCtxFor(req, actor, 200));
 
-  const persisted = await persistEvent(envelope, auditCtxFor(req, actor, 200));
   const updated = await getSupplierById(supplierId);
-
-  sendJson(req, res, 200, {
+  sendJson(res, 200, {
     event_id: persisted.event_id,
     supplier: updated,
   });
 };
 
-const updateSupplierBase: RouteHandler = async (req, res, params) => {
-  const supplierId = params?.['supplierId'] as string | undefined;
+export const updateSupplierBase: RouteHandler = async (req, res, params) => {
+  const supplierId = params?.['supplierId'];
   if (!supplierId) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId is required');
     return;
@@ -398,6 +389,7 @@ const updateSupplierBase: RouteHandler = async (req, res, params) => {
 
   const actor = actorContext(req);
   const now = new Date().toISOString();
+  const eventId = randomUUID();
 
   const payload: Record<string, unknown> = { supplier_id: supplierId };
   if ('contacts' in body) payload.contacts = body.contacts;
@@ -407,11 +399,11 @@ const updateSupplierBase: RouteHandler = async (req, res, params) => {
   if ('delivery_terms' in body) payload.delivery_terms = body.delivery_terms;
   if ('certification_references' in body) payload.certification_references = body.certification_references;
 
-  const envelope = {
+  const persisted = await persistEvent({
     stream_type: 'procurement',
     stream_id: supplierId,
     event_type: 'supplier.updated',
-    event_id: randomUUID(),
+    event_id: eventId,
     payload,
     metadata: {
       correlation_id: randomUUID(),
@@ -422,19 +414,17 @@ const updateSupplierBase: RouteHandler = async (req, res, params) => {
       },
       occurred_at: now,
     },
-  };
+  }, auditCtxFor(req, actor, 200));
 
-  const persisted = await persistEvent(envelope, auditCtxFor(req, actor, 200));
   const updated = await getSupplierById(supplierId);
-
-  sendJson(req, res, 200, {
+  sendJson(res, 200, {
     event_id: persisted.event_id,
     supplier: updated,
   });
 };
 
-const deactivateSupplierBase: RouteHandler = async (req, res, params) => {
-  const supplierId = params?.['supplierId'] as string | undefined;
+export const deactivateSupplierBase: RouteHandler = async (req, res, params) => {
+  const supplierId = params?.['supplierId'];
   if (!supplierId) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId is required');
     return;
@@ -444,7 +434,7 @@ const deactivateSupplierBase: RouteHandler = async (req, res, params) => {
   const reasonCode = body?.reason_code;
   const validReasons = ['fraud', 'business_closure', 'duplicate', 'compliance_failure', 'voluntary'];
   if (!reasonCode || typeof reasonCode !== 'string' || !validReasons.includes(reasonCode)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', `reason_code is required and must be one of: ${validReasons.join(', ')}`, { reason_code: reasonCode });
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', `reason_code is required and must be one of: ${validReasons.join(', ')}`, { reason_code: reasonCode as string });
     return;
   }
 
@@ -456,12 +446,13 @@ const deactivateSupplierBase: RouteHandler = async (req, res, params) => {
 
   const actor = actorContext(req);
   const now = new Date().toISOString();
+  const eventId = randomUUID();
 
-  const envelope = {
+  const persisted = await persistEvent({
     stream_type: 'procurement',
     stream_id: supplierId,
     event_type: 'supplier.deactivated',
-    event_id: randomUUID(),
+    event_id: eventId,
     payload: {
       supplier_id: supplierId,
       reason_code: reasonCode,
@@ -476,12 +467,10 @@ const deactivateSupplierBase: RouteHandler = async (req, res, params) => {
       },
       occurred_at: now,
     },
-  };
+  }, auditCtxFor(req, actor, 200));
 
-  const persisted = await persistEvent(envelope, auditCtxFor(req, actor, 200));
   const updated = await getSupplierById(supplierId);
-
-  sendJson(req, res, 200, {
+  sendJson(res, 200, {
     event_id: persisted.event_id,
     supplier: updated,
   });
