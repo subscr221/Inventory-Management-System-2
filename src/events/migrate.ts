@@ -55,6 +55,7 @@ const MIGRATIONS = [
   '../../read/projections/pick_line.sql',
   '../../read/projections/cross_dock_constraints.sql',
   '../../read/projections/task_sla_config.sql',
+  '../../read/projections/supplier.sql',
 ];
 
 async function migrate(): Promise<void> {

@@ -732,6 +732,92 @@ export interface CrossDockTaskCompletedEnvelope extends Omit<EventEnvelope, 'pay
 }
 
 // ---------------------------------------------------------------------------
+// Story 4.1: Supplier Registry and Onboarding
+// ---------------------------------------------------------------------------
+
+export interface SupplierRegisteredPayload {
+  supplier_id: string;
+  legal_name: string;
+  owner_party_code: string;
+  gstin_ext?: string;
+  pan_ext?: string;
+  contacts: Array<{ name: string; email?: string; phone?: string; designation?: string }>;
+  credit_period_days: number;
+  commercial_terms?: string;
+  freight_terms?: string;
+  delivery_terms?: string;
+  certification_references: Array<{ type: string; reference_number: string; issuer?: string; valid_until?: string }>;
+}
+
+export interface SupplierRegisteredEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier.registered';
+  payload: SupplierRegisteredPayload;
+}
+
+export interface SupplierOnboardingSubmittedPayload {
+  supplier_id: string;
+  documents: Array<{ type: string; reference: string; file_hash: string }>;
+  submitted_at?: string;
+  submitted_by?: string;
+}
+
+export interface SupplierOnboardingSubmittedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier.onboarding_submitted';
+  payload: SupplierOnboardingSubmittedPayload;
+}
+
+export interface SupplierOnboardingApprovedPayload {
+  supplier_id: string;
+  approver_actor_id: string;
+  doa_band_id?: string;
+  approved_at?: string;
+}
+
+export interface SupplierOnboardingApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier.onboarding_approved';
+  payload: SupplierOnboardingApprovedPayload;
+}
+
+export interface SupplierOnboardingRejectedPayload {
+  supplier_id: string;
+  rejection_reason: string;
+  approver_actor_id: string;
+  rejected_at?: string;
+}
+
+export interface SupplierOnboardingRejectedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier.onboarding_rejected';
+  payload: SupplierOnboardingRejectedPayload;
+}
+
+export interface SupplierUpdatedPayload {
+  supplier_id: string;
+  contacts?: Array<{ name: string; email?: string; phone?: string; designation?: string }>;
+  credit_period_days?: number;
+  commercial_terms?: string;
+  freight_terms?: string;
+  delivery_terms?: string;
+  certification_references?: Array<{ type: string; reference_number: string; issuer?: string; valid_until?: string }>;
+}
+
+export interface SupplierUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier.updated';
+  payload: SupplierUpdatedPayload;
+}
+
+export interface SupplierDeactivatedPayload {
+  supplier_id: string;
+  reason_code: string;
+  actor_id: string;
+  deactivated_at?: string;
+}
+
+export interface SupplierDeactivatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier.deactivated';
+  payload: SupplierDeactivatedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -923,6 +1009,32 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'cross_dock_task.completed': {
     streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  // Story 4.1: supplier lifecycle events on a new 'procurement' stream. Supplier records are
+  // master data, not inventory movements, so business-stream tagging is not gated on them.
+  'supplier.registered': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier.onboarding_submitted': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier.onboarding_approved': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier.onboarding_rejected': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier.updated': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier.deactivated': {
+    streamType: 'procurement',
     requiresBusinessStream: false,
   },
 } as const;

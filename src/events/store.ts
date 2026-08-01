@@ -94,6 +94,10 @@ import {
   applyCrossDockTaskAssignedProjection,
   applyCrossDockTaskCompletedProjection,
 } from '../compliance/cross-dock.js';
+import {
+  assertSupplierShape,
+  applySupplierProjection,
+} from '../compliance/supplier.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -456,6 +460,10 @@ export async function persistEvent(
     );
   }
   assertCrossDockEventShape(envelope);
+  // Story 4.1: supplier lifecycle shape validation (supplier creation, onboarding submission,
+  // approval, rejection, update, deactivation) is non-DB and runs with the other pre-transaction
+  // asserts, so a malformed supplier event never consumes an idempotency key.
+  assertSupplierShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -678,6 +686,10 @@ export async function persistEvent(
         eventId,
       );
     }
+    // Story 4.1: supplier registry projection (creation, onboarding lifecycle, update,
+    // deactivation) runs inside this same transaction so the supplier row and the domain_events
+    // insert commit or roll back together.
+    await applySupplierProjection(envelope, client);
 
     let nextVersion: number;
 
