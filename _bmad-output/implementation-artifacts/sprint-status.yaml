@@ -1,5 +1,10 @@
 # generated: 2026-07-12
 # last_updated: '2026-08-01'
+# story 3-10 code review 2026-08-01 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
+#   Auditor, run in parallel against baseline c46fc21c; all three returned findings). 1 decision
+#   resolved (persistEvent now returns existing event on duplicate instead of 409), 2 patches applied
+#   (edge.ts overrides pick_task_id/pick_line_id from server, edge-client.tsx throws on DB-null with
+#   try/catch in cross-dock-capture.tsx), 8 dismissed; moved to done
 # story 3-10 created 2026-07-31 via create-story workflow: Cross-Docking Execution (FR-W-09);
 #   qualifying owned, lot-resolved, non-QC receipt lines bind deterministically to one same-site open
 #   Story 2.9 sales-order line with sufficient exact remaining demand, create one cross-dock task,
@@ -535,7 +540,7 @@ development_status:
   3-7-packing-shipping-and-dispatch-documents-fr-w-05-fr-w-06: done   # PILOT
   3-8-warehouse-task-management-and-productivity-tracking-fr-w-07: done   # PILOT
   3-9-forward-pick-replenishment-fr-w-08: done   # PILOT
-  3-10-cross-docking-execution-fr-w-09: review   # PILOT
+  3-10-cross-docking-execution-fr-w-09: done   # PILOT
   epic-3-retrospective: optional
   # story 3-2 code review 2026-07-23: 2 decisions resolved + 7 patches applied (server-generated gate_event_id, IST-based localYmd, removed redundant binding_token alias, UNIQUE correlation_id, pagination limit, negative-path tests); 1 patch reverted (alreadyPersisted null-key throw broke HTTP path); moved to done
 

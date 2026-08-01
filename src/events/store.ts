@@ -487,18 +487,20 @@ export async function persistEvent(
     // idempotency_key is treated as "not supplied" rather than a wildcard that matches every
     // existing event without an idempotency key, which would 409 every request that omits the
     // field - the original unique constraint is not a wildcard either.
+    // When a duplicate event_id or idempotency_key is found, return the existing event (2xx-style
+    // no-op) instead of throwing 409, so an identical replay is indistinguishable from success.
     if (envelope.idempotency_key || envelope.event_id) {
       const existing = await client.query(
-        `SELECT event_id FROM domain_events
+        `SELECT event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at
+          FROM domain_events
           WHERE ($1::text IS NOT NULL AND idempotency_key = $1::text)
              OR event_id = $2::uuid
           LIMIT 1`,
         [envelope.idempotency_key ?? null, eventId],
       );
       if (existing.rows.length > 0) {
-        throw new AppError(409, 'DUPLICATE_EVENT', 'Event already exists', {
-          existing_event_id: existing.rows[0]!['event_id'] as string,
-        });
+        if (ownsTransaction) await client.query('COMMIT');
+        return mapRowToEvent(existing.rows[0]!);
       }
     }
 
@@ -757,17 +759,19 @@ export async function persistEvent(
       // (err.detail only contains the conflicting key/value, e.g. "Key (idempotency_key)=(...) already exists.").
       const constraint = (err as { constraint?: string }).constraint;
       if (constraint === 'uq_idempotency' || constraint === 'domain_events_pkey') {
-        let existingEventId: string = 'unknown';
         if (ownsTransaction) {
           const existing = await client.query(
-            `SELECT event_id FROM domain_events WHERE idempotency_key = $1 OR event_id = $2 LIMIT 1`,
+            `SELECT event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at
+              FROM domain_events WHERE idempotency_key = $1 OR event_id = $2 LIMIT 1`,
             [envelope.idempotency_key, eventId],
           );
-          existingEventId =
-            existing.rows.length > 0 ? (existing.rows[0]!['event_id'] as string) : 'unknown';
+          if (existing.rows.length > 0) {
+            await client.query('COMMIT');
+            return mapRowToEvent(existing.rows[0]!);
+          }
         }
         throw new AppError(409, 'DUPLICATE_EVENT', 'Event already exists', {
-          existing_event_id: existingEventId,
+          existing_event_id: 'unknown',
         });
       } else if (constraint === 'uq_stream_version') {
         throw new AppError(409, 'STREAM_CONFLICT', 'Event version conflict in stream', {

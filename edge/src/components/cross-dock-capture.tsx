@@ -56,8 +56,12 @@ export function CrossDockCapture({
 
   async function confirm() {
     if (!task || !stagingBin.trim()) return;
-    const identifier = await onConfirm?.(task, stagingBin.trim());
-    setResult(`${t('crossDock.pendingResult')} ${t('crossDock.scannedBin')}: ${stagingBin.trim()}. ${identifier ?? task.cross_dock_task_id}. ${t('crossDock.nextAction')}`);
+    try {
+      const identifier = await onConfirm?.(task, stagingBin.trim());
+      setResult(`${t('crossDock.pendingResult')} ${t('crossDock.scannedBin')}: ${stagingBin.trim()}. ${identifier ?? task.cross_dock_task_id}. ${t('crossDock.nextAction')}`);
+    } catch {
+      setResult(t('crossDock.loadError'));
+    }
   }
 
   return (

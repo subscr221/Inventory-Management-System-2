@@ -201,7 +201,9 @@ export function EdgeClient() {
 
   const confirmCrossDock = useCallback(async (task: CrossDockTaskContext, stagingBinCode: string): Promise<string> => {
     const db = database.current;
-    if (!db || !state.userId || !state.siteId) return task.cross_dock_task_id;
+    if (!db || !state.userId || !state.siteId) {
+      throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
+    }
     const event = createCrossDockCompletionEvent({
       taskId: task.cross_dock_task_id,
       stagingBinCode,

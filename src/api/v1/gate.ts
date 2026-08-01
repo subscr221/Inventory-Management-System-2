@@ -287,6 +287,9 @@ const createGateEventBase: RouteHandler = async (req, res) => {
     // Concurrent same-key requests race past the replay pre-check; the uq_idempotency constraint
     // rejects the loser, which then replays the winner's row (through the same site/body check
     // used above) instead of surfacing an opaque 409.
+    // persistEvent now returns the existing event on duplicate (no-op for identical replay),
+    // so this catch block is reached only for non-ownsTransaction callers or other remaining
+    // DUPLICATE_EVENT paths. Keep the replay check as a safety net.
     if (idempotencyKey && err instanceof AppError && err.errorCode === 'DUPLICATE_EVENT') {
       const replay = await replayIfMatch();
       if (replay) {

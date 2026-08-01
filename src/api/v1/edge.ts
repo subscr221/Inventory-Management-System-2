@@ -250,6 +250,10 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     body.metadata.actor.role = covering.role;
     body.metadata.actor.location_id = task.site_id;
     body.payload['completed_by'] = authContext.userId;
+    // Server-owned deterministic projection IDs: override edge-generated random UUIDs
+    // so replay never produces different pick_task/pick_line identifiers (Task 2).
+    body.payload['pick_task_id'] = globalThis.crypto.randomUUID();
+    body.payload['pick_line_id'] = globalThis.crypto.randomUUID();
     auditRole = covering.role;
     auditLocationId = task.site_id;
     authoritativeSiteId = task.site_id;

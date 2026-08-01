@@ -4,7 +4,7 @@ baseline_commit: c46fc21cc9422925a940232e4fbaebbee4e152f7
 
 # Story 3.10: Cross-Docking Execution (FR-W-09)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -327,6 +327,14 @@ fugu-ultra
 - Implemented exact, locked demand matching shared with normal pick generation, safe receiving fallback, event-sourced assignment, atomic staging movement, deterministic synthetic pick fulfillment, exact dispatch readiness, location provenance, and location-scoped dispatch stock decrement.
 - Added cross-docking to the unified task board and honest productivity metrics, dedicated event-sourced REST and edge intake, permanent failure classification and localization, and a minimal accessible known-task capture flow using the existing generic outbox and shell.
 - Completed exhaustive regression, concurrency, authorization, destination, downstream dispatch, atomicity, edge sync, schema/route, and task-metric coverage. All acceptance criteria pass and all verification gates are green.
+
+### Review Findings (code review 2026-08-01)
+
+- [x] [Review][Decision] Identical replay returns 200 instead of 409 DUPLICATE_EVENT — `persistEvent` now returns existing event on duplicate match. Applied to both pre-INSERT short-circuit and post-INSERT unique constraint paths. `src/events/store.ts:490-503`, `src/events/store.ts:761-771`.
+
+- [x] [Review][Patch] Edge generates non-deterministic pick_task_id/pick_line_id — `edge/src/capture/cross-dock.ts:26-27`. Server now overrides in `src/api/v1/edge.ts:252-253` before `persistEvent`.
+
+- [x] [Review][Patch] Edge confirmCrossDock silently returns task ID when DB/auth state unavailable — `edge/src/components/edge-client.tsx:204`. Now throws descriptive error; `cross-dock-capture.tsx:57-61` wraps in try/catch and shows error message.
 
 ### File List
 
