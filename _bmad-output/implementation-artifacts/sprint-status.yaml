@@ -254,7 +254,8 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-07-31'
+last_updated: '2026-08-01'
+# story 4-1 created 2026-08-01 via create-story workflow: Supplier Registry and Onboarding; new 'procurement' stream with supplier.registered/onboarding_submitted/onboarding_approved/onboarding_rejected/updated/deactivated events (requiresBusinessStream false), supplier projection with status lifecycle (onboarding -> active -> inactive), DOA-resolved onboarding approval by transaction_type supplier_onboarding value-band 0, GSTIN uniqueness enforcement across active and onboarding suppliers, notification foundation integration for approval/rejection decisions, get/list/create/update/deactivate/approve/reject REST routes with procurement-module RBAC, edge intake with 5 permanent error codes, and integration with existing owner_party_code governance from Story 2.8; ready-for-dev
 # story 3-6 created 2026-07-25 via create-story workflow: Pick Task Generation and Execution (FR-W-04);
 #   system-generated pick tasks with optimized paths (single-order, batch, wave, zone strategies);
 #   FEFO lot selection, bin pick-sequence ordering, paper-directed picking; real-time stock allocation
@@ -546,8 +547,8 @@ development_status:
   # story 3-2 code review 2026-07-23: 2 decisions resolved + 7 patches applied (server-generated gate_event_id, IST-based localYmd, removed redundant binding_token alias, UNIQUE correlation_id, pagination limit, negative-path tests); 1 patch reverted (alreadyPersisted null-key throw broke HTTP path); moved to done
 
   # --- Epic 4: Procurement and Supplier Management (wave 1, post-pilot) ---
-  epic-4: backlog
-  4-1-supplier-registry-and-onboarding: backlog
+  epic-4: in-progress
+  4-1-supplier-registry-and-onboarding: ready-for-dev
   4-2-supplier-performance-scorecards: backlog
   4-3-purchase-requisition-and-indent-loop: backlog
   4-4-purchase-order-management: backlog
