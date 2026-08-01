@@ -1,5 +1,6 @@
 # generated: 2026-07-12
 # last_updated: '2026-08-01'
+# epic statuses updated 2026-08-01: epics 1, 2, 3 all moved from in-progress to done (all stories complete); three epics form the completed Phase 1 pilot foundation slice and Epic 5 is next in the pilot build order
 # story 3-10 code review 2026-08-01 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
 #   Auditor, run in parallel against baseline c46fc21c; all three returned findings). 1 decision
 #   resolved (persistEvent now returns existing event on duplicate instead of 409), 2 patches applied
@@ -497,7 +498,7 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # --- Epic 1: Platform Foundation, Compliance Spine, and Offline Edge Shell  [PILOT] ---
-  epic-1: in-progress
+  epic-1: done
   1-1-core-infrastructure-deployment-and-event-store-schema: done   # PILOT
   1-2-sso-authentication-and-role-based-access-control: done   # PILOT
   1-3-statutory-edit-log: done   # PILOT
@@ -512,7 +513,7 @@ development_status:
   epic-1-retrospective: optional
 
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---
-  epic-2: in-progress
+  epic-2: done
   2-1-item-master-and-location-register: done   # PILOT
   2-2-real-time-multi-location-stock-balances: done   # PILOT
   2-3-lot-batch-and-serial-traceability: done   # PILOT
@@ -525,7 +526,7 @@ development_status:
   epic-2-retrospective: optional
 
   # --- Epic 3: Warehouse Operations and Frontline Capture Flows  [PILOT] ---
-  epic-3: in-progress
+  epic-3: done
   3-1-warehouse-topology-setup-fr-w-01: done   # PILOT
   # story 3-2 re-review 2026-07-23 (adversarial pass over fix commit 9fbdcf1): 3 decisions (Idempotency-Key
   #   online dedup, binding_token deprecated alias restored, offset/order pagination + oldest-first unmatched
