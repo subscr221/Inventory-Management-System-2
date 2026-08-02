@@ -153,5 +153,7 @@
   "errors.SUPPLIER_ALREADY_ACTIVE": "This supplier is already active and does not require onboarding.",
   "errors.SUPPLIER_ALREADY_APPROVED": "This supplier has already been approved.",
   "errors.SUPPLIER_ONBOARDING_NOT_SUBMITTED": "Onboarding has not been submitted for this supplier.",
+  "errors.SUPPLIER_NOT_IN_ONBOARDING": "This supplier must be in onboarding status for this action.",
+  "errors.SUPPLIER_NOT_ACTIVE_OR_ONBOARDING": "Only active or onboarding suppliers can be deactivated.",
   "errors.IMMUTABLE_FIELD": "Cannot modify immutable fields on this supplier record."
 }

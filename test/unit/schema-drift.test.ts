@@ -499,6 +499,8 @@ const EXPECTED = [
     indexes: [
       'uq_supplier_gstin',
       'uq_supplier_owner_party_code',
+      'idx_supplier_legal_name_trgm',
+      'idx_supplier_owner_party_code_trgm',
     ],
   },
 ];

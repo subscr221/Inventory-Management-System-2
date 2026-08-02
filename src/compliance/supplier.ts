@@ -93,7 +93,6 @@ function assertSupplierRegisteredShape(p: Record<string, unknown>): void {
       owner_party_code: p['owner_party_code'],
     });
   }
-  p['owner_party_code'] = ownerPartyCode;
 
   if (p['gstin_ext'] !== undefined && p['gstin_ext'] !== null && p['gstin_ext'] !== '') {
     if (typeof p['gstin_ext'] !== 'string' || !GSTIN_REGEX.test(p['gstin_ext'])) {
@@ -221,7 +220,7 @@ function assertSupplierDeactivatedShape(p: Record<string, unknown>): void {
 async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Promise<boolean> {
   if (!envelope.idempotency_key && !envelope.event_id) return false;
   const existing = await client.query(
-    `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 LIMIT 1`,
+    `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 FOR UPDATE LIMIT 1`,
     [envelope.idempotency_key ?? null, envelope.event_id ?? null],
   );
   return existing.rows.length > 0;
@@ -266,7 +265,7 @@ async function applySupplierRegistered(
   const supplierId = p['supplier_id'] as string;
   const now = new Date().toISOString();
 
-  const existingByCode = await getSupplierByOwnerPartyCode(p['owner_party_code'] as string, client);
+  const existingByCode = await getSupplierByOwnerPartyCode(p['owner_party_code'] as string, client, true);
   if (existingByCode) {
     reject('INVALID_PARAMS', 'An active, onboarding, or inactive supplier already exists with this owner_party_code', {
       owner_party_code: p['owner_party_code'],
@@ -395,9 +394,8 @@ async function applySupplierOnboardingApproved(
   }
 
   const now = new Date().toISOString();
-  const approverId = typeof p['approved_at'] === 'string' ? p['approved_at'] : now;
   await updateSupplierStatus(supplierId, 'active', {
-    onboarding_approved_at: approverId,
+    onboarding_approved_at: now,
     onboarding_approved_by: p['approver_actor_id'] as string,
   }, client);
 
@@ -486,6 +484,23 @@ async function applySupplierUpdated(
       supplier_id: supplierId,
       status: supplier['status'],
     });
+  }
+
+  if ('gstin_ext' in p && p['gstin_ext'] !== null && typeof p['gstin_ext'] === 'string' && p['gstin_ext'].trim() !== '') {
+    const gstin = p['gstin_ext'].trim();
+    const existingGstin = await client.query(
+      `SELECT supplier_id, legal_name, status FROM supplier WHERE gstin_ext = $1 AND status IN ('onboarding', 'active') AND supplier_id != $2 FOR UPDATE`,
+      [gstin, supplierId],
+    );
+    if (existingGstin.rows.length > 0) {
+      const existing = existingGstin.rows[0] as Record<string, unknown>;
+      reject('DUPLICATE_SUPPLIER_GSTIN', 'A supplier with this GSTIN already exists', {
+        gstin_ext: gstin,
+        existing_supplier_id: existing['supplier_id'],
+        existing_legal_name: existing['legal_name'],
+        existing_status: existing['status'],
+      });
+    }
   }
 
   const fields: Record<string, unknown> = {};

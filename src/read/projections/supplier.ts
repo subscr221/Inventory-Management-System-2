@@ -31,10 +31,13 @@ function runner(client?: PoolClient): Queryable {
   return client ?? getPool();
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function getSupplierById(
   supplierId: string,
   client?: PoolClient,
 ): Promise<SupplierRow | null> {
+  if (!UUID_REGEX.test(supplierId)) return null;
   const r = runner(client);
   const result = await r.query(`SELECT * FROM supplier WHERE supplier_id = $1`, [supplierId]);
   return (result.rows[0] as SupplierRow) ?? null;
@@ -43,9 +46,11 @@ export async function getSupplierById(
 export async function getSupplierByOwnerPartyCode(
   ownerPartyCode: string,
   client?: PoolClient,
+  forUpdate: boolean = false,
 ): Promise<SupplierRow | null> {
   const r = runner(client);
-  const result = await r.query(`SELECT * FROM supplier WHERE owner_party_code = $1`, [ownerPartyCode]);
+  const lockClause = forUpdate ? ' FOR UPDATE' : '';
+  const result = await r.query(`SELECT * FROM supplier WHERE owner_party_code = $1${lockClause}`, [ownerPartyCode]);
   return (result.rows[0] as SupplierRow) ?? null;
 }
 
@@ -81,10 +86,11 @@ export async function listSuppliers(
   }
 
   if (params.search) {
+    const escaped = params.search.replace(/[%_\\]/g, '\\$&');
     conditions.push(
-      `(legal_name ILIKE $${idx} OR owner_party_code ILIKE $${idx + 1})`,
+      `(legal_name ILIKE $${idx} ESCAPE '\\' OR owner_party_code ILIKE $${idx + 1} ESCAPE '\\')`,
     );
-    const pattern = `%${params.search}%`;
+    const pattern = `%${escaped}%`;
     values.push(pattern, pattern);
     idx += 2;
   }
@@ -101,6 +107,14 @@ export async function insertSupplier(
   row: SupplierRow,
   client: PoolClient,
 ): Promise<void> {
+  let contactsJson: string;
+  let certRefsJson: string;
+  try {
+    contactsJson = JSON.stringify(row.contacts);
+    certRefsJson = JSON.stringify(row.certification_references);
+  } catch (err) {
+    throw new Error(`Failed to serialize supplier data: ${(err as Error).message}`);
+  }
   await client.query(
     `INSERT INTO supplier (
       supplier_id, legal_name, owner_party_code, gstin_ext, pan_ext,
@@ -114,12 +128,12 @@ export async function insertSupplier(
       row.owner_party_code,
       row.gstin_ext,
       row.pan_ext,
-      JSON.stringify(row.contacts),
+      contactsJson,
       row.credit_period_days,
       row.commercial_terms,
       row.freight_terms,
       row.delivery_terms,
-      JSON.stringify(row.certification_references),
+      certRefsJson,
       row.status,
       row.created_by,
       row.created_at,
@@ -190,7 +204,9 @@ export async function updateSupplierMutableFields(
     }
   }
 
-  if (sets.length === 1) return;
+  if (sets.length === 1) {
+    throw new Error('No fields to update');
+  }
   await client.query(
     `UPDATE supplier SET ${sets.join(', ')} WHERE supplier_id = $1`,
     values,

@@ -203,7 +203,11 @@ export const submitOnboardingBase: RouteHandler = async (req, res, params) => {
   }
 
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
-  const documents = (body?.documents as Record<string, unknown>[]) ?? [];
+  const documents = body?.documents as Record<string, unknown>[] | undefined;
+  if (!documents || !Array.isArray(documents) || documents.length === 0) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'documents is required and must be a non-empty array');
+    return;
+  }
 
   const approval = await resolveApprover(SUPPLIER_DOA_TYPE, 0);
 
@@ -285,6 +289,11 @@ export const approveOnboardingBase: RouteHandler = async (req, res, params) => {
     return;
   }
 
+  if (supplier.status !== 'onboarding') {
+    sendRequestError(req, res, 400, 'SUPPLIER_NOT_IN_ONBOARDING', 'Supplier must be in onboarding status to approve', { supplier_id: supplierId, status: supplier.status });
+    return;
+  }
+
   const actor = actorContext(req);
   const now = new Date().toISOString();
   const eventId = randomUUID();
@@ -333,6 +342,11 @@ export const rejectOnboardingBase: RouteHandler = async (req, res, params) => {
   const supplier = await getSupplierById(supplierId);
   if (!supplier) {
     sendRequestError(req, res, 404, 'SUPPLIER_NOT_FOUND', 'Supplier not found', { supplier_id: supplierId });
+    return;
+  }
+
+  if (supplier.status !== 'onboarding') {
+    sendRequestError(req, res, 400, 'SUPPLIER_NOT_IN_ONBOARDING', 'Supplier must be in onboarding status to reject', { supplier_id: supplierId, status: supplier.status });
     return;
   }
 
@@ -387,17 +401,40 @@ export const updateSupplierBase: RouteHandler = async (req, res, params) => {
     return;
   }
 
+  if (supplier.status !== 'active') {
+    sendRequestError(req, res, 400, 'SUPPLIER_NOT_ACTIVE', 'Only active suppliers can be updated', { supplier_id: supplierId, status: supplier.status });
+    return;
+  }
+
   const actor = actorContext(req);
   const now = new Date().toISOString();
   const eventId = randomUUID();
 
   const payload: Record<string, unknown> = { supplier_id: supplierId };
-  if ('contacts' in body) payload.contacts = body.contacts;
-  if ('credit_period_days' in body) payload.credit_period_days = body.credit_period_days;
+  if ('contacts' in body) {
+    if (!Array.isArray(body.contacts) || body.contacts.length === 0) {
+      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'contacts must be a non-empty array');
+      return;
+    }
+    payload.contacts = body.contacts;
+  }
+  if ('credit_period_days' in body) {
+    if (typeof body.credit_period_days !== 'number' || !Number.isInteger(body.credit_period_days) || body.credit_period_days < 0) {
+      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'credit_period_days must be a non-negative integer');
+      return;
+    }
+    payload.credit_period_days = body.credit_period_days;
+  }
   if ('commercial_terms' in body) payload.commercial_terms = body.commercial_terms;
   if ('freight_terms' in body) payload.freight_terms = body.freight_terms;
   if ('delivery_terms' in body) payload.delivery_terms = body.delivery_terms;
-  if ('certification_references' in body) payload.certification_references = body.certification_references;
+  if ('certification_references' in body) {
+    if (!Array.isArray(body.certification_references)) {
+      sendRequestError(req, res, 400, 'INVALID_PARAMS', 'certification_references must be an array');
+      return;
+    }
+    payload.certification_references = body.certification_references;
+  }
 
   const persisted = await persistEvent({
     stream_type: 'procurement',
@@ -441,6 +478,11 @@ export const deactivateSupplierBase: RouteHandler = async (req, res, params) => 
   const supplier = await getSupplierById(supplierId);
   if (!supplier) {
     sendRequestError(req, res, 404, 'SUPPLIER_NOT_FOUND', 'Supplier not found', { supplier_id: supplierId });
+    return;
+  }
+
+  if (supplier.status !== 'active' && supplier.status !== 'onboarding') {
+    sendRequestError(req, res, 400, 'SUPPLIER_NOT_ACTIVE_OR_ONBOARDING', 'Only active or onboarding suppliers can be deactivated', { supplier_id: supplierId, status: supplier.status });
     return;
   }
 

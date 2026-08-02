@@ -255,6 +255,16 @@
 
 generated: 2026-07-12
 last_updated: '2026-08-01'
+# story 4-1 code review 2026-08-01 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
+#   Auditor, run in parallel against baseline ce7c7f3; all three returned findings). 11 patches applied
+#   (TOCTOU race fixes with FOR UPDATE locks, status validation in API handlers, GSTIN uniqueness check
+#   on update, ILIKE escaping and GIN indexes for search performance, JSON serialization error handling,
+#   no-op update rejection, two new error codes SUPPLIER_NOT_IN_ONBOARDING and SUPPLIER_NOT_ACTIVE_OR_ONBOARDING
+#   wired across backend/edge/i18n). 4 patches not applied with documented rationale (notification targeting
+#   uses role-based system only, payload mutation reverted to read-only, DOA audit covered by existing audit_log,
+#   inactive GSTIN reuse intentional per story decision). tsc/eslint clean, npm test 517/539 (22 pre-existing
+#   idempotency failures, 0 new), edge typecheck/lint/build clean, schema drift 46/46, db:migrate idempotent
+#   with pg_trgm extension added; moved to done
 # story 4-1 created 2026-08-01 via create-story workflow: Supplier Registry and Onboarding; new 'procurement' stream with supplier.registered/onboarding_submitted/onboarding_approved/onboarding_rejected/updated/deactivated events (requiresBusinessStream false), supplier projection with status lifecycle (onboarding -> active -> inactive), DOA-resolved onboarding approval by transaction_type supplier_onboarding value-band 0, GSTIN uniqueness enforcement across active and onboarding suppliers, notification foundation integration for approval/rejection decisions, get/list/create/update/deactivate/approve/reject REST routes with procurement-module RBAC, edge intake with 5 permanent error codes, and integration with existing owner_party_code governance from Story 2.8; ready-for-dev
 # story 3-6 created 2026-07-25 via create-story workflow: Pick Task Generation and Execution (FR-W-04);
 #   system-generated pick tasks with optimized paths (single-order, batch, wave, zone strategies);

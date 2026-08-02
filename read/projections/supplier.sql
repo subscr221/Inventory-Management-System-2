@@ -14,6 +14,8 @@
 -- short-code, unique across all statuses, validated by the same regex as ownership agreement codes
 -- (Story 2.8). PAN format is not validated in Phase 1.
 
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE TABLE IF NOT EXISTS supplier (
   supplier_id                  UUID PRIMARY KEY,
   legal_name                   TEXT NOT NULL,
@@ -47,6 +49,8 @@ CREATE TABLE IF NOT EXISTS supplier (
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_gstin ON supplier (gstin_ext) WHERE status IN ('onboarding', 'active');
 CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_owner_party_code ON supplier (owner_party_code);
+CREATE INDEX IF NOT EXISTS idx_supplier_legal_name_trgm ON supplier USING gin (legal_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_supplier_owner_party_code_trgm ON supplier USING gin (owner_party_code gin_trgm_ops);
 
 DO $$
 BEGIN
