@@ -1,5 +1,5 @@
 # generated: 2026-07-12
-# last_updated: '2026-08-01'
+# last_updated: '2026-08-02'
 # epic statuses updated 2026-08-01: epics 1, 2, 3 all moved from in-progress to done (all stories complete); three epics form the completed Phase 1 pilot foundation slice and Epic 5 is next in the pilot build order
 # story 3-10 code review 2026-08-01 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
 #   Auditor, run in parallel against baseline c46fc21c; all three returned findings). 1 decision
@@ -254,7 +254,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-01'
+last_updated: '2026-08-02'
 # story 4-1 code review 2026-08-01 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
 #   Auditor, run in parallel against baseline ce7c7f3; all three returned findings). 11 patches applied
 #   (TOCTOU race fixes with FOR UPDATE locks, status validation in API handlers, GSTIN uniqueness check
@@ -560,12 +560,15 @@ development_status:
   epic-4: in-progress
   4-1-supplier-registry-and-onboarding: review
   4-2-supplier-performance-scorecards: backlog
-  4-3-purchase-requisition-and-indent-loop: backlog
+  4-3-purchase-requisition-and-indent-loop: ready-for-dev
   4-4-purchase-order-management: backlog
   4-5-goods-receipt-and-three-way-match: backlog
   4-6-msme-compliance-tracking: backlog
   4-7-supplier-invoice-capture: backlog
   epic-4-retrospective: optional
+  # story 4-2 skipped for now: epics.md sequences it LAST in epic 4 (consumes PurchaseOrderIssued/Confirmed
+  # from 4.4, GoodsReceived + match results from 4.5, SupplierInvoiceCaptured from 4.7). Create 4-2 after
+  # those land. 4-3 contexted instead on 2026-08-02.
 
   # --- Epic 5: BOM and Engineering Change Management  [PILOT] ---
   epic-5: backlog
