@@ -50,7 +50,9 @@ export async function getSupplierByOwnerPartyCode(
 ): Promise<SupplierRow | null> {
   const r = runner(client);
   const lockClause = forUpdate ? ' FOR UPDATE' : '';
-  const result = await r.query(`SELECT * FROM supplier WHERE owner_party_code = $1${lockClause}`, [ownerPartyCode]);
+  const result = await r.query(`SELECT * FROM supplier WHERE owner_party_code = $1${lockClause}`, [
+    ownerPartyCode,
+  ]);
   return (result.rows[0] as SupplierRow) ?? null;
 }
 
@@ -96,17 +98,11 @@ export async function listSuppliers(
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  const result = await r.query(
-    `SELECT * FROM supplier ${where} ORDER BY legal_name ASC`,
-    values,
-  );
+  const result = await r.query(`SELECT * FROM supplier ${where} ORDER BY legal_name ASC`, values);
   return result.rows as SupplierRow[];
 }
 
-export async function insertSupplier(
-  row: SupplierRow,
-  client: PoolClient,
-): Promise<void> {
+export async function insertSupplier(row: SupplierRow, client: PoolClient): Promise<void> {
   let contactsJson: string;
   let certRefsJson: string;
   try {
@@ -145,7 +141,17 @@ export async function insertSupplier(
 export async function updateSupplierStatus(
   supplierId: string,
   status: 'onboarding' | 'active' | 'inactive',
-  extra: Partial<Pick<SupplierRow, 'onboarding_submitted_at' | 'onboarding_approved_at' | 'onboarding_approved_by' | 'onboarding_rejection_reason' | 'deactivation_reason_code' | 'deactivated_at'>>,
+  extra: Partial<
+    Pick<
+      SupplierRow,
+      | 'onboarding_submitted_at'
+      | 'onboarding_approved_at'
+      | 'onboarding_approved_by'
+      | 'onboarding_rejection_reason'
+      | 'deactivation_reason_code'
+      | 'deactivated_at'
+    >
+  >,
   client: PoolClient,
 ): Promise<void> {
   const sets: string[] = ['status = $2', 'updated_at = now()'];
@@ -177,15 +183,22 @@ export async function updateSupplierStatus(
     values.push(extra.deactivated_at);
   }
 
-  await client.query(
-    `UPDATE supplier SET ${sets.join(', ')} WHERE supplier_id = $1`,
-    values,
-  );
+  await client.query(`UPDATE supplier SET ${sets.join(', ')} WHERE supplier_id = $1`, values);
 }
 
 export async function updateSupplierMutableFields(
   supplierId: string,
-  fields: Partial<Pick<SupplierRow, 'contacts' | 'credit_period_days' | 'commercial_terms' | 'freight_terms' | 'delivery_terms' | 'certification_references'>>,
+  fields: Partial<
+    Pick<
+      SupplierRow,
+      | 'contacts'
+      | 'credit_period_days'
+      | 'commercial_terms'
+      | 'freight_terms'
+      | 'delivery_terms'
+      | 'certification_references'
+    >
+  >,
   client: PoolClient,
 ): Promise<void> {
   const sets: string[] = ['updated_at = now()'];
@@ -197,9 +210,7 @@ export async function updateSupplierMutableFields(
       const dbKey = key as string;
       sets.push(`${dbKey} = $${idx++}`);
       values.push(
-        key === 'contacts' || key === 'certification_references'
-          ? JSON.stringify(val)
-          : val,
+        key === 'contacts' || key === 'certification_references' ? JSON.stringify(val) : val,
       );
     }
   }
@@ -207,8 +218,5 @@ export async function updateSupplierMutableFields(
   if (sets.length === 1) {
     throw new Error('No fields to update');
   }
-  await client.query(
-    `UPDATE supplier SET ${sets.join(', ')} WHERE supplier_id = $1`,
-    values,
-  );
+  await client.query(`UPDATE supplier SET ${sets.join(', ')} WHERE supplier_id = $1`, values);
 }

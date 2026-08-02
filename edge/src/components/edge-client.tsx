@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PowerSyncDatabase } from '@powersync/web';
 import { createTestCaptureEvent } from '../capture/test-capture';
 import { createCrossDockCompletionEvent } from '../capture/cross-dock';
+import { createIndentRaisedEvent } from '../capture/indent';
 import { AppShell } from './app-shell';
 import type { CrossDockTaskContext } from './cross-dock-capture';
+import type { IndentSubmitInput } from './indent-capture';
 import { t } from '../i18n/locale';
 import { createEdgeDatabase } from '../local-db/database';
 import {
@@ -218,6 +220,23 @@ export function EdgeClient() {
     return event.event_id;
   }, [refreshLocalState, state.role, state.siteId, state.userId]);
 
+  const submitIndent = useCallback(async (input: IndentSubmitInput): Promise<string> => {
+    const db = database.current;
+    if (!db || !state.userId || !state.siteId) {
+      throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
+    }
+    const event = createIndentRaisedEvent({
+      ...input,
+      userId: state.userId,
+      role: state.role,
+      siteId: state.siteId,
+      deviceId: deviceId(),
+    });
+    await insertCaptureEvent(db, event);
+    await refreshLocalState(db);
+    return event.event_id;
+  }, [refreshLocalState, state.role, state.siteId, state.userId]);
+
   return (
     <AppShell
       userName={state.userName || t('app.defaultUserName')}
@@ -233,6 +252,7 @@ export function EdgeClient() {
       onCapture={() => void capture()}
       onLoadCrossDockTask={loadCrossDockTask}
       onConfirmCrossDock={confirmCrossDock}
+      onSubmitIndent={submitIndent}
       onRetry={() => {
         const db = database.current;
         if (db) void refreshLocalState(db);

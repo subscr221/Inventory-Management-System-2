@@ -66,7 +66,7 @@ function resolveOccurredAt(event: NotificationCreatedEventRow): string {
 }
 
 interface NotificationCreatedPayload {
-  target: { role: string; location_id: string | null };
+  target: { role: string; location_id: string | null; user_id?: string | null };
   event_type: string;
   status_verb: string;
   object_type: string;
@@ -178,11 +178,11 @@ export async function runDispatchCycle(limit = 50): Promise<DispatchCycleResult>
       // request) via the event's correlation_id, rather than an unrelated fresh UUID.
       const traceId = event.metadata.correlation_id ?? event.event_id;
 
-      const userIds = await resolveTargetUserIds(
-        payload.target.role,
-        payload.target.location_id,
-        client,
-      );
+      // Story 4.3 (AC 5): a user_id target delivers to exactly that user - the role/location
+      // fan-out is only for targets without one.
+      const userIds = payload.target.user_id
+        ? [payload.target.user_id]
+        : await resolveTargetUserIds(payload.target.role, payload.target.location_id, client);
 
       for (const userId of userIds) {
         const notification = await insertNotification(

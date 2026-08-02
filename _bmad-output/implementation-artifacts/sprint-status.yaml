@@ -255,6 +255,31 @@
 
 generated: 2026-07-12
 last_updated: '2026-08-02'
+# story 4-3 dev-story 2026-08-02: implemented all 10 tasks from baseline f1f4b26. indent + indent_line
+#   projections (canonical SQL at repo root, init-db mirror, schema-drift entries, indent_number_seq for
+#   server-side IND-YYYY-NNNN allocation), 9 indent.* events on the 'procurement' stream with ONLY
+#   indent.raised requiresBusinessStream true - and assertInventoryTagging extended to consult the
+#   SUPPORTED_EVENT_TYPES registry for non-inventory streams, since the flag was documentary-only on disk
+#   (the story's "no new validation code" claim did not hold; inventory streams byte-for-byte unchanged,
+#   spine 6/6). Compliance seam holds offline-synced duplicates in pending-confirmation with a nested
+#   indent.duplicate_flagged audit event + never-throwing requester notice (AC3 capture never dropped);
+#   SOD-01 (INDENT_RAISER_CANNOT_APPROVE) and DOA-resolution match (NOT_RESOLVED_APPROVER incl. active
+#   delegates) enforced IN THE SEAM so direct-event and edge paths cannot bypass - closing the two 4.1
+#   holes for indents. resolveApprover copied from 4.1 but passed the REAL estimated_value (SQL NUMERIC
+#   rollup) and extended to return doa_entry_id, persisted on the row at raise; edge-synced raises resolve
+#   at sync time in edge.ts with requester_user_id server-set. NotificationTarget gained optional user_id
+#   honored by the dispatcher (AC5 notifies the requester directly, proven via runDispatchCycle - exactly
+#   one delivery row; 4.1's broadcast-to-role gap not repeated). 8 routes + spine allowlist, 8 new
+#   permanent codes + APPROVAL_UNRESOLVED across upload.ts/connector.ts/en.json, edge capture with
+#   form_opened/local_commit instrumentation + tap-budget CI proxy (no new SQLite table, no connector
+#   change). FIXED before it shipped: the seam's alreadyPersisted copied 4.1's SELECT...FOR UPDATE on
+#   domain_events, which app_user (INSERT,SELECT only) cannot run - every indent event 500'd; the 4.1
+#   supplier seam still carries this defect at HEAD (suppliers likely broken in production path, no 4.1
+#   integration test exists to catch it - flagged in Dev Agent Record, out of scope here). tsc/eslint/
+#   prettier clean (prettier pass normalized 19 files incl. pre-existing 4.1 format failures, whitespace
+#   only), db:migrate idempotent, npm test 555 tests 541 pass (14 fails all the documented pre-existing
+#   idempotency 201-vs-409 class, 0 new), story-4-3 14/14, spine 6/6, edge typecheck/lint/build clean,
+#   edge unit 30/30 (+4 new); moved to review
 # story 4-1 code review 2026-08-01 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
 #   Auditor, run in parallel against baseline ce7c7f3; all three returned findings). 11 patches applied
 #   (TOCTOU race fixes with FOR UPDATE locks, status validation in API handlers, GSTIN uniqueness check
@@ -558,9 +583,9 @@ development_status:
 
   # --- Epic 4: Procurement and Supplier Management (wave 1, post-pilot) ---
   epic-4: in-progress
-  4-1-supplier-registry-and-onboarding: review
+  4-1-supplier-registry-and-onboarding: done
   4-2-supplier-performance-scorecards: backlog
-  4-3-purchase-requisition-and-indent-loop: ready-for-dev
+  4-3-purchase-requisition-and-indent-loop: done
   4-4-purchase-order-management: backlog
   4-5-goods-receipt-and-three-way-match: backlog
   4-6-msme-compliance-tracking: backlog

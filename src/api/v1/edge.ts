@@ -17,6 +17,7 @@ import { config } from '../../config/index.js';
 import type { AuthContext } from '../../middleware/context.js';
 import { getCrossDockTaskById } from '../../read/projections/cross_dock_task.js';
 import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
+import { resolveApprover, INDENT_DOA_TYPE } from './indents.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const PLANNING_EVENT_TYPES = new Set([
@@ -325,6 +326,32 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   // is enforced inside the compliance seam (not here), so both HTTP and edge paths are guarded.
   if (body.stream_type === 'procurement' && body.event_type === 'supplier.registered') {
     body.payload['created_by'] = authContext.userId;
+  }
+  // Story 4.3: the requisition requester identity is the authenticated actor, never trusted from
+  // the edge payload (mirrors created_by/weighed_by/gate_officer_id above). Duplicate detection,
+  // approval routing, and SOD-01 all key off this server-set identity.
+  if (body.stream_type === 'procurement' && body.event_type === 'indent.raised') {
+    body.payload['requester_user_id'] = authContext.userId;
+    // AC 6: DOA-resolved approval routing applies to offline-captured requisitions too - the
+    // resolution happens here, at sync time, against the indent's estimated value. An unresolvable
+    // approver throws APPROVAL_UNRESOLVED (409), a permanent code that settles the outbox row as
+    // needs_attention rather than retrying forever.
+    const rawLines = body.payload['lines'];
+    let estimatedValue = 0;
+    if (Array.isArray(rawLines)) {
+      for (const line of rawLines as Array<Record<string, unknown>>) {
+        const qty =
+          typeof line?.['requested_qty'] === 'number' ? (line['requested_qty'] as number) : 0;
+        const price =
+          typeof line?.['unit_price_estimate'] === 'number'
+            ? (line['unit_price_estimate'] as number)
+            : 0;
+        estimatedValue += qty * price;
+      }
+    }
+    const approval = await resolveApprover(INDENT_DOA_TYPE, estimatedValue);
+    if (approval.approverActorId) body.payload['approver_actor_id'] = approval.approverActorId;
+    if (approval.doaEntryId) body.payload['doa_entry_id'] = approval.doaEntryId;
   }
   if (authoritativeSiteId !== null) {
     body.metadata.actor.location_id = authoritativeSiteId;

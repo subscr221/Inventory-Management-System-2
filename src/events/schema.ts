@@ -746,7 +746,12 @@ export interface SupplierRegisteredPayload {
   commercial_terms?: string;
   freight_terms?: string;
   delivery_terms?: string;
-  certification_references: Array<{ type: string; reference_number: string; issuer?: string; valid_until?: string }>;
+  certification_references: Array<{
+    type: string;
+    reference_number: string;
+    issuer?: string;
+    valid_until?: string;
+  }>;
 }
 
 export interface SupplierRegisteredEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -797,7 +802,12 @@ export interface SupplierUpdatedPayload {
   commercial_terms?: string;
   freight_terms?: string;
   delivery_terms?: string;
-  certification_references?: Array<{ type: string; reference_number: string; issuer?: string; valid_until?: string }>;
+  certification_references?: Array<{
+    type: string;
+    reference_number: string;
+    issuer?: string;
+    valid_until?: string;
+  }>;
 }
 
 export interface SupplierUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -815,6 +825,119 @@ export interface SupplierDeactivatedPayload {
 export interface SupplierDeactivatedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'supplier.deactivated';
   payload: SupplierDeactivatedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 4.3: Purchase Requisition and Indent Loop
+// ---------------------------------------------------------------------------
+
+export interface IndentLineInput {
+  sku: string;
+  item_category: string;
+  requested_qty: number;
+  uom: string;
+  unit_price_estimate?: number;
+}
+
+export interface IndentRaisedPayload {
+  indent_id: string;
+  requester_user_id: string;
+  department_code: string;
+  site_id: string;
+  need_by_date: string;
+  urgent?: boolean;
+  reason?: string;
+  lines: IndentLineInput[];
+  estimated_value?: number;
+  approver_actor_id?: string;
+  doa_entry_id?: string;
+  duplicate_window_days?: number;
+}
+
+export interface IndentRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.raised';
+  payload: IndentRaisedPayload;
+}
+
+export interface IndentDuplicateFlaggedPayload {
+  indent_id: string;
+  duplicate_of_indent_id: string;
+}
+
+export interface IndentDuplicateFlaggedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.duplicate_flagged';
+  payload: IndentDuplicateFlaggedPayload;
+}
+
+export interface IndentConfirmedPayload {
+  indent_id: string;
+}
+
+export interface IndentConfirmedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.confirmed';
+  payload: IndentConfirmedPayload;
+}
+
+export interface IndentWithdrawnPayload {
+  indent_id: string;
+}
+
+export interface IndentWithdrawnEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.withdrawn';
+  payload: IndentWithdrawnPayload;
+}
+
+export interface IndentApprovedPayload {
+  indent_id: string;
+  approver_actor_id: string;
+  approved_at?: string;
+}
+
+export interface IndentApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.approved';
+  payload: IndentApprovedPayload;
+}
+
+export interface IndentRejectedPayload {
+  indent_id: string;
+  rejection_reason: string;
+  approver_actor_id: string;
+  rejected_at?: string;
+}
+
+export interface IndentRejectedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.rejected';
+  payload: IndentRejectedPayload;
+}
+
+export interface IndentOrderedPayload {
+  indent_id: string;
+  purchase_order_id: string;
+  expected_delivery_date?: string;
+}
+
+export interface IndentOrderedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.ordered';
+  payload: IndentOrderedPayload;
+}
+
+export interface IndentCancelledPayload {
+  indent_id: string;
+  cancelled_reason?: string;
+}
+
+export interface IndentCancelledEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.cancelled';
+  payload: IndentCancelledPayload;
+}
+
+export interface IndentClosedPayload {
+  indent_id: string;
+}
+
+export interface IndentClosedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'indent.closed';
+  payload: IndentClosedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,6 +1157,47 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'supplier.deactivated': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  // Story 4.3: purchase requisition (indent) lifecycle on the 'procurement' stream. Only
+  // indent.raised carries requiresBusinessStream: true - the raise is the tagged business
+  // transaction (FR-AC-01), which makes AC 1's UNTAGGED_TRANSACTION rejection work through the
+  // existing spine with no new validation code. Every other indent event is a lifecycle
+  // transition on an already-tagged document.
+  'indent.raised': {
+    streamType: 'procurement',
+    requiresBusinessStream: true,
+  },
+  'indent.duplicate_flagged': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.confirmed': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.withdrawn': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.approved': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.rejected': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.ordered': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.cancelled': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'indent.closed': {
     streamType: 'procurement',
     requiresBusinessStream: false,
   },

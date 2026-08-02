@@ -503,6 +503,23 @@ const EXPECTED = [
       'idx_supplier_owner_party_code_trgm',
     ],
   },
+  // Story 4.3: Purchase Requisition and Indent Loop
+  {
+    canonical: 'read/projections/indent.sql',
+    table: 'indent',
+    constraints: [
+      'chk_indent_status',
+      'chk_indent_rejection_reason',
+      'chk_indent_estimated_value_non_negative',
+    ],
+    indexes: ['uq_indent_number_ext', 'idx_indent_dup_window'],
+  },
+  {
+    canonical: 'read/projections/indent_line.sql',
+    table: 'indent_line',
+    constraints: ['uq_indent_line_no', 'chk_indent_line_qty_positive'],
+    indexes: ['idx_indent_line_sku'],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

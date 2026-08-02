@@ -56,6 +56,8 @@ const MIGRATIONS = [
   '../../read/projections/cross_dock_constraints.sql',
   '../../read/projections/task_sla_config.sql',
   '../../read/projections/supplier.sql',
+  '../../read/projections/indent.sql',
+  '../../read/projections/indent_line.sql',
 ];
 
 async function migrate(): Promise<void> {

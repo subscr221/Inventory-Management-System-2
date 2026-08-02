@@ -140,3 +140,15 @@
 ## Deferred from: code review of 3-9-forward-pick-replenishment-fr-w-08 (2026-07-30)
 
 - Concurrent checks select same reserve bin - no lock on source bin selection in `runForwardPickReplenishmentCheck`. Two concurrent checks for different (sku, zone) pairs at the same site could select the same reserve bin. If the bin's available covers each individually but not both, the second completion drives `stock_balance.available` negative or fails with `INSUFFICIENT_STOCK`, leaving an orphaned task. [src/warehouse/replenishment-job.ts:129-151] - deferred, Phase-1 limitation; FEFO/velocity ranking and bin locking are future enhancements.
+
+## Deferred from: code review of 4-3-purchase-requisition-and-indent-loop (2026-08-02)
+
+- Online duplicate pre-check TOCTOU - `findOpenDuplicate` runs before `persistEvent` with no locking. Concurrent request can create duplicate between pre-check and insert. [src/api/v1/indents.ts:1016-1042] - deferred, seam handles it inside transaction; pre-check is UX convenience returning 409 to user.
+- No FK from indent_line to indent - `indent_line.indent_id` has no FK constraint. Orphaned lines possible if indent insert fails after lines inserted. [read/projections/indent_line.sql:117] - deferred, schema design decision; code always inserts together in same transaction.
+- Missing index on indent.status for non-open statuses - Queries for `status = 'closed'`, `'rejected'`, `'cancelled'`, `'ordered'` do sequential scan. [src/read/projections/indent.ts:1595-1598] - deferred, performance issue not correctness; partial index covers open statuses only.
+- Missing index on indent.requester_user_id for cross-status queries - `mine=true` query with non-open status does full scan. [src/read/projections/indent.ts:1196] - deferred, performance issue; partial index covers open statuses only.
+- indent_number_seq doesn't reset per year - Single sequence, globally monotonic but year-ambiguous. `IND-2026-9999` followed by `IND-2027-10000`. [read/projections/indent.sql:88] - deferred, cosmetic; documented behavior; globally unique is sufficient.
+- cancelIndentBase doesn't validate state before persisting - Persists `indent.cancelled` event without checking status. Seam validates inside transaction. [src/api/v1/indents.ts:1387-1414] - deferred, seam validation is sufficient; handler commits to event before seam rejects.
+- applyIndentClosed doesn't verify purchase_order_id - Allows closing any ordered indent without checking PO is set. [src/compliance/indent.ts:850-857] - deferred, ordered status implies PO was set; no current path creates ordered without PO.
+- Search pattern escaping non-standard PG setting - Escapes `%`, `_`, `\` for ILIKE but assumes `standard_conforming_strings` is on. [src/read/projections/indent.ts:1576] - deferred, non-default PostgreSQL setting; project uses defaults.
+- Edge capture minimal client-side validation - Only validates SKU and quantity. Required fields rely on HTML `required` attributes. [edge/src/components/indent-capture.tsx:1942-1951] - deferred, HTML required handles it; server validates all fields.

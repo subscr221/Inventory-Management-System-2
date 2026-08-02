@@ -153,6 +153,16 @@ import {
   deactivateSupplierHandler,
 } from './api/v1/suppliers.js';
 import {
+  raiseIndentHandler,
+  getIndentHandler,
+  listIndentsHandler,
+  confirmIndentHandler,
+  withdrawIndentHandler,
+  approveIndentHandler,
+  rejectIndentHandler,
+  cancelIndentHandler,
+} from './api/v1/indents.js';
+import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
   generateBatchPickTasksHandler,
@@ -358,6 +368,16 @@ export function createAppRouter(): Router {
   router.post('/api/v1/suppliers/:supplierId/onboarding/reject', rejectOnboardingHandler);
   router.patch('/api/v1/suppliers/:supplierId', updateSupplierHandler);
   router.post('/api/v1/suppliers/:supplierId/deactivate', deactivateSupplierHandler);
+
+  // Story 4.3: Purchase Requisition and Indent Loop
+  router.post('/api/v1/indents', raiseIndentHandler);
+  router.get('/api/v1/indents/:indentId', getIndentHandler);
+  router.get('/api/v1/indents', listIndentsHandler);
+  router.post('/api/v1/indents/:indentId/confirm', confirmIndentHandler);
+  router.post('/api/v1/indents/:indentId/withdraw', withdrawIndentHandler);
+  router.post('/api/v1/indents/:indentId/approve', approveIndentHandler);
+  router.post('/api/v1/indents/:indentId/reject', rejectIndentHandler);
+  router.post('/api/v1/indents/:indentId/cancel', cancelIndentHandler);
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

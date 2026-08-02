@@ -89,16 +89,24 @@ function assertSupplierRegisteredShape(p: Record<string, unknown>): void {
 
   const ownerPartyCode = String(p['owner_party_code']).trim().toUpperCase();
   if (!OWNER_PARTY_CODE_REGEX.test(ownerPartyCode)) {
-    reject('INVALID_PARAMS', 'owner_party_code must be 2-32 uppercase alphanumeric/hyphen characters', {
-      owner_party_code: p['owner_party_code'],
-    });
+    reject(
+      'INVALID_PARAMS',
+      'owner_party_code must be 2-32 uppercase alphanumeric/hyphen characters',
+      {
+        owner_party_code: p['owner_party_code'],
+      },
+    );
   }
 
   if (p['gstin_ext'] !== undefined && p['gstin_ext'] !== null && p['gstin_ext'] !== '') {
     if (typeof p['gstin_ext'] !== 'string' || !GSTIN_REGEX.test(p['gstin_ext'])) {
-      reject('INVALID_PARAMS', 'gstin_ext must match the GSTIN format ^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$', {
-        gstin_ext: p['gstin_ext'],
-      });
+      reject(
+        'INVALID_PARAMS',
+        'gstin_ext must match the GSTIN format ^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$',
+        {
+          gstin_ext: p['gstin_ext'],
+        },
+      );
     }
   }
 
@@ -114,17 +122,33 @@ function assertSupplierRegisteredShape(p: Record<string, unknown>): void {
     }
   }
 
-  if (typeof p['credit_period_days'] !== 'number' || !Number.isInteger(p['credit_period_days']) || (p['credit_period_days'] as number) < 0) {
+  if (
+    typeof p['credit_period_days'] !== 'number' ||
+    !Number.isInteger(p['credit_period_days']) ||
+    (p['credit_period_days'] as number) < 0
+  ) {
     reject('INVALID_PARAMS', 'credit_period_days is required and must be a non-negative integer');
   }
 
-  if (p['commercial_terms'] !== undefined && p['commercial_terms'] !== null && typeof p['commercial_terms'] !== 'string') {
+  if (
+    p['commercial_terms'] !== undefined &&
+    p['commercial_terms'] !== null &&
+    typeof p['commercial_terms'] !== 'string'
+  ) {
     reject('INVALID_PARAMS', 'commercial_terms must be a string');
   }
-  if (p['freight_terms'] !== undefined && p['freight_terms'] !== null && typeof p['freight_terms'] !== 'string') {
+  if (
+    p['freight_terms'] !== undefined &&
+    p['freight_terms'] !== null &&
+    typeof p['freight_terms'] !== 'string'
+  ) {
     reject('INVALID_PARAMS', 'freight_terms must be a string');
   }
-  if (p['delivery_terms'] !== undefined && p['delivery_terms'] !== null && typeof p['delivery_terms'] !== 'string') {
+  if (
+    p['delivery_terms'] !== undefined &&
+    p['delivery_terms'] !== null &&
+    typeof p['delivery_terms'] !== 'string'
+  ) {
     reject('INVALID_PARAMS', 'delivery_terms must be a string');
   }
 
@@ -134,7 +158,10 @@ function assertSupplierRegisteredShape(p: Record<string, unknown>): void {
     }
     for (const cr of p['certification_references'] as Record<string, unknown>[]) {
       if (!isNonEmptyString(cr['type']) || !isNonEmptyString(cr['reference_number'])) {
-        reject('INVALID_PARAMS', 'Each certification_reference must have type and reference_number');
+        reject(
+          'INVALID_PARAMS',
+          'Each certification_reference must have type and reference_number',
+        );
       }
     }
   }
@@ -147,7 +174,11 @@ function assertSupplierOnboardingSubmittedShape(p: Record<string, unknown>): voi
     reject('INVALID_PARAMS', 'documents is required and must be a non-empty array');
   }
   for (const doc of p['documents'] as Record<string, unknown>[]) {
-    if (!isNonEmptyString(doc['type']) || !isNonEmptyString(doc['reference']) || !isNonEmptyString(doc['file_hash'])) {
+    if (
+      !isNonEmptyString(doc['type']) ||
+      !isNonEmptyString(doc['reference']) ||
+      !isNonEmptyString(doc['file_hash'])
+    ) {
       reject('INVALID_PARAMS', 'Each document must have type, reference, and file_hash');
     }
   }
@@ -184,7 +215,14 @@ function assertSupplierUpdatedShape(p: Record<string, unknown>): void {
     });
   }
 
-  const allowedFields = ['contacts', 'credit_period_days', 'commercial_terms', 'freight_terms', 'delivery_terms', 'certification_references'];
+  const allowedFields = [
+    'contacts',
+    'credit_period_days',
+    'commercial_terms',
+    'freight_terms',
+    'delivery_terms',
+    'certification_references',
+  ];
   let hasField = false;
   for (const field of allowedFields) {
     if (field in p) hasField = true;
@@ -193,10 +231,18 @@ function assertSupplierUpdatedShape(p: Record<string, unknown>): void {
     reject('INVALID_PARAMS', 'At least one mutable field must be provided');
   }
 
-  if (p['credit_period_days'] !== undefined && (typeof p['credit_period_days'] !== 'number' || !Number.isInteger(p['credit_period_days']) || (p['credit_period_days'] as number) < 0)) {
+  if (
+    p['credit_period_days'] !== undefined &&
+    (typeof p['credit_period_days'] !== 'number' ||
+      !Number.isInteger(p['credit_period_days']) ||
+      (p['credit_period_days'] as number) < 0)
+  ) {
     reject('INVALID_PARAMS', 'credit_period_days must be a non-negative integer');
   }
-  if (p['contacts'] !== undefined && (!Array.isArray(p['contacts']) || (p['contacts'] as unknown[]).length === 0)) {
+  if (
+    p['contacts'] !== undefined &&
+    (!Array.isArray(p['contacts']) || (p['contacts'] as unknown[]).length === 0)
+  ) {
     reject('INVALID_PARAMS', 'contacts must be a non-empty array');
   }
 }
@@ -204,13 +250,19 @@ function assertSupplierUpdatedShape(p: Record<string, unknown>): void {
 function assertSupplierDeactivatedShape(p: Record<string, unknown>): void {
   if (!isUuid(p['supplier_id']))
     reject('INVALID_PARAMS', 'supplier_id is required and must be a UUID');
-  if (!isNonEmptyString(p['reason_code']) || !DECACTIVATION_REASONS.has(p['reason_code'] as string)) {
-    reject('INVALID_PARAMS', 'reason_code is required and must be one of: fraud, business_closure, duplicate, compliance_failure, voluntary', {
-      reason_code: p['reason_code'],
-    });
+  if (
+    !isNonEmptyString(p['reason_code']) ||
+    !DECACTIVATION_REASONS.has(p['reason_code'] as string)
+  ) {
+    reject(
+      'INVALID_PARAMS',
+      'reason_code is required and must be one of: fraud, business_closure, duplicate, compliance_failure, voluntary',
+      {
+        reason_code: p['reason_code'],
+      },
+    );
   }
-  if (!isUuid(p['actor_id']))
-    reject('INVALID_PARAMS', 'actor_id is required and must be a UUID');
+  if (!isUuid(p['actor_id'])) reject('INVALID_PARAMS', 'actor_id is required and must be a UUID');
 }
 
 // ---------------------------------------------------------------------------
@@ -255,23 +307,28 @@ export async function applySupplierProjection(
   }
 }
 
-async function applySupplierRegistered(
-  envelope: EventEnvelope,
-  client: PoolClient,
-): Promise<void> {
+async function applySupplierRegistered(envelope: EventEnvelope, client: PoolClient): Promise<void> {
   if (await alreadyPersisted(envelope, client)) return;
 
   const p = envelope.payload as Record<string, unknown>;
   const supplierId = p['supplier_id'] as string;
   const now = new Date().toISOString();
 
-  const existingByCode = await getSupplierByOwnerPartyCode(p['owner_party_code'] as string, client, true);
+  const existingByCode = await getSupplierByOwnerPartyCode(
+    p['owner_party_code'] as string,
+    client,
+    true,
+  );
   if (existingByCode) {
-    reject('INVALID_PARAMS', 'An active, onboarding, or inactive supplier already exists with this owner_party_code', {
-      owner_party_code: p['owner_party_code'],
-      existing_supplier_id: existingByCode.supplier_id,
-      existing_status: existingByCode.status,
-    });
+    reject(
+      'INVALID_PARAMS',
+      'An active, onboarding, or inactive supplier already exists with this owner_party_code',
+      {
+        owner_party_code: p['owner_party_code'],
+        existing_supplier_id: existingByCode.supplier_id,
+        existing_status: existingByCode.status,
+      },
+    );
   }
 
   if (p['gstin_ext'] && typeof p['gstin_ext'] === 'string' && p['gstin_ext'].trim() !== '') {
@@ -296,13 +353,17 @@ async function applySupplierRegistered(
       supplier_id: supplierId,
       legal_name: p['legal_name'] as string,
       owner_party_code: p['owner_party_code'] as string,
-      gstin_ext: (typeof p['gstin_ext'] === 'string' && p['gstin_ext'].trim() !== '') ? p['gstin_ext'].trim() : null,
-      pan_ext: (typeof p['pan_ext'] === 'string' && p['pan_ext'].trim() !== '') ? p['pan_ext'].trim() : null,
+      gstin_ext:
+        typeof p['gstin_ext'] === 'string' && p['gstin_ext'].trim() !== ''
+          ? p['gstin_ext'].trim()
+          : null,
+      pan_ext:
+        typeof p['pan_ext'] === 'string' && p['pan_ext'].trim() !== '' ? p['pan_ext'].trim() : null,
       contacts: p['contacts'] as Record<string, unknown>[],
       credit_period_days: p['credit_period_days'] as number,
-      commercial_terms: (typeof p['commercial_terms'] === 'string') ? p['commercial_terms'] : null,
-      freight_terms: (typeof p['freight_terms'] === 'string') ? p['freight_terms'] : null,
-      delivery_terms: (typeof p['delivery_terms'] === 'string') ? p['delivery_terms'] : null,
+      commercial_terms: typeof p['commercial_terms'] === 'string' ? p['commercial_terms'] : null,
+      freight_terms: typeof p['freight_terms'] === 'string' ? p['freight_terms'] : null,
+      delivery_terms: typeof p['delivery_terms'] === 'string' ? p['delivery_terms'] : null,
       certification_references: (p['certification_references'] as Record<string, unknown>[]) ?? [],
       status: 'onboarding',
       deactivation_reason_code: null,
@@ -343,18 +404,28 @@ async function applySupplierOnboardingSubmitted(
         [supplierId],
       );
     } else {
-      reject('SUPPLIER_ALREADY_ACTIVE', 'Supplier is already active and does not require onboarding', {
-        supplier_id: supplierId,
-        status: supplier['status'],
-      });
+      reject(
+        'SUPPLIER_ALREADY_ACTIVE',
+        'Supplier is already active and does not require onboarding',
+        {
+          supplier_id: supplierId,
+          status: supplier['status'],
+        },
+      );
     }
   }
 
-  const submittedAt = (typeof p['submitted_at'] === 'string') ? p['submitted_at'] : new Date().toISOString();
+  const submittedAt =
+    typeof p['submitted_at'] === 'string' ? p['submitted_at'] : new Date().toISOString();
 
-  await updateSupplierStatus(supplierId, 'onboarding', {
-    onboarding_submitted_at: submittedAt,
-  }, client);
+  await updateSupplierStatus(
+    supplierId,
+    'onboarding',
+    {
+      onboarding_submitted_at: submittedAt,
+    },
+    client,
+  );
 }
 
 async function applySupplierOnboardingApproved(
@@ -388,16 +459,25 @@ async function applySupplierOnboardingApproved(
     }
   }
   if (supplier['onboarding_submitted_at'] === null) {
-    reject('SUPPLIER_ONBOARDING_NOT_SUBMITTED', 'Onboarding has not been submitted for this supplier', {
-      supplier_id: supplierId,
-    });
+    reject(
+      'SUPPLIER_ONBOARDING_NOT_SUBMITTED',
+      'Onboarding has not been submitted for this supplier',
+      {
+        supplier_id: supplierId,
+      },
+    );
   }
 
   const now = new Date().toISOString();
-  await updateSupplierStatus(supplierId, 'active', {
-    onboarding_approved_at: now,
-    onboarding_approved_by: p['approver_actor_id'] as string,
-  }, client);
+  await updateSupplierStatus(
+    supplierId,
+    'active',
+    {
+      onboarding_approved_at: now,
+      onboarding_approved_by: p['approver_actor_id'] as string,
+    },
+    client,
+  );
 
   await emitNotificationInTransaction(
     {
@@ -440,9 +520,14 @@ async function applySupplierOnboardingRejected(
     });
   }
 
-  await updateSupplierStatus(supplierId, 'onboarding', {
-    onboarding_rejection_reason: p['rejection_reason'] as string,
-  }, client);
+  await updateSupplierStatus(
+    supplierId,
+    'onboarding',
+    {
+      onboarding_rejection_reason: p['rejection_reason'] as string,
+    },
+    client,
+  );
 
   const now = new Date().toISOString();
   await emitNotificationInTransaction(
@@ -462,10 +547,7 @@ async function applySupplierOnboardingRejected(
   );
 }
 
-async function applySupplierUpdated(
-  envelope: EventEnvelope,
-  client: PoolClient,
-): Promise<void> {
+async function applySupplierUpdated(envelope: EventEnvelope, client: PoolClient): Promise<void> {
   if (await alreadyPersisted(envelope, client)) return;
 
   const p = envelope.payload as Record<string, unknown>;
@@ -486,7 +568,12 @@ async function applySupplierUpdated(
     });
   }
 
-  if ('gstin_ext' in p && p['gstin_ext'] !== null && typeof p['gstin_ext'] === 'string' && p['gstin_ext'].trim() !== '') {
+  if (
+    'gstin_ext' in p &&
+    p['gstin_ext'] !== null &&
+    typeof p['gstin_ext'] === 'string' &&
+    p['gstin_ext'].trim() !== ''
+  ) {
     const gstin = p['gstin_ext'].trim();
     const existingGstin = await client.query(
       `SELECT supplier_id, legal_name, status FROM supplier WHERE gstin_ext = $1 AND status IN ('onboarding', 'active') AND supplier_id != $2 FOR UPDATE`,
@@ -509,7 +596,8 @@ async function applySupplierUpdated(
   if ('commercial_terms' in p) fields['commercial_terms'] = p['commercial_terms'] ?? null;
   if ('freight_terms' in p) fields['freight_terms'] = p['freight_terms'] ?? null;
   if ('delivery_terms' in p) fields['delivery_terms'] = p['delivery_terms'] ?? null;
-  if ('certification_references' in p) fields['certification_references'] = p['certification_references'];
+  if ('certification_references' in p)
+    fields['certification_references'] = p['certification_references'];
 
   await updateSupplierMutableFields(supplierId, fields, client);
 }
@@ -539,8 +627,13 @@ async function applySupplierDeactivated(
   }
 
   const now = new Date().toISOString();
-  await updateSupplierStatus(supplierId, 'inactive', {
-    deactivation_reason_code: p['reason_code'] as string,
-    deactivated_at: now,
-  }, client);
+  await updateSupplierStatus(
+    supplierId,
+    'inactive',
+    {
+      deactivation_reason_code: p['reason_code'] as string,
+      deactivated_at: now,
+    },
+    client,
+  );
 }

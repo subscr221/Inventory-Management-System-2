@@ -94,10 +94,8 @@ import {
   applyCrossDockTaskAssignedProjection,
   applyCrossDockTaskCompletedProjection,
 } from '../compliance/cross-dock.js';
-import {
-  assertSupplierShape,
-  applySupplierProjection,
-} from '../compliance/supplier.js';
+import { assertSupplierShape, applySupplierProjection } from '../compliance/supplier.js';
+import { assertIndentShape, applyIndentProjection } from '../compliance/indent.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -464,6 +462,9 @@ export async function persistEvent(
   // approval, rejection, update, deactivation) is non-DB and runs with the other pre-transaction
   // asserts, so a malformed supplier event never consumes an idempotency key.
   assertSupplierShape(envelope);
+  // Story 4.3: indent (purchase requisition) shape validation is non-DB and runs with the other
+  // pre-transaction asserts, so a malformed indent event never consumes an idempotency key.
+  assertIndentShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -690,6 +691,10 @@ export async function persistEvent(
     // deactivation) runs inside this same transaction so the supplier row and the domain_events
     // insert commit or roll back together.
     await applySupplierProjection(envelope, client);
+    // Story 4.3: indent (purchase requisition) projection runs inside this same transaction so
+    // the indent row, its lines, the duplicate-hold audit event, and the domain_events insert
+    // commit or roll back together.
+    await applyIndentProjection(envelope, client, eventId);
 
     let nextVersion: number;
 

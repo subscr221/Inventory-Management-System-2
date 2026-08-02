@@ -3,6 +3,7 @@ import { TestCaptureButton } from './test-capture-button';
 import { SyncFailureList, type SyncFailureItem } from './sync-failure-list';
 import { ServiceWorkerRegistration } from './service-worker-registration';
 import { CrossDockCapture, type CrossDockTaskContext } from './cross-dock-capture';
+import { IndentCapture, type IndentSubmitInput } from './indent-capture';
 import { t, type MessageKey } from '../i18n/locale';
 import type { SyncUiState } from '../sync/sync-status';
 
@@ -26,6 +27,7 @@ export interface AppShellProps {
   onRetry?: () => void;
   onLoadCrossDockTask?: (taskId: string) => Promise<CrossDockTaskContext | null>;
   onConfirmCrossDock?: (task: CrossDockTaskContext, stagingBinCode: string) => Promise<string>;
+  onSubmitIndent?: (input: IndentSubmitInput) => Promise<string>;
 }
 
 export function AppShell({
@@ -43,6 +45,7 @@ export function AppShell({
   onRetry,
   onLoadCrossDockTask,
   onConfirmCrossDock,
+  onSubmitIndent,
 }: AppShellProps) {
   const links = navigation.flatMap((item) => (NAVIGATION[item] ? [NAVIGATION[item]] : []));
   return (
@@ -109,6 +112,10 @@ export function AppShell({
                 syncState={syncState}
                 {...(onLoadCrossDockTask ? { onLoad: onLoadCrossDockTask } : {})}
                 {...(onConfirmCrossDock ? { onConfirm: onConfirmCrossDock } : {})}
+              />
+              <IndentCapture
+                syncState={syncState}
+                {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
               />
               <TestCaptureButton {...(onCapture ? { onCapture } : {})} />
             </section>

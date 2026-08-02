@@ -5,6 +5,7 @@ import {
   findActiveTaggingRule,
 } from '../read/projections/business_stream_config.js';
 import type { TransactionTaggingRule } from '../read/projections/business_stream_config.js';
+import { SUPPORTED_EVENT_TYPES } from '../events/schema.js';
 
 /**
  * The set of stream_type values whose events carry inventory movements and therefore require
@@ -56,7 +57,19 @@ export async function assertInventoryTagging(
   envelope: EventEnvelope,
   deps: TaggingDeps = defaultDeps,
 ): Promise<void> {
-  if (!INVENTORY_MOVEMENT_STREAM_TYPES.has(envelope.stream_type)) return;
+  if (!INVENTORY_MOVEMENT_STREAM_TYPES.has(envelope.stream_type)) {
+    // Story 4.3: outside the inventory streams, tagging is required only for event types the
+    // SUPPORTED_EVENT_TYPES registry explicitly marks requiresBusinessStream: true (e.g.
+    // indent.raised - the requisition raise is itself a tagged business transaction under
+    // FR-AC-01). Every other non-inventory event passes through byte-for-byte as before.
+    const registryEntry = (
+      SUPPORTED_EVENT_TYPES as Record<
+        string,
+        { streamType: string; requiresBusinessStream: boolean } | undefined
+      >
+    )[envelope.event_type];
+    if (!registryEntry?.requiresBusinessStream) return;
+  }
 
   const businessStream = envelope.payload['business_stream'];
   if (!isNonEmptyString(businessStream)) {

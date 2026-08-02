@@ -4,7 +4,7 @@ baseline_commit: f1f4b26
 
 # Story 4.3: Purchase Requisition and Indent Loop
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -44,95 +44,95 @@ so that I know exactly when material I need will arrive without chasing anyone (
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: SQL projections `indent` and `indent_line` (AC: 1, 2, 3, 4, 6)**
-  - [ ] Create `read/projections/indent.sql` at the REPO ROOT (not under `src/`). Copy the structure of `read/projections/supplier.sql` exactly: story-naming header comment, the "Derived state ONLY / mutation happens exclusively through persistEvent" paragraph, the init-db mirroring obligation note.
-  - [ ] Columns: `indent_id UUID PRIMARY KEY`, `indent_number_ext TEXT NOT NULL` (human ID, format `IND-YYYY-NNNN`), `requester_user_id UUID NOT NULL`, `department_code TEXT NOT NULL`, `site_id UUID NOT NULL`, `business_stream TEXT NOT NULL`, `need_by_date DATE NOT NULL`, `urgent BOOLEAN NOT NULL DEFAULT false`, `reason TEXT`, `estimated_value NUMERIC(18,4) NOT NULL DEFAULT 0`, `status TEXT NOT NULL DEFAULT 'raised'`, `approver_actor_id UUID`, `doa_entry_id UUID`, `decided_at TIMESTAMPTZ`, `decided_by UUID`, `rejection_reason TEXT`, `duplicate_of_indent_id UUID`, `cancelled_reason TEXT`, `expected_delivery_date DATE`, `purchase_order_id UUID`, `correlation_id UUID`, `source_event_id UUID NOT NULL`, `created_at`/`updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`.
-  - [ ] `CONSTRAINT chk_indent_status CHECK (status IN ('raised','pending-confirmation','approved','rejected','ordered','cancelled','closed'))`. The six AC-4 values plus `pending-confirmation` from AC 3. Use the hyphenated literal `pending-confirmation` exactly as the AC spells it.
-  - [ ] `CONSTRAINT chk_indent_rejection_reason CHECK (status <> 'rejected' OR (rejection_reason IS NOT NULL AND btrim(rejection_reason) <> ''))` - enforces AC 5's mandatory reason at the database level.
-  - [ ] `CONSTRAINT chk_indent_estimated_value_non_negative CHECK (estimated_value >= 0)`.
-  - [ ] Create `read/projections/indent_line.sql`: `indent_line_id UUID PRIMARY KEY`, `indent_id UUID NOT NULL`, `line_no INTEGER NOT NULL`, `sku TEXT NOT NULL`, `item_category TEXT NOT NULL`, `requested_qty NUMERIC(18,3) NOT NULL`, `uom TEXT NOT NULL`, `unit_price_estimate NUMERIC(18,4)`, `line_value NUMERIC(18,4) NOT NULL DEFAULT 0`, plus `UNIQUE (indent_id, line_no)` and `CHECK (requested_qty > 0)`. Follow the `grn.sql` / `grn_line.sql` header-plus-line precedent.
-  - [ ] Add the duplicate-detection index for AC 2 and AC 3: `CREATE INDEX IF NOT EXISTS idx_indent_dup_window ON indent (requester_user_id, created_at DESC) WHERE status IN ('raised','pending-confirmation','approved')`, and on lines `CREATE INDEX IF NOT EXISTS idx_indent_line_sku ON indent_line (sku)`.
-  - [ ] `CREATE UNIQUE INDEX IF NOT EXISTS uq_indent_number_ext ON indent (indent_number_ext)`.
-  - [ ] After the table, add the guarded `DO $$ ... END $$;` block that re-adds EVERY named CHECK constraint if missing. `CREATE TABLE IF NOT EXISTS` does not add constraints to a pre-existing table - omitting this block breaks upgrade paths and the schema-drift test.
-  - [ ] Add the guarded grants block: `GRANT INSERT, SELECT, UPDATE ON indent TO app_user` and `GRANT SELECT ON indent TO readonly_user`, each wrapped in `IF EXISTS (SELECT FROM pg_roles WHERE rolname = ...)`. Never `GRANT DELETE`.
-  - [ ] Append both files to the `MIGRATIONS` array tail in `src/events/migrate.ts`: `'../../read/projections/indent.sql'` then `'../../read/projections/indent_line.sql'`. Order matters - the array position IS the migration order; filenames carry no numeric prefix.
-  - [ ] Mirror both files byte-for-byte into `deploy/compose/init-db.sql` (append at tail) with the comment `-- MUST stay identical to read/projections/indent.sql (canonical source).`
-  - [ ] Add both tables to the `EXPECTED` array in `test/unit/schema-drift.test.ts` including every constraint and index name.
+- [x] **Task 1: SQL projections `indent` and `indent_line` (AC: 1, 2, 3, 4, 6)**
+  - [x] Create `read/projections/indent.sql` at the REPO ROOT (not under `src/`). Copy the structure of `read/projections/supplier.sql` exactly: story-naming header comment, the "Derived state ONLY / mutation happens exclusively through persistEvent" paragraph, the init-db mirroring obligation note.
+  - [x] Columns: `indent_id UUID PRIMARY KEY`, `indent_number_ext TEXT NOT NULL` (human ID, format `IND-YYYY-NNNN`), `requester_user_id UUID NOT NULL`, `department_code TEXT NOT NULL`, `site_id UUID NOT NULL`, `business_stream TEXT NOT NULL`, `need_by_date DATE NOT NULL`, `urgent BOOLEAN NOT NULL DEFAULT false`, `reason TEXT`, `estimated_value NUMERIC(18,4) NOT NULL DEFAULT 0`, `status TEXT NOT NULL DEFAULT 'raised'`, `approver_actor_id UUID`, `doa_entry_id UUID`, `decided_at TIMESTAMPTZ`, `decided_by UUID`, `rejection_reason TEXT`, `duplicate_of_indent_id UUID`, `cancelled_reason TEXT`, `expected_delivery_date DATE`, `purchase_order_id UUID`, `correlation_id UUID`, `source_event_id UUID NOT NULL`, `created_at`/`updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`.
+  - [x] `CONSTRAINT chk_indent_status CHECK (status IN ('raised','pending-confirmation','approved','rejected','ordered','cancelled','closed'))`. The six AC-4 values plus `pending-confirmation` from AC 3. Use the hyphenated literal `pending-confirmation` exactly as the AC spells it.
+  - [x] `CONSTRAINT chk_indent_rejection_reason CHECK (status <> 'rejected' OR (rejection_reason IS NOT NULL AND btrim(rejection_reason) <> ''))` - enforces AC 5's mandatory reason at the database level.
+  - [x] `CONSTRAINT chk_indent_estimated_value_non_negative CHECK (estimated_value >= 0)`.
+  - [x] Create `read/projections/indent_line.sql`: `indent_line_id UUID PRIMARY KEY`, `indent_id UUID NOT NULL`, `line_no INTEGER NOT NULL`, `sku TEXT NOT NULL`, `item_category TEXT NOT NULL`, `requested_qty NUMERIC(18,3) NOT NULL`, `uom TEXT NOT NULL`, `unit_price_estimate NUMERIC(18,4)`, `line_value NUMERIC(18,4) NOT NULL DEFAULT 0`, plus `UNIQUE (indent_id, line_no)` and `CHECK (requested_qty > 0)`. Follow the `grn.sql` / `grn_line.sql` header-plus-line precedent.
+  - [x] Add the duplicate-detection index for AC 2 and AC 3: `CREATE INDEX IF NOT EXISTS idx_indent_dup_window ON indent (requester_user_id, created_at DESC) WHERE status IN ('raised','pending-confirmation','approved')`, and on lines `CREATE INDEX IF NOT EXISTS idx_indent_line_sku ON indent_line (sku)`.
+  - [x] `CREATE UNIQUE INDEX IF NOT EXISTS uq_indent_number_ext ON indent (indent_number_ext)`.
+  - [x] After the table, add the guarded `DO $$ ... END $$;` block that re-adds EVERY named CHECK constraint if missing. `CREATE TABLE IF NOT EXISTS` does not add constraints to a pre-existing table - omitting this block breaks upgrade paths and the schema-drift test.
+  - [x] Add the guarded grants block: `GRANT INSERT, SELECT, UPDATE ON indent TO app_user` and `GRANT SELECT ON indent TO readonly_user`, each wrapped in `IF EXISTS (SELECT FROM pg_roles WHERE rolname = ...)`. Never `GRANT DELETE`.
+  - [x] Append both files to the `MIGRATIONS` array tail in `src/events/migrate.ts`: `'../../read/projections/indent.sql'` then `'../../read/projections/indent_line.sql'`. Order matters - the array position IS the migration order; filenames carry no numeric prefix.
+  - [x] Mirror both files byte-for-byte into `deploy/compose/init-db.sql` (append at tail) with the comment `-- MUST stay identical to read/projections/indent.sql (canonical source).`
+  - [x] Add both tables to the `EXPECTED` array in `test/unit/schema-drift.test.ts` including every constraint and index name.
 
-- [ ] **Task 2: Event types and payload interfaces (AC: 1, 2, 3, 4, 5, 6)**
-  - [ ] In `src/events/schema.ts`, append payload plus envelope interface pairs near the existing supplier block (around line 819), using the `Omit<EventEnvelope, 'payload'>` idiom.
-  - [ ] Event types (all on `streamType: 'procurement'`, `stream_id` = `indent_id`): `indent.raised`, `indent.duplicate_flagged`, `indent.confirmed`, `indent.withdrawn`, `indent.approved`, `indent.rejected`, `indent.ordered`, `indent.cancelled`, `indent.closed`.
-  - [ ] Append each to `SUPPORTED_EVENT_TYPES` (declared around line 823). **Set `requiresBusinessStream: true` for `indent.raised`** - this is what makes AC 1's `UNTAGGED_TRANSACTION` rejection work through the existing spine, with no new validation code. All other indent event types are lifecycle transitions on an already-tagged document, so they take `requiresBusinessStream: false`.
-  - [ ] Do not reorder existing entries.
+- [x] **Task 2: Event types and payload interfaces (AC: 1, 2, 3, 4, 5, 6)**
+  - [x] In `src/events/schema.ts`, append payload plus envelope interface pairs near the existing supplier block (around line 819), using the `Omit<EventEnvelope, 'payload'>` idiom.
+  - [x] Event types (all on `streamType: 'procurement'`, `stream_id` = `indent_id`): `indent.raised`, `indent.duplicate_flagged`, `indent.confirmed`, `indent.withdrawn`, `indent.approved`, `indent.rejected`, `indent.ordered`, `indent.cancelled`, `indent.closed`.
+  - [x] Append each to `SUPPORTED_EVENT_TYPES` (declared around line 823). **Set `requiresBusinessStream: true` for `indent.raised`** - this is what makes AC 1's `UNTAGGED_TRANSACTION` rejection work through the existing spine, with no new validation code. All other indent event types are lifecycle transitions on an already-tagged document, so they take `requiresBusinessStream: false`.
+  - [x] Do not reorder existing entries.
 
-- [ ] **Task 3: Compliance seam `src/compliance/indent.ts` (AC: 1, 2, 3, 4, 5, 6)**
-  - [ ] Model on `src/compliance/supplier.ts`. Export exactly three symbols: `indentEventType(envelope)`, `assertIndentShape(envelope)`, `applyIndentProjection(envelope, client)`. Everything else module-private.
-  - [ ] `indentEventType` returns `null` unless `stream_type === 'procurement'` AND `event_type` is in the module's `INDENT_EVENT_TYPES` Set. Returning `null` early is what keeps this seam off every other event's hot path.
-  - [ ] Add the private `reject(code, message, details): never` helper throwing `AppError(400, ...)`. Always surface the conflicting record's id and status in `details`.
-  - [ ] Every apply handler starts with `if (await alreadyPersisted(envelope, client)) return;` then `SELECT ... FOR UPDATE` on the `indent` row. This ordering is not optional - it is how the codebase prevents the TOCTOU races found in the Story 3.6 and 3.7 reviews.
-  - [ ] `applyIndentApproved` / `applyIndentRejected` must guard the current status (`raised` only), reject `INDENT_ALREADY_DECIDED` otherwise, and call `emitNotificationInTransaction(..., client)` for AC 5. Use the transactional entry point, not `emitNotification`: an approval decision is a business fact under AD-17, and the notification must commit atomically with the status change.
-  - [ ] `applyIndentRejected` must reject with `INDENT_REJECTION_REASON_REQUIRED` when the reason is absent or blank, before touching the projection.
-  - [ ] `applyIndentRaised` implements the duplicate check for AC 2 and AC 3: within the configured open window, look for an existing indent by the same `requester_user_id` for the same `sku` in status `raised`, `pending-confirmation`, or `approved`. On a hit, set `status = 'pending-confirmation'` and `duplicate_of_indent_id`, then emit the requester notification. Never drop the capture and never throw on the offline sync path - AC 3 is explicit that the capture survives.
-  - [ ] Wire into `src/events/store.ts`: `assertIndentShape(envelope)` immediately after the `assertSupplierShape` call (around line 466, pre-transaction, before the idempotency lookup), and `await applyIndentProjection(envelope, client)` immediately after `applySupplierProjection` (around line 692, inside the transaction).
+- [x] **Task 3: Compliance seam `src/compliance/indent.ts` (AC: 1, 2, 3, 4, 5, 6)**
+  - [x] Model on `src/compliance/supplier.ts`. Export exactly three symbols: `indentEventType(envelope)`, `assertIndentShape(envelope)`, `applyIndentProjection(envelope, client)`. Everything else module-private.
+  - [x] `indentEventType` returns `null` unless `stream_type === 'procurement'` AND `event_type` is in the module's `INDENT_EVENT_TYPES` Set. Returning `null` early is what keeps this seam off every other event's hot path.
+  - [x] Add the private `reject(code, message, details): never` helper throwing `AppError(400, ...)`. Always surface the conflicting record's id and status in `details`.
+  - [x] Every apply handler starts with `if (await alreadyPersisted(envelope, client)) return;` then `SELECT ... FOR UPDATE` on the `indent` row. This ordering is not optional - it is how the codebase prevents the TOCTOU races found in the Story 3.6 and 3.7 reviews.
+  - [x] `applyIndentApproved` / `applyIndentRejected` must guard the current status (`raised` only), reject `INDENT_ALREADY_DECIDED` otherwise, and call `emitNotificationInTransaction(..., client)` for AC 5. Use the transactional entry point, not `emitNotification`: an approval decision is a business fact under AD-17, and the notification must commit atomically with the status change.
+  - [x] `applyIndentRejected` must reject with `INDENT_REJECTION_REASON_REQUIRED` when the reason is absent or blank, before touching the projection.
+  - [x] `applyIndentRaised` implements the duplicate check for AC 2 and AC 3: within the configured open window, look for an existing indent by the same `requester_user_id` for the same `sku` in status `raised`, `pending-confirmation`, or `approved`. On a hit, set `status = 'pending-confirmation'` and `duplicate_of_indent_id`, then emit the requester notification. Never drop the capture and never throw on the offline sync path - AC 3 is explicit that the capture survives.
+  - [x] Wire into `src/events/store.ts`: `assertIndentShape(envelope)` immediately after the `assertSupplierShape` call (around line 466, pre-transaction, before the idempotency lookup), and `await applyIndentProjection(envelope, client)` immediately after `applySupplierProjection` (around line 692, inside the transaction).
 
-- [ ] **Task 4: DOA-resolved approval routing (AC: 6)**
-  - [ ] Use `transaction_type = 'indent_approval'`. Define it as a module constant `INDENT_DOA_TYPE` in the route file, mirroring `SUPPLIER_DOA_TYPE` at `src/api/v1/suppliers.ts:27`.
-  - [ ] Copy `resolveApprover` from `src/api/v1/suppliers.ts:62-98` verbatim, including the escalation ladder over `listActiveDoaEntries` and the fail-closed `APPROVAL_UNRESOLVED` (409). Change only the transaction type and the message text. Do not write a new resolver.
-  - [ ] Pass the real indent `estimated_value` as the `value` argument. Story 4.1 hardcodes `0` because supplier onboarding has no amount; an indent does, and AC 6 requires band resolution. This is the one place you must NOT copy 4.1.
-  - [ ] Persist the resolved `approver_actor_id` and the matched `doa_entry_id` onto the indent row at raise time so the approval card can render the authority and the audit answers "who was it routed to".
-  - [ ] **Enforce SOD-01 (requester is not approver).** On approve and reject, reject with `INDENT_RAISER_CANNOT_APPROVE` when the authenticated actor equals `requester_user_id`. Story 4.1 omitted the equivalent check; do not repeat that omission.
-  - [ ] **Verify the acting approver matches the DOA resolution.** Reject with `NOT_RESOLVED_APPROVER` when the authenticated actor is neither `approver_actor_id` nor an active delegate of that holder per `findActiveDelegation`. Story 4.1's approve and reject routes guard only `requireRole({ module: 'procurement', functionScope: 'write' })`, which lets any procurement writer approve anything - a known hole, listed in the inherited-context table below.
-  - [ ] Never write a role-name literal into the approval path. `test/unit/no-hardcoded-role-in-workflow.test.ts` fails the build on role-name literals in workflow code, and it runs inside the Story 1.9 spine contract.
+- [x] **Task 4: DOA-resolved approval routing (AC: 6)**
+  - [x] Use `transaction_type = 'indent_approval'`. Define it as a module constant `INDENT_DOA_TYPE` in the route file, mirroring `SUPPLIER_DOA_TYPE` at `src/api/v1/suppliers.ts:27`.
+  - [x] Copy `resolveApprover` from `src/api/v1/suppliers.ts:62-98` verbatim, including the escalation ladder over `listActiveDoaEntries` and the fail-closed `APPROVAL_UNRESOLVED` (409). Change only the transaction type and the message text. Do not write a new resolver.
+  - [x] Pass the real indent `estimated_value` as the `value` argument. Story 4.1 hardcodes `0` because supplier onboarding has no amount; an indent does, and AC 6 requires band resolution. This is the one place you must NOT copy 4.1.
+  - [x] Persist the resolved `approver_actor_id` and the matched `doa_entry_id` onto the indent row at raise time so the approval card can render the authority and the audit answers "who was it routed to".
+  - [x] **Enforce SOD-01 (requester is not approver).** On approve and reject, reject with `INDENT_RAISER_CANNOT_APPROVE` when the authenticated actor equals `requester_user_id`. Story 4.1 omitted the equivalent check; do not repeat that omission.
+  - [x] **Verify the acting approver matches the DOA resolution.** Reject with `NOT_RESOLVED_APPROVER` when the authenticated actor is neither `approver_actor_id` nor an active delegate of that holder per `findActiveDelegation`. Story 4.1's approve and reject routes guard only `requireRole({ module: 'procurement', functionScope: 'write' })`, which lets any procurement writer approve anything - a known hole, listed in the inherited-context table below.
+  - [x] Never write a role-name literal into the approval path. `test/unit/no-hardcoded-role-in-workflow.test.ts` fails the build on role-name literals in workflow code, and it runs inside the Story 1.9 spine contract.
 
-- [ ] **Task 5: REST routes `src/api/v1/indents.ts` (AC: 1, 2, 3, 4, 5, 6)**
-  - [ ] Copy the three boilerplate helpers from `src/api/v1/suppliers.ts:26-60` unchanged: `NO_LOCATION_UUID`, `ActorContext` plus `actorContext(req)`, and `auditCtxFor(req, actor, httpStatus)`. Identity comes from the auth context, never from the request body.
-  - [ ] Routes: `POST /api/v1/indents` (raise), `GET /api/v1/indents/:indentId` (status, AC 4), `GET /api/v1/indents` (list with filters), `POST /api/v1/indents/:indentId/confirm` (AC 2, AC 3 duplicate confirmation), `POST /api/v1/indents/:indentId/withdraw`, `POST /api/v1/indents/:indentId/approve` (AC 5, AC 6), `POST /api/v1/indents/:indentId/reject` (AC 5), `POST /api/v1/indents/:indentId/cancel`.
-  - [ ] Export both the base handler and the `requireRole`-wrapped handler for each route, matching the 4.1 export convention. Reads use `functionScope: 'read'`, everything else `'write'`, all on `module: 'procurement'`.
-  - [ ] All state changes go through `persistEvent({ stream_type: 'procurement', stream_id: indentId, event_type: 'indent.*', ... }, auditCtxFor(...))`. No route handler may INSERT or UPDATE the `indent` table directly - the projection is derived state, rebuildable by replay.
-  - [ ] `indent_number_ext` generation: allocate server-side inside the raise handler in the `IND-YYYY-NNNN` format shown in the UX. Use a Postgres sequence or a `SELECT ... FOR UPDATE` counter row - never a client-supplied value, and never `MAX(...) + 1` without a lock.
-  - [ ] Register all eight routes in `src/server.ts` (import block near lines 145-154, registration in `createAppRouter()` near lines 353-360).
-  - [ ] Add all eight paths to `allowedSpineRoutes` in `test/integration/story-1-9.test.ts` (supplier entries at lines 324-331 show the format). Omitting this fails `npm run spine-acceptance-contract`.
+- [x] **Task 5: REST routes `src/api/v1/indents.ts` (AC: 1, 2, 3, 4, 5, 6)**
+  - [x] Copy the three boilerplate helpers from `src/api/v1/suppliers.ts:26-60` unchanged: `NO_LOCATION_UUID`, `ActorContext` plus `actorContext(req)`, and `auditCtxFor(req, actor, httpStatus)`. Identity comes from the auth context, never from the request body.
+  - [x] Routes: `POST /api/v1/indents` (raise), `GET /api/v1/indents/:indentId` (status, AC 4), `GET /api/v1/indents` (list with filters), `POST /api/v1/indents/:indentId/confirm` (AC 2, AC 3 duplicate confirmation), `POST /api/v1/indents/:indentId/withdraw`, `POST /api/v1/indents/:indentId/approve` (AC 5, AC 6), `POST /api/v1/indents/:indentId/reject` (AC 5), `POST /api/v1/indents/:indentId/cancel`.
+  - [x] Export both the base handler and the `requireRole`-wrapped handler for each route, matching the 4.1 export convention. Reads use `functionScope: 'read'`, everything else `'write'`, all on `module: 'procurement'`.
+  - [x] All state changes go through `persistEvent({ stream_type: 'procurement', stream_id: indentId, event_type: 'indent.*', ... }, auditCtxFor(...))`. No route handler may INSERT or UPDATE the `indent` table directly - the projection is derived state, rebuildable by replay.
+  - [x] `indent_number_ext` generation: allocate server-side inside the raise handler in the `IND-YYYY-NNNN` format shown in the UX. Use a Postgres sequence or a `SELECT ... FOR UPDATE` counter row - never a client-supplied value, and never `MAX(...) + 1` without a lock.
+  - [x] Register all eight routes in `src/server.ts` (import block near lines 145-154, registration in `createAppRouter()` near lines 353-360).
+  - [x] Add all eight paths to `allowedSpineRoutes` in `test/integration/story-1-9.test.ts` (supplier entries at lines 324-331 show the format). Omitting this fails `npm run spine-acceptance-contract`.
 
-- [ ] **Task 6: Read-model accessors `src/read/projections/indent.ts` (AC: 4)**
-  - [ ] Model on `src/read/projections/supplier.ts`. Include the `Queryable` plus `runner(client?)` pattern and the `UUID_REGEX` guard.
-  - [ ] Export `IndentRow`, `IndentLineRow`, `getIndentById(id, client?, forUpdate?)`, `listIndents(params, client?)`, `getIndentLines(indentId, client?)`, `findOpenDuplicate(requesterUserId, sku, windowDays, client?)`, `insertIndent`, `insertIndentLine`, `updateIndentStatus`.
-  - [ ] `getIndentById` takes the optional `forUpdate: boolean` third parameter that appends `FOR UPDATE`, exactly as `getSupplierByOwnerPartyCode` does. Every compliance-seam read that precedes a write must pass `true`.
-  - [ ] Any text search must use the ILIKE escaping from `src/read/projections/supplier.ts:88-96` (`replace(/[%_\\]/g, '\\$&')` plus `ESCAPE '\\'`).
-  - [ ] `listIndents` must filter by the caller's permitted locations. Use `permittedLocationsForModuleScope` from `src/middleware/rbac.ts` - do not return cross-site indents to a site-scoped supervisor.
+- [x] **Task 6: Read-model accessors `src/read/projections/indent.ts` (AC: 4)**
+  - [x] Model on `src/read/projections/supplier.ts`. Include the `Queryable` plus `runner(client?)` pattern and the `UUID_REGEX` guard.
+  - [x] Export `IndentRow`, `IndentLineRow`, `getIndentById(id, client?, forUpdate?)`, `listIndents(params, client?)`, `getIndentLines(indentId, client?)`, `findOpenDuplicate(requesterUserId, sku, windowDays, client?)`, `insertIndent`, `insertIndentLine`, `updateIndentStatus`.
+  - [x] `getIndentById` takes the optional `forUpdate: boolean` third parameter that appends `FOR UPDATE`, exactly as `getSupplierByOwnerPartyCode` does. Every compliance-seam read that precedes a write must pass `true`.
+  - [x] Any text search must use the ILIKE escaping from `src/read/projections/supplier.ts:88-96` (`replace(/[%_\\]/g, '\\$&')` plus `ESCAPE '\\'`).
+  - [x] `listIndents` must filter by the caller's permitted locations. Use `permittedLocationsForModuleScope` from `src/middleware/rbac.ts` - do not return cross-site indents to a site-scoped supervisor.
 
-- [ ] **Task 7: Error codes registered in three places (AC: 1, 2, 3, 5, 6)**
-  - [ ] New codes: `INDENT_NOT_FOUND`, `INDENT_ALREADY_DECIDED`, `INDENT_NOT_IN_RAISED`, `INDENT_RAISER_CANNOT_APPROVE`, `NOT_RESOLVED_APPROVER`, `INDENT_REJECTION_REASON_REQUIRED`, `INDENT_PENDING_CONFIRMATION`, `INDENT_LINE_REQUIRED`.
-  - [ ] Add every code to `PERMANENT_ERROR_CODES` in `src/sync/upload.ts` (block at lines 17-137) AND the twin Set in `edge/src/sync/connector.ts` (lines 22-140), each under a new `// Story 4.3: indent permanent business rejections` comment. **A code missing from these Sets makes an offline-captured indent retry forever instead of settling as `needs_attention`.**
-  - [ ] Add an `"errors.<CODE>": "<sentence>"` entry per code to `edge/src/messages/en.json`. A missing entry shows a raw error code to a frontline supervisor.
-  - [ ] `APPROVAL_REQUIRED`, `DUPLICATE_EVENT`, and `UNTAGGED_TRANSACTION` already exist in the spine registry - reuse them, do not mint variants. `APPROVAL_UNRESOLVED` (409) is thrown by `resolveApprover` but is NOT currently in the permanent-code Sets; add it while you are there.
+- [x] **Task 7: Error codes registered in three places (AC: 1, 2, 3, 5, 6)**
+  - [x] New codes: `INDENT_NOT_FOUND`, `INDENT_ALREADY_DECIDED`, `INDENT_NOT_IN_RAISED`, `INDENT_RAISER_CANNOT_APPROVE`, `NOT_RESOLVED_APPROVER`, `INDENT_REJECTION_REASON_REQUIRED`, `INDENT_PENDING_CONFIRMATION`, `INDENT_LINE_REQUIRED`.
+  - [x] Add every code to `PERMANENT_ERROR_CODES` in `src/sync/upload.ts` (block at lines 17-137) AND the twin Set in `edge/src/sync/connector.ts` (lines 22-140), each under a new `// Story 4.3: indent permanent business rejections` comment. **A code missing from these Sets makes an offline-captured indent retry forever instead of settling as `needs_attention`.**
+  - [x] Add an `"errors.<CODE>": "<sentence>"` entry per code to `edge/src/messages/en.json`. A missing entry shows a raw error code to a frontline supervisor.
+  - [x] `APPROVAL_REQUIRED`, `DUPLICATE_EVENT`, and `UNTAGGED_TRANSACTION` already exist in the spine registry - reuse them, do not mint variants. `APPROVAL_UNRESOLVED` (409) is thrown by `resolveApprover` but is NOT currently in the permanent-code Sets; add it while you are there.
 
-- [ ] **Task 8: Edge PWA offline capture (AC: 1)**
-  - [ ] Create `edge/src/capture/indent.ts` exporting `createIndentRaisedEvent(input)`, modelled line-for-line on `edge/src/capture/cross-dock.ts`. Use `streamType: 'procurement'`, `eventType: 'indent.raised'`, `streamId: indentId`, `idempotencyKey: \`edge-indent-${eventId}\``. Keep `eventId`, `idempotencyKey`, and `occurredAt` optional-with-defaults so tests can pin them.
-  - [ ] Build the envelope through `createOutboxEvent` from `edge/src/capture/outbox-event.ts`. Do not hand-roll the metadata block.
-  - [ ] **No new local SQLite table is needed.** `edge_outbox` is event-shaped and entity-agnostic; an offline indent is one more row. Write it with `insertCaptureEvent(db, event)` from `edge/src/local-db/outbox.ts:41`. Do not add tables to `EdgeSchema` for the capture path.
-  - [ ] **No PowerSync sync-rules change is needed.** `uploadData` in `edge/src/sync/connector.ts:277` is generic over `edge_outbox` and POSTs to `/api/v1/edge/events`. A new capture flow requires zero connector changes.
-  - [ ] Create `edge/src/components/indent-capture.tsx` modelled on `edge/src/components/cross-dock-capture.tsx`: fully injection-based (`onSearch` / `onSubmit` props, no direct DB access), `useRef` plus `useEffect` autofocus on the SKU field for the scan gun, all strings through `t()`, `aria-labelledby` on the section.
-  - [ ] Wire `onSubmit` to `insertCaptureEvent` in `edge/src/components/edge-client.tsx`, matching how cross-dock is wired.
-  - [ ] Add `indent.*` UI strings to `edge/src/messages/en.json`. Reuse the existing `sync.captured` string ("Captured - pending sync") for the AC 1 degraded-state label - do not write a new one.
-  - [ ] Instrument `form_opened` and `local_commit` timestamps per the measurement note, and add the tap-count budget assertion as the CI regression proxy.
+- [x] **Task 8: Edge PWA offline capture (AC: 1)**
+  - [x] Create `edge/src/capture/indent.ts` exporting `createIndentRaisedEvent(input)`, modelled line-for-line on `edge/src/capture/cross-dock.ts`. Use `streamType: 'procurement'`, `eventType: 'indent.raised'`, `streamId: indentId`, `idempotencyKey: \`edge-indent-${eventId}\``. Keep `eventId`, `idempotencyKey`, and `occurredAt` optional-with-defaults so tests can pin them.
+  - [x] Build the envelope through `createOutboxEvent` from `edge/src/capture/outbox-event.ts`. Do not hand-roll the metadata block.
+  - [x] **No new local SQLite table is needed.** `edge_outbox` is event-shaped and entity-agnostic; an offline indent is one more row. Write it with `insertCaptureEvent(db, event)` from `edge/src/local-db/outbox.ts:41`. Do not add tables to `EdgeSchema` for the capture path.
+  - [x] **No PowerSync sync-rules change is needed.** `uploadData` in `edge/src/sync/connector.ts:277` is generic over `edge_outbox` and POSTs to `/api/v1/edge/events`. A new capture flow requires zero connector changes.
+  - [x] Create `edge/src/components/indent-capture.tsx` modelled on `edge/src/components/cross-dock-capture.tsx`: fully injection-based (`onSearch` / `onSubmit` props, no direct DB access), `useRef` plus `useEffect` autofocus on the SKU field for the scan gun, all strings through `t()`, `aria-labelledby` on the section.
+  - [x] Wire `onSubmit` to `insertCaptureEvent` in `edge/src/components/edge-client.tsx`, matching how cross-dock is wired.
+  - [x] Add `indent.*` UI strings to `edge/src/messages/en.json`. Reuse the existing `sync.captured` string ("Captured - pending sync") for the AC 1 degraded-state label - do not write a new one.
+  - [x] Instrument `form_opened` and `local_commit` timestamps per the measurement note, and add the tap-count budget assertion as the CI regression proxy.
 
-- [ ] **Task 9: Integration test `test/integration/story-4-3.test.ts` (AC: 1-6)**
-  - [ ] Model the harness on `test/integration/story-2-5.test.ts` (transfer request: create, DOA approve/reject, status transitions) - the closest existing approval-document test. Do NOT look for `test/integration/story-4-1.test.ts`; it does not exist.
-  - [ ] Standard harness: `node:test` plus `node:assert/strict`, `const run = randomUUID().slice(0, 8)`, real Postgres via `getPool()`, `closePool()` in `after()`. No mocking framework - the repo uses `node:test` only.
-  - [ ] `seedUser` must insert into `users` and `user_role_assignments` with `module = 'procurement'`.
-  - [ ] Seed a `doa_registry` entry for `transaction_type = 'indent_approval'` covering the access-matrix bands (Tier 1 up to INR 50,000; Tier 2 INR 50,001 to 2,00,000; Tier 3 above INR 2,00,000). Assert band selection, not just that some approver came back.
-  - [ ] Cover each AC explicitly, plus these negative paths: untagged raise returns `UNTAGGED_TRANSACTION`; requester approving own indent returns `INDENT_RAISER_CANNOT_APPROVE`; a non-resolved approver returns `NOT_RESOLVED_APPROVER`; rejection without a reason returns `INDENT_REJECTION_REASON_REQUIRED`; double-approve returns `INDENT_ALREADY_DECIDED`; replaying the same `indent.raised` envelope leaves exactly one row.
-  - [ ] Suffix every external-ID literal with `-${run}` for isolation. This was a concrete source of cross-test collisions in Story 3.7.
-  - [ ] Use `crypto.randomUUID()` for all UUIDs in edge-path tests. `UUID_REGEX` in `src/sync/upload.ts:4` is strict RFC-4122 and rejects hand-rolled placeholders such as `'00000000-...'`.
-  - [ ] Assert `NUMERIC` columns against STRING literals (`'50000.0000'`), not numbers. `pg` returns NUMERIC as string; this exact mismatch cost a debugging cycle in Story 3.7.
+- [x] **Task 9: Integration test `test/integration/story-4-3.test.ts` (AC: 1-6)**
+  - [x] Model the harness on `test/integration/story-2-5.test.ts` (transfer request: create, DOA approve/reject, status transitions) - the closest existing approval-document test. Do NOT look for `test/integration/story-4-1.test.ts`; it does not exist.
+  - [x] Standard harness: `node:test` plus `node:assert/strict`, `const run = randomUUID().slice(0, 8)`, real Postgres via `getPool()`, `closePool()` in `after()`. No mocking framework - the repo uses `node:test` only.
+  - [x] `seedUser` must insert into `users` and `user_role_assignments` with `module = 'procurement'`.
+  - [x] Seed a `doa_registry` entry for `transaction_type = 'indent_approval'` covering the access-matrix bands (Tier 1 up to INR 50,000; Tier 2 INR 50,001 to 2,00,000; Tier 3 above INR 2,00,000). Assert band selection, not just that some approver came back.
+  - [x] Cover each AC explicitly, plus these negative paths: untagged raise returns `UNTAGGED_TRANSACTION`; requester approving own indent returns `INDENT_RAISER_CANNOT_APPROVE`; a non-resolved approver returns `NOT_RESOLVED_APPROVER`; rejection without a reason returns `INDENT_REJECTION_REASON_REQUIRED`; double-approve returns `INDENT_ALREADY_DECIDED`; replaying the same `indent.raised` envelope leaves exactly one row.
+  - [x] Suffix every external-ID literal with `-${run}` for isolation. This was a concrete source of cross-test collisions in Story 3.7.
+  - [x] Use `crypto.randomUUID()` for all UUIDs in edge-path tests. `UUID_REGEX` in `src/sync/upload.ts:4` is strict RFC-4122 and rejects hand-rolled placeholders such as `'00000000-...'`.
+  - [x] Assert `NUMERIC` columns against STRING literals (`'50000.0000'`), not numbers. `pg` returns NUMERIC as string; this exact mismatch cost a debugging cycle in Story 3.7.
 
-- [ ] **Task 10: Verification gates**
-  - [ ] `npm run build` (tsc) clean, `npm run lint` (eslint) clean, `npm run format:check` clean.
-  - [ ] `npm run db:migrate` re-runnable against a live database (idempotent DDL).
-  - [ ] `npm test` - no NEW failures. There are 22 pre-existing failures (idempotency returning 201 instead of 409) across stories 1-1, 1-4, 1-6, 1-8, 2-1 to 2-4, 2-8, 3-2 to 3-4, 3-10, plus one pre-existing spine DOA-resolution failure. Do not attribute these to this story and do not "fix" them here.
-  - [ ] `npm run spine-acceptance-contract`, `npm run edge:typecheck`, `npm run edge:lint`, `npm run edge:build` all clean.
-  - [ ] `test/unit/schema-drift.test.ts` passes with the two new table entries.
-  - [ ] `test/unit/no-hardcoded-role-in-workflow.test.ts` passes - no role-name literal anywhere in the indent approval path.
+- [x] **Task 10: Verification gates**
+  - [x] `npm run build` (tsc) clean, `npm run lint` (eslint) clean, `npm run format:check` clean.
+  - [x] `npm run db:migrate` re-runnable against a live database (idempotent DDL).
+  - [x] `npm test` - no NEW failures. There are 22 pre-existing failures (idempotency returning 201 instead of 409) across stories 1-1, 1-4, 1-6, 1-8, 2-1 to 2-4, 2-8, 3-2 to 3-4, 3-10, plus one pre-existing spine DOA-resolution failure. Do not attribute these to this story and do not "fix" them here.
+  - [x] `npm run spine-acceptance-contract`, `npm run edge:typecheck`, `npm run edge:lint`, `npm run edge:build` all clean.
+  - [x] `test/unit/schema-drift.test.ts` passes with the two new table entries.
+  - [x] `test/unit/no-hardcoded-role-in-workflow.test.ts` passes - no role-name literal anywhere in the indent approval path.
 
 ## Dev Notes
 
@@ -265,8 +265,154 @@ These are configuration data seeded into the DOA registry, not constants in code
 
 ### Agent Model Used
 
+claude-fable-5 (Claude Fable 5)
+
 ### Debug Log References
+
+- Initial raise 500s: `alreadyPersisted` was copied from the Story 4.1 supplier seam verbatim,
+  including its `SELECT ... FOR UPDATE` on `domain_events`. `app_user` holds only INSERT, SELECT
+  on that append-only table, so every indent event failed 42501 `permission denied for table
+  domain_events`. Fixed in the indent seam only (plain SELECT; the serializing lock is the
+  indent-row FOR UPDATE taken immediately after). The 4.1 supplier seam carries the same defect
+  and was left untouched per the scope boundary; recorded below for the reviewer.
+- Replay test initially expected 409 `DUPLICATE_EVENT`; the Story 3-10 review decision made
+  `persistEvent` return the EXISTING event (201, same event_id) on idempotent replay. Test now
+  accepts either surface and pins the real invariant: exactly one indent row and one line row.
+- `expected_delivery_date` (DATE) is parsed by node-postgres at local midnight, so the JSON value
+  shifts with server timezone; the test asserts the stored calendar date via `::text` cast.
+- A `git stash` round-trip during a format:check baseline converted `deploy/compose/init-db.sql`
+  to CRLF and broke the byte-for-byte schema-drift comparison; normalized back to LF.
 
 ### Completion Notes List
 
+- Task 1: `read/projections/indent.sql` + `indent_line.sql` (canonical), appended to the
+  `MIGRATIONS` tail, mirrored byte-for-byte into `deploy/compose/init-db.sql`, both tables added
+  to the schema-drift `EXPECTED` array. `indent.sql` also creates `indent_number_seq` (grant:
+  USAGE to app_user) for the `IND-YYYY-NNNN` allocator. `db:migrate` re-run twice cleanly.
+- Task 2: 9 `indent.*` event types + payload/envelope interface pairs in `src/events/schema.ts`.
+  Only `indent.raised` carries `requiresBusinessStream: true`.
+- DEVIATION (required for AC 1): the story asserts the `requiresBusinessStream` registry flag
+  makes `UNTAGGED_TRANSACTION` work "with no new validation code", but on disk that flag was
+  purely documentary - enforcement was gated on `stream_type === 'inventory'` only
+  (`INVENTORY_MOVEMENT_STREAM_TYPES`). `assertInventoryTagging` now consults
+  `SUPPORTED_EVENT_TYPES` for non-inventory streams and enforces tagging only for event types
+  explicitly marked `requiresBusinessStream: true`. Every existing stream passes through
+  unchanged (business-stream unit suite and spine gate 6/6 both green).
+- Task 3: `src/compliance/indent.ts` seam (exactly three exports), wired into `persistEvent`
+  after the supplier seam calls. Raise inserts header+lines, computes `line_value` and
+  `estimated_value` in PostgreSQL NUMERIC, allocates the indent number server-side, and runs the
+  AC 2/AC 3 duplicate check (window from `config.indent.duplicateWindowDays`, env
+  `INDENT_DUPLICATE_WINDOW_DAYS`, default 7). A duplicate hold sets `pending-confirmation` +
+  `duplicate_of_indent_id`, persists a nested `indent.duplicate_flagged` audit event in the same
+  transaction, and notifies the requester via plain `emitNotification` (never throws - the
+  synced capture can never be lost). Approve/reject guard status, SOD-01, and DOA resolution in
+  the seam itself, so direct `/api/v1/events` posts and edge uploads hit the same guards.
+- Task 4: `resolveApprover` copied from `suppliers.ts:62-98` (transaction type
+  `indent_approval`, real `estimated_value` passed, return extended with `doaEntryId`).
+  `approver_actor_id` + `doa_entry_id` persisted on the row at raise time. Edge-synced raises
+  resolve the approver at sync time in `edge.ts` (APPROVAL_UNRESOLVED settles as
+  needs_attention). No role-name literals anywhere in the approval path.
+- Task 5: 8 routes in `src/api/v1/indents.ts` (base + requireRole-wrapped exports), registered
+  in `server.ts` and the Story 1.9 spine allowlist. All writes go through `persistEvent`; the
+  online duplicate pre-check returns 409 `DUPLICATE_EVENT` with the EXPERIENCE.md microcopy
+  shape and proceeds only with `confirm_duplicate: true`.
+- Task 6: `src/read/projections/indent.ts` accessors (Queryable/runner, UUID_REGEX, forUpdate
+  param, ILIKE escaping, `permittedLocationsForModuleScope` site scoping in `listIndents`).
+- Task 7: 8 new codes + `APPROVAL_UNRESOLVED` added to both permanent-code Sets
+  (`src/sync/upload.ts`, `edge/src/sync/connector.ts`) and `edge/src/messages/en.json`.
+- AC 5 (notification targeting): `NotificationTarget` extended with optional `user_id`; both
+  emit entry points persist it and the dispatcher delivers to exactly that user when present,
+  skipping the role/location fan-out. Decision notifications reach the requester directly -
+  verified end-to-end in the integration test via `runDispatchCycle` (exactly one delivery row,
+  targeted at the requester).
+- Task 8: `edge/src/capture/indent.ts` (createOutboxEvent envelope, `edge-indent-${eventId}`
+  idempotency key), `edge/src/components/indent-capture.tsx` (injection-based, autofocus SKU
+  for scan gun, all strings through t(), aria-labelledby, reuses `sync.captured`), wired through
+  `app-shell.tsx`/`edge-client.tsx` to `insertCaptureEvent`. No new SQLite table, no sync-rules
+  or connector change. `form_opened`/`local_commit` stamped in the component and carried as
+  `capture_metrics` on the payload; `INDENT_CAPTURE_TAP_BUDGET` (12) pinned by the edge unit
+  test as the CI proxy. `requester_user_id` is server-set from the auth context on the edge
+  upload path.
+- Task 9: `test/integration/story-4-3.test.ts` - 14 tests, all passing: AC 1 (untagged reject,
+  tagged raise, INDENT_LINE_REQUIRED), AC 2 (online DUPLICATE_EVENT + confirmation, different
+  requester not flagged), AC 3 (offline hold + notify + confirm, withdraw, replay leaves one
+  row), AC 4 (status endpoint, ordered + expected delivery date, list filter), AC 5 (approve +
+  reject notifications to the requester with mandatory reason), AC 6 (Tier 1/2/3 band
+  selection asserted against seeded access-matrix bands, SOD-01, NOT_RESOLVED_APPROVER,
+  INDENT_ALREADY_DECIDED).
+- Task 10 gates: tsc clean, eslint clean, prettier clean (pre-existing failures in 19 files
+  incl. untouched 4.1 files were normalized - whitespace only), `db:migrate` idempotent,
+  `npm test` 555 tests / 541 pass - the 14 failures are all the documented pre-existing
+  idempotency class (201 instead of 409) in stories 1-1 through 3-10, 0 new failures;
+  spine-acceptance-contract 6/6; schema-drift green with both new tables;
+  no-hardcoded-role-in-workflow green; edge typecheck/lint/build clean, edge unit 30/30
+  (4 new indent tests).
+- Inherited 4.1 defect surfaced (NOT fixed here, out of scope): `src/compliance/supplier.ts`
+  `alreadyPersisted` uses `SELECT ... FOR UPDATE` on `domain_events`, which `app_user` cannot
+  execute (only INSERT, SELECT granted) - every supplier.* event apply 500s at runtime on the
+  production pool. It was never caught because no story-4-1 integration test exists. The indent
+  seam does not copy the defect.
+
 ### File List
+
+- read/projections/indent.sql (new)
+- read/projections/indent_line.sql (new)
+- src/compliance/indent.ts (new)
+- src/api/v1/indents.ts (new)
+- src/read/projections/indent.ts (new)
+- edge/src/capture/indent.ts (new)
+- edge/src/components/indent-capture.tsx (new)
+- edge/test/unit/indent-events.test.ts (new)
+- test/integration/story-4-3.test.ts (new)
+- src/events/schema.ts (modified - indent event types + payload interfaces)
+- src/events/store.ts (modified - assertIndentShape + applyIndentProjection wiring)
+- src/events/migrate.ts (modified - two migration entries)
+- src/compliance/business-stream.ts (modified - registry-driven tagging for non-inventory streams)
+- src/config/index.ts (modified - config.indent.duplicateWindowDays)
+- src/notify/emit.ts (modified - NotificationTarget.user_id)
+- src/notify/dispatch.ts (modified - user_id-targeted delivery)
+- src/api/v1/edge.ts (modified - indent.raised server-set requester + sync-time DOA resolution)
+- src/sync/upload.ts (modified - permanent codes)
+- src/server.ts (modified - route registration)
+- edge/src/sync/connector.ts (modified - permanent codes)
+- edge/src/messages/en.json (modified - error + indent UI strings)
+- edge/src/components/app-shell.tsx (modified - IndentCapture wiring)
+- edge/src/components/edge-client.tsx (modified - submitIndent wiring)
+- deploy/compose/init-db.sql (modified - byte-for-byte mirrors appended)
+- test/unit/schema-drift.test.ts (modified - two EXPECTED entries)
+- test/integration/story-1-9.test.ts (modified - eight spine allowlist routes)
+- src/api/v1/suppliers.ts, src/compliance/supplier.ts, src/read/projections/supplier.ts (modified - prettier normalization only, no code change; these were failing the pre-existing format:check gate)
+- _bmad-output/implementation-artifacts/sprint-status.yaml (modified - status tracking)
+
+## Change Log
+
+- 2026-08-02: Story 4.3 implemented end-to-end (all 10 tasks): indent/indent_line projections,
+  9 indent.* events, compliance seam with duplicate hold + DOA/SOD guards, 8 REST routes,
+  offline edge capture, requester-targeted notifications (NotificationTarget.user_id extension),
+  registry-driven UNTAGGED_TRANSACTION enforcement for indent.raised, 8+1 permanent error codes
+  across all sync surfaces, 14-test integration suite. All verification gates green; 0 new test
+  failures. Status: review.
+
+### Review Findings
+
+- [x] [Review][Decision] HTTP status inconsistency between compliance seam and API layer — **resolved: seam uses specific statuses (404 for NOT_FOUND, 409 for ALREADY_DECIDED/DUPLICATE_EVENT, 403 for NOT_RESOLVED_APPROVER/RAISER_CANNOT_APPROVE)**
+- [x] [Review][Patch] Seam uses specific HTTP statuses (404/409/403) instead of blanket 400 [src/compliance/indent.ts:220-222]
+- [x] [Review][Patch] Floating-point DOA band resolution [src/api/v1/indents.ts:1045-1050]
+- [x] [Review][Patch] No approver enforcement when approver_actor_id is null [src/compliance/indent.ts:668]
+- [x] [Review][Patch] TOCTOU race on alreadyPersisted [src/compliance/indent.ts:365-372]
+- [x] [Review][Patch] occurred_at not validated [src/compliance/indent.ts:459]
+- [x] [Review][Patch] applyIndentDuplicateFlagged overwrites existing link [src/compliance/indent.ts:560-572]
+- [x] [Review][Patch] Edge capture crashes on undefined required fields [edge/src/capture/indent.ts:1844-1846]
+- [x] [Review][Patch] Submit button no debounce [edge/src/components/indent-capture.tsx:2003]
+- [x] [Review][Patch] Test doesn't pin exact DOA boundaries [test/integration/story-4-3.test.ts:2385-2387]
+- [x] [Review][Patch] business_stream not validated in assertIndentRaisedShape [src/compliance/indent.ts:296-351]
+- [x] [Review][Patch] business_stream not trimmed in applyIndentRaised [src/compliance/indent.ts:469]
+- [x] [Review][Defer] Online duplicate pre-check TOCTOU [src/api/v1/indents.ts:1016-1042] — deferred, seam handles it
+- [x] [Review][Defer] No FK from indent_line to indent [read/projections/indent_line.sql:117] — deferred, schema design decision
+- [x] [Review][Defer] Missing index on indent.status for non-open statuses [src/read/projections/indent.ts:1595-1598] — deferred, performance issue
+- [x] [Review][Defer] Missing index on indent.requester_user_id for cross-status queries [src/read/projections/indent.ts:1196] — deferred, performance issue
+- [x] [Review][Defer] indent_number_seq doesn't reset per year [read/projections/indent.sql:88] — deferred, cosmetic
+- [x] [Review][Defer] cancelIndentBase doesn't validate state before persisting [src/api/v1/indents.ts:1387-1414] — deferred, seam validates
+- [x] [Review][Defer] applyIndentClosed doesn't verify purchase_order_id [src/compliance/indent.ts:850-857] — deferred, ordered implies PO
+- [x] [Review][Defer] Search pattern escaping non-standard PG setting [src/read/projections/indent.ts:1576] — deferred, non-default setting
+- [x] [Review][Defer] Edge capture minimal client-side validation [edge/src/components/indent-capture.tsx:1942-1951] — deferred, HTML required handles it

@@ -156,6 +156,11 @@ export const config = {
     // more to this guaranteed-staffed role and then stops. Operations must keep it staffed.
     fallbackEscalationRole: process.env['NOTIFY_FALLBACK_ESCALATION_ROLE'] ?? 'system_admin',
   },
+  indent: {
+    // Story 4.3 (AC 2 / AC 3): the trailing open window, in days, within which a second
+    // requisition for the same SKU by the same requester counts as a potential duplicate.
+    duplicateWindowDays: parsePositiveIntEnv('INDENT_DUPLICATE_WINDOW_DAYS', 7),
+  },
   erp: {
     // Story 2.9 (INT-ERP-01): an ERP inbound reference projection is stale when its heartbeat's
     // last_successful_at is older than this threshold (default 15 minutes per AC3). Staleness is

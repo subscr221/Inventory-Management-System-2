@@ -8,6 +8,12 @@ export interface NotificationTarget {
   role: string;
   /** Location scope; null/undefined targets every holder of the role regardless of location. */
   location_id?: string | null;
+  /**
+   * Story 4.3 (AC 5): direct user targeting. When set, dispatch delivers to exactly this user and
+   * skips the role/location fan-out entirely; `role` is then recorded as descriptive context on
+   * the delivery row, not used for resolution.
+   */
+  user_id?: string | null;
 }
 
 export interface EscalationDefinition {
@@ -80,7 +86,11 @@ export async function emitNotification(
       stream_id: randomUUID(),
       event_type: 'notification.created',
       payload: {
-        target: { role: input.target.role, location_id: input.target.location_id ?? null },
+        target: {
+          role: input.target.role,
+          location_id: input.target.location_id ?? null,
+          user_id: input.target.user_id ?? null,
+        },
         event_type: input.event_type,
         status_verb: input.status_verb,
         object_type: input.object_type,
@@ -121,7 +131,11 @@ export async function emitNotificationInTransaction(
       stream_id: randomUUID(),
       event_type: 'notification.created',
       payload: {
-        target: { role: input.target.role, location_id: input.target.location_id ?? null },
+        target: {
+          role: input.target.role,
+          location_id: input.target.location_id ?? null,
+          user_id: input.target.user_id ?? null,
+        },
         event_type: input.event_type,
         status_verb: input.status_verb,
         object_type: input.object_type,
