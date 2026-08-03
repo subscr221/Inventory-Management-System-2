@@ -55,8 +55,8 @@
     "semantic_hash": ""
   },
   "deploy/compose/init-db.sql": {
-    "mtime": 1785661160.5637023,
-    "ast_hash": "6127a80e05a4b70e1a5dea4f9d4e12a3",
+    "mtime": 1785717121.7345376,
+    "ast_hash": "01ad3610db7ed4701d0b55fca6f72dd9",
     "semantic_hash": ""
   },
   "deploy/compose/init-pg-hba.sh": {
@@ -300,9 +300,9 @@
     "semantic_hash": ""
   },
   "events/domain_events.sql": {
-    "mtime": 1784911502.651091,
-    "ast_hash": "dd03fbc3359b09872c18a57a35eedd57",
-    "semantic_hash": "dd03fbc3359b09872c18a57a35eedd57"
+    "mtime": 1785717074.4751139,
+    "ast_hash": "aeab599359449690116574f96a8deccc",
+    "semantic_hash": ""
   },
   "package.json": {
     "mtime": 1785515713.722533,
@@ -505,8 +505,8 @@
     "semantic_hash": ""
   },
   "test/integration/story-1-9.test.ts": {
-    "mtime": 1785661078.3775568,
-    "ast_hash": "b27f6154e8822c630290b1d925d0044e",
+    "mtime": 1785681901.0515091,
+    "ast_hash": "d7cb0b131bbdaa70d44ece0f34f87671",
     "semantic_hash": ""
   },
   "test/integration/story-2-1.test.ts": {
@@ -595,8 +595,8 @@
     "semantic_hash": ""
   },
   "test/unit/schema-drift.test.ts": {
-    "mtime": 1785661078.4661448,
-    "ast_hash": "1900a24ba1f3706f2f08c003a2595402",
+    "mtime": 1785717134.6266317,
+    "ast_hash": "2bf2b427ad7720222e855011504d904a",
     "semantic_hash": ""
   },
   "test/unit/stock-balance.test.ts": {
@@ -1785,18 +1785,18 @@
     "semantic_hash": ""
   },
   "src/events/migrate.ts": {
-    "mtime": 1785661078.078006,
-    "ast_hash": "37084487d8956970147e220384c0a3b0",
+    "mtime": 1785680803.5944626,
+    "ast_hash": "a103449e5085d908459d081ba08863c7",
     "semantic_hash": ""
   },
   "src/events/schema.ts": {
-    "mtime": 1785661078.126673,
-    "ast_hash": "bcf02b3de1ee4f3d05302bdec51a9dde",
+    "mtime": 1785716940.7572417,
+    "ast_hash": "b16901da9882e773a6e0d38c0a6bce66",
     "semantic_hash": ""
   },
   "src/events/store.ts": {
-    "mtime": 1785661078.1929398,
-    "ast_hash": "c7cf878a20e22b06d1636919b8485aad",
+    "mtime": 1785717074.4851499,
+    "ast_hash": "786f72337cae9282798abbf5e90217f4",
     "semantic_hash": ""
   },
   "src/middleware/audit-tamper-guard.ts": {
@@ -1875,8 +1875,8 @@
     "semantic_hash": ""
   },
   "src/read/projections/doa_registry.ts": {
-    "mtime": 1785514688.7526271,
-    "ast_hash": "7100b791637db7bc6b2af16a5383e304",
+    "mtime": 1785687768.1106305,
+    "ast_hash": "ccc7d655f3d514925c73359d84e18f25",
     "semantic_hash": ""
   },
   "src/read/projections/erp_purchase_order.ts": {
@@ -2010,8 +2010,8 @@
     "semantic_hash": ""
   },
   "src/server.ts": {
-    "mtime": 1785661078.3087964,
-    "ast_hash": "4509556de3d2a92c98a3468badda71a0",
+    "mtime": 1785682495.6338172,
+    "ast_hash": "1355b2a2222aa68738178a3d9250a95a",
     "semantic_hash": ""
   },
   "src/sync/upload.ts": {
@@ -17125,13 +17125,13 @@
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/deferred-work.md": {
-    "mtime": 1785387976.2602496,
-    "ast_hash": "a68c436dccf693c6d721a4c0df96c9f5",
+    "mtime": 1785716387.4440386,
+    "ast_hash": "466009fd7826da8627d32b4d94df93a4",
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/sprint-status.yaml": {
-    "mtime": 1785662230.7575226,
-    "ast_hash": "969d23896d9b3c1f1959cbddfa12209b",
+    "mtime": 1785689480.4180622,
+    "ast_hash": "8393565e74d2d910b1df6646a97796e7",
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/stories-explained-simple.md": {
@@ -17625,13 +17625,13 @@
     "semantic_hash": ""
   },
   ".remember/tmp/last-ndc.ts": {
-    "mtime": 1785661349.5648286,
-    "ast_hash": "86f4a471200fa3511b186b137c50fe17",
+    "mtime": 1785687620.4077587,
+    "ast_hash": "0fd32e1aef9f47b965d7c9df5512b67a",
     "semantic_hash": ""
   },
   ".remember/tmp/last-save.json": {
-    "mtime": 1785662173.6124344,
-    "ast_hash": "255f07be54d5e69519a8bffb8ad93614",
+    "mtime": 1785689605.2817266,
+    "ast_hash": "4c503f436ece244c2e910f852a80b57e",
     "semantic_hash": ""
   },
   "edge/test/unit/dispatch-events.test.ts": {
@@ -17785,8 +17785,8 @@
     "semantic_hash": ""
   },
   ".remember/now.md": {
-    "mtime": 1785662162.8552127,
-    "ast_hash": "ae53f00bbec0847fd88e64acc04d9361",
+    "mtime": 1785689601.709822,
+    "ast_hash": "1cd194242c89912f353a3df6e4226298",
     "semantic_hash": ""
   },
   ".remember/recent.md": {
@@ -17905,13 +17905,13 @@
     "semantic_hash": ""
   },
   "edge/src/capture/indent.ts": {
-    "mtime": 1785660456.4578917,
-    "ast_hash": "464684e928867aa5793f4f3c4334e845",
+    "mtime": 1785671530.604456,
+    "ast_hash": "88de6cbffff25bf89047e13a8018c905",
     "semantic_hash": ""
   },
   "edge/src/components/indent-capture.tsx": {
-    "mtime": 1785660484.2359924,
-    "ast_hash": "8d4fcf0ab7f227b4a088941690fb590c",
+    "mtime": 1785671544.267341,
+    "ast_hash": "d1ebaadb2884144e9bb136d736306ed0",
     "semantic_hash": ""
   },
   "edge/test/unit/indent-events.test.ts": {
@@ -17935,23 +17935,23 @@
     "semantic_hash": ""
   },
   "src/api/v1/indents.ts": {
-    "mtime": 1785661077.874431,
-    "ast_hash": "8cbb26b3828b919a98f985e8ec4a6812",
+    "mtime": 1785687776.8150127,
+    "ast_hash": "ed6b722fcc0b30779f88404489551db3",
     "semantic_hash": ""
   },
   "src/api/v1/suppliers.ts": {
-    "mtime": 1785661077.9354603,
-    "ast_hash": "d6a9d0cb02448bac64f0579f993f0ffa",
+    "mtime": 1785686672.425266,
+    "ast_hash": "3e67a3f16ebffe33daf38f80d4ca905e",
     "semantic_hash": ""
   },
   "src/compliance/indent.ts": {
-    "mtime": 1785661302.584575,
-    "ast_hash": "654d3180a5ba1f1ec3389349f510349d",
+    "mtime": 1785683600.612757,
+    "ast_hash": "8949a554d6ae2e4e740de3e1f042e080",
     "semantic_hash": ""
   },
   "src/compliance/supplier.ts": {
-    "mtime": 1785661078.0524726,
-    "ast_hash": "cfab082f547d05cbcb1794006e716f93",
+    "mtime": 1785686239.8354552,
+    "ast_hash": "bd430b4456ab50a5899a07a042d8d17f",
     "semantic_hash": ""
   },
   "src/read/projections/indent.ts": {
@@ -17965,8 +17965,8 @@
     "semantic_hash": ""
   },
   "test/integration/story-4-3.test.ts": {
-    "mtime": 1785661390.997056,
-    "ast_hash": "47db25c72f3038cd40b46100fbc144cc",
+    "mtime": 1785672666.7697866,
+    "ast_hash": "43e3ce89eef755413e62168eea7fdbe4",
     "semantic_hash": ""
   },
   ".remember/today-2026-07-30.done.md": {
@@ -17975,8 +17975,8 @@
     "semantic_hash": ""
   },
   ".remember/today-2026-08-02.md": {
-    "mtime": 1785661380.1660855,
-    "ast_hash": "c17fc719eb7c994666ee61e9ebbddbb4",
+    "mtime": 1785680104.2053099,
+    "ast_hash": "b4f3bf15aafcd5be9bab04f410bd328b",
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/4-1-supplier-registry-and-onboarding.md": {
@@ -17985,8 +17985,8 @@
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/4-3-purchase-requisition-and-indent-loop.md": {
-    "mtime": 1785662169.6751845,
-    "ast_hash": "b01c1c2dea256599f99bde75d7dd81dc",
+    "mtime": 1785673532.2501485,
+    "ast_hash": "a63085a724eab59b52fb83fd3b6fab51",
     "semantic_hash": ""
   },
   "_bmad-output/implementation-artifacts/code-review-3-9-acceptance-auditor.md": {
@@ -18002,6 +18002,56 @@
   "_bmad-output/implementation-artifacts/code-review-3-9-edge-case-hunter.md": {
     "mtime": 1785517529.8184037,
     "ast_hash": "d735c45c6c4a79d7e2a52c51a193ce8f",
+    "semantic_hash": ""
+  },
+  "read/projections/po_outbound_message.sql": {
+    "mtime": 1785680708.790689,
+    "ast_hash": "bb453f64e45da402aa26590c91de415b",
+    "semantic_hash": ""
+  },
+  "read/projections/purchase_order.sql": {
+    "mtime": 1785717105.266299,
+    "ast_hash": "c52f80e1910c75eb00ce935a1f3d5800",
+    "semantic_hash": ""
+  },
+  "read/projections/purchase_order_line.sql": {
+    "mtime": 1785680702.182726,
+    "ast_hash": "7bc337b57edcc349a38a064ad671c89c",
+    "semantic_hash": ""
+  },
+  "src/adapters/erp/po-outbound.ts": {
+    "mtime": 1785683599.4440348,
+    "ast_hash": "1a26aad5c5b392c393128a88078474c6",
+    "semantic_hash": ""
+  },
+  "src/api/v1/purchase-orders.ts": {
+    "mtime": 1785717243.592739,
+    "ast_hash": "f4a4a280314c45c4e144acbd75ac2030",
+    "semantic_hash": ""
+  },
+  "src/compliance/purchase-order.ts": {
+    "mtime": 1785717242.7207386,
+    "ast_hash": "ece797e62c2c3ab1c6ba799658cc7c20",
+    "semantic_hash": ""
+  },
+  "src/read/projections/purchase_order.ts": {
+    "mtime": 1785717194.6968422,
+    "ast_hash": "f5e919be12fb0657392798c829e85d4e",
+    "semantic_hash": ""
+  },
+  "test/integration/story-4-4.test.ts": {
+    "mtime": 1785717186.681403,
+    "ast_hash": "8b60e7518fc70575551bc9a9937918f6",
+    "semantic_hash": ""
+  },
+  ".remember/today-2026-08-03.md": {
+    "mtime": 1785687636.2765992,
+    "ast_hash": "cfc7efdf2e61de4dc630f16ad38a985f",
+    "semantic_hash": ""
+  },
+  "_bmad-output/implementation-artifacts/4-4-purchase-order-management.md": {
+    "mtime": 1785716387.4363282,
+    "ast_hash": "bac232e499a867c01ded170aab3807e2",
     "semantic_hash": ""
   }
 }

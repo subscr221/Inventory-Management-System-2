@@ -178,7 +178,9 @@ export async function getDoaEntry(
  */
 export async function findMatchingDoaEntry(
   transactionType: string,
-  value: number,
+  // A NUMERIC string (e.g. read back from a projection row) is compared in SQL without ever
+  // passing through IEEE 754 - preferred for money values (Story 4.3/4.4 float-free precedent).
+  value: number | string,
   client?: PoolClient,
 ): Promise<DoaRegistryEntry | null> {
   const result = await runner(client).query(

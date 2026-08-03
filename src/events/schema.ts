@@ -941,6 +941,105 @@ export interface IndentClosedEnvelope extends Omit<EventEnvelope, 'payload'> {
 }
 
 // ---------------------------------------------------------------------------
+// Story 4.4: Purchase Order lifecycle
+// ---------------------------------------------------------------------------
+
+export interface PurchaseOrderLineInput {
+  sku: string;
+  item_category: string;
+  ordered_qty: number;
+  uom: string;
+  unit_price: number;
+  tax_rate_pct?: number;
+}
+
+export interface PurchaseOrderDraftedPayload {
+  po_id: string;
+  po_type: 'standard' | 'blanket' | 'contract';
+  supplier_id: string;
+  indent_id: string;
+  site_id: string;
+  /** Inherited from the source indent (AC1); required by the FR-AC-01 tagging gate. */
+  business_stream: string;
+  lines: PurchaseOrderLineInput[];
+  ceiling_value?: number;
+  currency?: string;
+  payment_terms?: string;
+  approver_actor_id?: string;
+  doa_entry_id?: string;
+}
+
+export interface PurchaseOrderDraftedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'purchase_order.drafted';
+  payload: PurchaseOrderDraftedPayload;
+}
+
+export interface PurchaseOrderApprovedPayload {
+  po_id: string;
+  approver_actor_id: string;
+  approved_at?: string;
+}
+
+export interface PurchaseOrderApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'purchase_order.approved';
+  payload: PurchaseOrderApprovedPayload;
+}
+
+export interface PurchaseOrderRejectedPayload {
+  po_id: string;
+  rejection_reason: string;
+  approver_actor_id: string;
+  rejected_at?: string;
+}
+
+export interface PurchaseOrderRejectedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'purchase_order.rejected';
+  payload: PurchaseOrderRejectedPayload;
+}
+
+export interface PurchaseOrderIssuedPayload {
+  po_id: string;
+  issued_at?: string;
+}
+
+export interface PurchaseOrderIssuedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'purchase_order.issued';
+  payload: PurchaseOrderIssuedPayload;
+}
+
+export interface PurchaseOrderConfirmedPayload {
+  po_id: string;
+  promised_delivery_date: string;
+  line_promised_dates?: Record<string, string>;
+}
+
+export interface PurchaseOrderConfirmedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'purchase_order.confirmed';
+  payload: PurchaseOrderConfirmedPayload;
+}
+
+export interface PurchaseOrderReleaseRecordedPayload {
+  po_id: string;
+  release_value: number;
+  release_reference: string;
+}
+
+export interface PurchaseOrderReleaseRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'purchase_order.release_recorded';
+  payload: PurchaseOrderReleaseRecordedPayload;
+}
+
+export interface PurchaseOrderCeilingRevisedPayload {
+  po_id: string;
+  new_ceiling_value: number;
+}
+
+export interface PurchaseOrderCeilingRevisedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'purchase_order.ceiling_revised';
+  payload: PurchaseOrderCeilingRevisedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -1198,6 +1297,39 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'indent.closed': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  // Story 4.4: purchase order lifecycle on the 'procurement' stream. Only
+  // purchase_order.drafted carries requiresBusinessStream: true - the draft is the tagged
+  // business transaction (FR-AC-01), which makes AC 1's UNTAGGED_TRANSACTION rejection work
+  // through the existing spine with no new validation code. Every other purchase_order event
+  // is a lifecycle transition on an already-tagged document.
+  'purchase_order.drafted': {
+    streamType: 'procurement',
+    requiresBusinessStream: true,
+  },
+  'purchase_order.approved': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'purchase_order.rejected': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'purchase_order.issued': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'purchase_order.confirmed': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'purchase_order.release_recorded': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'purchase_order.ceiling_revised': {
     streamType: 'procurement',
     requiresBusinessStream: false,
   },

@@ -520,6 +520,37 @@ const EXPECTED = [
     constraints: ['uq_indent_line_no', 'chk_indent_line_qty_positive'],
     indexes: ['idx_indent_line_sku'],
   },
+  // Story 4.4: Purchase Order Management
+  {
+    canonical: 'read/projections/purchase_order.sql',
+    table: 'purchase_order',
+    constraints: [
+      'chk_po_type',
+      'chk_po_status',
+      'chk_po_total_value_non_negative',
+      'chk_po_released_value_non_negative',
+      'chk_po_ceiling_covers_released',
+      'chk_po_rejection_reason',
+    ],
+    indexes: ['uq_po_number_ext', 'idx_po_supplier', 'idx_po_indent', 'idx_po_status'],
+  },
+  {
+    canonical: 'read/projections/purchase_order_line.sql',
+    table: 'purchase_order_line',
+    constraints: [
+      'uq_po_line_no',
+      'chk_po_line_qty_positive',
+      'chk_po_line_unit_price_non_negative',
+    ],
+    indexes: ['idx_po_line_sku', 'idx_po_line_po_id'],
+  },
+  {
+    canonical: 'read/projections/po_outbound_message.sql',
+    table: 'po_outbound_message',
+    constraints: [],
+    indexes: ['idx_po_outbound_po_id'],
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

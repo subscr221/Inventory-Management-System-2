@@ -96,6 +96,10 @@ import {
 } from '../compliance/cross-dock.js';
 import { assertSupplierShape, applySupplierProjection } from '../compliance/supplier.js';
 import { assertIndentShape, applyIndentProjection } from '../compliance/indent.js';
+import {
+  assertPurchaseOrderShape,
+  applyPurchaseOrderProjection,
+} from '../compliance/purchase-order.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -465,6 +469,9 @@ export async function persistEvent(
   // Story 4.3: indent (purchase requisition) shape validation is non-DB and runs with the other
   // pre-transaction asserts, so a malformed indent event never consumes an idempotency key.
   assertIndentShape(envelope);
+  // Story 4.4: purchase order shape validation is non-DB and runs with the other pre-transaction
+  // asserts, so a malformed purchase_order event never consumes an idempotency key.
+  assertPurchaseOrderShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -695,6 +702,9 @@ export async function persistEvent(
     // the indent row, its lines, the duplicate-hold audit event, and the domain_events insert
     // commit or roll back together.
     await applyIndentProjection(envelope, client, eventId);
+    // Story 4.4: purchase order projection runs inside this same transaction so the PO row,
+    // its lines, the outbound message, and the domain_events insert commit or roll back together.
+    await applyPurchaseOrderProjection(envelope, client, eventId);
 
     let nextVersion: number;
 
@@ -789,6 +799,13 @@ export async function persistEvent(
         }
         throw new AppError(409, 'DUPLICATE_EVENT', 'Event already exists', {
           existing_event_id: 'unknown',
+        });
+      } else if (constraint === 'uq_po_release_reference') {
+        throw new AppError(409, 'DUPLICATE_EVENT', 'Release reference already exists for this PO', {
+          release_reference:
+            typeof envelope.payload['release_reference'] === 'string'
+              ? envelope.payload['release_reference']
+              : null,
         });
       } else if (constraint === 'uq_stream_version') {
         throw new AppError(409, 'STREAM_CONFLICT', 'Event version conflict in stream', {

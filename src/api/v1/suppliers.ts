@@ -235,6 +235,31 @@ export const submitOnboardingBase: RouteHandler = async (req, res, params) => {
   const eventId = randomUUID();
 
   if (!approval.requiresApproval) {
+    // First, emit the submit event to set onboarding_submitted_at
+    await persistEvent(
+      {
+        stream_type: 'procurement',
+        stream_id: supplierId,
+        event_type: 'supplier.onboarding_submitted',
+        event_id: randomUUID(),
+        payload: {
+          supplier_id: supplierId,
+          documents,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: {
+            user_id: actor.userId,
+            role: actor.role,
+            location_id: actor.eventLocationId,
+          },
+          occurred_at: now,
+        },
+      },
+      auditCtxFor(req, actor, 200),
+    );
+
+    // Then, emit the approve event
     const persisted = await persistEvent(
       {
         stream_type: 'procurement',

@@ -163,6 +163,17 @@ import {
   cancelIndentHandler,
 } from './api/v1/indents.js';
 import {
+  draftPurchaseOrderHandler,
+  getNativePurchaseOrderHandler,
+  listPurchaseOrdersHandler,
+  approvePurchaseOrderHandler,
+  rejectPurchaseOrderHandler,
+  issuePurchaseOrderHandler,
+  confirmPurchaseOrderHandler,
+  recordReleaseHandler,
+  reviseCeilingHandler,
+} from './api/v1/purchase-orders.js';
+import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
   generateBatchPickTasksHandler,
@@ -378,6 +389,17 @@ export function createAppRouter(): Router {
   router.post('/api/v1/indents/:indentId/approve', approveIndentHandler);
   router.post('/api/v1/indents/:indentId/reject', rejectIndentHandler);
   router.post('/api/v1/indents/:indentId/cancel', cancelIndentHandler);
+
+  // Story 4.4: Purchase Order Management
+  router.post('/api/v1/purchase-orders', draftPurchaseOrderHandler);
+  router.get('/api/v1/purchase-orders/:poId', getNativePurchaseOrderHandler);
+  router.get('/api/v1/purchase-orders', listPurchaseOrdersHandler);
+  router.post('/api/v1/purchase-orders/:poId/approve', approvePurchaseOrderHandler);
+  router.post('/api/v1/purchase-orders/:poId/reject', rejectPurchaseOrderHandler);
+  router.post('/api/v1/purchase-orders/:poId/issue', issuePurchaseOrderHandler);
+  router.post('/api/v1/purchase-orders/:poId/confirm', confirmPurchaseOrderHandler);
+  router.post('/api/v1/purchase-orders/:poId/releases', recordReleaseHandler);
+  router.post('/api/v1/purchase-orders/:poId/ceiling', reviseCeilingHandler);
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

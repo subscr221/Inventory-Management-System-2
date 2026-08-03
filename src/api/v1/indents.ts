@@ -65,7 +65,7 @@ function auditCtxFor(
 
 export async function resolveApprover(
   transactionType: string,
-  value: number,
+  value: number | string,
 ): Promise<{
   requiresApproval: boolean;
   approverActorId: string | null;
@@ -98,7 +98,7 @@ export async function resolveApprover(
     throw new AppError(
       409,
       'APPROVAL_UNRESOLVED',
-      'Indent approval is required but no active approver could be resolved',
+      'Approval is required but no active approver could be resolved',
       { transaction_type: transactionType },
     );
   }

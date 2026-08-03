@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS domain_events (
 CREATE INDEX IF NOT EXISTS idx_domain_events_stream ON domain_events (stream_type, stream_id, event_version);
 CREATE INDEX IF NOT EXISTS idx_domain_events_type ON domain_events (event_type);
 CREATE INDEX IF NOT EXISTS idx_domain_events_created ON domain_events (created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_po_release_reference
+  ON domain_events (stream_id, (payload->>'release_reference'))
+  WHERE event_type = 'purchase_order.release_recorded';
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN

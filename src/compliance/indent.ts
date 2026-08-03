@@ -51,7 +51,12 @@ export function indentEventType(envelope: EventEnvelope): string | null {
   return envelope.event_type;
 }
 
-function reject(code: string, message: string, details?: Record<string, unknown>, status: number = 400): never {
+function reject(
+  code: string,
+  message: string,
+  details?: Record<string, unknown>,
+  status: number = 400,
+): never {
   throw new AppError(status, code, message, details);
 }
 
@@ -258,10 +263,15 @@ async function applyIndentRaised(
 
   const existing = await getIndentById(indentId, client, true);
   if (existing) {
-    reject('DUPLICATE_EVENT', 'An indent with this indent_id already exists', {
-      indent_id: indentId,
-      existing_status: existing.status,
-    }, 409);
+    reject(
+      'DUPLICATE_EVENT',
+      'An indent with this indent_id already exists',
+      {
+        indent_id: indentId,
+        existing_status: existing.status,
+      },
+      409,
+    );
   }
 
   const lines = p['lines'] as Record<string, unknown>[];
@@ -292,7 +302,11 @@ async function applyIndentRaised(
   }
 
   const occurredAt = envelope.metadata.occurred_at;
-  if (!occurredAt || typeof occurredAt !== 'string' || Number.isNaN(new Date(occurredAt).getTime())) {
+  if (
+    !occurredAt ||
+    typeof occurredAt !== 'string' ||
+    Number.isNaN(new Date(occurredAt).getTime())
+  ) {
     reject('INVALID_PARAMS', 'occurred_at is required and must be a valid ISO 8601 date string');
   }
   const year = new Date(occurredAt).getUTCFullYear();
@@ -314,7 +328,9 @@ async function applyIndentRaised(
         urgent: p['urgent'] === true,
         reason: typeof p['reason'] === 'string' ? p['reason'] : null,
         status: duplicateOf ? 'pending-confirmation' : 'raised',
-        approver_actor_id: isUuid(p['approver_actor_id']) ? (p['approver_actor_id'] as string) : null,
+        approver_actor_id: isUuid(p['approver_actor_id'])
+          ? (p['approver_actor_id'] as string)
+          : null,
         doa_entry_id: isUuid(p['doa_entry_id']) ? (p['doa_entry_id'] as string) : null,
         duplicate_of_indent_id: duplicateOf,
         correlation_id: envelope.metadata.correlation_id ?? null,
@@ -408,10 +424,15 @@ async function applyIndentDuplicateFlagged(
     reject('INDENT_NOT_FOUND', 'Indent not found', { indent_id: indentId }, 404);
   }
   if (indent.status !== 'raised' && indent.status !== 'pending-confirmation') {
-    reject('INDENT_NOT_IN_RAISED', 'Only an open indent can be duplicate-flagged', {
-      indent_id: indentId,
-      status: indent.status,
-    }, 409);
+    reject(
+      'INDENT_NOT_IN_RAISED',
+      'Only an open indent can be duplicate-flagged',
+      {
+        indent_id: indentId,
+        status: indent.status,
+      },
+      409,
+    );
   }
   // Prevent overwriting an existing duplicate link with a different indent
   if (
@@ -450,10 +471,15 @@ async function applyIndentConfirmed(envelope: EventEnvelope, client: PoolClient)
     reject('INDENT_NOT_FOUND', 'Indent not found', { indent_id: indentId }, 404);
   }
   if (indent.status !== 'pending-confirmation') {
-    reject('INDENT_NOT_IN_RAISED', 'Only an indent held in pending-confirmation can be confirmed', {
-      indent_id: indentId,
-      status: indent.status,
-    }, 409);
+    reject(
+      'INDENT_NOT_IN_RAISED',
+      'Only an indent held in pending-confirmation can be confirmed',
+      {
+        indent_id: indentId,
+        status: indent.status,
+      },
+      409,
+    );
   }
 
   await updateIndentStatus(indentId, 'raised', {}, client);
@@ -470,10 +496,15 @@ async function applyIndentWithdrawn(envelope: EventEnvelope, client: PoolClient)
     reject('INDENT_NOT_FOUND', 'Indent not found', { indent_id: indentId }, 404);
   }
   if (indent.status !== 'pending-confirmation') {
-    reject('INDENT_NOT_IN_RAISED', 'Only an indent held in pending-confirmation can be withdrawn', {
-      indent_id: indentId,
-      status: indent.status,
-    }, 409);
+    reject(
+      'INDENT_NOT_IN_RAISED',
+      'Only an indent held in pending-confirmation can be withdrawn',
+      {
+        indent_id: indentId,
+        status: indent.status,
+      },
+      409,
+    );
   }
 
   await updateIndentStatus(
@@ -506,16 +537,26 @@ async function assertDecisionAllowed(
     );
   }
   if (indent.status === 'approved' || indent.status === 'rejected') {
-    reject('INDENT_ALREADY_DECIDED', 'Indent has already been decided', {
-      indent_id: indent.indent_id,
-      status: indent.status,
-    }, 409);
+    reject(
+      'INDENT_ALREADY_DECIDED',
+      'Indent has already been decided',
+      {
+        indent_id: indent.indent_id,
+        status: indent.status,
+      },
+      409,
+    );
   }
   if (indent.status !== 'raised') {
-    reject('INDENT_NOT_IN_RAISED', 'Only a raised indent can be decided', {
-      indent_id: indent.indent_id,
-      status: indent.status,
-    }, 409);
+    reject(
+      'INDENT_NOT_IN_RAISED',
+      'Only a raised indent can be decided',
+      {
+        indent_id: indent.indent_id,
+        status: indent.status,
+      },
+      409,
+    );
   }
 
   const actorId = envelope.metadata.actor.user_id;
@@ -669,10 +710,15 @@ async function applyIndentOrdered(envelope: EventEnvelope, client: PoolClient): 
     reject('INDENT_NOT_FOUND', 'Indent not found', { indent_id: indentId }, 404);
   }
   if (indent.status !== 'approved') {
-    reject('INDENT_NOT_IN_RAISED', 'Only an approved indent can move to ordered', {
-      indent_id: indentId,
-      status: indent.status,
-    }, 409);
+    reject(
+      'INDENT_NOT_IN_RAISED',
+      'Only an approved indent can move to ordered',
+      {
+        indent_id: indentId,
+        status: indent.status,
+      },
+      409,
+    );
   }
 
   await updateIndentStatus(
@@ -703,10 +749,15 @@ async function applyIndentCancelled(envelope: EventEnvelope, client: PoolClient)
     indent.status !== 'pending-confirmation' &&
     indent.status !== 'approved'
   ) {
-    reject('INDENT_NOT_IN_RAISED', 'Only an open, undecided or approved indent can be cancelled', {
-      indent_id: indentId,
-      status: indent.status,
-    }, 409);
+    reject(
+      'INDENT_NOT_IN_RAISED',
+      'Only an open, undecided or approved indent can be cancelled',
+      {
+        indent_id: indentId,
+        status: indent.status,
+      },
+      409,
+    );
   }
 
   await updateIndentStatus(
@@ -728,10 +779,15 @@ async function applyIndentClosed(envelope: EventEnvelope, client: PoolClient): P
     reject('INDENT_NOT_FOUND', 'Indent not found', { indent_id: indentId }, 404);
   }
   if (indent.status !== 'ordered') {
-    reject('INDENT_NOT_IN_RAISED', 'Only an ordered indent can be closed', {
-      indent_id: indentId,
-      status: indent.status,
-    }, 409);
+    reject(
+      'INDENT_NOT_IN_RAISED',
+      'Only an ordered indent can be closed',
+      {
+        indent_id: indentId,
+        status: indent.status,
+      },
+      409,
+    );
   }
 
   await updateIndentStatus(indentId, 'closed', {}, client);

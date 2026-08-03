@@ -272,7 +272,7 @@ function assertSupplierDeactivatedShape(p: Record<string, unknown>): void {
 async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Promise<boolean> {
   if (!envelope.idempotency_key && !envelope.event_id) return false;
   const existing = await client.query(
-    `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 FOR UPDATE LIMIT 1`,
+    `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 LIMIT 1`,
     [envelope.idempotency_key ?? null, envelope.event_id ?? null],
   );
   return existing.rows.length > 0;
@@ -352,7 +352,7 @@ async function applySupplierRegistered(envelope: EventEnvelope, client: PoolClie
     {
       supplier_id: supplierId,
       legal_name: p['legal_name'] as string,
-      owner_party_code: p['owner_party_code'] as string,
+      owner_party_code: (p['owner_party_code'] as string).toUpperCase(),
       gstin_ext:
         typeof p['gstin_ext'] === 'string' && p['gstin_ext'].trim() !== ''
           ? p['gstin_ext'].trim()

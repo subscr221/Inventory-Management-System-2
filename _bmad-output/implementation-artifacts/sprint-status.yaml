@@ -254,7 +254,21 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-02'
+last_updated: '2026-08-03'
+# story 4-4 created 2026-08-02 via create-story workflow: Purchase Order Management (FR-P-05); standard/
+#   blanket/contract POs drafted from an approved Story 4.3 indent against an active supplier, 7 new
+#   purchase_order.* events on the 'procurement' stream (only .drafted requiresBusinessStream true),
+#   purchase_order + purchase_order_line + po_outbound_message projections (po_number_seq PO-YYYY-NNNN),
+#   DOA approval via the EXPORTED resolveApprover with new transaction_type purchase_order_approval
+#   (value = total, fresh resolution on ceiling revision), seam-enforced SOD PO_CREATOR_CANNOT_APPROVE +
+#   status guards + NUMERIC ceiling math (PO_CEILING_EXCEEDED), issue records the PO-outbound payload on
+#   the ERP adapter boundary (src/adapters/erp/po-outbound.ts, recorded not transmitted, distinct from
+#   INT-ERP-01) atomically with purchase_order.issued and flips the linked indent to ordered WITH
+#   purchase_order_id set (closes the applyIndentClosed "ordered implies PO" ledger assumption),
+#   confirmation stamps promised_delivery_date onto lines + indent expected_delivery_date (4.2 metric
+#   feed), 9 routes + spine allowlist, 9 new permanent codes, NO edge path (desktop officer flow, no
+#   upload.ts/connector.ts/en.json changes), plain-SELECT alreadyPersisted mandated (supplier 42501
+#   defect not copied); no amend/cancel (no FR), MSME deferred to 4.6, match to 4.5; ready-for-dev
 # story 4-3 dev-story 2026-08-02: implemented all 10 tasks from baseline f1f4b26. indent + indent_line
 #   projections (canonical SQL at repo root, init-db mirror, schema-drift entries, indent_number_seq for
 #   server-side IND-YYYY-NNNN allocation), 9 indent.* events on the 'procurement' stream with ONLY
@@ -586,7 +600,7 @@ development_status:
   4-1-supplier-registry-and-onboarding: done
   4-2-supplier-performance-scorecards: backlog
   4-3-purchase-requisition-and-indent-loop: done
-  4-4-purchase-order-management: backlog
+  4-4-purchase-order-management: done
   4-5-goods-receipt-and-three-way-match: backlog
   4-6-msme-compliance-tracking: backlog
   4-7-supplier-invoice-capture: backlog

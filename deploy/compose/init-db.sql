@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS domain_events (
 CREATE INDEX IF NOT EXISTS idx_domain_events_stream ON domain_events (stream_type, stream_id, event_version);
 CREATE INDEX IF NOT EXISTS idx_domain_events_type ON domain_events (event_type);
 CREATE INDEX IF NOT EXISTS idx_domain_events_created ON domain_events (created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_po_release_reference
+  ON domain_events (stream_id, (payload->>'release_reference'))
+  WHERE event_type = 'purchase_order.release_recorded';
 
 GRANT INSERT, SELECT ON domain_events TO app_user;
 GRANT SELECT ON domain_events TO readonly_user;
@@ -3676,5 +3679,224 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON indent_line TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/purchase_order.sql (canonical source).
+-- Purchase order read model (Story 4.4). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It carries
+-- its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve reads/writes as
+-- app_user without depending on deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates
+-- this content for first-boot container init - change both files together. Every statement is
+-- idempotent (IF NOT EXISTS / guarded DO blocks) so the file can be re-applied to a live database
+-- safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying purchase_order.* domain events;
+-- mutation happens exclusively through persistEvent, which applies this projection inside the SAME
+-- transaction as the domain_events insert. Status vocabulary is the six AC values
+-- (draft, pending-approval, approved, rejected, issued, confirmed). The ceiling_value column is
+-- required for blanket/contract POs (PO_CEILING_REQUIRED enforced in the seam). released_value
+-- tracks cumulative releases against the ceiling (PO_CEILING_EXCEEDED). Payment terms default
+-- from the supplier record at draft (Story 4.1 contract).
+
+CREATE TABLE IF NOT EXISTS purchase_order (
+  po_id                  UUID PRIMARY KEY,
+  po_number_ext          TEXT NOT NULL,
+  po_type                TEXT NOT NULL,
+  supplier_id            UUID NOT NULL,
+  indent_id              UUID NOT NULL,
+  site_id                UUID NOT NULL,
+  business_stream        TEXT NOT NULL,
+  status                 TEXT NOT NULL DEFAULT 'draft',
+  total_value            NUMERIC(14,2) NOT NULL DEFAULT 0,
+  ceiling_value          NUMERIC(14,2),
+  released_value         NUMERIC(14,2) NOT NULL DEFAULT 0,
+  currency               TEXT NOT NULL DEFAULT 'INR',
+  payment_terms          TEXT,
+  created_by             UUID NOT NULL,
+  approver_actor_id      UUID,
+  doa_entry_id           UUID,
+  decided_at             TIMESTAMPTZ,
+  decided_by             UUID,
+  rejection_reason       TEXT,
+  issued_at              TIMESTAMPTZ,
+  confirmed_at           TIMESTAMPTZ,
+  promised_delivery_date DATE,
+  correlation_id         UUID,
+  source_event_id        UUID NOT NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_po_type CHECK (po_type IN ('standard','blanket','contract')),
+  CONSTRAINT chk_po_status CHECK (status IN ('draft','pending-approval','approved','rejected','issued','confirmed')),
+  CONSTRAINT chk_po_total_value_non_negative CHECK (total_value >= 0),
+  CONSTRAINT chk_po_released_value_non_negative CHECK (released_value >= 0),
+  CONSTRAINT chk_po_ceiling_covers_released CHECK (ceiling_value IS NULL OR ceiling_value >= released_value),
+  CONSTRAINT chk_po_rejection_reason CHECK (status <> 'rejected' OR (rejection_reason IS NOT NULL AND btrim(rejection_reason) <> ''))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_po_number_ext ON purchase_order (po_number_ext);
+CREATE INDEX IF NOT EXISTS idx_po_supplier ON purchase_order (supplier_id);
+CREATE INDEX IF NOT EXISTS idx_po_indent ON purchase_order (indent_id);
+CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_order (status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_po_type'
+      AND conrelid = 'purchase_order'::regclass
+  ) THEN
+    ALTER TABLE purchase_order
+      ADD CONSTRAINT chk_po_type CHECK (po_type IN ('standard','blanket','contract'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_po_status'
+      AND conrelid = 'purchase_order'::regclass
+  ) THEN
+    ALTER TABLE purchase_order
+      ADD CONSTRAINT chk_po_status CHECK (status IN ('draft','pending-approval','approved','rejected','issued','confirmed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_po_total_value_non_negative'
+      AND conrelid = 'purchase_order'::regclass
+  ) THEN
+    ALTER TABLE purchase_order
+      ADD CONSTRAINT chk_po_total_value_non_negative CHECK (total_value >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_po_released_value_non_negative'
+      AND conrelid = 'purchase_order'::regclass
+  ) THEN
+    ALTER TABLE purchase_order
+      ADD CONSTRAINT chk_po_released_value_non_negative CHECK (released_value >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_po_ceiling_covers_released'
+      AND conrelid = 'purchase_order'::regclass
+  ) THEN
+    ALTER TABLE purchase_order
+      ADD CONSTRAINT chk_po_ceiling_covers_released CHECK (ceiling_value IS NULL OR ceiling_value >= released_value);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_po_rejection_reason'
+      AND conrelid = 'purchase_order'::regclass
+  ) THEN
+    ALTER TABLE purchase_order
+      ADD CONSTRAINT chk_po_rejection_reason CHECK (status <> 'rejected' OR (rejection_reason IS NOT NULL AND btrim(rejection_reason) <> ''));
+  END IF;
+END $$;
+
+CREATE SEQUENCE IF NOT EXISTS po_number_seq;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON purchase_order TO app_user;
+    GRANT USAGE ON SEQUENCE po_number_seq TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON purchase_order TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/purchase_order_line.sql (canonical source).
+-- Purchase order line read model (Story 4.4). CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent.
+--
+-- Derived state ONLY: rows are rebuildable by replaying purchase_order.* domain events; mutation happens
+-- exclusively through persistEvent inside the same transaction as the domain_events insert.
+-- Follows the indent.sql / indent_line.sql header-plus-line precedent. No FK to purchase_order
+-- (same-transaction inserts; matches the indent_line design decision on the deferred ledger).
+
+CREATE TABLE IF NOT EXISTS purchase_order_line (
+  po_line_id             UUID PRIMARY KEY,
+  po_id                  UUID NOT NULL,
+  line_no                INTEGER NOT NULL,
+  sku                    TEXT NOT NULL,
+  item_category          TEXT NOT NULL,
+  ordered_qty            NUMERIC(14,3) NOT NULL,
+  uom                    TEXT NOT NULL,
+  unit_price             NUMERIC(14,4) NOT NULL,
+  tax_rate_pct           NUMERIC(5,2),
+  line_value             NUMERIC(14,2) NOT NULL DEFAULT 0,
+  promised_delivery_date DATE,
+  CONSTRAINT uq_po_line_no UNIQUE (po_id, line_no),
+  CONSTRAINT chk_po_line_qty_positive CHECK (ordered_qty > 0),
+  CONSTRAINT chk_po_line_unit_price_non_negative CHECK (unit_price >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_po_line_sku ON purchase_order_line (sku);
+CREATE INDEX IF NOT EXISTS idx_po_line_po_id ON purchase_order_line (po_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_po_line_qty_positive'
+      AND conrelid = 'purchase_order_line'::regclass
+  ) THEN
+    ALTER TABLE purchase_order_line
+      ADD CONSTRAINT chk_po_line_qty_positive CHECK (ordered_qty > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_po_line_no'
+      AND conrelid = 'purchase_order_line'::regclass
+  ) THEN
+    ALTER TABLE purchase_order_line
+      ADD CONSTRAINT uq_po_line_no UNIQUE (po_id, line_no);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_po_line_unit_price_non_negative'
+      AND conrelid = 'purchase_order_line'::regclass
+  ) THEN
+    ALTER TABLE purchase_order_line
+      ADD CONSTRAINT chk_po_line_unit_price_non_negative CHECK (unit_price >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON purchase_order_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON purchase_order_line TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/po_outbound_message.sql (canonical source).
+-- PO outbound message record (Story 4.4). CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent.
+--
+-- Derived state ONLY: the row is written atomically with purchase_order.issued inside the SAME
+-- persistEvent transaction. This is the ERP adapter boundary record (AC3 verification contract) -
+-- the adapter records the payload durably; live transmission is per-deployment configuration and
+-- is NOT implemented here. Distinct from erp_purchase_order (Story 2.9 read-only inbound reference).
+
+CREATE TABLE IF NOT EXISTS po_outbound_message (
+  message_id    UUID PRIMARY KEY,
+  po_id         UUID NOT NULL,
+  payload       JSONB NOT NULL,
+  recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_po_outbound_po_id ON po_outbound_message (po_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON po_outbound_message TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON po_outbound_message TO readonly_user;
   END IF;
 END $$;
