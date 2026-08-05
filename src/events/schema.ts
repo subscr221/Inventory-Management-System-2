@@ -1040,6 +1040,145 @@ export interface PurchaseOrderCeilingRevisedEnvelope extends Omit<EventEnvelope,
 }
 
 // ---------------------------------------------------------------------------
+// Story 4.7: Supplier Invoice Capture
+// ---------------------------------------------------------------------------
+
+export interface SupplierInvoiceLineInput {
+  /** Present only when the line ties back to a native Story 4.4 PO line. */
+  po_line_id?: string;
+  sku: string;
+  quantity: number;
+  uom: string;
+  unit_price: number;
+  taxable_value: number;
+  cgst_amount?: number;
+  sgst_amount?: number;
+  igst_amount?: number;
+  cess_amount?: number;
+  line_total: number;
+}
+
+export interface InvoiceIngestionStagedPayload {
+  ingestion_id: string;
+  source_format: 'pdf' | 'csv' | 'xml';
+  attachment_ref: string;
+  sha256_hash: string;
+  detected_mime: string;
+  byte_size: number;
+  extracted_draft: Record<string, unknown>;
+  /** Server-set from auth; never trusted from the client. */
+  uploaded_by?: string;
+}
+
+export interface InvoiceIngestionStagedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'invoice_ingestion.staged';
+  payload: InvoiceIngestionStagedPayload;
+}
+
+export interface InvoiceIngestionReviewedPayload {
+  ingestion_id: string;
+  corrected_header: {
+    supplier_id: string;
+    invoice_number_ext: string;
+    invoice_date: string;
+    po_id?: string;
+    currency?: string;
+    recipient_gstin_ext?: string;
+    irn_ext?: string;
+    subtotal?: number;
+    cgst_total?: number;
+    sgst_total?: number;
+    igst_total?: number;
+    cess_total?: number;
+    total_value: number;
+    duplicate_override_reason?: string;
+  };
+  corrected_lines: SupplierInvoiceLineInput[];
+  correction_summary?: Record<string, unknown>;
+  /** Server-set from auth; never trusted from the client. */
+  reviewed_by?: string;
+}
+
+export interface InvoiceIngestionReviewedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'invoice_ingestion.reviewed';
+  payload: InvoiceIngestionReviewedPayload;
+}
+
+export interface SupplierInvoiceCapturedPayload {
+  invoice_id: string;
+  supplier_id: string;
+  invoice_number_ext: string;
+  invoice_date: string;
+  /** Required for supplier_invoice.captured (AC1) - the no-PO path is supplier_invoice.unmatched_recorded. */
+  po_id: string;
+  /** Required (AC1/AC6); the handler derives this from the locked source PO before persistEvent. */
+  business_stream: string;
+  currency?: string;
+  recipient_gstin_ext?: string;
+  irn_ext?: string;
+  lines: SupplierInvoiceLineInput[];
+  subtotal?: number;
+  cgst_total?: number;
+  sgst_total?: number;
+  igst_total?: number;
+  cess_total?: number;
+  total_value: number;
+  capture_method: 'manual' | 'file';
+  /** Present only when capture_method is 'file'. */
+  ingestion_id?: string;
+  /** Only the duplicate-override command may carry a non-empty reason (AC3). */
+  duplicate_override_reason?: string;
+  /** Server-set from auth; never trusted from the client. */
+  captured_by?: string;
+}
+
+export interface SupplierInvoiceCapturedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier_invoice.captured';
+  payload: SupplierInvoiceCapturedPayload;
+}
+
+export interface SupplierInvoiceUnmatchedRecordedPayload {
+  invoice_id: string;
+  supplier_id: string;
+  invoice_number_ext: string;
+  invoice_date: string;
+  currency?: string;
+  recipient_gstin_ext?: string;
+  irn_ext?: string;
+  lines: SupplierInvoiceLineInput[];
+  subtotal?: number;
+  cgst_total?: number;
+  sgst_total?: number;
+  igst_total?: number;
+  cess_total?: number;
+  total_value: number;
+  capture_method: 'manual' | 'file';
+  ingestion_id?: string;
+  duplicate_override_reason?: string;
+  /** Server-set from auth; never trusted from the client. */
+  captured_by?: string;
+}
+
+export interface SupplierInvoiceUnmatchedRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier_invoice.unmatched_recorded';
+  payload: SupplierInvoiceUnmatchedRecordedPayload;
+}
+
+export interface SupplierInvoicePoLinkedPayload {
+  invoice_id: string;
+  po_id: string;
+  /** Required (AC4/AC6); the handler derives this from the locked target PO before persistEvent. */
+  business_stream: string;
+  /** Server-set from auth; never trusted from the client. */
+  linked_by?: string;
+}
+
+export interface SupplierInvoicePoLinkedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier_invoice.po_linked';
+  payload: SupplierInvoicePoLinkedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -1332,5 +1471,30 @@ export const SUPPORTED_EVENT_TYPES = {
   'purchase_order.ceiling_revised': {
     streamType: 'procurement',
     requiresBusinessStream: false,
+  },
+  // Story 4.7: supplier invoice capture on the existing 'procurement' stream. Staging, review,
+  // and unmatched recording fabricate no business-stream tag (no PO context exists yet); only
+  // supplier_invoice.captured and supplier_invoice.po_linked carry requiresBusinessStream: true -
+  // both are the moments a PO's tag is inherited onto the invoice (mirrors the
+  // purchase_order.drafted / indent.raised precedent).
+  'invoice_ingestion.staged': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'invoice_ingestion.reviewed': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier_invoice.captured': {
+    streamType: 'procurement',
+    requiresBusinessStream: true,
+  },
+  'supplier_invoice.unmatched_recorded': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier_invoice.po_linked': {
+    streamType: 'procurement',
+    requiresBusinessStream: true,
   },
 } as const;

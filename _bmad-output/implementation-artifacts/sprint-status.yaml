@@ -254,7 +254,36 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-05'
+last_updated: '2026-08-06'
+# story 4-7 dev-story 2026-08-05: implemented Tasks 1-6, 8-9 from baseline f9d3bd2. Three new
+#   projections (supplier_invoice, supplier_invoice_line, supplier_invoice_ingestion) mirrored into
+#   init-db.sql + schema-drift EXPECTED; five new procurement-stream events
+#   (invoice_ingestion.staged/.reviewed, supplier_invoice.captured/.unmatched_recorded/.po_linked;
+#   only .captured/.po_linked requiresBusinessStream, mirroring purchase_order.drafted). New
+#   src/compliance/supplier-invoice.ts seam: PO-locked manual/reviewed-file capture sharing one
+#   duplicate-grain lookup (supplier GSTIN + normalized invoice number + Indian financial year,
+#   config.supplierInvoice.financialYearStartMonth default 4), SQL-computed NUMERIC line/header
+#   totals compared exactly (INVOICE_TOTAL_MISMATCH), unmatched exception queue with no fabricated
+#   PO/site/business_stream, and po_linked promotion. Duplicate override shares the SAME captured
+#   event type per the story's 5-event contract; authorization is a distinct RBAC module scope
+#   (procurement.duplicate-override), never a hard-coded role, checked on a separate
+#   POST /api/v1/supplier-invoices/duplicate-overrides route - the seam itself always derives
+#   duplicate_of_invoice_id from its own lookup, never the client payload. 8 new REST routes +
+#   spine allowlist. Fixed two real bugs only a live-DB integration run surfaced: an ambiguous
+#   "subtotal" column reference in the UPDATE...FROM...RETURNING total recomputation, and a
+#   duplicate-grain concurrency race whose unique-constraint violation was being swallowed by the
+#   same catch meant only for the idempotent invoice_id-retry case (left the transaction aborted,
+#   surfacing as a raw 500 instead of 409 DUPLICATE_EVENT). Task 7 (AC5 MSME) is explicitly left
+#   UNCHECKED and story is NOT done: Story 4.6 (msme-compliance-tracking, still backlog) is not
+#   implemented anywhere in this codebase, so msme_classification_at_capture/statutory_due_date/
+#   statutory_due_rule_version stay null at both capture and link time by design (proven by
+#   dedicated test assertions) rather than fabricated. Story 4.5 (goods-receipt-and-three-way-match,
+#   also backlog) means the unmatched-invoice SOURCE_DOCUMENT_REQUIRED consumer check has nothing
+#   to test against yet - recorded as a second blocked dependency. No edge/offline path touched.
+#   tsc/eslint/prettier clean, db:migrate idempotent x2, npm test 603 tests 589 pass (14 fails all
+#   the documented pre-existing idempotency 201-vs-409 class across stories 1.1/1.6/1.8/2.1-2.4/2.8/
+#   3.2-3.4/3.10, 0 new), story-4-7 23/23, spine gate 6/6, schema-drift 54/54, edge 30/30 unchanged,
+#   diff-check clean; moved to review
 # story 4-7 created 2026-08-05 via create-story workflow: Supplier Invoice Capture; manual and trusted-boundary PDF/CSV/XML ingestion with mandatory review, supplier GSTIN + normalized invoice number + Indian financial-year duplicate grain, evidenced override, unmatched queue and native PO linking, exact GST/NUMERIC contracts, attachment provenance metadata, Story 4.5/4.6 integration hooks, central procurement-stream enforcement, and no edge path; ready-for-dev
 # story 4-4 created 2026-08-02 via create-story workflow: Purchase Order Management (FR-P-05); standard/
 #   blanket/contract POs drafted from an approved Story 4.3 indent against an active supplier, 7 new
@@ -604,7 +633,7 @@ development_status:
   4-4-purchase-order-management: done
   4-5-goods-receipt-and-three-way-match: backlog
   4-6-msme-compliance-tracking: backlog
-  4-7-supplier-invoice-capture: ready-for-dev
+  4-7-supplier-invoice-capture: done
   epic-4-retrospective: optional
   # story 4-2 skipped for now: epics.md sequences it LAST in epic 4 (consumes PurchaseOrderIssued/Confirmed
   # from 4.4, GoodsReceived + match results from 4.5, SupplierInvoiceCaptured from 4.7). Create 4-2 after

@@ -174,6 +174,17 @@ import {
   reviseCeilingHandler,
 } from './api/v1/purchase-orders.js';
 import {
+  captureSupplierInvoiceHandler,
+  captureDuplicateOverrideHandler,
+  getSupplierInvoiceHandler,
+  listSupplierInvoicesHandler,
+  linkSupplierInvoiceToPoHandler,
+  stageInvoiceIngestionHandler,
+  getInvoiceIngestionHandler,
+  listInvoiceIngestionsHandler,
+  confirmInvoiceIngestionHandler,
+} from './api/v1/supplier-invoices.js';
+import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
   generateBatchPickTasksHandler,
@@ -400,6 +411,20 @@ export function createAppRouter(): Router {
   router.post('/api/v1/purchase-orders/:poId/confirm', confirmPurchaseOrderHandler);
   router.post('/api/v1/purchase-orders/:poId/releases', recordReleaseHandler);
   router.post('/api/v1/purchase-orders/:poId/ceiling', reviseCeilingHandler);
+
+  // Story 4.7: Supplier Invoice Capture
+  router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);
+  router.post('/api/v1/supplier-invoices/duplicate-overrides', captureDuplicateOverrideHandler);
+  router.get('/api/v1/supplier-invoices/:invoiceId', getSupplierInvoiceHandler);
+  router.get('/api/v1/supplier-invoices', listSupplierInvoicesHandler);
+  router.post('/api/v1/supplier-invoices/:invoiceId/link-po', linkSupplierInvoiceToPoHandler);
+  router.post('/api/v1/supplier-invoice-ingestions', stageInvoiceIngestionHandler);
+  router.get('/api/v1/supplier-invoice-ingestions', listInvoiceIngestionsHandler);
+  router.get('/api/v1/supplier-invoice-ingestions/:ingestionId', getInvoiceIngestionHandler);
+  router.post(
+    '/api/v1/supplier-invoice-ingestions/:ingestionId/confirm',
+    confirmInvoiceIngestionHandler,
+  );
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

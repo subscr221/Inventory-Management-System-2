@@ -167,4 +167,20 @@ export const config = {
     // computed in SQL (now() - last_successful_at), never against the JS wall clock.
     freshnessMs: parsePositiveIntEnv('ERP_SYNC_FRESHNESS_MS', 900_000),
   },
+  supplierInvoice: {
+    // Story 4.7 (Binding Scope Decisions): the Indian financial year (April 1 - March 31, IST)
+    // used to derive the duplicate-detection grain from invoice_date. Never derived from upload
+    // or event time. A non-1..12 value fails closed rather than silently wrapping.
+    financialYearStartMonth: (() => {
+      const raw = process.env['SUPPLIER_INVOICE_FY_START_MONTH'];
+      if (raw === undefined || raw.trim() === '') return 4;
+      const parsed = Number(raw);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 12) {
+        throw new Error(
+          `Invalid SUPPLIER_INVOICE_FY_START_MONTH "${raw}": must be an integer 1-12.`,
+        );
+      }
+      return parsed;
+    })(),
+  },
 } as const;

@@ -100,6 +100,11 @@ import {
   assertPurchaseOrderShape,
   applyPurchaseOrderProjection,
 } from '../compliance/purchase-order.js';
+import {
+  assertSupplierInvoiceShape,
+  applySupplierInvoiceProjection,
+  resolveSupplierInvoiceDuplicateConflict,
+} from '../compliance/supplier-invoice.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -472,6 +477,9 @@ export async function persistEvent(
   // Story 4.4: purchase order shape validation is non-DB and runs with the other pre-transaction
   // asserts, so a malformed purchase_order event never consumes an idempotency key.
   assertPurchaseOrderShape(envelope);
+  // Story 4.7: supplier invoice / invoice-ingestion shape validation is non-DB and runs with the
+  // other pre-transaction asserts, so a malformed invoice event never consumes an idempotency key.
+  assertSupplierInvoiceShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -705,6 +713,10 @@ export async function persistEvent(
     // Story 4.4: purchase order projection runs inside this same transaction so the PO row,
     // its lines, the outbound message, and the domain_events insert commit or roll back together.
     await applyPurchaseOrderProjection(envelope, client, eventId);
+    // Story 4.7: supplier invoice capture / file-ingestion review projection runs inside this
+    // same transaction so the invoice header, lines, ingestion row, and the domain_events insert
+    // commit or roll back together.
+    await applySupplierInvoiceProjection(envelope, client, eventId);
 
     let nextVersion: number;
 
@@ -838,6 +850,54 @@ export async function persistEvent(
                 ? envelope.payload['stock_class']
                 : null,
           },
+        );
+      } else if (constraint === 'supplier_invoice_pkey') {
+        // Concurrent second writer racing the seam's getSupplierInvoiceById pre-check on the same
+        // invoice_id. The serial case is already a mapped 409 in the seam; this maps the race.
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'A supplier invoice with this invoice_id already exists',
+          {
+            invoice_id:
+              typeof envelope.payload['invoice_id'] === 'string'
+                ? envelope.payload['invoice_id']
+                : null,
+          },
+        );
+      } else if (
+        constraint === 'uq_supplier_invoice_ingestion_attachment_ref' ||
+        constraint === 'supplier_invoice_ingestion_pkey'
+      ) {
+        // The ingestion unique index guards re-ingesting the SAME uploaded artifact (a staging
+        // retry after a timed-out call lands here) - a stable 409, never a raw PG 500, and never
+        // treated as a business duplicate of the invoice itself (Binding Scope Decisions).
+        throw new AppError(
+          409,
+          'INVOICE_ATTACHMENT_ALREADY_STAGED',
+          'This attachment reference has already been staged for review',
+          {
+            attachment_ref:
+              typeof envelope.payload['attachment_ref'] === 'string'
+                ? envelope.payload['attachment_ref']
+                : null,
+            ingestion_id:
+              typeof envelope.payload['ingestion_id'] === 'string'
+                ? envelope.payload['ingestion_id']
+                : null,
+          },
+        );
+      } else if (constraint === 'uq_supplier_invoice_duplicate_grain') {
+        // Task 3.6: the partial unique index is the final concurrency guard for AC3's ordinary
+        // duplicate block. The transaction is already rolled back here, so this runs a fresh,
+        // safe query against supplier_invoice by the attempted grain (never the generic
+        // domain_events lookup) and returns the same detail shape as the seam's own pre-check.
+        const details = await resolveSupplierInvoiceDuplicateConflict(envelope.payload);
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'An invoice with this supplier GSTIN, invoice number, and financial year already exists',
+          details ?? {},
         );
       } else if (constraint === 'uq_replenishment_recommendation_open_signal') {
         throw new AppError(

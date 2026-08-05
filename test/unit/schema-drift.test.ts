@@ -551,6 +551,61 @@ const EXPECTED = [
     indexes: ['idx_po_outbound_po_id'],
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 4.7: Supplier Invoice Capture
+  {
+    canonical: 'read/projections/supplier_invoice.sql',
+    table: 'supplier_invoice',
+    constraints: [
+      'chk_supplier_invoice_status',
+      'chk_supplier_invoice_capture_method',
+      'chk_supplier_invoice_status_po_pairing',
+      'chk_supplier_invoice_duplicate_pairing',
+      'chk_supplier_invoice_subtotal_non_negative',
+      'chk_supplier_invoice_cgst_non_negative',
+      'chk_supplier_invoice_sgst_non_negative',
+      'chk_supplier_invoice_igst_non_negative',
+      'chk_supplier_invoice_cess_non_negative',
+      'chk_supplier_invoice_total_non_negative',
+      'chk_supplier_invoice_msme_classification',
+    ],
+    indexes: [
+      'uq_supplier_invoice_duplicate_grain',
+      'idx_supplier_invoice_unmatched',
+      'idx_supplier_invoice_supplier_date',
+      'idx_supplier_invoice_po',
+      'idx_supplier_invoice_site_status',
+      'idx_supplier_invoice_gst_recon',
+    ],
+  },
+  {
+    canonical: 'read/projections/supplier_invoice_line.sql',
+    table: 'supplier_invoice_line',
+    constraints: [
+      'uq_supplier_invoice_line_no',
+      'chk_supplier_invoice_line_qty_positive',
+      'chk_supplier_invoice_line_amounts_non_negative',
+    ],
+    indexes: [
+      'idx_supplier_invoice_line_sku',
+      'idx_supplier_invoice_line_po_line',
+      'idx_supplier_invoice_line_invoice_id',
+    ],
+  },
+  {
+    canonical: 'read/projections/supplier_invoice_ingestion.sql',
+    table: 'supplier_invoice_ingestion',
+    constraints: [
+      'chk_supplier_invoice_ingestion_format',
+      'chk_supplier_invoice_ingestion_review_status',
+      'chk_supplier_invoice_ingestion_byte_size_positive',
+      'chk_supplier_invoice_ingestion_reviewed_pairing',
+    ],
+    indexes: [
+      'uq_supplier_invoice_ingestion_attachment_ref',
+      'idx_supplier_invoice_ingestion_review_status',
+      'idx_supplier_invoice_ingestion_resulting_invoice',
+    ],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

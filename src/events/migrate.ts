@@ -61,6 +61,9 @@ const MIGRATIONS = [
   '../../read/projections/purchase_order.sql',
   '../../read/projections/purchase_order_line.sql',
   '../../read/projections/po_outbound_message.sql',
+  '../../read/projections/supplier_invoice.sql',
+  '../../read/projections/supplier_invoice_line.sql',
+  '../../read/projections/supplier_invoice_ingestion.sql',
 ];
 
 async function migrate(): Promise<void> {

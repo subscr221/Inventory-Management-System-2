@@ -3900,3 +3900,371 @@ BEGIN
     GRANT SELECT ON po_outbound_message TO readonly_user;
   END IF;
 END $$;
+
+-- MUST stay identical to read/projections/supplier_invoice.sql (canonical source).
+-- Supplier invoice header read model (Story 4.7). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It carries
+-- its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve reads/writes as
+-- app_user without depending on deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates
+-- this content for first-boot container init - change both files together. Every statement is
+-- idempotent (IF NOT EXISTS / guarded DO blocks) so the file can be re-applied to a live database
+-- safely.
+--
+-- Derived state ONLY: rows are derived exclusively at persist time from supplier_invoice.* and
+-- invoice_ingestion.* domain events; mutation happens exclusively through persistEvent, which
+-- applies this projection inside the SAME transaction as the domain_events insert. Status
+-- vocabulary is the two AC values (unmatched, captured). uq_supplier_invoice_duplicate_grain is
+-- the final concurrency guard for AC3's ordinary-path duplicate block: it is a PARTIAL unique
+-- index (only rows with duplicate_of_invoice_id IS NULL participate), so an evidenced override
+-- row never collides with the original it overrides. GST/monetary columns are exact NUMERIC -
+-- never floating point.
+
+CREATE TABLE IF NOT EXISTS supplier_invoice (
+  invoice_id                     UUID PRIMARY KEY,
+  supplier_id                    UUID NOT NULL,
+  supplier_gstin_ext             TEXT NOT NULL,
+  invoice_number_ext             TEXT NOT NULL,
+  invoice_number_normalized      TEXT NOT NULL,
+  invoice_date                   DATE NOT NULL,
+  financial_year_start           INTEGER NOT NULL,
+  po_id                          UUID,
+  site_id                        UUID,
+  business_stream                TEXT,
+  status                         TEXT NOT NULL DEFAULT 'unmatched',
+  currency                       TEXT NOT NULL DEFAULT 'INR',
+  recipient_gstin_ext            TEXT,
+  irn_ext                        TEXT,
+  subtotal                       NUMERIC(14,2),
+  cgst_total                     NUMERIC(14,2),
+  sgst_total                     NUMERIC(14,2),
+  igst_total                     NUMERIC(14,2),
+  cess_total                     NUMERIC(14,2),
+  total_value                    NUMERIC(14,2),
+  msme_classification_at_capture TEXT,
+  statutory_due_date             DATE,
+  statutory_due_rule_version     TEXT,
+  duplicate_of_invoice_id        UUID,
+  duplicate_override_reason      TEXT,
+  capture_method                 TEXT,
+  ingestion_id                   UUID,
+  captured_by                    UUID NOT NULL,
+  captured_at                    TIMESTAMPTZ NOT NULL,
+  correlation_id                 UUID,
+  source_event_id                UUID NOT NULL,
+  created_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_supplier_invoice_status CHECK (status IN ('unmatched','captured')),
+  CONSTRAINT chk_supplier_invoice_capture_method CHECK (capture_method IN ('manual','file')),
+  CONSTRAINT chk_supplier_invoice_status_po_pairing CHECK (
+    (status = 'unmatched' AND po_id IS NULL AND site_id IS NULL AND business_stream IS NULL)
+    OR (status = 'captured' AND po_id IS NOT NULL AND site_id IS NOT NULL AND business_stream IS NOT NULL)
+  ),
+  CONSTRAINT chk_supplier_invoice_duplicate_pairing CHECK (
+    (duplicate_of_invoice_id IS NULL AND duplicate_override_reason IS NULL)
+    OR (duplicate_of_invoice_id IS NOT NULL AND duplicate_override_reason IS NOT NULL AND btrim(duplicate_override_reason) <> '')
+  ),
+  CONSTRAINT chk_supplier_invoice_subtotal_non_negative CHECK (subtotal IS NULL OR subtotal >= 0),
+  CONSTRAINT chk_supplier_invoice_cgst_non_negative CHECK (cgst_total IS NULL OR cgst_total >= 0),
+  CONSTRAINT chk_supplier_invoice_sgst_non_negative CHECK (sgst_total IS NULL OR sgst_total >= 0),
+  CONSTRAINT chk_supplier_invoice_igst_non_negative CHECK (igst_total IS NULL OR igst_total >= 0),
+  CONSTRAINT chk_supplier_invoice_cess_non_negative CHECK (cess_total IS NULL OR cess_total >= 0),
+  CONSTRAINT chk_supplier_invoice_total_non_negative CHECK (total_value IS NULL OR total_value >= 0),
+  CONSTRAINT chk_supplier_invoice_msme_classification CHECK (
+    msme_classification_at_capture IS NULL
+    OR msme_classification_at_capture IN ('micro','small','medium','not_msme')
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_invoice_duplicate_grain
+  ON supplier_invoice (supplier_gstin_ext, invoice_number_normalized, financial_year_start)
+  WHERE duplicate_of_invoice_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_unmatched ON supplier_invoice (status) WHERE status = 'unmatched';
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_supplier_date ON supplier_invoice (supplier_id, invoice_date);
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_po ON supplier_invoice (po_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_site_status ON supplier_invoice (site_id, status);
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_gst_recon ON supplier_invoice (supplier_gstin_ext, financial_year_start);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_status'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_status CHECK (status IN ('unmatched','captured'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_capture_method'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_capture_method CHECK (capture_method IN ('manual','file'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_status_po_pairing'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_status_po_pairing CHECK (
+        (status = 'unmatched' AND po_id IS NULL AND site_id IS NULL AND business_stream IS NULL)
+        OR (status = 'captured' AND po_id IS NOT NULL AND site_id IS NOT NULL AND business_stream IS NOT NULL)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_duplicate_pairing'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_duplicate_pairing CHECK (
+        (duplicate_of_invoice_id IS NULL AND duplicate_override_reason IS NULL)
+        OR (duplicate_of_invoice_id IS NOT NULL AND duplicate_override_reason IS NOT NULL AND btrim(duplicate_override_reason) <> '')
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_subtotal_non_negative'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_subtotal_non_negative CHECK (subtotal IS NULL OR subtotal >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_cgst_non_negative'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_cgst_non_negative CHECK (cgst_total IS NULL OR cgst_total >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_sgst_non_negative'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_sgst_non_negative CHECK (sgst_total IS NULL OR sgst_total >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_igst_non_negative'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_igst_non_negative CHECK (igst_total IS NULL OR igst_total >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_cess_non_negative'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_cess_non_negative CHECK (cess_total IS NULL OR cess_total >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_total_non_negative'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_total_non_negative CHECK (total_value IS NULL OR total_value >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_msme_classification'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_msme_classification CHECK (
+        msme_classification_at_capture IS NULL
+        OR msme_classification_at_capture IN ('micro','small','medium','not_msme')
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON supplier_invoice TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON supplier_invoice TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/supplier_invoice_line.sql (canonical source).
+-- Supplier invoice line read model (Story 4.7). CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent.
+--
+-- Derived state ONLY: rows are derived exclusively at persist time from supplier_invoice.* domain events;
+-- mutation happens exclusively through persistEvent inside the same transaction as the
+-- domain_events insert. Follows the purchase_order.sql / purchase_order_line.sql header-plus-line
+-- precedent. No FK to supplier_invoice (same-transaction inserts).
+
+CREATE TABLE IF NOT EXISTS supplier_invoice_line (
+  invoice_line_id   UUID PRIMARY KEY,
+  invoice_id        UUID NOT NULL,
+  line_no           INTEGER NOT NULL,
+  po_line_id        UUID,
+  sku               TEXT NOT NULL,
+  quantity          NUMERIC(14,3) NOT NULL,
+  uom               TEXT NOT NULL,
+  unit_price        NUMERIC(14,4) NOT NULL,
+  taxable_value     NUMERIC(14,2) NOT NULL,
+  cgst_amount       NUMERIC(14,2) NOT NULL DEFAULT 0,
+  sgst_amount       NUMERIC(14,2) NOT NULL DEFAULT 0,
+  igst_amount       NUMERIC(14,2) NOT NULL DEFAULT 0,
+  cess_amount       NUMERIC(14,2) NOT NULL DEFAULT 0,
+  line_total        NUMERIC(14,2) NOT NULL,
+  CONSTRAINT uq_supplier_invoice_line_no UNIQUE (invoice_id, line_no),
+  CONSTRAINT chk_supplier_invoice_line_qty_positive CHECK (quantity > 0),
+  CONSTRAINT chk_supplier_invoice_line_amounts_non_negative CHECK (
+    unit_price >= 0 AND taxable_value >= 0 AND cgst_amount >= 0 AND sgst_amount >= 0
+    AND igst_amount >= 0 AND cess_amount >= 0 AND line_total >= 0
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_line_sku ON supplier_invoice_line (sku);
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_line_po_line ON supplier_invoice_line (po_line_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_line_invoice_id ON supplier_invoice_line (invoice_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_supplier_invoice_line_no'
+      AND conrelid = 'supplier_invoice_line'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice_line
+      ADD CONSTRAINT uq_supplier_invoice_line_no UNIQUE (invoice_id, line_no);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_line_qty_positive'
+      AND conrelid = 'supplier_invoice_line'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice_line
+      ADD CONSTRAINT chk_supplier_invoice_line_qty_positive CHECK (quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_line_amounts_non_negative'
+      AND conrelid = 'supplier_invoice_line'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice_line
+      ADD CONSTRAINT chk_supplier_invoice_line_amounts_non_negative CHECK (
+        unit_price >= 0 AND taxable_value >= 0 AND cgst_amount >= 0 AND sgst_amount >= 0
+        AND igst_amount >= 0 AND cess_amount >= 0 AND line_total >= 0
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON supplier_invoice_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON supplier_invoice_line TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/supplier_invoice_ingestion.sql (canonical source).
+-- Supplier invoice ingestion (file-review) read model (Story 4.7). CANONICAL definition, applied
+-- by src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this
+-- content for first-boot container init - change both files together. Every statement is
+-- idempotent.
+--
+-- Derived state ONLY: rows are derived exclusively at persist time from invoice_ingestion.* domain events.
+-- Binary bytes never enter this table - only an immutable attachment reference, its SHA-256
+-- hash, detected MIME, byte size, and the trusted extraction boundary's draft JSON (Binding
+-- Scope Decisions: no binary attachment store is invented here). The attachment_ref unique index
+-- guards against re-ingesting the SAME uploaded artifact twice; it is NOT a business duplicate
+-- decision (that is the supplier_invoice duplicate grain) - a genuinely reused attachment
+-- reference belongs to the SAME ingestion attempt, never a second one.
+
+CREATE TABLE IF NOT EXISTS supplier_invoice_ingestion (
+  ingestion_id        UUID PRIMARY KEY,
+  source_format       TEXT NOT NULL,
+  attachment_ref       TEXT NOT NULL,
+  sha256_hash         TEXT NOT NULL,
+  detected_mime       TEXT NOT NULL,
+  byte_size           BIGINT NOT NULL,
+  extracted_draft     JSONB NOT NULL,
+  review_status       TEXT NOT NULL DEFAULT 'review-required',
+  uploaded_by         UUID NOT NULL,
+  uploaded_at         TIMESTAMPTZ NOT NULL,
+  reviewed_by         UUID,
+  reviewed_at         TIMESTAMPTZ,
+  correction_summary  JSONB,
+  resulting_invoice_id UUID,
+  correlation_id      UUID,
+  source_event_id     UUID NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_supplier_invoice_ingestion_format CHECK (source_format IN ('pdf','csv','xml')),
+  CONSTRAINT chk_supplier_invoice_ingestion_review_status CHECK (review_status IN ('review-required','reviewed')),
+  CONSTRAINT chk_supplier_invoice_ingestion_byte_size_positive CHECK (byte_size > 0),
+  CONSTRAINT chk_supplier_invoice_ingestion_reviewed_pairing CHECK (
+    (review_status = 'review-required' AND reviewed_by IS NULL AND reviewed_at IS NULL)
+    OR (review_status = 'reviewed' AND reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_supplier_invoice_ingestion_attachment_ref
+  ON supplier_invoice_ingestion (attachment_ref);
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_ingestion_review_status ON supplier_invoice_ingestion (review_status);
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_ingestion_resulting_invoice ON supplier_invoice_ingestion (resulting_invoice_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_ingestion_format'
+      AND conrelid = 'supplier_invoice_ingestion'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice_ingestion
+      ADD CONSTRAINT chk_supplier_invoice_ingestion_format CHECK (source_format IN ('pdf','csv','xml'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_ingestion_review_status'
+      AND conrelid = 'supplier_invoice_ingestion'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice_ingestion
+      ADD CONSTRAINT chk_supplier_invoice_ingestion_review_status CHECK (review_status IN ('review-required','reviewed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_ingestion_byte_size_positive'
+      AND conrelid = 'supplier_invoice_ingestion'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice_ingestion
+      ADD CONSTRAINT chk_supplier_invoice_ingestion_byte_size_positive CHECK (byte_size > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_ingestion_reviewed_pairing'
+      AND conrelid = 'supplier_invoice_ingestion'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice_ingestion
+      ADD CONSTRAINT chk_supplier_invoice_ingestion_reviewed_pairing CHECK (
+        (review_status = 'review-required' AND reviewed_by IS NULL AND reviewed_at IS NULL)
+        OR (review_status = 'reviewed' AND reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON supplier_invoice_ingestion TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON supplier_invoice_ingestion TO readonly_user;
+  END IF;
+END $$;
