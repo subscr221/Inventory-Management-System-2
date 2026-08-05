@@ -254,7 +254,8 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-03'
+last_updated: '2026-08-05'
+# story 4-7 created 2026-08-05 via create-story workflow: Supplier Invoice Capture; manual and trusted-boundary PDF/CSV/XML ingestion with mandatory review, supplier GSTIN + normalized invoice number + Indian financial-year duplicate grain, evidenced override, unmatched queue and native PO linking, exact GST/NUMERIC contracts, attachment provenance metadata, Story 4.5/4.6 integration hooks, central procurement-stream enforcement, and no edge path; ready-for-dev
 # story 4-4 created 2026-08-02 via create-story workflow: Purchase Order Management (FR-P-05); standard/
 #   blanket/contract POs drafted from an approved Story 4.3 indent against an active supplier, 7 new
 #   purchase_order.* events on the 'procurement' stream (only .drafted requiresBusinessStream true),
@@ -603,7 +604,7 @@ development_status:
   4-4-purchase-order-management: done
   4-5-goods-receipt-and-three-way-match: backlog
   4-6-msme-compliance-tracking: backlog
-  4-7-supplier-invoice-capture: backlog
+  4-7-supplier-invoice-capture: ready-for-dev
   epic-4-retrospective: optional
   # story 4-2 skipped for now: epics.md sequences it LAST in epic 4 (consumes PurchaseOrderIssued/Confirmed
   # from 4.4, GoodsReceived + match results from 4.5, SupplierInvoiceCaptured from 4.7). Create 4-2 after
