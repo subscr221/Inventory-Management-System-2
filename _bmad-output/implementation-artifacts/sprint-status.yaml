@@ -1,5 +1,16 @@
 # generated: 2026-07-12
 # last_updated: '2026-08-02'
+# story 5-1 created 2026-08-05 via create-story workflow: Multi-Level BOM Creation (FR-B-01, FR-B-03,
+#   FR-B-13, FR-B-14). Opens Epic 5 (epic-5 backlog -> in-progress). Draft-only scope: bom, bom_revision,
+#   bom_line, and a phantom-resolved bom_structure projection on a new 'engineering' event stream
+#   (bom.drafted, bom_line.added, bom_line.amended), business stream derived from the governed parent
+#   item_master. Enforces EFFECTIVITY_OVERLAP via bom_revision row lock plus explicit predicate (no
+#   btree_gist), BOM_CYCLE_DETECTED and BOM_DEPTH_EXCEEDED via depth-bounded recursive CTE, exact NUMERIC
+#   scrap/quantity/conversion/yield validation, and co-product/by-product output lines. Binding decision:
+#   item_master has no 'released' state (status is active|inactive only), so the A-11 condition is
+#   evaluated as status='active' behind one exported predicate and recorded per line as blocking_release
+#   for Story 5.2's release gate. Release, ECO, alternates, explosion, and cost rollups stay out of scope;
+#   ready-for-dev
 # epic statuses updated 2026-08-01: epics 1, 2, 3 all moved from in-progress to done (all stories complete); three epics form the completed Phase 1 pilot foundation slice and Epic 5 is next in the pilot build order
 # story 3-10 code review 2026-08-01 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
 #   Auditor, run in parallel against baseline c46fc21c; all three returned findings). 1 decision
@@ -640,8 +651,8 @@ development_status:
   # those land. 4-3 contexted instead on 2026-08-02.
 
   # --- Epic 5: BOM and Engineering Change Management  [PILOT] ---
-  epic-5: backlog
-  5-1-multi-level-bom-creation: backlog   # PILOT
+  epic-5: in-progress
+  5-1-multi-level-bom-creation: ready-for-dev   # PILOT
   5-2-bom-lifecycle-and-immutability: backlog   # PILOT
   5-3-eco-workflow-and-where-used-impact: backlog   # PILOT
   5-4-randd-draft-bom-regime: backlog   # PILOT
