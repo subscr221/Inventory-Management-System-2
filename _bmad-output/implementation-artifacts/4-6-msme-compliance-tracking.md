@@ -98,6 +98,7 @@ Code review 2026-08-06 Group 3 (HTTP surface: msme.ts routes, supplier MSME capt
 - [x] [Review][Patch] Non-string revalidation_due_date (number, array, null) was silently overwritten with the one-year default and returned 200 instead of a client error [src/api/v1/suppliers.ts:684] - fixed: a present-but-non-string value now rejects with 400 INVALID_PARAMS before persistEvent
 - [x] [Review][Patch] Past-date guard on revalidation_due_date compared against UTC today while every other calendar comparison in the module uses IST [src/compliance/msme.ts:214] - fixed: guard now uses istCalendarDate(new Date().toISOString())
 - [x] [Review][Patch] Sweep-1 revalidation alert set occurred_at to wall-clock now, breaking the business_date anchor invariant the Group 2 fix established for the other two sweeps (a replayed check for a past date would emit an alert dated now) [src/compliance/msme.ts:530] - fixed: occurred_at anchored on scope.business_date like msmeEventMetadata
+- [x] [Review][Patch] AC7 lapse fixture verified the supplier with revalidation_due_date of IST yesterday and expected 200, which the Group 2 past-date guard now rejects with UDYAM_INVALID; surfaced by the full-suite gate, not by any review layer [test/integration/story-4-6.test.ts:854] - fixed: fixture verifies with a future date and backdates udyam_revalidation_due_date directly in SQL
 - [x] [Review][Decision] PO draft warning is assembled inline and spread into the 201 success envelope rather than thrown as a named MsmeSuspendedWarning class on the ZoneIncompatibleWarning catch-and-wrap precedent [src/api/v1/purchase-orders.ts:217] - accepted: AC7 functional contract held (warning_code MSME_SUPPLIER_SUSPENDED rides the success envelope, drafting persists, both response branches covered); the deviation is documented in the code comment and the check lives at handler level where no throw is needed
 - [x] [Review][Defer] MSME ageing report has no pagination or row limit; response size grows with MSME invoice volume [src/read/projections/msme_ageing.ts:39] - deferred, pre-existing repo-wide pattern (all Phase 1 list endpoints are unbounded)
 
@@ -266,3 +267,9 @@ integration suite.
   and invoice capture/link (closes Story 4.7 AC 5), classification-tagged ageing report with
   s.43B(h)/s.16 exposure, ERP ageing feed run, daily compliance check (revalidation alert, lapse
   suspension, breach flag and escalation), full integration suite (17 tests).
+- 2026-08-06: Adversarial code review complete (3 groups, Blind Hunter + Edge Case Hunter +
+  Acceptance Auditor). 15 findings patched across the three groups, 4 deferred as pre-existing
+  repo-wide patterns, remainder dismissed against canonical conventions. Gates green:
+  npx tsc --noEmit clean, npm run lint clean, full suite 630/644 with only the 14 documented
+  pre-existing idempotency 201-vs-409 failures, spine acceptance contract 6/6. Status moved
+  review to done.

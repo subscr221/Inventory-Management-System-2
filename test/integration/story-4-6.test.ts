@@ -851,9 +851,16 @@ describe('Story 4.6 MSME Compliance Tracking Integration Tests', () => {
       udyam_number_ext: 'UDYAM-WB-19-9753197',
       msme_classification: 'micro',
       certificate_reference: `CERT-LAPS-${run}`,
-      revalidation_due_date: addDays(istToday, -1),
+      revalidation_due_date: addDays(istToday, 1),
     });
     assert.strictEqual(verify.status, 200, JSON.stringify(verify.body));
+
+    // The verify gate (Group 2 review fix) rejects a past revalidation date on the write path,
+    // so the lapsed fixture verifies with a valid date and backdates the projection row in SQL.
+    await getAdminPool().query(
+      `UPDATE supplier SET udyam_revalidation_due_date = $2 WHERE supplier_id = $1`,
+      [supplierLapsed, addDays(istToday, -1)],
+    );
 
     // Stamp a due date BEFORE the lapse so conservative treatment is observable.
     const { poId: prePoId } = await createIssuedPo(supplierLapsed, 'AC7PRE');
