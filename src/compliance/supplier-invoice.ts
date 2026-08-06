@@ -20,6 +20,7 @@ import type { SupplierInvoiceRow } from '../read/projections/supplier_invoice.js
 import { getSupplierById } from '../read/projections/supplier.js';
 import { getPurchaseOrderById, getPurchaseOrderLines } from '../read/projections/purchase_order.js';
 import type { PurchaseOrderRow, PurchaseOrderLineRow } from '../read/projections/purchase_order.js';
+import { getSupplierMsmeContext, computeStatutoryDueDate } from './msme.js';
 
 const PROCUREMENT_STREAM_TYPES = new Set(['procurement']);
 const SUPPLIER_INVOICE_EVENT_TYPES = new Set([
@@ -1138,6 +1139,26 @@ async function insertCapturedOrUnmatchedInvoice(
   const now = envelope.metadata.occurred_at;
   const capturedBy = envelope.metadata.actor.user_id;
 
+  // Story 4.6 AC3a: immutable capture-time MSME snapshot, anchored on invoice_date (calendar-date
+  // arithmetic, never elapsed milliseconds), via the single accessor and dated rule contract. A
+  // suspended-pending-reverification supplier still stamps (conservative treatment, AC7);
+  // non-MSME suppliers keep all three fields null.
+  const msmeCtx = await getSupplierMsmeContext(supplier.supplier_id, client);
+  const msmeStamp =
+    msmeCtx &&
+    msmeCtx.msme_classification !== null &&
+    (msmeCtx.msme_status === 'active' || msmeCtx.msme_status === 'suspended-pending-reverification')
+      ? {
+          msme_classification_at_capture: msmeCtx.msme_classification,
+          statutory_due_date: computeStatutoryDueDate(invoiceDate, msmeCtx.credit_period_days),
+          statutory_due_rule_version: msmeCtx.rule_version,
+        }
+      : {
+          msme_classification_at_capture: null,
+          statutory_due_date: null,
+          statutory_due_rule_version: null,
+        };
+
   // No 23505 catch here: the serial invoice_id collision is already rejected by the
   // getSupplierInvoiceById pre-check above, and a concurrent supplier_invoice_pkey race must
   // propagate to src/events/store.ts's constraint mapping. Swallowing it would return from an
@@ -1164,11 +1185,9 @@ async function insertCapturedOrUnmatchedInvoice(
       igst_total: p['igst_total'] !== undefined ? String(p['igst_total']) : null,
       cess_total: p['cess_total'] !== undefined ? String(p['cess_total']) : null,
       total_value: String(p['total_value'] as number),
-      // Story 4.6 (MSME classification/statutory due date) is not yet implemented in this
-      // codebase - Task 7.4 requires these fields to stay null rather than guess (AC5).
-      msme_classification_at_capture: null,
-      statutory_due_date: null,
-      statutory_due_rule_version: null,
+      msme_classification_at_capture: msmeStamp.msme_classification_at_capture,
+      statutory_due_date: msmeStamp.statutory_due_date,
+      statutory_due_rule_version: msmeStamp.statutory_due_rule_version,
       duplicate_of_invoice_id: duplicateOfInvoiceId,
       duplicate_override_reason: duplicateOfInvoiceId ? (overrideReason as string) : null,
       capture_method: p['capture_method'] as 'manual' | 'file',
@@ -1281,17 +1300,15 @@ async function applySupplierInvoicePoLinked(
   );
   assertLinesBelongToPo(invoiceLinesResult.rows as Record<string, unknown>[], poLines, false);
 
+  // Story 4.6 AC3a (amended by review decision 2): the MSME snapshot is immutable after capture.
+  // The po_link path no longer re-stamps msme_classification_at_capture / statutory_due_date /
+  // statutory_due_rule_version; a supplier that gains MSME status between capture and link keeps
+  // the capture-time nulls. The three MSME fields are absent from updateSupplierInvoicePoLink.
   await updateSupplierInvoicePoLink(
     invoiceId,
     po.po_id,
     po.site_id,
     po.business_stream,
-    {
-      // Story 4.6 absent - Task 7.4 leaves the MSME snapshot null even at link time.
-      msme_classification_at_capture: null,
-      statutory_due_date: null,
-      statutory_due_rule_version: null,
-    },
     client,
   );
 }

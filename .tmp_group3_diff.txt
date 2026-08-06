@@ -1,0 +1,1615 @@
+diff --git a/_bmad-output/implementation-artifacts/sprint-status.yaml b/_bmad-output/implementation-artifacts/sprint-status.yaml
+index 9f38561..cecf160 100644
+--- a/_bmad-output/implementation-artifacts/sprint-status.yaml
++++ b/_bmad-output/implementation-artifacts/sprint-status.yaml
+@@ -643,7 +643,7 @@ development_status:
+   4-3-purchase-requisition-and-indent-loop: done
+   4-4-purchase-order-management: done
+   4-5-goods-receipt-and-three-way-match: backlog
+-  4-6-msme-compliance-tracking: backlog
++  4-6-msme-compliance-tracking: review
+   4-7-supplier-invoice-capture: done
+   epic-4-retrospective: optional
+   # story 4-2 skipped for now: epics.md sequences it LAST in epic 4 (consumes PurchaseOrderIssued/Confirmed
+diff --git a/src/api/v1/purchase-orders.ts b/src/api/v1/purchase-orders.ts
+index 04f4ee3..a88a909 100644
+--- a/src/api/v1/purchase-orders.ts
++++ b/src/api/v1/purchase-orders.ts
+@@ -214,6 +214,23 @@ export const draftPurchaseOrderBase: RouteHandler = async (req, res, _params) =>
+   const po = await getPurchaseOrderById(poId);
+   const poLines = await getPurchaseOrderLines(poId);
+ 
++  // Story 4.6 AC7: a supplier whose Udyam revalidation lapsed does NOT block drafting - the
++  // warning rides the success envelope (ZoneIncompatibleWarning warning-not-error precedent,
++  // except nothing here is withheld from persistence).
++  const msmeWarning =
++    supplier.msme_status === 'suspended-pending-reverification'
++      ? {
++          warning: {
++            warning_code: 'MSME_SUPPLIER_SUSPENDED',
++            message:
++              `Supplier "${supplier.legal_name}" has an MSME flag suspended pending Udyam ` +
++              're-verification. Statutory due dates already stamped remain in force; re-verify ' +
++              'the registration via POST /api/v1/suppliers/:supplierId/msme.',
++            details: { supplier_id: supplierId, msme_status: supplier.msme_status },
++          },
++        }
++      : {};
++
+   if (po?.status === 'pending-approval') {
+     sendJson(res, 201, {
+       event_id: persisted.event_id,
+@@ -226,6 +243,7 @@ export const draftPurchaseOrderBase: RouteHandler = async (req, res, _params) =>
+         approver_actor_id: po.approver_actor_id,
+         doa_entry_id: po.doa_entry_id,
+       },
++      ...msmeWarning,
+     });
+     return;
+   }
+@@ -234,6 +252,7 @@ export const draftPurchaseOrderBase: RouteHandler = async (req, res, _params) =>
+     event_id: persisted.event_id,
+     purchase_order: po ?? null,
+     lines: poLines,
++    ...msmeWarning,
+   });
+ };
+ 
+diff --git a/src/api/v1/suppliers.ts b/src/api/v1/suppliers.ts
+index 68cd056..e011f24 100644
+--- a/src/api/v1/suppliers.ts
++++ b/src/api/v1/suppliers.ts
+@@ -13,6 +13,7 @@ import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
+ import { randomUUID } from 'node:crypto';
+ 
+ import { getSupplierById, listSuppliers } from '../../read/projections/supplier.js';
++import { istCalendarDate } from '../../compliance/msme.js';
+ import {
+   findMatchingDoaEntry,
+   findRoleHolder,
+@@ -647,6 +648,84 @@ export const deactivateSupplierBase: RouteHandler = async (req, res, params) =>
+   });
+ };
+ 
++/**
++ * Story 4.6 AC1/AC6: capture (or re-verify) a supplier's MSME status from the officer's
++ * verification of the uploaded Udyam certificate. Format/certificate validation lives in
++ * assertMsmeShape on the central write path (UDYAM_INVALID rejects BEFORE any write, so a failed
++ * save leaves the supplier untagged); this handler only resolves the supplier, defaults the
++ * revalidation due date, and persists supplier.msme_verified.
++ */
++export const verifySupplierMsmeBase: RouteHandler = async (req, res, params) => {
++  const supplierId = params?.['supplierId'];
++  if (!supplierId) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId is required');
++    return;
++  }
++
++  const supplier = await getSupplierById(supplierId);
++  if (!supplier) {
++    sendRequestError(req, res, 404, 'SUPPLIER_NOT_FOUND', 'Supplier not found', {
++      supplier_id: supplierId,
++    });
++    return;
++  }
++
++  const body = getParsedBody(req) as Record<string, unknown> | undefined;
++  if (!body) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
++    return;
++  }
++
++  const actor = actorContext(req);
++  const now = new Date().toISOString();
++
++  // Default revalidation due date: verified date plus 1 year, as an IST calendar date. Udyam
++  // registrations revalidate annually; the officer may pass an explicit certificate-driven date.
++  const revalidationDueDate =
++    typeof body['revalidation_due_date'] === 'string'
++      ? body['revalidation_due_date']
++      : addOneYear(istCalendarDate(now));
++
++  const persisted = await persistEvent(
++    {
++      stream_type: 'procurement',
++      stream_id: supplierId,
++      event_type: 'supplier.msme_verified',
++      event_id: randomUUID(),
++      payload: {
++        supplier_id: supplierId,
++        udyam_number_ext: body['udyam_number_ext'],
++        msme_classification: body['msme_classification'],
++        certificate_reference: body['certificate_reference'],
++        verified_at: now,
++        revalidation_due_date: revalidationDueDate,
++      },
++      metadata: {
++        correlation_id: randomUUID(),
++        actor: {
++          user_id: actor.userId,
++          role: actor.role,
++          location_id: actor.eventLocationId,
++        },
++        occurred_at: now,
++      },
++    },
++    auditCtxFor(req, actor, 200),
++  );
++
++  const updated = await getSupplierById(supplierId);
++  sendJson(res, 200, {
++    event_id: persisted.event_id,
++    supplier: updated,
++  });
++};
++
++function addOneYear(ymd: string): string {
++  const [year, month, day] = ymd.split('-').map(Number);
++  const d = new Date(Date.UTC(year! + 1, month! - 1, day!));
++  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
++}
++
+ export const createSupplierHandler = requireRole({
+   module: 'procurement',
+   functionScope: 'write',
+@@ -686,3 +765,8 @@ export const deactivateSupplierHandler = requireRole({
+   module: 'procurement',
+   functionScope: 'write',
+ })(deactivateSupplierBase);
++
++export const verifySupplierMsmeHandler = requireRole({
++  module: 'procurement',
++  functionScope: 'write',
++})(verifySupplierMsmeBase);
+diff --git a/src/server.ts b/src/server.ts
+index 4964f0d..961a23e 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -151,6 +151,7 @@ import {
+   rejectOnboardingHandler,
+   updateSupplierHandler,
+   deactivateSupplierHandler,
++  verifySupplierMsmeHandler,
+ } from './api/v1/suppliers.js';
+ import {
+   raiseIndentHandler,
+@@ -184,6 +185,11 @@ import {
+   listInvoiceIngestionsHandler,
+   confirmInvoiceIngestionHandler,
+ } from './api/v1/supplier-invoices.js';
++import {
++  msmeAgeingReportHandler,
++  runMsmeAgeingFeedHandler,
++  runMsmeDailyCheckHandler,
++} from './api/v1/msme.js';
+ import {
+   generatePickTasksHandler,
+   generateWavePickTasksHandler,
+@@ -390,6 +396,8 @@ export function createAppRouter(): Router {
+   router.post('/api/v1/suppliers/:supplierId/onboarding/reject', rejectOnboardingHandler);
+   router.patch('/api/v1/suppliers/:supplierId', updateSupplierHandler);
+   router.post('/api/v1/suppliers/:supplierId/deactivate', deactivateSupplierHandler);
++  // Story 4.6: MSME Compliance Tracking - Udyam verification / re-verification
++  router.post('/api/v1/suppliers/:supplierId/msme', verifySupplierMsmeHandler);
+ 
+   // Story 4.3: Purchase Requisition and Indent Loop
+   router.post('/api/v1/indents', raiseIndentHandler);
+@@ -425,6 +433,10 @@ export function createAppRouter(): Router {
+     '/api/v1/supplier-invoice-ingestions/:ingestionId/confirm',
+     confirmInvoiceIngestionHandler,
+   );
++  // Story 4.6: MSME Compliance Tracking - ageing report, ERP feed run, daily compliance check
++  router.get('/api/v1/compliance/msme/ageing', msmeAgeingReportHandler);
++  router.post('/api/v1/compliance/msme/ageing-feed/run', runMsmeAgeingFeedHandler);
++  router.post('/api/v1/compliance/msme/daily-check', runMsmeDailyCheckHandler);
+ 
+   // Story 3.6: Pick Task Generation and Execution
+   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);
+diff --git a/test/integration/story-1-9.test.ts b/test/integration/story-1-9.test.ts
+index ae48612..b060e19 100644
+--- a/test/integration/story-1-9.test.ts
++++ b/test/integration/story-1-9.test.ts
+@@ -358,6 +358,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
+       'GET /api/v1/supplier-invoice-ingestions',
+       'GET /api/v1/supplier-invoice-ingestions/:ingestionId',
+       'POST /api/v1/supplier-invoice-ingestions/:ingestionId/confirm',
++      // Story 4.6: MSME Compliance Tracking
++      'POST /api/v1/suppliers/:supplierId/msme',
++      'GET /api/v1/compliance/msme/ageing',
++      'POST /api/v1/compliance/msme/ageing-feed/run',
++      'POST /api/v1/compliance/msme/daily-check',
+       'PUT /api/v1/config/audit-log-enabled',
+       'PUT /api/v1/instruments/:id/calibration-status',
+       'PUT /api/v1/lots/:lot_id/quality-hold',
+diff --git a/test/integration/story-4-7.test.ts b/test/integration/story-4-7.test.ts
+index dfb89ca..4e6e790 100644
+--- a/test/integration/story-4-7.test.ts
++++ b/test/integration/story-4-7.test.ts
+@@ -13,10 +13,11 @@ import { fileURLToPath } from 'node:url';
+ // (createAppRouter) with real auth, RBAC, and PostgreSQL. Tests run serially (npm test uses
+ // --test-concurrency=1) and seed their own users/supplier/PO fixtures for isolation.
+ //
+-// Story 4.6 (MSME registration) is NOT implemented in this codebase. AC5 therefore stays an
+-// explicit blocked dependency (Task 7.4/Dev Notes): every assertion here pins
+-// msme_classification_at_capture/statutory_due_date/statutory_due_rule_version to null rather
+-// than fabricating MSME status. Story 4.5 (three-way match) is likewise not implemented, so its
++// Story 4.6 (MSME registration) is now implemented: invoices for MSME-flagged suppliers stamp
++// msme_classification_at_capture/statutory_due_date/statutory_due_rule_version at capture and at
++// link time (AC5 closed via 4.6 AC3a; positive stamping is asserted in story-4-6.test.ts). The
++// suppliers seeded HERE are never MSME-verified, so this file asserts the non-MSME contract: all
++// three fields stay null. Story 4.5 (three-way match) is still not implemented, so its
+ // SOURCE_DOCUMENT_REQUIRED consumer check stays a documented, visibly-blocked gap.
+ 
+ const __dirname = dirname(fileURLToPath(import.meta.url));
+@@ -457,6 +458,7 @@ describe('Story 4.7 Supplier Invoice Capture Integration Tests', () => {
+     assert.strictEqual(invoice['po_id'], poId);
+     assert.strictEqual(invoice['business_stream'], 'production');
+     assert.strictEqual(invoice['total_value'], '5900.00');
++    // Story 4.6 AC3a: this supplier is not MSME-verified, so the snapshot fields stay null.
+     assert.strictEqual(invoice['msme_classification_at_capture'], null);
+     assert.strictEqual(invoice['statutory_due_date'], null);
+     const lines = res.body['lines'] as Record<string, unknown>[];
+@@ -902,7 +904,7 @@ describe('Story 4.7 Supplier Invoice Capture Integration Tests', () => {
+     assert.strictEqual(linked['po_id'], rightPoId);
+     assert.ok(linked['site_id']);
+     assert.strictEqual(linked['business_stream'], 'production');
+-    // AC5 dependency honesty: linking must not fabricate MSME context (Story 4.6 absent).
++    // Story 4.6 AC3a: a non-MSME supplier keeps the snapshot null even at link time.
+     assert.strictEqual(linked['msme_classification_at_capture'], null);
+     assert.strictEqual(linked['statutory_due_date'], null);
+     assert.strictEqual(linked['statutory_due_rule_version'], null);
+diff --git a/src/api/v1/msme.ts b/src/api/v1/msme.ts
+new file mode 100644
+index 0000000..f9a493a
+--- /dev/null
++++ b/src/api/v1/msme.ts
+@@ -0,0 +1,179 @@
++import type { IncomingMessage } from 'node:http';
++import { randomUUID } from 'node:crypto';
++import type { RouteHandler } from '../../middleware/error.js';
++import { sendJson, sendRequestError } from '../../middleware/error.js';
++import {
++  getParsedBody,
++  getAuthContext,
++  getAuthorizedAssignment,
++  getTraceId,
++} from '../../middleware/context.js';
++import { requireRole } from '../../middleware/rbac.js';
++import { persistEvent } from '../../events/store.js';
++import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
++import { config } from '../../config/index.js';
++import { queryMsmeAgeing, getMsmeAgeingFeedById } from '../../read/projections/msme_ageing.js';
++import { isDateString, istCalendarDate, runMsmeComplianceCheck } from '../../compliance/msme.js';
++
++/**
++ * Story 4.6: MSME compliance HTTP surface - the classification-tagged ageing report (AC3/AC8),
++ * the ERP ageing feed run (AC4), and the daily compliance check (AC5/AC7/AC8). The feed run and
++ * daily check are synthetic HTTP triggers (planning-jobs precedent): no cron exists in Phase 1,
++ * a real scheduler calls these endpoints later, and tests drive cycles explicitly.
++ */
++
++const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
++
++interface ActorContext {
++  userId: string;
++  role: string;
++  auditLocationId: string;
++  eventLocationId: string;
++}
++
++function actorContext(req: IncomingMessage): ActorContext {
++  const authContext = getAuthContext(req);
++  const assignment = getAuthorizedAssignment(req);
++  const userId = authContext?.userId ?? NO_LOCATION_UUID;
++  const role = assignment?.role ?? '';
++  const auditLocationId = assignment?.locationId ?? '*';
++  const eventLocationId = auditLocationId === '*' ? NO_LOCATION_UUID : auditLocationId;
++  return { userId, role, auditLocationId, eventLocationId };
++}
++
++function auditCtxFor(
++  req: IncomingMessage,
++  actor: ActorContext,
++  httpStatus: number,
++): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
++  return {
++    trace_id: getTraceId(req) ?? '',
++    user_id: actor.userId,
++    role: actor.role,
++    location_id: actor.auditLocationId,
++    endpoint: req.url ?? '',
++    method: req.method ?? 'POST',
++    http_status: httpStatus,
++  };
++}
++
++// ---------------------------------------------------------------------------
++// GET /api/v1/compliance/msme/ageing?as_of=YYYY-MM-DD
++// ---------------------------------------------------------------------------
++
++export const msmeAgeingReportBase: RouteHandler = async (req, res, _params) => {
++  const url = new URL(req.url ?? '/', 'http://localhost');
++  const asOfParam = url.searchParams.get('as_of');
++  if (asOfParam !== null && !isDateString(asOfParam)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'as_of must be a YYYY-MM-DD calendar date', {
++      as_of: asOfParam,
++    });
++    return;
++  }
++  const asOf = asOfParam ?? istCalendarDate(new Date().toISOString());
++
++  const rows = await queryMsmeAgeing(asOf, config.msme.interestRatePercentAnnual);
++  sendJson(res, 200, {
++    as_of: asOf,
++    rule_version: config.msme.ruleVersion,
++    interest_rate_percent_annual: config.msme.interestRatePercentAnnual,
++    row_count: rows.length,
++    rows,
++  });
++};
++
++// ---------------------------------------------------------------------------
++// POST /api/v1/compliance/msme/ageing-feed/run
++// ---------------------------------------------------------------------------
++
++export const runMsmeAgeingFeedBase: RouteHandler = async (req, res, _params) => {
++  const actor = actorContext(req);
++  const generatedAt = new Date().toISOString();
++  const asOf = istCalendarDate(generatedAt);
++
++  // The applier re-derives the ageing and inserts the ledger row inside the persistEvent
++  // transaction; this pre-count only fills the event payload's row_count.
++  const rows = await queryMsmeAgeing(asOf, config.msme.interestRatePercentAnnual);
++  const feedId = randomUUID();
++
++  const persisted = await persistEvent(
++    {
++      stream_type: 'procurement',
++      stream_id: feedId,
++      event_type: 'msme_ageing_feed.recorded',
++      event_id: randomUUID(),
++      payload: {
++        feed_id: feedId,
++        row_count: rows.length,
++        generated_at: generatedAt,
++      },
++      metadata: {
++        correlation_id: randomUUID(),
++        actor: {
++          user_id: actor.userId,
++          role: actor.role,
++          location_id: actor.eventLocationId,
++        },
++        occurred_at: generatedAt,
++      },
++    },
++    auditCtxFor(req, actor, 201),
++  );
++
++  const feed = await getMsmeAgeingFeedById(feedId);
++  sendJson(res, 201, {
++    event_id: persisted.event_id,
++    feed_id: feedId,
++    row_count: feed?.row_count ?? rows.length,
++    recorded_at: feed?.recorded_at ?? null,
++  });
++};
++
++// ---------------------------------------------------------------------------
++// POST /api/v1/compliance/msme/daily-check
++// ---------------------------------------------------------------------------
++
++export const runMsmeDailyCheckBase: RouteHandler = async (req, res, _params) => {
++  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
++  const businessDateRaw = body['business_date'];
++  if (businessDateRaw !== undefined && !isDateString(businessDateRaw)) {
++    sendRequestError(
++      req,
++      res,
++      400,
++      'INVALID_PARAMS',
++      'business_date must be a YYYY-MM-DD calendar date',
++      { business_date: businessDateRaw },
++    );
++    return;
++  }
++  const businessDate =
++    (businessDateRaw as string | undefined) ?? istCalendarDate(new Date().toISOString());
++
++  const actor = actorContext(req);
++  const result = await runMsmeComplianceCheck({
++    business_date: businessDate,
++    actor: {
++      user_id: actor.userId,
++      role: actor.role,
++      location_id: actor.eventLocationId,
++    },
++    auditCtx: auditCtxFor(req, actor, 200),
++  });
++  sendJson(res, 200, result);
++};
++
++export const msmeAgeingReportHandler: RouteHandler = requireRole({
++  module: 'procurement',
++  functionScope: 'read',
++})(msmeAgeingReportBase);
++
++export const runMsmeAgeingFeedHandler: RouteHandler = requireRole({
++  module: 'procurement',
++  functionScope: 'write',
++})(runMsmeAgeingFeedBase);
++
++export const runMsmeDailyCheckHandler: RouteHandler = requireRole({
++  module: 'procurement',
++  functionScope: 'write',
++})(runMsmeDailyCheckBase);
+diff --git a/src/adapters/erp/msme-ageing-feed.ts b/src/adapters/erp/msme-ageing-feed.ts
+new file mode 100644
+index 0000000..77e611f
+--- /dev/null
++++ b/src/adapters/erp/msme-ageing-feed.ts
+@@ -0,0 +1,60 @@
++/**
++ * MSME ageing feed contract (Story 4.6, AC4 / FR-P-09).
++ *
++ * This module defines the ERP adapter boundary for the MSME-classification-tagged ageing feed
++ * consumed by the ERP-side s.43B(h) disallowance computation. The adapter records the payload
++ * durably in msme_ageing_feed; live transmission to the ERP system is per-deployment
++ * configuration and is NOT implemented here (identical philosophy to po-outbound.ts).
++ */
++
++import type { MsmeAgeingRow } from '../../read/projections/msme_ageing.js';
++
++export interface MsmeAgeingFeedLinePayload {
++  invoice_id: string;
++  invoice_number_ext: string;
++  supplier_id: string;
++  supplier_legal_name: string;
++  msme_classification: 'micro' | 'small' | 'medium';
++  statutory_due_date: string;
++  days_to_due: number;
++  days_overdue: number;
++  statutory_breach: boolean;
++  s43b_exposure: boolean;
++  total_value: string;
++  s16_interest_exposure: string;
++}
++
++export interface MsmeAgeingFeedPayload {
++  feed_type: 'msme_ageing';
++  generated_at: string;
++  row_count: number;
++  lines: MsmeAgeingFeedLinePayload[];
++  correlation_id: string | null;
++}
++
++export function buildMsmeAgeingFeedPayload(
++  ageingRows: MsmeAgeingRow[],
++  generatedAt: string,
++  correlationId: string | null,
++): MsmeAgeingFeedPayload {
++  return {
++    feed_type: 'msme_ageing',
++    generated_at: generatedAt,
++    row_count: ageingRows.length,
++    lines: ageingRows.map((r) => ({
++      invoice_id: r.invoice_id,
++      invoice_number_ext: r.invoice_number_ext,
++      supplier_id: r.supplier_id,
++      supplier_legal_name: r.supplier_legal_name,
++      msme_classification: r.msme_classification,
++      statutory_due_date: r.statutory_due_date,
++      days_to_due: r.days_to_due,
++      days_overdue: r.days_overdue,
++      statutory_breach: r.statutory_breach,
++      s43b_exposure: r.s43b_exposure,
++      total_value: r.total_value,
++      s16_interest_exposure: r.s16_interest_exposure,
++    })),
++    correlation_id: correlationId,
++  };
++}
+diff --git a/test/integration/story-4-6.test.ts b/test/integration/story-4-6.test.ts
+new file mode 100644
+index 0000000..be53abe
+--- /dev/null
++++ b/test/integration/story-4-6.test.ts
+@@ -0,0 +1,1098 @@
++import { describe, it, before, after } from 'node:test';
++import assert from 'node:assert/strict';
++import { randomUUID, createHash } from 'node:crypto';
++import { request as httpRequest, type Server, type IncomingMessage } from 'node:http';
++import type { AddressInfo } from 'node:net';
++import { createAppRouter, createAppServer } from '../../src/server.js';
++import { closePool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
++import { readFileSync } from 'node:fs';
++import { resolve, dirname } from 'node:path';
++import { fileURLToPath } from 'node:url';
++
++// Story 4.6: MSME Compliance Tracking. Runs against the PRODUCTION router surface
++// (createAppRouter) with real auth, RBAC, and PostgreSQL. Tests run serially (npm test uses
++// --test-concurrency=1) and seed their own users/supplier/PO fixtures for isolation.
++//
++// DATE columns are asserted via ::text against the admin pool (repo-wide DATE serialization
++// deferral: no global pg type parser exists, so DATE surfaces as a shifted timestamp through
++// JSON). Statutory expectations are computed with the same IST calendar arithmetic as the
++// production rule (UTC+5:30 shift, then UTC getters).
++
++const __dirname = dirname(fileURLToPath(import.meta.url));
++const SCIM_HEADERS = { Authorization: 'Bearer test-only-scim-bearer-token-not-for-production-use' };
++const run = randomUUID().slice(0, 8);
++const RULE_VERSION = 'msmed-2006.s15-16.v1';
++
++interface HttpResult {
++  status: number;
++  body: Record<string, unknown>;
++}
++
++interface Role {
++  role: string;
++  module: string;
++  functionScope: 'read' | 'write';
++  locationId: string;
++}
++
++function makeRequest(
++  port: number,
++  method: string,
++  path: string,
++  body?: unknown,
++  headers?: Record<string, string>,
++): Promise<HttpResult> {
++  return new Promise((resolvePromise, reject) => {
++    const data = body ? JSON.stringify(body) : undefined;
++    const req = httpRequest(
++      {
++        hostname: 'localhost',
++        port,
++        path,
++        method,
++        headers: {
++          'Content-Type': 'application/json',
++          ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
++          ...headers,
++        },
++      },
++      (res: IncomingMessage) => {
++        const chunks: Buffer[] = [];
++        res.on('data', (chunk: Buffer) => chunks.push(chunk));
++        res.on('error', reject);
++        res.on('end', () => {
++          const raw = Buffer.concat(chunks).toString('utf-8');
++          let parsed: Record<string, unknown> = {};
++          if (raw) {
++            try {
++              parsed = JSON.parse(raw) as Record<string, unknown>;
++            } catch {
++              parsed = { error_code: 'NON_JSON_BODY', raw };
++            }
++          }
++          resolvePromise({ status: res.statusCode ?? 0, body: parsed });
++        });
++      },
++    );
++    req.on('error', reject);
++    req.setTimeout(10000, () => req.destroy(new Error(`Request timed out: ${method} ${path}`)));
++    if (data) req.write(data);
++    req.end();
++  });
++}
++
++async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
++  const res = await makeRequest(
++    port,
++    'POST',
++    '/api/v1/scim/v2/Users',
++    { externalId, email: externalId, displayName: externalId, roles },
++    SCIM_HEADERS,
++  );
++  assert.strictEqual(
++    res.status,
++    201,
++    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
++  );
++  return (res.body as Record<string, string>)['userId']!;
++}
++
++async function authFor(port: number, sub: string): Promise<Record<string, string>> {
++  const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
++  assert.ok(
++    res.status >= 200 && res.status < 300,
++    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
++  );
++  return { Authorization: `Bearer ${res.body['token'] as string}` };
++}
++
++/** IST calendar date of an instant - same rule as production (shift +5:30, read UTC getters). */
++function istYmd(iso: string): string {
++  const ist = new Date(new Date(iso).getTime() + 5.5 * 60 * 60 * 1000);
++  return `${ist.getUTCFullYear()}-${String(ist.getUTCMonth() + 1).padStart(2, '0')}-${String(ist.getUTCDate()).padStart(2, '0')}`;
++}
++
++function addDays(ymd: string, days: number): string {
++  const [y, m, d] = ymd.split('-').map(Number);
++  const shifted = new Date(Date.UTC(y!, m! - 1, d! + days));
++  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
++}
++
++function addYears(ymd: string, years: number): string {
++  const [y, m, d] = ymd.split('-').map(Number);
++  const shifted = new Date(Date.UTC(y! + years, m! - 1, d!));
++  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
++}
++
++describe('Story 4.6 MSME Compliance Tracking Integration Tests', () => {
++  let server: Server;
++  let port: number;
++  const siteA = randomUUID();
++  let officerHeaders: Record<string, string>;
++  let deptHeadHeaders: Record<string, string>;
++  let requesterHeaders: Record<string, string>;
++  let readerHeaders: Record<string, string>;
++  let indentSeq = 0;
++  const istToday = istYmd(new Date().toISOString());
++
++  // Suppliers by scenario. All start active and non-MSME; individual tests verify Udyam.
++  let supplierCredit30: string; // 30-day agreed credit period
++  let supplierCredit60: string; // 60-day credit period - the 45-day ceiling must cap it
++  let supplierNoCredit: string; // no credit period - the 15-day appointed-day rule
++  let supplierNonMsme: string; // never MSME-verified
++  let supplierRevalSoon: string; // revalidation window (AC5)
++  let supplierLapsed: string; // lapsed revalidation (AC7)
++
++  const poLineIndex = new Map<string, { sku: string; poLineId: string }>();
++
++  async function createActiveSupplier(
++    tag: string,
++    creditPeriodDays: number,
++    gstin: string,
++  ): Promise<string> {
++    const res = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/suppliers',
++      {
++        legal_name: `MSME Supplier ${tag} ${run}`,
++        owner_party_code: `OWN-46-${tag}-${run}`.toUpperCase(),
++        gstin_ext: gstin,
++        contacts: [{ name: 'Contact', email: 'contact@example.com' }],
++        credit_period_days: creditPeriodDays,
++      },
++      officerHeaders,
++    );
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++    const supplierId = (res.body['supplier'] as Record<string, unknown>)['supplier_id'] as string;
++    const submitRes = await makeRequest(
++      port,
++      'POST',
++      `/api/v1/suppliers/${supplierId}/onboarding/submit`,
++      { documents: [{ type: 'registration', reference: `REG-${tag}`, file_hash: 'abc123' }] },
++      officerHeaders,
++    );
++    assert.strictEqual(submitRes.status, 200, JSON.stringify(submitRes.body));
++    if (submitRes.body['requires_approval'] !== false) {
++      const approveRes = await makeRequest(
++        port,
++        'POST',
++        `/api/v1/suppliers/${supplierId}/onboarding/approve`,
++        {},
++        deptHeadHeaders,
++      );
++      assert.strictEqual(approveRes.status, 200, JSON.stringify(approveRes.body));
++    }
++    return supplierId;
++  }
++
++  async function verifyMsme(
++    supplierId: string,
++    overrides: Record<string, unknown> = {},
++  ): Promise<HttpResult> {
++    return makeRequest(
++      port,
++      'POST',
++      `/api/v1/suppliers/${supplierId}/msme`,
++      {
++        udyam_number_ext: 'UDYAM-MH-12-1234567',
++        msme_classification: 'micro',
++        certificate_reference: `CERT-${run}`,
++        ...overrides,
++      },
++      officerHeaders,
++    );
++  }
++
++  async function createApprovedIndent(sku: string): Promise<string> {
++    indentSeq += 1;
++    const raiseRes = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/indents',
++      {
++        department_code: 'PROD',
++        site_id: siteA,
++        business_stream: 'production',
++        need_by_date: '2026-12-01',
++        urgent: false,
++        lines: [
++          {
++            sku: `${sku}-${indentSeq}`,
++            item_category: 'raw_materials',
++            requested_qty: 100,
++            uom: 'KG',
++            unit_price_estimate: 500,
++          },
++        ],
++      },
++      requesterHeaders,
++    );
++    assert.strictEqual(raiseRes.status, 201, JSON.stringify(raiseRes.body));
++    const indentId = (raiseRes.body['indent'] as Record<string, unknown>)['indent_id'] as string;
++    const approveRes = await makeRequest(
++      port,
++      'POST',
++      `/api/v1/indents/${indentId}/approve`,
++      {},
++      deptHeadHeaders,
++    );
++    assert.strictEqual(approveRes.status, 200, JSON.stringify(approveRes.body));
++    return indentId;
++  }
++
++  /** Drafts, approves, and issues a PO for the given supplier; returns ids plus draft body. */
++  async function createIssuedPo(
++    supplierId: string,
++    skuPrefix: string,
++  ): Promise<{
++    poId: string;
++    lineSku: string;
++    poLineId: string;
++    draftBody: Record<string, unknown>;
++  }> {
++    const sku = `SKU-46-${skuPrefix}-${run}`;
++    const indentId = await createApprovedIndent(sku);
++    const draftRes = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/purchase-orders',
++      {
++        indent_id: indentId,
++        supplier_id: supplierId,
++        po_type: 'standard',
++        lines: [
++          {
++            sku,
++            item_category: 'raw_materials',
++            ordered_qty: 100,
++            uom: 'KG',
++            unit_price: 500,
++          },
++        ],
++      },
++      officerHeaders,
++    );
++    assert.strictEqual(draftRes.status, 201, JSON.stringify(draftRes.body));
++    const po = draftRes.body['purchase_order'] as Record<string, unknown>;
++    const poId = po['po_id'] as string;
++    if (po['status'] === 'pending-approval') {
++      const approveRes = await makeRequest(
++        port,
++        'POST',
++        `/api/v1/purchase-orders/${poId}/approve`,
++        {},
++        deptHeadHeaders,
++      );
++      assert.strictEqual(approveRes.status, 200, JSON.stringify(approveRes.body));
++    }
++    const issueRes = await makeRequest(
++      port,
++      'POST',
++      `/api/v1/purchase-orders/${poId}/issue`,
++      {},
++      officerHeaders,
++    );
++    assert.strictEqual(issueRes.status, 200, JSON.stringify(issueRes.body));
++    const draftLines = draftRes.body['lines'] as Record<string, unknown>[];
++    const poLineId = draftLines[0]!['po_line_id'] as string;
++    poLineIndex.set(poId, { sku, poLineId });
++    return { poId, lineSku: sku, poLineId, draftBody: draftRes.body };
++  }
++
++  async function confirmPo(poId: string): Promise<HttpResult> {
++    return makeRequest(
++      port,
++      'POST',
++      `/api/v1/purchase-orders/${poId}/confirm`,
++      { promised_delivery_date: '2026-12-15' },
++      officerHeaders,
++    );
++  }
++
++  /** Captures a PO-backed invoice for the supplier; returns invoice_id. */
++  async function captureInvoice(
++    supplierId: string,
++    poId: string,
++    invoiceNumberExt: string,
++    invoiceDate: string,
++  ): Promise<string> {
++    const poLine = poLineIndex.get(poId)!;
++    const res = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/supplier-invoices',
++      {
++        supplier_id: supplierId,
++        invoice_number_ext: invoiceNumberExt,
++        invoice_date: invoiceDate,
++        po_id: poId,
++        currency: 'INR',
++        lines: [
++          {
++            po_line_id: poLine.poLineId,
++            sku: poLine.sku,
++            quantity: 10,
++            uom: 'KG',
++            unit_price: 500,
++            taxable_value: 5000,
++            cgst_amount: 450,
++            sgst_amount: 450,
++            line_total: 5900,
++          },
++        ],
++        subtotal: 5000,
++        cgst_total: 450,
++        sgst_total: 450,
++        total_value: 5900,
++      },
++      officerHeaders,
++    );
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++    return (res.body['supplier_invoice'] as Record<string, unknown>)['invoice_id'] as string;
++  }
++
++  async function invoiceStampRow(invoiceId: string): Promise<Record<string, unknown>> {
++    const adminPool = getAdminPool();
++    const r = await adminPool.query(
++      `SELECT msme_classification_at_capture, statutory_due_date::text AS statutory_due_date,
++              statutory_due_rule_version, statutory_breach
++       FROM supplier_invoice WHERE invoice_id = $1`,
++      [invoiceId],
++    );
++    return r.rows[0] as Record<string, unknown>;
++  }
++
++  async function supplierMsmeRow(supplierId: string): Promise<Record<string, unknown>> {
++    const adminPool = getAdminPool();
++    const r = await adminPool.query(
++      `SELECT udyam_number_ext, msme_classification, msme_certificate_reference, msme_status,
++              udyam_verified_at, udyam_revalidation_due_date::text AS udyam_revalidation_due_date
++       FROM supplier WHERE supplier_id = $1`,
++      [supplierId],
++    );
++    return r.rows[0] as Record<string, unknown>;
++  }
++
++  async function runDailyCheck(businessDate?: string): Promise<HttpResult> {
++    return makeRequest(
++      port,
++      'POST',
++      '/api/v1/compliance/msme/daily-check',
++      businessDate ? { business_date: businessDate } : {},
++      officerHeaders,
++    );
++  }
++
++  before(async () => {
++    const adminPool = getAdminPool();
++    for (const file of [
++      '../../events/domain_events.sql',
++      '../../read/projections/users.sql',
++      '../../read/projections/audit_log.sql',
++      '../../read/projections/doa_registry.sql',
++      '../../read/projections/business_stream_config.sql',
++      '../../read/projections/location.sql',
++      '../../read/projections/instrument_calibration.sql',
++      '../../read/projections/notification.sql',
++      '../../read/projections/supplier.sql',
++      '../../read/projections/indent.sql',
++      '../../read/projections/indent_line.sql',
++      '../../read/projections/purchase_order.sql',
++      '../../read/projections/purchase_order_line.sql',
++      '../../read/projections/po_outbound_message.sql',
++      '../../read/projections/supplier_invoice.sql',
++      '../../read/projections/supplier_invoice_line.sql',
++      '../../read/projections/supplier_invoice_ingestion.sql',
++      '../../read/projections/msme_ageing_feed.sql',
++    ]) {
++      await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
++    }
++    await adminPool.query('ALTER TABLE audit_log DISABLE TRIGGER ALL');
++    await adminPool.query('ALTER TABLE audit_log_tamper_attempt_log DISABLE TRIGGER ALL');
++    await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
++    try {
++      await adminPool.query(
++        'TRUNCATE msme_ageing_feed, supplier_invoice_line, supplier_invoice_ingestion, supplier_invoice, po_outbound_message, purchase_order_line, purchase_order, indent_line, indent, supplier, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, transaction_tagging_rules, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
++      );
++    } finally {
++      await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');
++      await adminPool.query('ALTER TABLE audit_log_tamper_attempt_log ENABLE TRIGGER ALL');
++      await adminPool.query('ALTER TABLE audit_log_archive ENABLE TRIGGER ALL');
++    }
++
++    server = createAppServer(createAppRouter());
++    await new Promise<void>((resolvePromise, reject) => {
++      server.once('error', reject);
++      server.listen(0, () => {
++        server.off('error', reject);
++        port = (server.address() as AddressInfo).port;
++        resolvePromise();
++      });
++    });
++
++    await provisionUser(port, `officer-4-6-${run}@example.com`, [
++      {
++        role: 'procurement_officer_4_6',
++        module: 'procurement',
++        functionScope: 'write',
++        locationId: siteA,
++      },
++    ]);
++    officerHeaders = await authFor(port, `officer-4-6-${run}@example.com`);
++
++    await provisionUser(port, `approver-4-6-${run}@example.com`, [
++      {
++        role: 'department_head_4_6',
++        module: 'procurement',
++        functionScope: 'write',
++        locationId: '*',
++      },
++    ]);
++    deptHeadHeaders = await authFor(port, `approver-4-6-${run}@example.com`);
++
++    await provisionUser(port, `requester-4-6-${run}@example.com`, [
++      {
++        role: 'floor_supervisor',
++        module: 'procurement',
++        functionScope: 'write',
++        locationId: siteA,
++      },
++    ]);
++    requesterHeaders = await authFor(port, `requester-4-6-${run}@example.com`);
++
++    await provisionUser(port, `reader-4-6-${run}@example.com`, [
++      {
++        role: 'procurement_reader_4_6',
++        module: 'procurement',
++        functionScope: 'read',
++        locationId: siteA,
++      },
++    ]);
++    readerHeaders = await authFor(port, `reader-4-6-${run}@example.com`);
++
++    // AC8: the finance compliance escalation target role - provisioned like every other role so
++    // the notification target resolves to a real role holder in this environment.
++    await provisionUser(port, `finance-4-6-${run}@example.com`, [
++      {
++        role: 'finance_compliance_officer',
++        module: 'procurement',
++        functionScope: 'read',
++        locationId: '*',
++      },
++    ]);
++
++    await provisionUser(port, `doa-admin-4-6-${run}@example.com`, [
++      {
++        role: 'compliance_admin_4_6',
++        module: 'compliance',
++        functionScope: 'write',
++        locationId: '*',
++      },
++    ]);
++    const doaHeaders = await authFor(port, `doa-admin-4-6-${run}@example.com`);
++    for (const entry of [
++      {
++        transaction_type: 'indent_approval',
++        role: 'department_head_4_6',
++        value_min: 0,
++        value_max: null,
++      },
++      {
++        transaction_type: 'purchase_order_approval',
++        role: 'department_head_4_6',
++        value_min: 0,
++        value_max: null,
++      },
++    ]) {
++      const r = await makeRequest(port, 'POST', '/api/v1/doa/entries', entry, doaHeaders);
++      assert.strictEqual(r.status, 201, JSON.stringify(r.body));
++    }
++
++    supplierCredit30 = await createActiveSupplier('C30', 30, '27ABCDE1234F1Z5');
++    supplierCredit60 = await createActiveSupplier('C60', 60, '29FGHIJ5678K2Z6');
++    supplierNoCredit = await createActiveSupplier('C0', 0, '24LMNOP9012Q3Z7');
++    supplierNonMsme = await createActiveSupplier('NON', 30, '33QRSTU3456V4Z8');
++    supplierRevalSoon = await createActiveSupplier('SOON', 30, '06VWXYZ7890A5Z9');
++    supplierLapsed = await createActiveSupplier('LAPS', 30, '09BCDEF2345G6Z1');
++  });
++
++  after(async () => {
++    if (server) await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
++    await closePool();
++    await closeAdminPool();
++  });
++
++  // --- AC1 / AC6: Udyam capture and validation gate ---------------------------
++
++  it('AC1: a valid Udyam registration flags the supplier as MSME with classification, certificate, and default annual revalidation date', async () => {
++    const res = await verifyMsme(supplierCredit30, {
++      udyam_number_ext: 'UDYAM-MH-12-1234567',
++      msme_classification: 'micro',
++      certificate_reference: `CERT-C30-${run}`,
++    });
++    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
++    const row = await supplierMsmeRow(supplierCredit30);
++    assert.strictEqual(row['udyam_number_ext'], 'UDYAM-MH-12-1234567');
++    assert.strictEqual(row['msme_classification'], 'micro');
++    assert.strictEqual(row['msme_certificate_reference'], `CERT-C30-${run}`);
++    assert.strictEqual(row['msme_status'], 'active');
++    assert.ok(row['udyam_verified_at']);
++    assert.strictEqual(row['udyam_revalidation_due_date'], addYears(istToday, 1));
++  });
++
++  it('AC6: a malformed Udyam number is rejected with UDYAM_INVALID and the supplier stays untagged', async () => {
++    const res = await verifyMsme(supplierNonMsme, { udyam_number_ext: 'UDYAM-M1-1-BAD' });
++    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
++    assert.strictEqual(res.body['error_code'], 'UDYAM_INVALID');
++    const row = await supplierMsmeRow(supplierNonMsme);
++    assert.strictEqual(row['msme_status'], null);
++    assert.strictEqual(row['udyam_number_ext'], null);
++  });
++
++  it('AC6: a verification missing the certificate reference or carrying an off-certificate classification is rejected with UDYAM_INVALID', async () => {
++    const noCert = await verifyMsme(supplierNonMsme, { certificate_reference: '   ' });
++    assert.strictEqual(noCert.status, 400, JSON.stringify(noCert.body));
++    assert.strictEqual(noCert.body['error_code'], 'UDYAM_INVALID');
++
++    const badClass = await verifyMsme(supplierNonMsme, { msme_classification: 'gigantic' });
++    assert.strictEqual(badClass.status, 400, JSON.stringify(badClass.body));
++    assert.strictEqual(badClass.body['error_code'], 'UDYAM_INVALID');
++
++    const row = await supplierMsmeRow(supplierNonMsme);
++    assert.strictEqual(row['msme_status'], null);
++  });
++
++  // --- AC2: PO confirmation stamping ------------------------------------------
++
++  it('AC2: PO confirmation stamps the agreed date when the credit period is inside the 45-day ceiling', async () => {
++    const { poId } = await createIssuedPo(supplierCredit30, 'AC2A');
++    const res = await confirmPo(poId);
++    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
++    const adminPool = getAdminPool();
++    const r = await adminPool.query(
++      `SELECT statutory_due_date::text AS statutory_due_date, statutory_due_rule_version FROM purchase_order WHERE po_id = $1`,
++      [poId],
++    );
++    assert.strictEqual(r.rows[0]!['statutory_due_date'], addDays(istToday, 30));
++    assert.strictEqual(r.rows[0]!['statutory_due_rule_version'], RULE_VERSION);
++  });
++
++  it('AC2: the 45-day statutory ceiling caps a longer agreed credit period', async () => {
++    const verify = await verifyMsme(supplierCredit60, {
++      udyam_number_ext: 'UDYAM-KA-07-7654321',
++      msme_classification: 'small',
++      certificate_reference: `CERT-C60-${run}`,
++    });
++    assert.strictEqual(verify.status, 200, JSON.stringify(verify.body));
++    const { poId } = await createIssuedPo(supplierCredit60, 'AC2B');
++    const res = await confirmPo(poId);
++    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
++    const adminPool = getAdminPool();
++    const r = await adminPool.query(
++      `SELECT statutory_due_date::text AS statutory_due_date FROM purchase_order WHERE po_id = $1`,
++      [poId],
++    );
++    assert.strictEqual(r.rows[0]!['statutory_due_date'], addDays(istToday, 45));
++  });
++
++  it('AC2: the appointed-day rule stamps 15 days when no credit period exists', async () => {
++    const verify = await verifyMsme(supplierNoCredit, {
++      udyam_number_ext: 'UDYAM-GJ-03-2468135',
++      msme_classification: 'medium',
++      certificate_reference: `CERT-C0-${run}`,
++    });
++    assert.strictEqual(verify.status, 200, JSON.stringify(verify.body));
++    const { poId } = await createIssuedPo(supplierNoCredit, 'AC2C');
++    const res = await confirmPo(poId);
++    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
++    const adminPool = getAdminPool();
++    const r = await adminPool.query(
++      `SELECT statutory_due_date::text AS statutory_due_date FROM purchase_order WHERE po_id = $1`,
++      [poId],
++    );
++    assert.strictEqual(r.rows[0]!['statutory_due_date'], addDays(istToday, 15));
++  });
++
++  it('AC2: a non-MSME supplier leaves both statutory columns null at confirmation', async () => {
++    const { poId } = await createIssuedPo(supplierNonMsme, 'AC2D');
++    const res = await confirmPo(poId);
++    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
++    const adminPool = getAdminPool();
++    const r = await adminPool.query(
++      `SELECT statutory_due_date::text AS statutory_due_date, statutory_due_rule_version FROM purchase_order WHERE po_id = $1`,
++      [poId],
++    );
++    assert.strictEqual(r.rows[0]!['statutory_due_date'], null);
++    assert.strictEqual(r.rows[0]!['statutory_due_rule_version'], null);
++  });
++
++  // --- AC3a: invoice stamping (Story 4.7 AC5 closure) --------------------------
++
++  it('AC3a: invoice capture stamps classification, statutory due date, and rule version anchored on invoice_date', async () => {
++    const { poId } = await createIssuedPo(supplierCredit30, 'AC3A');
++    const invoiceId = await captureInvoice(
++      supplierCredit30,
++      poId,
++      `INV-46-CAP-${run}`,
++      '2026-06-15',
++    );
++    const row = await invoiceStampRow(invoiceId);
++    assert.strictEqual(row['msme_classification_at_capture'], 'micro');
++    assert.strictEqual(row['statutory_due_date'], '2026-07-15');
++    assert.strictEqual(row['statutory_due_rule_version'], RULE_VERSION);
++  });
++
++  it('AC3a: linking an unmatched invoice stamps the snapshot anchored on the invoice own date, not the link date', async () => {
++    // Unmatched invoices exist only via the file-ingestion review path (Story 4.7 AC2/AC4).
++    const stageRes = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/supplier-invoice-ingestions',
++      {
++        source_format: 'csv',
++        attachment_ref: `att-46-link-${run}`,
++        sha256_hash: createHash('sha256').update(`link-46-${run}`).digest('hex'),
++        detected_mime: 'text/csv',
++        byte_size: 128,
++        extracted_draft: {
++          supplier_id: supplierCredit30,
++          invoice_number_ext: `INV-46-LINK-${run}`,
++        },
++      },
++      officerHeaders,
++    );
++    assert.strictEqual(stageRes.status, 201, JSON.stringify(stageRes.body));
++    const ingestionId = (stageRes.body['ingestion'] as Record<string, unknown>)[
++      'ingestion_id'
++    ] as string;
++
++    const { poId } = await createIssuedPo(supplierCredit30, 'AC3L');
++    const poLine = poLineIndex.get(poId)!;
++    const confirmRes = await makeRequest(
++      port,
++      'POST',
++      `/api/v1/supplier-invoice-ingestions/${ingestionId}/confirm`,
++      {
++        corrected_header: {
++          supplier_id: supplierCredit30,
++          invoice_number_ext: `INV-46-LINK-${run}`,
++          invoice_date: '2026-06-20',
++          total_value: 1180,
++          subtotal: 1000,
++          cgst_total: 90,
++          sgst_total: 90,
++        },
++        corrected_lines: [
++          {
++            sku: poLine.sku,
++            quantity: 2,
++            uom: 'KG',
++            unit_price: 500,
++            taxable_value: 1000,
++            cgst_amount: 90,
++            sgst_amount: 90,
++            line_total: 1180,
++          },
++        ],
++      },
++      officerHeaders,
++    );
++    assert.strictEqual(confirmRes.status, 200, JSON.stringify(confirmRes.body));
++    const invoiceId = (confirmRes.body['ingestion'] as Record<string, unknown>)[
++      'resulting_invoice_id'
++    ] as string;
++    assert.ok(invoiceId);
++    // The statutory obligation runs from the invoice date with or without a PO, so the unmatched
++    // recording already carries the snapshot (same insert seam as capture).
++    const preLink = await invoiceStampRow(invoiceId);
++    assert.strictEqual(preLink['statutory_due_date'], '2026-07-20');
++    assert.strictEqual(preLink['msme_classification_at_capture'], 'micro');
++
++    const linkRes = await makeRequest(
++      port,
++      'POST',
++      `/api/v1/supplier-invoices/${invoiceId}/link-po`,
++      { po_id: poId },
++      officerHeaders,
++    );
++    assert.strictEqual(linkRes.status, 200, JSON.stringify(linkRes.body));
++    const row = await invoiceStampRow(invoiceId);
++    assert.strictEqual(row['msme_classification_at_capture'], 'micro');
++    assert.strictEqual(row['statutory_due_date'], '2026-07-20');
++    assert.strictEqual(row['statutory_due_rule_version'], RULE_VERSION);
++  });
++
++  // --- AC3: ageing report ------------------------------------------------------
++
++  it('AC3: the ageing report tags each line with the MSME classification and computes s.43B(h)/s.16 exposure in SQL', async () => {
++    // As-of 40 days past the AC3a capture invoice's 2026-07-15 due date.
++    const asOf = addDays('2026-07-15', 40);
++    const res = await makeRequest(
++      port,
++      'GET',
++      `/api/v1/compliance/msme/ageing?as_of=${asOf}`,
++      undefined,
++      readerHeaders,
++    );
++    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
++    assert.strictEqual(res.body['rule_version'], RULE_VERSION);
++    const rows = res.body['rows'] as Record<string, unknown>[];
++    const line = rows.find((r) => r['invoice_number_ext'] === `INV-46-CAP-${run}`);
++    assert.ok(line, 'ageing must include the captured MSME invoice');
++    assert.strictEqual(line['msme_classification'], 'micro');
++    assert.strictEqual(line['statutory_due_date'], '2026-07-15');
++    assert.strictEqual(line['days_overdue'], 40);
++    assert.strictEqual(line['days_to_due'], -40);
++    assert.strictEqual(line['s43b_exposure'], true);
++    assert.ok(Number(line['s16_interest_exposure']) > 0, JSON.stringify(line));
++
++    // On the due date itself: no overdue, no exposure, zero interest.
++    const onDue = await makeRequest(
++      port,
++      'GET',
++      '/api/v1/compliance/msme/ageing?as_of=2026-07-15',
++      undefined,
++      readerHeaders,
++    );
++    assert.strictEqual(onDue.status, 200, JSON.stringify(onDue.body));
++    const onDueLine = (onDue.body['rows'] as Record<string, unknown>[]).find(
++      (r) => r['invoice_number_ext'] === `INV-46-CAP-${run}`,
++    );
++    assert.ok(onDueLine);
++    assert.strictEqual(onDueLine['days_overdue'], 0);
++    assert.strictEqual(onDueLine['s43b_exposure'], false);
++    assert.strictEqual(onDueLine['s16_interest_exposure'], '0.00');
++  });
++
++  // --- AC4: ERP ageing feed ----------------------------------------------------
++
++  it('AC4: a feed run records the classification-tagged ageing payload with timestamp and row count in the append-only ledger', async () => {
++    const res = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/compliance/msme/ageing-feed/run',
++      {},
++      officerHeaders,
++    );
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++    const feedId = res.body['feed_id'] as string;
++    assert.ok(feedId);
++
++    const adminPool = getAdminPool();
++    const feedRow = await adminPool.query(
++      `SELECT payload, row_count, recorded_at FROM msme_ageing_feed WHERE feed_id = $1`,
++      [feedId],
++    );
++    assert.strictEqual(feedRow.rows.length, 1);
++    const payload = feedRow.rows[0]!['payload'] as Record<string, unknown>;
++    assert.strictEqual(payload['feed_type'], 'msme_ageing');
++    const lines = payload['lines'] as Record<string, unknown>[];
++    assert.strictEqual(feedRow.rows[0]!['row_count'], lines.length);
++    assert.ok(feedRow.rows[0]!['recorded_at']);
++    assert.ok(
++      lines.every((l) => ['micro', 'small', 'medium'].includes(l['msme_classification'] as string)),
++      'every feed line carries an MSME classification tag',
++    );
++
++    const evt = await adminPool.query(
++      `SELECT payload FROM domain_events WHERE event_type = 'msme_ageing_feed.recorded' AND payload->>'feed_id' = $1`,
++      [feedId],
++    );
++    assert.strictEqual(evt.rows.length, 1);
++    assert.strictEqual(
++      (evt.rows[0]!['payload'] as Record<string, unknown>)['row_count'],
++      lines.length,
++    );
++  });
++
++  // --- AC5: revalidation alert -------------------------------------------------
++
++  it('AC5: an approaching revalidation date raises a re-verify alert through the notification foundation exactly once', async () => {
++    const verify = await verifyMsme(supplierRevalSoon, {
++      udyam_number_ext: 'UDYAM-TN-01-1357913',
++      msme_classification: 'small',
++      certificate_reference: `CERT-SOON-${run}`,
++      revalidation_due_date: addDays(istToday, 10),
++    });
++    assert.strictEqual(verify.status, 200, JSON.stringify(verify.body));
++
++    const check = await runDailyCheck();
++    assert.strictEqual(check.status, 200, JSON.stringify(check.body));
++    const alerts = check.body['revalidation_alerts'] as Record<string, unknown>[];
++    assert.ok(
++      alerts.some((a) => a['supplier_id'] === supplierRevalSoon),
++      JSON.stringify(alerts),
++    );
++
++    const adminPool = getAdminPool();
++    const countAlerts = async (): Promise<number> => {
++      const r = await adminPool.query(
++        `SELECT count(*)::int AS n FROM domain_events
++         WHERE event_type = 'notification.created'
++           AND payload->>'object_type' = 'supplier_udyam_revalidation'
++           AND payload->>'object_id' = $1`,
++        [supplierRevalSoon],
++      );
++      return (r.rows[0] as Record<string, number>)['n']!;
++    };
++    assert.strictEqual(await countAlerts(), 1);
++
++    // Idempotent per due date: a second daily run does not re-notify.
++    const second = await runDailyCheck();
++    assert.strictEqual(second.status, 200, JSON.stringify(second.body));
++    assert.strictEqual(await countAlerts(), 1);
++  });
++
++  // --- AC7: lapse, suspension, warning, conservative treatment ------------------
++
++  it('AC7: a lapsed revalidation suspends the MSME flag with an edit-log row, warns new PO drafts, and keeps stamped dates in force', async () => {
++    const verify = await verifyMsme(supplierLapsed, {
++      udyam_number_ext: 'UDYAM-WB-19-9753197',
++      msme_classification: 'micro',
++      certificate_reference: `CERT-LAPS-${run}`,
++      revalidation_due_date: addDays(istToday, -1),
++    });
++    assert.strictEqual(verify.status, 200, JSON.stringify(verify.body));
++
++    // Stamp a due date BEFORE the lapse so conservative treatment is observable.
++    const { poId: prePoId } = await createIssuedPo(supplierLapsed, 'AC7PRE');
++    const preConfirm = await confirmPo(prePoId);
++    assert.strictEqual(preConfirm.status, 200, JSON.stringify(preConfirm.body));
++    const adminPool = getAdminPool();
++    const stampedBefore = (
++      await adminPool.query(
++        `SELECT statutory_due_date::text AS d FROM purchase_order WHERE po_id = $1`,
++        [prePoId],
++      )
++    ).rows[0]!['d'] as string;
++    assert.ok(stampedBefore);
++
++    const check = await runDailyCheck();
++    assert.strictEqual(check.status, 200, JSON.stringify(check.body));
++    const suspended = check.body['suspended'] as Record<string, unknown>[];
++    assert.ok(
++      suspended.some((s) => s['supplier_id'] === supplierLapsed),
++      JSON.stringify(suspended),
++    );
++
++    const row = await supplierMsmeRow(supplierLapsed);
++    assert.strictEqual(row['msme_status'], 'suspended-pending-reverification');
++
++    // FR-AC-13: the suspension is a domain event with its edit-log (audit) row.
++    const evt = await adminPool.query(
++      `SELECT event_id FROM domain_events WHERE event_type = 'supplier.msme_suspended' AND payload->>'supplier_id' = $1`,
++      [supplierLapsed],
++    );
++    assert.strictEqual(evt.rows.length, 1);
++    const auditRow = await adminPool.query(`SELECT 1 FROM audit_log WHERE event_id = $1`, [
++      evt.rows[0]!['event_id'],
++    ]);
++    assert.strictEqual(auditRow.rows.length, 1, 'suspension must write an edit-log row');
++
++    // Already-stamped statutory dates stay in force.
++    const stampedAfter = (
++      await adminPool.query(
++        `SELECT statutory_due_date::text AS d FROM purchase_order WHERE po_id = $1`,
++        [prePoId],
++      )
++    ).rows[0]!['d'] as string;
++    assert.strictEqual(stampedAfter, stampedBefore);
++
++    // New PO drafts warn but proceed; confirmation still stamps (conservative treatment).
++    const { poId: postPoId, draftBody } = await createIssuedPo(supplierLapsed, 'AC7POST');
++    const warning = draftBody['warning'] as Record<string, unknown> | undefined;
++    assert.ok(warning, 'draft to a suspended MSME supplier must carry a warning');
++    assert.strictEqual(warning['warning_code'], 'MSME_SUPPLIER_SUSPENDED');
++    const postConfirm = await confirmPo(postPoId);
++    assert.strictEqual(postConfirm.status, 200, JSON.stringify(postConfirm.body));
++    const postStamp = (
++      await adminPool.query(
++        `SELECT statutory_due_date::text AS d FROM purchase_order WHERE po_id = $1`,
++        [postPoId],
++      )
++    ).rows[0]!['d'] as string;
++    assert.strictEqual(postStamp, addDays(istToday, 30));
++  });
++
++  // --- AC8: statutory breach ---------------------------------------------------
++
++  it('AC8: an invoice past its statutory due date is flagged, accrues s.16 interest from the day after, and escalates once', async () => {
++    const { poId } = await createIssuedPo(supplierCredit30, 'AC8');
++    const invoiceId = await captureInvoice(
++      supplierCredit30,
++      poId,
++      `INV-46-BREACH-${run}`,
++      '2026-01-10',
++    );
++    const preRow = await invoiceStampRow(invoiceId);
++    assert.strictEqual(preRow['statutory_due_date'], '2026-02-09');
++
++    const check = await runDailyCheck();
++    assert.strictEqual(check.status, 200, JSON.stringify(check.body));
++    const flagged = check.body['breaches_flagged'] as Record<string, unknown>[];
++    assert.ok(
++      flagged.some((f) => f['invoice_id'] === invoiceId),
++      JSON.stringify(flagged),
++    );
++
++    const row = await invoiceStampRow(invoiceId);
++    assert.strictEqual(row['statutory_breach'], true);
++
++    const adminPool = getAdminPool();
++    const countBreachArtifacts = async (): Promise<{ events: number; escalations: number }> => {
++      const events = await adminPool.query(
++        `SELECT count(*)::int AS n FROM domain_events
++         WHERE event_type = 'supplier_invoice.statutory_breach_flagged' AND payload->>'invoice_id' = $1`,
++        [invoiceId],
++      );
++      const escalations = await adminPool.query(
++        `SELECT count(*)::int AS n FROM domain_events
++         WHERE event_type = 'notification.created'
++           AND payload->>'event_type' = 'msme_statutory_breach'
++           AND payload->>'object_id' = $1`,
++        [invoiceId],
++      );
++      return {
++        events: (events.rows[0] as Record<string, number>)['n']!,
++        escalations: (escalations.rows[0] as Record<string, number>)['n']!,
++      };
++    };
++    const first = await countBreachArtifacts();
++    assert.strictEqual(first.events, 1);
++    assert.strictEqual(first.escalations, 1, 'breach must escalate to the finance compliance role');
++
++    // Interest accrues from the day AFTER the due date: zero on the due date, positive after.
++    const dayAfter = await makeRequest(
++      port,
++      'GET',
++      '/api/v1/compliance/msme/ageing?as_of=2026-02-10',
++      undefined,
++      readerHeaders,
++    );
++    const dayAfterLine = (dayAfter.body['rows'] as Record<string, unknown>[]).find(
++      (r) => r['invoice_number_ext'] === `INV-46-BREACH-${run}`,
++    );
++    assert.ok(dayAfterLine);
++    assert.strictEqual(dayAfterLine['days_overdue'], 1);
++    assert.ok(Number(dayAfterLine['s16_interest_exposure']) > 0);
++    assert.strictEqual(dayAfterLine['statutory_breach'], true);
++
++    // Idempotent per invoice: a second run neither re-flags nor re-escalates.
++    const second = await runDailyCheck();
++    assert.strictEqual(second.status, 200, JSON.stringify(second.body));
++    const again = await countBreachArtifacts();
++    assert.strictEqual(again.events, 1);
++    assert.strictEqual(again.escalations, 1);
++  });
++
++  // --- Direct event-POST spoof tests (mandatory per 4.7 conventions) -----------
++
++  it('AC6 spoof: a direct event POST cannot bypass the Udyam format gate', async () => {
++    const res = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/events',
++      {
++        stream_type: 'procurement',
++        stream_id: supplierNonMsme,
++        event_type: 'supplier.msme_verified',
++        payload: {
++          supplier_id: supplierNonMsme,
++          udyam_number_ext: 'UDYAM-BAD-FORMAT',
++          msme_classification: 'micro',
++          certificate_reference: 'CERT-SPOOF',
++          verified_at: new Date().toISOString(),
++          revalidation_due_date: addYears(istToday, 1),
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: randomUUID(), role: 'procurement_officer_4_6', location_id: siteA },
++          occurred_at: new Date().toISOString(),
++        },
++      },
++      officerHeaders,
++    );
++    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
++    assert.strictEqual(res.body['error_code'], 'UDYAM_INVALID');
++  });
++
++  it('spoof: malformed suspension and ageing-feed payloads are rejected on the central write path', async () => {
++    const badReason = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/events',
++      {
++        stream_type: 'procurement',
++        stream_id: supplierNonMsme,
++        event_type: 'supplier.msme_suspended',
++        payload: { supplier_id: supplierNonMsme, reason: 'because', lapsed_on: istToday },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: randomUUID(), role: 'procurement_officer_4_6', location_id: siteA },
++          occurred_at: new Date().toISOString(),
++        },
++      },
++      officerHeaders,
++    );
++    assert.strictEqual(badReason.status, 400, JSON.stringify(badReason.body));
++
++    const badCount = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/events',
++      {
++        stream_type: 'procurement',
++        stream_id: randomUUID(),
++        event_type: 'msme_ageing_feed.recorded',
++        payload: { feed_id: randomUUID(), row_count: -3, generated_at: new Date().toISOString() },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: randomUUID(), role: 'procurement_officer_4_6', location_id: siteA },
++          occurred_at: new Date().toISOString(),
++        },
++      },
++      officerHeaders,
++    );
++    assert.strictEqual(badCount.status, 400, JSON.stringify(badCount.body));
++  });
++
++  // --- Trailing idempotent replay (mandatory per 4.7 conventions) --------------
++
++  it('idempotent replay: supplier.msme_verified with the same idempotency key persists exactly one event', async () => {
++    const envelope = {
++      stream_type: 'procurement',
++      stream_id: supplierCredit30,
++      event_type: 'supplier.msme_verified',
++      idempotency_key: `msme-verify-replay-${run}`,
++      payload: {
++        supplier_id: supplierCredit30,
++        udyam_number_ext: 'UDYAM-MH-12-1234567',
++        msme_classification: 'micro',
++        certificate_reference: `CERT-C30-${run}`,
++        verified_at: new Date().toISOString(),
++        revalidation_due_date: addYears(istToday, 1),
++      },
++      metadata: {
++        correlation_id: randomUUID(),
++        actor: { user_id: randomUUID(), role: 'procurement_officer_4_6', location_id: siteA },
++        occurred_at: new Date().toISOString(),
++      },
++    };
++    const first = await makeRequest(port, 'POST', '/api/v1/events', envelope, officerHeaders);
++    assert.ok(first.status >= 200 && first.status < 300, JSON.stringify(first.body));
++    const second = await makeRequest(port, 'POST', '/api/v1/events', envelope, officerHeaders);
++    assert.ok(second.status >= 200 && second.status < 300, JSON.stringify(second.body));
++
++    const adminPool = getAdminPool();
++    const count = await adminPool.query(
++      `SELECT count(*)::int AS n FROM domain_events WHERE idempotency_key = $1`,
++      [`msme-verify-replay-${run}`],
++    );
++    assert.strictEqual((count.rows[0] as Record<string, number>)['n'], 1);
++
++    // The replay leaves the supplier exactly as verified - still active MSME.
++    const row = await supplierMsmeRow(supplierCredit30);
++    assert.strictEqual(row['msme_status'], 'active');
++  });
++});

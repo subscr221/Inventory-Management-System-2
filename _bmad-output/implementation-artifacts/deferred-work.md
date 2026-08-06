@@ -164,3 +164,13 @@
 
 - DATE columns serialize as shifted timestamps on non-UTC servers [src/read/projections/supplier_invoice.ts:10] - deferred, pre-existing repo-wide: no pg.types.setTypeParser override exists anywhere, so node-postgres parses DATE (oid 1082) into a local-midnight JS Date and sendJson emits a shifted UTC ISO string (2026-04-01 renders as 2026-03-31T18:30:00.000Z under IST). Affects every existing DATE projection column (purchase_order.promised_delivery_date, cycle_count.business_date, etc.), not just invoice_date/statutory_due_date. Fix once globally with a type parser returning the raw string.
 - Supplier-invoice write routes (capture/duplicate-override/link-po/stage/confirm) perform no site-write authorization [src/api/v1/supplier-invoices.ts:495-537] - deferred, same pre-existing module-wide pattern as the purchase-orders and indents entries above; a site-A procurement writer can capture against a site-B PO. Resolve as one procurement-module RBAC decision covering indents, purchase-orders, and supplier-invoices together.
+
+## Deferred from: code review of 4-6-msme-compliance-tracking (2026-08-06, Group 1)
+
+- CHECK vocabulary widening never propagates to existing databases [read/projections/supplier.sql:117] - deferred, pre-existing guarded-migration pattern repo-wide: the IF NOT EXISTS constraint guard skips re-adding a CHECK whose body needs to widen (e.g. a future MSME re-classification value), so existing DBs keep the old vocabulary until a manual or differently-named migration lands. Same shape as every guarded additive migration since Story 3.10.
+- Concurrent db:migrate runs can abort on TOCTOU inside guarded DO blocks [src/events/migrate.ts:73] - deferred, pre-existing repo-wide pattern: two runners can both observe a constraint missing and both attempt ADD CONSTRAINT; the second raises 42710 and the unguarded DO block aborts mid-migration. No advisory lock around the migration runner anywhere in the repo.
+- init-db.sql runs outside any transaction [deploy/compose/init-db.sql] - deferred, pre-existing file-wide pattern: an interrupted container first boot (OOM, eviction) leaves a partially-applied schema; the db:migrate upgrade path heals it via IF NOT EXISTS guards, but init-db itself is not re-runnable in an automated way on partial failure.
+
+## Deferred from: code review of 4-6-msme-compliance-tracking (2026-08-06, Group 3)
+
+- MSME ageing report has no pagination or row limit [src/read/projections/msme_ageing.ts:39] - deferred, pre-existing repo-wide pattern: every Phase 1 list endpoint (listSuppliers, listPurchaseOrders, listIndents) is similarly unbounded; response size and query time grow with MSME invoice volume. Resolve as one repo-wide pagination decision, not a 4.6-only fix.

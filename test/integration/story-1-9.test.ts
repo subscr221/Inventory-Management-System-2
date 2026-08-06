@@ -358,6 +358,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/supplier-invoice-ingestions',
       'GET /api/v1/supplier-invoice-ingestions/:ingestionId',
       'POST /api/v1/supplier-invoice-ingestions/:ingestionId/confirm',
+      // Story 4.6: MSME Compliance Tracking
+      'POST /api/v1/suppliers/:supplierId/msme',
+      'GET /api/v1/compliance/msme/ageing',
+      'POST /api/v1/compliance/msme/ageing-feed/run',
+      'POST /api/v1/compliance/msme/daily-check',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
       'PUT /api/v1/lots/:lot_id/quality-hold',

@@ -13,6 +13,7 @@ import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { randomUUID } from 'node:crypto';
 
 import { getSupplierById, listSuppliers } from '../../read/projections/supplier.js';
+import { istCalendarDate } from '../../compliance/msme.js';
 import {
   findMatchingDoaEntry,
   findRoleHolder,
@@ -647,6 +648,94 @@ export const deactivateSupplierBase: RouteHandler = async (req, res, params) => 
   });
 };
 
+/**
+ * Story 4.6 AC1/AC6: capture (or re-verify) a supplier's MSME status from the officer's
+ * verification of the uploaded Udyam certificate. Format/certificate validation lives in
+ * assertMsmeShape on the central write path (UDYAM_INVALID rejects BEFORE any write, so a failed
+ * save leaves the supplier untagged); this handler only resolves the supplier, defaults the
+ * revalidation due date, and persists supplier.msme_verified.
+ */
+export const verifySupplierMsmeBase: RouteHandler = async (req, res, params) => {
+  const supplierId = params?.['supplierId'];
+  if (!supplierId) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId is required');
+    return;
+  }
+
+  const supplier = await getSupplierById(supplierId);
+  if (!supplier) {
+    sendRequestError(req, res, 404, 'SUPPLIER_NOT_FOUND', 'Supplier not found', {
+      supplier_id: supplierId,
+    });
+    return;
+  }
+
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  // Default revalidation due date: verified date plus 1 year, as an IST calendar date. Udyam
+  // registrations revalidate annually; the officer may pass an explicit certificate-driven date.
+  // A present-but-non-string value is a client error, not a silent default.
+  const rawRevalidationDueDate = body['revalidation_due_date'];
+  if (rawRevalidationDueDate !== undefined && typeof rawRevalidationDueDate !== 'string') {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'revalidation_due_date must be a YYYY-MM-DD calendar date',
+      { revalidation_due_date: rawRevalidationDueDate },
+    );
+    return;
+  }
+  const revalidationDueDate = rawRevalidationDueDate ?? addOneYear(istCalendarDate(now));
+
+  const persisted = await persistEvent(
+    {
+      stream_type: 'procurement',
+      stream_id: supplierId,
+      event_type: 'supplier.msme_verified',
+      event_id: randomUUID(),
+      payload: {
+        supplier_id: supplierId,
+        udyam_number_ext: body['udyam_number_ext'],
+        msme_classification: body['msme_classification'],
+        certificate_reference: body['certificate_reference'],
+        verified_at: now,
+        revalidation_due_date: revalidationDueDate,
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: {
+          user_id: actor.userId,
+          role: actor.role,
+          location_id: actor.eventLocationId,
+        },
+        occurred_at: now,
+      },
+    },
+    auditCtxFor(req, actor, 200),
+  );
+
+  const updated = await getSupplierById(supplierId);
+  sendJson(res, 200, {
+    event_id: persisted.event_id,
+    supplier: updated,
+  });
+};
+
+function addOneYear(ymd: string): string {
+  const [year, month, day] = ymd.split('-').map(Number);
+  const d = new Date(Date.UTC(year! + 1, month! - 1, day!));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
 export const createSupplierHandler = requireRole({
   module: 'procurement',
   functionScope: 'write',
@@ -686,3 +775,8 @@ export const deactivateSupplierHandler = requireRole({
   module: 'procurement',
   functionScope: 'write',
 })(deactivateSupplierBase);
+
+export const verifySupplierMsmeHandler = requireRole({
+  module: 'procurement',
+  functionScope: 'write',
+})(verifySupplierMsmeBase);

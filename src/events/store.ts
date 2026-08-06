@@ -105,6 +105,7 @@ import {
   applySupplierInvoiceProjection,
   resolveSupplierInvoiceDuplicateConflict,
 } from '../compliance/supplier-invoice.js';
+import { assertMsmeShape, applyMsmeProjection } from '../compliance/msme.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -480,6 +481,10 @@ export async function persistEvent(
   // Story 4.7: supplier invoice / invoice-ingestion shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed invoice event never consumes an idempotency key.
   assertSupplierInvoiceShape(envelope);
+  // Story 4.6: MSME compliance shape validation (Udyam format/certificate gate, suspension,
+  // breach flag, ageing feed) is non-DB and runs with the other pre-transaction asserts, so a
+  // malformed MSME event never consumes an idempotency key.
+  assertMsmeShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -717,6 +722,11 @@ export async function persistEvent(
     // same transaction so the invoice header, lines, ingestion row, and the domain_events insert
     // commit or roll back together.
     await applySupplierInvoiceProjection(envelope, client, eventId);
+    // Story 4.6: MSME compliance projection (Udyam verification/suspension on the supplier row,
+    // statutory breach flag plus its transactional escalation, ageing feed ledger row) runs
+    // inside this same transaction so the projection and the domain_events insert commit or roll
+    // back together.
+    await applyMsmeProjection(envelope, client);
 
     let nextVersion: number;
 

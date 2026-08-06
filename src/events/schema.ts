@@ -1179,6 +1179,67 @@ export interface SupplierInvoicePoLinkedEnvelope extends Omit<EventEnvelope, 'pa
 }
 
 // ---------------------------------------------------------------------------
+// Story 4.6: MSME Compliance Tracking
+// ---------------------------------------------------------------------------
+
+export interface SupplierMsmeVerifiedPayload {
+  supplier_id: string;
+  udyam_number_ext: string;
+  msme_classification: 'micro' | 'small' | 'medium';
+  certificate_reference: string;
+  /** ISO timestamp of officer verification against the uploaded Udyam certificate. */
+  verified_at: string;
+  /** YYYY-MM-DD; re-verification stamps a fresh date and moves msme_status back to active. */
+  revalidation_due_date: string;
+}
+
+export interface SupplierMsmeVerifiedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier.msme_verified';
+  payload: SupplierMsmeVerifiedPayload;
+}
+
+export interface SupplierMsmeSuspendedPayload {
+  supplier_id: string;
+  reason: 'revalidation-lapsed';
+  /** YYYY-MM-DD the revalidation due date that passed without re-verification. */
+  lapsed_on: string;
+}
+
+export interface SupplierMsmeSuspendedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier.msme_suspended';
+  payload: SupplierMsmeSuspendedPayload;
+}
+
+export interface SupplierInvoiceStatutoryBreachFlaggedPayload {
+  invoice_id: string;
+  supplier_id: string;
+  /** YYYY-MM-DD statutory due date that passed unpaid. */
+  statutory_due_date: string;
+  /** YYYY-MM-DD business date of the compliance check that detected the breach. */
+  detected_on: string;
+}
+
+export interface SupplierInvoiceStatutoryBreachFlaggedEnvelope extends Omit<
+  EventEnvelope,
+  'payload'
+> {
+  event_type: 'supplier_invoice.statutory_breach_flagged';
+  payload: SupplierInvoiceStatutoryBreachFlaggedPayload;
+}
+
+export interface MsmeAgeingFeedRecordedPayload {
+  feed_id: string;
+  row_count: number;
+  /** ISO timestamp the ageing snapshot was generated. */
+  generated_at: string;
+}
+
+export interface MsmeAgeingFeedRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'msme_ageing_feed.recorded';
+  payload: MsmeAgeingFeedRecordedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -1496,5 +1557,24 @@ export const SUPPORTED_EVENT_TYPES = {
   'supplier_invoice.po_linked': {
     streamType: 'procurement',
     requiresBusinessStream: true,
+  },
+  // Story 4.6: MSME compliance on the existing 'procurement' stream. Supplier-level registration
+  // lifecycle, breach flagging, and the ageing feed ledger carry no business-stream tag - MSME
+  // status is a supplier-wide statutory attribute, not a stream-scoped commercial fact.
+  'supplier.msme_verified': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier.msme_suspended': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier_invoice.statutory_breach_flagged': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'msme_ageing_feed.recorded': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
   },
 } as const;

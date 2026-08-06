@@ -24,6 +24,9 @@ export interface PurchaseOrderRow {
   issued_at: string | null;
   confirmed_at: string | null;
   promised_delivery_date: string | null;
+  // Story 4.6: statutory MSME payment due date stamped at confirmation; null for non-MSME.
+  statutory_due_date: string | null;
+  statutory_due_rule_version: string | null;
   correlation_id: string | null;
   source_event_id: string;
   created_at: string;
@@ -258,6 +261,8 @@ export async function updatePurchaseOrderStatus(
       | 'doa_entry_id'
       | 'ceiling_value'
       | 'released_value'
+      | 'statutory_due_date'
+      | 'statutory_due_rule_version'
     >
   >,
   client: PoolClient,
@@ -305,6 +310,17 @@ export async function updatePurchaseOrderStatus(
   if (extra.released_value !== undefined) {
     sets.push(`released_value = $${idx++}::numeric`);
     values.push(extra.released_value);
+  }
+  // AC7: statutory due dates are stamped once on the confirmation transition and then preserved
+  // (conservative treatment, 'stamped dates remain in force'). Guard the write so any future
+  // re-confirmation of the same PO does not overwrite the originally-stamped date or rule version.
+  if (extra.statutory_due_date !== undefined) {
+    sets.push(`statutory_due_date = COALESCE(statutory_due_date, $${idx++}::date)`);
+    values.push(extra.statutory_due_date);
+  }
+  if (extra.statutory_due_rule_version !== undefined) {
+    sets.push(`statutory_due_rule_version = COALESCE(statutory_due_rule_version, $${idx++})`);
+    values.push(extra.statutory_due_rule_version);
   }
 
   await client.query(`UPDATE purchase_order SET ${sets.join(', ')} WHERE po_id = $1`, values);

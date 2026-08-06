@@ -151,6 +151,7 @@ import {
   rejectOnboardingHandler,
   updateSupplierHandler,
   deactivateSupplierHandler,
+  verifySupplierMsmeHandler,
 } from './api/v1/suppliers.js';
 import {
   raiseIndentHandler,
@@ -184,6 +185,11 @@ import {
   listInvoiceIngestionsHandler,
   confirmInvoiceIngestionHandler,
 } from './api/v1/supplier-invoices.js';
+import {
+  msmeAgeingReportHandler,
+  runMsmeAgeingFeedHandler,
+  runMsmeDailyCheckHandler,
+} from './api/v1/msme.js';
 import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
@@ -390,6 +396,8 @@ export function createAppRouter(): Router {
   router.post('/api/v1/suppliers/:supplierId/onboarding/reject', rejectOnboardingHandler);
   router.patch('/api/v1/suppliers/:supplierId', updateSupplierHandler);
   router.post('/api/v1/suppliers/:supplierId/deactivate', deactivateSupplierHandler);
+  // Story 4.6: MSME Compliance Tracking - Udyam verification / re-verification
+  router.post('/api/v1/suppliers/:supplierId/msme', verifySupplierMsmeHandler);
 
   // Story 4.3: Purchase Requisition and Indent Loop
   router.post('/api/v1/indents', raiseIndentHandler);
@@ -425,6 +433,10 @@ export function createAppRouter(): Router {
     '/api/v1/supplier-invoice-ingestions/:ingestionId/confirm',
     confirmInvoiceIngestionHandler,
   );
+  // Story 4.6: MSME Compliance Tracking - ageing report, ERP feed run, daily compliance check
+  router.get('/api/v1/compliance/msme/ageing', msmeAgeingReportHandler);
+  router.post('/api/v1/compliance/msme/ageing-feed/run', runMsmeAgeingFeedHandler);
+  router.post('/api/v1/compliance/msme/daily-check', runMsmeDailyCheckHandler);
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

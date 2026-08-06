@@ -396,38 +396,13 @@ export async function updateSupplierInvoicePoLink(
   poId: string,
   siteId: string,
   businessStream: string,
-  extra: Partial<
-    Pick<
-      SupplierInvoiceRow,
-      'msme_classification_at_capture' | 'statutory_due_date' | 'statutory_due_rule_version'
-    >
-  >,
   client: PoolClient,
 ): Promise<void> {
-  const sets: string[] = [
-    'status = $2',
-    'po_id = $3',
-    'site_id = $4',
-    'business_stream = $5',
-    'updated_at = now()',
-  ];
-  const values: (string | null)[] = [invoiceId, 'captured', poId, siteId, businessStream];
-  let idx = 6;
-  if (extra.msme_classification_at_capture !== undefined) {
-    sets.push(`msme_classification_at_capture = $${idx++}`);
-    values.push(extra.msme_classification_at_capture);
-  }
-  if (extra.statutory_due_date !== undefined) {
-    sets.push(`statutory_due_date = $${idx++}`);
-    values.push(extra.statutory_due_date);
-  }
-  if (extra.statutory_due_rule_version !== undefined) {
-    sets.push(`statutory_due_rule_version = $${idx++}`);
-    values.push(extra.statutory_due_rule_version);
-  }
   await client.query(
-    `UPDATE supplier_invoice SET ${sets.join(', ')} WHERE invoice_id = $1`,
-    values,
+    `UPDATE supplier_invoice
+       SET status = 'captured', po_id = $2, site_id = $3, business_stream = $4, updated_at = now()
+     WHERE invoice_id = $1`,
+    [invoiceId, poId, siteId, businessStream],
   );
 }
 

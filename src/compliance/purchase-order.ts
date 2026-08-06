@@ -22,6 +22,7 @@ import { findActiveDelegation } from '../read/projections/doa_registry.js';
 import { resolveApprover } from '../api/v1/indents.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import { buildPoOutboundPayload } from '../adapters/erp/po-outbound.js';
+import { getSupplierMsmeContext, computeStatutoryDueDate, istCalendarDate } from './msme.js';
 
 const PROCUREMENT_STREAM_TYPES = new Set(['procurement']);
 const PURCHASE_ORDER_EVENT_TYPES = new Set([
@@ -721,12 +722,27 @@ async function applyPoConfirmed(envelope: EventEnvelope, client: PoolClient): Pr
 
   const now = envelope.metadata.occurred_at;
   const promisedDate = p['promised_delivery_date'] as string;
-  await updatePurchaseOrderStatus(
-    poId,
-    'confirmed',
-    { confirmed_at: now, promised_delivery_date: promisedDate },
-    client,
-  );
+
+  // Story 4.6 AC2: stamp the statutory MSME payment due date at confirmation, anchored on the
+  // confirmation IST business date. A suspended-pending-reverification supplier still gets the
+  // stamp (conservative treatment, AC7); a non-MSME supplier leaves both columns null.
+  const msmeCtx = await getSupplierMsmeContext(po.supplier_id, client);
+  const extra: Parameters<typeof updatePurchaseOrderStatus>[2] = {
+    confirmed_at: now,
+    promised_delivery_date: promisedDate,
+  };
+  if (
+    msmeCtx &&
+    msmeCtx.msme_classification !== null &&
+    (msmeCtx.msme_status === 'active' || msmeCtx.msme_status === 'suspended-pending-reverification')
+  ) {
+    extra.statutory_due_date = computeStatutoryDueDate(
+      istCalendarDate(now),
+      msmeCtx.credit_period_days,
+    );
+    extra.statutory_due_rule_version = msmeCtx.rule_version;
+  }
+  await updatePurchaseOrderStatus(poId, 'confirmed', extra, client);
 
   // AC4: the promised date is stamped on every PO line; the payload may override individual
   // lines (keyed by po_line_id) when the supplier commits different dates per line.

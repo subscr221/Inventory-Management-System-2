@@ -55,6 +55,22 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+/**
+ * Parses a positive-number statutory rate from the environment, falling back to `fallback`
+ * for an unset, non-numeric, or non-positive value. Fractional values are valid: the MSMED
+ * s.16 rate is three times the RBI bank rate, which is frequently fractional (3 x 6.5 = 19.5),
+ * so an integer-only parse would make the legally correct rate unconfigurable.
+ */
+function parsePositiveNumberEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name} "${raw}": must be a positive number.`);
+  }
+  return parsed;
+}
+
 // Local auth mode (which exposes the unauthenticated dev-token endpoint) is only permitted when
 // NODE_ENV is EXPLICITLY a dev/test value. Fail closed for every other case - including NODE_ENV
 // unset - so a misconfigured host (e.g. a copied env file with NODE_ENV absent) cannot silently
@@ -182,5 +198,23 @@ export const config = {
       }
       return parsed;
     })(),
+  },
+  msme: {
+    // Story 4.6: dated statutory rule configuration (architecture spine: statutory thresholds are
+    // dated configuration, never hard-coded). ruleVersion is stamped alongside every statutory due
+    // date so a later amendment to MSMED timelines can ship as new configuration while existing
+    // stamps remain traceable to the rule they were computed under.
+    ruleVersion: (() => {
+      const raw = process.env['MSME_STATUTORY_RULE_VERSION'];
+      if (raw === undefined || raw.trim() === '') return 'msmed-2006.s15-16.v1';
+      return raw;
+    })(),
+    // Days before udyam_revalidation_due_date at which the daily compliance check raises the
+    // re-verification alert (AC5).
+    revalidationLeadDays: parsePositiveIntEnv('MSME_REVALIDATION_LEAD_DAYS', 30),
+    // MSMED 2006 s.16: compound interest at three times the RBI bank rate, compounded monthly.
+    // The bank rate moves with RBI policy, so the effective annual percent stays configuration;
+    // fractional percents are valid (3 x 6.5 = 19.5).
+    interestRatePercentAnnual: parsePositiveNumberEnv('MSME_S16_BANK_RATE_X3_PERCENT', 27),
   },
 } as const;

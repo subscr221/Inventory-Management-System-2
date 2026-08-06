@@ -100,3 +100,42 @@ BEGIN
     GRANT SELECT ON supplier TO readonly_user;
   END IF;
 END $$;
+
+-- Story 4.6 additive migration: MSME compliance fields (Udyam registration, classification,
+-- revalidation lifecycle). msme_status is a SEPARATE axis from supplier.status - the supplier
+-- lifecycle gates (SUPPLIER_NOT_ACTIVE) never read it and chk_supplier_status is untouched.
+-- Set exclusively by supplier.msme_verified / supplier.msme_suspended events via persistEvent.
+-- Note: supplier.msme_classification is restricted to ('micro','small','medium') because the
+-- column is null when the supplier is not currently MSME-flagged. supplier_invoice carries
+-- 'not_msme' as a fourth value to preserve the capture-time classification when a supplier
+-- loses MSME status after invoicing; do not align these vocabularies.
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS udyam_number_ext TEXT;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS msme_classification TEXT;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS msme_certificate_reference TEXT;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS msme_status TEXT;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS udyam_verified_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS udyam_revalidation_due_date DATE;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_msme_classification'
+      AND conrelid = 'supplier'::regclass
+  ) THEN
+    ALTER TABLE supplier
+      ADD CONSTRAINT chk_supplier_msme_classification CHECK (
+        msme_classification IS NULL OR msme_classification IN ('micro', 'small', 'medium')
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_msme_status'
+      AND conrelid = 'supplier'::regclass
+  ) THEN
+    ALTER TABLE supplier
+      ADD CONSTRAINT chk_supplier_msme_status CHECK (
+        msme_status IS NULL OR msme_status IN ('active', 'suspended-pending-reverification')
+      );
+  END IF;
+END $$;

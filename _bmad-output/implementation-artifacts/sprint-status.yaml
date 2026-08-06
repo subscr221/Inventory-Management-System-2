@@ -643,7 +643,7 @@ development_status:
   4-3-purchase-requisition-and-indent-loop: done
   4-4-purchase-order-management: done
   4-5-goods-receipt-and-three-way-match: backlog
-  4-6-msme-compliance-tracking: backlog
+  4-6-msme-compliance-tracking: done
   4-7-supplier-invoice-capture: done
   epic-4-retrospective: optional
   # story 4-2 skipped for now: epics.md sequences it LAST in epic 4 (consumes PurchaseOrderIssued/Confirmed

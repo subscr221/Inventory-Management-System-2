@@ -118,3 +118,10 @@ BEGIN
     GRANT SELECT ON purchase_order TO readonly_user;
   END IF;
 END $$;
+
+-- Story 4.6 additive migration: statutory MSME payment due date stamped at PO confirmation
+-- (MSMED 2006 s.15: earlier of the agreed date and 45 days; 15-day appointed-day rule when no
+-- agreement exists). Null for non-MSME suppliers. statutory_due_rule_version records the dated
+-- statutory configuration the stamp was computed under. Header only - lines carry no due date.
+ALTER TABLE IF EXISTS purchase_order ADD COLUMN IF NOT EXISTS statutory_due_date DATE;
+ALTER TABLE IF EXISTS purchase_order ADD COLUMN IF NOT EXISTS statutory_due_rule_version TEXT;

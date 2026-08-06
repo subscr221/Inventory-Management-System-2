@@ -190,3 +190,8 @@ BEGIN
     GRANT SELECT ON supplier_invoice TO readonly_user;
   END IF;
 END $$;
+
+-- Story 4.6 additive migration: statutory breach marker set by the daily compliance check when an
+-- MSME invoice passes its statutory due date unpaid. Orthogonal to the unmatched/captured status
+-- lifecycle - chk_supplier_invoice_status is untouched.
+ALTER TABLE IF EXISTS supplier_invoice ADD COLUMN IF NOT EXISTS statutory_breach BOOLEAN NOT NULL DEFAULT false;

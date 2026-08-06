@@ -13,10 +13,11 @@ import { fileURLToPath } from 'node:url';
 // (createAppRouter) with real auth, RBAC, and PostgreSQL. Tests run serially (npm test uses
 // --test-concurrency=1) and seed their own users/supplier/PO fixtures for isolation.
 //
-// Story 4.6 (MSME registration) is NOT implemented in this codebase. AC5 therefore stays an
-// explicit blocked dependency (Task 7.4/Dev Notes): every assertion here pins
-// msme_classification_at_capture/statutory_due_date/statutory_due_rule_version to null rather
-// than fabricating MSME status. Story 4.5 (three-way match) is likewise not implemented, so its
+// Story 4.6 (MSME registration) is now implemented: invoices for MSME-flagged suppliers stamp
+// msme_classification_at_capture/statutory_due_date/statutory_due_rule_version at capture and at
+// link time (AC5 closed via 4.6 AC3a; positive stamping is asserted in story-4-6.test.ts). The
+// suppliers seeded HERE are never MSME-verified, so this file asserts the non-MSME contract: all
+// three fields stay null. Story 4.5 (three-way match) is still not implemented, so its
 // SOURCE_DOCUMENT_REQUIRED consumer check stays a documented, visibly-blocked gap.
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -457,6 +458,7 @@ describe('Story 4.7 Supplier Invoice Capture Integration Tests', () => {
     assert.strictEqual(invoice['po_id'], poId);
     assert.strictEqual(invoice['business_stream'], 'production');
     assert.strictEqual(invoice['total_value'], '5900.00');
+    // Story 4.6 AC3a: this supplier is not MSME-verified, so the snapshot fields stay null.
     assert.strictEqual(invoice['msme_classification_at_capture'], null);
     assert.strictEqual(invoice['statutory_due_date'], null);
     const lines = res.body['lines'] as Record<string, unknown>[];
@@ -902,7 +904,7 @@ describe('Story 4.7 Supplier Invoice Capture Integration Tests', () => {
     assert.strictEqual(linked['po_id'], rightPoId);
     assert.ok(linked['site_id']);
     assert.strictEqual(linked['business_stream'], 'production');
-    // AC5 dependency honesty: linking must not fabricate MSME context (Story 4.6 absent).
+    // Story 4.6 AC3a: a non-MSME supplier keeps the snapshot null even at link time.
     assert.strictEqual(linked['msme_classification_at_capture'], null);
     assert.strictEqual(linked['statutory_due_date'], null);
     assert.strictEqual(linked['statutory_due_rule_version'], null);

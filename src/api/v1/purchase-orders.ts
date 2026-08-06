@@ -214,6 +214,23 @@ export const draftPurchaseOrderBase: RouteHandler = async (req, res, _params) =>
   const po = await getPurchaseOrderById(poId);
   const poLines = await getPurchaseOrderLines(poId);
 
+  // Story 4.6 AC7: a supplier whose Udyam revalidation lapsed does NOT block drafting - the
+  // warning rides the success envelope (ZoneIncompatibleWarning warning-not-error precedent,
+  // except nothing here is withheld from persistence).
+  const msmeWarning =
+    supplier.msme_status === 'suspended-pending-reverification'
+      ? {
+          warning: {
+            warning_code: 'MSME_SUPPLIER_SUSPENDED',
+            message:
+              `Supplier "${supplier.legal_name}" has an MSME flag suspended pending Udyam ` +
+              're-verification. Statutory due dates already stamped remain in force; re-verify ' +
+              'the registration via POST /api/v1/suppliers/:supplierId/msme.',
+            details: { supplier_id: supplierId, msme_status: supplier.msme_status },
+          },
+        }
+      : {};
+
   if (po?.status === 'pending-approval') {
     sendJson(res, 201, {
       event_id: persisted.event_id,
@@ -226,6 +243,7 @@ export const draftPurchaseOrderBase: RouteHandler = async (req, res, _params) =>
         approver_actor_id: po.approver_actor_id,
         doa_entry_id: po.doa_entry_id,
       },
+      ...msmeWarning,
     });
     return;
   }
@@ -234,6 +252,7 @@ export const draftPurchaseOrderBase: RouteHandler = async (req, res, _params) =>
     event_id: persisted.event_id,
     purchase_order: po ?? null,
     lines: poLines,
+    ...msmeWarning,
   });
 };
 

@@ -3533,6 +3533,45 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 4.6 additive migration: MSME compliance fields (Udyam registration, classification,
+-- revalidation lifecycle). msme_status is a SEPARATE axis from supplier.status - the supplier
+-- lifecycle gates (SUPPLIER_NOT_ACTIVE) never read it and chk_supplier_status is untouched.
+-- Set exclusively by supplier.msme_verified / supplier.msme_suspended events via persistEvent.
+-- Note: supplier.msme_classification is restricted to ('micro','small','medium') because the
+-- column is null when the supplier is not currently MSME-flagged. supplier_invoice carries
+-- 'not_msme' as a fourth value to preserve the capture-time classification when a supplier
+-- loses MSME status after invoicing; do not align these vocabularies.
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS udyam_number_ext TEXT;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS msme_classification TEXT;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS msme_certificate_reference TEXT;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS msme_status TEXT;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS udyam_verified_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS supplier ADD COLUMN IF NOT EXISTS udyam_revalidation_due_date DATE;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_msme_classification'
+      AND conrelid = 'supplier'::regclass
+  ) THEN
+    ALTER TABLE supplier
+      ADD CONSTRAINT chk_supplier_msme_classification CHECK (
+        msme_classification IS NULL OR msme_classification IN ('micro', 'small', 'medium')
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_msme_status'
+      AND conrelid = 'supplier'::regclass
+  ) THEN
+    ALTER TABLE supplier
+      ADD CONSTRAINT chk_supplier_msme_status CHECK (
+        msme_status IS NULL OR msme_status IN ('active', 'suspended-pending-reverification')
+      );
+  END IF;
+END $$;
+
 -- MUST stay identical to read/projections/indent.sql (canonical source).
 -- Purchase requisition (indent) read model (Story 4.3). This file is the CANONICAL definition,
 -- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It carries
@@ -3803,6 +3842,13 @@ BEGIN
     GRANT SELECT ON purchase_order TO readonly_user;
   END IF;
 END $$;
+
+-- Story 4.6 additive migration: statutory MSME payment due date stamped at PO confirmation
+-- (MSMED 2006 s.15: earlier of the agreed date and 45 days; 15-day appointed-day rule when no
+-- agreement exists). Null for non-MSME suppliers. statutory_due_rule_version records the dated
+-- statutory configuration the stamp was computed under. Header only - lines carry no due date.
+ALTER TABLE IF EXISTS purchase_order ADD COLUMN IF NOT EXISTS statutory_due_date DATE;
+ALTER TABLE IF EXISTS purchase_order ADD COLUMN IF NOT EXISTS statutory_due_rule_version TEXT;
 
 -- MUST stay identical to read/projections/purchase_order_line.sql (canonical source).
 -- Purchase order line read model (Story 4.4). CANONICAL definition, applied by
@@ -4095,6 +4141,11 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 4.6 additive migration: statutory breach marker set by the daily compliance check when an
+-- MSME invoice passes its statutory due date unpaid. Orthogonal to the unmatched/captured status
+-- lifecycle - chk_supplier_invoice_status is untouched.
+ALTER TABLE IF EXISTS supplier_invoice ADD COLUMN IF NOT EXISTS statutory_breach BOOLEAN NOT NULL DEFAULT false;
+
 -- MUST stay identical to read/projections/supplier_invoice_line.sql (canonical source).
 -- Supplier invoice line read model (Story 4.7). CANONICAL definition, applied by
 -- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
@@ -4266,5 +4317,33 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON supplier_invoice_ingestion TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/msme_ageing_feed.sql (canonical source).
+-- MSME ageing feed ledger (Story 4.6). CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent.
+--
+-- Derived state ONLY: the row is written atomically with msme_ageing_feed.recorded inside the SAME
+-- persistEvent transaction. This is the ERP adapter boundary record (AC4 verification contract) -
+-- the adapter records the ageing payload durably; live transmission is per-deployment configuration
+-- and is NOT implemented here. Append-only ledger: app_user gets INSERT, SELECT only (no UPDATE),
+-- mirroring po_outbound_message.
+
+CREATE TABLE IF NOT EXISTS msme_ageing_feed (
+  feed_id       UUID PRIMARY KEY,
+  payload       JSONB NOT NULL,
+  row_count     INTEGER NOT NULL,
+  recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON msme_ageing_feed TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON msme_ageing_feed TO readonly_user;
   END IF;
 END $$;

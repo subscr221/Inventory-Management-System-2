@@ -23,6 +23,14 @@ export interface SupplierRow {
   created_by: string;
   created_at: string;
   updated_at: string;
+  // Story 4.6: MSME compliance fields. msme_status is a separate axis from `status` - the
+  // SUPPLIER_NOT_ACTIVE lifecycle gates never read it.
+  udyam_number_ext: string | null;
+  msme_classification: 'micro' | 'small' | 'medium' | null;
+  msme_certificate_reference: string | null;
+  msme_status: 'active' | 'suspended-pending-reverification' | null;
+  udyam_verified_at: string | null;
+  udyam_revalidation_due_date: string | null;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -102,7 +110,19 @@ export async function listSuppliers(
   return result.rows as SupplierRow[];
 }
 
-export async function insertSupplier(row: SupplierRow, client: PoolClient): Promise<void> {
+// MSME fields (Story 4.6) are never set at registration - they arrive only via
+// supplier.msme_verified - so the insert seam excludes them.
+export type InsertSupplierInput = Omit<
+  SupplierRow,
+  | 'udyam_number_ext'
+  | 'msme_classification'
+  | 'msme_certificate_reference'
+  | 'msme_status'
+  | 'udyam_verified_at'
+  | 'udyam_revalidation_due_date'
+>;
+
+export async function insertSupplier(row: InsertSupplierInput, client: PoolClient): Promise<void> {
   let contactsJson: string;
   let certRefsJson: string;
   try {
@@ -183,6 +203,62 @@ export async function updateSupplierStatus(
     values.push(extra.deactivated_at);
   }
 
+  await client.query(`UPDATE supplier SET ${sets.join(', ')} WHERE supplier_id = $1`, values);
+}
+
+/**
+ * Story 4.6: whitelisted mutation seam for the MSME compliance fields, written exclusively by the
+ * supplier.msme_verified / supplier.msme_suspended appliers inside the persistEvent transaction.
+ * Deliberately separate from updateSupplierStatus (supplier lifecycle) and
+ * updateSupplierMutableFields (supplier.updated concerns) - MSME capture is neither.
+ */
+export async function updateSupplierMsmeFields(
+  supplierId: string,
+  fields: Partial<
+    Pick<
+      SupplierRow,
+      | 'udyam_number_ext'
+      | 'msme_classification'
+      | 'msme_certificate_reference'
+      | 'msme_status'
+      | 'udyam_verified_at'
+      | 'udyam_revalidation_due_date'
+    >
+  >,
+  client: PoolClient,
+): Promise<void> {
+  const sets: string[] = ['updated_at = now()'];
+  const values: (string | null)[] = [supplierId];
+  let idx = 2;
+
+  if (fields.udyam_number_ext !== undefined) {
+    sets.push(`udyam_number_ext = $${idx++}`);
+    values.push(fields.udyam_number_ext);
+  }
+  if (fields.msme_classification !== undefined) {
+    sets.push(`msme_classification = $${idx++}`);
+    values.push(fields.msme_classification);
+  }
+  if (fields.msme_certificate_reference !== undefined) {
+    sets.push(`msme_certificate_reference = $${idx++}`);
+    values.push(fields.msme_certificate_reference);
+  }
+  if (fields.msme_status !== undefined) {
+    sets.push(`msme_status = $${idx++}`);
+    values.push(fields.msme_status);
+  }
+  if (fields.udyam_verified_at !== undefined) {
+    sets.push(`udyam_verified_at = $${idx++}`);
+    values.push(fields.udyam_verified_at);
+  }
+  if (fields.udyam_revalidation_due_date !== undefined) {
+    sets.push(`udyam_revalidation_due_date = $${idx++}::date`);
+    values.push(fields.udyam_revalidation_due_date);
+  }
+
+  if (sets.length === 1) {
+    throw new Error('No MSME fields to update');
+  }
   await client.query(`UPDATE supplier SET ${sets.join(', ')} WHERE supplier_id = $1`, values);
 }
 

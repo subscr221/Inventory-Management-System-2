@@ -495,6 +495,8 @@ const EXPECTED = [
       'chk_supplier_credit_period_non_negative',
       'chk_supplier_deactivation_reason',
       'chk_supplier_owner_party_code',
+      'chk_supplier_msme_classification',
+      'chk_supplier_msme_status',
     ],
     indexes: [
       'uq_supplier_gstin',
@@ -606,11 +608,83 @@ const EXPECTED = [
       'idx_supplier_invoice_ingestion_resulting_invoice',
     ],
   },
+  // Story 4.6: MSME Compliance Tracking
+  {
+    canonical: 'read/projections/msme_ageing_feed.sql',
+    table: 'msme_ageing_feed',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
   const migrateSource = read('src/events/migrate.ts');
   const initDb = read('deploy/compose/init-db.sql');
+
+  it('Story 4.6 mirrors every MSME additive column into init-db.sql and registers msme_ageing_feed in MIGRATIONS', () => {
+    const supplierSql = read('read/projections/supplier.sql');
+    const poSql = read('read/projections/purchase_order.sql');
+    const supplierInvoiceSql = read('read/projections/supplier_invoice.sql');
+    const msmeAgeingFeedSql = read('read/projections/msme_ageing_feed.sql');
+    const msmeAgeingFeedMigration = "'../../read/projections/msme_ageing_feed.sql'";
+    const msmeExpected = [
+      'udyam_number_ext TEXT',
+      'msme_classification TEXT',
+      'msme_certificate_reference TEXT',
+      'msme_status TEXT',
+      'udyam_verified_at TIMESTAMPTZ',
+      'udyam_revalidation_due_date DATE',
+    ];
+    for (const fragment of msmeExpected) {
+      assert.ok(
+        supplierSql.includes(`ADD COLUMN IF NOT EXISTS ${fragment}`),
+        `supplier.sql missing ${fragment}`,
+      );
+      assert.ok(
+        initDb.includes(`ADD COLUMN IF NOT EXISTS ${fragment}`),
+        `init-db.sql missing ${fragment}`,
+      );
+    }
+    assert.ok(
+      poSql.includes('ADD COLUMN IF NOT EXISTS statutory_due_date DATE'),
+      'purchase_order.sql missing statutory_due_date',
+    );
+    assert.ok(
+      initDb.includes('ADD COLUMN IF NOT EXISTS statutory_due_date DATE'),
+      'init-db.sql missing statutory_due_date',
+    );
+    assert.ok(
+      poSql.includes('ADD COLUMN IF NOT EXISTS statutory_due_rule_version TEXT'),
+      'purchase_order.sql missing statutory_due_rule_version',
+    );
+    assert.ok(
+      initDb.includes('ADD COLUMN IF NOT EXISTS statutory_due_rule_version TEXT'),
+      'init-db.sql missing statutory_due_rule_version',
+    );
+    assert.ok(
+      supplierInvoiceSql.includes(
+        'ADD COLUMN IF NOT EXISTS statutory_breach BOOLEAN NOT NULL DEFAULT false',
+      ),
+      'supplier_invoice.sql missing statutory_breach',
+    );
+    assert.ok(
+      initDb.includes(
+        'ADD COLUMN IF NOT EXISTS statutory_breach BOOLEAN NOT NULL DEFAULT false',
+      ),
+      'init-db.sql missing statutory_breach',
+    );
+    assert.ok(msmeAgeingFeedSql.includes('msme_ageing_feed'), 'msme_ageing_feed.sql missing table');
+    assert.ok(
+      migrateSource.includes(msmeAgeingFeedMigration),
+      'src/events/migrate.ts must register msme_ageing_feed.sql',
+    );
+    assert.ok(
+      migrateSource.indexOf(msmeAgeingFeedMigration) >
+        migrateSource.lastIndexOf("'../../read/projections/supplier_invoice.sql'"),
+      'msme_ageing_feed must be appended after the supplier_invoice migrations',
+    );
+  });
 
   it('Story 3.10 applies dependency-safe additive cross-dock alterations in final vocabulary order', () => {
     const grnSql = read('read/projections/grn_line.sql');
