@@ -1366,6 +1366,80 @@ export interface PaymentClearanceFeedRecordedEnvelope extends Omit<EventEnvelope
   payload: PaymentClearanceFeedRecordedPayload;
 }
 
+// ---------------------------------------------------------------------------
+// Story 5.1: Multi-Level BOM Creation
+// ---------------------------------------------------------------------------
+
+export interface BomLineInput {
+  line_no: number;
+  component_item_id: string;
+  output_class: 'component' | 'co_product' | 'by_product';
+  quantity_per: string;
+  line_uom: string;
+  uom_conversion_factor: string;
+  scrap_percent?: string;
+  expected_yield_percent?: string;
+  is_phantom: boolean;
+  phantom_source_bom_id?: string;
+  effective_from: string;
+  effective_to?: string;
+}
+
+export interface BomDraftedPayload {
+  bom_id: string;
+  parent_item_id: string;
+  bom_type?: 'production' | 'rnd' | 'job_work_kit';
+  revision_code: string;
+  lines: BomLineInput[];
+  correlation_id?: string;
+}
+
+export interface BomDraftedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.drafted';
+  payload: BomDraftedPayload;
+}
+
+export interface BomLineAddedPayload {
+  bom_id: string;
+  revision_id: string;
+  bom_line_id: string;
+  line_no: number;
+  component_item_id: string;
+  output_class: 'component' | 'co_product' | 'by_product';
+  quantity_per: string;
+  line_uom: string;
+  uom_conversion_factor: string;
+  scrap_percent?: string;
+  expected_yield_percent?: string;
+  is_phantom: boolean;
+  phantom_source_bom_id?: string;
+  effective_from: string;
+  effective_to?: string;
+}
+
+export interface BomLineAddedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom_line.added';
+  payload: BomLineAddedPayload;
+}
+
+export interface BomLineAmendedPayload {
+  bom_id: string;
+  revision_id: string;
+  bom_line_id: string;
+  quantity_per?: string;
+  line_uom?: string;
+  uom_conversion_factor?: string;
+  scrap_percent?: string;
+  expected_yield_percent?: string;
+  effective_from?: string;
+  effective_to?: string;
+}
+
+export interface BomLineAmendedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom_line.amended';
+  payload: BomLineAmendedPayload;
+}
+
 /**
  * Story 4.2: Supplier Performance Scorecards. One append-only metric observation per upstream
  * source event. All NUMERIC values are strings; business_date is an IST calendar date string.
@@ -1766,6 +1840,22 @@ export const SUPPORTED_EVENT_TYPES = {
   // source PO/GRN documents (the Story 4.6 msme.* precedent).
   'supplier_scorecard.metric_recorded': {
     streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  // Story 5.1: BOM lifecycle on a new 'engineering' stream. Only bom.drafted carries
+  // requiresBusinessStream: true - the draft is the tagged business transaction (FR-AC-01),
+  // mirroring purchase_order.drafted and indent.raised. bom_line.added and bom_line.amended
+  // are lifecycle transitions on an already-tagged document and do not require a business_stream.
+  'bom.drafted': {
+    streamType: 'engineering',
+    requiresBusinessStream: true,
+  },
+  'bom_line.added': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'bom_line.amended': {
+    streamType: 'engineering',
     requiresBusinessStream: false,
   },
 } as const;

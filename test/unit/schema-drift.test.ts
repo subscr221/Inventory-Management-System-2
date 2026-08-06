@@ -657,6 +657,61 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 5.1: BOM Management
+  {
+    canonical: 'read/projections/bom.sql',
+    table: 'bom',
+    constraints: ['chk_bom_type', 'chk_bom_status'],
+    indexes: [
+      'uq_bom_parent_item',
+      'idx_bom_status',
+      'idx_bom_business_stream',
+      'idx_bom_parent_item_id',
+      'idx_bom_blocking',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/bom_revision.sql',
+    table: 'bom_revision',
+    constraints: ['chk_bom_revision_status'],
+    indexes: ['uq_bom_revision_code', 'idx_bom_revision_bom_id'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/bom_line.sql',
+    table: 'bom_line',
+    constraints: [
+      'chk_bom_line_output_class',
+      'chk_bom_line_scrap_percent',
+      'chk_bom_line_quantity_positive',
+      'chk_bom_line_conversion_positive',
+      'chk_bom_line_yield_required',
+      'chk_bom_line_effectivity_order',
+      'chk_bom_line_phantom_pairing',
+      'chk_bom_line_blocking_reason',
+    ],
+    indexes: [
+      'uq_bom_line_no',
+      'idx_bom_line_component_item',
+      'idx_bom_line_bom_id',
+      'idx_bom_line_blocking',
+      'idx_bom_line_effective',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/bom_structure.sql',
+    table: 'bom_structure',
+    constraints: ['chk_bom_structure_depth'],
+    indexes: [
+      'uq_bom_structure_path',
+      'idx_bom_structure_component',
+      'idx_bom_structure_bom_id',
+      'idx_bom_structure_revision',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

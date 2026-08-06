@@ -275,4 +275,7 @@ export const config = {
         });
     })(),
   },
+  bom: {
+    maxDepth: parsePositiveIntEnv('BOM_MAX_DEPTH', 20),
+  },
 } as const;

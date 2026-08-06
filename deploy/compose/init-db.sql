@@ -3954,6 +3954,292 @@ BEGIN
   END IF;
 END $$;
 
+-- MUST stay identical to read/projections/bom.sql (canonical source).
+-- Bill of Materials (BOM) read model (Story 5.1). CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent.
+
+CREATE TABLE IF NOT EXISTS bom (
+  bom_id                UUID PRIMARY KEY,
+  parent_item_id        UUID NOT NULL,
+  parent_sku            TEXT NOT NULL,
+  parent_uom            TEXT NOT NULL,
+  business_stream       TEXT NOT NULL,
+  bom_type              TEXT NOT NULL DEFAULT 'production',
+  status                TEXT NOT NULL DEFAULT 'draft',
+  current_revision_id   UUID,
+  blocking_line_count   INTEGER NOT NULL DEFAULT 0,
+  created_by            UUID NOT NULL,
+  correlation_id        UUID,
+  source_event_id       UUID NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_bom_type CHECK (bom_type IN ('production','rnd','job_work_kit')),
+  CONSTRAINT chk_bom_status CHECK (status IN ('draft'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_parent_item ON bom (parent_item_id);
+CREATE INDEX IF NOT EXISTS idx_bom_status ON bom (status);
+CREATE INDEX IF NOT EXISTS idx_bom_business_stream ON bom (business_stream);
+CREATE INDEX IF NOT EXISTS idx_bom_parent_item_id ON bom (parent_item_id);
+CREATE INDEX IF NOT EXISTS idx_bom_blocking ON bom (blocking_line_count) WHERE blocking_line_count > 0;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_type'
+      AND conrelid = 'bom'::regclass
+  ) THEN
+    ALTER TABLE bom
+      ADD CONSTRAINT chk_bom_type CHECK (bom_type IN ('production','rnd','job_work_kit'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_status'
+      AND conrelid = 'bom'::regclass
+  ) THEN
+    ALTER TABLE bom
+      ADD CONSTRAINT chk_bom_status CHECK (status IN ('draft'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON bom TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/bom_revision.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS bom_revision (
+  revision_id       UUID PRIMARY KEY,
+  bom_id            UUID NOT NULL,
+  revision_code     TEXT NOT NULL,
+  revision_status   TEXT NOT NULL DEFAULT 'draft',
+  drafted_by        UUID NOT NULL,
+  drafted_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  source_event_id   UUID NOT NULL,
+  CONSTRAINT chk_bom_revision_status CHECK (revision_status IN ('draft'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_revision_code ON bom_revision (bom_id, revision_code);
+CREATE INDEX IF NOT EXISTS idx_bom_revision_bom_id ON bom_revision (bom_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_revision_status'
+      AND conrelid = 'bom_revision'::regclass
+  ) THEN
+    ALTER TABLE bom_revision
+      ADD CONSTRAINT chk_bom_revision_status CHECK (revision_status IN ('draft'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON bom_revision TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom_revision TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/bom_line.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS bom_line (
+  bom_line_id              UUID PRIMARY KEY,
+  revision_id              UUID NOT NULL,
+  bom_id                   UUID NOT NULL,
+  line_no                  INTEGER NOT NULL,
+  component_item_id        UUID NOT NULL,
+  component_sku            TEXT NOT NULL,
+  output_class             TEXT NOT NULL DEFAULT 'component',
+  quantity_per             NUMERIC(18,6) NOT NULL,
+  line_uom                 TEXT NOT NULL,
+  uom_conversion_factor    NUMERIC(18,8) NOT NULL,
+  base_quantity_per        NUMERIC(18,6) NOT NULL,
+  scrap_percent            NUMERIC(7,4),
+  expected_yield_percent   NUMERIC(7,4),
+  is_phantom               BOOLEAN NOT NULL DEFAULT false,
+  phantom_source_bom_id    UUID,
+  effective_from           DATE NOT NULL,
+  effective_to            DATE,
+  blocking_release         BOOLEAN NOT NULL DEFAULT false,
+  blocking_reason          TEXT,
+  amended_at               TIMESTAMPTZ,
+  source_event_id          UUID NOT NULL,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_bom_line_output_class CHECK (output_class IN ('component','co_product','by_product')),
+  CONSTRAINT chk_bom_line_scrap_percent CHECK (scrap_percent IS NULL OR (scrap_percent >= 0 AND scrap_percent <= 100)),
+  CONSTRAINT chk_bom_line_quantity_positive CHECK (quantity_per > 0),
+  CONSTRAINT chk_bom_line_conversion_positive CHECK (uom_conversion_factor > 0),
+  CONSTRAINT chk_bom_line_yield_required CHECK (
+    (output_class = 'component' AND expected_yield_percent IS NULL) OR
+    (output_class IN ('co_product','by_product') AND expected_yield_percent IS NOT NULL)
+  ),
+  CONSTRAINT chk_bom_line_effectivity_order CHECK (effective_to IS NULL OR effective_to >= effective_from),
+  CONSTRAINT chk_bom_line_phantom_pairing CHECK (
+    (is_phantom = true AND phantom_source_bom_id IS NOT NULL) OR
+    (is_phantom = false AND phantom_source_bom_id IS NULL)
+  ),
+  CONSTRAINT chk_bom_line_blocking_reason CHECK (
+    (blocking_release = true AND blocking_reason IS NOT NULL AND btrim(blocking_reason) <> '') OR
+    (blocking_release = false AND blocking_reason IS NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_line_no ON bom_line (revision_id, line_no);
+CREATE INDEX IF NOT EXISTS idx_bom_line_component_item ON bom_line (component_item_id);
+CREATE INDEX IF NOT EXISTS idx_bom_line_bom_id ON bom_line (bom_id);
+CREATE INDEX IF NOT EXISTS idx_bom_line_blocking ON bom_line (blocking_release) WHERE blocking_release = true;
+CREATE INDEX IF NOT EXISTS idx_bom_line_effective ON bom_line (component_item_id, effective_from, effective_to);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_line_output_class'
+      AND conrelid = 'bom_line'::regclass
+  ) THEN
+    ALTER TABLE bom_line
+      ADD CONSTRAINT chk_bom_line_output_class CHECK (output_class IN ('component','co_product','by_product'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_line_scrap_percent'
+      AND conrelid = 'bom_line'::regclass
+  ) THEN
+    ALTER TABLE bom_line
+      ADD CONSTRAINT chk_bom_line_scrap_percent CHECK (scrap_percent IS NULL OR (scrap_percent >= 0 AND scrap_percent <= 100));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_line_quantity_positive'
+      AND conrelid = 'bom_line'::regclass
+  ) THEN
+    ALTER TABLE bom_line
+      ADD CONSTRAINT chk_bom_line_quantity_positive CHECK (quantity_per > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_line_conversion_positive'
+      AND conrelid = 'bom_line'::regclass
+  ) THEN
+    ALTER TABLE bom_line
+      ADD CONSTRAINT chk_bom_line_conversion_positive CHECK (uom_conversion_factor > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_line_yield_required'
+      AND conrelid = 'bom_line'::regclass
+  ) THEN
+    ALTER TABLE bom_line
+      ADD CONSTRAINT chk_bom_line_yield_required CHECK (
+        (output_class = 'component' AND expected_yield_percent IS NULL) OR
+        (output_class IN ('co_product','by_product') AND expected_yield_percent IS NOT NULL)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_line_effectivity_order'
+      AND conrelid = 'bom_line'::regclass
+  ) THEN
+    ALTER TABLE bom_line
+      ADD CONSTRAINT chk_bom_line_effectivity_order CHECK (effective_to IS NULL OR effective_to >= effective_from);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_line_phantom_pairing'
+      AND conrelid = 'bom_line'::regclass
+  ) THEN
+    ALTER TABLE bom_line
+      ADD CONSTRAINT chk_bom_line_phantom_pairing CHECK (
+        (is_phantom = true AND phantom_source_bom_id IS NOT NULL) OR
+        (is_phantom = false AND phantom_source_bom_id IS NULL)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_line_blocking_reason'
+      AND conrelid = 'bom_line'::regclass
+  ) THEN
+    ALTER TABLE bom_line
+      ADD CONSTRAINT chk_bom_line_blocking_reason CHECK (
+        (blocking_release = true AND blocking_reason IS NOT NULL AND btrim(blocking_reason) <> '') OR
+        (blocking_release = false AND blocking_reason IS NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON bom_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom_line TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/bom_structure.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS bom_structure (
+  structure_id           UUID PRIMARY KEY,
+  bom_id                 UUID NOT NULL,
+  revision_id            UUID NOT NULL,
+  root_bom_line_id       UUID,
+  path                   TEXT NOT NULL,
+  depth                  INTEGER NOT NULL,
+  component_item_id      UUID NOT NULL,
+  component_sku          TEXT NOT NULL,
+  output_class           TEXT NOT NULL DEFAULT 'component',
+  effective_quantity_per NUMERIC(18,6) NOT NULL,
+  effective_scrap_percent NUMERIC(9,6),
+  via_phantom            BOOLEAN NOT NULL DEFAULT false,
+  effective_from         DATE NOT NULL,
+  effective_to           DATE,
+  source_event_id        UUID NOT NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_bom_structure_depth CHECK (depth >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_structure_path ON bom_structure (revision_id, path);
+CREATE INDEX IF NOT EXISTS idx_bom_structure_component ON bom_structure (component_item_id);
+CREATE INDEX IF NOT EXISTS idx_bom_structure_bom_id ON bom_structure (bom_id);
+CREATE INDEX IF NOT EXISTS idx_bom_structure_revision ON bom_structure (revision_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_structure_depth'
+      AND conrelid = 'bom_structure'::regclass
+  ) THEN
+    ALTER TABLE bom_structure
+      ADD CONSTRAINT chk_bom_structure_depth CHECK (depth >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE, DELETE ON bom_structure TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom_structure TO readonly_user;
+  END IF;
+END $$;
+
 -- MUST stay identical to read/projections/supplier_invoice.sql (canonical source).
 -- Supplier invoice header read model (Story 4.7). This file is the CANONICAL definition,
 -- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It carries

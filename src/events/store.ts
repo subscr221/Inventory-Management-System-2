@@ -100,6 +100,7 @@ import {
   assertPurchaseOrderShape,
   applyPurchaseOrderProjection,
 } from '../compliance/purchase-order.js';
+import { assertBomShape, applyBomProjection } from '../compliance/bom.js';
 import {
   assertSupplierInvoiceShape,
   applySupplierInvoiceProjection,
@@ -486,6 +487,9 @@ export async function persistEvent(
   // Story 4.4: purchase order shape validation is non-DB and runs with the other pre-transaction
   // asserts, so a malformed purchase_order event never consumes an idempotency key.
   assertPurchaseOrderShape(envelope);
+  // Story 5.1: BOM shape validation is non-DB and runs with the other pre-transaction asserts,
+  // so a malformed BOM event never consumes an idempotency key.
+  assertBomShape(envelope);
   // Story 4.7: supplier invoice / invoice-ingestion shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed invoice event never consumes an idempotency key.
   assertSupplierInvoiceShape(envelope);
@@ -731,6 +735,9 @@ export async function persistEvent(
     // Story 4.4: purchase order projection runs inside this same transaction so the PO row,
     // its lines, the outbound message, and the domain_events insert commit or roll back together.
     await applyPurchaseOrderProjection(envelope, client, eventId);
+    // Story 5.1: BOM projection runs inside this same transaction so the BOM header, revision,
+    // lines, and structure projection commit together with the domain_events insert.
+    await applyBomProjection(envelope, client, eventId);
     // Story 4.7: supplier invoice capture / file-ingestion review projection runs inside this
     // same transaction so the invoice header, lines, ingestion row, and the domain_events insert
     // commit or roll back together.

@@ -348,6 +348,13 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/purchase-orders/:poId/confirm',
       'POST /api/v1/purchase-orders/:poId/releases',
       'POST /api/v1/purchase-orders/:poId/ceiling',
+      // Story 5.1: BOM Management
+      'POST /api/v1/boms',
+      'GET /api/v1/boms',
+      'GET /api/v1/boms/:bomId',
+      'GET /api/v1/boms/:bomId/structure',
+      'POST /api/v1/boms/:bomId/lines',
+      'PATCH /api/v1/boms/:bomId/lines/:bomLineId',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

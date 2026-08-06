@@ -175,6 +175,14 @@ import {
   reviseCeilingHandler,
 } from './api/v1/purchase-orders.js';
 import {
+  draftBomHandler,
+  addBomLineHandler,
+  amendBomLineHandler,
+  getBomHandler,
+  listBomsHandler,
+  getBomStructureHandler,
+} from './api/v1/boms.js';
+import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
   getSupplierInvoiceHandler,
@@ -436,6 +444,14 @@ export function createAppRouter(): Router {
   router.post('/api/v1/purchase-orders/:poId/confirm', confirmPurchaseOrderHandler);
   router.post('/api/v1/purchase-orders/:poId/releases', recordReleaseHandler);
   router.post('/api/v1/purchase-orders/:poId/ceiling', reviseCeilingHandler);
+
+  // Story 5.1: BOM Management
+  router.post('/api/v1/boms', draftBomHandler);
+  router.get('/api/v1/boms', listBomsHandler);
+  router.get('/api/v1/boms/:bomId', getBomHandler);
+  router.get('/api/v1/boms/:bomId/structure', getBomStructureHandler);
+  router.post('/api/v1/boms/:bomId/lines', addBomLineHandler);
+  router.patch('/api/v1/boms/:bomId/lines/:bomLineId', amendBomLineHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);
