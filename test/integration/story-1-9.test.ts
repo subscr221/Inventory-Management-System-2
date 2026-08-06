@@ -372,6 +372,12 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/supplier-invoices/:invoiceId/debit-note',
       'POST /api/v1/compliance/payment-clearance-feed/run',
       'GET /api/v1/compliance/payment-clearance-feed/eligible',
+      // Story 4.2: Supplier Performance Scorecards
+      'GET /api/v1/supplier-scorecards/:supplierId',
+      'GET /api/v1/supplier-scorecards/:supplierId/transactions',
+      'POST /api/v1/grns/:grnId/scorecard/on-time',
+      'POST /api/v1/three-way-match/:matchId/scorecard/price-variance',
+      'POST /api/v1/purchase-orders/:poId/scorecard/responsiveness',
       'PUT /api/v1/config/audit-log-enabled',
       'PUT /api/v1/instruments/:id/calibration-status',
       'PUT /api/v1/lots/:lot_id/quality-hold',

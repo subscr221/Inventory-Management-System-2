@@ -236,4 +236,43 @@ export const config = {
       return raw;
     })(),
   },
+  scorecard: {
+    // Story 4.2 (AC4): statutory/bank holidays removed from the responsiveness business-day count
+    // (IST calendar, Monday-Saturday working week). Comma-separated YYYY-MM-DD list; default
+    // empty - holiday calendars are deployment configuration, never code. Every entry is
+    // validated as a strict calendar date at load time (fail closed, the config.msme precedent):
+    // businessDaysBetween matches holidays by exact zero-padded YYYY-MM-DD string, so a malformed
+    // entry like "2026-1-1" would silently never match and the holiday would silently not be
+    // removed from the business-day count.
+    responsivenessHolidayCalendar: (() => {
+      const raw = process.env['SCORECARD_RESPONSIVENESS_HOLIDAYS'];
+      if (raw === undefined || raw.trim() === '') return [] as string[];
+      return raw
+        .split(',')
+        .map((d) => d.trim())
+        .filter((d) => d.length > 0)
+        .map((d) => {
+          const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+          if (!match) {
+            throw new Error(
+              `Invalid SCORECARD_RESPONSIVENESS_HOLIDAYS entry "${d}": must be a YYYY-MM-DD calendar date.`,
+            );
+          }
+          const year = Number(match[1]);
+          const month = Number(match[2]);
+          const day = Number(match[3]);
+          const date = new Date(Date.UTC(year, month - 1, day));
+          if (
+            date.getUTCFullYear() !== year ||
+            date.getUTCMonth() !== month - 1 ||
+            date.getUTCDate() !== day
+          ) {
+            throw new Error(
+              `Invalid SCORECARD_RESPONSIVENESS_HOLIDAYS entry "${d}": not a real calendar date.`,
+            );
+          }
+          return d;
+        });
+    })(),
+  },
 } as const;

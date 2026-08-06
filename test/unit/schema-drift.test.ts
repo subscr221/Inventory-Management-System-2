@@ -644,6 +644,19 @@ const EXPECTED = [
     indexes: [] as string[],
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 4.2: Supplier Performance Scorecards
+  {
+    canonical: 'read/projections/supplier_scorecard_metric.sql',
+    table: 'supplier_scorecard_metric',
+    constraints: ['chk_supplier_scorecard_metric_kind'],
+    indexes: [
+      'idx_supplier_scorecard_supplier_kind',
+      'idx_supplier_scorecard_reference',
+      'idx_supplier_scorecard_supersedes',
+      'uq_supplier_scorecard_reference_kind',
+    ],
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

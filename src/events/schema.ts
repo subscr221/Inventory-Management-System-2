@@ -2,6 +2,9 @@ import type { EventEnvelope } from './store.js';
 
 /**
  * Event types introduced by Story 2.5: Inter-Location Transfer Requests.
+ *
+ * Reserved event name (not registered): `qc.lot_dispositioned` - Epic 8 Story 8.3 lot
+ * disposition. Story 4.2's quality-acceptance scorecard applier activates when Epic 8 lands.
  */
 
 // ---------------------------------------------------------------------------
@@ -1363,6 +1366,39 @@ export interface PaymentClearanceFeedRecordedEnvelope extends Omit<EventEnvelope
   payload: PaymentClearanceFeedRecordedPayload;
 }
 
+/**
+ * Story 4.2: Supplier Performance Scorecards. One append-only metric observation per upstream
+ * source event. All NUMERIC values are strings; business_date is an IST calendar date string.
+ *
+ * Future hook (Epic 8 Story 8.3): the `qc.lot_dispositioned` event name is reserved for the
+ * quality-acceptance metric source. It is NOT registered in SUPPORTED_EVENT_TYPES here - Epic 8
+ * registers it when lot disposition lands; Story 4.2's quality-acceptance applier activates then.
+ */
+export interface SupplierScorecardMetricRecordedPayload {
+  metric_id: string;
+  supplier_id: string;
+  metric_kind: 'on_time_delivery' | 'quality_acceptance' | 'price_variance' | 'responsiveness';
+  /** The GRN, match, or PO source event that produced this observation. */
+  reference_event_id: string;
+  /** The GRN, match, or PO entity id the observation is about. */
+  reference_entity_id: string;
+  /** NUMERIC-as-string, scale <= 6, at most 14 integer digits. */
+  value_num: string;
+  /** Drill-through facts (received_date, promised_delivery_date, variance_pct, ...). */
+  context: Record<string, unknown>;
+  /** IST calendar date string YYYY-MM-DD. */
+  business_date: string;
+  /** A correction points at the metric row it supersedes; never an in-place update. */
+  supersedes_metric_id?: string;
+  /** Server-set from auth; never trusted from the client. */
+  recorded_by?: string;
+}
+
+export interface SupplierScorecardMetricRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier_scorecard.metric_recorded';
+  payload: SupplierScorecardMetricRecordedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
@@ -1722,6 +1758,13 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'payment_clearance_feed.recorded': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  // Story 4.2: supplier scorecard metric on the existing 'procurement' stream. The scorecard is
+  // an analytic read-side artifact; its business stream is stamped onto the projection from the
+  // source PO/GRN documents (the Story 4.6 msme.* precedent).
+  'supplier_scorecard.metric_recorded': {
     streamType: 'procurement',
     requiresBusinessStream: false,
   },

@@ -201,6 +201,13 @@ import {
   listClearanceEligibleHandler,
 } from './api/v1/three-way-match.js';
 import {
+  getSupplierScorecardHandler,
+  listSupplierScorecardTransactionsHandler,
+  recordOnTimeDeliveryMetricHandler,
+  recordPriceVarianceMetricHandler,
+  recordResponsivenessMetricHandler,
+} from './api/v1/supplier-scorecards.js';
+import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
   generateBatchPickTasksHandler,
@@ -459,6 +466,24 @@ export function createAppRouter(): Router {
   router.post('/api/v1/supplier-invoices/:invoiceId/debit-note', recordDebitNoteHandler);
   router.post('/api/v1/compliance/payment-clearance-feed/run', runPaymentClearanceFeedHandler);
   router.get('/api/v1/compliance/payment-clearance-feed/eligible', listClearanceEligibleHandler);
+
+  // Story 4.2: Supplier Performance Scorecards - consolidated trend read plus drill-through, and
+  // the three thin metric write routes (quality acceptance intentionally has no write route
+  // until Epic 8 lands its qc.lot_dispositioned source).
+  router.get('/api/v1/supplier-scorecards/:supplierId', getSupplierScorecardHandler);
+  router.get(
+    '/api/v1/supplier-scorecards/:supplierId/transactions',
+    listSupplierScorecardTransactionsHandler,
+  );
+  router.post('/api/v1/grns/:grnId/scorecard/on-time', recordOnTimeDeliveryMetricHandler);
+  router.post(
+    '/api/v1/three-way-match/:matchId/scorecard/price-variance',
+    recordPriceVarianceMetricHandler,
+  );
+  router.post(
+    '/api/v1/purchase-orders/:poId/scorecard/responsiveness',
+    recordResponsivenessMetricHandler,
+  );
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

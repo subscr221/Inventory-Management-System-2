@@ -107,6 +107,10 @@ import {
 } from '../compliance/supplier-invoice.js';
 import { assertMsmeShape, applyMsmeProjection } from '../compliance/msme.js';
 import {
+  assertSupplierScorecardShape,
+  applySupplierScorecardProjection,
+} from '../compliance/supplier-scorecard.js';
+import {
   assertThreeWayMatchShape,
   applyThreeWayMatchProjection,
 } from '../compliance/three-way-match.js';
@@ -489,6 +493,10 @@ export async function persistEvent(
   // breach flag, ageing feed) is non-DB and runs with the other pre-transaction asserts, so a
   // malformed MSME event never consumes an idempotency key.
   assertMsmeShape(envelope);
+  // Story 4.2: supplier scorecard shape validation (metric kind enum, strict UUIDs, NUMERIC
+  // scale, calendar-date rollover) is non-DB and runs with the other pre-transaction asserts, so
+  // a malformed scorecard event never consumes an idempotency key.
+  assertSupplierScorecardShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -732,6 +740,11 @@ export async function persistEvent(
     // inside this same transaction so the projection and the domain_events insert commit or roll
     // back together.
     await applyMsmeProjection(envelope, client);
+    // Story 4.2: supplier scorecard metric projection (supplier-active gate, append-only metric
+    // row, replay idempotency on metric_id plus the (reference_event_id, metric_kind) guard) runs
+    // inside this same transaction so the metric row and the domain_events insert commit or roll
+    // back together.
+    await applySupplierScorecardProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
