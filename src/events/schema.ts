@@ -1240,6 +1240,130 @@ export interface MsmeAgeingFeedRecordedEnvelope extends Omit<EventEnvelope, 'pay
 }
 
 // ---------------------------------------------------------------------------
+// Story 4.5: Goods Receipt and Three-Way Match
+// ---------------------------------------------------------------------------
+
+export interface GrnPoLinkedPayload {
+  grn_id: string;
+  /** Native Story 4.4 purchase order. First stamp wins - a GRN never re-links to a different PO. */
+  po_id: string;
+  /** The Story 2.9 ERP reference the GRN was physically received against; carried for traceability. */
+  po_number_ext?: string;
+  /** Server-set from auth; never trusted from the client. */
+  linked_by?: string;
+}
+
+export interface GrnPoLinkedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'grn.po_linked';
+  payload: GrnPoLinkedPayload;
+}
+
+/**
+ * One per-PO-line comparison across all three documents. Every quantity and money value is a
+ * NUMERIC-as-string: the comparison itself runs in PostgreSQL NUMERIC and the strings are the
+ * verbatim results, so no JS float ever touches the audit record (Story 4.4 lesson).
+ */
+export interface ThreeWayMatchLineVariance {
+  line_no: number;
+  sku: string;
+  po_qty: string;
+  received_qty: string;
+  invoice_qty: string;
+  qty_variance_pct: string;
+  po_unit_price: string;
+  invoice_unit_price: string;
+  price_variance_pct: string;
+  /** Present only on a failing line: 'quantity' | 'price' | 'ambiguous_sku'. */
+  failure_reason?: string;
+}
+
+export interface ThreeWayMatchToleranceSnapshot {
+  quantity_pct: string;
+  price_pct: string;
+  invoice_value_abs: string;
+  rule_version: string;
+}
+
+export interface ThreeWayMatchVarianceDetail {
+  lines: ThreeWayMatchLineVariance[];
+  /** Invoice lines that resolve to no PO line at all - a failure, never a crash. */
+  unmatched_invoice_lines: Array<{ line_no: number; sku: string; quantity: string }>;
+  /** ABS(invoice.total_value - SUM(matched line values)), NUMERIC-as-string. */
+  invoice_value_variance_abs: string;
+  invoice_total_value: string;
+  matched_line_value_total: string;
+  /** SQL-computed NUMERIC boolean; the authoritative pass/fail signal, no JS float. */
+  invoice_value_within_tolerance: boolean;
+  tolerance_snapshot: ThreeWayMatchToleranceSnapshot;
+}
+
+export interface ThreeWayMatchRecordedPayload {
+  match_id: string;
+  invoice_id: string;
+  po_id: string;
+  /** Every GRN bound to the PO that contributed received quantity to this run. */
+  grn_ids: string[];
+  result: 'passed' | 'blocked';
+  /** 'MATCH_OUT_OF_TOLERANCE' when result is 'blocked'; absent otherwise. */
+  error_code?: string;
+  variance_detail: ThreeWayMatchVarianceDetail;
+  tolerance_snapshot: ThreeWayMatchToleranceSnapshot;
+  /** Server-set from auth; never trusted from the client. */
+  run_by?: string;
+}
+
+export interface ThreeWayMatchRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'three_way_match.recorded';
+  payload: ThreeWayMatchRecordedPayload;
+}
+
+/**
+ * Credit and debit notes are the ONLY way a blocked match is lifted (AC3). They are additive
+ * records: no invoice row is deleted and no captured financial snapshot is mutated. The FR-AC-13
+ * edit-log requirement is met by the existing statutory audit_log written by the route.
+ */
+export interface SupplierInvoiceNoteRecordedPayload {
+  note_id: string;
+  invoice_id: string;
+  match_id: string;
+  note_number_ext: string;
+  /** NUMERIC-as-string, scale 2, strictly positive. */
+  amount: string;
+  reason: string;
+  /** Stamped by the applier from the event_type, present in the stored event. */
+  note_type?: 'credit_note' | 'debit_note';
+  /** Server-set from auth; never trusted from the client. */
+  recorded_by?: string;
+}
+
+export type SupplierInvoiceCreditNoteRecordedPayload = SupplierInvoiceNoteRecordedPayload;
+
+export interface SupplierInvoiceCreditNoteRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier_invoice.credit_note_recorded';
+  payload: SupplierInvoiceCreditNoteRecordedPayload;
+}
+
+export type SupplierInvoiceDebitNoteRecordedPayload = SupplierInvoiceNoteRecordedPayload;
+
+export interface SupplierInvoiceDebitNoteRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'supplier_invoice.debit_note_recorded';
+  payload: SupplierInvoiceDebitNoteRecordedPayload;
+}
+
+export interface PaymentClearanceFeedRecordedPayload {
+  feed_id: string;
+  row_count: number;
+  /** ISO timestamp the clearance snapshot was generated. */
+  generated_at: string;
+  correlation_id: string;
+}
+
+export interface PaymentClearanceFeedRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'payment_clearance_feed.recorded';
+  payload: PaymentClearanceFeedRecordedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -1574,6 +1698,30 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'msme_ageing_feed.recorded': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  // Story 4.5: three-way match on the existing 'procurement' stream. None of these carry a
+  // business-stream tag on the envelope - site_id and business_stream are stamped into the
+  // projections from the already-governed PO and invoice rows (the Story 4.6 pattern), so the
+  // match record cannot disagree with the documents it compares.
+  'grn.po_linked': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'three_way_match.recorded': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier_invoice.credit_note_recorded': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'supplier_invoice.debit_note_recorded': {
+    streamType: 'procurement',
+    requiresBusinessStream: false,
+  },
+  'payment_clearance_feed.recorded': {
     streamType: 'procurement',
     requiresBusinessStream: false,
   },

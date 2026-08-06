@@ -217,4 +217,23 @@ export const config = {
     // fractional percents are valid (3 x 6.5 = 19.5).
     interestRatePercentAnnual: parsePositiveNumberEnv('MSME_S16_BANK_RATE_X3_PERCENT', 27),
   },
+  threeWayMatch: {
+    // Story 4.5 (AC2): the tolerances a PO/GRN/invoice comparison must fall within to pass. These
+    // are commercial policy, not code - they move per deployment and per financial year, so they
+    // live here and are snapshotted into every match record alongside ruleVersion. Do NOT conflate
+    // them with erp_purchase_order_line.over_receipt_tolerance_pct, which is Story 3.4's
+    // receiving-side check with its own error code (RECEIPT_TOLERANCE_EXCEEDED).
+    quantityTolerancePercent: parsePositiveNumberEnv('MATCH_QTY_TOLERANCE_PCT', 2),
+    priceTolerancePercent: parsePositiveNumberEnv('MATCH_PRICE_TOLERANCE_PCT', 2),
+    // Absolute currency tolerance on the invoice header total vs the sum of matched line values,
+    // which catches rounding and tax-allocation drift that per-line percentages cannot.
+    invoiceValueToleranceAbsolute: parsePositiveNumberEnv('MATCH_INVOICE_VALUE_TOLERANCE_ABS', 100),
+    // Dated rule version stamped onto every match record so a historical match stays explainable
+    // after the tolerances above are amended (mirrors config.msme.ruleVersion).
+    ruleVersion: (() => {
+      const raw = process.env['MATCH_TOLERANCE_RULE_VERSION'];
+      if (raw === undefined || raw.trim() === '') return '2026-08-fy27';
+      return raw;
+    })(),
+  },
 } as const;

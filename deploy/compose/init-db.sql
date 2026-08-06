@@ -2884,6 +2884,13 @@ CREATE INDEX IF NOT EXISTS idx_weighbridge_event_occurred_at ON weighbridge_even
 ALTER TABLE IF EXISTS grn ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_grn_received_at ON grn (received_at);
 
+-- Story 4.5 additive migration: binding to a NATIVE Story 4.4 purchase order. Story 3.4 physical
+-- capture only knows the Story 2.9 ERP reference (po_ref_ext matching erp_purchase_order
+-- .po_number_ext), which stays authoritative for ERP-originated receipts; a GRN may carry both.
+-- Nullable and first-stamp-wins (COALESCE) - a GRN never re-links to a different PO.
+ALTER TABLE IF EXISTS grn ADD COLUMN IF NOT EXISTS po_id UUID;
+CREATE INDEX IF NOT EXISTS idx_grn_po_id ON grn (po_id);
+
 -- Story 3.8 additive migration: supervisor-assignable priority (AC1 requires the task board to show
 -- priority alongside age and zone). Added as an ALTER rather than inside the CREATE TABLE above so
 -- databases provisioned before this story gain the column too. NOT NULL with a default keeps every
@@ -4146,6 +4153,29 @@ END $$;
 -- lifecycle - chk_supplier_invoice_status is untouched.
 ALTER TABLE IF EXISTS supplier_invoice ADD COLUMN IF NOT EXISTS statutory_breach BOOLEAN NOT NULL DEFAULT false;
 
+-- Story 4.5 additive migration: three-way match outcome. Orthogonal to the unmatched/captured
+-- capture lifecycle - chk_supplier_invoice_status is untouched. NULL means never matched, and a
+-- never-matched invoice is NOT clearance-eligible. Mirrors the latest three_way_match row for this
+-- invoice so the payment-clearance feed can filter without a correlated subquery.
+ALTER TABLE IF EXISTS supplier_invoice ADD COLUMN IF NOT EXISTS match_status TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_match_status'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_match_status CHECK (
+        match_status IS NULL OR match_status IN ('passed','blocked','lifted')
+      );
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_match_blocked
+  ON supplier_invoice (match_status) WHERE match_status = 'blocked';
+
 -- MUST stay identical to read/projections/supplier_invoice_line.sql (canonical source).
 -- Supplier invoice line read model (Story 4.7). CANONICAL definition, applied by
 -- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
@@ -4345,5 +4375,128 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON msme_ageing_feed TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/three_way_match.sql (canonical source).
+-- Three-way match read model (Story 4.5). This file is the CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It carries its OWN
+-- grants (guarded DO blocks) so a migrate-provisioned database can serve reads/writes as app_user
+-- without depending on deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates this
+-- content for first-boot container init - change both files together. Every statement is
+-- idempotent (IF NOT EXISTS / guarded DO blocks) so the file can be re-applied to a live database
+-- safely.
+--
+-- Derived state ONLY: rows are derived exclusively at persist time from three_way_match.* and
+-- supplier_invoice.*_note_recorded domain events; mutation happens exclusively through
+-- persistEvent, which applies this projection inside the SAME transaction as the domain_events
+-- insert. One row per match RUN (match_id): a blocked match that is later lifted by a credit or
+-- debit note keeps its row and flips to 'lifted'; a fresh match run after a lift is a NEW match_id,
+-- never an overwrite. variance_detail carries the per-line quantity/price comparison plus the
+-- tolerance snapshot actually applied, so a historical match stays explainable after the
+-- configured tolerances change. All comparison arithmetic runs in PostgreSQL NUMERIC - never
+-- floating point.
+
+CREATE TABLE IF NOT EXISTS three_way_match (
+  match_id              UUID PRIMARY KEY,
+  invoice_id            UUID NOT NULL,
+  po_id                 UUID NOT NULL,
+  site_id               UUID,
+  business_stream       TEXT,
+  status                TEXT NOT NULL,
+  error_code            TEXT,
+  variance_detail       JSONB NOT NULL,
+  tolerance_rule_version TEXT NOT NULL,
+  lifted_note_id        UUID,
+  lifted_note_type      TEXT,
+  run_by                UUID NOT NULL,
+  recorded_at           TIMESTAMPTZ NOT NULL,
+  lifted_at             TIMESTAMPTZ,
+  source_event_id       UUID NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_three_way_match_status CHECK (status IN ('passed','blocked','lifted')),
+  CONSTRAINT chk_three_way_match_note_type CHECK (
+    lifted_note_type IS NULL OR lifted_note_type IN ('credit_note','debit_note')
+  ),
+  CONSTRAINT chk_three_way_match_lift_pairing CHECK (
+    (status = 'lifted' AND lifted_note_id IS NOT NULL AND lifted_note_type IS NOT NULL AND lifted_at IS NOT NULL)
+    OR (status <> 'lifted' AND lifted_note_id IS NULL AND lifted_note_type IS NULL AND lifted_at IS NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_three_way_match_invoice ON three_way_match (invoice_id);
+CREATE INDEX IF NOT EXISTS idx_three_way_match_po ON three_way_match (po_id);
+CREATE INDEX IF NOT EXISTS idx_three_way_match_blocked ON three_way_match (status) WHERE status = 'blocked';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_three_way_match_status'
+      AND conrelid = 'three_way_match'::regclass
+  ) THEN
+    ALTER TABLE three_way_match
+      ADD CONSTRAINT chk_three_way_match_status CHECK (status IN ('passed','blocked','lifted'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_three_way_match_note_type'
+      AND conrelid = 'three_way_match'::regclass
+  ) THEN
+    ALTER TABLE three_way_match
+      ADD CONSTRAINT chk_three_way_match_note_type CHECK (
+        lifted_note_type IS NULL OR lifted_note_type IN ('credit_note','debit_note')
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_three_way_match_lift_pairing'
+      AND conrelid = 'three_way_match'::regclass
+  ) THEN
+    ALTER TABLE three_way_match
+      ADD CONSTRAINT chk_three_way_match_lift_pairing CHECK (
+        (status = 'lifted' AND lifted_note_id IS NOT NULL AND lifted_note_type IS NOT NULL AND lifted_at IS NOT NULL)
+        OR (status <> 'lifted' AND lifted_note_id IS NULL AND lifted_note_type IS NULL AND lifted_at IS NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON three_way_match TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON three_way_match TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/payment_clearance_feed.sql (canonical source).
+-- Payment clearance feed ledger (Story 4.5). CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate); deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent.
+--
+-- Derived state ONLY: the row is written atomically with payment_clearance_feed.recorded inside the
+-- SAME persistEvent transaction. This is the ERP adapter boundary record for AC3 - payment executes
+-- in ERP, so "blocked from payment" is effected by OMITTING the invoice from this payload while its
+-- three-way match is blocked. The adapter records the clearance payload durably; live transmission
+-- is per-deployment configuration and is NOT implemented here (AD-4). Append-only ledger: app_user
+-- gets INSERT, SELECT only (no UPDATE), mirroring msme_ageing_feed.
+
+CREATE TABLE IF NOT EXISTS payment_clearance_feed (
+  feed_id       UUID PRIMARY KEY,
+  payload       JSONB NOT NULL,
+  row_count     INTEGER NOT NULL,
+  recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON payment_clearance_feed TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON payment_clearance_feed TO readonly_user;
   END IF;
 END $$;

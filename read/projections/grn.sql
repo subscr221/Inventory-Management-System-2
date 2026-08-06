@@ -57,3 +57,10 @@ END $$;
 -- other header-identity column on this table.
 ALTER TABLE IF EXISTS grn ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_grn_received_at ON grn (received_at);
+
+-- Story 4.5 additive migration: binding to a NATIVE Story 4.4 purchase order. Story 3.4 physical
+-- capture only knows the Story 2.9 ERP reference (po_ref_ext matching erp_purchase_order
+-- .po_number_ext), which stays authoritative for ERP-originated receipts; a GRN may carry both.
+-- Nullable and first-stamp-wins (COALESCE) - a GRN never re-links to a different PO.
+ALTER TABLE IF EXISTS grn ADD COLUMN IF NOT EXISTS po_id UUID;
+CREATE INDEX IF NOT EXISTS idx_grn_po_id ON grn (po_id);

@@ -17,8 +17,10 @@ import { fileURLToPath } from 'node:url';
 // msme_classification_at_capture/statutory_due_date/statutory_due_rule_version at capture and at
 // link time (AC5 closed via 4.6 AC3a; positive stamping is asserted in story-4-6.test.ts). The
 // suppliers seeded HERE are never MSME-verified, so this file asserts the non-MSME contract: all
-// three fields stay null. Story 4.5 (three-way match) is still not implemented, so its
-// SOURCE_DOCUMENT_REQUIRED consumer check stays a documented, visibly-blocked gap.
+// three fields stay null. Story 4.5 (three-way match) is now implemented, and the consumer check
+// this file used to record as a visibly-blocked gap - a match attempt against an unmatched invoice
+// must fail with SOURCE_DOCUMENT_REQUIRED - is asserted for real in story-4-5.test.ts
+// ('AC4: a three-way match run against an unmatched invoice is rejected').
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCIM_HEADERS = { Authorization: 'Bearer test-only-scim-bearer-token-not-for-production-use' };

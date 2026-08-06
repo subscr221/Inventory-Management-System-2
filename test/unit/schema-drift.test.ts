@@ -318,6 +318,8 @@ const EXPECTED = [
       'idx_grn_business_date',
       // Story 3.8: capture-instant column for the GRN-fallback leg of gate-dwell computation.
       'idx_grn_received_at',
+      // Story 4.5: native Story 4.4 purchase-order binding for the three-way match.
+      'idx_grn_po_id',
     ],
   },
   {
@@ -569,6 +571,8 @@ const EXPECTED = [
       'chk_supplier_invoice_cess_non_negative',
       'chk_supplier_invoice_total_non_negative',
       'chk_supplier_invoice_msme_classification',
+      // Story 4.5: additive match-outcome column, guarded separately from the CREATE TABLE body.
+      'chk_supplier_invoice_match_status',
     ],
     indexes: [
       'uq_supplier_invoice_duplicate_grain',
@@ -577,6 +581,8 @@ const EXPECTED = [
       'idx_supplier_invoice_po',
       'idx_supplier_invoice_site_status',
       'idx_supplier_invoice_gst_recon',
+      // Story 4.5: partial index over blocked matches for the payment-clearance filter.
+      'idx_supplier_invoice_match_blocked',
     ],
   },
   {
@@ -612,6 +618,28 @@ const EXPECTED = [
   {
     canonical: 'read/projections/msme_ageing_feed.sql',
     table: 'msme_ageing_feed',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 4.5: Goods Receipt and Three-Way Match
+  {
+    canonical: 'read/projections/three_way_match.sql',
+    table: 'three_way_match',
+    constraints: [
+      'chk_three_way_match_status',
+      'chk_three_way_match_note_type',
+      'chk_three_way_match_lift_pairing',
+    ],
+    indexes: [
+      'idx_three_way_match_invoice',
+      'idx_three_way_match_po',
+      'idx_three_way_match_blocked',
+    ],
+  },
+  {
+    canonical: 'read/projections/payment_clearance_feed.sql',
+    table: 'payment_clearance_feed',
     constraints: [] as string[],
     indexes: [] as string[],
     appUserGrant: 'INSERT, SELECT',
@@ -669,9 +697,7 @@ describe('Story 2.1 schema drift guard', () => {
       'supplier_invoice.sql missing statutory_breach',
     );
     assert.ok(
-      initDb.includes(
-        'ADD COLUMN IF NOT EXISTS statutory_breach BOOLEAN NOT NULL DEFAULT false',
-      ),
+      initDb.includes('ADD COLUMN IF NOT EXISTS statutory_breach BOOLEAN NOT NULL DEFAULT false'),
       'init-db.sql missing statutory_breach',
     );
     assert.ok(msmeAgeingFeedSql.includes('msme_ageing_feed'), 'msme_ageing_feed.sql missing table');
@@ -683,6 +709,52 @@ describe('Story 2.1 schema drift guard', () => {
       migrateSource.indexOf(msmeAgeingFeedMigration) >
         migrateSource.lastIndexOf("'../../read/projections/supplier_invoice.sql'"),
       'msme_ageing_feed must be appended after the supplier_invoice migrations',
+    );
+  });
+
+  it('Story 4.5 mirrors every match additive column into init-db.sql and registers both new projections in MIGRATIONS', () => {
+    const grnSql = read('read/projections/grn.sql');
+    const supplierInvoiceSql = read('read/projections/supplier_invoice.sql');
+    const threeWayMatchMigration = "'../../read/projections/three_way_match.sql'";
+    const clearanceFeedMigration = "'../../read/projections/payment_clearance_feed.sql'";
+
+    assert.ok(
+      grnSql.includes('ADD COLUMN IF NOT EXISTS po_id UUID'),
+      'grn.sql missing native po_id binding column',
+    );
+    assert.ok(
+      initDb.includes('ADD COLUMN IF NOT EXISTS po_id UUID'),
+      'init-db.sql missing grn.po_id',
+    );
+    assert.ok(
+      supplierInvoiceSql.includes('ADD COLUMN IF NOT EXISTS match_status TEXT'),
+      'supplier_invoice.sql missing match_status',
+    );
+    assert.ok(
+      initDb.includes('ADD COLUMN IF NOT EXISTS match_status TEXT'),
+      'init-db.sql missing match_status',
+    );
+    // The capture-lifecycle CHECK must never be widened to carry match state (binding decision 5).
+    assert.ok(
+      supplierInvoiceSql.includes("CHECK (status IN ('unmatched','captured'))"),
+      'chk_supplier_invoice_status must stay the two capture values',
+    );
+    assert.ok(
+      migrateSource.includes(threeWayMatchMigration),
+      'src/events/migrate.ts must register three_way_match.sql',
+    );
+    assert.ok(
+      migrateSource.includes(clearanceFeedMigration),
+      'src/events/migrate.ts must register payment_clearance_feed.sql',
+    );
+    assert.ok(
+      migrateSource.indexOf(threeWayMatchMigration) >
+        migrateSource.lastIndexOf("'../../read/projections/supplier_invoice_line.sql'"),
+      'three_way_match must be appended after the supplier invoice migrations it reads',
+    );
+    assert.ok(
+      migrateSource.indexOf(clearanceFeedMigration) > migrateSource.indexOf(threeWayMatchMigration),
+      'payment_clearance_feed must be appended after three_way_match',
     );
   });
 

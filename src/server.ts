@@ -191,6 +191,16 @@ import {
   runMsmeDailyCheckHandler,
 } from './api/v1/msme.js';
 import {
+  linkGrnToPoHandler,
+  runThreeWayMatchHandler,
+  listThreeWayMatchesHandler,
+  getThreeWayMatchHandler,
+  recordCreditNoteHandler,
+  recordDebitNoteHandler,
+  runPaymentClearanceFeedHandler,
+  listClearanceEligibleHandler,
+} from './api/v1/three-way-match.js';
+import {
   generatePickTasksHandler,
   generateWavePickTasksHandler,
   generateBatchPickTasksHandler,
@@ -437,6 +447,18 @@ export function createAppRouter(): Router {
   router.get('/api/v1/compliance/msme/ageing', msmeAgeingReportHandler);
   router.post('/api/v1/compliance/msme/ageing-feed/run', runMsmeAgeingFeedHandler);
   router.post('/api/v1/compliance/msme/daily-check', runMsmeDailyCheckHandler);
+
+  // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
+  // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP
+  // payment-clearance feed that a blocked invoice is withheld from.
+  router.post('/api/v1/grns/:grnId/link-po', linkGrnToPoHandler);
+  router.post('/api/v1/three-way-match/run', runThreeWayMatchHandler);
+  router.get('/api/v1/three-way-match', listThreeWayMatchesHandler);
+  router.get('/api/v1/three-way-match/:matchId', getThreeWayMatchHandler);
+  router.post('/api/v1/supplier-invoices/:invoiceId/credit-note', recordCreditNoteHandler);
+  router.post('/api/v1/supplier-invoices/:invoiceId/debit-note', recordDebitNoteHandler);
+  router.post('/api/v1/compliance/payment-clearance-feed/run', runPaymentClearanceFeedHandler);
+  router.get('/api/v1/compliance/payment-clearance-feed/eligible', listClearanceEligibleHandler);
 
   // Story 3.6: Pick Task Generation and Execution
   router.post('/api/v1/pick-tasks/generate', generatePickTasksHandler);

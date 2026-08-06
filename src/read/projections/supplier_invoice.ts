@@ -28,6 +28,12 @@ export interface SupplierInvoiceRow {
   duplicate_of_invoice_id: string | null;
   duplicate_override_reason: string | null;
   capture_method: 'manual' | 'file' | null;
+  /**
+   * Story 4.5: outcome of the latest three-way match run. Orthogonal to `status`, which stays the
+   * two capture-lifecycle values. NULL means never matched - and a never-matched invoice is NOT
+   * eligible for the payment-clearance feed.
+   */
+  match_status: 'passed' | 'blocked' | 'lifted' | null;
   ingestion_id: string | null;
   captured_by: string;
   captured_at: string;
@@ -403,6 +409,23 @@ export async function updateSupplierInvoicePoLink(
        SET status = 'captured', po_id = $2, site_id = $3, business_stream = $4, updated_at = now()
      WHERE invoice_id = $1`,
     [invoiceId, poId, siteId, businessStream],
+  );
+}
+
+/**
+ * Story 4.5: mirrors the latest three_way_match outcome onto the invoice row so the
+ * payment-clearance filter is a plain indexed predicate rather than a correlated subquery. The
+ * three_way_match row remains the authoritative record; this column is a denormalized cache
+ * written in the same transaction as that row.
+ */
+export async function updateSupplierInvoiceMatchStatus(
+  invoiceId: string,
+  matchStatus: 'passed' | 'blocked' | 'lifted',
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `UPDATE supplier_invoice SET match_status = $2, updated_at = now() WHERE invoice_id = $1`,
+    [invoiceId, matchStatus],
   );
 }
 

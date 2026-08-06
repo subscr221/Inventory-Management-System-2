@@ -1,5 +1,21 @@
 # generated: 2026-07-12
-# last_updated: '2026-08-02'
+# last_updated: '2026-08-06'
+# story 4-5 dev-story 2026-08-06: implemented all 9 tasks (35 subtasks) from baseline b32fe25.
+#   New three_way_match projection (one row per match RUN) and append-only payment_clearance_feed
+#   ledger; additive grn.po_id and supplier_invoice.match_status (chk_supplier_invoice_status
+#   deliberately NOT widened). Five new procurement-stream events (grn.po_linked,
+#   three_way_match.recorded, supplier_invoice.credit_note_recorded / .debit_note_recorded,
+#   payment_clearance_feed.recorded), one compliance module, eight routes. Binding decision: the
+#   match RESULT is server-computed inside the persistEvent transaction and written back onto
+#   envelope.payload before the domain_events insert, so a direct POST /api/v1/events claiming
+#   result 'passed' is stored as 'blocked' with the real variance detail - the strongest available
+#   answer to the 4.7 route-bypass lesson. Quantity agreement is one percent per line (largest
+#   pairwise difference among ordered/received/invoiced, over ordered), inclusive at the boundary.
+#   Fail-closed on a line-less PO, on a SKU repeated across PO lines (ambiguous_sku), and on an
+#   invoice line matching no PO line. Clearance withholds blocked AND never-matched invoices.
+#   Story 4.7's SOURCE_DOCUMENT_REQUIRED consumer gap closed and un-documented. Gates: build,
+#   lint, format:check, db:migrate x2, spine 6/6, schema-drift 59/59, story-4-5 24/24, npm test
+#   671/657 pass with the same 14 pre-existing idempotency failures (0 new); moved to review
 # story 5-1 created 2026-08-05 via create-story workflow: Multi-Level BOM Creation (FR-B-01, FR-B-03,
 #   FR-B-13, FR-B-14). Opens Epic 5 (epic-5 backlog -> in-progress). Draft-only scope: bom, bom_revision,
 #   bom_line, and a phantom-resolved bom_structure projection on a new 'engineering' event stream
@@ -266,6 +282,16 @@
 
 generated: 2026-07-12
 last_updated: '2026-08-06'
+# story 4-5 code review 2026-08-06 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
+#   Auditor over baseline b32fe25 working tree): 12 patch findings applied (match mirror desync,
+#   superseded-lift payment-clearing hazard, JS-float tolerance decision violating Binding
+#   Decision 8, site-scoped clearance eligible read, FOR UPDATE on PO liveness, SKU agreement on
+#   line_no fallback, replay coverage for all 5 new event types, note replay mismatch 409,
+#   note_number_ext duplicate detection, 404 for missing match, schema interface drift,
+#   feed-replay ledger no-op, and a P12 po_ref_ext correspondence check reclassified as deferred -
+#   needs a dedicated erp_supplier_ref_ext <-> governed supplier mapping table, not present in
+#   the schema). All story-4-5 tests 35/35, sibling 4-6/4-7 suites green, tsc/eslint/format
+#   clean, schema-drift 60/60, spine 6/6, db:migrate re-runnable; status moved review -> done.
 # story 4-7 dev-story 2026-08-05: implemented Tasks 1-6, 8-9 from baseline f9d3bd2. Three new
 #   projections (supplier_invoice, supplier_invoice_line, supplier_invoice_ingestion) mirrored into
 #   init-db.sql + schema-drift EXPECTED; five new procurement-stream events
@@ -642,7 +668,7 @@ development_status:
   4-2-supplier-performance-scorecards: backlog
   4-3-purchase-requisition-and-indent-loop: done
   4-4-purchase-order-management: done
-  4-5-goods-receipt-and-three-way-match: backlog
+  4-5-goods-receipt-and-three-way-match: done
   4-6-msme-compliance-tracking: done
   4-7-supplier-invoice-capture: done
   epic-4-retrospective: optional

@@ -24,6 +24,13 @@ export interface Grn {
    * line that creates the header and never overwritten. Null on headers written before Story 3.8.
    */
   received_at: string | null;
+  /**
+   * Story 4.5: the NATIVE Story 4.4 purchase order this receipt is bound to. Story 3.4 physical
+   * capture only knows po_ref_ext (the Story 2.9 ERP reference), which stays authoritative for
+   * ERP-originated receipts; a GRN may carry both. Null until a grn.po_linked event stamps it,
+   * and first-stamp-wins thereafter.
+   */
+  po_id: string | null;
   source_event_id: string;
   created_at: string;
   updated_at: string;
@@ -63,7 +70,7 @@ function ts(value: unknown): string {
 
 const GRN_COLUMNS = `grn_id, correlation_id, po_ref_ext, source_document, source_ref_ext, site_id,
        site_code_ext, status, received_by, to_char(business_date, 'YYYY-MM-DD') AS business_date,
-       received_at, source_event_id, created_at, updated_at`;
+       received_at, po_id, source_event_id, created_at, updated_at`;
 
 function mapRow(row: Record<string, unknown>): Grn {
   return {
@@ -78,6 +85,7 @@ function mapRow(row: Record<string, unknown>): Grn {
     received_by: row['received_by'] as string,
     business_date: row['business_date'] as string,
     received_at: row['received_at'] ? ts(row['received_at']) : null,
+    po_id: (row['po_id'] as string | null) ?? null,
     source_event_id: row['source_event_id'] as string,
     created_at: ts(row['created_at']),
     updated_at: ts(row['updated_at']),
@@ -89,6 +97,34 @@ export async function getGrnById(grnId: string, client?: PoolClient): Promise<Gr
     grnId,
   ]);
   return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
+}
+
+/**
+ * Story 4.5: row-level lock on the GRN header, used by the grn.po_linked applier to serialize
+ * concurrent link attempts. FOR UPDATE is taken on this entity row, never on domain_events (a
+ * lock there fails with 42501 under the app_user grant set).
+ */
+export async function getGrnByIdForUpdate(grnId: string, client: PoolClient): Promise<Grn | null> {
+  const result = await client.query(`SELECT ${GRN_COLUMNS} FROM grn WHERE grn_id = $1 FOR UPDATE`, [
+    grnId,
+  ]);
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
+}
+
+/**
+ * Story 4.5: first-stamp-wins binding of a GRN to a native purchase order. COALESCE means a
+ * replay is a no-op and a re-link attempt to a DIFFERENT PO leaves the original binding intact -
+ * the applier detects that case beforehand and rejects it rather than silently ignoring it.
+ */
+export async function linkGrnToPurchaseOrder(
+  grnId: string,
+  poId: string,
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `UPDATE grn SET po_id = COALESCE(po_id, $2::uuid), updated_at = now() WHERE grn_id = $1`,
+    [grnId, poId],
+  );
 }
 
 export async function listGrns(filters: ListGrnsFilters = {}, client?: PoolClient): Promise<Grn[]> {

@@ -106,6 +106,10 @@ import {
   resolveSupplierInvoiceDuplicateConflict,
 } from '../compliance/supplier-invoice.js';
 import { assertMsmeShape, applyMsmeProjection } from '../compliance/msme.js';
+import {
+  assertThreeWayMatchShape,
+  applyThreeWayMatchProjection,
+} from '../compliance/three-way-match.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -485,6 +489,7 @@ export async function persistEvent(
   // breach flag, ageing feed) is non-DB and runs with the other pre-transaction asserts, so a
   // malformed MSME event never consumes an idempotency key.
   assertMsmeShape(envelope);
+  assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
@@ -727,6 +732,12 @@ export async function persistEvent(
     // inside this same transaction so the projection and the domain_events insert commit or roll
     // back together.
     await applyMsmeProjection(envelope, client);
+    // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
+    // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
+    // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
+    // computed match result before the domain_events insert below, so the stored event carries
+    // findings this process derived rather than anything the caller asserted.
+    await applyThreeWayMatchProjection(envelope, client, eventId);
 
     let nextVersion: number;
 
@@ -926,6 +937,30 @@ export async function persistEvent(
                 : 'internal',
           },
         );
+      }
+    }
+    // Story 4.5: the match vocabulary CHECKs are enforced in the appliers first, so reaching one
+    // here means an unmapped path produced an impossible state. Surface it as a stable 409 with
+    // the violated constraint rather than a raw PG 500.
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      err.code === '23514' &&
+      'constraint' in err
+    ) {
+      const constraint = (err as { constraint?: string }).constraint;
+      if (
+        constraint === 'chk_three_way_match_status' ||
+        constraint === 'chk_three_way_match_note_type' ||
+        constraint === 'chk_three_way_match_lift_pairing' ||
+        constraint === 'chk_supplier_invoice_match_status'
+      ) {
+        throw new AppError(409, 'MATCH_STATE_INVALID', 'Invalid three-way match state transition', {
+          constraint,
+          match_id:
+            typeof envelope.payload['match_id'] === 'string' ? envelope.payload['match_id'] : null,
+        });
       }
     }
     throw err;

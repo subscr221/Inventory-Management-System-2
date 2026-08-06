@@ -1304,13 +1304,7 @@ async function applySupplierInvoicePoLinked(
   // The po_link path no longer re-stamps msme_classification_at_capture / statutory_due_date /
   // statutory_due_rule_version; a supplier that gains MSME status between capture and link keeps
   // the capture-time nulls. The three MSME fields are absent from updateSupplierInvoicePoLink.
-  await updateSupplierInvoicePoLink(
-    invoiceId,
-    po.po_id,
-    po.site_id,
-    po.business_stream,
-    client,
-  );
+  await updateSupplierInvoicePoLink(invoiceId, po.po_id, po.site_id, po.business_stream, client);
 }
 
 export async function applySupplierInvoiceProjection(

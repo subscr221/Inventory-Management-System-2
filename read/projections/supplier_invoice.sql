@@ -195,3 +195,26 @@ END $$;
 -- MSME invoice passes its statutory due date unpaid. Orthogonal to the unmatched/captured status
 -- lifecycle - chk_supplier_invoice_status is untouched.
 ALTER TABLE IF EXISTS supplier_invoice ADD COLUMN IF NOT EXISTS statutory_breach BOOLEAN NOT NULL DEFAULT false;
+
+-- Story 4.5 additive migration: three-way match outcome. Orthogonal to the unmatched/captured
+-- capture lifecycle - chk_supplier_invoice_status is untouched. NULL means never matched, and a
+-- never-matched invoice is NOT clearance-eligible. Mirrors the latest three_way_match row for this
+-- invoice so the payment-clearance feed can filter without a correlated subquery.
+ALTER TABLE IF EXISTS supplier_invoice ADD COLUMN IF NOT EXISTS match_status TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_supplier_invoice_match_status'
+      AND conrelid = 'supplier_invoice'::regclass
+  ) THEN
+    ALTER TABLE supplier_invoice
+      ADD CONSTRAINT chk_supplier_invoice_match_status CHECK (
+        match_status IS NULL OR match_status IN ('passed','blocked','lifted')
+      );
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_supplier_invoice_match_blocked
+  ON supplier_invoice (match_status) WHERE match_status = 'blocked';

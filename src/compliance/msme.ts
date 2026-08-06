@@ -213,11 +213,9 @@ function assertMsmeVerifiedShape(p: Record<string, unknown>): void {
   if (isDateString(p['revalidation_due_date'])) {
     const today = istCalendarDate(new Date().toISOString());
     if ((p['revalidation_due_date'] as string) < today) {
-      reject(
-        'UDYAM_INVALID',
-        'revalidation_due_date must be today or in the future',
-        { revalidation_due_date: p['revalidation_due_date'] },
-      );
+      reject('UDYAM_INVALID', 'revalidation_due_date must be today or in the future', {
+        revalidation_due_date: p['revalidation_due_date'],
+      });
     }
   }
 }
@@ -526,10 +524,10 @@ export async function runMsmeComplianceCheck(
           object_id: supplierId,
           actor_label: `Supplier ${raw['legal_name']}`,
           next_step: `Re-verify the Udyam registration before ${dueDate} or the MSME flag lapses`,
-        actor: scope.actor,
-        // Same anchor as msmeEventMetadata: a replayed check for a past business date produces
-        // an alert dated at the start of that business day, not at wall-clock now.
-        occurred_at: `${scope.business_date}T00:00:00.000Z`,
+          actor: scope.actor,
+          // Same anchor as msmeEventMetadata: a replayed check for a past business date produces
+          // an alert dated at the start of that business day, not at wall-clock now.
+          occurred_at: `${scope.business_date}T00:00:00.000Z`,
         },
         client,
       );
