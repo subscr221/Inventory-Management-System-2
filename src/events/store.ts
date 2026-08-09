@@ -957,6 +957,23 @@ export async function persistEvent(
                 : 'internal',
           },
         );
+      } else if (constraint === 'uq_bom_parent_item' || constraint === 'bom_pkey') {
+        // Concurrent BOM writes racing the seam's pre-check: the serial case is already a mapped
+        // 409 in the seam (DUPLICATE_EVENT on an existing bom_id or parent_item_id); this maps the
+        // race so a second writer surfaces a stable 409 instead of a raw 23505 500.
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'A BOM already exists for this bom_id or parent item',
+          {
+            bom_id:
+              typeof envelope.payload['bom_id'] === 'string' ? envelope.payload['bom_id'] : null,
+            parent_item_id:
+              typeof envelope.payload['parent_item_id'] === 'string'
+                ? envelope.payload['parent_item_id']
+                : null,
+          },
+        );
       }
     }
     // Story 4.5: the match vocabulary CHECKs are enforced in the appliers first, so reaching one

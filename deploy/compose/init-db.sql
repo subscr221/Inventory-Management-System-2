@@ -3969,14 +3969,38 @@ CREATE TABLE IF NOT EXISTS bom (
   status                TEXT NOT NULL DEFAULT 'draft',
   current_revision_id   UUID,
   blocking_line_count   INTEGER NOT NULL DEFAULT 0,
+  status_changed_at     TIMESTAMPTZ,
+  status_changed_by     UUID,
+  origin                TEXT NOT NULL DEFAULT 'native',
+  remediation_flag      BOOLEAN NOT NULL DEFAULT false,
+  kit_ref               TEXT,
   created_by            UUID NOT NULL,
   correlation_id        UUID,
   source_event_id       UUID NOT NULL,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_bom_type CHECK (bom_type IN ('production','rnd','job_work_kit')),
-  CONSTRAINT chk_bom_status CHECK (status IN ('draft'))
+  CONSTRAINT chk_bom_status CHECK (status IN ('draft','released','on_hold','obsolete')),
+  CONSTRAINT chk_bom_origin CHECK (origin IN ('native','legacy_kit'))
 );
+
+-- Story 5.2 lifecycle/migration columns for databases created before this story
+-- (CREATE TABLE IF NOT EXISTS alone will not add columns to an existing table).
+ALTER TABLE bom ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ;
+ALTER TABLE bom ADD COLUMN IF NOT EXISTS status_changed_by UUID;
+ALTER TABLE bom ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'native';
+ALTER TABLE bom ADD COLUMN IF NOT EXISTS remediation_flag BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE bom ADD COLUMN IF NOT EXISTS kit_ref TEXT;
+
+-- Story 5.2 widens chk_bom_status on live databases: drop the Story 5.1 single-value CHECK and
+-- re-add with the full lifecycle vocabulary. Wrapped in a DO block so the DROP + ADD pair is
+-- atomic - init-db.sql runs statement-by-statement under autocommit, and a failure between the
+-- two would otherwise leave the status column unconstrained until a re-run.
+DO $$
+BEGIN
+  ALTER TABLE bom DROP CONSTRAINT IF EXISTS chk_bom_status;
+  ALTER TABLE bom ADD CONSTRAINT chk_bom_status CHECK (status IN ('draft','released','on_hold','obsolete'));
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_parent_item ON bom (parent_item_id);
 CREATE INDEX IF NOT EXISTS idx_bom_status ON bom (status);
@@ -4000,7 +4024,15 @@ BEGIN
       AND conrelid = 'bom'::regclass
   ) THEN
     ALTER TABLE bom
-      ADD CONSTRAINT chk_bom_status CHECK (status IN ('draft'));
+      ADD CONSTRAINT chk_bom_status CHECK (status IN ('draft','released','on_hold','obsolete'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_origin'
+      AND conrelid = 'bom'::regclass
+  ) THEN
+    ALTER TABLE bom
+      ADD CONSTRAINT chk_bom_origin CHECK (origin IN ('native','legacy_kit'));
   END IF;
 END $$;
 
@@ -4023,9 +4055,23 @@ CREATE TABLE IF NOT EXISTS bom_revision (
   revision_status   TEXT NOT NULL DEFAULT 'draft',
   drafted_by        UUID NOT NULL,
   drafted_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  released_at       TIMESTAMPTZ,
+  released_by       UUID,
   source_event_id   UUID NOT NULL,
-  CONSTRAINT chk_bom_revision_status CHECK (revision_status IN ('draft'))
+  CONSTRAINT chk_bom_revision_status CHECK (revision_status IN ('draft','released'))
 );
+
+-- Story 5.2 release columns for databases created before this story.
+ALTER TABLE bom_revision ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ;
+ALTER TABLE bom_revision ADD COLUMN IF NOT EXISTS released_by UUID;
+
+-- Story 5.2 widens chk_bom_revision_status on live databases. DROP + ADD wrapped in a DO block
+-- for atomicity - init-db.sql runs statement-by-statement under autocommit.
+DO $$
+BEGIN
+  ALTER TABLE bom_revision DROP CONSTRAINT IF EXISTS chk_bom_revision_status;
+  ALTER TABLE bom_revision ADD CONSTRAINT chk_bom_revision_status CHECK (revision_status IN ('draft','released'));
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_revision_code ON bom_revision (bom_id, revision_code);
 CREATE INDEX IF NOT EXISTS idx_bom_revision_bom_id ON bom_revision (bom_id);
@@ -4038,7 +4084,7 @@ BEGIN
       AND conrelid = 'bom_revision'::regclass
   ) THEN
     ALTER TABLE bom_revision
-      ADD CONSTRAINT chk_bom_revision_status CHECK (revision_status IN ('draft'));
+      ADD CONSTRAINT chk_bom_revision_status CHECK (revision_status IN ('draft','released'));
   END IF;
 END $$;
 

@@ -8,9 +8,14 @@ export interface BomRow {
   parent_uom: string;
   business_stream: string;
   bom_type: 'production' | 'rnd' | 'job_work_kit';
-  status: 'draft';
+  status: 'draft' | 'released' | 'on_hold' | 'obsolete';
   current_revision_id: string | null;
   blocking_line_count: number;
+  status_changed_at: string | null;
+  status_changed_by: string | null;
+  origin: 'native' | 'legacy_kit';
+  remediation_flag: boolean;
+  kit_ref: string | null;
   created_by: string;
   correlation_id: string | null;
   source_event_id: string;
@@ -22,9 +27,11 @@ export interface BomRevisionRow {
   revision_id: string;
   bom_id: string;
   revision_code: string;
-  revision_status: 'draft';
+  revision_status: 'draft' | 'released';
   drafted_by: string;
   drafted_at: string;
+  released_at: string | null;
+  released_by: string | null;
   source_event_id: string;
 }
 
@@ -181,6 +188,8 @@ export async function getBlockingLineCount(bomId: string, client?: PoolClient): 
 export interface ListBomsParams {
   status?: BomRow['status'] | undefined;
   businessStream?: string | undefined;
+  origin?: BomRow['origin'] | undefined;
+  remediationFlag?: boolean | undefined;
   search?: string | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
@@ -202,6 +211,14 @@ export async function listBoms(
   if (params.businessStream) {
     conditions.push(`business_stream = $${idx++}`);
     values.push(params.businessStream);
+  }
+  if (params.origin) {
+    conditions.push(`origin = $${idx++}`);
+    values.push(params.origin);
+  }
+  if (params.remediationFlag !== undefined) {
+    conditions.push(`remediation_flag = $${idx++}`);
+    values.push(params.remediationFlag);
   }
   if (params.search) {
     const escaped = params.search.replace(/[%_\\]/g, '\\$&');
@@ -230,8 +247,8 @@ export async function insertBom(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
-    `INSERT INTO bom (bom_id, parent_item_id, parent_sku, parent_uom, business_stream, bom_type, status, current_revision_id, blocking_line_count, created_by, correlation_id, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    `INSERT INTO bom (bom_id, parent_item_id, parent_sku, parent_uom, business_stream, bom_type, status, current_revision_id, blocking_line_count, status_changed_at, status_changed_by, origin, remediation_flag, kit_ref, created_by, correlation_id, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
     [
       row.bom_id,
       row.parent_item_id,
@@ -242,6 +259,11 @@ export async function insertBom(
       row.status,
       row.current_revision_id,
       row.blocking_line_count,
+      row.status_changed_at,
+      row.status_changed_by,
+      row.origin,
+      row.remediation_flag,
+      row.kit_ref,
       row.created_by,
       row.correlation_id,
       row.source_event_id,
@@ -254,8 +276,8 @@ export async function insertBomRevision(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
-    `INSERT INTO bom_revision (revision_id, bom_id, revision_code, revision_status, drafted_by, drafted_at, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    `INSERT INTO bom_revision (revision_id, bom_id, revision_code, revision_status, drafted_by, drafted_at, released_at, released_by, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       row.revision_id,
       row.bom_id,
@@ -263,6 +285,8 @@ export async function insertBomRevision(
       row.revision_status,
       row.drafted_by,
       row.drafted_at,
+      row.released_at,
+      row.released_by,
       row.source_event_id,
     ],
   );
@@ -320,5 +344,30 @@ export async function updateBomCurrentRevision(
   await client.query(
     'UPDATE bom SET current_revision_id = $1, updated_at = now() WHERE bom_id = $2',
     [revisionId, bomId],
+  );
+}
+
+export async function updateBomStatus(
+  bomId: string,
+  status: BomRow['status'],
+  changedAt: string,
+  changedBy: string,
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    'UPDATE bom SET status = $1, status_changed_at = $2, status_changed_by = $3, updated_at = now() WHERE bom_id = $4',
+    [status, changedAt, changedBy, bomId],
+  );
+}
+
+export async function releaseBomRevision(
+  revisionId: string,
+  releasedAt: string,
+  releasedBy: string,
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `UPDATE bom_revision SET revision_status = 'released', released_at = $1, released_by = $2 WHERE revision_id = $3`,
+    [releasedAt, releasedBy, revisionId],
   );
 }

@@ -199,3 +199,21 @@
 ## Deferred from: code review of 4-2-supplier-performance-scorecards (2026-08-06)
 
 - A replayed direct event without caller-supplied idempotency_key/event_id creates duplicate domain_events and audit rows while the projection replay guard still pins one metric row [test/integration/story-4-2.test.ts:1116-1135] - deferred, pre-existing platform-wide convention: AD-16 idempotency keys are caller-carried on every direct event surface (same class as the 4.5 client-controlled occurred_at deferral). Resolve as one platform decision on caller-less direct-event dedupe, not a 4.2-only fix.
+
+## Deferred from: code review of 5-2-bom-lifecycle-and-immutability (2026-08-09, Group 1)
+
+- Immutability guard accepts a missing or foreign `revision_id` (no existence or bom_id cross-check); `bom_line` has no FK to `bom_revision`, so a phantom/foreign revision can receive lines and collide on `uq_bom_line_no` (unmapped 23505, raw 500) [src/compliance/bom.ts:907, 1019] - deferred, pre-existing: the Story 5.1 lock also verified nothing; confirm in Group 2 whether handlers constrain `revision_id` server-side.
+- `correlation_id` passed unvalidated into a UUID column (PG 22P02 500 on non-UUID) [src/compliance/bom.ts:706] - deferred, pre-existing pattern at bom.ts:816 (applyBomDrafted); low reachability since handlers compose it server-side.
+
+## Deferred from: code review of 5-2-bom-lifecycle-and-immutability (2026-08-09, Group 2)
+
+- Cross-revision immutability bypass: `applyBomLineAmended` updates the line by `bom_line_id` with no `revision_id` filter, and both handler and applier validate only the CURRENT revision's status; a future Story 5.3 revision whose current revision is draft could amend an older released revision's lines (FR-B-03 violation) [src/api/v1/boms.ts:279] - deferred, unreachable today (this story is strictly one revision per BOM); revisit when 5.3 adds revision generation.
+- Global idempotency-key reuse silently no-ops a lifecycle transition: `uq_idempotency` is global and `persistEvent` returns the existing event on a key hit, so reusing one key across release then hold (or across different BOMs) drops the transition with a 200 and no error [src/api/v1/boms.ts:434] - deferred, pre-existing platform-wide convention (AD-16 caller-carried keys) and the exact Task 6 pattern; the migration handler's per-kit key composition is a documented, necessary deviation.
+
+## Resolved: code review of 5-2-bom-lifecycle-and-immutability (2026-08-09, Group 2)
+
+- Immutability guard accepts a missing or foreign `revision_id` [src/compliance/bom.ts:907, 1019] - RESOLVED: Group 2 confirmed all three consumers (add line, amend line, release) derive `revision_id` server-side from `bom.current_revision_id`, never from the request body, and direct engineering-stream event posts are rejected (events.ts:39 accepts only stream_type 'inventory'), so the phantom/foreign-revision path is not reachable. Closing this entry.
+
+## Deferred from: code review of 5-2-bom-lifecycle-and-immutability (2026-08-09, Group 3)
+
+- Partial-migration failure window: `bom.sql` and `bom_revision.sql` are applied as separate implicit transactions by migrate.ts, so a process death after bom.sql commits but before bom_revision.sql applies leaves the widened `chk_bom_status` with the Story 5.1 single-value `chk_bom_revision_status`; the new appliers then write `revision_status = 'released'` and hit an unmapped 23514 (raw 500) until migrate is re-run (which heals) [src/events/migrate.ts:80] - deferred, consistent with the repo's established per-file-transaction migration pattern and its documented re-run-heals stance; new cross-file interdependency introduced by 5.2's widened vocabularies.

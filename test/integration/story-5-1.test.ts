@@ -65,8 +65,36 @@ function makeRequest(
 
 async function authFor(port: number, sub: string): Promise<Record<string, string>> {
   const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
-  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed: ${JSON.stringify(res.body)}`);
+  assert.ok(
+    res.status >= 200 && res.status < 300,
+    `dev-token ${sub} failed: ${JSON.stringify(res.body)}`,
+  );
   return { Authorization: `Bearer ${res.body['token'] as string}` };
+}
+
+async function createItem(
+  port: number,
+  headers: Record<string, string>,
+  sku: string,
+  overrides: Record<string, unknown> = {},
+): Promise<string> {
+  const res = await makeRequest(
+    port,
+    'POST',
+    '/api/v1/items',
+    {
+      sku,
+      description: `Test item ${sku}`,
+      valuation_method: 'fifo',
+      uom: 'EA',
+      business_stream: 'production',
+      category: 'raw_materials',
+      ...overrides,
+    },
+    headers,
+  );
+  assert.strictEqual(res.status, 201, `item ${sku} failed: ${JSON.stringify(res.body)}`);
+  return (res.body as Record<string, string>)['item_id']!;
 }
 
 describe('Story 5.1 BOM Management Integration Tests', () => {
@@ -91,53 +119,108 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
     }
 
     const app = createAppRouter();
-    server = await createAppServer(app);
+    server = createAppServer(app);
+    await new Promise<void>((resolvePromise) => {
+      server.listen(0, () => {
+        resolvePromise();
+      });
+    });
     port = (server.address() as AddressInfo).port;
 
-    await makeRequest(port, 'POST', '/api/v1/scim/v2/Users', {
-      externalId: `engineer-${run}@test.com`,
-      email: `engineer-${run}@test.com`,
-      displayName: `Engineer ${run}`,
-      roles: [
-        { role: 'engineering_admin', module: 'engineering', functionScope: 'write', locationId: '*' },
-      ],
-    });
-
-    const itemRes1 = await makeRequest(port, 'POST', '/api/v1/items', {
-      sku: `BOM-PARENT-${run}`,
-      description: 'Test Parent Item',
-      uom: 'EA',
-      business_stream: 'production',
-      category: 'finished_goods',
-    });
-    assert.strictEqual(itemRes1.status, 201);
-    parentItemId = (itemRes1.body as Record<string, string>)['item_id']!;
-
-    const itemRes2 = await makeRequest(port, 'POST', '/api/v1/items', {
-      sku: `BOM-COMP1-${run}`,
-      description: 'Test Component 1',
-      uom: 'KG',
-      business_stream: 'production',
-      category: 'raw_materials',
-    });
-    assert.strictEqual(itemRes2.status, 201);
-    componentItemId1 = (itemRes2.body as Record<string, string>)['item_id']!;
-
-    const itemRes3 = await makeRequest(port, 'POST', '/api/v1/items', {
-      sku: `BOM-COMP2-${run}`,
-      description: 'Test Component 2',
-      uom: 'EA',
-      business_stream: 'production',
-      category: 'raw_materials',
-    });
-    assert.strictEqual(itemRes3.status, 201);
-    componentItemId2 = (itemRes3.body as Record<string, string>)['item_id']!;
+    const scimHeaders = {
+      Authorization: 'Bearer test-only-scim-bearer-token-not-for-production-use',
+    };
+    const scimRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/scim/v2/Users',
+      {
+        externalId: `engineer-${run}@test.com`,
+        email: `engineer-${run}@test.com`,
+        displayName: `Engineer ${run}`,
+        roles: [
+          {
+            role: 'engineering_admin',
+            module: 'engineering',
+            functionScope: 'write',
+            locationId: '*',
+          },
+          {
+            role: 'inventory_controller',
+            module: 'inventory',
+            functionScope: 'write',
+            locationId: '*',
+          },
+        ],
+      },
+      scimHeaders,
+    );
+    assert.strictEqual(scimRes.status, 201, JSON.stringify(scimRes.body));
 
     engineerHeaders = await authFor(port, `engineer-${run}@test.com`);
+
+    const itemRes1 = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/items',
+      {
+        sku: `BOM-PARENT-${run}`,
+        description: 'Test Parent Item',
+        valuation_method: 'fifo',
+        uom: 'EA',
+        business_stream: 'production',
+        category: 'finished_goods',
+      },
+      engineerHeaders,
+    );
+    assert.strictEqual(itemRes1.status, 201, JSON.stringify(itemRes1.body));
+    parentItemId = (itemRes1.body as Record<string, string>)['item_id']!;
+
+    const itemRes2 = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/items',
+      {
+        sku: `BOM-COMP1-${run}`,
+        description: 'Test Component 1',
+        valuation_method: 'fifo',
+        uom: 'KG',
+        business_stream: 'production',
+        category: 'raw_materials',
+      },
+      engineerHeaders,
+    );
+    assert.strictEqual(itemRes2.status, 201, JSON.stringify(itemRes2.body));
+    componentItemId1 = (itemRes2.body as Record<string, string>)['item_id']!;
+
+    const itemRes3 = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/items',
+      {
+        sku: `BOM-COMP2-${run}`,
+        description: 'Test Component 2',
+        valuation_method: 'fifo',
+        uom: 'EA',
+        business_stream: 'production',
+        category: 'raw_materials',
+      },
+      engineerHeaders,
+    );
+    assert.strictEqual(itemRes3.status, 201, JSON.stringify(itemRes3.body));
+    componentItemId2 = (itemRes3.body as Record<string, string>)['item_id']!;
   });
 
   after(async () => {
     server.close();
+    const admin = await getAdminPool().connect();
+    try {
+      await admin.query(
+        'TRUNCATE TABLE bom_line, bom_revision, bom_structure, bom RESTART IDENTITY CASCADE',
+      );
+    } finally {
+      admin.release();
+    }
     await closePool();
     await closeAdminPool();
   });
@@ -184,26 +267,33 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
     assert.ok(bom['bom_id'], 'BOM should have bom_id');
     assert.strictEqual(bom['status'], 'draft', 'BOM status should be draft');
     assert.strictEqual(bom['parent_item_id'], parentItemId, 'Parent item should match');
-    assert.strictEqual(bom['blocking_line_count'], 0, 'Blocking count should be 0 for active items');
+    assert.strictEqual(
+      bom['blocking_line_count'],
+      0,
+      'Blocking count should be 0 for active items',
+    );
   });
 
   it('rejects BOM creation with inactive component', async () => {
-    const inactiveItemRes = await makeRequest(port, 'POST', '/api/v1/items', {
-      sku: `BOM-INACTIVE-${run}`,
-      description: 'Inactive Component',
-      uom: 'EA',
-      business_stream: 'production',
-      category: 'raw_materials',
-      status: 'inactive',
+    const inactiveItemId = await createItem(port, engineerHeaders, `BOM-INACTIVE-${run}`);
+    const patchRes = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/items/BOM-INACTIVE-${run}`,
+      { status: 'inactive' },
+      engineerHeaders,
+    );
+    assert.strictEqual(patchRes.status, 200, JSON.stringify(patchRes.body));
+    const freshParentId = await createItem(port, engineerHeaders, `BOM-PARENT-B-${run}`, {
+      category: 'finished_goods',
     });
-    const inactiveItemId = (inactiveItemRes.body as Record<string, string>)['item_id']!;
 
     const draftRes = await makeRequest(
       port,
       'POST',
       '/api/v1/boms',
       {
-        parent_item_id: parentItemId,
+        parent_item_id: freshParentId,
         revision_code: 'B',
         lines: [
           {
@@ -221,9 +311,17 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
       engineerHeaders,
     );
 
-    assert.strictEqual(draftRes.status, 201, 'BOM with inactive component should be created (line is blocked)');
+    assert.strictEqual(
+      draftRes.status,
+      201,
+      'BOM with inactive component should be created (line is blocked)',
+    );
     const bom = draftRes.body as Record<string, unknown>;
-    assert.strictEqual(bom['blocking_line_count'], 1, 'Blocking count should be 1 for inactive component');
+    assert.strictEqual(
+      bom['blocking_line_count'],
+      1,
+      'Blocking count should be 1 for inactive component',
+    );
   });
 
   it('rejects BOM creation with missing lines', async () => {
@@ -240,7 +338,10 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
     );
 
     assert.strictEqual(draftRes.status, 400, 'Empty lines should be rejected');
-    assert.strictEqual((draftRes.body as Record<string, string>)['error_code'], 'BOM_LINE_REQUIRED');
+    assert.strictEqual(
+      (draftRes.body as Record<string, string>)['error_code'],
+      'BOM_LINE_REQUIRED',
+    );
   });
 
   it('rejects BOM creation with invalid scrap percent', async () => {
@@ -269,6 +370,11 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
     );
 
     assert.strictEqual(draftRes.status, 400, 'Invalid scrap percent should be rejected');
+    assert.strictEqual(
+      (draftRes.body as Record<string, string>)['error_code'],
+      'BOM_INVALID_SCRAP_PERCENT',
+      'scrap percent validation should return BOM_INVALID_SCRAP_PERCENT',
+    );
   });
 
   it('rejects co-product without yield', async () => {
@@ -296,16 +402,22 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
     );
 
     assert.strictEqual(draftRes.status, 400, 'Co-product without yield should be rejected');
-    assert.strictEqual((draftRes.body as Record<string, string>)['error_code'], 'BOM_YIELD_REQUIRED');
+    assert.strictEqual(
+      (draftRes.body as Record<string, string>)['error_code'],
+      'BOM_YIELD_REQUIRED',
+    );
   });
 
   it('accepts co-product with yield', async () => {
+    const freshParentId = await createItem(port, engineerHeaders, `BOM-PARENT-F-${run}`, {
+      category: 'finished_goods',
+    });
     const draftRes = await makeRequest(
       port,
       'POST',
       '/api/v1/boms',
       {
-        parent_item_id: parentItemId,
+        parent_item_id: freshParentId,
         revision_code: 'F',
         lines: [
           {
@@ -324,7 +436,11 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
       engineerHeaders,
     );
 
-    assert.strictEqual(draftRes.status, 201, `Co-product with yield failed: ${JSON.stringify(draftRes.body)}`);
+    assert.strictEqual(
+      draftRes.status,
+      201,
+      `Co-product with yield failed: ${JSON.stringify(draftRes.body)}`,
+    );
   });
 
   it('lists BOMs', async () => {
@@ -337,27 +453,42 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
   });
 
   it('retrieves a single BOM', async () => {
-    const draftRes = await makeRequest(port, 'POST', '/api/v1/boms', {
-      parent_item_id: parentItemId,
-      revision_code: 'G',
-      lines: [
-        {
-          line_no: 1,
-          component_item_id: componentItemId1,
-          output_class: 'component',
-          quantity_per: '1.0',
-          line_uom: 'KG',
-          uom_conversion_factor: '1.0',
-          is_phantom: false,
-          effective_from: '2026-01-01',
-        },
-      ],
-    }, engineerHeaders);
+    const freshParentId = await createItem(port, engineerHeaders, `BOM-PARENT-G-${run}`, {
+      category: 'finished_goods',
+    });
+    const draftRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/boms',
+      {
+        parent_item_id: freshParentId,
+        revision_code: 'G',
+        lines: [
+          {
+            line_no: 1,
+            component_item_id: componentItemId1,
+            output_class: 'component',
+            quantity_per: '1.0',
+            line_uom: 'KG',
+            uom_conversion_factor: '1.0',
+            is_phantom: false,
+            effective_from: '2026-01-01',
+          },
+        ],
+      },
+      engineerHeaders,
+    );
 
     assert.strictEqual(draftRes.status, 201);
     const bomId = (draftRes.body as Record<string, string>)['bom_id'];
 
-    const getRes = await makeRequest(port, 'GET', `/api/v1/boms/${bomId}`, undefined, engineerHeaders);
+    const getRes = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/boms/${bomId}`,
+      undefined,
+      engineerHeaders,
+    );
 
     assert.strictEqual(getRes.status, 200, 'Get BOM should succeed');
     const bom = getRes.body as Record<string, unknown>;
@@ -365,28 +496,43 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
   });
 
   it('retrieves BOM structure', async () => {
-    const draftRes = await makeRequest(port, 'POST', '/api/v1/boms', {
-      parent_item_id: parentItemId,
-      revision_code: 'H',
-      lines: [
-        {
-          line_no: 1,
-          component_item_id: componentItemId1,
-          output_class: 'component',
-          quantity_per: '2.0',
-          line_uom: 'KG',
-          uom_conversion_factor: '1.0',
-          scrap_percent: '10.0',
-          is_phantom: false,
-          effective_from: '2026-01-01',
-        },
-      ],
-    }, engineerHeaders);
+    const freshParentId = await createItem(port, engineerHeaders, `BOM-PARENT-H-${run}`, {
+      category: 'finished_goods',
+    });
+    const draftRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/boms',
+      {
+        parent_item_id: freshParentId,
+        revision_code: 'H',
+        lines: [
+          {
+            line_no: 1,
+            component_item_id: componentItemId1,
+            output_class: 'component',
+            quantity_per: '2.0',
+            line_uom: 'KG',
+            uom_conversion_factor: '1.0',
+            scrap_percent: '10.0',
+            is_phantom: false,
+            effective_from: '2026-01-01',
+          },
+        ],
+      },
+      engineerHeaders,
+    );
 
     assert.strictEqual(draftRes.status, 201);
     const bomId = (draftRes.body as Record<string, string>)['bom_id'];
 
-    const structRes = await makeRequest(port, 'GET', `/api/v1/boms/${bomId}/structure`, undefined, engineerHeaders);
+    const structRes = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/boms/${bomId}/structure`,
+      undefined,
+      engineerHeaders,
+    );
 
     assert.strictEqual(structRes.status, 200, 'Get BOM structure should succeed');
     const structure = structRes.body as Record<string, unknown>;
@@ -395,92 +541,167 @@ describe('Story 5.1 BOM Management Integration Tests', () => {
   });
 
   it('adds a line to draft BOM', async () => {
-    const draftRes = await makeRequest(port, 'POST', '/api/v1/boms', {
-      parent_item_id: parentItemId,
-      revision_code: 'I',
-      lines: [
-        {
-          line_no: 1,
-          component_item_id: componentItemId1,
-          output_class: 'component',
-          quantity_per: '1.0',
-          line_uom: 'KG',
-          uom_conversion_factor: '1.0',
-          is_phantom: false,
-          effective_from: '2026-01-01',
-        },
-      ],
-    }, engineerHeaders);
+    const freshParentId = await createItem(port, engineerHeaders, `BOM-PARENT-I-${run}`, {
+      category: 'finished_goods',
+    });
+    const draftRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/boms',
+      {
+        parent_item_id: freshParentId,
+        revision_code: 'I',
+        lines: [
+          {
+            line_no: 1,
+            component_item_id: componentItemId1,
+            output_class: 'component',
+            quantity_per: '1.0',
+            line_uom: 'KG',
+            uom_conversion_factor: '1.0',
+            is_phantom: false,
+            effective_from: '2026-01-01',
+          },
+        ],
+      },
+      engineerHeaders,
+    );
 
     assert.strictEqual(draftRes.status, 201);
     const bomId = (draftRes.body as Record<string, string>)['bom_id'];
 
-    const addLineRes = await makeRequest(port, 'POST', `/api/v1/boms/${bomId}/lines`, {
-      line_no: 2,
-      component_item_id: componentItemId2,
-      output_class: 'component',
-      quantity_per: '3.0',
-      line_uom: 'EA',
-      uom_conversion_factor: '1.0',
-      is_phantom: false,
-      effective_from: '2026-01-01',
-    }, engineerHeaders);
+    const addLineRes = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/boms/${bomId}/lines`,
+      {
+        line_no: 2,
+        component_item_id: componentItemId2,
+        output_class: 'component',
+        quantity_per: '3.0',
+        line_uom: 'EA',
+        uom_conversion_factor: '1.0',
+        is_phantom: false,
+        effective_from: '2026-01-01',
+      },
+      engineerHeaders,
+    );
 
-    assert.strictEqual(addLineRes.status, 200, `Add line failed: ${JSON.stringify(addLineRes.body)}`);
+    assert.strictEqual(
+      addLineRes.status,
+      200,
+      `Add line failed: ${JSON.stringify(addLineRes.body)}`,
+    );
+
+    const verifyAdd = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/boms/${bomId}/structure`,
+      undefined,
+      engineerHeaders,
+    );
+    const addStructure = verifyAdd.body as Record<string, unknown>;
+    const addLines = addStructure['lines'] as Record<string, unknown>[];
+    assert.ok(
+      addLines.some((l) => l['line_no'] === 2 && l['component_item_id'] === componentItemId2),
+      'added line should be visible in the structure',
+    );
   });
 
   it('amends a line on draft BOM', async () => {
-    const draftRes = await makeRequest(port, 'POST', '/api/v1/boms', {
-      parent_item_id: parentItemId,
-      revision_code: 'J',
-      lines: [
-        {
-          line_no: 1,
-          component_item_id: componentItemId1,
-          output_class: 'component',
-          quantity_per: '1.0',
-          line_uom: 'KG',
-          uom_conversion_factor: '1.0',
-          scrap_percent: '5.0',
-          is_phantom: false,
-          effective_from: '2026-01-01',
-        },
-      ],
-    }, engineerHeaders);
+    const freshParentId = await createItem(port, engineerHeaders, `BOM-PARENT-J-${run}`, {
+      category: 'finished_goods',
+    });
+    const draftRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/boms',
+      {
+        parent_item_id: freshParentId,
+        revision_code: 'J',
+        lines: [
+          {
+            line_no: 1,
+            component_item_id: componentItemId1,
+            output_class: 'component',
+            quantity_per: '1.0',
+            line_uom: 'KG',
+            uom_conversion_factor: '1.0',
+            scrap_percent: '5.0',
+            is_phantom: false,
+            effective_from: '2026-01-01',
+          },
+        ],
+      },
+      engineerHeaders,
+    );
 
     assert.strictEqual(draftRes.status, 201);
     const bom = draftRes.body as Record<string, unknown>;
     const bomId = bom['bom_id'] as string;
 
-    const linesRes = await makeRequest(port, 'GET', `/api/v1/boms/${bomId}/structure`, undefined, engineerHeaders);
+    const linesRes = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/boms/${bomId}/structure`,
+      undefined,
+      engineerHeaders,
+    );
     const structure = linesRes.body as Record<string, unknown>;
     const lineId = (structure['lines'] as Record<string, unknown>[])[0]!['bom_line_id'] as string;
 
-    const amendRes = await makeRequest(port, 'PATCH', `/api/v1/boms/${bomId}/lines/${lineId}`, {
-      scrap_percent: '10.0',
-      quantity_per: '2.0',
-    }, engineerHeaders);
+    const amendRes = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/boms/${bomId}/lines/${lineId}`,
+      {
+        scrap_percent: '10.0',
+        quantity_per: '2.0',
+      },
+      engineerHeaders,
+    );
 
     assert.strictEqual(amendRes.status, 200, `Amend line failed: ${JSON.stringify(amendRes.body)}`);
+
+    const verifyAmend = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/boms/${bomId}/structure`,
+      undefined,
+      engineerHeaders,
+    );
+    const amendStructure = verifyAmend.body as Record<string, unknown>;
+    const amendLines = amendStructure['lines'] as Record<string, unknown>[];
+    const amended = amendLines.find((l) => l['bom_line_id'] === lineId);
+    assert.strictEqual(amended?.['quantity_per'], '2.000000', 'amend should persist');
+    assert.strictEqual(amended?.['scrap_percent'], '10.0000', 'amend should persist');
   });
 
   it('rejects direct POST to events with engineering stream', async () => {
-    const eventRes = await makeRequest(port, 'POST', '/api/v1/events', {
-      stream_type: 'engineering',
-      stream_id: randomUUID(),
-      event_type: 'bom.drafted',
-      payload: {
-        bom_id: randomUUID(),
-        parent_item_id: parentItemId,
-        revision_code: 'X',
-        lines: [],
+    const eventRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'engineering',
+        stream_id: randomUUID(),
+        event_type: 'bom.drafted',
+        payload: {
+          bom_id: randomUUID(),
+          parent_item_id: parentItemId,
+          revision_code: 'X',
+          lines: [],
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          occurred_at: new Date().toISOString(),
+          actor: { user_id: randomUUID(), role: 'engineering_admin', location_id: randomUUID() },
+        },
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: `engineer-${run}@test.com`, role: 'engineering_admin', location_id: '*' },
-      },
-    }, engineerHeaders);
+      engineerHeaders,
+    );
 
-    assert.strictEqual(eventRes.status, 400, 'Direct event POST should be rejected');
+    assert.strictEqual(eventRes.status, 400, JSON.stringify(eventRes.body));
+    assert.strictEqual(eventRes.body['error_code'], 'INVALID_EVENT_STREAM');
   });
 });

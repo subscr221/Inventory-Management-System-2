@@ -661,7 +661,7 @@ const EXPECTED = [
   {
     canonical: 'read/projections/bom.sql',
     table: 'bom',
-    constraints: ['chk_bom_type', 'chk_bom_status'],
+    constraints: ['chk_bom_type', 'chk_bom_status', 'chk_bom_origin'],
     indexes: [
       'uq_bom_parent_item',
       'idx_bom_status',

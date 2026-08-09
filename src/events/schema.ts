@@ -1388,6 +1388,8 @@ export interface BomLineInput {
 export interface BomDraftedPayload {
   bom_id: string;
   parent_item_id: string;
+  /** Server-derived from the parent item master (FR-AC-01); never accepted from a request body. */
+  business_stream: string;
   bom_type?: 'production' | 'rnd' | 'job_work_kit';
   revision_code: string;
   lines: BomLineInput[];
@@ -1438,6 +1440,66 @@ export interface BomLineAmendedPayload {
 export interface BomLineAmendedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'bom_line.amended';
   payload: BomLineAmendedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 5.2: BOM Lifecycle and Immutability
+// ---------------------------------------------------------------------------
+
+export interface BomReleasedPayload {
+  bom_id: string;
+  revision_id: string;
+  /** Distinguishes reinstatement (on_hold to released) from first release in the audit trail. */
+  reason?: string;
+  correlation_id?: string;
+}
+
+export interface BomReleasedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.released';
+  payload: BomReleasedPayload;
+}
+
+export interface BomHeldPayload {
+  bom_id: string;
+  reason?: string;
+  correlation_id?: string;
+}
+
+export interface BomHeldEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.held';
+  payload: BomHeldPayload;
+}
+
+export interface BomObsoletedPayload {
+  bom_id: string;
+  reason?: string;
+  correlation_id?: string;
+}
+
+export interface BomObsoletedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.obsoleted';
+  payload: BomObsoletedPayload;
+}
+
+/**
+ * Legacy ERP kit migrated as a single-level BOM (FR-B-02). `outcome` is computed at capture
+ * time and stored so replay is deterministic - item-master statuses drift after the fact.
+ */
+export interface LegacyKitMigratedPayload {
+  bom_id: string;
+  parent_item_id: string;
+  /** Server-derived from the parent item master (FR-AC-01); never accepted from a request body. */
+  business_stream: string;
+  kit_ref: string;
+  revision_code: string;
+  outcome: 'released' | 'draft_remediation';
+  lines: BomLineInput[];
+  correlation_id?: string;
+}
+
+export interface LegacyKitMigratedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.migrated_from_kit';
+  payload: LegacyKitMigratedPayload;
 }
 
 /**
@@ -1857,5 +1919,23 @@ export const SUPPORTED_EVENT_TYPES = {
   'bom_line.amended': {
     streamType: 'engineering',
     requiresBusinessStream: false,
+  },
+  // Story 5.2: lifecycle transitions act on an already-tagged document (bom_line.* precedent);
+  // bom.migrated_from_kit creates a header and follows the bom.drafted precedent.
+  'bom.released': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'bom.held': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'bom.obsoleted': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'bom.migrated_from_kit': {
+    streamType: 'engineering',
+    requiresBusinessStream: true,
   },
 } as const;

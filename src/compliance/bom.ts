@@ -3,14 +3,27 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { getItemById } from '../read/projections/item_master.js';
+import { releaseBomRevision, updateBomStatus } from '../read/projections/bom.js';
 import type {
   BomDraftedPayload,
   BomLineAddedPayload,
   BomLineAmendedPayload,
+  BomReleasedPayload,
+  BomHeldPayload,
+  BomObsoletedPayload,
+  LegacyKitMigratedPayload,
 } from '../events/schema.js';
 
 const ENGINEERING_STREAM_TYPES = new Set(['engineering']);
-const BOM_EVENT_TYPES = new Set(['bom.drafted', 'bom_line.added', 'bom_line.amended']);
+const BOM_EVENT_TYPES = new Set([
+  'bom.drafted',
+  'bom_line.added',
+  'bom_line.amended',
+  'bom.released',
+  'bom.held',
+  'bom.obsoleted',
+  'bom.migrated_from_kit',
+]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -92,6 +105,25 @@ function assertYieldPercent(value: unknown): void {
     reject('BOM_INVALID_YIELD_PERCENT', 'expected_yield_percent scale exceeds 4 decimals');
 }
 
+/**
+ * A-11 predicate (Story 5.1 binding decision, extracted in Story 5.2): item_master has no
+ * released state - "released item master" means status = 'active'. Every release-gate,
+ * blocking-flag, and migration evaluation MUST go through this single predicate.
+ */
+export function isReleasedItemMaster(item: { status: string }): boolean {
+  return item.status === 'active';
+}
+
+function assertValidOccurredAt(occurredAt: unknown): asserts occurredAt is string {
+  if (
+    !occurredAt ||
+    typeof occurredAt !== 'string' ||
+    Number.isNaN(new Date(occurredAt).getTime())
+  ) {
+    reject('INVALID_PARAMS', 'occurred_at is required and must be a valid ISO 8601 date string');
+  }
+}
+
 export function bomEventType(envelope: EventEnvelope): string | null {
   if (!ENGINEERING_STREAM_TYPES.has(envelope.stream_type)) return null;
   if (!BOM_EVENT_TYPES.has(envelope.event_type)) return null;
@@ -113,7 +145,49 @@ export function assertBomShape(envelope: EventEnvelope): void {
     case 'bom_line.amended':
       assertBomLineAmendedShape(p);
       break;
+    case 'bom.released':
+      assertBomReleasedShape(p);
+      break;
+    case 'bom.held':
+    case 'bom.obsoleted':
+      assertBomTransitionShape(p);
+      break;
+    case 'bom.migrated_from_kit':
+      assertLegacyKitMigratedShape(p);
+      break;
   }
+}
+
+function assertBomReleasedShape(p: Record<string, unknown>): void {
+  if (!isUuid(p['bom_id'])) reject('INVALID_PARAMS', 'bom_id is required and must be a UUID');
+  if (!isUuid(p['revision_id']))
+    reject('INVALID_PARAMS', 'revision_id is required and must be a UUID');
+  if (p['reason'] !== undefined && !isNonEmptyString(p['reason']))
+    reject('INVALID_PARAMS', 'reason must be a non-empty string when provided');
+}
+
+function assertBomTransitionShape(p: Record<string, unknown>): void {
+  if (!isUuid(p['bom_id'])) reject('INVALID_PARAMS', 'bom_id is required and must be a UUID');
+  if (p['reason'] !== undefined && !isNonEmptyString(p['reason']))
+    reject('INVALID_PARAMS', 'reason must be a non-empty string when provided');
+}
+
+function assertLegacyKitMigratedShape(p: Record<string, unknown>): void {
+  if (!isUuid(p['bom_id'])) reject('INVALID_PARAMS', 'bom_id is required and must be a UUID');
+  if (!isUuid(p['parent_item_id']))
+    reject('INVALID_PARAMS', 'parent_item_id is required and must be a UUID');
+  if (!isNonEmptyString(p['kit_ref']))
+    reject('INVALID_PARAMS', 'kit_ref is required and must be a non-empty string');
+  if (!isNonEmptyString(p['revision_code']))
+    reject('INVALID_PARAMS', 'revision_code is required and must be a non-empty string');
+  if (p['outcome'] !== 'released' && p['outcome'] !== 'draft_remediation')
+    reject('INVALID_PARAMS', 'outcome must be released or draft_remediation');
+
+  const lines = p['lines'];
+  if (!Array.isArray(lines) || lines.length === 0)
+    reject('BOM_LINE_REQUIRED', 'At least one line is required');
+  if (lines.length > 200) reject('INVALID_PARAMS', 'Maximum 200 lines per BOM');
+  assertBomLineInputArray(lines as Record<string, unknown>[]);
 }
 
 function assertBomDraftedShape(p: Record<string, unknown>): void {
@@ -132,9 +206,12 @@ function assertBomDraftedShape(p: Record<string, unknown>): void {
   if (!Array.isArray(lines) || lines.length === 0)
     reject('BOM_LINE_REQUIRED', 'At least one line is required');
   if (lines.length > 200) reject('INVALID_PARAMS', 'Maximum 200 lines per BOM');
+  assertBomLineInputArray(lines as Record<string, unknown>[]);
+}
 
+function assertBomLineInputArray(lines: Record<string, unknown>[]): void {
   const seenLineNos = new Set<number>();
-  for (const line of lines as Record<string, unknown>[]) {
+  for (const line of lines) {
     const lineNo = line['line_no'];
     if (typeof lineNo !== 'number' || !Number.isInteger(lineNo) || lineNo <= 0) {
       reject('INVALID_PARAMS', 'line_no must be a positive integer');
@@ -184,6 +261,13 @@ function assertBomDraftedShape(p: Record<string, unknown>): void {
     if (typeof isPhantom !== 'boolean') reject('INVALID_PARAMS', 'is_phantom must be a boolean');
     if (isPhantom && !isUuid(line['phantom_source_bom_id'])) {
       reject('INVALID_PARAMS', 'phantom_source_bom_id is required when is_phantom is true');
+    }
+    if (
+      !isPhantom &&
+      line['phantom_source_bom_id'] !== undefined &&
+      line['phantom_source_bom_id'] !== null
+    ) {
+      reject('INVALID_PARAMS', 'phantom_source_bom_id must not be set when is_phantom is false');
     }
 
     if (!isDateString(line['effective_from']))
@@ -339,6 +423,350 @@ export async function applyBomProjection(
     case 'bom_line.amended':
       await applyBomLineAmended(envelope, client, eventId);
       break;
+    case 'bom.released':
+      await applyBomReleased(envelope, client, eventId);
+      break;
+    case 'bom.held':
+      await applyBomHeld(envelope, client, eventId);
+      break;
+    case 'bom.obsoleted':
+      await applyBomObsoleted(envelope, client, eventId);
+      break;
+    case 'bom.migrated_from_kit':
+      await applyLegacyKitMigrated(envelope, client, eventId);
+      break;
+  }
+}
+
+interface GateLineRow {
+  bom_line_id: string;
+  line_no: number;
+  component_item_id: string;
+  scrap_percent: string | null;
+  blocking_release: boolean;
+  blocking_reason: string | null;
+}
+
+/**
+ * Release gate (Story 5.2, D4 staging): enforces released component item masters (A-11) and
+ * filled scrap percents. Approved-ECO (Story 5.3) and completed-cost-rollup (Story 5.6) are
+ * staged conditions surfaced with enforced: false. The A-11 check re-evaluates EVERY line at
+ * release time - blocking flags stamped at line-add time go stale when item masters deactivate.
+ */
+async function evaluateReleaseGate(
+  bomId: string,
+  revisionId: string,
+  client: PoolClient,
+): Promise<{
+  unmetConditions: string[];
+  blockingLines: { bom_line_id: string; line_no: number }[];
+  scrapMissingLines: { bom_line_id: string; line_no: number }[];
+}> {
+  const lineRows = await client.query(
+    `SELECT bom_line_id, line_no, component_item_id, scrap_percent, blocking_release, blocking_reason
+     FROM bom_line WHERE revision_id = $1 ORDER BY line_no`,
+    [revisionId],
+  );
+  const lines = lineRows.rows as GateLineRow[];
+  if (lines.length === 0) {
+    reject('BOM_LINE_REQUIRED', 'Cannot release a BOM with no lines', { bom_id: bomId }, 409);
+  }
+
+  const blockingLines: { bom_line_id: string; line_no: number }[] = [];
+  const scrapMissingLines: { bom_line_id: string; line_no: number }[] = [];
+
+  for (const line of lines) {
+    const componentItem = await getItemById(line.component_item_id, client);
+    let blockingRelease = false;
+    let blockingReason: string | null = null;
+    if (!componentItem) {
+      blockingRelease = true;
+      blockingReason = `Component item ${line.component_item_id} not found`;
+    } else if (!isReleasedItemMaster(componentItem)) {
+      blockingRelease = true;
+      blockingReason = `Component item ${componentItem.sku} is ${componentItem.status} - BOM cannot be released until item is active`;
+    }
+    if (blockingRelease !== line.blocking_release || blockingReason !== line.blocking_reason) {
+      await client.query(
+        'UPDATE bom_line SET blocking_release = $1, blocking_reason = $2, updated_at = now() WHERE bom_line_id = $3',
+        [blockingRelease, blockingReason, line.bom_line_id],
+      );
+    }
+    if (blockingRelease)
+      blockingLines.push({ bom_line_id: line.bom_line_id, line_no: line.line_no });
+    if (line.scrap_percent === null)
+      scrapMissingLines.push({ bom_line_id: line.bom_line_id, line_no: line.line_no });
+  }
+
+  await client.query(
+    'UPDATE bom SET blocking_line_count = $1, updated_at = now() WHERE bom_id = $2',
+    [blockingLines.length, bomId],
+  );
+
+  const unmetConditions: string[] = [];
+  if (blockingLines.length > 0) unmetConditions.push('component_item_masters_released');
+  if (scrapMissingLines.length > 0) unmetConditions.push('scrap_percent_missing');
+  return { unmetConditions, blockingLines, scrapMissingLines };
+}
+
+const STAGED_CONDITIONS = [
+  { condition: 'approved_eco', enforced: false, staged_by: 'Story 5.3' },
+  { condition: 'cost_rollup_complete', enforced: false, staged_by: 'Story 5.6' },
+];
+
+async function applyBomReleased(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  _eventId: string,
+): Promise<void> {
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as BomReleasedPayload;
+
+  const bomRow = await client.query('SELECT * FROM bom WHERE bom_id = $1 FOR UPDATE', [p.bom_id]);
+  if (bomRow.rows.length === 0) reject('BOM_NOT_FOUND', 'BOM not found', { bom_id: p.bom_id }, 404);
+  const bom = bomRow.rows[0]!;
+
+  if (bom.current_revision_id !== p.revision_id) {
+    reject(
+      'INVALID_PARAMS',
+      'revision_id does not match the current revision of this BOM',
+      {
+        bom_id: p.bom_id,
+        revision_id: p.revision_id,
+        current_revision_id: bom.current_revision_id,
+      },
+      409,
+    );
+  }
+
+  const status = bom.status as string;
+  if (status !== 'draft' && status !== 'on_hold') {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      `Cannot release a BOM in ${status} state`,
+      { bom_id: p.bom_id, status, allowed_from: ['draft', 'on_hold'] },
+      409,
+    );
+  }
+
+  const occurredAt = envelope.metadata.occurred_at;
+  assertValidOccurredAt(occurredAt);
+  const actorId = envelope.metadata.actor.user_id;
+
+  if (status === 'draft') {
+    // Full gate on first release. on_hold reinstatement skips it: the revision already passed
+    // the gate and is unchanged by definition of immutability.
+    const gate = await evaluateReleaseGate(p.bom_id, p.revision_id, client);
+    if (gate.unmetConditions.length > 0) {
+      reject(
+        'RELEASE_GATE_UNMET',
+        'Release gate conditions are not met',
+        {
+          bom_id: p.bom_id,
+          unmet_conditions: gate.unmetConditions,
+          component_item_masters_released: { blocking_lines: gate.blockingLines },
+          scrap_percent_missing: { lines: gate.scrapMissingLines },
+          staged_conditions: STAGED_CONDITIONS,
+        },
+        409,
+      );
+    }
+    await releaseBomRevision(p.revision_id, new Date(occurredAt).toISOString(), actorId, client);
+  }
+
+  await updateBomStatus(p.bom_id, 'released', new Date(occurredAt).toISOString(), actorId, client);
+}
+
+async function applyBomHeld(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  _eventId: string,
+): Promise<void> {
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as BomHeldPayload;
+
+  const bomRow = await client.query('SELECT * FROM bom WHERE bom_id = $1 FOR UPDATE', [p.bom_id]);
+  if (bomRow.rows.length === 0) reject('BOM_NOT_FOUND', 'BOM not found', { bom_id: p.bom_id }, 404);
+  const status = bomRow.rows[0]!.status as string;
+  if (status !== 'released') {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      `Cannot put a BOM in ${status} state on hold`,
+      { bom_id: p.bom_id, status, allowed_from: ['released'] },
+      409,
+    );
+  }
+
+  assertValidOccurredAt(envelope.metadata.occurred_at);
+
+  await updateBomStatus(
+    p.bom_id,
+    'on_hold',
+    new Date(envelope.metadata.occurred_at).toISOString(),
+    envelope.metadata.actor.user_id,
+    client,
+  );
+}
+
+async function applyBomObsoleted(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  _eventId: string,
+): Promise<void> {
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as BomObsoletedPayload;
+
+  const bomRow = await client.query('SELECT * FROM bom WHERE bom_id = $1 FOR UPDATE', [p.bom_id]);
+  if (bomRow.rows.length === 0) reject('BOM_NOT_FOUND', 'BOM not found', { bom_id: p.bom_id }, 404);
+  const status = bomRow.rows[0]!.status as string;
+  if (status !== 'released' && status !== 'on_hold') {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      `Cannot obsolete a BOM in ${status} state`,
+      { bom_id: p.bom_id, status, allowed_from: ['released', 'on_hold'] },
+      409,
+    );
+  }
+
+  assertValidOccurredAt(envelope.metadata.occurred_at);
+
+  await updateBomStatus(
+    p.bom_id,
+    'obsolete',
+    new Date(envelope.metadata.occurred_at).toISOString(),
+    envelope.metadata.actor.user_id,
+    client,
+  );
+}
+
+async function applyLegacyKitMigrated(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as LegacyKitMigratedPayload;
+
+  const existing = await client.query(
+    'SELECT 1 FROM bom WHERE bom_id = $1 OR parent_item_id = $2',
+    [p.bom_id, p.parent_item_id],
+  );
+  if (existing.rows.length > 0) {
+    reject(
+      'DUPLICATE_EVENT',
+      'A BOM already exists for this bom_id or parent item',
+      { bom_id: p.bom_id, parent_item_id: p.parent_item_id },
+      409,
+    );
+  }
+
+  const parentItem = await getItemById(p.parent_item_id, client);
+  if (!parentItem)
+    reject(
+      'BOM_ITEM_NOT_FOUND',
+      'Parent item not found',
+      { parent_item_id: p.parent_item_id },
+      404,
+    );
+
+  const released = p.outcome === 'released';
+  assertValidOccurredAt(envelope.metadata.occurred_at);
+  const occurredAt = new Date(envelope.metadata.occurred_at).toISOString();
+  const actorId = envelope.metadata.actor.user_id;
+  const revisionId = randomUUID();
+
+  let blockingCount = 0;
+  const lineEvaluations: { blockingRelease: boolean; blockingReason: string | null }[] = [];
+  for (const line of p.lines) {
+    let blockingRelease = false;
+    let blockingReason: string | null = null;
+    if (!released) {
+      const componentItem = await getItemById(line.component_item_id, client);
+      if (!componentItem) {
+        blockingRelease = true;
+        blockingReason = `Component item ${line.component_item_id} not found`;
+      } else if (!isReleasedItemMaster(componentItem)) {
+        blockingRelease = true;
+        blockingReason = `Component item ${componentItem.sku} is ${componentItem.status} - BOM cannot be released until item is active`;
+      }
+      if (blockingRelease) blockingCount++;
+    }
+    lineEvaluations.push({ blockingRelease, blockingReason });
+  }
+
+  await client.query(
+    `INSERT INTO bom (bom_id, parent_item_id, parent_sku, parent_uom, business_stream, bom_type, status, current_revision_id, blocking_line_count, status_changed_at, status_changed_by, origin, remediation_flag, kit_ref, created_by, correlation_id, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, 'production', $6, $7, $8, $9, $10, 'legacy_kit', $11, $12, $13, $14, $15)`,
+    [
+      p.bom_id,
+      parentItem.item_id,
+      parentItem.sku,
+      parentItem.uom,
+      parentItem.business_stream,
+      released ? 'released' : 'draft',
+      revisionId,
+      blockingCount,
+      occurredAt,
+      actorId,
+      !released,
+      p.kit_ref,
+      actorId,
+      p.correlation_id ?? null,
+      eventId,
+    ],
+  );
+
+  await client.query(
+    `INSERT INTO bom_revision (revision_id, bom_id, revision_code, revision_status, drafted_by, drafted_at, released_at, released_by, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      revisionId,
+      p.bom_id,
+      p.revision_code,
+      released ? 'released' : 'draft',
+      actorId,
+      occurredAt,
+      released ? occurredAt : null,
+      released ? actorId : null,
+      eventId,
+    ],
+  );
+
+  for (let i = 0; i < p.lines.length; i++) {
+    const line = p.lines[i]!;
+    const evaluation = lineEvaluations[i]!;
+    const componentItem = await getItemById(line.component_item_id, client);
+    // Migration-exempt released path defaults missing scrap to exact-decimal zero (AC 4).
+    const scrapPercent = line.scrap_percent ?? (released ? '0.0000' : null);
+    await client.query(
+      `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, source_event_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10::numeric, $8::numeric * $10::numeric, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+      [
+        randomUUID(),
+        revisionId,
+        p.bom_id,
+        line.line_no,
+        line.component_item_id,
+        componentItem?.sku ?? line.component_item_id,
+        line.output_class,
+        line.quantity_per,
+        line.line_uom,
+        line.uom_conversion_factor,
+        scrapPercent,
+        line.expected_yield_percent ?? null,
+        line.is_phantom,
+        line.phantom_source_bom_id ?? null,
+        line.effective_from,
+        line.effective_to ?? null,
+        evaluation.blockingRelease,
+        evaluation.blockingReason,
+        eventId,
+      ],
+    );
   }
 }
 
@@ -365,7 +793,7 @@ async function applyBomDrafted(
       { parent_item_id: p.parent_item_id },
       404,
     );
-  if (parentItem.status !== 'active') {
+  if (!isReleasedItemMaster(parentItem)) {
     reject(
       'BOM_ITEM_NOT_ACTIVE',
       'Parent item must be active',
@@ -376,13 +804,7 @@ async function applyBomDrafted(
 
   const revisionId = randomUUID();
   const occurredAt = envelope.metadata.occurred_at;
-  if (
-    !occurredAt ||
-    typeof occurredAt !== 'string' ||
-    Number.isNaN(new Date(occurredAt).getTime())
-  ) {
-    reject('INVALID_PARAMS', 'occurred_at is required and must be a valid ISO 8601 date string');
-  }
+  assertValidOccurredAt(occurredAt);
 
   await client.query(
     `INSERT INTO bom (bom_id, parent_item_id, parent_sku, parent_uom, business_stream, bom_type, status, current_revision_id, blocking_line_count, created_by, correlation_id, source_event_id)
@@ -428,7 +850,7 @@ async function applyBomDrafted(
 
     let blockingRelease = false;
     let blockingReason: string | null = null;
-    if (componentItem.status !== 'active') {
+    if (!isReleasedItemMaster(componentItem)) {
       blockingRelease = true;
       blockingReason = `Component item ${componentItem.sku} is ${componentItem.status} - BOM cannot be released until item is active`;
       blockingCount++;
@@ -484,6 +906,21 @@ async function applyBomLineAdded(
 
   const bomRow = await client.query('SELECT * FROM bom WHERE bom_id = $1 FOR UPDATE', [p.bom_id]);
   if (bomRow.rows.length === 0) reject('BOM_NOT_FOUND', 'BOM not found', { bom_id: p.bom_id }, 404);
+
+  // Released revisions are immutable (FR-B-03); other non-draft header states keep the
+  // Story 5.1 BOM_NOT_DRAFT semantics.
+  const revisionRow = await client.query(
+    'SELECT revision_status FROM bom_revision WHERE revision_id = $1 FOR UPDATE',
+    [p.revision_id],
+  );
+  if (revisionRow.rows.length > 0 && revisionRow.rows[0]!.revision_status === 'released') {
+    reject(
+      'IMMUTABLE_REVISION',
+      'Released revisions are immutable - changes require an ECO',
+      { bom_id: p.bom_id, revision_id: p.revision_id },
+      409,
+    );
+  }
   if (bomRow.rows[0]!.status !== 'draft')
     reject(
       'BOM_NOT_DRAFT',
@@ -491,10 +928,6 @@ async function applyBomLineAdded(
       { bom_id: p.bom_id, status: bomRow.rows[0]!.status },
       409,
     );
-
-  await client.query('SELECT 1 FROM bom_revision WHERE revision_id = $1 FOR UPDATE', [
-    p.revision_id,
-  ]);
 
   const componentItem = await getItemById(p.component_item_id, client);
   if (!componentItem)
@@ -534,7 +967,7 @@ async function applyBomLineAdded(
 
   let blockingRelease = false;
   let blockingReason: string | null = null;
-  if (componentItem.status !== 'active') {
+  if (!isReleasedItemMaster(componentItem)) {
     blockingRelease = true;
     blockingReason = `Component item ${componentItem.sku} is ${componentItem.status}`;
   }
@@ -585,6 +1018,21 @@ async function applyBomLineAmended(
 
   const bomRow = await client.query('SELECT * FROM bom WHERE bom_id = $1 FOR UPDATE', [p.bom_id]);
   if (bomRow.rows.length === 0) reject('BOM_NOT_FOUND', 'BOM not found', { bom_id: p.bom_id }, 404);
+
+  // Released revisions are immutable (FR-B-03); other non-draft header states keep the
+  // Story 5.1 BOM_NOT_DRAFT semantics.
+  const revisionRow = await client.query(
+    'SELECT revision_status FROM bom_revision WHERE revision_id = $1 FOR UPDATE',
+    [p.revision_id],
+  );
+  if (revisionRow.rows.length > 0 && revisionRow.rows[0]!.revision_status === 'released') {
+    reject(
+      'IMMUTABLE_REVISION',
+      'Released revisions are immutable - changes require an ECO',
+      { bom_id: p.bom_id, revision_id: p.revision_id },
+      409,
+    );
+  }
   if (bomRow.rows[0]!.status !== 'draft')
     reject(
       'BOM_NOT_DRAFT',
@@ -592,10 +1040,6 @@ async function applyBomLineAmended(
       { bom_id: p.bom_id, status: bomRow.rows[0]!.status },
       409,
     );
-
-  await client.query('SELECT 1 FROM bom_revision WHERE revision_id = $1 FOR UPDATE', [
-    p.revision_id,
-  ]);
 
   const lineRow = await client.query('SELECT * FROM bom_line WHERE bom_line_id = $1 FOR UPDATE', [
     p.bom_line_id,

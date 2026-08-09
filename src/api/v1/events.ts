@@ -116,6 +116,17 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req);
   validateEnvelope(body);
 
+  if (body.stream_type === 'engineering') {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_EVENT_STREAM',
+      'Direct engineering stream writes are not permitted via the events API',
+    );
+    return;
+  }
+
   const authContext = getAuthContext(req);
   const authorizedAssignment = getAuthorizedAssignment(req);
   const auditLocationId = authorizedAssignment?.locationId ?? body.metadata.actor.location_id;

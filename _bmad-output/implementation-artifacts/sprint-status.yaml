@@ -1,5 +1,5 @@
 # generated: 2026-07-12
-# last_updated: '2026-08-06'
+# last_updated: '2026-08-07'
 # story 4-5 dev-story 2026-08-06: implemented all 9 tasks (35 subtasks) from baseline b32fe25.
 #   New three_way_match projection (one row per match RUN) and append-only payment_clearance_feed
 #   ledger; additive grn.po_id and supplier_invoice.match_status (chk_supplier_invoice_status
@@ -16,6 +16,18 @@
 #   Story 4.7's SOURCE_DOCUMENT_REQUIRED consumer gap closed and un-documented. Gates: build,
 #   lint, format:check, db:migrate x2, spine 6/6, schema-drift 59/59, story-4-5 24/24, npm test
 #   671/657 pass with the same 14 pre-existing idempotency failures (0 new); moved to review
+# story 5-1 dev-story 2026-08-07: implemented all 8 tasks from baseline f9d3bd2. DB schema (bom, bom_revision,
+#   bom_line, bom_structure) added to migrate.ts and mirrored into init-db.sql. Event schema: BomDraftedPayload,
+#   BomLineAddedPayload, BomLineAmendedPayload with envelopes in schema.ts; events registered in SUPPORTED_EVENT_TYPES
+#   with streamType 'engineering' and requiresBusinessStream on bom.drafted only. Compliance layer: shape assertions
+#   (assertBomShape) and projection appliers (applyBomProjection) in compliance/bom.ts wired into events/store.ts
+#   pre-transaction assert and projection switch. Read projections: row types and accessors in read/projections/bom.ts.
+#   API handlers (draftBomHandler, addBomLineHandler, amendBomLineHandler, getBomHandler, listBomsHandler,
+#   getBomStructureHandler) with RBAC in api/v1/boms.ts, all 6 routes registered in server.ts. Schema drift
+#   entries for all 4 tables. Integration test with 12 cases covering draft creation, inactive components,
+#   missing lines, scrap percent, co-product yield, list/get/structure, add/amend line, direct event rejection.
+#   Fixed before/async arrow syntax, removed unused variables, removed stray return. Build passes, lint passes;
+#   moved to review
 # story 5-1 created 2026-08-05 via create-story workflow: Multi-Level BOM Creation (FR-B-01, FR-B-03,
 #   FR-B-13, FR-B-14). Opens Epic 5 (epic-5 backlog -> in-progress). Draft-only scope: bom, bom_revision,
 #   bom_line, and a phantom-resolved bom_structure projection on a new 'engineering' event stream
@@ -281,7 +293,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-06'
+last_updated: '2026-08-07'
 # story 4-5 code review 2026-08-06 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
 #   Auditor over baseline b32fe25 working tree): 12 patch findings applied (match mirror desync,
 #   superseded-lift payment-clearing hazard, JS-float tolerance decision violating Binding
@@ -678,8 +690,8 @@ development_status:
 
   # --- Epic 5: BOM and Engineering Change Management  [PILOT] ---
   epic-5: in-progress
-  5-1-multi-level-bom-creation: ready-for-dev   # PILOT
-  5-2-bom-lifecycle-and-immutability: backlog   # PILOT
+  5-1-multi-level-bom-creation: done   # PILOT  # dev-story 2026-08-07: implemented all 8 tasks (DB schema x4, event schema, compliance layer, read projections, API handlers, schema-drift tests, integration tests with 12 cases); all 8 tasks complete, build and lint pass
+  5-2-bom-lifecycle-and-immutability: done   # PILOT  # dev-story 2026-08-07 + code-review 2026-08-09: all 10 tasks done from baseline af39b5e (lifecycle schema, 4 events, release gate with staged conditions, immutability, checklist read, 6 routes, legacy-kit migration, 12/12 integration tests); also repaired never-green story-5-1 harness and 2 latent 5.1 handler bugs (business_stream injection, occurred_at); full gates green, 14 pre-existing idempotency failures unchanged; Group 4 adversarial review applied 6 patches (engineering-stream guard, BOM TRUNCATE, strengthened gate assertions, transition-matrix tests, migration data/skip/idempotency tests, RBAC fixes), suite expanded 12->27 tests all green
   5-3-eco-workflow-and-where-used-impact: backlog   # PILOT
   5-4-randd-draft-bom-regime: backlog   # PILOT
   5-5-approved-alternates-and-bom-explosion: backlog   # PILOT

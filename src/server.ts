@@ -181,6 +181,12 @@ import {
   getBomHandler,
   listBomsHandler,
   getBomStructureHandler,
+  releaseBomHandler,
+  holdBomHandler,
+  obsoleteBomHandler,
+  getReleaseGateHandler,
+  migrateLegacyKitsHandler,
+  listMigrationExceptionsHandler,
 } from './api/v1/boms.js';
 import {
   captureSupplierInvoiceHandler,
@@ -448,10 +454,20 @@ export function createAppRouter(): Router {
   // Story 5.1: BOM Management
   router.post('/api/v1/boms', draftBomHandler);
   router.get('/api/v1/boms', listBomsHandler);
+  // Story 5.2: registered ABOVE GET /api/v1/boms/:bomId - the router returns the first match in
+  // registration order and :bomId would swallow the literal 'migration-exceptions'.
+  router.get('/api/v1/boms/migration-exceptions', listMigrationExceptionsHandler);
   router.get('/api/v1/boms/:bomId', getBomHandler);
   router.get('/api/v1/boms/:bomId/structure', getBomStructureHandler);
   router.post('/api/v1/boms/:bomId/lines', addBomLineHandler);
   router.patch('/api/v1/boms/:bomId/lines/:bomLineId', amendBomLineHandler);
+
+  // Story 5.2: BOM Lifecycle
+  router.post('/api/v1/boms/:bomId/release', releaseBomHandler);
+  router.post('/api/v1/boms/:bomId/hold', holdBomHandler);
+  router.post('/api/v1/boms/:bomId/obsolete', obsoleteBomHandler);
+  router.get('/api/v1/boms/:bomId/release-gate', getReleaseGateHandler);
+  router.post('/api/v1/boms/legacy-kit-migration', migrateLegacyKitsHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);
