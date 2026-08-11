@@ -72,6 +72,9 @@ const MIGRATIONS = [
   '../../read/projections/three_way_match.sql',
   '../../read/projections/payment_clearance_feed.sql',
   '../../read/projections/supplier_scorecard_metric.sql',
+  '../../read/projections/eco.sql',
+  '../../read/projections/eco_change_line.sql',
+  '../../read/projections/eco_stock_disposition.sql',
 ];
 
 async function migrate(): Promise<void> {

@@ -675,7 +675,7 @@ const EXPECTED = [
     canonical: 'read/projections/bom_revision.sql',
     table: 'bom_revision',
     constraints: ['chk_bom_revision_status'],
-    indexes: ['uq_bom_revision_code', 'idx_bom_revision_bom_id'],
+    indexes: ['uq_bom_revision_code', 'idx_bom_revision_bom_id', 'idx_bom_revision_source_eco'],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
   {
@@ -711,6 +711,28 @@ const EXPECTED = [
       'idx_bom_structure_revision',
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
+  // Story 5.3: ECO Workflow and Where-Used Impact
+  {
+    canonical: 'read/projections/eco.sql',
+    table: 'eco',
+    constraints: ['chk_eco_status'],
+    indexes: ['uq_eco_number', 'idx_eco_bom_id', 'idx_eco_status', 'idx_eco_approver'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/eco_change_line.sql',
+    table: 'eco_change_line',
+    constraints: ['chk_eco_change_type', 'chk_eco_change_target'],
+    indexes: ['uq_eco_change_no', 'idx_eco_change_eco_id'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/eco_stock_disposition.sql',
+    table: 'eco_stock_disposition',
+    constraints: ['chk_eco_disposition', 'chk_eco_disposition_rework_ref'],
+    indexes: ['uq_eco_disposition_lot', 'idx_eco_disposition_eco_id'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
   },
 ];
 

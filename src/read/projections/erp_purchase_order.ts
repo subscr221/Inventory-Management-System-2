@@ -201,6 +201,48 @@ export async function upsertPurchaseOrderLine(
   );
 }
 
+export interface OpenPoLineImpactRow {
+  po_number_ext: string;
+  line_no: number;
+  sku: string;
+  open_qty: number;
+  expected_delivery_date: string | null;
+  supplier_ref_ext: string;
+}
+
+/**
+ * Story 5.3 (AC 2): open-PO impact for the where-used/impact read. Joins erp_purchase_order_line
+ * to erp_purchase_order where status = 'open' AND open_qty > 0, filtered by the affected SKUs
+ * (there is no item UUID on this Story 2.9 reference table, only sku). An empty sku list returns
+ * no rows rather than every open line.
+ */
+export async function getOpenPurchaseOrderLinesBySkus(
+  skus: string[],
+  client?: PoolClient,
+): Promise<OpenPoLineImpactRow[]> {
+  if (skus.length === 0) return [];
+  const q = runner(client);
+  const result = await q.query(
+    `SELECT l.po_number_ext, l.line_no, l.sku,
+            l.open_qty,
+            to_char(h.expected_delivery_date, 'YYYY-MM-DD') AS expected_delivery_date,
+            h.supplier_ref_ext
+       FROM erp_purchase_order_line l
+       JOIN erp_purchase_order h ON h.po_number_ext = l.po_number_ext
+      WHERE h.status = 'open' AND l.open_qty > 0 AND l.sku = ANY($1::text[])
+      ORDER BY l.po_number_ext, l.line_no`,
+    [skus],
+  );
+  return result.rows.map((row) => ({
+    po_number_ext: row.po_number_ext as string,
+    line_no: num(row.line_no),
+    sku: row.sku as string,
+    open_qty: num(row.open_qty),
+    expected_delivery_date: (row.expected_delivery_date as string | null) ?? null,
+    supplier_ref_ext: row.supplier_ref_ext as string,
+  }));
+}
+
 /**
  * Soft-closes every open PO whose po_number_ext is NOT in the present feed (status = 'closed', never
  * hard-delete) so downstream receipts referencing a closed PO still resolve; ERP stays master.

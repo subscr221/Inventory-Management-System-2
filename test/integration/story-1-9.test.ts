@@ -362,6 +362,16 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/boms/:bomId/obsolete',
       'GET /api/v1/boms/:bomId/release-gate',
       'POST /api/v1/boms/legacy-kit-migration',
+      // Story 5.3: ECO Workflow and Where-Used Impact
+      'POST /api/v1/ecos',
+      'GET /api/v1/ecos',
+      'GET /api/v1/ecos/:ecoId',
+      'GET /api/v1/ecos/:ecoId/impact',
+      'POST /api/v1/ecos/:ecoId/review',
+      'POST /api/v1/ecos/:ecoId/approve',
+      'POST /api/v1/ecos/:ecoId/dispositions',
+      'POST /api/v1/ecos/:ecoId/implement',
+      'POST /api/v1/ecos/:ecoId/cancel',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

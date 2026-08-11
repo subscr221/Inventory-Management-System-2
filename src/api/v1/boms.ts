@@ -17,6 +17,7 @@ import {
   getBomRevisionById,
   getBomRevisionByBomId,
   getBomLines,
+  getBomLineById,
   getBomStructure,
   listBoms,
   type BomRow,
@@ -289,6 +290,16 @@ const amendBomLineBase: RouteHandler = async (req, res, params) => {
   }
   if (bom.status !== 'draft') {
     sendRequestError(req, res, 409, 'BOM_NOT_DRAFT', 'Can only amend lines on a draft BOM');
+    return;
+  }
+
+  // Story 5.3 (deferred-work.md line 210): the handler pre-check must scope the line lookup to
+  // the CURRENT revision, not just bom_line_id - once a BOM has a second revision (only possible
+  // via an implemented ECO), a stale bom_line_id from an older, released revision must 404 here
+  // rather than reach the applier at all.
+  const targetLine = await getBomLineById(bomLineId);
+  if (!targetLine || targetLine.revision_id !== revisionId) {
+    sendRequestError(req, res, 404, 'BOM_LINE_NOT_FOUND', 'BOM line not found in this revision');
     return;
   }
 

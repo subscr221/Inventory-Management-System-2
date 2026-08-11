@@ -448,10 +448,43 @@ interface GateLineRow {
 }
 
 /**
+ * Approved-ECO release gate condition (Story 5.3, AC 9). Exemption predicate: count released
+ * revisions for this bom_id EXCLUDING the revision under release. Zero means first release of a
+ * brand-new BOM - the condition is EXEMPT and reported met (this is what makes initial release
+ * achievable with no ECO in existence yet). Otherwise the condition is met only when the
+ * revision under release carries source_eco_id and that ECO is approved or implemented. The SAME
+ * predicate backs release_gate_checklist.ts - the checklist and the gate can never disagree.
+ */
+export async function isApprovedEcoConditionMet(
+  bomId: string,
+  revisionId: string,
+  client: Pick<PoolClient, 'query'>,
+): Promise<boolean> {
+  const priorReleased = await client.query(
+    `SELECT COUNT(*) AS cnt FROM bom_revision
+      WHERE bom_id = $1 AND revision_status = 'released' AND revision_id <> $2`,
+    [bomId, revisionId],
+  );
+  if (Number(priorReleased.rows[0]!.cnt) === 0) return true;
+
+  const revision = await client.query(
+    `SELECT source_eco_id FROM bom_revision WHERE revision_id = $1`,
+    [revisionId],
+  );
+  const sourceEcoId = revision.rows[0]?.source_eco_id as string | null | undefined;
+  if (!sourceEcoId) return false;
+
+  const eco = await client.query(`SELECT status FROM eco WHERE eco_id = $1`, [sourceEcoId]);
+  const status = eco.rows[0]?.status as string | undefined;
+  return status === 'approved' || status === 'implemented';
+}
+
+/**
  * Release gate (Story 5.2, D4 staging): enforces released component item masters (A-11) and
- * filled scrap percents. Approved-ECO (Story 5.3) and completed-cost-rollup (Story 5.6) are
- * staged conditions surfaced with enforced: false. The A-11 check re-evaluates EVERY line at
- * release time - blocking flags stamped at line-add time go stale when item masters deactivate.
+ * filled scrap percents, plus the Story 5.3 approved-ECO condition (now enforced). Completed-
+ * cost-rollup (Story 5.6) remains a staged condition surfaced with enforced: false. The A-11
+ * check re-evaluates EVERY line at release time - blocking flags stamped at line-add time go
+ * stale when item masters deactivate.
  */
 async function evaluateReleaseGate(
   bomId: string,
@@ -506,11 +539,12 @@ async function evaluateReleaseGate(
   const unmetConditions: string[] = [];
   if (blockingLines.length > 0) unmetConditions.push('component_item_masters_released');
   if (scrapMissingLines.length > 0) unmetConditions.push('scrap_percent_missing');
+  if (!(await isApprovedEcoConditionMet(bomId, revisionId, client)))
+    unmetConditions.push('approved_eco');
   return { unmetConditions, blockingLines, scrapMissingLines };
 }
 
 const STAGED_CONDITIONS = [
-  { condition: 'approved_eco', enforced: false, staged_by: 'Story 5.3' },
   { condition: 'cost_rollup_complete', enforced: false, staged_by: 'Story 5.6' },
 ];
 
@@ -1041,11 +1075,22 @@ async function applyBomLineAmended(
       409,
     );
 
-  const lineRow = await client.query('SELECT * FROM bom_line WHERE bom_line_id = $1 FOR UPDATE', [
-    p.bom_line_id,
-  ]);
+  // Story 5.3 (deferred-work.md line 210): filter by revision_id, not just bom_line_id. Without
+  // this filter, a stale/foreign bom_line_id targeting an OLDER (released, immutable) revision
+  // of the SAME bom_id would still match and be amended in place once this BOM has a second
+  // revision - a released-revision immutability violation the earlier one-revision-per-BOM world
+  // could never reach.
+  const lineRow = await client.query(
+    'SELECT * FROM bom_line WHERE bom_line_id = $1 AND revision_id = $2 FOR UPDATE',
+    [p.bom_line_id, p.revision_id],
+  );
   if (lineRow.rows.length === 0)
-    reject('BOM_LINE_NOT_FOUND', 'BOM line not found', { bom_line_id: p.bom_line_id }, 404);
+    reject(
+      'BOM_LINE_NOT_FOUND',
+      'BOM line not found in this revision',
+      { bom_line_id: p.bom_line_id, revision_id: p.revision_id },
+      404,
+    );
 
   const currentLine = lineRow.rows[0]!;
 

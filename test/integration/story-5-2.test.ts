@@ -300,14 +300,21 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
       scrapLines.every((l) => l['condition'] === 'scrap_percent_missing' || l['bom_line_id']),
       'scrap lines should carry bom_line_id: ' + JSON.stringify(details),
     );
+    // Story 5.3 un-stages approved_eco (it is now enforced and evaluated - and met here, since
+    // this is a first release with zero prior released revisions, the AC 9 exemption). Only
+    // cost_rollup_complete (Story 5.6) remains staged.
     const staged = details['staged_conditions'] as Record<string, unknown>[];
     assert.ok(
-      staged.some((c) => c['condition'] === 'approved_eco' && c['enforced'] === false),
-      'staged_conditions should list approved_eco with enforced false',
+      staged.every((c) => c['condition'] !== 'approved_eco'),
+      'approved_eco should no longer be staged: ' + JSON.stringify(staged),
     );
     assert.ok(
       staged.some((c) => c['condition'] === 'cost_rollup_complete' && c['enforced'] === false),
       'staged_conditions should list cost_rollup_complete with enforced false',
+    );
+    assert.ok(
+      (details['unmet_conditions'] as string[]).every((c) => c !== 'approved_eco'),
+      'approved_eco should be exempt (met) on a first release with no prior released revision',
     );
   });
 

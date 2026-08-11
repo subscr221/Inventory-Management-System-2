@@ -4065,6 +4065,10 @@ CREATE TABLE IF NOT EXISTS bom_revision (
 ALTER TABLE bom_revision ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ;
 ALTER TABLE bom_revision ADD COLUMN IF NOT EXISTS released_by UUID;
 
+-- Story 5.3: the ECO (if any) whose implementation created this revision.
+ALTER TABLE bom_revision ADD COLUMN IF NOT EXISTS source_eco_id UUID;
+CREATE INDEX IF NOT EXISTS idx_bom_revision_source_eco ON bom_revision (source_eco_id);
+
 -- Story 5.2 widens chk_bom_revision_status on live databases. DROP + ADD wrapped in a DO block
 -- for atomicity - init-db.sql runs statement-by-statement under autocommit.
 DO $$
@@ -4905,5 +4909,187 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON supplier_scorecard_metric TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/eco.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS eco (
+  eco_id                UUID PRIMARY KEY,
+  eco_number            TEXT NOT NULL,
+  bom_id                UUID NOT NULL,
+  target_revision_id    UUID NOT NULL,
+  business_stream       TEXT NOT NULL,
+  status                TEXT NOT NULL DEFAULT 'draft',
+  reason                TEXT NOT NULL,
+  raised_by             UUID NOT NULL,
+  approver_actor_id     UUID,
+  doa_entry_id          UUID,
+  review_started_at     TIMESTAMPTZ,
+  approved_at           TIMESTAMPTZ,
+  approved_by           UUID,
+  implemented_at        TIMESTAMPTZ,
+  implemented_by        UUID,
+  new_revision_id       UUID,
+  cancelled_at          TIMESTAMPTZ,
+  cancelled_by          UUID,
+  cancel_reason         TEXT,
+  status_changed_at     TIMESTAMPTZ,
+  status_changed_by     UUID,
+  correlation_id        UUID,
+  source_event_id       UUID NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_eco_status CHECK (status IN ('draft','under_review','approved','implemented','cancelled'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_eco_number ON eco (eco_number);
+CREATE INDEX IF NOT EXISTS idx_eco_bom_id ON eco (bom_id);
+CREATE INDEX IF NOT EXISTS idx_eco_status ON eco (status);
+CREATE INDEX IF NOT EXISTS idx_eco_approver ON eco (approver_actor_id) WHERE status = 'under_review';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_eco_status'
+      AND conrelid = 'eco'::regclass
+  ) THEN
+    ALTER TABLE eco
+      ADD CONSTRAINT chk_eco_status CHECK (status IN ('draft','under_review','approved','implemented','cancelled'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON eco TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON eco TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/eco_change_line.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS eco_change_line (
+  eco_change_id            UUID PRIMARY KEY,
+  eco_id                   UUID NOT NULL,
+  change_no                INTEGER NOT NULL,
+  change_type              TEXT NOT NULL,
+  target_bom_line_id       UUID,
+  component_item_id        UUID,
+  component_sku            TEXT,
+  output_class             TEXT NOT NULL DEFAULT 'component',
+  quantity_per             NUMERIC(18,6),
+  line_uom                 TEXT,
+  uom_conversion_factor    NUMERIC(18,8),
+  base_quantity_per        NUMERIC(18,6),
+  scrap_percent            NUMERIC(7,4),
+  expected_yield_percent   NUMERIC(7,4),
+  is_phantom               BOOLEAN NOT NULL DEFAULT false,
+  phantom_source_bom_id    UUID,
+  effective_from           DATE,
+  effective_to             DATE,
+  source_event_id          UUID NOT NULL,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_eco_change_type CHECK (change_type IN ('add','amend','retire')),
+  CONSTRAINT chk_eco_change_target CHECK (
+    (change_type = 'add' AND target_bom_line_id IS NULL AND component_item_id IS NOT NULL) OR
+    (change_type IN ('amend','retire') AND target_bom_line_id IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_eco_change_no ON eco_change_line (eco_id, change_no);
+CREATE INDEX IF NOT EXISTS idx_eco_change_eco_id ON eco_change_line (eco_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_eco_change_type'
+      AND conrelid = 'eco_change_line'::regclass
+  ) THEN
+    ALTER TABLE eco_change_line
+      ADD CONSTRAINT chk_eco_change_type CHECK (change_type IN ('add','amend','retire'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_eco_change_target'
+      AND conrelid = 'eco_change_line'::regclass
+  ) THEN
+    ALTER TABLE eco_change_line
+      ADD CONSTRAINT chk_eco_change_target CHECK (
+        (change_type = 'add' AND target_bom_line_id IS NULL AND component_item_id IS NOT NULL) OR
+        (change_type IN ('amend','retire') AND target_bom_line_id IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON eco_change_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON eco_change_line TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/eco_stock_disposition.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS eco_stock_disposition (
+  disposition_id      UUID PRIMARY KEY,
+  eco_id               UUID NOT NULL,
+  lot_id               TEXT NOT NULL,
+  sku                  TEXT NOT NULL,
+  location_id          UUID NOT NULL,
+  on_hand_qty          NUMERIC(18,6) NOT NULL,
+  disposition          TEXT NOT NULL,
+  rework_reference     TEXT,
+  notes                TEXT,
+  decided_at           TIMESTAMPTZ NOT NULL,
+  decided_by           UUID NOT NULL,
+  source_event_id      UUID NOT NULL,
+  CONSTRAINT chk_eco_disposition CHECK (disposition IN ('use_up','scrap','rework')),
+  CONSTRAINT chk_eco_disposition_rework_ref CHECK (
+    (disposition = 'rework' AND rework_reference IS NOT NULL AND btrim(rework_reference) <> '') OR
+    (disposition <> 'rework' AND rework_reference IS NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_eco_disposition_lot ON eco_stock_disposition (eco_id, lot_id, location_id);
+CREATE INDEX IF NOT EXISTS idx_eco_disposition_eco_id ON eco_stock_disposition (eco_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_eco_disposition'
+      AND conrelid = 'eco_stock_disposition'::regclass
+  ) THEN
+    ALTER TABLE eco_stock_disposition
+      ADD CONSTRAINT chk_eco_disposition CHECK (disposition IN ('use_up','scrap','rework'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_eco_disposition_rework_ref'
+      AND conrelid = 'eco_stock_disposition'::regclass
+  ) THEN
+    ALTER TABLE eco_stock_disposition
+      ADD CONSTRAINT chk_eco_disposition_rework_ref CHECK (
+        (disposition = 'rework' AND rework_reference IS NOT NULL AND btrim(rework_reference) <> '') OR
+        (disposition <> 'rework' AND rework_reference IS NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON eco_stock_disposition TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON eco_stock_disposition TO readonly_user;
   END IF;
 END $$;

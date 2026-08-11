@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
+import { isApprovedEcoConditionMet } from '../../compliance/bom.js';
 
 /**
  * Release-gate checklist (Story 5.2, AC 1). Deliberate divergence from the epics dev-note
@@ -99,6 +100,15 @@ export async function getReleaseGateChecklist(
     }
   }
 
+  // Story 5.3: approved_eco is now a computed, enforced condition using the SAME predicate as
+  // the release gate itself (src/compliance/bom.ts:isApprovedEcoConditionMet) - the checklist and
+  // the gate can never disagree. Only reachable when a revision exists; a BOM header with no
+  // current revision has nothing to check yet and reports the condition unmet (revision required
+  // before release is possible in any case).
+  const approvedEcoMet = bom.current_revision_id
+    ? await isApprovedEcoConditionMet(bom.bom_id, bom.current_revision_id, r)
+    : false;
+
   const conditions: ReleaseGateCondition[] = [
     {
       condition: 'bom_lines_present',
@@ -118,9 +128,14 @@ export async function getReleaseGateChecklist(
       enforced: true,
       blocking_lines: scrapMissingLines,
     },
-    // Staged gate conditions (D4): flipped on by later stories, surfaced here so the payload
-    // shape does not change when they arrive.
-    { condition: 'approved_eco', met: null, enforced: false, blocking_lines: [] },
+    {
+      condition: 'approved_eco',
+      met: approvedEcoMet,
+      enforced: true,
+      blocking_lines: [],
+    },
+    // cost_rollup_complete remains staged (D4): flipped on by Story 5.6, surfaced here so the
+    // payload shape does not change when it arrives.
     { condition: 'cost_rollup_complete', met: null, enforced: false, blocking_lines: [] },
   ];
 

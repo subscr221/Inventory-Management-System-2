@@ -189,6 +189,17 @@ import {
   listMigrationExceptionsHandler,
 } from './api/v1/boms.js';
 import {
+  raiseEcoHandler,
+  listEcosHandler,
+  getEcoHandler,
+  getEcoImpactHandler,
+  startEcoReviewHandler,
+  approveEcoHandler,
+  recordEcoDispositionsHandler,
+  implementEcoHandler,
+  cancelEcoHandler,
+} from './api/v1/ecos.js';
+import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
   getSupplierInvoiceHandler,
@@ -468,6 +479,17 @@ export function createAppRouter(): Router {
   router.post('/api/v1/boms/:bomId/obsolete', obsoleteBomHandler);
   router.get('/api/v1/boms/:bomId/release-gate', getReleaseGateHandler);
   router.post('/api/v1/boms/legacy-kit-migration', migrateLegacyKitsHandler);
+
+  // Story 5.3: ECO Workflow and Where-Used Impact
+  router.post('/api/v1/ecos', raiseEcoHandler);
+  router.get('/api/v1/ecos', listEcosHandler);
+  router.get('/api/v1/ecos/:ecoId', getEcoHandler);
+  router.get('/api/v1/ecos/:ecoId/impact', getEcoImpactHandler);
+  router.post('/api/v1/ecos/:ecoId/review', startEcoReviewHandler);
+  router.post('/api/v1/ecos/:ecoId/approve', approveEcoHandler);
+  router.post('/api/v1/ecos/:ecoId/dispositions', recordEcoDispositionsHandler);
+  router.post('/api/v1/ecos/:ecoId/implement', implementEcoHandler);
+  router.post('/api/v1/ecos/:ecoId/cancel', cancelEcoHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

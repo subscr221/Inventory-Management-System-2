@@ -101,6 +101,7 @@ import {
   applyPurchaseOrderProjection,
 } from '../compliance/purchase-order.js';
 import { assertBomShape, applyBomProjection } from '../compliance/bom.js';
+import { assertEcoShape, applyEcoProjection } from '../compliance/eco.js';
 import {
   assertSupplierInvoiceShape,
   applySupplierInvoiceProjection,
@@ -490,6 +491,9 @@ export async function persistEvent(
   // Story 5.1: BOM shape validation is non-DB and runs with the other pre-transaction asserts,
   // so a malformed BOM event never consumes an idempotency key.
   assertBomShape(envelope);
+  // Story 5.3: ECO shape validation is non-DB and runs with the other pre-transaction asserts,
+  // so a malformed ECO event never consumes an idempotency key.
+  assertEcoShape(envelope);
   // Story 4.7: supplier invoice / invoice-ingestion shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed invoice event never consumes an idempotency key.
   assertSupplierInvoiceShape(envelope);
@@ -738,6 +742,10 @@ export async function persistEvent(
     // Story 5.1: BOM projection runs inside this same transaction so the BOM header, revision,
     // lines, and structure projection commit together with the domain_events insert.
     await applyBomProjection(envelope, client, eventId);
+    // Story 5.3: ECO projection runs inside this same transaction so the ECO header, change
+    // lines, stock dispositions, and (on implementation) the new BOM revision commit together
+    // with the domain_events insert.
+    await applyEcoProjection(envelope, client, eventId);
     // Story 4.7: supplier invoice capture / file-ingestion review projection runs inside this
     // same transaction so the invoice header, lines, ingestion row, and the domain_events insert
     // commit or roll back together.

@@ -32,6 +32,7 @@ export interface BomRevisionRow {
   drafted_at: string;
   released_at: string | null;
   released_by: string | null;
+  source_eco_id: string | null;
   source_event_id: string;
 }
 
@@ -276,8 +277,8 @@ export async function insertBomRevision(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
-    `INSERT INTO bom_revision (revision_id, bom_id, revision_code, revision_status, drafted_by, drafted_at, released_at, released_by, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    `INSERT INTO bom_revision (revision_id, bom_id, revision_code, revision_status, drafted_by, drafted_at, released_at, released_by, source_eco_id, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       row.revision_id,
       row.bom_id,
@@ -287,6 +288,7 @@ export async function insertBomRevision(
       row.drafted_at,
       row.released_at,
       row.released_by,
+      row.source_eco_id,
       row.source_event_id,
     ],
   );

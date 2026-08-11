@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS bom_revision (
 ALTER TABLE bom_revision ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ;
 ALTER TABLE bom_revision ADD COLUMN IF NOT EXISTS released_by UUID;
 
+-- Story 5.3: the ECO (if any) whose implementation created this revision. The machine-checkable
+-- evidence the AC 9 release-gate condition reads; "was this revision ECO-driven" is never
+-- re-derived any other way.
+ALTER TABLE bom_revision ADD COLUMN IF NOT EXISTS source_eco_id UUID;
+CREATE INDEX IF NOT EXISTS idx_bom_revision_source_eco ON bom_revision (source_eco_id);
+
 -- Story 5.2 widens chk_bom_revision_status on live databases. DROP + ADD wrapped in a DO block
 -- for atomicity (migrate.ts runs the whole file as one transaction today; the DO block keeps the
 -- pair atomic even if that ever changes, and mirrors deploy/compose/init-db.sql exactly).

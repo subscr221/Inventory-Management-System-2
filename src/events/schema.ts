@@ -1536,6 +1536,120 @@ export interface SupplierScorecardMetricRecordedEnvelope extends Omit<EventEnvel
 }
 
 // ---------------------------------------------------------------------------
+// Story 5.3: ECO Workflow and Where-Used Impact
+// ---------------------------------------------------------------------------
+
+/** One proposed change on an ECO: add a new component, amend, or retire an existing bom_line. */
+export interface EcoChangeInput {
+  change_type: 'add' | 'amend' | 'retire';
+  target_bom_line_id?: string;
+  component_item_id?: string;
+  output_class?: 'component' | 'co_product' | 'by_product';
+  quantity_per?: string;
+  line_uom?: string;
+  uom_conversion_factor?: string;
+  scrap_percent?: string;
+  expected_yield_percent?: string;
+  is_phantom?: boolean;
+  phantom_source_bom_id?: string;
+  effective_from?: string;
+  effective_to?: string;
+}
+
+/**
+ * approver_actor_id and doa_entry_id are computed at CAPTURE time (resolveApprover) and stored
+ * here so replay is deterministic - DOA registry entries and role holders drift over time.
+ */
+export interface EcoRaisedPayload {
+  eco_id: string;
+  eco_number: string;
+  bom_id: string;
+  target_revision_id: string;
+  /** Server-derived from the target BOM; never accepted from a request body. */
+  business_stream: string;
+  reason: string;
+  changes: EcoChangeInput[];
+  approver_actor_id: string | null;
+  doa_entry_id: string | null;
+  correlation_id?: string;
+}
+
+export interface EcoRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'eco.raised';
+  payload: EcoRaisedPayload;
+}
+
+export interface EcoReviewStartedPayload {
+  eco_id: string;
+  correlation_id?: string;
+}
+
+export interface EcoReviewStartedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'eco.review_started';
+  payload: EcoReviewStartedPayload;
+}
+
+export interface EcoApprovedPayload {
+  eco_id: string;
+  decision_note?: string;
+  correlation_id?: string;
+}
+
+export interface EcoApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'eco.approved';
+  payload: EcoApprovedPayload;
+}
+
+/**
+ * new_revision_id and new_revision_code are computed at CAPTURE time in the handler and stored
+ * here so replay is deterministic - revision counts drift over time (the same rule Story 5.2
+ * applied to the legacy-kit migration `outcome` field).
+ */
+export interface EcoImplementedPayload {
+  eco_id: string;
+  new_revision_id: string;
+  new_revision_code: string;
+  correlation_id?: string;
+}
+
+export interface EcoImplementedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'eco.implemented';
+  payload: EcoImplementedPayload;
+}
+
+export interface EcoCancelledPayload {
+  eco_id: string;
+  cancel_reason: string;
+  correlation_id?: string;
+}
+
+export interface EcoCancelledEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'eco.cancelled';
+  payload: EcoCancelledPayload;
+}
+
+export interface EcoStockDispositionInput {
+  lot_id: string;
+  sku: string;
+  location_id: string;
+  on_hand_qty: string;
+  disposition: 'use_up' | 'scrap' | 'rework';
+  rework_reference?: string;
+  notes?: string;
+}
+
+export interface EcoStockDispositionRecordedPayload {
+  eco_id: string;
+  dispositions: EcoStockDispositionInput[];
+  correlation_id?: string;
+}
+
+export interface EcoStockDispositionRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'eco.stock_disposition_recorded';
+  payload: EcoStockDispositionRecordedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -1937,5 +2051,35 @@ export const SUPPORTED_EVENT_TYPES = {
   'bom.migrated_from_kit': {
     streamType: 'engineering',
     requiresBusinessStream: true,
+  },
+  // Story 5.3: ECO lifecycle on the existing 'engineering' stream. eco.raised creates the header
+  // and follows the bom.drafted precedent (requiresBusinessStream: true); the other five are
+  // transitions acting on an already-tagged document, following the bom_line.* / Story 5.2
+  // lifecycle precedent (requiresBusinessStream: false). eco.review_started is a deliberate sixth
+  // event beyond the five named in the epics dev note: AC 1 requires Under Review to be a
+  // reachable state and every state change in this codebase is an event.
+  'eco.raised': {
+    streamType: 'engineering',
+    requiresBusinessStream: true,
+  },
+  'eco.review_started': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'eco.approved': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'eco.implemented': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'eco.cancelled': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'eco.stock_disposition_recorded': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
   },
 } as const;

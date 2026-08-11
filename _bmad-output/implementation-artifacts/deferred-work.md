@@ -207,7 +207,7 @@
 
 ## Deferred from: code review of 5-2-bom-lifecycle-and-immutability (2026-08-09, Group 2)
 
-- Cross-revision immutability bypass: `applyBomLineAmended` updates the line by `bom_line_id` with no `revision_id` filter, and both handler and applier validate only the CURRENT revision's status; a future Story 5.3 revision whose current revision is draft could amend an older released revision's lines (FR-B-03 violation) [src/api/v1/boms.ts:279] - deferred, unreachable today (this story is strictly one revision per BOM); revisit when 5.3 adds revision generation.
+- RESOLVED by 5-3-eco-workflow-and-where-used-impact (2026-08-11): Cross-revision immutability bypass - `applyBomLineAmended` now filters the `bom_line` lookup by `bom_line_id AND revision_id` (`src/compliance/bom.ts`), and the handler pre-check in `src/api/v1/boms.ts` (`amendBomLineHandler`) 404s a stale/foreign `bom_line_id` before persisting. Covered by a dedicated cross-revision test in `test/integration/story-5-3.test.ts`.
 - Global idempotency-key reuse silently no-ops a lifecycle transition: `uq_idempotency` is global and `persistEvent` returns the existing event on a key hit, so reusing one key across release then hold (or across different BOMs) drops the transition with a 200 and no error [src/api/v1/boms.ts:434] - deferred, pre-existing platform-wide convention (AD-16 caller-carried keys) and the exact Task 6 pattern; the migration handler's per-kit key composition is a documented, necessary deviation.
 
 ## Resolved: code review of 5-2-bom-lifecycle-and-immutability (2026-08-09, Group 2)
