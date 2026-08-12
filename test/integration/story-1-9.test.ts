@@ -372,6 +372,15 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/ecos/:ecoId/dispositions',
       'POST /api/v1/ecos/:ecoId/implement',
       'POST /api/v1/ecos/:ecoId/cancel',
+      // Story 5.4: R&D Draft BOM Regime
+      'POST /api/v1/boms/:bomId/clone-to-rd',
+      'POST /api/v1/boms/:bomId/builds',
+      'GET /api/v1/boms/:bomId/builds',
+      'GET /api/v1/rd-builds/:buildId',
+      'POST /api/v1/rd-builds/:buildId/confirm',
+      'POST /api/v1/boms/:bomId/productization-signoffs',
+      'GET /api/v1/boms/:bomId/productization-gate',
+      'POST /api/v1/boms/:bomId/productize',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

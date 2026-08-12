@@ -64,7 +64,9 @@ async function getAffectedComponentItemIds(
     }
     if (change.target_bom_line_id) {
       const targetLine = await getBomLineById(change.target_bom_line_id, client);
-      if (targetLine) affected.add(targetLine.component_item_id);
+      // Story 5.4: component_item_id is NULL on placeholder lines - a placeholder has no item
+      // identity to walk upward from.
+      if (targetLine?.component_item_id) affected.add(targetLine.component_item_id);
     }
   }
   return affected;

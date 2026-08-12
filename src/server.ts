@@ -200,6 +200,16 @@ import {
   cancelEcoHandler,
 } from './api/v1/ecos.js';
 import {
+  cloneToRdHandler,
+  recordBuildHandler,
+  listBuildsHandler,
+  getBuildHandler,
+  confirmBuildHandler,
+  signProductizationHandler,
+  getProductizationGateHandler,
+  productizeHandler,
+} from './api/v1/rd-boms.js';
+import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
   getSupplierInvoiceHandler,
@@ -490,6 +500,16 @@ export function createAppRouter(): Router {
   router.post('/api/v1/ecos/:ecoId/dispositions', recordEcoDispositionsHandler);
   router.post('/api/v1/ecos/:ecoId/implement', implementEcoHandler);
   router.post('/api/v1/ecos/:ecoId/cancel', cancelEcoHandler);
+
+  // Story 5.4: R&D Draft BOM Regime
+  router.post('/api/v1/boms/:bomId/clone-to-rd', cloneToRdHandler);
+  router.post('/api/v1/boms/:bomId/builds', recordBuildHandler);
+  router.get('/api/v1/boms/:bomId/builds', listBuildsHandler);
+  router.get('/api/v1/rd-builds/:buildId', getBuildHandler);
+  router.post('/api/v1/rd-builds/:buildId/confirm', confirmBuildHandler);
+  router.post('/api/v1/boms/:bomId/productization-signoffs', signProductizationHandler);
+  router.get('/api/v1/boms/:bomId/productization-gate', getProductizationGateHandler);
+  router.post('/api/v1/boms/:bomId/productize', productizeHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

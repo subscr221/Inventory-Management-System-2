@@ -1372,7 +1372,11 @@ export interface PaymentClearanceFeedRecordedEnvelope extends Omit<EventEnvelope
 
 export interface BomLineInput {
   line_no: number;
-  component_item_id: string;
+  /** Required unless is_placeholder is true (Story 5.4, R&D drafts only). */
+  component_item_id?: string;
+  /** Story 5.4: placeholder line (R&D drafts only) - no component identity, free_text required. */
+  is_placeholder?: boolean;
+  free_text?: string;
   output_class: 'component' | 'co_product' | 'by_product';
   quantity_per: string;
   line_uom: string;
@@ -1406,7 +1410,11 @@ export interface BomLineAddedPayload {
   revision_id: string;
   bom_line_id: string;
   line_no: number;
-  component_item_id: string;
+  /** Required unless is_placeholder is true (Story 5.4, R&D drafts only). */
+  component_item_id?: string;
+  /** Story 5.4: placeholder line (R&D drafts only) - no component identity, free_text required. */
+  is_placeholder?: boolean;
+  free_text?: string;
   output_class: 'component' | 'co_product' | 'by_product';
   quantity_per: string;
   line_uom: string;
@@ -1647,6 +1655,143 @@ export interface EcoStockDispositionRecordedPayload {
 export interface EcoStockDispositionRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'eco.stock_disposition_recorded';
   payload: EcoStockDispositionRecordedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 5.4: R&D draft BOM regime events (FR-B-09 to FR-B-11).
+//
+// There is deliberately NO rd_draft.created event: POST /api/v1/boms with bom_type 'rnd' already
+// drafts an R&D BOM through bom.drafted. Likewise the epics' "AsBuiltSnapshotCaptured" is split
+// into rd_build.recorded + rd_build.confirmed because AC 4 needs a build record that exists
+// BEFORE confirmation and a capture that happens AT confirmation.
+//
+// All ids (bom_id, revision_id, line_ids, build_id, signoff_id, approver_actor_id) are minted or
+// resolved at CAPTURE time in the handler and stored in the payload so replay is deterministic.
+// ---------------------------------------------------------------------------
+
+/**
+ * Clones a production (or R&D) BOM into a NEW editable R&D draft (FR-B-10). stream_id is the NEW
+ * draft's bom_id. business_stream is COPIED from the source BOM, never accepted from a request.
+ */
+export interface RdDraftClonedPayload {
+  source_bom_id: string;
+  source_revision_id: string;
+  bom_id: string;
+  revision_id: string;
+  revision_code: string;
+  parent_item_id: string;
+  parent_sku: string;
+  parent_uom: string;
+  business_stream: string;
+  line_ids: string[];
+  correlation_id?: string;
+}
+
+export interface RdDraftClonedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_draft.cloned';
+  payload: RdDraftClonedPayload;
+}
+
+/**
+ * One as-built line supplied when recording a draft-BOM build (AC 4). The discriminated union
+ * mirrors assertRdBuildRecordedShape (src/compliance/rd-bom.ts): a placeholder line carries
+ * free_text and NO component identity; a real line carries component_item_id plus the
+ * server-resolved component_sku (required by the shape assert, never supplied by the client).
+ */
+export type RdAsBuiltLineInput =
+  | {
+      line_no: number;
+      draft_bom_line_id?: string;
+      is_placeholder?: false;
+      component_item_id: string;
+      component_sku: string;
+      quantity_used: string;
+      line_uom: string;
+    }
+  | {
+      line_no: number;
+      draft_bom_line_id?: string;
+      is_placeholder: true;
+      free_text: string;
+      quantity_used: string;
+      line_uom: string;
+    };
+
+/**
+ * Records a draft-BOM build (AC 4). stream_id is build_id. business_stream is derived server-side
+ * from the BOM. Deviations are NOT computed here - they are recomputed at confirm time against
+ * the draft's then-current lines.
+ */
+export interface RdBuildRecordedPayload {
+  build_id: string;
+  bom_id: string;
+  revision_id: string;
+  build_ref: string;
+  business_stream: string;
+  built_quantity: string;
+  built_uom: string;
+  outcome?: string;
+  notes?: string;
+  as_built_lines: RdAsBuiltLineInput[];
+  correlation_id?: string;
+}
+
+export interface RdBuildRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_build.recorded';
+  payload: RdBuildRecordedPayload;
+}
+
+/** Confirms a recorded build, capturing the immutable as-built snapshot (AC 4). */
+export interface RdBuildConfirmedPayload {
+  build_id: string;
+  correlation_id?: string;
+}
+
+export interface RdBuildConfirmedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_build.confirmed';
+  payload: RdBuildConfirmedPayload;
+}
+
+/**
+ * One productization gate sign-off (AC 5). approver_actor_id and doa_entry_id are resolved at
+ * CAPTURE time (resolveApprover) and stored so replay is deterministic. stream_id is the R&D
+ * draft's bom_id.
+ */
+export interface RdProductizationSignedPayload {
+  signoff_id: string;
+  bom_id: string;
+  gate_function: 'engineering' | 'procurement' | 'qc';
+  approver_actor_id: string;
+  doa_entry_id: string | null;
+  notes?: string;
+  correlation_id?: string;
+}
+
+export interface RdProductizationSignedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_draft.productization_signed';
+  payload: RdProductizationSignedPayload;
+}
+
+/**
+ * Creates a NEW production BOM (in draft) from a fully signed-off R&D draft (FR-B-11). stream_id
+ * is the NEW production BOM's bom_id. The source R&D draft is never modified.
+ */
+export interface RdProductizedPayload {
+  source_bom_id: string;
+  bom_id: string;
+  revision_id: string;
+  revision_code: string;
+  parent_item_id: string;
+  parent_sku: string;
+  parent_uom: string;
+  business_stream: string;
+  line_ids: string[];
+  correlation_id?: string;
+}
+
+export interface RdProductizedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'rd_draft.productized';
+  payload: RdProductizedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -2081,5 +2226,29 @@ export const SUPPORTED_EVENT_TYPES = {
   'eco.stock_disposition_recorded': {
     streamType: 'engineering',
     requiresBusinessStream: false,
+  },
+  // Story 5.4: R&D draft BOM regime on the existing 'engineering' stream. rd_draft.cloned,
+  // rd_draft.productized, and rd_build.recorded each create a new tagged document header and
+  // follow the bom.drafted / eco.raised precedent (requiresBusinessStream: true); the other two
+  // are transitions on an already-tagged document (requiresBusinessStream: false).
+  'rd_draft.cloned': {
+    streamType: 'engineering',
+    requiresBusinessStream: true,
+  },
+  'rd_build.recorded': {
+    streamType: 'engineering',
+    requiresBusinessStream: true,
+  },
+  'rd_build.confirmed': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'rd_draft.productization_signed': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'rd_draft.productized': {
+    streamType: 'engineering',
+    requiresBusinessStream: true,
   },
 } as const;

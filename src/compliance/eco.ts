@@ -796,8 +796,13 @@ async function applyEcoImplemented(
         revision_id: newRevisionId,
         bom_id: bomId,
         line_no: line.line_no,
+        // Story 5.4: component identity is nullable (placeholder lines). ECOs attach only to
+        // released production BOMs, which can never carry placeholders, but the copy is
+        // field-faithful either way.
         component_item_id: line.component_item_id,
         component_sku: line.component_sku,
+        is_placeholder: line.is_placeholder,
+        free_text: line.free_text,
         output_class: line.output_class,
         quantity_per: line.quantity_per,
         line_uom: line.line_uom,

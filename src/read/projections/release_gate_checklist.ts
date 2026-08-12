@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
-import { isApprovedEcoConditionMet } from '../../compliance/bom.js';
+import { assertNotRdDraft, isApprovedEcoConditionMet } from '../../compliance/bom.js';
 
 /**
  * Release-gate checklist (Story 5.2, AC 1). Deliberate divergence from the epics dev-note
@@ -55,23 +55,32 @@ export async function getReleaseGateChecklist(
   const r = runner(client);
 
   const bomResult = await r.query(
-    'SELECT bom_id, status, current_revision_id FROM bom WHERE bom_id = $1',
+    'SELECT bom_id, bom_type, status, current_revision_id FROM bom WHERE bom_id = $1',
     [bomId],
   );
   if (bomResult.rows.length === 0) return null;
   const bom = bomResult.rows[0] as {
     bom_id: string;
+    bom_type: string;
     status: string;
     current_revision_id: string | null;
   };
 
+  // Story 5.4 (AC 2): an R&D draft gets a 409 RD_EXECUTION_BARRED, never a checklist. The
+  // Story 5.2 binding rule is that the checklist and the gate can never disagree; that rule now
+  // covers the R&D bar too.
+  assertNotRdDraft({ bom_id: bom.bom_id, bom_type: bom.bom_type });
+
   let lines: ChecklistLineRow[] = [];
   if (bom.current_revision_id) {
+    // Story 5.4: component_item_id is NULL on placeholder lines. They are unreachable here (the
+    // R&D bar fired above and placeholders are barred from production BOMs), but the query stays
+    // NULL-safe: a placeholder row must not be reported as "item not found".
     const lineResult = await r.query(
       `SELECT bl.bom_line_id, bl.line_no, bl.component_sku, bl.scrap_percent, im.status AS item_status
        FROM bom_line bl
        LEFT JOIN item_master im ON im.item_id = bl.component_item_id
-       WHERE bl.revision_id = $1
+       WHERE bl.revision_id = $1 AND bl.component_item_id IS NOT NULL
        ORDER BY bl.line_no`,
       [bom.current_revision_id],
     );

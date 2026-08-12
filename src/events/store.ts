@@ -102,6 +102,7 @@ import {
 } from '../compliance/purchase-order.js';
 import { assertBomShape, applyBomProjection } from '../compliance/bom.js';
 import { assertEcoShape, applyEcoProjection } from '../compliance/eco.js';
+import { assertRdShape, applyRdProjection } from '../compliance/rd-bom.js';
 import {
   assertSupplierInvoiceShape,
   applySupplierInvoiceProjection,
@@ -494,6 +495,9 @@ export async function persistEvent(
   // Story 5.3: ECO shape validation is non-DB and runs with the other pre-transaction asserts,
   // so a malformed ECO event never consumes an idempotency key.
   assertEcoShape(envelope);
+  // Story 5.4: R&D draft BOM regime shape validation is non-DB and runs with the other
+  // pre-transaction asserts, so a malformed rd_* event never consumes an idempotency key.
+  assertRdShape(envelope);
   // Story 4.7: supplier invoice / invoice-ingestion shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed invoice event never consumes an idempotency key.
   assertSupplierInvoiceShape(envelope);
@@ -746,6 +750,10 @@ export async function persistEvent(
     // lines, stock dispositions, and (on implementation) the new BOM revision commit together
     // with the domain_events insert.
     await applyEcoProjection(envelope, client, eventId);
+    // Story 5.4: R&D projection runs inside this same transaction so the cloned/productized BOM
+    // header, revision, lines, build records, as-built snapshot, and sign-offs commit together
+    // with the domain_events insert.
+    await applyRdProjection(envelope, client, eventId);
     // Story 4.7: supplier invoice capture / file-ingestion review projection runs inside this
     // same transaction so the invoice header, lines, ingestion row, and the domain_events insert
     // commit or roll back together.

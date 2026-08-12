@@ -16,6 +16,10 @@ export interface BomRow {
   origin: 'native' | 'legacy_kit';
   remediation_flag: boolean;
   kit_ref: string | null;
+  /** Story 5.4 provenance: source BOM this R&D draft was cloned from (FR-B-10). */
+  cloned_from_bom_id: string | null;
+  /** Story 5.4 provenance: R&D draft this production BOM was productized from (FR-B-11). */
+  productized_from_bom_id: string | null;
   created_by: string;
   correlation_id: string | null;
   source_event_id: string;
@@ -41,8 +45,12 @@ export interface BomLineRow {
   revision_id: string;
   bom_id: string;
   line_no: number;
-  component_item_id: string;
-  component_sku: string;
+  /** NULL only on placeholder lines (Story 5.4, R&D drafts). */
+  component_item_id: string | null;
+  component_sku: string | null;
+  /** Story 5.4: placeholder line - no component identity, free_text carries the description. */
+  is_placeholder: boolean;
+  free_text: string | null;
   output_class: 'component' | 'co_product' | 'by_product';
   quantity_per: string;
   line_uom: string;
@@ -248,8 +256,8 @@ export async function insertBom(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
-    `INSERT INTO bom (bom_id, parent_item_id, parent_sku, parent_uom, business_stream, bom_type, status, current_revision_id, blocking_line_count, status_changed_at, status_changed_by, origin, remediation_flag, kit_ref, created_by, correlation_id, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+    `INSERT INTO bom (bom_id, parent_item_id, parent_sku, parent_uom, business_stream, bom_type, status, current_revision_id, blocking_line_count, status_changed_at, status_changed_by, origin, remediation_flag, kit_ref, cloned_from_bom_id, productized_from_bom_id, created_by, correlation_id, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
     [
       row.bom_id,
       row.parent_item_id,
@@ -265,6 +273,8 @@ export async function insertBom(
       row.origin,
       row.remediation_flag,
       row.kit_ref,
+      row.cloned_from_bom_id,
+      row.productized_from_bom_id,
       row.created_by,
       row.correlation_id,
       row.source_event_id,
@@ -299,8 +309,8 @@ export async function insertBomLine(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
-    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, amended_at, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, amended_at, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
     [
       row.bom_line_id,
       row.revision_id,
@@ -308,6 +318,8 @@ export async function insertBomLine(
       row.line_no,
       row.component_item_id,
       row.component_sku,
+      row.is_placeholder,
+      row.free_text,
       row.output_class,
       row.quantity_per,
       row.line_uom,

@@ -108,6 +108,10 @@ const draftBomBase: RouteHandler = async (req, res, _params) => {
       lines: lines.map((l) => ({
         line_no: l.line_no,
         component_item_id: l.component_item_id,
+        // Story 5.4: placeholder/free-text lines (R&D drafts only; admission enforced in the
+        // applier, which can see bom.bom_type).
+        is_placeholder: l.is_placeholder,
+        free_text: l.free_text,
         output_class: l.output_class,
         quantity_per: l.quantity_per,
         line_uom: l.line_uom,
@@ -196,6 +200,9 @@ const addBomLineBase: RouteHandler = async (req, res, params) => {
   const line = {
     line_no: body.line_no as number,
     component_item_id: body.component_item_id as string,
+    // Story 5.4: placeholder/free-text lines (R&D drafts only; admission enforced in the applier).
+    is_placeholder: body.is_placeholder as boolean | undefined,
+    free_text: body.free_text as string | undefined,
     output_class: body.output_class as 'component' | 'co_product' | 'by_product',
     quantity_per: body.quantity_per as string,
     line_uom: body.line_uom as string,

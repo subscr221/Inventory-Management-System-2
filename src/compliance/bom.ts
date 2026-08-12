@@ -114,6 +114,23 @@ export function isReleasedItemMaster(item: { status: string }): boolean {
   return item.status === 'active';
 }
 
+/**
+ * Story 5.4 execution bar (AC 2): the single definition of the R&D regime block. An R&D draft
+ * (bom_type = 'rnd') can never be gate-evaluated, released, or exploded to execution. Story 5.5's
+ * explosion service and Epic 6's production-order release call THIS function and must not
+ * re-derive the predicate.
+ */
+export function assertNotRdDraft(bom: { bom_id: string; bom_type: string }): void {
+  if (bom.bom_type === 'rnd') {
+    reject(
+      'RD_EXECUTION_BARRED',
+      'R&D draft BOMs are barred from release-gate evaluation and execution',
+      { bom_id: bom.bom_id, bom_type: 'rnd' },
+      409,
+    );
+  }
+}
+
 function assertValidOccurredAt(occurredAt: unknown): asserts occurredAt is string {
   if (
     !occurredAt ||
@@ -188,6 +205,18 @@ function assertLegacyKitMigratedShape(p: Record<string, unknown>): void {
     reject('BOM_LINE_REQUIRED', 'At least one line is required');
   if (lines.length > 200) reject('INVALID_PARAMS', 'Maximum 200 lines per BOM');
   assertBomLineInputArray(lines as Record<string, unknown>[]);
+  // Story 5.4: legacy kit migrations always land as production BOMs, which can never carry
+  // placeholder lines - reject at shape time so the applier can rely on component identity.
+  for (const line of lines as Record<string, unknown>[]) {
+    if (line['is_placeholder'] === true) {
+      reject(
+        'RD_PLACEHOLDER_NOT_PERMITTED',
+        'Placeholder lines are only permitted on R&D draft BOMs',
+        { line_no: line['line_no'] },
+        400,
+      );
+    }
+  }
 }
 
 function assertBomDraftedShape(p: Record<string, unknown>): void {
@@ -209,6 +238,34 @@ function assertBomDraftedShape(p: Record<string, unknown>): void {
   assertBomLineInputArray(lines as Record<string, unknown>[]);
 }
 
+/**
+ * Story 5.4: a line carries EITHER a real component identity (component_item_id UUID) OR a
+ * placeholder (is_placeholder true + non-empty free_text, no component identity). Whether a
+ * placeholder is ADMISSIBLE (R&D drafts only) is decided in the applier, which can see
+ * bom.bom_type - this shape check only enforces internal consistency.
+ */
+function assertLinePlaceholderIdentity(line: Record<string, unknown>): void {
+  const isPlaceholder = line['is_placeholder'];
+  if (isPlaceholder !== undefined && typeof isPlaceholder !== 'boolean') {
+    reject('INVALID_PARAMS', 'is_placeholder must be a boolean when provided');
+  }
+  if (isPlaceholder === true) {
+    if (line['component_item_id'] !== undefined && line['component_item_id'] !== null) {
+      reject('INVALID_PARAMS', 'component_item_id must not be set on a placeholder line');
+    }
+    if (!isNonEmptyString(line['free_text'])) {
+      reject('INVALID_PARAMS', 'free_text is required and must be non-empty on a placeholder line');
+    }
+  } else {
+    if (!isUuid(line['component_item_id'])) {
+      reject('INVALID_PARAMS', 'component_item_id is required and must be a UUID');
+    }
+    if (line['free_text'] !== undefined && line['free_text'] !== null) {
+      reject('INVALID_PARAMS', 'free_text is only permitted on placeholder lines');
+    }
+  }
+}
+
 function assertBomLineInputArray(lines: Record<string, unknown>[]): void {
   const seenLineNos = new Set<number>();
   for (const line of lines) {
@@ -219,9 +276,7 @@ function assertBomLineInputArray(lines: Record<string, unknown>[]): void {
     if (seenLineNos.has(lineNo)) reject('INVALID_PARAMS', 'Duplicate line_no in request');
     seenLineNos.add(lineNo);
 
-    if (!isUuid(line['component_item_id'])) {
-      reject('INVALID_PARAMS', 'component_item_id is required and must be a UUID');
-    }
+    assertLinePlaceholderIdentity(line);
 
     const outputClass = line['output_class'] as string;
     if (!['component', 'co_product', 'by_product'].includes(outputClass)) {
@@ -299,8 +354,7 @@ function assertBomLineAddedShape(p: Record<string, unknown>): void {
     reject('INVALID_PARAMS', 'line_no must be a positive integer');
   }
 
-  if (!isUuid(p['component_item_id']))
-    reject('INVALID_PARAMS', 'component_item_id is required and must be a UUID');
+  assertLinePlaceholderIdentity(p);
 
   const outputClass = p['output_class'] as string;
   if (!['component', 'co_product', 'by_product'].includes(outputClass)) {
@@ -441,7 +495,7 @@ export async function applyBomProjection(
 interface GateLineRow {
   bom_line_id: string;
   line_no: number;
-  component_item_id: string;
+  component_item_id: string | null;
   scrap_percent: string | null;
   blocking_release: boolean;
   blocking_reason: string | null;
@@ -495,6 +549,13 @@ async function evaluateReleaseGate(
   blockingLines: { bom_line_id: string; line_no: number }[];
   scrapMissingLines: { bom_line_id: string; line_no: number }[];
 }> {
+  // Story 5.4 (AC 2): the R&D bar fires FIRST so a direct caller cannot bypass the
+  // applyBomReleased check. An R&D draft must never even be gate-evaluated.
+  const bomTypeRow = await client.query('SELECT bom_type FROM bom WHERE bom_id = $1', [bomId]);
+  if (bomTypeRow.rows.length > 0) {
+    assertNotRdDraft({ bom_id: bomId, bom_type: bomTypeRow.rows[0]!.bom_type as string });
+  }
+
   const lineRows = await client.query(
     `SELECT bom_line_id, line_no, component_item_id, scrap_percent, blocking_release, blocking_reason
      FROM bom_line WHERE revision_id = $1 ORDER BY line_no`,
@@ -509,6 +570,14 @@ async function evaluateReleaseGate(
   const scrapMissingLines: { bom_line_id: string; line_no: number }[] = [];
 
   for (const line of lines) {
+    // Placeholder lines carry no component identity (Story 5.4). They are structurally
+    // unreachable here (the R&D bar fired above and placeholders are barred from production
+    // BOMs), but a NULL must never reach getItemById.
+    if (line.component_item_id === null) {
+      if (line.scrap_percent === null)
+        scrapMissingLines.push({ bom_line_id: line.bom_line_id, line_no: line.line_no });
+      continue;
+    }
     const componentItem = await getItemById(line.component_item_id, client);
     let blockingRelease = false;
     let blockingReason: string | null = null;
@@ -560,6 +629,9 @@ async function applyBomReleased(
   const bomRow = await client.query('SELECT * FROM bom WHERE bom_id = $1 FOR UPDATE', [p.bom_id]);
   if (bomRow.rows.length === 0) reject('BOM_NOT_FOUND', 'BOM not found', { bom_id: p.bom_id }, 404);
   const bom = bomRow.rows[0]!;
+
+  // Story 5.4 (AC 2): R&D drafts are structurally barred from release before any gate evaluation.
+  assertNotRdDraft({ bom_id: p.bom_id, bom_type: bom.bom_type as string });
 
   if (bom.current_revision_id !== p.revision_id) {
     reject(
@@ -719,7 +791,7 @@ async function applyLegacyKitMigrated(
     let blockingRelease = false;
     let blockingReason: string | null = null;
     if (!released) {
-      const componentItem = await getItemById(line.component_item_id, client);
+      const componentItem = await getItemById(line.component_item_id!, client);
       if (!componentItem) {
         blockingRelease = true;
         blockingReason = `Component item ${line.component_item_id} not found`;
@@ -773,7 +845,7 @@ async function applyLegacyKitMigrated(
   for (let i = 0; i < p.lines.length; i++) {
     const line = p.lines[i]!;
     const evaluation = lineEvaluations[i]!;
-    const componentItem = await getItemById(line.component_item_id, client);
+    const componentItem = await getItemById(line.component_item_id!, client);
     // Migration-exempt released path defaults missing scrap to exact-decimal zero (AC 4).
     const scrapPercent = line.scrap_percent ?? (released ? '0.0000' : null);
     await client.query(
@@ -870,44 +942,65 @@ async function applyBomDrafted(
     ],
   );
 
+  const bomType = p.bom_type ?? 'production';
   let blockingCount = 0;
   for (const line of p.lines) {
-    const componentItem = await getItemById(line.component_item_id, client);
-    if (!componentItem) {
+    // Story 5.4: placeholder lines are admissible on R&D drafts ONLY. The DB CHECK cannot see
+    // bom.bom_type, so this applier guard is the single enforcement point keeping item-less
+    // lines off production BOMs. Placeholders skip the item-master lookup entirely and never
+    // block or unblock release.
+    const isPlaceholder = line.is_placeholder === true;
+    if (isPlaceholder && bomType !== 'rnd') {
       reject(
-        'BOM_ITEM_NOT_FOUND',
-        'Component item not found',
-        { component_item_id: line.component_item_id },
-        404,
+        'RD_PLACEHOLDER_NOT_PERMITTED',
+        'Placeholder lines are only permitted on R&D draft BOMs',
+        { bom_id: bomId, line_no: line.line_no, bom_type: bomType },
+        400,
       );
     }
 
+    let componentItemId: string | null = null;
+    let componentSku: string | null = null;
     let blockingRelease = false;
     let blockingReason: string | null = null;
-    if (!isReleasedItemMaster(componentItem)) {
-      blockingRelease = true;
-      blockingReason = `Component item ${componentItem.sku} is ${componentItem.status} - BOM cannot be released until item is active`;
-      blockingCount++;
+    if (!isPlaceholder) {
+      const componentItem = await getItemById(line.component_item_id!, client);
+      if (!componentItem) {
+        reject(
+          'BOM_ITEM_NOT_FOUND',
+          'Component item not found',
+          { component_item_id: line.component_item_id },
+          404,
+        );
+      }
+      componentItemId = componentItem.item_id;
+      componentSku = componentItem.sku;
+      if (!isReleasedItemMaster(componentItem)) {
+        blockingRelease = true;
+        blockingReason = `Component item ${componentItem.sku} is ${componentItem.status} - BOM cannot be released until item is active`;
+        blockingCount++;
+      }
     }
 
     const bomLineId = randomUUID();
     const effectiveTo = line.effective_to ?? null;
 
     await client.query(
-      `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, source_event_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+      `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, source_event_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10::numeric * $12::numeric, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
       [
         bomLineId,
         revisionId,
         bomId,
         line.line_no,
-        componentItem.item_id,
-        componentItem.sku,
+        componentItemId,
+        componentSku,
+        isPlaceholder,
+        isPlaceholder ? line.free_text : null,
         line.output_class,
         line.quantity_per,
         line.line_uom,
         line.uom_conversion_factor,
-        String(Number(line.quantity_per) * Number(line.uom_conversion_factor)),
         line.scrap_percent ?? null,
         line.expected_yield_percent ?? null,
         line.is_phantom,
@@ -963,14 +1056,39 @@ async function applyBomLineAdded(
       409,
     );
 
-  const componentItem = await getItemById(p.component_item_id, client);
-  if (!componentItem)
+  // Story 5.4: placeholder admission guard - see applyBomDrafted. Placeholders skip the
+  // item-master lookup and the effectivity-overlap check (both key on component identity) and
+  // never affect blocking-line accounting.
+  const isPlaceholder = p.is_placeholder === true;
+  if (isPlaceholder && bomRow.rows[0]!.bom_type !== 'rnd') {
     reject(
-      'BOM_ITEM_NOT_FOUND',
-      'Component item not found',
-      { component_item_id: p.component_item_id },
-      404,
+      'RD_PLACEHOLDER_NOT_PERMITTED',
+      'Placeholder lines are only permitted on R&D draft BOMs',
+      { bom_id: p.bom_id, line_no: p.line_no, bom_type: bomRow.rows[0]!.bom_type },
+      400,
     );
+  }
+
+  let componentItemId: string | null = null;
+  let componentSku: string | null = null;
+  let blockingRelease = false;
+  let blockingReason: string | null = null;
+  if (!isPlaceholder) {
+    const componentItem = await getItemById(p.component_item_id!, client);
+    if (!componentItem)
+      reject(
+        'BOM_ITEM_NOT_FOUND',
+        'Component item not found',
+        { component_item_id: p.component_item_id },
+        404,
+      );
+    componentItemId = componentItem.item_id;
+    componentSku = componentItem.sku;
+    if (!isReleasedItemMaster(componentItem)) {
+      blockingRelease = true;
+      blockingReason = `Component item ${componentItem.sku} is ${componentItem.status}`;
+    }
+  }
 
   const existingLine = await client.query(
     'SELECT 1 FROM bom_line WHERE revision_id = $1 AND line_no = $2',
@@ -979,48 +1097,44 @@ async function applyBomLineAdded(
   if (existingLine.rows.length > 0)
     reject('INVALID_PARAMS', 'A line with this line_no already exists in this revision');
 
-  const overlapCheck = await client.query(
-    `SELECT line_no, effective_from, effective_to FROM bom_line
-     WHERE revision_id = $1 AND component_item_id = $2
-     AND effective_from <= $3 AND (effective_to IS NULL OR effective_to >= $4)`,
-    [p.revision_id, p.component_item_id, p.effective_to ?? '9999-12-31', p.effective_from],
-  );
-  if (overlapCheck.rows.length > 0) {
-    const conflict = overlapCheck.rows[0]!;
-    reject(
-      'EFFECTIVITY_OVERLAP',
-      'Overlapping effectivity window with existing line',
-      {
-        conflicting_line_no: conflict.line_no,
-        conflicting_effective_from: (conflict as Record<string, unknown>).effective_from,
-        conflicting_effective_to: (conflict as Record<string, unknown>).effective_to,
-      },
-      409,
+  if (!isPlaceholder) {
+    const overlapCheck = await client.query(
+      `SELECT line_no, effective_from, effective_to FROM bom_line
+       WHERE revision_id = $1 AND component_item_id = $2
+       AND effective_from <= $3 AND (effective_to IS NULL OR effective_to >= $4)`,
+      [p.revision_id, p.component_item_id, p.effective_to ?? '9999-12-31', p.effective_from],
     );
-  }
-
-  let blockingRelease = false;
-  let blockingReason: string | null = null;
-  if (!isReleasedItemMaster(componentItem)) {
-    blockingRelease = true;
-    blockingReason = `Component item ${componentItem.sku} is ${componentItem.status}`;
+    if (overlapCheck.rows.length > 0) {
+      const conflict = overlapCheck.rows[0]!;
+      reject(
+        'EFFECTIVITY_OVERLAP',
+        'Overlapping effectivity window with existing line',
+        {
+          conflicting_line_no: conflict.line_no,
+          conflicting_effective_from: (conflict as Record<string, unknown>).effective_from,
+          conflicting_effective_to: (conflict as Record<string, unknown>).effective_to,
+        },
+        409,
+      );
+    }
   }
 
   await client.query(
-    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10::numeric * $12::numeric, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
     [
       p.bom_line_id,
       p.revision_id,
       p.bom_id,
       p.line_no,
-      componentItem.item_id,
-      componentItem.sku,
+      componentItemId,
+      componentSku,
+      isPlaceholder,
+      isPlaceholder ? p.free_text : null,
       p.output_class,
       p.quantity_per,
       p.line_uom,
       p.uom_conversion_factor,
-      String(Number(p.quantity_per) * Number(p.uom_conversion_factor)),
       p.scrap_percent ?? null,
       p.expected_yield_percent ?? null,
       p.is_phantom,
@@ -1094,36 +1208,47 @@ async function applyBomLineAmended(
 
   const currentLine = lineRow.rows[0]!;
 
+  // Story 5.4: a placeholder line can only ever legitimately exist on an R&D draft; amending one
+  // anywhere else means the admission guard was bypassed - fail loudly rather than proceed.
+  if (currentLine.is_placeholder === true && bomRow.rows[0]!.bom_type !== 'rnd') {
+    reject(
+      'RD_PLACEHOLDER_NOT_PERMITTED',
+      'Placeholder lines are only permitted on R&D draft BOMs',
+      { bom_id: p.bom_id, bom_line_id: p.bom_line_id, bom_type: bomRow.rows[0]!.bom_type },
+      400,
+    );
+  }
+
   const sets: string[] = ['amended_at = now()', 'updated_at = now()'];
   const values: unknown[] = [];
   let paramIdx = 1;
 
+  // Track the param indices of the NEW quantity_per / uom_conversion_factor so base_quantity_per
+  // can be recomputed in PostgreSQL NUMERIC from the new values (Story 5.2 Group 1 binding rule:
+  // never JS floats). An UPDATE SET expression references the OLD row, so a factor that is not
+  // being changed this call falls back to its column value.
+  let qtyPerParam: number | null = null;
+  let uomFactorParam: number | null = null;
+
   if (p.quantity_per !== undefined) {
+    qtyPerParam = paramIdx;
     sets.push(`quantity_per = $${paramIdx++}`);
     values.push(p.quantity_per);
-    sets.push(`base_quantity_per = $${paramIdx++}`);
-    values.push(
-      String(
-        Number(p.quantity_per) *
-          Number(p.uom_conversion_factor ?? currentLine.uom_conversion_factor),
-      ),
-    );
   }
   if (p.line_uom !== undefined) {
     sets.push(`line_uom = $${paramIdx++}`);
     values.push(p.line_uom);
   }
   if (p.uom_conversion_factor !== undefined) {
+    uomFactorParam = paramIdx;
     sets.push(`uom_conversion_factor = $${paramIdx++}`);
     values.push(p.uom_conversion_factor);
-    if (p.quantity_per !== undefined) {
-      sets.push(`base_quantity_per = $${paramIdx++}`);
-      values.push(String(Number(p.quantity_per) * Number(p.uom_conversion_factor)));
-    } else {
-      const currentQtyPer = Number(currentLine.quantity_per);
-      sets.push(`base_quantity_per = $${paramIdx++}`);
-      values.push(String(currentQtyPer * Number(p.uom_conversion_factor)));
-    }
+  }
+  if (qtyPerParam !== null || uomFactorParam !== null) {
+    const qtyExpr = qtyPerParam !== null ? `$${qtyPerParam}::numeric` : 'quantity_per::numeric';
+    const factorExpr =
+      uomFactorParam !== null ? `$${uomFactorParam}::numeric` : 'uom_conversion_factor::numeric';
+    sets.push(`base_quantity_per = ${qtyExpr} * ${factorExpr}`);
   }
   if (p.scrap_percent !== undefined) {
     sets.push(`scrap_percent = $${paramIdx++}`);

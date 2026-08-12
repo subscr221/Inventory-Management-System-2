@@ -45,6 +45,12 @@ ALTER TABLE bom ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'native';
 ALTER TABLE bom ADD COLUMN IF NOT EXISTS remediation_flag BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE bom ADD COLUMN IF NOT EXISTS kit_ref TEXT;
 
+-- Story 5.4 R&D provenance columns: cloned_from_bom_id records the production (or R&D) BOM an R&D
+-- draft was cloned from (FR-B-10); productized_from_bom_id records the R&D draft a production BOM
+-- was productized from (FR-B-11). These are the machine-checkable lineage the tests assert.
+ALTER TABLE bom ADD COLUMN IF NOT EXISTS cloned_from_bom_id UUID;
+ALTER TABLE bom ADD COLUMN IF NOT EXISTS productized_from_bom_id UUID;
+
 -- Story 5.2 widens chk_bom_status on live databases: drop the Story 5.1 single-value CHECK and
 -- re-add with the full lifecycle vocabulary. Wrapped in a DO block so the DROP + ADD pair is
 -- atomic (migrate.ts runs the whole file as one transaction today; the DO block keeps the pair
@@ -55,11 +61,17 @@ BEGIN
   ALTER TABLE bom ADD CONSTRAINT chk_bom_status CHECK (status IN ('draft','released','on_hold','obsolete'));
 END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_parent_item ON bom (parent_item_id);
+-- Story 5.4 swaps uq_bom_parent_item to a PARTIAL unique index: production and job_work_kit BOMs
+-- keep one-per-item uniqueness; R&D drafts (bom_type = 'rnd') may be many per item, which is what
+-- makes cloning (FR-B-10) and parallel draft iteration possible. DROP + CREATE pair is re-runnable.
+DROP INDEX IF EXISTS uq_bom_parent_item;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_parent_item ON bom (parent_item_id) WHERE bom_type <> 'rnd';
 CREATE INDEX IF NOT EXISTS idx_bom_status ON bom (status);
 CREATE INDEX IF NOT EXISTS idx_bom_business_stream ON bom (business_stream);
 CREATE INDEX IF NOT EXISTS idx_bom_parent_item_id ON bom (parent_item_id);
 CREATE INDEX IF NOT EXISTS idx_bom_blocking ON bom (blocking_line_count) WHERE blocking_line_count > 0;
+CREATE INDEX IF NOT EXISTS idx_bom_cloned_from ON bom (cloned_from_bom_id);
+CREATE INDEX IF NOT EXISTS idx_bom_productized_from ON bom (productized_from_bom_id);
 
 DO $$
 BEGIN

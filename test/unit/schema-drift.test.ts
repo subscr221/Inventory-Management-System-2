@@ -668,6 +668,9 @@ const EXPECTED = [
       'idx_bom_business_stream',
       'idx_bom_parent_item_id',
       'idx_bom_blocking',
+      // Story 5.4 provenance indexes
+      'idx_bom_cloned_from',
+      'idx_bom_productized_from',
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
@@ -690,6 +693,8 @@ const EXPECTED = [
       'chk_bom_line_effectivity_order',
       'chk_bom_line_phantom_pairing',
       'chk_bom_line_blocking_reason',
+      // Story 5.4 placeholder pairing (DROP + ADD DO block, mirrored in init-db.sql)
+      'chk_bom_line_placeholder_pairing',
     ],
     indexes: [
       'uq_bom_line_no',
@@ -732,6 +737,33 @@ const EXPECTED = [
     table: 'eco_stock_disposition',
     constraints: ['chk_eco_disposition', 'chk_eco_disposition_rework_ref'],
     indexes: ['uq_eco_disposition_lot', 'idx_eco_disposition_eco_id'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 5.4: R&D Draft BOM Regime
+  {
+    canonical: 'read/projections/rd_build_record.sql',
+    table: 'rd_build_record',
+    constraints: ['chk_rd_build_status', 'chk_rd_build_quantity_positive', 'chk_rd_build_outcome'],
+    indexes: ['uq_rd_build_ref', 'idx_rd_build_bom_id', 'idx_rd_build_status'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/rd_as_built_line.sql',
+    table: 'rd_as_built_line',
+    constraints: [
+      'chk_rd_as_built_quantity_positive',
+      'chk_rd_as_built_identity',
+      'chk_rd_as_built_deviation',
+      'chk_rd_as_built_deviation_kind',
+    ],
+    indexes: ['uq_rd_as_built_line_no', 'idx_rd_as_built_build_id'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/rd_productization_signoff.sql',
+    table: 'rd_productization_signoff',
+    constraints: ['chk_rd_signoff_function'],
+    indexes: ['uq_rd_signoff_function', 'idx_rd_signoff_bom_id'],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
 ];
@@ -899,6 +931,41 @@ describe('Story 2.1 schema drift guard', () => {
       normalizeSql(initDb).includes(normalizeSql(constraintsSql)),
       'init-db must mirror the deferred cross-dock FK block',
     );
+  });
+
+  it('Story 5.4 mirrors the R&D regime alterations into init-db.sql', () => {
+    const bomSql = read('read/projections/bom.sql');
+    const bomLineSql = read('read/projections/bom_line.sql');
+    const partialIndex =
+      "CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_parent_item ON bom (parent_item_id) WHERE bom_type <> 'rnd';";
+    // The partial predicate is what makes R&D draft cloning possible; production and
+    // job_work_kit BOMs keep one-per-item uniqueness.
+    assert.ok(
+      bomSql.includes('DROP INDEX IF EXISTS uq_bom_parent_item;'),
+      'bom.sql missing index drop',
+    );
+    assert.ok(bomSql.includes(partialIndex), 'bom.sql missing partial uq_bom_parent_item');
+    assert.ok(
+      initDb.includes('DROP INDEX IF EXISTS uq_bom_parent_item;'),
+      'init-db.sql missing index drop',
+    );
+    assert.ok(initDb.includes(partialIndex), 'init-db.sql missing partial uq_bom_parent_item');
+    for (const fragment of [
+      'ADD COLUMN IF NOT EXISTS cloned_from_bom_id UUID',
+      'ADD COLUMN IF NOT EXISTS productized_from_bom_id UUID',
+    ]) {
+      assert.ok(bomSql.includes(fragment), `bom.sql missing ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
+    for (const fragment of [
+      'ALTER TABLE bom_line ALTER COLUMN component_item_id DROP NOT NULL;',
+      'ALTER TABLE bom_line ALTER COLUMN component_sku DROP NOT NULL;',
+      'ADD COLUMN IF NOT EXISTS is_placeholder BOOLEAN NOT NULL DEFAULT false',
+      'ADD COLUMN IF NOT EXISTS free_text TEXT',
+    ]) {
+      assert.ok(bomLineSql.includes(fragment), `bom_line.sql missing ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
   });
 
   for (const entry of EXPECTED) {

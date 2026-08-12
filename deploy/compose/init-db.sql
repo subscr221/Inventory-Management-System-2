@@ -3992,6 +3992,12 @@ ALTER TABLE bom ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'native';
 ALTER TABLE bom ADD COLUMN IF NOT EXISTS remediation_flag BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE bom ADD COLUMN IF NOT EXISTS kit_ref TEXT;
 
+-- Story 5.4 R&D provenance columns: cloned_from_bom_id records the production (or R&D) BOM an R&D
+-- draft was cloned from (FR-B-10); productized_from_bom_id records the R&D draft a production BOM
+-- was productized from (FR-B-11). These are the machine-checkable lineage the tests assert.
+ALTER TABLE bom ADD COLUMN IF NOT EXISTS cloned_from_bom_id UUID;
+ALTER TABLE bom ADD COLUMN IF NOT EXISTS productized_from_bom_id UUID;
+
 -- Story 5.2 widens chk_bom_status on live databases: drop the Story 5.1 single-value CHECK and
 -- re-add with the full lifecycle vocabulary. Wrapped in a DO block so the DROP + ADD pair is
 -- atomic - init-db.sql runs statement-by-statement under autocommit, and a failure between the
@@ -4002,11 +4008,17 @@ BEGIN
   ALTER TABLE bom ADD CONSTRAINT chk_bom_status CHECK (status IN ('draft','released','on_hold','obsolete'));
 END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_parent_item ON bom (parent_item_id);
+-- Story 5.4 swaps uq_bom_parent_item to a PARTIAL unique index: production and job_work_kit BOMs
+-- keep one-per-item uniqueness; R&D drafts (bom_type = 'rnd') may be many per item, which is what
+-- makes cloning (FR-B-10) and parallel draft iteration possible. DROP + CREATE pair is re-runnable.
+DROP INDEX IF EXISTS uq_bom_parent_item;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_parent_item ON bom (parent_item_id) WHERE bom_type <> 'rnd';
 CREATE INDEX IF NOT EXISTS idx_bom_status ON bom (status);
 CREATE INDEX IF NOT EXISTS idx_bom_business_stream ON bom (business_stream);
 CREATE INDEX IF NOT EXISTS idx_bom_parent_item_id ON bom (parent_item_id);
 CREATE INDEX IF NOT EXISTS idx_bom_blocking ON bom (blocking_line_count) WHERE blocking_line_count > 0;
+CREATE INDEX IF NOT EXISTS idx_bom_cloned_from ON bom (cloned_from_bom_id);
+CREATE INDEX IF NOT EXISTS idx_bom_productized_from ON bom (productized_from_bom_id);
 
 DO $$
 BEGIN
@@ -4109,8 +4121,10 @@ CREATE TABLE IF NOT EXISTS bom_line (
   revision_id              UUID NOT NULL,
   bom_id                   UUID NOT NULL,
   line_no                  INTEGER NOT NULL,
-  component_item_id        UUID NOT NULL,
-  component_sku            TEXT NOT NULL,
+  component_item_id        UUID,
+  component_sku            TEXT,
+  is_placeholder           BOOLEAN NOT NULL DEFAULT false,
+  free_text                TEXT,
   output_class             TEXT NOT NULL DEFAULT 'component',
   quantity_per             NUMERIC(18,6) NOT NULL,
   line_uom                 TEXT NOT NULL,
@@ -4144,8 +4158,33 @@ CREATE TABLE IF NOT EXISTS bom_line (
   CONSTRAINT chk_bom_line_blocking_reason CHECK (
     (blocking_release = true AND blocking_reason IS NOT NULL AND btrim(blocking_reason) <> '') OR
     (blocking_release = false AND blocking_reason IS NULL)
+  ),
+  CONSTRAINT chk_bom_line_placeholder_pairing CHECK (
+    (is_placeholder = true AND component_item_id IS NULL AND component_sku IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
+    (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
   )
 );
+
+-- Story 5.4 placeholder/free-text columns for databases created before this story. The NOT NULL
+-- drop on component identity is DB-wide because a CHECK cannot see bom.bom_type; the applier guard
+-- (RD_PLACEHOLDER_NOT_PERMITTED in src/compliance/bom.ts) is what keeps placeholders off
+-- production BOMs. quantity_per / line_uom / uom_conversion_factor / base_quantity_per stay
+-- NOT NULL - a placeholder still consumes a quantity in a unit; only item identity is unknown.
+ALTER TABLE bom_line ALTER COLUMN component_item_id DROP NOT NULL;
+ALTER TABLE bom_line ALTER COLUMN component_sku DROP NOT NULL;
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS is_placeholder BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS free_text TEXT;
+
+-- Story 5.4 placeholder pairing: DROP + ADD pair kept atomic in a DO block, mirroring the
+-- chk_bom_status swap pattern in bom.sql.
+DO $$
+BEGIN
+  ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_placeholder_pairing;
+  ALTER TABLE bom_line ADD CONSTRAINT chk_bom_line_placeholder_pairing CHECK (
+    (is_placeholder = true AND component_item_id IS NULL AND component_sku IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
+    (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
+  );
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_line_no ON bom_line (revision_id, line_no);
 CREATE INDEX IF NOT EXISTS idx_bom_line_component_item ON bom_line (component_item_id);
@@ -5091,5 +5130,202 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON eco_stock_disposition TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/rd_build_record.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS rd_build_record (
+  build_id          UUID PRIMARY KEY,
+  bom_id            UUID NOT NULL,
+  revision_id       UUID NOT NULL,
+  build_ref         TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'recorded',
+  built_quantity    NUMERIC(18,6) NOT NULL,
+  built_uom         TEXT NOT NULL,
+  notes             TEXT,
+  outcome           TEXT,
+  recorded_by       UUID NOT NULL,
+  recorded_at       TIMESTAMPTZ NOT NULL,
+  confirmed_by      UUID,
+  confirmed_at      TIMESTAMPTZ,
+  correlation_id    UUID,
+  source_event_id   UUID NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_build_status CHECK (status IN ('recorded','confirmed')),
+  CONSTRAINT chk_rd_build_quantity_positive CHECK (built_quantity > 0),
+  CONSTRAINT chk_rd_build_outcome CHECK (outcome IS NULL OR outcome IN ('success','failed','abandoned'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_build_ref ON rd_build_record (bom_id, build_ref);
+CREATE INDEX IF NOT EXISTS idx_rd_build_bom_id ON rd_build_record (bom_id);
+CREATE INDEX IF NOT EXISTS idx_rd_build_status ON rd_build_record (status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_build_status'
+      AND conrelid = 'rd_build_record'::regclass
+  ) THEN
+    ALTER TABLE rd_build_record
+      ADD CONSTRAINT chk_rd_build_status CHECK (status IN ('recorded','confirmed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_build_quantity_positive'
+      AND conrelid = 'rd_build_record'::regclass
+  ) THEN
+    ALTER TABLE rd_build_record
+      ADD CONSTRAINT chk_rd_build_quantity_positive CHECK (built_quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_build_outcome'
+      AND conrelid = 'rd_build_record'::regclass
+  ) THEN
+    ALTER TABLE rd_build_record
+      ADD CONSTRAINT chk_rd_build_outcome CHECK (outcome IS NULL OR outcome IN ('success','failed','abandoned'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_build_record TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_build_record TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/rd_as_built_line.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS rd_as_built_line (
+  as_built_line_id    UUID PRIMARY KEY,
+  build_id            UUID NOT NULL,
+  line_no             INTEGER NOT NULL,
+  draft_bom_line_id   UUID,
+  component_item_id   UUID,
+  component_sku       TEXT,
+  is_placeholder      BOOLEAN NOT NULL DEFAULT false,
+  free_text           TEXT,
+  quantity_used       NUMERIC(18,6) NOT NULL,
+  line_uom            TEXT NOT NULL,
+  deviation_flag      BOOLEAN NOT NULL DEFAULT false,
+  deviation_kind      TEXT,
+  deviation_detail    TEXT,
+  source_event_id     UUID NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_as_built_quantity_positive CHECK (quantity_used > 0),
+  CONSTRAINT chk_rd_as_built_identity CHECK (
+    (is_placeholder = true AND component_item_id IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
+    (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
+  ),
+  CONSTRAINT chk_rd_as_built_deviation CHECK (
+    (deviation_flag = true AND deviation_kind IS NOT NULL) OR
+    (deviation_flag = false AND deviation_kind IS NULL AND deviation_detail IS NULL)
+  ),
+  CONSTRAINT chk_rd_as_built_deviation_kind CHECK (
+    deviation_kind IS NULL OR deviation_kind IN ('quantity','substitution','extra','missing','placeholder')
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_as_built_line_no ON rd_as_built_line (build_id, line_no);
+CREATE INDEX IF NOT EXISTS idx_rd_as_built_build_id ON rd_as_built_line (build_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_as_built_quantity_positive'
+      AND conrelid = 'rd_as_built_line'::regclass
+  ) THEN
+    ALTER TABLE rd_as_built_line
+      ADD CONSTRAINT chk_rd_as_built_quantity_positive CHECK (quantity_used > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_as_built_identity'
+      AND conrelid = 'rd_as_built_line'::regclass
+  ) THEN
+    ALTER TABLE rd_as_built_line
+      ADD CONSTRAINT chk_rd_as_built_identity CHECK (
+        (is_placeholder = true AND component_item_id IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
+        (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_as_built_deviation'
+      AND conrelid = 'rd_as_built_line'::regclass
+  ) THEN
+    ALTER TABLE rd_as_built_line
+      ADD CONSTRAINT chk_rd_as_built_deviation CHECK (
+        (deviation_flag = true AND deviation_kind IS NOT NULL) OR
+        (deviation_flag = false AND deviation_kind IS NULL AND deviation_detail IS NULL)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_as_built_deviation_kind'
+      AND conrelid = 'rd_as_built_line'::regclass
+  ) THEN
+    ALTER TABLE rd_as_built_line
+      ADD CONSTRAINT chk_rd_as_built_deviation_kind CHECK (
+        deviation_kind IS NULL OR deviation_kind IN ('quantity','substitution','extra','missing','placeholder')
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_as_built_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_as_built_line TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/rd_productization_signoff.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS rd_productization_signoff (
+  signoff_id          UUID PRIMARY KEY,
+  bom_id              UUID NOT NULL,
+  gate_function       TEXT NOT NULL,
+  signed_by           UUID NOT NULL,
+  signed_at           TIMESTAMPTZ NOT NULL,
+  approver_actor_id   UUID NOT NULL,
+  doa_entry_id        UUID,
+  notes               TEXT,
+  source_event_id     UUID NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_rd_signoff_function CHECK (gate_function IN ('engineering','procurement','qc'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rd_signoff_function ON rd_productization_signoff (bom_id, gate_function);
+CREATE INDEX IF NOT EXISTS idx_rd_signoff_bom_id ON rd_productization_signoff (bom_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_rd_signoff_function'
+      AND conrelid = 'rd_productization_signoff'::regclass
+  ) THEN
+    ALTER TABLE rd_productization_signoff
+      ADD CONSTRAINT chk_rd_signoff_function CHECK (gate_function IN ('engineering','procurement','qc'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON rd_productization_signoff TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON rd_productization_signoff TO readonly_user;
   END IF;
 END $$;

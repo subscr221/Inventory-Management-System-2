@@ -11,8 +11,10 @@ CREATE TABLE IF NOT EXISTS bom_line (
   revision_id              UUID NOT NULL,
   bom_id                   UUID NOT NULL,
   line_no                  INTEGER NOT NULL,
-  component_item_id        UUID NOT NULL,
-  component_sku            TEXT NOT NULL,
+  component_item_id        UUID,
+  component_sku            TEXT,
+  is_placeholder           BOOLEAN NOT NULL DEFAULT false,
+  free_text                TEXT,
   output_class             TEXT NOT NULL DEFAULT 'component',
   quantity_per             NUMERIC(18,6) NOT NULL,
   line_uom                 TEXT NOT NULL,
@@ -46,8 +48,33 @@ CREATE TABLE IF NOT EXISTS bom_line (
   CONSTRAINT chk_bom_line_blocking_reason CHECK (
     (blocking_release = true AND blocking_reason IS NOT NULL AND btrim(blocking_reason) <> '') OR
     (blocking_release = false AND blocking_reason IS NULL)
+  ),
+  CONSTRAINT chk_bom_line_placeholder_pairing CHECK (
+    (is_placeholder = true AND component_item_id IS NULL AND component_sku IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
+    (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
   )
 );
+
+-- Story 5.4 placeholder/free-text columns for databases created before this story. The NOT NULL
+-- drop on component identity is DB-wide because a CHECK cannot see bom.bom_type; the applier guard
+-- (RD_PLACEHOLDER_NOT_PERMITTED in src/compliance/bom.ts) is what keeps placeholders off
+-- production BOMs. quantity_per / line_uom / uom_conversion_factor / base_quantity_per stay
+-- NOT NULL - a placeholder still consumes a quantity in a unit; only item identity is unknown.
+ALTER TABLE bom_line ALTER COLUMN component_item_id DROP NOT NULL;
+ALTER TABLE bom_line ALTER COLUMN component_sku DROP NOT NULL;
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS is_placeholder BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS free_text TEXT;
+
+-- Story 5.4 placeholder pairing: DROP + ADD pair kept atomic in a DO block, mirroring the
+-- chk_bom_status swap pattern in bom.sql.
+DO $$
+BEGIN
+  ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_placeholder_pairing;
+  ALTER TABLE bom_line ADD CONSTRAINT chk_bom_line_placeholder_pairing CHECK (
+    (is_placeholder = true AND component_item_id IS NULL AND component_sku IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
+    (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
+  );
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_line_no ON bom_line (revision_id, line_no);
 CREATE INDEX IF NOT EXISTS idx_bom_line_component_item ON bom_line (component_item_id);

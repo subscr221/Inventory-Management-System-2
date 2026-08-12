@@ -75,6 +75,9 @@ const MIGRATIONS = [
   '../../read/projections/eco.sql',
   '../../read/projections/eco_change_line.sql',
   '../../read/projections/eco_stock_disposition.sql',
+  '../../read/projections/rd_build_record.sql',
+  '../../read/projections/rd_as_built_line.sql',
+  '../../read/projections/rd_productization_signoff.sql',
 ];
 
 async function migrate(): Promise<void> {
