@@ -217,3 +217,7 @@
 ## Deferred from: code review of 5-2-bom-lifecycle-and-immutability (2026-08-09, Group 3)
 
 - Partial-migration failure window: `bom.sql` and `bom_revision.sql` are applied as separate implicit transactions by migrate.ts, so a process death after bom.sql commits but before bom_revision.sql applies leaves the widened `chk_bom_status` with the Story 5.1 single-value `chk_bom_revision_status`; the new appliers then write `revision_status = 'released'` and hit an unmapped 23514 (raw 500) until migrate is re-run (which heals) [src/events/migrate.ts:80] - deferred, consistent with the repo's established per-file-transaction migration pattern and its documented re-run-heals stance; new cross-file interdependency introduced by 5.2's widened vocabularies.
+
+## Deferred from: code review of 5-5-approved-alternates-and-bom-explosion (2026-08-13)
+
+- ECO add change lines cannot express backflush: eco_change_line has no supply_method field, so every ECO-added line silently defaults to directed_issue while story 5.5's binding decision claims backflush authorability (AC 3). Direct add-line authoring (bom_line.added via the 5.2 route) does support supply_method, so the gap is limited to the ECO-add surface. Fix requires a 5.3 schema change (add supply_method to eco_change_line and the add-insert in src/compliance/eco.ts:514-537) - deferred, pre-existing 5.3 schema, out of story 5.5 scope.

@@ -3,3 +3,20 @@ bucket_definitions:
     parameters: SELECT request.jwt() ->> 'site_id' AS site_id
     data:
       - SELECT event_id AS id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at FROM domain_events WHERE metadata -> 'actor' ->> 'location_id' = bucket.site_id
+
+  # Story 5.5 (AC 4): Released-BOM explosion inputs for offline continuity (FR-B-07). A bucket
+  # definition with no parameters query is a GLOBAL bucket, synced to every connected client.
+  # BOM is enterprise-scoped - no BOM table has a site or plant column and none may be added
+  # (Story 5.4 binding decision) - so "replicated per plant" is satisfied by every plant's edge
+  # devices holding the full Released set; plant applicability lives in line effectivity windows.
+  # Table names must match the edge client schema names exactly (edge/src/local-db/schema.ts).
+  # The bom_line/bom_alternate queries filter on the is_released_structure marker: legacy Sync
+  # Rules support NO joins or subqueries, so released-ness is denormalized onto the rows by the
+  # lifecycle seam (updateBomStatus) instead of computed here. Without the marker, draft, on_hold,
+  # obsolete and R&D-draft lines (including placeholders) would replicate to every edge device.
+  released_bom_structure:
+    data:
+      - SELECT bom_id AS id, bom_id, parent_item_id, parent_sku, parent_uom, business_stream, bom_type, status, current_revision_id, updated_at FROM bom WHERE status = 'released'
+      - SELECT revision_id AS id, revision_id, bom_id, revision_code, revision_status, released_at, released_by FROM bom_revision WHERE revision_status = 'released'
+      - SELECT bom_line_id AS id, bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, is_phantom, phantom_source_bom_id, supply_method, effective_from, effective_to FROM bom_line WHERE is_released_structure = true
+      - SELECT bom_alternate_id AS id, bom_alternate_id, bom_id, revision_id, bom_line_id, line_no, component_item_id, alternate_item_id, alternate_sku, priority, effective_from, effective_to, origin FROM bom_alternate WHERE is_released_structure = true

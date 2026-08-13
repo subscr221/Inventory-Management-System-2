@@ -389,6 +389,7 @@ async function copyRevisionLines(
         expected_yield_percent: line.expected_yield_percent,
         is_phantom: line.is_phantom,
         phantom_source_bom_id: line.phantom_source_bom_id,
+        supply_method: line.supply_method,
         effective_from: line.effective_from,
         effective_to: line.effective_to,
         blocking_release: false,

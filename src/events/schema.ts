@@ -1387,6 +1387,8 @@ export interface BomLineInput {
   phantom_source_bom_id?: string;
   effective_from: string;
   effective_to?: string;
+  /** Story 5.5: how execution consumes this component (FR-B-07). Defaults to 'directed_issue'. */
+  supply_method?: 'directed_issue' | 'backflush';
 }
 
 export interface BomDraftedPayload {
@@ -1425,6 +1427,8 @@ export interface BomLineAddedPayload {
   phantom_source_bom_id?: string;
   effective_from: string;
   effective_to?: string;
+  /** Story 5.5: how execution consumes this component (FR-B-07). Defaults to 'directed_issue'. */
+  supply_method?: 'directed_issue' | 'backflush';
 }
 
 export interface BomLineAddedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -1792,6 +1796,129 @@ export interface RdProductizedPayload {
 export interface RdProductizedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'rd_draft.productized';
   payload: RdProductizedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 5.5: approved alternates and BOM explosion (FR-B-12, FR-B-07).
+//
+// The epics' PascalCase names (AlternateDefined, SubstitutionApproved, BomExploded) map to the
+// dot-separated spine-convention types below. All three act on an ALREADY business-stream-tagged
+// BOM aggregate, so requiresBusinessStream is false; business_stream is copied server-side from
+// the BOM header where a persisted row needs it, never accepted from a request body.
+//
+// Every id (bom_alternate_id, explosion_id, doa_entry_id, approver_actor_id) is minted or resolved
+// at CAPTURE time in the handler and stored in the payload, and the whole explosion requirement
+// set is computed at capture time by src/engineering/bom-explosion.ts and embedded here, so the
+// appliers recompute NOTHING and replay is byte-deterministic.
+// ---------------------------------------------------------------------------
+
+/**
+ * Defines one approved alternate for a Released BOM line (FR-B-12). stream_id is bom_id.
+ * component_item_id and line_no are resolved server-side from the bom_line, never trusted from
+ * the request body.
+ */
+export interface BomAlternateDefinedPayload {
+  bom_alternate_id: string;
+  bom_id: string;
+  revision_id: string;
+  bom_line_id: string;
+  line_no: number;
+  component_item_id: string;
+  alternate_item_id: string;
+  alternate_sku: string | null;
+  priority: number;
+  effective_from: string;
+  effective_to: string | null;
+  origin: 'approved';
+  correlation_id?: string;
+}
+
+export interface BomAlternateDefinedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.alternate_defined';
+  payload: BomAlternateDefinedPayload;
+}
+
+/**
+ * Records a DOA-approved ad-hoc substitution (FR-B-12, FR-DOA-01). Materializes as a bom_alternate
+ * row with origin 'ad_hoc' plus DOA evidence, so the alternates read model serves approved
+ * alternates and approved substitutions as ONE priority-ordered stream. doa_entry_id and
+ * approver_actor_id are REQUIRED - both are resolved through resolveApprover at capture time.
+ */
+export interface BomSubstitutionApprovedPayload {
+  bom_alternate_id: string;
+  bom_id: string;
+  revision_id: string;
+  bom_line_id: string;
+  line_no: number;
+  component_item_id: string;
+  alternate_item_id: string;
+  alternate_sku: string | null;
+  priority: number;
+  effective_from: string;
+  effective_to: string | null;
+  origin: 'ad_hoc';
+  doa_entry_id: string;
+  approver_actor_id: string;
+  correlation_id?: string;
+}
+
+export interface BomSubstitutionApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.substitution_approved';
+  payload: BomSubstitutionApprovedPayload;
+}
+
+/** One open alternate carried on a requirement row, ordered by priority ASC (AC 1). */
+export interface BomExplosionAlternate {
+  alternate_item_id: string;
+  alternate_sku: string | null;
+  priority: number;
+  origin: 'approved' | 'ad_hoc';
+}
+
+/**
+ * One generated requirement. Quantities are exact decimal strings - all arithmetic happened in
+ * PostgreSQL NUMERIC inside the explosion CTE, never in JS floats. explosion_line_id is minted at
+ * CAPTURE time and travels in the payload so replaying bom.exploded events into a fresh projection
+ * rebuilds the same bom_explosion_line rows (capture-time-minted-IDs replay rule).
+ */
+export interface BomExplosionRequirement {
+  explosion_line_id: string;
+  depth: number;
+  path: string;
+  source_bom_id: string;
+  source_revision_id: string;
+  bom_line_id: string;
+  line_no: number;
+  component_item_id: string;
+  component_sku: string | null;
+  supply_method: 'directed_issue' | 'backflush';
+  required_quantity: string;
+  scrap_percent: string | null;
+  base_quantity_per: string;
+  has_child_bom: boolean;
+  via_phantom: boolean;
+  alternates: BomExplosionAlternate[];
+}
+
+/**
+ * Records one explosion run of a Released BOM to an execution requirement set (FR-B-07).
+ * stream_id is bom_id. requirements is the complete capture-time result; the applier persists it
+ * verbatim.
+ */
+export interface BomExplodedPayload {
+  explosion_id: string;
+  bom_id: string;
+  revision_id: string;
+  order_quantity: string;
+  business_date: string;
+  depth_truncated: boolean;
+  requirements: BomExplosionRequirement[];
+  correlation_id?: string;
+}
+
+export interface BomExplodedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.exploded';
+  payload: BomExplodedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -2250,5 +2377,20 @@ export const SUPPORTED_EVENT_TYPES = {
   'rd_draft.productized': {
     streamType: 'engineering',
     requiresBusinessStream: true,
+  },
+  // Story 5.5: approved alternates and BOM explosion on the existing 'engineering' stream. All
+  // three are transitions/records on an already business-stream-tagged BOM aggregate, so none
+  // requires a business stream on the envelope.
+  'bom.alternate_defined': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'bom.substitution_approved': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'bom.exploded': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
   },
 } as const;

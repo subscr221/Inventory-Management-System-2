@@ -1,6 +1,6 @@
 {
   "$schema": "https://app.kilo.ai/config.json",
   "plugin": [
-    "file:///D:/WINCODE/Inventory%20Management%20System_2/.kilo/plugins/graphify.js"
+    "file:///C:/Users/admin/Documents/GitHub/Inventory-Management-System-2/.kilo/plugins/graphify.js"
   ]
 }

@@ -78,6 +78,11 @@ const MIGRATIONS = [
   '../../read/projections/rd_build_record.sql',
   '../../read/projections/rd_as_built_line.sql',
   '../../read/projections/rd_productization_signoff.sql',
+  '../../read/projections/bom_alternate.sql',
+  '../../read/projections/bom_explosion.sql',
+  '../../read/projections/bom_explosion_line.sql',
+  // Must run AFTER bom_alternate.sql: it publishes and grants those tables (Story 5.5, AC 4).
+  '../../sync/migrations/powersync-bom.sql',
 ];
 
 async function migrate(): Promise<void> {

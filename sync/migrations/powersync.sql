@@ -19,3 +19,7 @@ BEGIN
     ALTER PUBLICATION powersync_publication ADD TABLE domain_events;
   END IF;
 END $$;
+
+-- Story 5.5 extends this publication with the Released-BOM explosion inputs. That extension lives
+-- in powersync-bom.sql, registered at the TAIL of MIGRATIONS, because this file runs before the
+-- bom tables are created and cannot reference them.

@@ -104,6 +104,10 @@ import { assertBomShape, applyBomProjection } from '../compliance/bom.js';
 import { assertEcoShape, applyEcoProjection } from '../compliance/eco.js';
 import { assertRdShape, applyRdProjection } from '../compliance/rd-bom.js';
 import {
+  assertBomExecutionShape,
+  applyBomExecutionProjection,
+} from '../compliance/bom-execution.js';
+import {
   assertSupplierInvoiceShape,
   applySupplierInvoiceProjection,
   resolveSupplierInvoiceDuplicateConflict,
@@ -498,6 +502,9 @@ export async function persistEvent(
   // Story 5.4: R&D draft BOM regime shape validation is non-DB and runs with the other
   // pre-transaction asserts, so a malformed rd_* event never consumes an idempotency key.
   assertRdShape(envelope);
+  // Story 5.5: alternate / substitution / explosion shape validation is non-DB and runs with the
+  // other pre-transaction asserts, so a malformed execution event never consumes an idempotency key.
+  assertBomExecutionShape(envelope);
   // Story 4.7: supplier invoice / invoice-ingestion shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed invoice event never consumes an idempotency key.
   assertSupplierInvoiceShape(envelope);
@@ -754,6 +761,9 @@ export async function persistEvent(
     // header, revision, lines, build records, as-built snapshot, and sign-offs commit together
     // with the domain_events insert.
     await applyRdProjection(envelope, client, eventId);
+    // Story 5.5: alternates, ad-hoc substitutions and explosion runs commit inside this same
+    // transaction as the domain_events insert, so a requirement set can never outlive its event.
+    await applyBomExecutionProjection(envelope, client, eventId);
     // Story 4.7: supplier invoice capture / file-ingestion review projection runs inside this
     // same transaction so the invoice header, lines, ingestion row, and the domain_events insert
     // commit or roll back together.
@@ -987,6 +997,34 @@ export async function persistEvent(
             parent_item_id:
               typeof envelope.payload['parent_item_id'] === 'string'
                 ? envelope.payload['parent_item_id']
+                : null,
+          },
+        );
+      } else if (
+        constraint === 'uq_bom_alternate_entry' ||
+        constraint === 'bom_alternate_pkey' ||
+        constraint === 'uq_bom_explosion_source_event' ||
+        constraint === 'bom_explosion_pkey' ||
+        constraint === 'uq_bom_explosion_line_no' ||
+        constraint === 'bom_explosion_line_pkey'
+      ) {
+        // Story 5.5: the serial cases are already mapped 409s in the seam; this maps the
+        // concurrent race so a second writer surfaces a stable 409 instead of a raw 23505 500.
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'This alternate or explosion run has already been recorded',
+          {
+            constraint,
+            bom_id:
+              typeof envelope.payload['bom_id'] === 'string' ? envelope.payload['bom_id'] : null,
+            explosion_id:
+              typeof envelope.payload['explosion_id'] === 'string'
+                ? envelope.payload['explosion_id']
+                : null,
+            bom_alternate_id:
+              typeof envelope.payload['bom_alternate_id'] === 'string'
+                ? envelope.payload['bom_alternate_id']
                 : null,
           },
         );

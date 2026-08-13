@@ -122,6 +122,9 @@ const draftBomBase: RouteHandler = async (req, res, _params) => {
         phantom_source_bom_id: l.phantom_source_bom_id,
         effective_from: l.effective_from,
         effective_to: l.effective_to,
+        // Story 5.5: how execution consumes the line (FR-B-07); the applier defaults it to
+        // 'directed_issue' when absent, so every pre-5.5 caller is unaffected.
+        supply_method: l.supply_method,
       })),
       correlation_id: correlationId,
     },
@@ -213,6 +216,8 @@ const addBomLineBase: RouteHandler = async (req, res, params) => {
     phantom_source_bom_id: body.phantom_source_bom_id as string | undefined,
     effective_from: body.effective_from as string,
     effective_to: body.effective_to as string | undefined,
+    // Story 5.5: how execution consumes the line (FR-B-07); defaults to 'directed_issue'.
+    supply_method: body.supply_method as 'directed_issue' | 'backflush' | undefined,
   };
 
   const idempotencyKey = (body.idempotency_key as string) ?? randomUUID();

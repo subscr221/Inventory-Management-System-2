@@ -60,6 +60,8 @@ export interface BomLineRow {
   expected_yield_percent: string | null;
   is_phantom: boolean;
   phantom_source_bom_id: string | null;
+  /** Story 5.5: how execution consumes this component (FR-B-07). */
+  supply_method: 'directed_issue' | 'backflush';
   effective_from: string;
   effective_to: string | null;
   blocking_release: boolean;
@@ -309,8 +311,8 @@ export async function insertBomLine(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
-    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, amended_at, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, supply_method, effective_from, effective_to, blocking_release, blocking_reason, amended_at, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
     [
       row.bom_line_id,
       row.revision_id,
@@ -329,6 +331,7 @@ export async function insertBomLine(
       row.expected_yield_percent,
       row.is_phantom,
       row.phantom_source_bom_id,
+      row.supply_method,
       row.effective_from,
       row.effective_to,
       row.blocking_release,
@@ -371,6 +374,21 @@ export async function updateBomStatus(
   await client.query(
     'UPDATE bom SET status = $1, status_changed_at = $2, status_changed_by = $3, updated_at = now() WHERE bom_id = $4',
     [status, changedAt, changedBy, bomId],
+  );
+  // Story 5.5 review (sync scoping): maintain the released_bom_structure marker on the current
+  // revision's lines and alternates in the SAME transaction, so the PowerSync bucket (which
+  // cannot join under legacy Sync Rules) syncs only structure of released BOMs. Every lifecycle
+  // transition funnels through this helper: release -> true, on_hold/obsolete -> false.
+  const released = status === 'released';
+  await client.query(
+    `UPDATE bom_line SET is_released_structure = $1, updated_at = now()
+      WHERE revision_id = (SELECT current_revision_id FROM bom WHERE bom_id = $2)`,
+    [released, bomId],
+  );
+  await client.query(
+    `UPDATE bom_alternate SET is_released_structure = $1, updated_at = now()
+      WHERE revision_id = (SELECT current_revision_id FROM bom WHERE bom_id = $2)`,
+    [released, bomId],
   );
 }
 

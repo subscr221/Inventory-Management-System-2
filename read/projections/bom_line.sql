@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS bom_line (
   expected_yield_percent   NUMERIC(7,4),
   is_phantom               BOOLEAN NOT NULL DEFAULT false,
   phantom_source_bom_id    UUID,
+  supply_method            TEXT NOT NULL DEFAULT 'directed_issue',
+  is_released_structure    BOOLEAN NOT NULL DEFAULT false,
   effective_from           DATE NOT NULL,
   effective_to            DATE,
   blocking_release         BOOLEAN NOT NULL DEFAULT false,
@@ -52,7 +54,8 @@ CREATE TABLE IF NOT EXISTS bom_line (
   CONSTRAINT chk_bom_line_placeholder_pairing CHECK (
     (is_placeholder = true AND component_item_id IS NULL AND component_sku IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
     (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
-  )
+  ),
+  CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'))
 );
 
 -- Story 5.4 placeholder/free-text columns for databases created before this story. The NOT NULL
@@ -75,6 +78,35 @@ BEGIN
     (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
   );
 END $$;
+
+-- Story 5.5 supply method: how execution consumes this component (FR-B-07). 'directed_issue' is
+-- the default so every pre-5.5 line keeps its existing behaviour; 'backflush' lines are consumed
+-- implicitly at completion. The DROP + ADD pair is kept atomic in a DO block, mirroring the
+-- chk_bom_line_placeholder_pairing swap above.
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS supply_method TEXT NOT NULL DEFAULT 'directed_issue';
+
+DO $$
+BEGIN
+  ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_supply_method;
+  ALTER TABLE bom_line ADD CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'));
+END $$;
+
+-- Story 5.5 review (sync scoping): the released_bom_structure PowerSync bucket filters on this
+-- denormalized marker because legacy Sync Rules support NO joins or subqueries (the pinned
+-- PowerSync 1.23.x subset). It is a projection of "this line belongs to a released revision of a
+-- released BOM", maintained in src/read/projections/bom.ts updateBomStatus (released -> true,
+-- on_hold/obsolete -> false) and set explicitly by the legacy-kit migration path, which inserts
+-- released structure directly. Alternates are only ever created on released revisions, so
+-- insertBomAlternate stamps them true.
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS is_released_structure BOOLEAN NOT NULL DEFAULT false;
+
+-- Backfill for deployments upgraded from before this marker: released revisions of currently
+-- released BOMs keep their sync visibility; everything else stays false. Idempotent by nature.
+UPDATE bom_line SET is_released_structure = true, updated_at = now()
+ WHERE revision_id IN (
+   SELECT br.revision_id FROM bom_revision br JOIN bom b ON b.bom_id = br.bom_id
+    WHERE br.revision_status = 'released' AND b.status = 'released'
+ );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_line_no ON bom_line (revision_id, line_no);
 CREATE INDEX IF NOT EXISTS idx_bom_line_component_item ON bom_line (component_item_id);

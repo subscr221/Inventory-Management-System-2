@@ -210,6 +210,13 @@ import {
   productizeHandler,
 } from './api/v1/rd-boms.js';
 import {
+  defineAlternateHandler,
+  listBomAlternatesHandler,
+  approveSubstitutionHandler,
+  explodeBomHandler,
+  getExplosionHandler,
+} from './api/v1/bom-execution.js';
+import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
   getSupplierInvoiceHandler,
@@ -510,6 +517,14 @@ export function createAppRouter(): Router {
   router.post('/api/v1/boms/:bomId/productization-signoffs', signProductizationHandler);
   router.get('/api/v1/boms/:bomId/productization-gate', getProductizationGateHandler);
   router.post('/api/v1/boms/:bomId/productize', productizeHandler);
+
+  // Story 5.5: Approved Alternates and BOM Explosion. Every second segment is a literal distinct
+  // from the :bomId-only routes above, so there is no route-order trap here.
+  router.post('/api/v1/boms/:bomId/alternates', defineAlternateHandler);
+  router.get('/api/v1/boms/:bomId/alternates', listBomAlternatesHandler);
+  router.post('/api/v1/boms/:bomId/substitution-approvals', approveSubstitutionHandler);
+  router.post('/api/v1/boms/:bomId/explosion', explodeBomHandler);
+  router.get('/api/v1/bom-explosions/:explosionId', getExplosionHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

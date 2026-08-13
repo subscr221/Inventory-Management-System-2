@@ -339,6 +339,19 @@ function assertBomLineInputArray(lines: Record<string, unknown>[]): void {
         reject('INVALID_PARAMS', 'effective_to must be on or after effective_from');
       }
     }
+
+    assertSupplyMethod(line['supply_method']);
+  }
+}
+
+/**
+ * Story 5.5: supply_method is optional on the wire and defaults to 'directed_issue' at insert, so
+ * every pre-5.5 line keeps its behaviour; only the vocabulary is policed here.
+ */
+export function assertSupplyMethod(value: unknown): void {
+  if (value === undefined || value === null) return;
+  if (value !== 'directed_issue' && value !== 'backflush') {
+    reject('INVALID_PARAMS', "supply_method must be one of 'directed_issue', 'backflush'");
   }
 }
 
@@ -402,6 +415,8 @@ function assertBomLineAddedShape(p: Record<string, unknown>): void {
   ) {
     reject('INVALID_PARAMS', 'effective_to must be a YYYY-MM-DD date or null');
   }
+
+  assertSupplyMethod(p['supply_method']);
 }
 
 function assertBomLineAmendedShape(p: Record<string, unknown>): void {
@@ -849,8 +864,8 @@ async function applyLegacyKitMigrated(
     // Migration-exempt released path defaults missing scrap to exact-decimal zero (AC 4).
     const scrapPercent = line.scrap_percent ?? (released ? '0.0000' : null);
     await client.query(
-      `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, source_event_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10::numeric, $8::numeric * $10::numeric, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+      `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, supply_method, is_released_structure, source_event_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10::numeric, $8::numeric * $10::numeric, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
       [
         randomUUID(),
         revisionId,
@@ -870,6 +885,8 @@ async function applyLegacyKitMigrated(
         line.effective_to ?? null,
         evaluation.blockingRelease,
         evaluation.blockingReason,
+        line.supply_method ?? 'directed_issue',
+        released,
         eventId,
       ],
     );
@@ -986,8 +1003,8 @@ async function applyBomDrafted(
     const effectiveTo = line.effective_to ?? null;
 
     await client.query(
-      `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, source_event_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10::numeric * $12::numeric, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+      `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, supply_method, source_event_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10::numeric * $12::numeric, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
       [
         bomLineId,
         revisionId,
@@ -1009,6 +1026,7 @@ async function applyBomDrafted(
         effectiveTo,
         blockingRelease,
         blockingReason,
+        line.supply_method ?? 'directed_issue',
         eventId,
       ],
     );
@@ -1120,8 +1138,8 @@ async function applyBomLineAdded(
   }
 
   await client.query(
-    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10::numeric * $12::numeric, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, effective_from, effective_to, blocking_release, blocking_reason, supply_method, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $10::numeric * $12::numeric, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
     [
       p.bom_line_id,
       p.revision_id,
@@ -1143,6 +1161,7 @@ async function applyBomLineAdded(
       p.effective_to ?? null,
       blockingRelease,
       blockingReason,
+      p.supply_method ?? 'directed_issue',
       eventId,
     ],
   );

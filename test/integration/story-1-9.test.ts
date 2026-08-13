@@ -381,6 +381,12 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/boms/:bomId/productization-signoffs',
       'GET /api/v1/boms/:bomId/productization-gate',
       'POST /api/v1/boms/:bomId/productize',
+      // Story 5.5: Approved Alternates and BOM Explosion
+      'POST /api/v1/boms/:bomId/alternates',
+      'GET /api/v1/boms/:bomId/alternates',
+      'POST /api/v1/boms/:bomId/substitution-approvals',
+      'POST /api/v1/boms/:bomId/explosion',
+      'GET /api/v1/bom-explosions/:explosionId',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

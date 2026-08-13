@@ -695,6 +695,8 @@ const EXPECTED = [
       'chk_bom_line_blocking_reason',
       // Story 5.4 placeholder pairing (DROP + ADD DO block, mirrored in init-db.sql)
       'chk_bom_line_placeholder_pairing',
+      // Story 5.5 supply method (DROP + ADD DO block, mirrored in init-db.sql)
+      'chk_bom_line_supply_method',
     ],
     indexes: [
       'uq_bom_line_no',
@@ -764,6 +766,47 @@ const EXPECTED = [
     table: 'rd_productization_signoff',
     constraints: ['chk_rd_signoff_function'],
     indexes: ['uq_rd_signoff_function', 'idx_rd_signoff_bom_id'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 5.5: Approved Alternates and BOM Explosion
+  {
+    canonical: 'read/projections/bom_alternate.sql',
+    table: 'bom_alternate',
+    constraints: [
+      'chk_bom_alternate_origin',
+      'chk_bom_alternate_priority',
+      'chk_bom_alternate_effectivity_order',
+      'chk_bom_alternate_not_self',
+      'chk_bom_alternate_doa_pairing',
+    ],
+    indexes: [
+      'uq_bom_alternate_entry',
+      'idx_bom_alternate_bom_id',
+      'idx_bom_alternate_line',
+      'idx_bom_alternate_effective',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/bom_explosion.sql',
+    table: 'bom_explosion',
+    constraints: ['chk_bom_explosion_quantity_positive', 'chk_bom_explosion_requirement_count'],
+    indexes: ['uq_bom_explosion_source_event', 'idx_bom_explosion_bom_id'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/bom_explosion_line.sql',
+    table: 'bom_explosion_line',
+    constraints: [
+      'chk_bom_explosion_line_depth',
+      'chk_bom_explosion_line_supply_method',
+      'chk_bom_explosion_line_quantity_positive',
+    ],
+    indexes: [
+      'uq_bom_explosion_line_no',
+      'idx_bom_explosion_line_explosion',
+      'idx_bom_explosion_line_component',
+    ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
 ];
@@ -965,6 +1008,53 @@ describe('Story 2.1 schema drift guard', () => {
     ]) {
       assert.ok(bomLineSql.includes(fragment), `bom_line.sql missing ${fragment}`);
       assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
+  });
+
+  it('Story 5.5 mirrors the supply_method additive column into init-db.sql', () => {
+    const bomLineSql = read('read/projections/bom_line.sql');
+    // The column lives in BOTH the CREATE TABLE body (so extractCreateTable equality holds) and an
+    // ADD COLUMN IF NOT EXISTS statement (so pre-5.5 databases pick it up on re-migrate).
+    for (const fragment of [
+      "supply_method            TEXT NOT NULL DEFAULT 'directed_issue'",
+      "ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS supply_method TEXT NOT NULL DEFAULT 'directed_issue';",
+      'ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_supply_method;',
+      "ADD CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'))",
+    ]) {
+      assert.ok(bomLineSql.includes(fragment), `bom_line.sql missing ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
+  });
+
+  it('Story 5.5 review mirrors the is_released_structure sync marker into init-db.sql', () => {
+    const bomLineSql = read('read/projections/bom_line.sql');
+    const bomAlternateSql = read('read/projections/bom_alternate.sql');
+    // CREATE TABLE body fragments use each file's own column alignment.
+    assert.ok(
+      bomLineSql.includes('is_released_structure    BOOLEAN NOT NULL DEFAULT false'),
+      'bom_line.sql CREATE body missing the marker column',
+    );
+    assert.ok(
+      initDb.includes('is_released_structure    BOOLEAN NOT NULL DEFAULT false'),
+      'init-db.sql bom_line section missing the marker column',
+    );
+    assert.ok(
+      bomAlternateSql.includes('is_released_structure BOOLEAN NOT NULL DEFAULT false'),
+      'bom_alternate.sql CREATE body missing the marker column',
+    );
+    assert.ok(
+      initDb.includes('is_released_structure BOOLEAN NOT NULL DEFAULT false'),
+      'init-db.sql bom_alternate section missing the marker column',
+    );
+    for (const table of ['bom_line', 'bom_alternate']) {
+      const canonical = table === 'bom_line' ? bomLineSql : bomAlternateSql;
+      for (const fragment of [
+        `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS is_released_structure BOOLEAN NOT NULL DEFAULT false;`,
+        "br.revision_status = 'released' AND b.status = 'released'",
+      ]) {
+        assert.ok(canonical.includes(fragment), `${table}.sql missing ${fragment}`);
+        assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment} (from ${table}.sql)`);
+      }
     }
   });
 

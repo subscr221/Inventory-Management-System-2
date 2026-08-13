@@ -293,7 +293,52 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-12'
+last_updated: '2026-08-14'
+# story 5-5 dev-story 2026-08-13: implemented all 8 tasks from baseline 21a3235. Three new tables
+#   (bom_alternate, bom_explosion, bom_explosion_line) plus additive bom_line.supply_method with a
+#   guarded constraint swap, mirrored into init-db.sql, migrate re-run twice cleanly. Three new
+#   engineering-stream events (bom.alternate_defined, bom.substitution_approved, bom.exploded, all
+#   requiresBusinessStream false) wired into store.ts at the two existing seams plus three new
+#   23505 DUPLICATE_EVENT mappings. New src/compliance/bom-execution.ts seam shares ONE applier
+#   across both alternate events (BOM lock, post-lock idempotency re-check, assertNotRdDraft,
+#   released-BOM + current-released-revision guards, revision-scoped line lookup, placeholder
+#   reject, server-side component_item_id/line_no correspondence re-assert under lock,
+#   isReleasedItemMaster, EFFECTIVITY_OVERLAP, ALTERNATE_PRIORITY_CONFLICT,
+#   ALTERNATE_ALREADY_APPROVED). Exported explodeBomForExecution (src/engineering/bom-explosion.ts)
+#   is the Epic 6 FR-MO-03 contract surface: pure, optional PoolClient, one recursive CTE with all
+#   arithmetic in PostgreSQL NUMERIC, depth cap config.bom.maxDepth with depth_truncated reported
+#   only when a row AT the cap still had somewhere to descend. Decision: cycle defense uses a
+#   visited uuid[] path predicate, NOT the PG CYCLE clause - CYCLE keys on a column value and
+#   sibling lines legitimately share source_bom_id at the same level, which would false-positive on
+#   every level-1 row. Decision: the story's "extend sync/migrations/powersync.sql" was split into a
+#   new powersync-bom.sql registered at the TAIL of MIGRATIONS, because powersync.sql runs before
+#   any bom table exists and the GRANT/ALTER PUBLICATION would abort a fresh migrate; same
+#   contractual surface, correct ordering. Decision: supply_method added as an OPTIONAL field on
+#   BomLineInput/BomLineAddedPayload (new exported assertSupplyMethod, default 'directed_issue',
+#   carried forward by the ECO revision copy and the R&D clone) because AC 3's backflush half is
+#   otherwise unauthorable and untestable. First downstream read-model replication: parameterless
+#   global released_bom_structure bucket over bom/bom_revision/bom_line/bom_alternate, publication
+#   membership verified live, four synced edge schema tables, no capture path. 5 routes + spine
+#   allowlist. Gates: build/lint/format clean, migrate idempotent x2, schema-drift 75/75, story-5-5
+#   19/19, spine 6/6, edge 30/30 unchanged, diff-check clean, graphify updated; npm test 848 tests
+#   833 pass, 15 fail = the 14 documented pre-existing idempotency failures PLUS one pre-existing
+#   story-5-3 where-used assertion, the latter reproduced on unmodified HEAD via git stash (0 new);
+#   moved to review
+# story 5-5 created 2026-08-12 via create-story workflow: Approved Alternates and BOM Explosion (FR-B-12, FR-B-07).
+#   Greenfield alternates + explosion surface on the 5.1-5.4 BOM module. Three engineering-stream events
+#   (bom.alternate_defined, bom.substitution_approved, bom.exploded; all requiresBusinessStream false); three new
+#   tables (bom_alternate, bom_explosion, bom_explosion_line) plus additive bom_line.supply_method
+#   ('directed_issue' default | 'backflush'); new src/compliance/bom-execution.ts seam at the two store.ts seams;
+#   exported explodeBomForExecution service (src/engineering/bom-explosion.ts) as the Epic 6 FR-MO-03 contract
+#   surface (recursive CTE, PG-NUMERIC scrap-adjusted quantities, depth cap config.bom.maxDepth with
+#   depth_truncated, CYCLE defense, phantom pass-through, component-only lines, priority-ordered open alternates);
+#   DOA ad-hoc substitution via resolveApprover('bom_substitution', 0) with fail-closed APPROVAL_UNRESOLVED and
+#   403 APPROVAL_REQUIRED authority check; consumes Story 5.4 assertNotRdDraft/isReleasedItemMaster handoff so an
+#   R&D draft explodes to RD_EXECUTION_BARRED; five new routes + spine allowlist; first downstream PowerSync
+#   replication (global released_bom_structure bucket over bom/bom_revision/bom_line/bom_alternate, publication
+#   extension + svc_powersync grants + edge local schema tables; BOM stays enterprise-scoped, no site column);
+#   four new module-local error codes; no edge capture path; cost rollups / kit tagging / ERP sync stay in 5.6;
+#   ready-for-dev
 # story 5-3 dev-story 2026-08-11: implemented all 9 tasks from baseline 25084ab. Three new
 #   projections (eco, eco_change_line, eco_stock_disposition) plus source_eco_id on bom_revision,
 #   mirrored into init-db.sql and schema-drift EXPECTED, migrate re-run twice cleanly. Six new
@@ -727,7 +772,7 @@ development_status:
   5-2-bom-lifecycle-and-immutability: done   # PILOT  # dev-story 2026-08-07 + code-review 2026-08-09: all 10 tasks done from baseline af39b5e (lifecycle schema, 4 events, release gate with staged conditions, immutability, checklist read, 6 routes, legacy-kit migration, 12/12 integration tests); also repaired never-green story-5-1 harness and 2 latent 5.1 handler bugs (business_stream injection, occurred_at); full gates green, 14 pre-existing idempotency failures unchanged; Group 4 adversarial review applied 6 patches (engineering-stream guard, BOM TRUNCATE, strengthened gate assertions, transition-matrix tests, migration data/skip/idempotency tests, RBAC fixes), suite expanded 12->27 tests all green
   5-3-eco-workflow-and-where-used-impact: done   # PILOT  # create-story 2026-08-09: ECO lifecycle (draft/under_review/approved/implemented/cancelled), 3 new tables + source_eco_id on bom_revision, 6 events, computed where-used impact read (bom_line not bom_structure), DOA approver resolution via resolveApprover, approved-ECO release gate un-staged with first-release exemption, closes the 5.2 cross-revision immutability deferral; dev-story 2026-08-11 (all 9 tasks, 14/14 tests) + code-review 2026-08-11 (23 patches applied: stale-ECO guard, release-gate re-check, revision-code guard, eco_id/eco_number validation, where-used current-revision/cycle guard, amend validation, APPROVAL_UNRESOLVED at raise, insertBomRevision source_eco_id, disposition validation, retire effective_to; 9 new regression tests; gates green, 0 new failures) moved to done
   5-4-randd-draft-bom-regime: done   # PILOT  # create-story 2026-08-12: R&D draft BOM regime (bom_type='rnd' IS the rd_draft flag, no new column), partial uq_bom_parent_item to unblock cloning, placeholder/free-text bom_line columns, 3 new tables (rd_build_record, rd_as_built_line, rd_productization_signoff), 5 events, shared assertNotRdDraft execution bar consumed by 5.5/Epic 6, 7 tasks; code-review 2026-08-12: 1 decision resolved (quantity_used is per-unit, built_quantity informational) + 9 patches applied (honor client line_no in rd_build.recorded, post-lock idempotency re-check on concurrent same-key retries, advisory-lock close of the BOM_ALREADY_EXISTS productize race, deterministic clone via payload source_revision_id, confirm-event source_event_id on synthetic missing rows, RD_BUILD_NOT_PERMITTED on the productization-gate GET for non-rnd, PostgreSQL NUMERIC base_quantity_per in the three rewritten bom_line statements, RdAsBuiltLineInput discriminated-union type, per-unit built_quantity: 2 regression test), 0 deferred, 2 dismissed; Edge Case Hunter layer returned empty; story-5-4 20/20, story-5-1/5-2/5-3 62/62, schema-drift + role gates 72/72, build/lint/format clean
-  5-5-approved-alternates-and-bom-explosion: backlog   # PILOT
+  5-5-approved-alternates-and-bom-explosion: done   # PILOT  # create-story 2026-08-12: approved alternates (priority + effectivity), DOA ad-hoc substitutions, exported explosion service with contract tests, PowerSync released-BOM replication; consumes 5.4 assertNotRdDraft; code-review 2026-08-14: 2 decisions resolved (a/a - window-scoped ALTERNATE_ALREADY_APPROVED, phantom-line reject) + 18 patches applied (apply-time explosion_line_id -> capture-minted, DATE timezone-shift family fixed in the seam and both read models, released_bom_structure scoped via is_released_structure marker with backfill + init-db/edge/schema-drift mirrors, priority upper bound, window-aware ALTERNATE_PRIORITY_CONFLICT, revision_status check in the walk, replay-before-DOA + persisted-payload responses, numeric path ordering, maxDepth/occurred_at/limit guards, shape-gate tightening, batched alternates, obsolete-state test); story-5-5 21/21, schema-drift marker test green, build/lint/edge typecheck clean; 16 full-suite failures verified pre-existing at pristine HEAD (worktree check)
   5-6-cost-rollups-job-work-kit-tagging-and-erp-outbound-sync: backlog   # PILOT
   epic-5-retrospective: optional
 

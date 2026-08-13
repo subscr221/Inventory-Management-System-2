@@ -4134,6 +4134,8 @@ CREATE TABLE IF NOT EXISTS bom_line (
   expected_yield_percent   NUMERIC(7,4),
   is_phantom               BOOLEAN NOT NULL DEFAULT false,
   phantom_source_bom_id    UUID,
+  supply_method            TEXT NOT NULL DEFAULT 'directed_issue',
+  is_released_structure    BOOLEAN NOT NULL DEFAULT false,
   effective_from           DATE NOT NULL,
   effective_to            DATE,
   blocking_release         BOOLEAN NOT NULL DEFAULT false,
@@ -4162,7 +4164,8 @@ CREATE TABLE IF NOT EXISTS bom_line (
   CONSTRAINT chk_bom_line_placeholder_pairing CHECK (
     (is_placeholder = true AND component_item_id IS NULL AND component_sku IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
     (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
-  )
+  ),
+  CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'))
 );
 
 -- Story 5.4 placeholder/free-text columns for databases created before this story. The NOT NULL
@@ -4185,6 +4188,29 @@ BEGIN
     (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
   );
 END $$;
+
+-- Story 5.5 supply method: how execution consumes this component (FR-B-07). 'directed_issue' is
+-- the default so every pre-5.5 line keeps its existing behaviour; 'backflush' lines are consumed
+-- implicitly at completion. The DROP + ADD pair is kept atomic in a DO block, mirroring the
+-- chk_bom_line_placeholder_pairing swap above.
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS supply_method TEXT NOT NULL DEFAULT 'directed_issue';
+
+DO $$
+BEGIN
+  ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_supply_method;
+  ALTER TABLE bom_line ADD CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'));
+END $$;
+
+-- Story 5.5 review (sync scoping): released_bom_structure PowerSync bucket filter marker, mirroring
+-- read/projections/bom_line.sql. Maintained by updateBomStatus; backfill keeps released structure
+-- visible on upgraded deployments.
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS is_released_structure BOOLEAN NOT NULL DEFAULT false;
+
+UPDATE bom_line SET is_released_structure = true, updated_at = now()
+ WHERE revision_id IN (
+   SELECT br.revision_id FROM bom_revision br JOIN bom b ON b.bom_id = br.bom_id
+    WHERE br.revision_status = 'released' AND b.status = 'released'
+ );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_line_no ON bom_line (revision_id, line_no);
 CREATE INDEX IF NOT EXISTS idx_bom_line_component_item ON bom_line (component_item_id);
@@ -5328,4 +5354,263 @@ BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON rd_productization_signoff TO readonly_user;
   END IF;
+END $$;
+
+-- MUST stay identical to read/projections/bom_alternate.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS bom_alternate (
+  bom_alternate_id    UUID PRIMARY KEY,
+  bom_id              UUID NOT NULL,
+  revision_id         UUID NOT NULL,
+  bom_line_id         UUID NOT NULL,
+  line_no             INTEGER NOT NULL,
+  component_item_id   UUID NOT NULL,
+  alternate_item_id   UUID NOT NULL,
+  alternate_sku       TEXT,
+  priority            INTEGER NOT NULL,
+  effective_from      DATE NOT NULL,
+  effective_to        DATE,
+  origin              TEXT NOT NULL,
+  doa_entry_id        UUID,
+  approver_actor_id   UUID,
+  is_released_structure BOOLEAN NOT NULL DEFAULT false,
+  defined_by          UUID NOT NULL,
+  source_event_id     UUID NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_bom_alternate_origin CHECK (origin IN ('approved','ad_hoc')),
+  CONSTRAINT chk_bom_alternate_priority CHECK (priority >= 1),
+  CONSTRAINT chk_bom_alternate_effectivity_order CHECK (effective_to IS NULL OR effective_to >= effective_from),
+  CONSTRAINT chk_bom_alternate_not_self CHECK (alternate_item_id <> component_item_id),
+  CONSTRAINT chk_bom_alternate_doa_pairing CHECK (
+    (origin = 'ad_hoc' AND doa_entry_id IS NOT NULL AND approver_actor_id IS NOT NULL) OR
+    (origin = 'approved' AND doa_entry_id IS NULL AND approver_actor_id IS NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_alternate_entry
+  ON bom_alternate (bom_line_id, alternate_item_id, effective_from);
+CREATE INDEX IF NOT EXISTS idx_bom_alternate_bom_id ON bom_alternate (bom_id);
+CREATE INDEX IF NOT EXISTS idx_bom_alternate_line ON bom_alternate (bom_line_id, priority);
+CREATE INDEX IF NOT EXISTS idx_bom_alternate_effective
+  ON bom_alternate (bom_line_id, effective_from, effective_to);
+
+-- Story 5.5 review (sync scoping): released_bom_structure bucket filter marker, mirroring
+-- read/projections/bom_alternate.sql.
+ALTER TABLE bom_alternate ADD COLUMN IF NOT EXISTS is_released_structure BOOLEAN NOT NULL DEFAULT false;
+
+UPDATE bom_alternate SET is_released_structure = true, updated_at = now()
+ WHERE revision_id IN (
+   SELECT br.revision_id FROM bom_revision br JOIN bom b ON b.bom_id = br.bom_id
+    WHERE br.revision_status = 'released' AND b.status = 'released'
+ );
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_alternate_origin'
+      AND conrelid = 'bom_alternate'::regclass
+  ) THEN
+    ALTER TABLE bom_alternate
+      ADD CONSTRAINT chk_bom_alternate_origin CHECK (origin IN ('approved','ad_hoc'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_alternate_priority'
+      AND conrelid = 'bom_alternate'::regclass
+  ) THEN
+    ALTER TABLE bom_alternate
+      ADD CONSTRAINT chk_bom_alternate_priority CHECK (priority >= 1);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_alternate_effectivity_order'
+      AND conrelid = 'bom_alternate'::regclass
+  ) THEN
+    ALTER TABLE bom_alternate
+      ADD CONSTRAINT chk_bom_alternate_effectivity_order CHECK (effective_to IS NULL OR effective_to >= effective_from);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_alternate_not_self'
+      AND conrelid = 'bom_alternate'::regclass
+  ) THEN
+    ALTER TABLE bom_alternate
+      ADD CONSTRAINT chk_bom_alternate_not_self CHECK (alternate_item_id <> component_item_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_alternate_doa_pairing'
+      AND conrelid = 'bom_alternate'::regclass
+  ) THEN
+    ALTER TABLE bom_alternate
+      ADD CONSTRAINT chk_bom_alternate_doa_pairing CHECK (
+        (origin = 'ad_hoc' AND doa_entry_id IS NOT NULL AND approver_actor_id IS NOT NULL) OR
+        (origin = 'approved' AND doa_entry_id IS NULL AND approver_actor_id IS NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON bom_alternate TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom_alternate TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/bom_explosion.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS bom_explosion (
+  explosion_id      UUID PRIMARY KEY,
+  bom_id            UUID NOT NULL,
+  revision_id       UUID NOT NULL,
+  order_quantity    NUMERIC NOT NULL,
+  business_date     DATE NOT NULL,
+  depth_truncated   BOOLEAN NOT NULL DEFAULT false,
+  requirement_count INTEGER NOT NULL,
+  exploded_by       UUID NOT NULL,
+  correlation_id    UUID,
+  source_event_id   UUID NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_bom_explosion_quantity_positive CHECK (order_quantity > 0),
+  CONSTRAINT chk_bom_explosion_requirement_count CHECK (requirement_count >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_explosion_source_event ON bom_explosion (source_event_id);
+CREATE INDEX IF NOT EXISTS idx_bom_explosion_bom_id ON bom_explosion (bom_id, created_at DESC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_explosion_quantity_positive'
+      AND conrelid = 'bom_explosion'::regclass
+  ) THEN
+    ALTER TABLE bom_explosion
+      ADD CONSTRAINT chk_bom_explosion_quantity_positive CHECK (order_quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_explosion_requirement_count'
+      AND conrelid = 'bom_explosion'::regclass
+  ) THEN
+    ALTER TABLE bom_explosion
+      ADD CONSTRAINT chk_bom_explosion_requirement_count CHECK (requirement_count >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON bom_explosion TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom_explosion TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to read/projections/bom_explosion_line.sql (canonical source).
+
+CREATE TABLE IF NOT EXISTS bom_explosion_line (
+  explosion_line_id   UUID PRIMARY KEY,
+  explosion_id        UUID NOT NULL,
+  depth               INTEGER NOT NULL,
+  path                TEXT NOT NULL,
+  source_bom_id       UUID NOT NULL,
+  source_revision_id  UUID NOT NULL,
+  bom_line_id         UUID NOT NULL,
+  line_no             INTEGER NOT NULL,
+  component_item_id   UUID NOT NULL,
+  component_sku       TEXT,
+  supply_method       TEXT NOT NULL,
+  required_quantity   NUMERIC NOT NULL,
+  scrap_percent       NUMERIC(9,6),
+  base_quantity_per   NUMERIC(18,8) NOT NULL,
+  has_child_bom       BOOLEAN NOT NULL DEFAULT false,
+  via_phantom         BOOLEAN NOT NULL DEFAULT false,
+  alternates          JSONB NOT NULL DEFAULT '[]',
+  source_event_id     UUID NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_bom_explosion_line_depth CHECK (depth >= 0),
+  CONSTRAINT chk_bom_explosion_line_supply_method CHECK (supply_method IN ('directed_issue','backflush')),
+  CONSTRAINT chk_bom_explosion_line_quantity_positive CHECK (required_quantity > 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_explosion_line_no
+  ON bom_explosion_line (explosion_id, path, line_no);
+CREATE INDEX IF NOT EXISTS idx_bom_explosion_line_explosion ON bom_explosion_line (explosion_id);
+CREATE INDEX IF NOT EXISTS idx_bom_explosion_line_component ON bom_explosion_line (component_item_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_explosion_line_depth'
+      AND conrelid = 'bom_explosion_line'::regclass
+  ) THEN
+    ALTER TABLE bom_explosion_line
+      ADD CONSTRAINT chk_bom_explosion_line_depth CHECK (depth >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_explosion_line_supply_method'
+      AND conrelid = 'bom_explosion_line'::regclass
+  ) THEN
+    ALTER TABLE bom_explosion_line
+      ADD CONSTRAINT chk_bom_explosion_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_explosion_line_quantity_positive'
+      AND conrelid = 'bom_explosion_line'::regclass
+  ) THEN
+    ALTER TABLE bom_explosion_line
+      ADD CONSTRAINT chk_bom_explosion_line_quantity_positive CHECK (required_quantity > 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON bom_explosion_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom_explosion_line TO readonly_user;
+  END IF;
+END $$;
+
+-- MUST stay identical to sync/migrations/powersync-bom.sql (canonical source). Placed at the END
+-- of this file because it publishes and grants the bom tables created above (Story 5.5, AC 4).
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'svc_powersync') THEN
+    GRANT SELECT ON bom, bom_revision, bom_line, bom_alternate TO svc_powersync;
+  END IF;
+END $$;
+
+DO $$
+DECLARE
+  target_table text;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync_publication') THEN
+    RETURN;
+  END IF;
+  FOREACH target_table IN ARRAY ARRAY['bom', 'bom_revision', 'bom_line', 'bom_alternate'] LOOP
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_publication_tables
+      WHERE pubname = 'powersync_publication'
+        AND schemaname = 'public'
+        AND tablename = target_table
+    ) THEN
+      EXECUTE format('ALTER PUBLICATION powersync_publication ADD TABLE %I', target_table);
+    END IF;
+  END LOOP;
 END $$;
