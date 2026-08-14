@@ -62,6 +62,8 @@ const ADVISORY_LOCK_KEYS: Record<'purchase_orders' | 'sales_orders', number> = {
 export const ERP_ERROR_CODES = {
   SOURCE_SYSTEM_READ_ONLY: 'SOURCE_SYSTEM_READ_ONLY',
   ERP_SYNC_STALE: 'ERP_SYNC_STALE',
+  /** Story 5.6 (FR-B-17): recorded on every exception raised by an inbound BOM record. */
+  BOM_INBOUND_SYNC_REJECTED: 'BOM_INBOUND_SYNC_REJECTED',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -96,14 +98,38 @@ export interface SourceSalesOrderLine {
   ship_from_site_code_ext: string;
 }
 
+/**
+ * Story 5.6 (FR-B-17, AD-4): an inbound BOM record as the ERP feed delivers it. Deliberately
+ * loose - the platform is the system of record for BOM structure, so an inbound record is NEVER
+ * parsed into a structural change; it is snapshotted verbatim onto the exception queue.
+ */
+export interface SourceBomRecord {
+  bom_ref: string;
+  parent_sku?: string;
+  lines?: unknown[];
+}
+
 export interface ErpSyncBatch {
   purchase_orders?: SourcePurchaseOrder[];
   sales_orders?: SourceSalesOrderLine[];
+  boms?: SourceBomRecord[];
+}
+
+/** One unconditionally rejected inbound BOM record (Story 5.6, AC 5). */
+export interface RejectedBomRecord {
+  bom_ref: string;
+  bom_id: string | null;
+  exception_id: string;
+  conflict_reason: string;
+  source_snapshot: unknown;
+  /** true when raiseException INSERTED a new open row; false when it refreshed an existing one. */
+  newly_opened: boolean;
 }
 
 export interface ErpSyncResult {
   purchase_orders?: { applied: number; failed: number };
   sales_orders?: { applied: number; failed: number };
+  boms?: { applied: number; failed: number; rejected: RejectedBomRecord[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +331,68 @@ async function applySalesOrderLine(so: SourceSalesOrderLine, client: PoolClient)
   );
 }
 
+/**
+ * Story 5.6 (FR-B-17, AD-4): rejects ONE inbound BOM record. EVERY inbound BOM record is rejected
+ * unconditionally - there is no comparison step, no "identical record" shortcut, and no code path
+ * here that reads or writes bom, bom_revision or bom_line. `applied` is always 0.
+ *
+ * A rejection is a deliberate OUTCOME, not a failure: the caller must NOT roll back to a savepoint
+ * around it or the exception row written here would be discarded.
+ *
+ * bom_id is resolved best-effort for the event payload only, with a plain SELECT that neither
+ * locks nor mutates the BOM row.
+ */
+async function rejectInboundBom(
+  record: SourceBomRecord,
+  index: number,
+  client: PoolClient,
+): Promise<RejectedBomRecord> {
+  const bomRef =
+    typeof record?.bom_ref === 'string' && record.bom_ref.trim().length > 0
+      ? record.bom_ref
+      : `bom#${index}`;
+  const reason =
+    'BOM structure is mastered by this platform (AD-4, INT-ERP-01). The inbound record was rejected and queued for the BOM Administrator; no BOM was modified.';
+
+  // Best-effort id resolution for the audit payload. bom_ref may be a platform bom_id or an
+  // ERP-side reference this platform has never seen - both are legal, and NULL is a valid answer.
+  let bomId: string | null = null;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(bomRef)) {
+    const found = await client.query('SELECT bom_id FROM bom WHERE bom_id = $1', [bomRef]);
+    bomId = (found.rows[0]?.bom_id as string | undefined) ?? null;
+  }
+
+  const newlyOpened = await raiseException(
+    {
+      record_type: 'bom',
+      source_system: 'ERP',
+      error_code: ERP_ERROR_CODES.BOM_INBOUND_SYNC_REJECTED,
+      source_record_ref: bomRef,
+      reason,
+      details: { source_snapshot: record, bom_id: bomId },
+    },
+    client,
+  );
+
+  // raiseException returns only the inserted/refreshed discriminator by design (shared Story 2.9
+  // code with callers that depend on the boolean), so the id is read back on the same client.
+  const exceptionRow = await client.query(
+    `SELECT exception_id FROM integration_exception
+      WHERE source_system = 'ERP' AND record_type = 'bom' AND source_record_ref = $1
+        AND error_code = $2 AND status = 'open'`,
+    [bomRef, ERP_ERROR_CODES.BOM_INBOUND_SYNC_REJECTED],
+  );
+
+  return {
+    bom_ref: bomRef,
+    bom_id: bomId,
+    exception_id: (exceptionRow.rows[0]?.exception_id as string | undefined) ?? '',
+    conflict_reason: reason,
+    source_snapshot: record,
+    newly_opened: newlyOpened,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Sync entry point (in-process; driven by the POST /api/v1/erp/sync trigger)
 // ---------------------------------------------------------------------------
@@ -319,6 +407,7 @@ async function applySalesOrderLine(so: SourceSalesOrderLine, client: PoolClient)
 export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
   const syncsPo = Object.prototype.hasOwnProperty.call(batch, 'purchase_orders');
   const syncsSo = Object.prototype.hasOwnProperty.call(batch, 'sales_orders');
+  const syncsBom = Object.prototype.hasOwnProperty.call(batch, 'boms');
   const result: ErpSyncResult = {};
 
   // Attempt heartbeats stamped on their own statements (before the batch transaction) so they
@@ -432,6 +521,31 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
       }
       appliedSo.count = applied;
       result.sales_orders = { applied, failed };
+    }
+
+    if (syncsBom) {
+      // Story 5.6 (AC 5): BOM structure is OUTBOUND-only. Every inbound record is rejected, so
+      // `applied` is always 0 and there is NO heartbeat, soft-close or advisory lock for this
+      // domain - none of it applies to a feed nothing is applied from.
+      const boms = batch.boms ?? [];
+      const rejected: RejectedBomRecord[] = [];
+      for (let index = 0; index < boms.length; index++) {
+        // Per-record SAVEPOINT for isolation of an INFRASTRUCTURE failure only. The rejection
+        // itself is the successful outcome and commits; rolling it back would discard the
+        // exception row the BOM Administrator needs.
+        try {
+          const outcome = await withSavepoint(client, `sp_${savepointSeq++}`, () =>
+            rejectInboundBom(boms[index]!, index, client),
+          );
+          rejected.push(outcome);
+        } catch (err) {
+          // The queue write itself failed. Never abort the batch and discard already-applied
+          // good records; the record simply does not appear in the rejected list. Log it so a
+          // silently-lost rejection is at least visible to operators.
+          console.error('[erp-sync] inbound BOM rejection queue write failed', err);
+        }
+      }
+      result.boms = { applied: 0, failed: boms.length, rejected };
     }
 
     await client.query('COMMIT');

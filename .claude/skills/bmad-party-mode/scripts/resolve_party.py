@@ -32,6 +32,7 @@ customize.toml directly if the customization resolver is unavailable.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -44,12 +45,27 @@ except ImportError:  # pragma: no cover - guarded for <3.11
 
 
 def _run_json(cmd):
-    """Run a resolver script and parse its JSON stdout. None on any failure."""
+    """Run a resolver script and parse its JSON stdout. None on any failure.
+
+    Decoding is pinned to UTF-8: rosters carry emoji icons, and on Windows the
+    default text= decode uses the locale codec (cp1252), which raises
+    UnicodeDecodeError inside subprocess's reader thread and leaves stdout None.
+    PYTHONIOENCODING pins the child's side of the pipe for the same reason.
+    """
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        out = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            env=env,
+        )
     except (OSError, subprocess.SubprocessError):
         return None
-    if out.returncode != 0 or not out.stdout.strip():
+    if out.returncode != 0 or not out.stdout or not out.stdout.strip():
         return None
     try:
         return json.loads(out.stdout)

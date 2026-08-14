@@ -250,14 +250,20 @@ function assertRequirementShape(r: Record<string, unknown>): void {
       altPriority < 1 ||
       altPriority > MAX_PRIORITY
     )
-      reject('INVALID_PARAMS', `requirement alternate priority must be an integer between 1 and ${MAX_PRIORITY}`);
+      reject(
+        'INVALID_PARAMS',
+        `requirement alternate priority must be an integer between 1 and ${MAX_PRIORITY}`,
+      );
     if (alt['origin'] !== 'approved' && alt['origin'] !== 'ad_hoc')
       reject('INVALID_PARAMS', "requirement alternate origin must be 'approved' or 'ad_hoc'");
     if (
       alt['alternate_sku'] !== null &&
       (typeof alt['alternate_sku'] !== 'string' || alt['alternate_sku'].length === 0)
     )
-      reject('INVALID_PARAMS', 'requirement alternate alternate_sku must be a non-empty string or null');
+      reject(
+        'INVALID_PARAMS',
+        'requirement alternate alternate_sku must be a non-empty string or null',
+      );
   }
 }
 

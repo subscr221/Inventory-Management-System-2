@@ -294,6 +294,37 @@
 
 generated: 2026-07-12
 last_updated: '2026-08-14'
+# story 5-6 dev-story 2026-08-14: implemented all 9 tasks (58 subtasks) from baseline f29765f. Three new
+#   tables (bom_cost_rollup, bom_cost_rollup_line, bom_outbound_message), additive bom_line.supply_source
+#   with a guarded constraint swap, and integration_exception.record_type widened with 'bom' via a
+#   DROP-then-ADD block; all mirrored into init-db.sql, migrate re-run twice cleanly. Three new
+#   engineering-stream events (bom.cost_rollup_snapshotted, bom.job_work_kit_tagged,
+#   bom.sync_conflict_raised, all requiresBusinessStream false) wired into store.ts at the two existing
+#   seams plus four new 23505 DUPLICATE_EVENT mappings. Exported rollUpBomCost
+#   (src/engineering/bom-cost-rollup.ts) is pure read-plus-compute with one recursive CTE, all arithmetic
+#   in PostgreSQL NUMERIC, visited-uuid[] cycle defense and config.bom.maxDepth truncation reporting.
+#   Decision: the walk's DESCENT targets released child BOMs only (the Story 5.5 walk shape verbatim)
+#   while the BOM at the TOP may be draft or on_hold - without that, a self-referential draft trips the
+#   cycle guard on its own first release and the story-5-3 self-reference fixture cannot release.
+#   Decision: double-counting defense is DESCENDANT-based, so a phantom mid-chain cannot strand the cost
+#   of the subtree beneath it; rate_missing and unit_cost are leaf-only properties. Decision: total_cost
+#   is summed in SQL NUMERIC over the contributing line costs, never in JS. Decision: the gate pins
+#   MAX(bom_line.updated_at) BEFORE its own blocking-flag re-stamp, so a fresh rollup is never reported
+#   stale by the gate's own writes. STAGED_CONDITIONS retired to [] (the key still ships so the
+#   RELEASE_GATE_UNMET shape is unchanged); cost_rollup_complete enforced with the three-part
+#   exists/no-missing-rates/not-stale definition, and a new kit-only supply_source_missing condition is
+#   the enforcement point for AC 4 (partial tagging stays a legitimate authoring step). ERP stays
+#   outbound-only: a released PRODUCTION BOM writes one bom_outbound_message inside the release
+#   transaction (kit releases write none) and EVERY inbound BOM record is rejected unconditionally into
+#   integration_exception with no savepoint rollback, the audit event emitted post-commit from the
+#   trigger handler, gated on raiseException's newly_opened discriminator with a RANDOM idempotency key
+#   (dedupe and reopen both proved by test). Accepted tradeoff documented: a crash between batch commit
+#   and event write leaves a queue row with no event. Fixture-only extensions to story-5-2/5-3/5-4/5-5
+#   (rated item masters + a primeCostRollup call before every release); one story-5-2 assertion updated
+#   for the un-staging, the story-5-3 precedent. 7 routes + spine allowlist. Gates: build/lint/
+#   format:check clean, migrate idempotent x2, schema-drift 80/80, story-5-6 24/24, spine 6/6, edge
+#   30/30 unchanged, diff-check clean, graphify updated; npm test 879 tests 864 pass, 15 fail = the
+#   documented pre-existing set (14 idempotency + 1 story-5-3 where-used), 0 new; moved to review
 # story 5-5 dev-story 2026-08-13: implemented all 8 tasks from baseline 21a3235. Three new tables
 #   (bom_alternate, bom_explosion, bom_explosion_line) plus additive bom_line.supply_method with a
 #   guarded constraint swap, mirrored into init-db.sql, migrate re-run twice cleanly. Three new
@@ -773,7 +804,7 @@ development_status:
   5-3-eco-workflow-and-where-used-impact: done   # PILOT  # create-story 2026-08-09: ECO lifecycle (draft/under_review/approved/implemented/cancelled), 3 new tables + source_eco_id on bom_revision, 6 events, computed where-used impact read (bom_line not bom_structure), DOA approver resolution via resolveApprover, approved-ECO release gate un-staged with first-release exemption, closes the 5.2 cross-revision immutability deferral; dev-story 2026-08-11 (all 9 tasks, 14/14 tests) + code-review 2026-08-11 (23 patches applied: stale-ECO guard, release-gate re-check, revision-code guard, eco_id/eco_number validation, where-used current-revision/cycle guard, amend validation, APPROVAL_UNRESOLVED at raise, insertBomRevision source_eco_id, disposition validation, retire effective_to; 9 new regression tests; gates green, 0 new failures) moved to done
   5-4-randd-draft-bom-regime: done   # PILOT  # create-story 2026-08-12: R&D draft BOM regime (bom_type='rnd' IS the rd_draft flag, no new column), partial uq_bom_parent_item to unblock cloning, placeholder/free-text bom_line columns, 3 new tables (rd_build_record, rd_as_built_line, rd_productization_signoff), 5 events, shared assertNotRdDraft execution bar consumed by 5.5/Epic 6, 7 tasks; code-review 2026-08-12: 1 decision resolved (quantity_used is per-unit, built_quantity informational) + 9 patches applied (honor client line_no in rd_build.recorded, post-lock idempotency re-check on concurrent same-key retries, advisory-lock close of the BOM_ALREADY_EXISTS productize race, deterministic clone via payload source_revision_id, confirm-event source_event_id on synthetic missing rows, RD_BUILD_NOT_PERMITTED on the productization-gate GET for non-rnd, PostgreSQL NUMERIC base_quantity_per in the three rewritten bom_line statements, RdAsBuiltLineInput discriminated-union type, per-unit built_quantity: 2 regression test), 0 deferred, 2 dismissed; Edge Case Hunter layer returned empty; story-5-4 20/20, story-5-1/5-2/5-3 62/62, schema-drift + role gates 72/72, build/lint/format clean
   5-5-approved-alternates-and-bom-explosion: done   # PILOT  # create-story 2026-08-12: approved alternates (priority + effectivity), DOA ad-hoc substitutions, exported explosion service with contract tests, PowerSync released-BOM replication; consumes 5.4 assertNotRdDraft; code-review 2026-08-14: 2 decisions resolved (a/a - window-scoped ALTERNATE_ALREADY_APPROVED, phantom-line reject) + 18 patches applied (apply-time explosion_line_id -> capture-minted, DATE timezone-shift family fixed in the seam and both read models, released_bom_structure scoped via is_released_structure marker with backfill + init-db/edge/schema-drift mirrors, priority upper bound, window-aware ALTERNATE_PRIORITY_CONFLICT, revision_status check in the walk, replay-before-DOA + persisted-payload responses, numeric path ordering, maxDepth/occurred_at/limit guards, shape-gate tightening, batched alternates, obsolete-state test); story-5-5 21/21, schema-drift marker test green, build/lint/edge typecheck clean; 16 full-suite failures verified pre-existing at pristine HEAD (worktree check)
-  5-6-cost-rollups-job-work-kit-tagging-and-erp-outbound-sync: backlog   # PILOT
+  5-6-cost-rollups-job-work-kit-tagging-and-erp-outbound-sync: done   # PILOT  # code-review 2026-08-14: 2 decisions resolved (empty-rollup gate requires line_count > 0; outbound publishes only on first release) + 13 patches applied (DATE serialization, correlation_id validation, offset clamp, kit-tag component filter, metadata correlation id, rejection error logging, resolve scoping, 6 test strengthenings) + 5 deferred; gates green, story-5-6 25/25  # create-story 2026-08-14: dated cost-rollup snapshots (item_master standard-cost rates, inbound-only per INT-ERP-01) with a computed comparison read, un-stages the last FR-B-06 gate condition (cost_rollup_complete, revision-scoped + zero missing rates + not stale), adds bom_line.supply_source for job-work kit tagging with a kit-only supply_source_missing gate condition, BOM outbound message on production release (po_outbound_message pattern), and unconditional inbound-BOM rejection into integration_exception (record_type widened to 'bom'); 9 tasks, baseline f29765f
   epic-5-retrospective: optional
 
   # --- Epic 6: Production Orders and Manufacturing WIP (wave, post-pilot) ---

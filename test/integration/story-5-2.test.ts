@@ -90,12 +90,32 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
         uom: 'EA',
         business_stream: 'production',
         category: 'raw_materials',
+        // Story 5.6 fixture setup: a usable Ind AS 2 rate on every component, so a cost
+        // rollup over these BOMs has missing_rate_count 0 and satisfies the release gate.
+        standard_cost_designation: 'ind_as_2_para_21_measurement_technique',
+        standard_cost_amount: 10,
         ...overrides,
       },
       engineerHeaders,
     );
     assert.strictEqual(res.status, 201, `item ${sku} failed: ${JSON.stringify(res.body)}`);
     return (res.body as Record<string, string>)['item_id']!;
+  }
+
+  /**
+   * Story 5.6 fixture setup: cost_rollup_complete is now an ENFORCED release-gate condition, so
+   * every fixture that reaches 'released' must first take a complete rollup. Deliberately
+   * non-asserting - it is also called on BOMs whose release is expected to fail for an unrelated
+   * reason. No assertion in this suite is weakened by it.
+   */
+  async function primeCostRollup(bomId: string): Promise<void> {
+    await makeRequest(
+      port,
+      'POST',
+      `/api/v1/boms/${bomId}/cost-rollups`,
+      { idempotency_key: randomUUID() },
+      engineerHeaders,
+    );
   }
 
   async function deactivateItem(sku: string): Promise<void> {
@@ -240,6 +260,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId]);
     const bomId = bom['bom_id'] as string;
 
+    await primeCostRollup(bomId);
     const releaseRes = await makeRequest(
       port,
       'POST',
@@ -273,6 +294,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId], { scrapPercent: undefined });
     const bomId = bom['bom_id'] as string;
 
+    await primeCostRollup(bomId);
     const releaseRes = await makeRequest(
       port,
       'POST',
@@ -300,17 +322,18 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
       scrapLines.every((l) => l['condition'] === 'scrap_percent_missing' || l['bom_line_id']),
       'scrap lines should carry bom_line_id: ' + JSON.stringify(details),
     );
-    // Story 5.3 un-stages approved_eco (it is now enforced and evaluated - and met here, since
-    // this is a first release with zero prior released revisions, the AC 9 exemption). Only
-    // cost_rollup_complete (Story 5.6) remains staged.
+    // Story 5.3 un-staged approved_eco and Story 5.6 un-staged cost_rollup_complete, the last
+    // entry - so staged_conditions is now EMPTY while the key itself stays in the payload so the
+    // response shape does not change for existing callers.
     const staged = details['staged_conditions'] as Record<string, unknown>[];
     assert.ok(
       staged.every((c) => c['condition'] !== 'approved_eco'),
       'approved_eco should no longer be staged: ' + JSON.stringify(staged),
     );
-    assert.ok(
-      staged.some((c) => c['condition'] === 'cost_rollup_complete' && c['enforced'] === false),
-      'staged_conditions should list cost_rollup_complete with enforced false',
+    assert.deepStrictEqual(
+      staged,
+      [],
+      'Story 5.6 flipped the last staged condition on; nothing remains staged',
     );
     assert.ok(
       (details['unmet_conditions'] as string[]).every((c) => c !== 'approved_eco'),
@@ -328,6 +351,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
 
     await deactivateItem(componentSku);
 
+    await primeCostRollup(bomId);
     const releaseRes = await makeRequest(
       port,
       'POST',
@@ -381,6 +405,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
 
     await deactivateItem(componentSku);
 
+    await primeCostRollup(bomId);
     const releaseRes = await makeRequest(
       port,
       'POST',
@@ -420,6 +445,8 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId]);
     const bomId = bom['bom_id'] as string;
 
+    // Story 5.6 fixture setup: a clean draft now also needs a complete cost rollup to be ready.
+    await primeCostRollup(bomId);
     const checklist = await makeRequest(
       port,
       'GET',
@@ -448,6 +475,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId]);
     const bomId = bom['bom_id'] as string;
 
+    await primeCostRollup(bomId);
     const releaseRes = await makeRequest(
       port,
       'POST',
@@ -501,6 +529,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId]);
     const bomId = bom['bom_id'] as string;
 
+    await primeCostRollup(bomId);
     const releaseRes = await makeRequest(
       port,
       'POST',
@@ -546,6 +575,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId]);
     const bomId = bom['bom_id'] as string;
 
+    await primeCostRollup(bomId);
     const release1 = await makeRequest(
       port,
       'POST',
@@ -565,6 +595,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     assert.strictEqual(hold.status, 200, JSON.stringify(hold.body));
     assert.strictEqual(hold.body['status'], 'on_hold');
 
+    await primeCostRollup(bomId);
     const reinstate = await makeRequest(
       port,
       'POST',
@@ -610,6 +641,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId]);
     const bomId = bom['bom_id'] as string;
 
+    await primeCostRollup(bomId);
     const release = await makeRequest(
       port,
       'POST',
@@ -639,6 +671,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId]);
     const bomId = bom['bom_id'] as string;
 
+    await primeCostRollup(bomId);
     const release = await makeRequest(
       port,
       'POST',
@@ -685,6 +718,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId]);
     const bomId = bom['bom_id'] as string;
 
+    await primeCostRollup(bomId);
     const release = await makeRequest(
       port,
       'POST',
@@ -703,6 +737,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     );
     assert.strictEqual(hold.status, 200, JSON.stringify(hold.body));
 
+    await primeCostRollup(bomId);
     const reinstate = await makeRequest(
       port,
       'POST',
@@ -1255,6 +1290,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bom = await draftBom(parentId, [componentId]);
     const bomId = bom['bom_id'] as string;
 
+    await primeCostRollup(bomId);
     const release = await makeRequest(
       port,
       'POST',
@@ -1306,6 +1342,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     const bomId = bom['bom_id'] as string;
 
     const idempotencyKey = randomUUID();
+    await primeCostRollup(bomId);
     const first = await makeRequest(
       port,
       'POST',
@@ -1315,6 +1352,7 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
     );
     assert.strictEqual(first.status, 200, JSON.stringify(first.body));
 
+    await primeCostRollup(bomId);
     const replay = await makeRequest(
       port,
       'POST',

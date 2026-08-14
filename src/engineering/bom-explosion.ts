@@ -301,12 +301,7 @@ export async function explodeBomForExecution(
   // A depth cap below 1 would silently produce an empty requirement set; fail loudly instead.
   const maxDepth = config.bom.maxDepth;
   if (!Number.isInteger(maxDepth) || maxDepth < 1) {
-    reject(
-      'INVALID_PARAMS',
-      'config.bom.maxDepth must be a positive integer',
-      { maxDepth },
-      500,
-    );
+    reject('INVALID_PARAMS', 'config.bom.maxDepth must be a positive integer', { maxDepth }, 500);
   }
 
   const result = await runner.query(WALK_SQL, [

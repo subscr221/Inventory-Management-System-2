@@ -1,15 +1,26 @@
 import type { IncomingMessage } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
-import { getAuthContext, getParsedBody } from '../../middleware/context.js';
+import {
+  getAuthContext,
+  getAuthorizedAssignment,
+  getParsedBody,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.js';
 import { config } from '../../config/index.js';
 import { getPurchaseOrderByRef } from '../../read/projections/erp_purchase_order.js';
 import { listSalesOrders } from '../../read/projections/erp_sales_order.js';
 import { getLocationByCode } from '../../read/projections/location_register.js';
-import { getFreshness } from '../../read/projections/integration_exception.js';
+import {
+  getFreshness,
+  listExceptions,
+  resolveException,
+} from '../../read/projections/integration_exception.js';
 import { runErpSync, raiseErpSyncStale } from '../../adapters/erp/sync.js';
-import type { ErpSyncBatch } from '../../adapters/erp/sync.js';
+import type { ErpSyncBatch, RejectedBomRecord } from '../../adapters/erp/sync.js';
+import { persistEvent } from '../../events/store.js';
 
 /**
  * ERP inbound reference projection read API (Story 2.9). GET handlers are read-only projections of
@@ -26,6 +37,11 @@ const SITE_CODE_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 // Only the ERP service account and a system administrator may drive an inbound sync. Recorded here
 // for the access-matrix sync (the matrix has no explicit INT-ERP-01 read-projection row yet).
 const ERP_SYNC_ROLES = ['svc_erp_adapter', 'system_administrator'];
+
+// System-actor convention (src/adapters/iam/scim.ts): sentinel UUID for non-user-attributable
+// activity, and the stream_id used when an inbound record names a BOM this platform never had.
+const SYSTEM_ACTOR_ID = '00000000-0000-0000-0000-000000000000';
+const NO_BOM_STREAM_ID = SYSTEM_ACTOR_ID;
 
 function assertRoleAllowed(
   req: IncomingMessage,
@@ -245,8 +261,138 @@ const erpSyncTriggerBase: RouteHandler = async (req, res) => {
     );
     return;
   }
+  if (body.boms !== undefined && !Array.isArray(body.boms)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'boms must be an array when supplied');
+    return;
+  }
   const result = await runErpSync(body);
+  // Story 5.6 (AC 5): the exception QUEUE is authoritative and already committed above; the event
+  // is a DERIVED audit fact written after the batch commits. The adapter keeps its direct-SQL-only
+  // contract and never calls persistEvent, because a per-record SAVEPOINT would then be able to
+  // discard a deliberate rejection. Accepted tradeoff: a crash in this window leaves an exception
+  // row with no event - the administrator still sees the conflict and the next poll re-raises.
+  await emitBomSyncConflictEvents(req, result.boms?.rejected ?? []);
   sendJson(res, 200, result);
+};
+
+/**
+ * Persists exactly ONE bom.sync_conflict_raised event per NEWLY OPENED exception. A polling ERP
+ * re-sending the same unresolved conflict every cycle refreshes the open row and produces NO
+ * further event; a conflict recurring after an administrator resolved the exception opens a new
+ * row and therefore produces a new event.
+ *
+ * The idempotency_key is deliberately RANDOM, never derived from the source record: a
+ * deterministic key would suppress that post-resolution re-raise.
+ */
+async function emitBomSyncConflictEvents(
+  req: IncomingMessage,
+  rejected: RejectedBomRecord[],
+): Promise<void> {
+  const authContext = getAuthContext(req);
+  const assignment = getAuthorizedAssignment(req);
+  const actor = {
+    user_id: authContext?.userId ?? SYSTEM_ACTOR_ID,
+    role: assignment?.role ?? '',
+    location_id: assignment?.locationId ?? '*',
+  };
+  const traceId = getTraceId(req) ?? '';
+
+  for (const record of rejected) {
+    if (!record.newly_opened || !record.exception_id) continue;
+    const occurredAt = new Date().toISOString();
+    const event = {
+      stream_type: 'engineering',
+      stream_id: record.bom_id ?? NO_BOM_STREAM_ID,
+      event_type: 'bom.sync_conflict_raised',
+      payload: {
+        bom_id: record.bom_id,
+        source_record_ref: record.bom_ref,
+        conflict_reason: record.conflict_reason,
+        exception_id: record.exception_id,
+        source_snapshot: record.source_snapshot,
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        occurred_at: occurredAt,
+        actor,
+      },
+      idempotency_key: randomUUID(),
+    };
+    // Best-effort: the queue row is the source of truth and is already committed, so an audit
+    // event failing must never turn a successful sync into a 500.
+    await persistEvent(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      event as any,
+      {
+        trace_id: traceId,
+        user_id: actor.user_id,
+        role: actor.role,
+        location_id: actor.location_id,
+        endpoint: req.url ?? '',
+        method: req.method ?? 'POST',
+        http_status: 200,
+      },
+    ).catch(() => undefined);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET/POST /api/v1/erp/bom-sync-exceptions  (Story 5.6 BOM Administrator queue)
+// ---------------------------------------------------------------------------
+
+const listBomSyncExceptionsBase: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? '', `http://${req.headers.host ?? 'localhost'}`);
+  const status = url.searchParams.get('status');
+  if (status !== null && status !== 'open' && status !== 'resolved') {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', "status filter must be 'open' or 'resolved'");
+    return;
+  }
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+  if (
+    (limitRaw !== null && !/^\d+$/.test(limitRaw)) ||
+    (offsetRaw !== null && !/^\d+$/.test(offsetRaw))
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'limit and offset must be non-negative integers',
+    );
+    return;
+  }
+  // Clamp plus echo of the clamped value (the module's limit/offset discipline).
+  const limit = limitRaw === null ? 50 : Math.min(Math.max(Number(limitRaw), 1), 200);
+  const offset = offsetRaw === null ? 0 : Number(offsetRaw);
+
+  const rows = await listExceptions({ record_type: 'bom', status: status ?? 'open' });
+  sendJson(res, 200, {
+    exceptions: rows.slice(offset, offset + limit),
+    total: rows.length,
+    limit,
+    offset,
+  });
+};
+
+const resolveBomSyncExceptionBase: RouteHandler = async (req, res, params) => {
+  const exceptionId = params?.['exceptionId'];
+  if (!exceptionId) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'exceptionId is required');
+    return;
+  }
+  const resolved = await resolveException(exceptionId, undefined, 'bom');
+  if (!resolved) {
+    sendRequestError(
+      req,
+      res,
+      404,
+      'NOT_FOUND',
+      'No open integration exception exists with that exception_id',
+    );
+    return;
+  }
+  sendJson(res, 200, { exception_id: exceptionId, status: 'resolved' });
 };
 
 // ---------------------------------------------------------------------------
@@ -273,3 +419,13 @@ export const erpSyncTriggerHandler: RouteHandler = requireRole({
   module: 'inventory',
   functionScope: 'write',
 })(erpSyncTriggerBase);
+// The BOM Administrator owns the inbound-BOM conflict queue per INT-ERP-01 and the roles table,
+// so these two are engineering-module scoped, not procurement or inventory.
+export const listBomSyncExceptionsHandler: RouteHandler = requireRole({
+  module: 'engineering',
+  functionScope: 'read',
+})(listBomSyncExceptionsBase);
+export const resolveBomSyncExceptionHandler: RouteHandler = requireRole({
+  module: 'engineering',
+  functionScope: 'write',
+})(resolveBomSyncExceptionBase);

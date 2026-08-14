@@ -390,6 +390,9 @@ async function copyRevisionLines(
         is_phantom: line.is_phantom,
         phantom_source_bom_id: line.phantom_source_bom_id,
         supply_method: line.supply_method,
+        // Story 5.6: the kit supply-source tag carries forward with the clone, exactly like
+        // supply_method.
+        supply_source: line.supply_source,
         effective_from: line.effective_from,
         effective_to: line.effective_to,
         blocking_release: false,

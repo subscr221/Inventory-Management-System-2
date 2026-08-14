@@ -107,6 +107,7 @@ import {
   assertBomExecutionShape,
   applyBomExecutionProjection,
 } from '../compliance/bom-execution.js';
+import { assertBomCostingShape, applyBomCostingProjection } from '../compliance/bom-costing.js';
 import {
   assertSupplierInvoiceShape,
   applySupplierInvoiceProjection,
@@ -505,6 +506,10 @@ export async function persistEvent(
   // Story 5.5: alternate / substitution / explosion shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed execution event never consumes an idempotency key.
   assertBomExecutionShape(envelope);
+  // Story 5.6: cost rollup / kit tagging / inbound-sync-conflict shape validation is non-DB and
+  // runs with the other pre-transaction asserts, so a malformed costing event never consumes an
+  // idempotency key.
+  assertBomCostingShape(envelope);
   // Story 4.7: supplier invoice / invoice-ingestion shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed invoice event never consumes an idempotency key.
   assertSupplierInvoiceShape(envelope);
@@ -764,6 +769,10 @@ export async function persistEvent(
     // Story 5.5: alternates, ad-hoc substitutions and explosion runs commit inside this same
     // transaction as the domain_events insert, so a requirement set can never outlive its event.
     await applyBomExecutionProjection(envelope, client, eventId);
+    // Story 5.6: cost rollup snapshots, kit supply-source tags and the inbound-sync-conflict
+    // convergence step commit inside this same transaction as the domain_events insert, so a
+    // snapshot can never outlive its event.
+    await applyBomCostingProjection(envelope, client, eventId);
     // Story 4.7: supplier invoice capture / file-ingestion review projection runs inside this
     // same transaction so the invoice header, lines, ingestion row, and the domain_events insert
     // commit or roll back together.
@@ -1006,14 +1015,19 @@ export async function persistEvent(
         constraint === 'uq_bom_explosion_source_event' ||
         constraint === 'bom_explosion_pkey' ||
         constraint === 'uq_bom_explosion_line_no' ||
-        constraint === 'bom_explosion_line_pkey'
+        constraint === 'bom_explosion_line_pkey' ||
+        // Story 5.6: same treatment for the cost-rollup snapshot grains.
+        constraint === 'uq_bom_cost_rollup_source_event' ||
+        constraint === 'bom_cost_rollup_pkey' ||
+        constraint === 'uq_bom_cost_rollup_line_no' ||
+        constraint === 'bom_cost_rollup_line_pkey'
       ) {
         // Story 5.5: the serial cases are already mapped 409s in the seam; this maps the
         // concurrent race so a second writer surfaces a stable 409 instead of a raw 23505 500.
         throw new AppError(
           409,
           'DUPLICATE_EVENT',
-          'This alternate or explosion run has already been recorded',
+          'This alternate, explosion run or cost rollup has already been recorded',
           {
             constraint,
             bom_id:

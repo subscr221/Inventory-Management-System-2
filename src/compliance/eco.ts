@@ -813,6 +813,9 @@ async function applyEcoImplemented(
         is_phantom: line.is_phantom,
         phantom_source_bom_id: line.phantom_source_bom_id,
         supply_method: line.supply_method,
+        // Story 5.6: the kit supply-source tag is line data and carries forward onto the new
+        // revision exactly like supply_method (an ECO revision copy is field-faithful).
+        supply_source: line.supply_source,
         effective_from: line.effective_from,
         effective_to: line.effective_to,
         blocking_release: false,

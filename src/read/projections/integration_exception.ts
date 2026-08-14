@@ -13,7 +13,8 @@ import { getPool } from '../../config/db.js';
 
 export type SyncProjectionName = 'purchase_orders' | 'sales_orders';
 export type SyncStatus = 'never_synced' | 'success' | 'failed';
-export type ExceptionRecordType = 'purchase_order' | 'sales_order' | 'sync_batch';
+/** Story 5.6 widens the vocabulary with 'bom' (FR-B-17 inbound BOM rejection). */
+export type ExceptionRecordType = 'purchase_order' | 'sales_order' | 'sync_batch' | 'bom';
 export type ExceptionStatus = 'open' | 'resolved';
 
 export interface SyncStateRow {
@@ -240,12 +241,22 @@ export async function listExceptions(
   }));
 }
 
-/** Resolves a single exception by id. Returns true when a row transitioned to resolved. */
-export async function resolveException(exceptionId: string, client?: PoolClient): Promise<boolean> {
+/** Resolves a single exception by id, optionally scoped to a record_type. Returns true when a row transitioned to resolved. */
+export async function resolveException(
+  exceptionId: string,
+  client?: PoolClient,
+  recordType?: string,
+): Promise<boolean> {
+  const conditions = ['exception_id = $1', "status = 'open'"];
+  const params: unknown[] = [exceptionId];
+  if (recordType) {
+    conditions.push('record_type = $2');
+    params.push(recordType);
+  }
   const result = await runner(client).query(
     `UPDATE integration_exception SET status = 'resolved', updated_at = now()
-     WHERE exception_id = $1 AND status = 'open'`,
-    [exceptionId],
+     WHERE ${conditions.join(' AND ')}`,
+    params,
   );
   return (result.rowCount ?? 0) > 0;
 }

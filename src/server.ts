@@ -94,6 +94,8 @@ import {
   listSalesOrdersHandler,
   erpSyncTriggerHandler,
   erpReadOnlyRejectHandler,
+  listBomSyncExceptionsHandler,
+  resolveBomSyncExceptionHandler,
 } from './api/v1/erp-projections.js';
 import {
   createGateEventHandler,
@@ -216,6 +218,13 @@ import {
   explodeBomHandler,
   getExplosionHandler,
 } from './api/v1/bom-execution.js';
+import {
+  runCostRollupHandler,
+  listCostRollupsHandler,
+  compareCostRollupsHandler,
+  getCostRollupHandler,
+  tagJobWorkKitHandler,
+} from './api/v1/bom-costing.js';
 import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
@@ -525,6 +534,20 @@ export function createAppRouter(): Router {
   router.post('/api/v1/boms/:bomId/substitution-approvals', approveSubstitutionHandler);
   router.post('/api/v1/boms/:bomId/explosion', explodeBomHandler);
   router.get('/api/v1/bom-explosions/:explosionId', getExplosionHandler);
+
+  // Story 5.6: Cost Rollups, Job-Work Kit Tagging, and ERP Outbound Sync.
+  router.post('/api/v1/boms/:bomId/cost-rollups', runCostRollupHandler);
+  router.get('/api/v1/boms/:bomId/cost-rollups', listCostRollupsHandler);
+  // Registered ABOVE GET /api/v1/bom-cost-rollups/:rollupId - the router returns the first match
+  // in registration order and :rollupId compiles to ([^/]+), which would swallow 'compare'.
+  router.get('/api/v1/bom-cost-rollups/compare', compareCostRollupsHandler);
+  router.get('/api/v1/bom-cost-rollups/:rollupId', getCostRollupHandler);
+  router.post('/api/v1/boms/:bomId/job-work-kit-tags', tagJobWorkKitHandler);
+  router.get('/api/v1/erp/bom-sync-exceptions', listBomSyncExceptionsHandler);
+  router.post(
+    '/api/v1/erp/bom-sync-exceptions/:exceptionId/resolve',
+    resolveBomSyncExceptionHandler,
+  );
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

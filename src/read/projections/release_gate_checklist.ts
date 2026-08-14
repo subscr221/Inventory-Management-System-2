@@ -1,6 +1,10 @@
 import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
-import { assertNotRdDraft, isApprovedEcoConditionMet } from '../../compliance/bom.js';
+import {
+  assertNotRdDraft,
+  isApprovedEcoConditionMet,
+  evaluateCostRollupCondition,
+} from '../../compliance/bom.js';
 
 /**
  * Release-gate checklist (Story 5.2, AC 1). Deliberate divergence from the epics dev-note
@@ -44,6 +48,8 @@ interface ChecklistLineRow {
   line_no: number;
   component_sku: string;
   scrap_percent: string | null;
+  output_class: 'component' | 'co_product' | 'by_product';
+  supply_source: 'company' | 'customer' | 'job_worker' | null;
   item_status: string | null;
 }
 
@@ -77,7 +83,8 @@ export async function getReleaseGateChecklist(
     // R&D bar fired above and placeholders are barred from production BOMs), but the query stays
     // NULL-safe: a placeholder row must not be reported as "item not found".
     const lineResult = await r.query(
-      `SELECT bl.bom_line_id, bl.line_no, bl.component_sku, bl.scrap_percent, im.status AS item_status
+      `SELECT bl.bom_line_id, bl.line_no, bl.component_sku, bl.scrap_percent, bl.output_class,
+              bl.supply_source, im.status AS item_status
        FROM bom_line bl
        LEFT JOIN item_master im ON im.item_id = bl.component_item_id
        WHERE bl.revision_id = $1 AND bl.component_item_id IS NOT NULL
@@ -89,7 +96,20 @@ export async function getReleaseGateChecklist(
 
   const inactiveLines: ReleaseGateBlockingLine[] = [];
   const scrapMissingLines: ReleaseGateBlockingLine[] = [];
+  const supplySourceMissingLines: ReleaseGateBlockingLine[] = [];
   for (const line of lines) {
+    // Story 5.6 (AC 4): kit-only condition, evaluated with the same rule as the gate itself.
+    if (
+      bom.bom_type === 'job_work_kit' &&
+      line.output_class === 'component' &&
+      !line.supply_source
+    ) {
+      supplySourceMissingLines.push({
+        bom_line_id: line.bom_line_id,
+        line_no: line.line_no,
+        reason: 'supply_source is not tagged',
+      });
+    }
     if (line.item_status !== 'active') {
       inactiveLines.push({
         bom_line_id: line.bom_line_id,
@@ -118,6 +138,12 @@ export async function getReleaseGateChecklist(
     ? await isApprovedEcoConditionMet(bom.bom_id, bom.current_revision_id, r)
     : false;
 
+  // Story 5.6: cost_rollup_complete is no longer staged. Same predicate as the gate
+  // (src/compliance/bom.ts:evaluateCostRollupCondition) so the two can never disagree.
+  const costRollup = bom.current_revision_id
+    ? await evaluateCostRollupCondition(bom.bom_id, bom.current_revision_id, r)
+    : { met: false, rollup_id: null, missing_rate_count: null, stale: false };
+
   const conditions: ReleaseGateCondition[] = [
     {
       condition: 'bom_lines_present',
@@ -143,9 +169,20 @@ export async function getReleaseGateChecklist(
       enforced: true,
       blocking_lines: [],
     },
-    // cost_rollup_complete remains staged (D4): flipped on by Story 5.6, surfaced here so the
-    // payload shape does not change when it arrives.
-    { condition: 'cost_rollup_complete', met: null, enforced: false, blocking_lines: [] },
+    // Story 5.6 flipped this from staged (D4) to enforced. The condition is BOM-level, not
+    // line-level, so blocking_lines stays empty; its position in the array is unchanged.
+    {
+      condition: 'cost_rollup_complete',
+      met: costRollup.met,
+      enforced: true,
+      blocking_lines: [],
+    },
+    {
+      condition: 'supply_source_missing',
+      met: supplySourceMissingLines.length === 0,
+      enforced: true,
+      blocking_lines: supplySourceMissingLines,
+    },
   ];
 
   const readyToRelease =

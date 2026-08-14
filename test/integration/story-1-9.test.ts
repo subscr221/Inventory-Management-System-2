@@ -387,6 +387,14 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/boms/:bomId/substitution-approvals',
       'POST /api/v1/boms/:bomId/explosion',
       'GET /api/v1/bom-explosions/:explosionId',
+      // Story 5.6: Cost Rollups, Job-Work Kit Tagging, and ERP Outbound Sync
+      'POST /api/v1/boms/:bomId/cost-rollups',
+      'GET /api/v1/boms/:bomId/cost-rollups',
+      'GET /api/v1/bom-cost-rollups/compare',
+      'GET /api/v1/bom-cost-rollups/:rollupId',
+      'POST /api/v1/boms/:bomId/job-work-kit-tags',
+      'GET /api/v1/erp/bom-sync-exceptions',
+      'POST /api/v1/erp/bom-sync-exceptions/:exceptionId/resolve',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

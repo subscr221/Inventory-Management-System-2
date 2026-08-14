@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS integration_exception (
   raised_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch')),
+  CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom')),
   CONSTRAINT chk_integration_exception_status CHECK (status IN ('open', 'resolved'))
 );
 
@@ -55,16 +55,19 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 5.6 widens the record-type vocabulary with 'bom' (FR-B-17 inbound BOM rejection). The
+-- DROP + ADD pair is kept atomic in a DO block so a database created before Story 5.6 picks the
+-- new value up on re-migrate; uq_integration_exception_open is deliberately untouched - the
+-- one-open-row-per-grain contract carries over to BOM conflicts unchanged.
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_integration_exception_record_type'
-      AND conrelid = 'integration_exception'::regclass
-  ) THEN
-    ALTER TABLE integration_exception
-      ADD CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch'));
-  END IF;
+  ALTER TABLE integration_exception DROP CONSTRAINT IF EXISTS chk_integration_exception_record_type;
+  ALTER TABLE integration_exception
+    ADD CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom'));
+END $$;
+
+DO $$
+BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_integration_exception_status'

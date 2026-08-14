@@ -83,6 +83,12 @@ const MIGRATIONS = [
   '../../read/projections/bom_explosion_line.sql',
   // Must run AFTER bom_alternate.sql: it publishes and grants those tables (Story 5.5, AC 4).
   '../../sync/migrations/powersync-bom.sql',
+  // Story 5.6: cost rollup snapshots and the BOM outbound adapter-boundary record. Appended at
+  // the tail; bom_line.sql and integration_exception.sql are already registered above and only
+  // their contents changed.
+  '../../read/projections/bom_cost_rollup.sql',
+  '../../read/projections/bom_cost_rollup_line.sql',
+  '../../read/projections/bom_outbound_message.sql',
 ];
 
 async function migrate(): Promise<void> {

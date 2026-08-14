@@ -3,7 +3,14 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { getItemById } from '../read/projections/item_master.js';
-import { releaseBomRevision, updateBomStatus } from '../read/projections/bom.js';
+import {
+  releaseBomRevision,
+  updateBomStatus,
+  getBomRevisionById,
+  getBomLines,
+} from '../read/projections/bom.js';
+import { insertBomOutboundMessage } from '../read/projections/bom_outbound_message.js';
+import { buildBomOutboundPayload } from '../adapters/erp/bom-outbound.js';
 import type {
   BomDraftedPayload,
   BomLineAddedPayload,
@@ -514,6 +521,9 @@ interface GateLineRow {
   scrap_percent: string | null;
   blocking_release: boolean;
   blocking_reason: string | null;
+  output_class: 'component' | 'co_product' | 'by_product';
+  /** Story 5.6: NULL until tagged; only job-work kit BOMs require it (FR-B-16). */
+  supply_source: 'company' | 'customer' | 'job_worker' | null;
 }
 
 /**
@@ -549,11 +559,79 @@ export async function isApprovedEcoConditionMet(
 }
 
 /**
- * Release gate (Story 5.2, D4 staging): enforces released component item masters (A-11) and
- * filled scrap percents, plus the Story 5.3 approved-ECO condition (now enforced). Completed-
- * cost-rollup (Story 5.6) remains a staged condition surfaced with enforced: false. The A-11
- * check re-evaluates EVERY line at release time - blocking flags stamped at line-add time go
- * stale when item masters deactivate.
+ * Completed-cost-rollup release gate condition (Story 5.6, AC 3). Three parts, ALL required:
+ *  (a) a bom_cost_rollup row exists for the exact (bom_id, revision_id) being released,
+ *  (b) that row has missing_rate_count = 0 - a snapshot with missing rates is a valid simulation
+ *      but is NOT a completed rollup for gate purposes, and
+ *  (c) the row is not STALE: its created_at is later than MAX(bom_line.updated_at) on that
+ *      revision, so a line added or amended after the rollup invalidates it and forces a re-run.
+ *
+ * `linesUpdatedAt` lets a caller pin the MAX(bom_line.updated_at) it observed BEFORE any of its
+ * own line writes: evaluateReleaseGate re-stamps blocking flags, and a self-inflicted updated_at
+ * bump must not be able to make a fresh rollup look stale. Omit it for a pure read.
+ *
+ * The SAME predicate backs release_gate_checklist.ts - the checklist and the gate can never
+ * disagree.
+ */
+export interface CostRollupConditionResult {
+  met: boolean;
+  rollup_id: string | null;
+  missing_rate_count: number | null;
+  stale: boolean;
+}
+
+export async function evaluateCostRollupCondition(
+  bomId: string,
+  revisionId: string,
+  client: Pick<PoolClient, 'query'>,
+  linesUpdatedAt?: string | null,
+): Promise<CostRollupConditionResult> {
+  let boundary = linesUpdatedAt;
+  if (boundary === undefined) {
+    const maxRow = await client.query(
+      'SELECT MAX(updated_at) AS max_updated FROM bom_line WHERE revision_id = $1',
+      [revisionId],
+    );
+    const value = maxRow.rows[0]?.max_updated as Date | string | null | undefined;
+    boundary = value === null || value === undefined ? null : new Date(value).toISOString();
+  }
+
+  // Prefer a QUALIFYING snapshot (complete and fresh); fall back to the newest one so the reject
+  // details tell the administrator which of the three parts failed.
+  const result = await client.query(
+    `SELECT rollup_id, missing_rate_count, line_count,
+            COALESCE(created_at <= $3::timestamptz, false) AS stale
+       FROM bom_cost_rollup
+      WHERE bom_id = $1 AND revision_id = $2
+      ORDER BY (missing_rate_count = 0
+                AND line_count > 0
+                AND ($3::timestamptz IS NULL OR created_at > $3::timestamptz)) DESC,
+               created_at DESC
+      LIMIT 1`,
+    [bomId, revisionId, boundary],
+  );
+  if (result.rows.length === 0) {
+    return { met: false, rollup_id: null, missing_rate_count: null, stale: false };
+  }
+  const row = result.rows[0]!;
+  const missingRateCount = Number(row.missing_rate_count);
+  const lineCount = Number(row.line_count);
+  const stale = row.stale === true;
+  return {
+    met: missingRateCount === 0 && lineCount > 0 && !stale,
+    rollup_id: row.rollup_id as string,
+    missing_rate_count: missingRateCount,
+    stale,
+  };
+}
+
+/**
+ * Release gate (Story 5.2, D4 staging; Story 5.6 retires the staging): enforces released component
+ * item masters (A-11), filled scrap percents, the Story 5.3 approved-ECO condition, the Story 5.6
+ * completed-cost-rollup condition, and - on job-work kit BOMs only - a supply source on every
+ * component line (FR-B-16, AC 4). STAGED_CONDITIONS is now empty; every FR-B-06 condition is
+ * enforced. The A-11 check re-evaluates EVERY line at release time - blocking flags stamped at
+ * line-add time go stale when item masters deactivate.
  */
 async function evaluateReleaseGate(
   bomId: string,
@@ -563,16 +641,33 @@ async function evaluateReleaseGate(
   unmetConditions: string[];
   blockingLines: { bom_line_id: string; line_no: number }[];
   scrapMissingLines: { bom_line_id: string; line_no: number }[];
+  supplySourceMissingLines: { bom_line_id: string; line_no: number }[];
+  costRollup: CostRollupConditionResult;
 }> {
   // Story 5.4 (AC 2): the R&D bar fires FIRST so a direct caller cannot bypass the
   // applyBomReleased check. An R&D draft must never even be gate-evaluated.
-  const bomTypeRow = await client.query('SELECT bom_type FROM bom WHERE bom_id = $1', [bomId]);
+  const bomTypeRow = await client.query('SELECT bom_id, bom_type FROM bom WHERE bom_id = $1', [
+    bomId,
+  ]);
   if (bomTypeRow.rows.length > 0) {
     assertNotRdDraft({ bom_id: bomId, bom_type: bomTypeRow.rows[0]!.bom_type as string });
   }
+  const bomType = (bomTypeRow.rows[0]?.bom_type as string | undefined) ?? 'production';
+
+  // Pinned BEFORE the blocking-flag re-stamp below: that UPDATE bumps bom_line.updated_at, and a
+  // rollup taken moments earlier must not be reported stale because the gate itself touched a row.
+  const lineClockRow = await client.query(
+    'SELECT MAX(updated_at) AS max_updated FROM bom_line WHERE revision_id = $1',
+    [revisionId],
+  );
+  const lineClockValue = lineClockRow.rows[0]?.max_updated as Date | string | null | undefined;
+  const linesUpdatedAt =
+    lineClockValue === null || lineClockValue === undefined
+      ? null
+      : new Date(lineClockValue).toISOString();
 
   const lineRows = await client.query(
-    `SELECT bom_line_id, line_no, component_item_id, scrap_percent, blocking_release, blocking_reason
+    `SELECT bom_line_id, line_no, component_item_id, scrap_percent, blocking_release, blocking_reason, output_class, supply_source
      FROM bom_line WHERE revision_id = $1 ORDER BY line_no`,
     [revisionId],
   );
@@ -583,8 +678,14 @@ async function evaluateReleaseGate(
 
   const blockingLines: { bom_line_id: string; line_no: number }[] = [];
   const scrapMissingLines: { bom_line_id: string; line_no: number }[] = [];
+  const supplySourceMissingLines: { bom_line_id: string; line_no: number }[] = [];
 
   for (const line of lines) {
+    // Story 5.6 (AC 4): every component line of a job-work kit BOM must carry a supply source.
+    // This is the ENFORCEMENT point - a tag-time-only check would let an untagged kit release.
+    if (bomType === 'job_work_kit' && line.output_class === 'component' && !line.supply_source) {
+      supplySourceMissingLines.push({ bom_line_id: line.bom_line_id, line_no: line.line_no });
+    }
     // Placeholder lines carry no component identity (Story 5.4). They are structurally
     // unreachable here (the R&D bar fired above and placeholders are barred from production
     // BOMs), but a NULL must never reach getItemById.
@@ -625,12 +726,25 @@ async function evaluateReleaseGate(
   if (scrapMissingLines.length > 0) unmetConditions.push('scrap_percent_missing');
   if (!(await isApprovedEcoConditionMet(bomId, revisionId, client)))
     unmetConditions.push('approved_eco');
-  return { unmetConditions, blockingLines, scrapMissingLines };
+  const costRollup = await evaluateCostRollupCondition(bomId, revisionId, client, linesUpdatedAt);
+  if (!costRollup.met) unmetConditions.push('cost_rollup_complete');
+  if (supplySourceMissingLines.length > 0) unmetConditions.push('supply_source_missing');
+  return {
+    unmetConditions,
+    blockingLines,
+    scrapMissingLines,
+    supplySourceMissingLines,
+    costRollup,
+  };
 }
 
-const STAGED_CONDITIONS = [
-  { condition: 'cost_rollup_complete', enforced: false, staged_by: 'Story 5.6' },
-];
+/**
+ * Story 5.2 introduced this list so a condition could be surfaced before it was enforceable.
+ * Story 5.6 flipped the last one (cost_rollup_complete) on, so the list is now EMPTY - every
+ * FR-B-06 condition is enforced. The constant and its emission in the RELEASE_GATE_UNMET details
+ * stay so the response shape does not change for existing callers or tests.
+ */
+const STAGED_CONDITIONS: { condition: string; enforced: boolean; staged_by: string }[] = [];
 
 async function applyBomReleased(
   envelope: EventEnvelope,
@@ -688,6 +802,13 @@ async function applyBomReleased(
           unmet_conditions: gate.unmetConditions,
           component_item_masters_released: { blocking_lines: gate.blockingLines },
           scrap_percent_missing: { lines: gate.scrapMissingLines },
+          // Story 5.6: which of the three parts of "completed cost rollup" failed.
+          cost_rollup_complete: {
+            rollup_id: gate.costRollup.rollup_id,
+            missing_rate_count: gate.costRollup.missing_rate_count,
+            stale: gate.costRollup.stale,
+          },
+          supply_source_missing: { blocking_lines: gate.supplySourceMissingLines },
           staged_conditions: STAGED_CONDITIONS,
         },
         409,
@@ -697,6 +818,34 @@ async function applyBomReleased(
   }
 
   await updateBomStatus(p.bom_id, 'released', new Date(occurredAt).toISOString(), actorId, client);
+
+  // Story 5.6 (FR-B-17, INT-ERP-01): a Released PRODUCTION BOM version publishes outbound. The
+  // row is derived state written atomically with the release inside THIS transaction (the Story
+  // 4.4 purchase_order.ts precedent at the indent.ordered seam) - no second domain event. Kit
+  // BOMs are an internal job-work construct and record no outbound message. Publishing happens
+  // only on the FIRST release from draft: an on_hold reinstatement re-releases a version whose
+  // structure was already published and must not emit a duplicate outbound message.
+  if (status === 'draft' && (bom.bom_type as string) === 'production') {
+    const revision = await getBomRevisionById(p.revision_id, client);
+    const lines = await getBomLines(p.revision_id, client);
+    if (revision) {
+      const payload = buildBomOutboundPayload(
+        {
+          bom_id: p.bom_id,
+          parent_sku: bom.parent_sku as string,
+          parent_uom: bom.parent_uom as string,
+          business_stream: bom.business_stream as string,
+          bom_type: 'production',
+          status: 'released',
+        },
+        { revision_code: revision.revision_code, revision_status: 'released' },
+        lines,
+        new Date(occurredAt).toISOString(),
+        envelope.metadata.correlation_id ?? null,
+      );
+      await insertBomOutboundMessage(randomUUID(), p.bom_id, p.revision_id, payload, client);
+    }
+  }
 }
 
 async function applyBomHeld(

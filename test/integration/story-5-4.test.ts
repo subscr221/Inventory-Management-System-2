@@ -120,12 +120,32 @@ describe('Story 5.4 R&D Draft BOM Regime Integration Tests', () => {
         uom: 'EA',
         business_stream: 'production',
         category: 'raw_materials',
+        // Story 5.6 fixture setup: a usable Ind AS 2 rate on every component, so a cost
+        // rollup over these BOMs has missing_rate_count 0 and satisfies the release gate.
+        standard_cost_designation: 'ind_as_2_para_21_measurement_technique',
+        standard_cost_amount: 10,
         ...overrides,
       },
       engineerHeaders,
     );
     assert.strictEqual(res.status, 201, `item ${sku} failed: ${JSON.stringify(res.body)}`);
     return (res.body as Record<string, string>)['item_id']!;
+  }
+
+  /**
+   * Story 5.6 fixture setup: cost_rollup_complete is now an ENFORCED release-gate condition, so
+   * every fixture that reaches 'released' must first take a complete rollup. Deliberately
+   * non-asserting - it is also called on BOMs whose release is expected to fail for an unrelated
+   * reason. No assertion in this suite is weakened by it.
+   */
+  async function primeCostRollup(bomId: string): Promise<void> {
+    await makeRequest(
+      port,
+      'POST',
+      `/api/v1/boms/${bomId}/cost-rollups`,
+      { idempotency_key: randomUUID() },
+      engineerHeaders,
+    );
   }
 
   function componentLine(
@@ -429,6 +449,8 @@ describe('Story 5.4 R&D Draft BOM Regime Integration Tests', () => {
     const compA = await createItem(`RD-C5-${run}`);
     const { bomId } = await draftRndBom(parent, [componentLine(1, compA)]);
 
+    // No rollup is possible or needed here: an R&D draft is barred from release before the
+    // gate is ever evaluated, so a rollup call would deterministically 409 RD_EXECUTION_BARRED.
     const res = await makeRequest(
       port,
       'POST',
@@ -965,6 +987,7 @@ describe('Story 5.4 R&D Draft BOM Regime Integration Tests', () => {
 
     // The productized BOM releases through the ordinary Story 5.2 path - productization does
     // not shortcut the gate.
+    await primeCostRollup(productize.body['bom_id'] as string);
     const release = await makeRequest(
       port,
       'POST',

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS bom_line (
   is_phantom               BOOLEAN NOT NULL DEFAULT false,
   phantom_source_bom_id    UUID,
   supply_method            TEXT NOT NULL DEFAULT 'directed_issue',
+  supply_source            TEXT,
   is_released_structure    BOOLEAN NOT NULL DEFAULT false,
   effective_from           DATE NOT NULL,
   effective_to            DATE,
@@ -55,7 +56,8 @@ CREATE TABLE IF NOT EXISTS bom_line (
     (is_placeholder = true AND component_item_id IS NULL AND component_sku IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
     (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
   ),
-  CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'))
+  CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush')),
+  CONSTRAINT chk_bom_line_supply_source CHECK (supply_source IS NULL OR supply_source IN ('company','customer','job_worker'))
 );
 
 -- Story 5.4 placeholder/free-text columns for databases created before this story. The NOT NULL
@@ -89,6 +91,20 @@ DO $$
 BEGIN
   ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_supply_method;
   ALTER TABLE bom_line ADD CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'));
+END $$;
+
+-- Story 5.6 supply source: who owns the material on a job-work kit BOM (FR-B-16) - 'company',
+-- 'customer' or 'job_worker'. A DIFFERENT axis from supply_method (how execution consumes the
+-- component); never derive one from the other. NULL is legal at the column level because only
+-- bom_type = 'job_work_kit' BOMs carry supply-source tags; the not-null requirement for kit BOMs
+-- is enforced by the release gate (supply_source_missing), not by this constraint. The DROP + ADD
+-- pair is kept atomic in a DO block, mirroring the chk_bom_line_supply_method swap above.
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS supply_source TEXT;
+
+DO $$
+BEGIN
+  ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_supply_source;
+  ALTER TABLE bom_line ADD CONSTRAINT chk_bom_line_supply_source CHECK (supply_source IS NULL OR supply_source IN ('company','customer','job_worker'));
 END $$;
 
 -- Story 5.5 review (sync scoping): the released_bom_structure PowerSync bucket filters on this

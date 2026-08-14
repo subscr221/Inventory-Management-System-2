@@ -179,7 +179,12 @@ async function resolveAlternateTarget(
 
 function readPriority(body: Record<string, unknown>): number {
   const priority = body['priority'];
-  if (typeof priority !== 'number' || !Number.isInteger(priority) || priority < 1 || priority > 2147483647) {
+  if (
+    typeof priority !== 'number' ||
+    !Number.isInteger(priority) ||
+    priority < 1 ||
+    priority > 2147483647
+  ) {
     throw new AppError(
       400,
       'INVALID_PARAMS',

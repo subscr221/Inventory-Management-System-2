@@ -2057,7 +2057,7 @@ CREATE TABLE IF NOT EXISTS integration_exception (
   raised_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch')),
+  CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom')),
   CONSTRAINT chk_integration_exception_status CHECK (status IN ('open', 'resolved'))
 );
 
@@ -2076,16 +2076,19 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 5.6 widens the record-type vocabulary with 'bom' (FR-B-17 inbound BOM rejection). The
+-- DROP + ADD pair is kept atomic in a DO block so a database created before Story 5.6 picks the
+-- new value up on re-migrate; uq_integration_exception_open is deliberately untouched - the
+-- one-open-row-per-grain contract carries over to BOM conflicts unchanged.
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_integration_exception_record_type'
-      AND conrelid = 'integration_exception'::regclass
-  ) THEN
-    ALTER TABLE integration_exception
-      ADD CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch'));
-  END IF;
+  ALTER TABLE integration_exception DROP CONSTRAINT IF EXISTS chk_integration_exception_record_type;
+  ALTER TABLE integration_exception
+    ADD CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom'));
+END $$;
+
+DO $$
+BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_integration_exception_status'
@@ -4135,6 +4138,7 @@ CREATE TABLE IF NOT EXISTS bom_line (
   is_phantom               BOOLEAN NOT NULL DEFAULT false,
   phantom_source_bom_id    UUID,
   supply_method            TEXT NOT NULL DEFAULT 'directed_issue',
+  supply_source            TEXT,
   is_released_structure    BOOLEAN NOT NULL DEFAULT false,
   effective_from           DATE NOT NULL,
   effective_to            DATE,
@@ -4165,7 +4169,8 @@ CREATE TABLE IF NOT EXISTS bom_line (
     (is_placeholder = true AND component_item_id IS NULL AND component_sku IS NULL AND free_text IS NOT NULL AND btrim(free_text) <> '') OR
     (is_placeholder = false AND component_item_id IS NOT NULL AND component_sku IS NOT NULL)
   ),
-  CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'))
+  CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush')),
+  CONSTRAINT chk_bom_line_supply_source CHECK (supply_source IS NULL OR supply_source IN ('company','customer','job_worker'))
 );
 
 -- Story 5.4 placeholder/free-text columns for databases created before this story. The NOT NULL
@@ -4199,6 +4204,20 @@ DO $$
 BEGIN
   ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_supply_method;
   ALTER TABLE bom_line ADD CONSTRAINT chk_bom_line_supply_method CHECK (supply_method IN ('directed_issue','backflush'));
+END $$;
+
+-- Story 5.6 supply source: who owns the material on a job-work kit BOM (FR-B-16) - 'company',
+-- 'customer' or 'job_worker'. A DIFFERENT axis from supply_method (how execution consumes the
+-- component); never derive one from the other. NULL is legal at the column level because only
+-- bom_type = 'job_work_kit' BOMs carry supply-source tags; the not-null requirement for kit BOMs
+-- is enforced by the release gate (supply_source_missing), not by this constraint. The DROP + ADD
+-- pair is kept atomic in a DO block, mirroring the chk_bom_line_supply_method swap above.
+ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS supply_source TEXT;
+
+DO $$
+BEGIN
+  ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_supply_source;
+  ALTER TABLE bom_line ADD CONSTRAINT chk_bom_line_supply_source CHECK (supply_source IS NULL OR supply_source IN ('company','customer','job_worker'));
 END $$;
 
 -- Story 5.5 review (sync scoping): released_bom_structure PowerSync bucket filter marker, mirroring
@@ -5613,4 +5632,151 @@ BEGIN
       EXECUTE format('ALTER PUBLICATION powersync_publication ADD TABLE %I', target_table);
     END IF;
   END LOOP;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Story 5.6: BOM cost rollup snapshots and the ERP outbound boundary record.
+-- MUST stay identical to read/projections/bom_cost_rollup.sql,
+-- read/projections/bom_cost_rollup_line.sql and read/projections/bom_outbound_message.sql
+-- (canonical sources).
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS bom_cost_rollup (
+  rollup_id          UUID PRIMARY KEY,
+  bom_id             UUID NOT NULL,
+  revision_id        UUID NOT NULL,
+  rollup_date        DATE NOT NULL,
+  rate_basis         TEXT NOT NULL,
+  total_cost         NUMERIC NOT NULL,
+  line_count         INTEGER NOT NULL,
+  missing_rate_count INTEGER NOT NULL,
+  depth_truncated    BOOLEAN NOT NULL DEFAULT false,
+  rolled_up_by       UUID,
+  correlation_id     UUID,
+  source_event_id    UUID NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_bom_cost_rollup_rate_basis CHECK (rate_basis IN ('item_master_standard_cost')),
+  CONSTRAINT chk_bom_cost_rollup_counts CHECK (line_count >= 0 AND missing_rate_count >= 0 AND missing_rate_count <= line_count)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_cost_rollup_source_event ON bom_cost_rollup (source_event_id);
+CREATE INDEX IF NOT EXISTS idx_bom_cost_rollup_bom ON bom_cost_rollup (bom_id, rollup_date DESC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_cost_rollup_rate_basis'
+      AND conrelid = 'bom_cost_rollup'::regclass
+  ) THEN
+    ALTER TABLE bom_cost_rollup
+      ADD CONSTRAINT chk_bom_cost_rollup_rate_basis CHECK (rate_basis IN ('item_master_standard_cost'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_cost_rollup_counts'
+      AND conrelid = 'bom_cost_rollup'::regclass
+  ) THEN
+    ALTER TABLE bom_cost_rollup
+      ADD CONSTRAINT chk_bom_cost_rollup_counts CHECK (line_count >= 0 AND missing_rate_count >= 0 AND missing_rate_count <= line_count);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON bom_cost_rollup TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom_cost_rollup TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS bom_cost_rollup_line (
+  rollup_line_id        UUID PRIMARY KEY,
+  rollup_id             UUID NOT NULL,
+  depth                 INTEGER NOT NULL,
+  path                  TEXT NOT NULL,
+  source_bom_id         UUID,
+  source_revision_id    UUID,
+  bom_line_id           UUID NOT NULL,
+  line_no               INTEGER NOT NULL,
+  component_item_id     UUID,
+  component_sku         TEXT,
+  effective_quantity_per NUMERIC NOT NULL,
+  scrap_percent         NUMERIC(9,6),
+  unit_cost             NUMERIC(18,6),
+  extended_cost         NUMERIC NOT NULL DEFAULT 0,
+  rate_missing          BOOLEAN NOT NULL DEFAULT false,
+  via_phantom           BOOLEAN NOT NULL DEFAULT false,
+  has_child_bom         BOOLEAN NOT NULL DEFAULT false,
+  source_event_id       UUID NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_bom_cost_rollup_line_depth CHECK (depth >= 0),
+  CONSTRAINT chk_bom_cost_rollup_line_quantity_positive CHECK (effective_quantity_per > 0),
+  CONSTRAINT chk_bom_cost_rollup_line_extended_non_negative CHECK (extended_cost >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bom_cost_rollup_line_no ON bom_cost_rollup_line (rollup_id, path, line_no);
+CREATE INDEX IF NOT EXISTS idx_bom_cost_rollup_line_rollup ON bom_cost_rollup_line (rollup_id);
+CREATE INDEX IF NOT EXISTS idx_bom_cost_rollup_line_component ON bom_cost_rollup_line (component_item_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_cost_rollup_line_depth'
+      AND conrelid = 'bom_cost_rollup_line'::regclass
+  ) THEN
+    ALTER TABLE bom_cost_rollup_line
+      ADD CONSTRAINT chk_bom_cost_rollup_line_depth CHECK (depth >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_cost_rollup_line_quantity_positive'
+      AND conrelid = 'bom_cost_rollup_line'::regclass
+  ) THEN
+    ALTER TABLE bom_cost_rollup_line
+      ADD CONSTRAINT chk_bom_cost_rollup_line_quantity_positive CHECK (effective_quantity_per > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_bom_cost_rollup_line_extended_non_negative'
+      AND conrelid = 'bom_cost_rollup_line'::regclass
+  ) THEN
+    ALTER TABLE bom_cost_rollup_line
+      ADD CONSTRAINT chk_bom_cost_rollup_line_extended_non_negative CHECK (extended_cost >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON bom_cost_rollup_line TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom_cost_rollup_line TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS bom_outbound_message (
+  message_id    UUID PRIMARY KEY,
+  bom_id        UUID NOT NULL,
+  revision_id   UUID NOT NULL,
+  payload       JSONB NOT NULL,
+  recorded_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bom_outbound_bom_id ON bom_outbound_message (bom_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON bom_outbound_message TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON bom_outbound_message TO readonly_user;
+  END IF;
 END $$;

@@ -697,6 +697,8 @@ const EXPECTED = [
       'chk_bom_line_placeholder_pairing',
       // Story 5.5 supply method (DROP + ADD DO block, mirrored in init-db.sql)
       'chk_bom_line_supply_method',
+      // Story 5.6 supply source (DROP + ADD DO block, mirrored in init-db.sql)
+      'chk_bom_line_supply_source',
     ],
     indexes: [
       'uq_bom_line_no',
@@ -807,6 +809,36 @@ const EXPECTED = [
       'idx_bom_explosion_line_explosion',
       'idx_bom_explosion_line_component',
     ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 5.6: Cost Rollups, Job-Work Kit Tagging, and ERP Outbound Sync
+  {
+    canonical: 'read/projections/bom_cost_rollup.sql',
+    table: 'bom_cost_rollup',
+    constraints: ['chk_bom_cost_rollup_rate_basis', 'chk_bom_cost_rollup_counts'],
+    indexes: ['uq_bom_cost_rollup_source_event', 'idx_bom_cost_rollup_bom'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/bom_cost_rollup_line.sql',
+    table: 'bom_cost_rollup_line',
+    constraints: [
+      'chk_bom_cost_rollup_line_depth',
+      'chk_bom_cost_rollup_line_quantity_positive',
+      'chk_bom_cost_rollup_line_extended_non_negative',
+    ],
+    indexes: [
+      'uq_bom_cost_rollup_line_no',
+      'idx_bom_cost_rollup_line_rollup',
+      'idx_bom_cost_rollup_line_component',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/bom_outbound_message.sql',
+    table: 'bom_outbound_message',
+    constraints: [] as string[],
+    indexes: ['idx_bom_outbound_bom_id'],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
 ];
@@ -1023,6 +1055,42 @@ describe('Story 2.1 schema drift guard', () => {
     ]) {
       assert.ok(bomLineSql.includes(fragment), `bom_line.sql missing ${fragment}`);
       assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
+  });
+
+  it('Story 5.6 mirrors the supply_source column and the widened exception vocabulary into init-db.sql', () => {
+    const bomLineSql = read('read/projections/bom_line.sql');
+    const exceptionSql = read('read/projections/integration_exception.sql');
+    // The column lives in BOTH the CREATE TABLE body (so extractCreateTable equality holds) and an
+    // ADD COLUMN IF NOT EXISTS statement (so pre-5.6 databases pick it up on re-migrate).
+    for (const fragment of [
+      'supply_source            TEXT',
+      'ALTER TABLE bom_line ADD COLUMN IF NOT EXISTS supply_source TEXT;',
+      'ALTER TABLE bom_line DROP CONSTRAINT IF EXISTS chk_bom_line_supply_source;',
+      "ADD CONSTRAINT chk_bom_line_supply_source CHECK (supply_source IS NULL OR supply_source IN ('company','customer','job_worker'))",
+    ]) {
+      assert.ok(bomLineSql.includes(fragment), `bom_line.sql missing ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
+    // FR-B-17: inbound BOM records queue as exceptions, so 'bom' joins the record-type vocabulary.
+    // The one-open-row-per-grain index is deliberately untouched.
+    for (const fragment of [
+      "CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom'))",
+      'ALTER TABLE integration_exception DROP CONSTRAINT IF EXISTS chk_integration_exception_record_type;',
+      "CREATE UNIQUE INDEX IF NOT EXISTS uq_integration_exception_open ON integration_exception (source_system, record_type, source_record_ref, error_code) NULLS NOT DISTINCT WHERE status = 'open';",
+    ]) {
+      assert.ok(exceptionSql.includes(fragment), `integration_exception.sql missing ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
+    for (const fileName of [
+      'bom_cost_rollup.sql',
+      'bom_cost_rollup_line.sql',
+      'bom_outbound_message.sql',
+    ]) {
+      assert.ok(
+        migrateSource.includes(`'../../read/projections/${fileName}'`),
+        `src/events/migrate.ts must register ${fileName}`,
+      );
     }
   });
 

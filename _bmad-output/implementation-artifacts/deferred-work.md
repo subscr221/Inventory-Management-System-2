@@ -221,3 +221,11 @@
 ## Deferred from: code review of 5-5-approved-alternates-and-bom-explosion (2026-08-13)
 
 - ECO add change lines cannot express backflush: eco_change_line has no supply_method field, so every ECO-added line silently defaults to directed_issue while story 5.5's binding decision claims backflush authorability (AC 3). Direct add-line authoring (bom_line.added via the 5.2 route) does support supply_method, so the gap is limited to the ECO-add surface. Fix requires a 5.3 schema change (add supply_method to eco_change_line and the add-insert in src/compliance/eco.ts:514-537) - deferred, pre-existing 5.3 schema, out of story 5.5 scope.
+
+## Deferred from: code review of 5-6-cost-rollups-job-work-kit-tagging-and-erp-outbound-sync (2026-08-14)
+
+- `getLatestCompleteRollup` and `getLatestRollup` are dead code and diverge from the live gate predicate `evaluateCostRollupCondition`, which runs its own staleness-aware query [src/read/projections/bom_cost_rollup.ts:183-211] - deferred, spec-mandated accessors the gate predicate did not adopt
+- Cost rollup capture runs outside the persist transaction, so a same-revision `bom_line` amendment between capture and commit yields a silently stale snapshot; the stale guard compares only `current_revision_id` [src/compliance/bom-costing.ts:286-306] - deferred, the release gate's staleness check (created_at versus MAX bom_line.updated_at) re-validates freshness at release
+- `bom.sync_conflict_raised` for an unknown-BOM conflict uses the SCIM system-actor UUID as the stream id sentinel, conflating the actor and stream namespaces [src/api/v1/erp-projections.ts:43-44] - deferred, low, no functional break
+- `emitBomSyncConflictEvents` swallows every `persistEvent` rejection with a silent catch, hiding shape-assert defects in the emission path [src/api/v1/erp-projections.ts:323-335] - deferred, the commit-then-emit crash window is an accepted tradeoff
+- `bom_line` is_released_structure comment mirror diverges between the canonical file and init-db.sql [read/projections/bom_line.sql] - deferred, pre-existing from Story 5.5

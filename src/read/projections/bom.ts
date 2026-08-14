@@ -62,6 +62,11 @@ export interface BomLineRow {
   phantom_source_bom_id: string | null;
   /** Story 5.5: how execution consumes this component (FR-B-07). */
   supply_method: 'directed_issue' | 'backflush';
+  /**
+   * Story 5.6: who owns the material on a job-work kit BOM (FR-B-16). NULL on every non-kit line
+   * and on an untagged kit line; a DIFFERENT axis from supply_method, never derived from it.
+   */
+  supply_source: 'company' | 'customer' | 'job_worker' | null;
   effective_from: string;
   effective_to: string | null;
   blocking_release: boolean;
@@ -311,8 +316,8 @@ export async function insertBomLine(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
-    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, supply_method, effective_from, effective_to, blocking_release, blocking_reason, amended_at, source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+    `INSERT INTO bom_line (bom_line_id, revision_id, bom_id, line_no, component_item_id, component_sku, is_placeholder, free_text, output_class, quantity_per, line_uom, uom_conversion_factor, base_quantity_per, scrap_percent, expected_yield_percent, is_phantom, phantom_source_bom_id, supply_method, supply_source, effective_from, effective_to, blocking_release, blocking_reason, amended_at, source_event_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
     [
       row.bom_line_id,
       row.revision_id,
@@ -332,6 +337,7 @@ export async function insertBomLine(
       row.is_phantom,
       row.phantom_source_bom_id,
       row.supply_method,
+      row.supply_source ?? null,
       row.effective_from,
       row.effective_to,
       row.blocking_release,

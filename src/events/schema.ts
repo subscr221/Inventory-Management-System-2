@@ -1922,6 +1922,116 @@ export interface BomExplodedEnvelope extends Omit<EventEnvelope, 'payload'> {
 }
 
 // ---------------------------------------------------------------------------
+// Story 5.6: cost rollups, job-work kit tagging and ERP outbound sync
+// (FR-B-15, FR-B-16, FR-B-17, INT-ERP-01).
+//
+// The epics' PascalCase names (CostRollupSnapshotted, JobWorkKitTagged, BomSyncConflictRaised) map
+// to the dot-separated spine-convention types below. All three act on an ALREADY
+// business-stream-tagged BOM aggregate, so requiresBusinessStream is false; business_stream is
+// derived server-side from the BOM header, never accepted from a request body.
+//
+// rollup_id and the whole costed line set are computed at CAPTURE time by
+// src/engineering/bom-cost-rollup.ts and embedded here, so the applier recomputes NOTHING and
+// replay is byte-deterministic (the Story 5.5 bom.exploded rule, verbatim).
+// ---------------------------------------------------------------------------
+
+/**
+ * One costed line occurrence of a rollup walk. Costs and quantities are exact decimal strings -
+ * every multiplication and sum happened in PostgreSQL NUMERIC, never in a JS float.
+ *
+ * A line with no usable rate carries unit_cost null, extended_cost '0' and rate_missing true. A
+ * line whose costed children carry the cost (has_child_bom) contributes zero to the header total:
+ * only leaves carry cost, which is what keeps a multi-level rollup from double counting.
+ */
+export interface BomCostRollupLine {
+  rollup_line_id: string;
+  depth: number;
+  path: string;
+  source_bom_id: string;
+  source_revision_id: string;
+  bom_line_id: string;
+  line_no: number;
+  component_item_id: string | null;
+  component_sku: string | null;
+  effective_quantity_per: string;
+  scrap_percent: string | null;
+  unit_cost: string | null;
+  extended_cost: string;
+  rate_missing: boolean;
+  via_phantom: boolean;
+  has_child_bom: boolean;
+}
+
+/**
+ * Records one dated cost-rollup simulation snapshot for a BOM revision (FR-B-15). stream_id is
+ * bom_id. Prior snapshots are never touched; a rollup is a simulation and posts no valuation.
+ */
+export interface BomCostRollupSnapshottedPayload {
+  rollup_id: string;
+  bom_id: string;
+  revision_id: string;
+  rollup_date: string;
+  rate_basis: 'item_master_standard_cost';
+  total_cost: string;
+  line_count: number;
+  missing_rate_count: number;
+  depth_truncated: boolean;
+  lines: BomCostRollupLine[];
+  correlation_id?: string;
+}
+
+export interface BomCostRollupSnapshottedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.cost_rollup_snapshotted';
+  payload: BomCostRollupSnapshottedPayload;
+}
+
+/** One supply-source tag on a job-work kit BOM line (FR-B-16). */
+export interface BomJobWorkKitTag {
+  bom_line_id: string;
+  line_no: number;
+  supply_source: 'company' | 'customer' | 'job_worker';
+}
+
+/**
+ * Tags job-work kit BOM lines by who owns the material (FR-B-16). stream_id is bom_id. line_no and
+ * revision_id are resolved server-side from the BOM header and its line rows, never trusted from
+ * the request body. tags is REQUIRED and non-empty.
+ */
+export interface BomJobWorkKitTaggedPayload {
+  bom_id: string;
+  revision_id: string;
+  tags: BomJobWorkKitTag[];
+  correlation_id?: string;
+}
+
+export interface BomJobWorkKitTaggedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.job_work_kit_tagged';
+  payload: BomJobWorkKitTaggedPayload;
+}
+
+/**
+ * Records that an inbound ERP BOM record was rejected and queued for the BOM Administrator
+ * (FR-B-17, INT-ERP-01). stream_id is bom_id when the inbound record names a known BOM.
+ *
+ * This event is a DERIVED audit fact: the integration_exception row is the source of truth and is
+ * raised by src/adapters/erp/sync.ts before this event exists. exception_id is READ BACK from that
+ * row, never minted here. bom_id is nullable because the inbound record may name an unknown BOM.
+ */
+export interface BomSyncConflictRaisedPayload {
+  bom_id: string | null;
+  source_record_ref: string;
+  conflict_reason: string;
+  exception_id: string;
+  source_snapshot: unknown;
+  correlation_id?: string;
+}
+
+export interface BomSyncConflictRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'bom.sync_conflict_raised';
+  payload: BomSyncConflictRaisedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -2390,6 +2500,21 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'bom.exploded': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  // Story 5.6: cost rollup snapshots, job-work kit supply-source tagging, and the inbound-BOM
+  // rejection audit fact. All three act on an already business-stream-tagged BOM aggregate, so
+  // none requires a business stream on the envelope.
+  'bom.cost_rollup_snapshotted': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'bom.job_work_kit_tagged': {
+    streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  'bom.sync_conflict_raised': {
     streamType: 'engineering',
     requiresBusinessStream: false,
   },
