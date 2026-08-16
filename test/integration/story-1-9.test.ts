@@ -395,6 +395,10 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/boms/:bomId/job-work-kit-tags',
       'GET /api/v1/erp/bom-sync-exceptions',
       'POST /api/v1/erp/bom-sync-exceptions/:exceptionId/resolve',
+      // Story 7.1: Asset Register and Criticality Classification
+      'POST /api/v1/assets',
+      'GET /api/v1/assets',
+      'GET /api/v1/assets/:assetId',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

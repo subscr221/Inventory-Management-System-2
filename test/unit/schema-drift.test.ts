@@ -841,6 +841,14 @@ const EXPECTED = [
     indexes: ['idx_bom_outbound_bom_id'],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 7.1: Asset Register and Criticality Classification
+  {
+    canonical: 'read/projections/asset.sql',
+    table: 'asset',
+    constraints: ['chk_asset_criticality_class'],
+    indexes: ['uq_asset_tag', 'uq_asset_serial'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

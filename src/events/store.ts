@@ -122,6 +122,11 @@ import {
   assertThreeWayMatchShape,
   applyThreeWayMatchProjection,
 } from '../compliance/three-way-match.js';
+import {
+  assertAssetShape,
+  applyAssetProjection,
+  resolveAssetDuplicateConflict,
+} from '../compliance/asset.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -521,6 +526,10 @@ export async function persistEvent(
   // scale, calendar-date rollover) is non-DB and runs with the other pre-transaction asserts, so
   // a malformed scorecard event never consumes an idempotency key.
   assertSupplierScorecardShape(envelope);
+  // Story 7.1: asset register shape validation (strict UUID, required tag/name, criticality
+  // vocabulary) is non-DB and runs with the other pre-transaction asserts, so a malformed asset
+  // event never consumes an idempotency key.
+  assertAssetShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -787,6 +796,10 @@ export async function persistEvent(
     // inside this same transaction so the metric row and the domain_events insert commit or roll
     // back together.
     await applySupplierScorecardProjection(envelope, client, eventId);
+    // Story 7.1: asset register projection (FOR UPDATE duplicate detection on serial_number and
+    // asset_tag, then the insert) runs inside this same transaction so the asset row and the
+    // domain_events insert commit or roll back together.
+    await applyAssetProjection(envelope, client);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -1042,6 +1055,24 @@ export async function persistEvent(
                 : null,
           },
         );
+      } else if (constraint === 'uq_asset_serial' || constraint === 'uq_asset_tag') {
+        // Story 7.1: the serial cases are already mapped DUPLICATE_ASSET 409s in the seam; a
+        // concurrent first-insert race reaches the unique index instead, so this resolves the
+        // winning row on a fresh query and returns the SAME contract as the sequential path
+        // (mirror of resolveSupplierInvoiceDuplicateConflict). asset_pkey stays DUPLICATE_EVENT.
+        const details = await resolveAssetDuplicateConflict(envelope.payload);
+        throw new AppError(
+          409,
+          'DUPLICATE_ASSET',
+          'An asset with this serial number or asset tag is already registered',
+          details ?? {},
+        );
+      } else if (constraint === 'asset_pkey') {
+        // Server-minted UUIDs make this practically unreachable; mapped for completeness.
+        throw new AppError(409, 'DUPLICATE_EVENT', 'An asset with this asset_id already exists', {
+          asset_id:
+            typeof envelope.payload['asset_id'] === 'string' ? envelope.payload['asset_id'] : null,
+        });
       }
     }
     // Story 4.5: the match vocabulary CHECKs are enforced in the appliers first, so reaching one

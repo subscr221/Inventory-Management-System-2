@@ -225,6 +225,7 @@ import {
   getCostRollupHandler,
   tagJobWorkKitHandler,
 } from './api/v1/bom-costing.js';
+import { createAssetHandler, getAssetHandler, listAssetsHandler } from './api/v1/assets.js';
 import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
@@ -548,6 +549,13 @@ export function createAppRouter(): Router {
     '/api/v1/erp/bom-sync-exceptions/:exceptionId/resolve',
     resolveBomSyncExceptionHandler,
   );
+
+  // Story 7.1: Asset Register and Criticality Classification (maintenance stream, AD-9).
+  // GET /api/v1/assets registered before GET /api/v1/assets/:assetId - the router returns the
+  // first match in registration order and :assetId compiles to ([^/]+).
+  router.post('/api/v1/assets', createAssetHandler);
+  router.get('/api/v1/assets', listAssetsHandler);
+  router.get('/api/v1/assets/:assetId', getAssetHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

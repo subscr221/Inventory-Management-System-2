@@ -2032,6 +2032,33 @@ export interface BomSyncConflictRaisedEnvelope extends Omit<EventEnvelope, 'payl
 }
 
 // ---------------------------------------------------------------------------
+// Story 7.1: Asset Register and Criticality Classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Registers a maintainable asset in the company-wide register (FR-M-01, AD-9). stream_id is
+ * asset_id. created_by is derived server-side from metadata.actor.user_id, never from the payload
+ * (the supplier.registered precedent). fixed_asset_ref is a FREE identifier - no lookup against a
+ * fixed-asset module is performed (AC 2). serial_number is the AC 3 duplicate-detection key and
+ * applies to serialized assets only.
+ */
+export interface AssetRegisteredPayload {
+  asset_id: string;
+  asset_tag: string;
+  asset_name: string;
+  criticality_class: 'critical' | 'high' | 'medium' | 'low';
+  serial_number?: string | null;
+  manufacturer?: string | null;
+  model?: string | null;
+  fixed_asset_ref?: string | null;
+}
+
+export interface AssetRegisteredEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'asset.registered';
+  payload: AssetRegisteredPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -2516,6 +2543,12 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'bom.sync_conflict_raised': {
     streamType: 'engineering',
+    requiresBusinessStream: false,
+  },
+  // Story 7.1: asset register on a NEW 'maintenance' stream (AD-9). An asset is master data, not
+  // an inventory movement, so requiresBusinessStream is false (the supplier.registered precedent).
+  'asset.registered': {
+    streamType: 'maintenance',
     requiresBusinessStream: false,
   },
 } as const;

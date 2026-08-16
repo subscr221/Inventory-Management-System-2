@@ -293,7 +293,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-14'
+last_updated: '2026-08-16'
 # story 5-6 dev-story 2026-08-14: implemented all 9 tasks (58 subtasks) from baseline f29765f. Three new
 #   tables (bom_cost_rollup, bom_cost_rollup_line, bom_outbound_message), additive bom_line.supply_source
 #   with a guarded constraint swap, and integration_exception.record_type widened with 'bom' via a
@@ -816,8 +816,36 @@ development_status:
   epic-6-retrospective: optional
 
   # --- Epic 7: Maintenance, Calibration, and Asset Register  [PILOT] ---
-  epic-7: backlog
-  7-1-asset-register-and-criticality-classification: backlog   # PILOT
+  epic-7: in-progress
+  # story 7-1 created 2026-08-15 via create-story workflow: Asset Register and Criticality
+  #   Classification (FR-M-01). New 'maintenance' stream with asset.registered
+  #   (requiresBusinessStream false), the asset projection (criticality_class, scannable asset_tag,
+  #   optional nullable fixed_asset_ref free identifier, no FR-FA lookup), and DUPLICATE_ASSET
+  #   duplicate detection on the serial-number key (serialized assets only). Opens Epic 7 (AD-9 one
+  #   asset register for everything); ready-for-dev
+  7-1-asset-register-and-criticality-classification: done   # PILOT
+  # story 7-1 dev-story 2026-08-15: implementation started from baseline 9b6d5e1; moved to in-progress
+   # story 7-1 dev-story 2026-08-15: all 6 tasks/17 subtasks done; new maintenance stream +
+   #   asset.registered event, asset projection (uq_asset_tag, partial uq_asset_serial), compliance
+   #   seam with FOR UPDATE duplicate detection (DUPLICATE_ASSET 409 + existing_asset_id), 3 REST
+   #   routes (maintenance RBAC, enterprise-scoped), direct-events guard extended to maintenance;
+   #   gates: build/lint/format clean, migrate x2 idempotent, schema-drift 81/81, spine 6/6,
+   #   story-7-1 14/14, edge 30/30, full suite 895 (880 pass, 15 pre-existing Epic 1-3 idempotency
+   #   fails, 0 new); moved to review
+   # story 7-1 code review 2026-08-16 (adversarial pass: Blind Hunter + Edge Case Hunter +
+   #   Acceptance Auditor over baseline 9b6d5e1 working tree; auditor found no genuine spec
+   #   violations). 2 decisions resolved to patch (race-path duplicates now resolve the winner via
+   #   resolveAssetDuplicateConflict and return 409 DUPLICATE_ASSET + existing_asset_id like the
+   #   sequential path; serial/tag uniqueness keys canonicalized with lower() in the seam, the
+   #   accessors, and both unique indexes, with a guarded index swap that self-heals existing DBs)
+   #   + 3 patches applied (blank/non-string idempotency_key no longer collapses distinct
+   #   registrations; cross-stream idempotency-key reuse now 409 DUPLICATE_EVENT instead of a
+   #   phantom 201 with asset: null; nullable capture fields normalized in the persisted payload
+   #   exactly as stored) + 3 deferred (stream/event mismatch bypass, NUL-byte 500 mapper gap,
+   #   no audit on failed writes - all pre-existing platform-wide) + 13 dismissed. 5 new
+   #   regression tests. story-7-1 19/19, schema-drift 81/81, spine 6/6, tsc/eslint/prettier
+   #   clean, migrate x2 idempotent, full suite 900 (885 pass, same 15 pre-existing fails, 0 new);
+   #   moved to done
   7-2-preventive-maintenance-plans-and-work-order-generation: backlog   # PILOT
   7-3-fault-reporting-and-breakdown-work-orders: backlog   # PILOT
   7-4-spare-parts-cataloguing-reservation-and-critical-spares-alerts: backlog   # PILOT

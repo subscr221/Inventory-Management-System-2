@@ -5780,3 +5780,63 @@ BEGIN
     GRANT SELECT ON bom_outbound_message TO readonly_user;
   END IF;
 END $$;
+
+-- Story 7.1: Asset register (mirror of read/projections/asset.sql)
+
+CREATE TABLE IF NOT EXISTS asset (
+  asset_id           UUID PRIMARY KEY,
+  asset_tag          TEXT NOT NULL,
+  asset_name         TEXT NOT NULL,
+  criticality_class  TEXT NOT NULL,
+  serial_number      TEXT,
+  manufacturer       TEXT,
+  model              TEXT,
+  fixed_asset_ref    TEXT,
+  created_by         UUID NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_asset_criticality_class CHECK (criticality_class IN ('critical', 'high', 'medium', 'low'))
+);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'uq_asset_tag'
+      AND indexdef NOT LIKE '%lower(asset_tag)%'
+  ) THEN
+    DROP INDEX uq_asset_tag;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'uq_asset_serial'
+      AND indexdef NOT LIKE '%lower(serial_number)%'
+  ) THEN
+    DROP INDEX uq_asset_serial;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_tag ON asset (lower(asset_tag));
+CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_serial ON asset (lower(serial_number)) WHERE serial_number IS NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_criticality_class'
+      AND conrelid = 'asset'::regclass
+  ) THEN
+    ALTER TABLE asset
+      ADD CONSTRAINT chk_asset_criticality_class CHECK (criticality_class IN ('critical', 'high', 'medium', 'low'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON asset TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON asset TO readonly_user;
+  END IF;
+END $$;

@@ -229,3 +229,9 @@
 - `bom.sync_conflict_raised` for an unknown-BOM conflict uses the SCIM system-actor UUID as the stream id sentinel, conflating the actor and stream namespaces [src/api/v1/erp-projections.ts:43-44] - deferred, low, no functional break
 - `emitBomSyncConflictEvents` swallows every `persistEvent` rejection with a silent catch, hiding shape-assert defects in the emission path [src/api/v1/erp-projections.ts:323-335] - deferred, the commit-then-emit crash window is an accepted tradeoff
 - `bom_line` is_released_structure comment mirror diverges between the canonical file and init-db.sql [read/projections/bom_line.sql] - deferred, pre-existing from Story 5.5
+
+## Deferred from: code review of 7-1-asset-register-and-criticality-classification (2026-08-16)
+
+- stream_type/event_type mismatch bypasses all shape validation and the direct-writes guard [src/api/v1/events.ts:119, src/events/store.ts:199-221] - deferred, pre-existing platform-wide: persistEvent never checks SUPPORTED_EVENT_TYPES membership or stream/event consistency, and every module seam gates on its own stream/event pair; a mismatched pair (e.g. stream_type 'procurement' + event_type 'asset.registered') persists unvalidated with no projection row. Story 7.1 closes the exact-case guard per the engineering precedent; resolve as one platform-level registry check, not a 7.1-only fix.
+- NUL byte in text fields or the search parameter surfaces as a raw 500 (unmapped SQLSTATE) [src/events/store.ts:875-1101] - deferred, pre-existing platform mapper gap (only 23505/23514 mapped) shared by every module's handlers; resolve as one platform error-mapping decision.
+- Failed registrations write no audit entry (409 DUPLICATE_ASSET, 400 INVALID_PARAMS) [src/api/v1/assets.ts:127-129] - deferred, platform convention matching the supplier precedent; duplicate-attempt traceability needs a platform-level decision.

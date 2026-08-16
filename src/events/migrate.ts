@@ -89,6 +89,8 @@ const MIGRATIONS = [
   '../../read/projections/bom_cost_rollup.sql',
   '../../read/projections/bom_cost_rollup_line.sql',
   '../../read/projections/bom_outbound_message.sql',
+  // Story 7.1: the company-wide maintainable asset register (AD-9), opening the maintenance stream.
+  '../../read/projections/asset.sql',
 ];
 
 async function migrate(): Promise<void> {

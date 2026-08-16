@@ -116,13 +116,13 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req);
   validateEnvelope(body);
 
-  if (body.stream_type === 'engineering') {
+  if (body.stream_type === 'engineering' || body.stream_type === 'maintenance') {
     sendRequestError(
       req,
       res,
       400,
       'INVALID_EVENT_STREAM',
-      'Direct engineering stream writes are not permitted via the events API',
+      `Direct ${body.stream_type} stream writes are not permitted via the events API`,
     );
     return;
   }
