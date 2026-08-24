@@ -134,6 +134,33 @@ export async function getStockBalancesBySku(
 }
 
 /**
+ * Story 7.4: the owned on-hand balance for one (sku, location) grain plus whether it is at or
+ * below a minimum, both computed in SQL NUMERIC. The comparison basis is `on_hand`, NOT
+ * `available` (a fully-reserved-but-present spare is not a stockout - the 7.4 scan decision).
+ * Used by the spares breach scan AND by the seam's alert re-derivation so the alert row's
+ * `on_hand_at_check` / `below` facts are always derived from the ledger, never trusted from a
+ * payload. Consignment/VMI stock (Story 2.8) is excluded via stock_class = 'owned'.
+ */
+export async function getOwnedOnHandAndBelowMin(
+  sku: string,
+  locationId: string,
+  minLevel: string,
+  client?: PoolClient,
+): Promise<{ on_hand: string; below: boolean }> {
+  const result = await runner(client).query(
+    `SELECT COALESCE(SUM(on_hand), 0)::text AS on_hand,
+            (COALESCE(SUM(on_hand), 0) <= $3::numeric) AS below
+       FROM stock_balance
+      WHERE sku = $1 AND location_id = $2 AND stock_class = 'owned'`,
+    [sku, locationId, minLevel],
+  );
+  return {
+    on_hand: result.rows[0]!['on_hand'] as string,
+    below: result.rows[0]!['below'] === true,
+  };
+}
+
+/**
  * Story 3.9: the owned on-hand balance for a SKU summed across every bin physically inside a
  * zone. The mirror-image of putaway_task.ts's ZONE_ANCESTOR_CTE and pick-task-generator.ts's
  * equivalent, both of which walk a bin UPWARD to its owning zone - this walks a zone DOWNWARD to

@@ -71,6 +71,41 @@ function parsePositiveNumberEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+/**
+ * A comma-separated YYYY-MM-DD holiday calendar from the environment, validated fail-closed at
+ * load time (the config.msme precedent). Business-day arithmetic matches holidays by exact
+ * zero-padded string, so a malformed entry like "2026-1-1" would silently never match and the
+ * holiday would silently not be removed from the count - a wrong answer with no error. Shared by
+ * every holiday calendar in the codebase (Story 4.2 responsiveness, Story 7.4 spare returns) so a
+ * second copy of this validation cannot drift from the first.
+ */
+function parseHolidayCalendarEnv(name: string): string[] {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return [];
+  return raw
+    .split(',')
+    .map((d) => d.trim())
+    .filter((d) => d.length > 0)
+    .map((d) => {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+      if (!match) {
+        throw new Error(`Invalid ${name} entry "${d}": must be a YYYY-MM-DD calendar date.`);
+      }
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (
+        date.getUTCFullYear() !== year ||
+        date.getUTCMonth() !== month - 1 ||
+        date.getUTCDate() !== day
+      ) {
+        throw new Error(`Invalid ${name} entry "${d}": not a real calendar date.`);
+      }
+      return d;
+    });
+}
+
 // Local auth mode (which exposes the unauthenticated dev-token endpoint) is only permitted when
 // NODE_ENV is EXPLICITLY a dev/test value. Fail closed for every other case - including NODE_ENV
 // unset - so a misconfigured host (e.g. a copied env file with NODE_ENV absent) cannot silently
@@ -244,35 +279,25 @@ export const config = {
     // businessDaysBetween matches holidays by exact zero-padded YYYY-MM-DD string, so a malformed
     // entry like "2026-1-1" would silently never match and the holiday would silently not be
     // removed from the business-day count.
-    responsivenessHolidayCalendar: (() => {
-      const raw = process.env['SCORECARD_RESPONSIVENESS_HOLIDAYS'];
-      if (raw === undefined || raw.trim() === '') return [] as string[];
-      return raw
-        .split(',')
-        .map((d) => d.trim())
-        .filter((d) => d.length > 0)
-        .map((d) => {
-          const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
-          if (!match) {
-            throw new Error(
-              `Invalid SCORECARD_RESPONSIVENESS_HOLIDAYS entry "${d}": must be a YYYY-MM-DD calendar date.`,
-            );
-          }
-          const year = Number(match[1]);
-          const month = Number(match[2]);
-          const day = Number(match[3]);
-          const date = new Date(Date.UTC(year, month - 1, day));
-          if (
-            date.getUTCFullYear() !== year ||
-            date.getUTCMonth() !== month - 1 ||
-            date.getUTCDate() !== day
-          ) {
-            throw new Error(
-              `Invalid SCORECARD_RESPONSIVENESS_HOLIDAYS entry "${d}": not a real calendar date.`,
-            );
-          }
-          return d;
-        });
+    responsivenessHolidayCalendar: parseHolidayCalendarEnv('SCORECARD_RESPONSIVENESS_HOLIDAYS'),
+  },
+  maintenance: {
+    // Story 7.4 (FR-M-08): the three-working-day spare return clock skips Sundays and every date
+    // listed here. A SEPARATE knob from the scorecard calendar despite sharing a parser and a
+    // default: a plant's maintenance-store closure days are not necessarily the supplier
+    // responsiveness holidays, and naming one after the other would make the config lie.
+    spareReturnHolidayCalendar: parseHolidayCalendarEnv('MAINTENANCE_SPARE_RETURN_HOLIDAYS'),
+    // Business days allowed before an issued spare is overdue back at the store (FR-M-08).
+    // Capped at 3650, the addBusinessDays ceiling, so an operator typo (e.g. 30000) fails fast
+    // at config load instead of surfacing as a 500 on every issue route call.
+    spareReturnBusinessDays: (() => {
+      const days = parsePositiveIntEnv('MAINTENANCE_SPARE_RETURN_DAYS', 3);
+      if (days > 3650) {
+        throw new Error(
+          `Invalid MAINTENANCE_SPARE_RETURN_DAYS "${days}": must be at most 3650 (the addBusinessDays ceiling).`,
+        );
+      }
+      return days;
     })(),
   },
   bom: {

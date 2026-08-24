@@ -1,11 +1,13 @@
 /**
- * Business-day arithmetic for the supplier responsiveness metric (Story 4.2, AC4).
+ * Business-day arithmetic for the supplier responsiveness metric (Story 4.2, AC4) and the
+ * maintenance spare return clock (Story 7.4, FR-M-08).
  *
  * This module is the ONLY source of business-day arithmetic in the codebase - no second copy in
- * the seam, the routes, the read accessors, or the tests. The working week is the IST calendar
- * Monday through Saturday; holidays are removed via the configured calendar
- * (config.scorecard.responsivenessHolidayCalendar). test/unit/business-days.test.ts is the
- * correctness oracle.
+ * the seam, the routes, the read accessors, the jobs, or the tests. The working week is the IST
+ * calendar Monday through Saturday; holidays are removed via the configured calendar
+ * (config.scorecard.responsivenessHolidayCalendar for responsiveness,
+ * config.maintenance.spareReturnHolidayCalendar for spare returns).
+ * test/unit/business-days.test.ts is the correctness oracle.
  */
 
 /** en-CA + Asia/Kolkata reliably formats an instant as the IST YYYY-MM-DD calendar date. */
@@ -61,4 +63,51 @@ export function businessDaysBetween(
     count += 1;
   }
   return count;
+}
+
+/**
+ * The IST calendar date `days` business days after `startDate` (Story 7.4, FR-M-08). The start
+ * date itself is never counted: issuing on a Thursday with days = 3 lands on the following Monday
+ * (Friday 1, Saturday 2, Sunday skipped, Monday 3). Sundays and every date in `holidayDates` are
+ * skipped, matching businessDaysBetween's Monday-to-Saturday working week, so the two functions
+ * cannot disagree about what a business day is.
+ *
+ * `startDate` is a YYYY-MM-DD IST calendar date - use toIstCalendarDate to derive one from an
+ * instant, never a bare slice(0, 10) on an ISO string, which silently shifts the date for any
+ * instant in the 18:30-24:00 UTC window. `days` must be a non-negative integer; 0 returns the
+ * start date unchanged. The loop is bounded with a generous ceiling (a full year of buffer over
+ * the ordinary at-most-one-skipped-day-in-seven cadence) so a densely-holidayed span - a
+ * multi-week plant shutdown where every day is a calendar holiday - still advances instead of
+ * being a latent 500, and the guard makes a caller error (a non-integer or absurd `days`, or a
+ * degenerate holiday calendar) a thrown Error rather than an infinite loop.
+ */
+export function addBusinessDays(
+  startDate: string,
+  days: number,
+  holidayDates: readonly string[],
+): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+    throw new Error(`addBusinessDays: startDate must be YYYY-MM-DD, received "${startDate}"`);
+  }
+  if (!Number.isInteger(days) || days < 0 || days > 3650) {
+    throw new Error(`addBusinessDays: days must be an integer in [0, 3650], received "${days}"`);
+  }
+  if (days === 0) return startDate;
+
+  const holidays = new Set(holidayDates);
+  let remaining = days;
+  let cursor = startDate;
+  const maxSteps = days * 7 + 7 + 366;
+  for (let step = 0; step < maxSteps && remaining > 0; step += 1) {
+    cursor = nextCalendarDate(cursor);
+    if (calendarDayOfWeek(cursor) === 0) continue; // Sunday
+    if (holidays.has(cursor)) continue;
+    remaining -= 1;
+  }
+  if (remaining > 0) {
+    throw new Error(
+      `addBusinessDays: could not advance ${days} business days from ${startDate} within ${maxSteps} calendar days`,
+    );
+  }
+  return cursor;
 }

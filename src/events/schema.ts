@@ -2323,6 +2323,164 @@ export interface ReliabilityReportGeneratedEnvelope extends Omit<EventEnvelope, 
   payload: ReliabilityReportGeneratedPayload;
 }
 
+/**
+ * Story 7.4 (FR-M-07, FR-M-09): a spare catalogued for maintenance at one stocking location.
+ * stream_id is catalogue_id. created_by is derived server-side from metadata.actor.user_id. The
+ * SKU must already exist and be active in item_master (the FR-I "catalogued under the Epic 2 stock
+ * ledger" contract); this event records the maintenance-side designation and the operator-set
+ * min-max, it does NOT create inventory. min_level is mandatory when is_critical is true so the
+ * FR-M-09 breach scan can never silently skip a grain it was configured to watch.
+ */
+export interface SpareCataloguedPayload {
+  catalogue_id: string;
+  sku: string;
+  location_id: string;
+  is_critical: boolean;
+  min_level: string | null;
+  max_level: string | null;
+}
+
+export interface SpareCataloguedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.spare_catalogued';
+  payload: SpareCataloguedPayload;
+}
+
+/**
+ * Story 7.4 (FR-M-07): one line of the maintenance-owned asset parts list, the equipment BOM.
+ * stream_id is part_line_id. This is NOT an Epic 5 bom.* event and must never be treated as one
+ * (AD-4): there is no revision, no release gate and no ERP outbound. quantity_per is a NUMERIC
+ * string to avoid JS float precision loss on the wire.
+ */
+export interface AssetPartListedPayload {
+  part_line_id: string;
+  asset_id: string;
+  sku: string;
+  quantity_per: string;
+  position_ref: string | null;
+}
+
+export interface AssetPartListedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.asset_part_listed';
+  payload: AssetPartListedPayload;
+}
+
+/**
+ * Story 7.4 (FR-M-07, FR-M-08): a spare reserved against a work order. stream_id is
+ * reservation_id. The applier calls applyStockAllocation, so the AUTHORITATIVE reserved quantity
+ * is stock_balance.allocated; this row carries the maintenance-side facts only. asset_id is
+ * DECLARED and CHECKED against the locked work order's asset_id, never trusted.
+ */
+export interface SpareReservedPayload {
+  reservation_id: string;
+  work_order_id: string;
+  asset_id: string;
+  sku: string;
+  location_id: string;
+  lot_id: string | null;
+  quantity: string;
+  reserved_at: string;
+}
+
+export interface SpareReservedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.spare_reserved';
+  payload: SpareReservedPayload;
+}
+
+/**
+ * Story 7.4 (FR-M-08): the reserved quantity physically issued to the technician. stream_id is
+ * reservation_id. The applier releases the allocation BEFORE drawing stock, because
+ * applyStockIssue gates on `available` and `available` is already net of this reservation's own
+ * allocation. quantity and return_due_date are DECLARED and CHECKED against the values derived
+ * from the locked reservation and the three-working-day clock.
+ */
+export interface SpareIssuedPayload {
+  reservation_id: string;
+  quantity: string;
+  issued_at: string;
+  return_due_date: string;
+  business_date: string;
+}
+
+export interface SpareIssuedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.spare_issued';
+  payload: SpareIssuedPayload;
+}
+
+/**
+ * Story 7.4 (FR-M-08): an issued spare handed back, in whole or in part. stream_id is
+ * reservation_id. The applier calls applyStockReceipt, returning the quantity to owned on-hand at
+ * the reservation's location. A cumulative return above the issued quantity is rejected, never
+ * clamped.
+ */
+export interface SpareReturnedPayload {
+  reservation_id: string;
+  quantity_returned: string;
+  returned_at: string;
+}
+
+export interface SpareReturnedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.spare_returned';
+  payload: SpareReturnedPayload;
+}
+
+/**
+ * Story 7.4: a reservation abandoned before issue. stream_id is reservation_id. Without this event
+ * an abandoned work order would hold stock_balance.allocated forever and the location's
+ * `available` would decay permanently, so it exists even though no acceptance criterion names it.
+ */
+export interface SpareReservationCancelledPayload {
+  reservation_id: string;
+  cancellation_reason: string;
+  cancelled_at: string;
+}
+
+export interface SpareReservationCancelledEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.spare_reservation_cancelled';
+  payload: SpareReservationCancelledPayload;
+}
+
+/**
+ * Story 7.4 (FR-M-09): a critical spare whose owned on-hand has fallen to or below its configured
+ * minimum, raised by the POST-triggered scan. stream_id is alert_id. on_hand_at_check is computed
+ * in SQL NUMERIC by the job and re-derived under the catalogue row's lock, never trusted from the
+ * payload. business_date carries the "same day" of FR-M-09; uq_maintenance_spare_alert_day makes a
+ * re-run on the same date a no-op rather than a duplicate.
+ */
+export interface CriticalSpareBreachFlaggedPayload {
+  alert_id: string;
+  sku: string;
+  location_id: string;
+  on_hand_at_check: string;
+  min_level: string;
+  business_date: string;
+  flagged_at: string;
+}
+
+export interface CriticalSpareBreachFlaggedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.critical_spare_breach_flagged';
+  payload: CriticalSpareBreachFlaggedPayload;
+}
+
+/**
+ * Story 7.4 (FR-M-08): an issued spare past its three-working-day return clock, raised by the same
+ * POST-triggered scan. stream_id is alert_id. return_due_date is re-derived from the locked
+ * reservation, never trusted from the payload.
+ */
+export interface SpareReturnOverdueFlaggedPayload {
+  alert_id: string;
+  reservation_id: string;
+  sku: string;
+  location_id: string;
+  return_due_date: string;
+  business_date: string;
+  flagged_at: string;
+}
+
+export interface SpareReturnOverdueFlaggedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.spare_return_overdue_flagged';
+  payload: SpareReturnOverdueFlaggedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
@@ -2872,6 +3030,44 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'maintenance.reliability_report_generated': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 7.4: spare cataloguing, the maintenance-owned asset parts list, the reserve/issue/return
+  // lifecycle and the min-max / overdue-return alerts, all on the same 'maintenance' stream. These
+  // MOVE stock through the Epic 2 ledger helpers but are not themselves tagged inventory
+  // movements - the movement is applied by the seam inside persistEvent, and the business stream
+  // belongs to the stock.* events of Epic 2 - so requiresBusinessStream stays false, matching the
+  // rest of the maintenance block.
+  'maintenance.spare_catalogued': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.asset_part_listed': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.spare_reserved': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.spare_issued': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.spare_returned': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.spare_reservation_cancelled': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.critical_spare_breach_flagged': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.spare_return_overdue_flagged': {
     streamType: 'maintenance',
     requiresBusinessStream: false,
   },

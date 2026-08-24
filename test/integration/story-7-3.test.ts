@@ -766,10 +766,7 @@ describe('Story 7.3 Fault Reporting and Breakdown Work Orders Integration Tests'
       supervisorHeaders,
     );
     assert.strictEqual(replay.status, 201, JSON.stringify(replay.body));
-    assert.strictEqual(
-      (replay.body['policy'] as Record<string, string>)['policy_id'],
-      policyId,
-    );
+    assert.strictEqual((replay.body['policy'] as Record<string, string>)['policy_id'], policyId);
     assert.strictEqual(
       await domainEventCountFor('maintenance.sla_policy_defined', 'policy_id', policyId),
       1,
@@ -813,11 +810,7 @@ describe('Story 7.3 Fault Reporting and Breakdown Work Orders Integration Tests'
       downtimeId,
     );
     assert.strictEqual(
-      await domainEventCountFor(
-        'maintenance.downtime_closed',
-        'downtime_id',
-        downtimeId as string,
-      ),
+      await domainEventCountFor('maintenance.downtime_closed', 'downtime_id', downtimeId as string),
       1,
       'the event ledger must not grow on a close replay',
     );
@@ -1271,7 +1264,10 @@ describe('Story 7.3 Fault Reporting and Breakdown Work Orders Integration Tests'
     // same detail shape the caller needs. Exercise the exported resolver contract directly.
     const assetId = await createAsset('medium');
     // (medium, false) p3/60/8 is already defined by the downtime-close-probes test above.
-    const fault = await reportFault({ asset_id: assetId, description: 'DOWNTIME_ALREADY_OPEN probe' });
+    const fault = await reportFault({
+      asset_id: assetId,
+      description: 'DOWNTIME_ALREADY_OPEN probe',
+    });
     const faultReportId = (fault.body['fault_report'] as Record<string, string>)[
       'fault_report_id'
     ]!;
@@ -1304,10 +1300,7 @@ describe('Story 7.3 Fault Reporting and Breakdown Work Orders Integration Tests'
     const accept = await acceptFault(faultReportId);
     assert.strictEqual(accept.status, 201, JSON.stringify(accept.body));
     const workOrderId = (accept.body['work_order'] as Record<string, string>)['work_order_id']!;
-    assert.strictEqual(
-      (accept.body['work_order'] as Record<string, unknown>)['status'],
-      'open',
-    );
+    assert.strictEqual((accept.body['work_order'] as Record<string, unknown>)['status'], 'open');
 
     const sweep = await makeRequest(
       port,
@@ -1404,10 +1397,7 @@ describe('Story 7.3 Fault Reporting and Breakdown Work Orders Integration Tests'
     );
     assert.strictEqual(actorLabel.rows.length, 1);
     const label = actorLabel.rows[0]!['actor_label'] as string;
-    assert.ok(
-      label.includes(canonicalTag),
-      `actor_label must name the asset tag: ${label}`,
-    );
+    assert.ok(label.includes(canonicalTag), `actor_label must name the asset tag: ${label}`);
 
     const badPriority = await makeRequest(
       port,

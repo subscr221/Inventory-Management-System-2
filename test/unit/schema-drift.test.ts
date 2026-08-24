@@ -963,6 +963,58 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT',
   },
+  {
+    canonical: 'read/projections/maintenance_spare_catalogue.sql',
+    table: 'maintenance_spare_catalogue',
+    constraints: [
+      'uq_maintenance_spare_catalogue_grain',
+      'chk_maintenance_spare_catalogue_levels',
+      'chk_maintenance_spare_catalogue_min_non_negative',
+      'chk_maintenance_spare_catalogue_max_non_negative',
+      'chk_maintenance_spare_catalogue_critical_needs_min',
+    ],
+    indexes: [
+      'idx_maintenance_spare_catalogue_location',
+      'idx_maintenance_spare_catalogue_critical',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/asset_parts_list.sql',
+    table: 'asset_parts_list',
+    constraints: ['uq_asset_parts_list_grain', 'chk_asset_parts_list_quantity_positive'],
+    indexes: ['idx_asset_parts_list_sku', 'idx_asset_parts_list_asset'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/maintenance_spare_reservation.sql',
+    table: 'maintenance_spare_reservation',
+    constraints: [
+      'chk_maintenance_spare_reservation_status',
+      'chk_maintenance_spare_reservation_quantity_positive',
+      'chk_maintenance_spare_reservation_returned_non_negative',
+      'chk_maintenance_spare_reservation_returned_bound',
+      'chk_maintenance_spare_reservation_issue_fields',
+    ],
+    indexes: [
+      'idx_maintenance_spare_reservation_work_order',
+      'idx_maintenance_spare_reservation_grain',
+      'idx_maintenance_spare_reservation_due',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/maintenance_spare_alert.sql',
+    table: 'maintenance_spare_alert',
+    constraints: [
+      'chk_maintenance_spare_alert_type',
+      'uq_maintenance_spare_alert_day',
+      'chk_maintenance_spare_alert_breach_fields',
+      'chk_maintenance_spare_alert_overdue_fields',
+    ],
+    indexes: ['idx_maintenance_spare_alert_business_date', 'idx_maintenance_spare_alert_grain'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

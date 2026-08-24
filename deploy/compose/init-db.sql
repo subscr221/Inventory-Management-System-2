@@ -6629,3 +6629,355 @@ BEGIN
     GRANT SELECT ON maintenance_reliability_metric TO readonly_user;
   END IF;
 END $$;
+
+-- Maintenance spare catalogue (Story 7.4, FR-M-07, FR-M-09). Mirror of
+-- read/projections/maintenance_spare_catalogue.sql for first-boot container init - change both
+-- files together. Every statement is idempotent. Grain is (sku, location_id); this is NOT
+-- inventory_planning_params, whose levels are computed outputs of the Story 2.7 jobs.
+
+CREATE TABLE IF NOT EXISTS maintenance_spare_catalogue (
+  catalogue_id UUID PRIMARY KEY,
+  sku          TEXT NOT NULL,
+  location_id  UUID NOT NULL,
+  is_critical  BOOLEAN NOT NULL DEFAULT false,
+  min_level    NUMERIC(18, 6),
+  max_level    NUMERIC(18, 6),
+  created_by   UUID NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_maintenance_spare_catalogue_grain UNIQUE (sku, location_id),
+  CONSTRAINT chk_maintenance_spare_catalogue_levels CHECK (min_level IS NULL OR max_level IS NULL OR max_level >= min_level),
+  CONSTRAINT chk_maintenance_spare_catalogue_min_non_negative CHECK (min_level IS NULL OR min_level >= 0),
+  CONSTRAINT chk_maintenance_spare_catalogue_max_non_negative CHECK (max_level IS NULL OR max_level >= 0),
+  CONSTRAINT chk_maintenance_spare_catalogue_critical_needs_min CHECK (is_critical = false OR min_level IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_spare_catalogue_location ON maintenance_spare_catalogue (location_id);
+CREATE INDEX IF NOT EXISTS idx_maintenance_spare_catalogue_critical ON maintenance_spare_catalogue (is_critical);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_maintenance_spare_catalogue_grain'
+      AND conrelid = 'maintenance_spare_catalogue'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_catalogue
+      ADD CONSTRAINT uq_maintenance_spare_catalogue_grain UNIQUE (sku, location_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_catalogue_levels'
+      AND conrelid = 'maintenance_spare_catalogue'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_catalogue
+      ADD CONSTRAINT chk_maintenance_spare_catalogue_levels CHECK (min_level IS NULL OR max_level IS NULL OR max_level >= min_level);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_catalogue_min_non_negative'
+      AND conrelid = 'maintenance_spare_catalogue'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_catalogue
+      ADD CONSTRAINT chk_maintenance_spare_catalogue_min_non_negative CHECK (min_level IS NULL OR min_level >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_catalogue_max_non_negative'
+      AND conrelid = 'maintenance_spare_catalogue'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_catalogue
+      ADD CONSTRAINT chk_maintenance_spare_catalogue_max_non_negative CHECK (max_level IS NULL OR max_level >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_catalogue_critical_needs_min'
+      AND conrelid = 'maintenance_spare_catalogue'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_catalogue
+      ADD CONSTRAINT chk_maintenance_spare_catalogue_critical_needs_min CHECK (is_critical = false OR min_level IS NOT NULL);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_spare_catalogue TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_spare_catalogue TO readonly_user;
+  END IF;
+END $$;
+
+-- Asset parts list, the maintenance-owned equipment BOM (Story 7.4, FR-M-07). Mirror of
+-- read/projections/asset_parts_list.sql for first-boot container init - change both files
+-- together. Every statement is idempotent. This is NOT the Epic 5 manufacturing BOM (AD-4):
+-- one flat row per (asset_id, sku), no header and no revision lifecycle.
+
+CREATE TABLE IF NOT EXISTS asset_parts_list (
+  part_line_id UUID PRIMARY KEY,
+  asset_id     UUID NOT NULL,
+  sku          TEXT NOT NULL,
+  quantity_per NUMERIC(18, 6) NOT NULL,
+  position_ref TEXT,
+  created_by   UUID NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_asset_parts_list_grain UNIQUE (asset_id, sku),
+  CONSTRAINT chk_asset_parts_list_quantity_positive CHECK (quantity_per > 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_parts_list_sku ON asset_parts_list (sku);
+CREATE INDEX IF NOT EXISTS idx_asset_parts_list_asset ON asset_parts_list (asset_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_asset_parts_list_grain'
+      AND conrelid = 'asset_parts_list'::regclass
+  ) THEN
+    ALTER TABLE asset_parts_list
+      ADD CONSTRAINT uq_asset_parts_list_grain UNIQUE (asset_id, sku);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_parts_list_quantity_positive'
+      AND conrelid = 'asset_parts_list'::regclass
+  ) THEN
+    ALTER TABLE asset_parts_list
+      ADD CONSTRAINT chk_asset_parts_list_quantity_positive CHECK (quantity_per > 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON asset_parts_list TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON asset_parts_list TO readonly_user;
+  END IF;
+END $$;
+
+-- Maintenance spare reservation (Story 7.4, FR-M-07, FR-M-08). Mirror of
+-- read/projections/maintenance_spare_reservation.sql for first-boot container init - change both
+-- files together. Every statement is idempotent. The authoritative reserved quantity lives in
+-- stock_balance.allocated; this table records the maintenance-side facts only.
+
+CREATE TABLE IF NOT EXISTS maintenance_spare_reservation (
+  reservation_id      UUID PRIMARY KEY,
+  work_order_id       UUID NOT NULL,
+  asset_id            UUID NOT NULL,
+  sku                 TEXT NOT NULL,
+  location_id         UUID NOT NULL,
+  lot_id              TEXT,
+  quantity            NUMERIC(18, 6) NOT NULL,
+  quantity_returned   NUMERIC(18, 6) NOT NULL DEFAULT 0,
+  status              TEXT NOT NULL DEFAULT 'reserved',
+  reserved_at         TIMESTAMPTZ NOT NULL,
+  issued_at           TIMESTAMPTZ,
+  return_due_date     DATE,
+  returned_at         TIMESTAMPTZ,
+  cancelled_at        TIMESTAMPTZ,
+  cancellation_reason TEXT,
+  created_by          UUID NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_maintenance_spare_reservation_status CHECK (status IN ('reserved', 'issued', 'partially_returned', 'returned', 'cancelled')),
+  CONSTRAINT chk_maintenance_spare_reservation_quantity_positive CHECK (quantity > 0),
+  CONSTRAINT chk_maintenance_spare_reservation_returned_non_negative CHECK (quantity_returned >= 0),
+  CONSTRAINT chk_maintenance_spare_reservation_returned_bound CHECK (quantity_returned <= quantity),
+  CONSTRAINT chk_maintenance_spare_reservation_issue_fields CHECK (
+    status IN ('reserved', 'cancelled') OR (issued_at IS NOT NULL AND return_due_date IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_spare_reservation_work_order ON maintenance_spare_reservation (work_order_id);
+CREATE INDEX IF NOT EXISTS idx_maintenance_spare_reservation_grain ON maintenance_spare_reservation (sku, location_id);
+CREATE INDEX IF NOT EXISTS idx_maintenance_spare_reservation_due ON maintenance_spare_reservation (return_due_date) WHERE status IN ('issued', 'partially_returned');
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_reservation_status'
+      AND conrelid = 'maintenance_spare_reservation'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_reservation
+      ADD CONSTRAINT chk_maintenance_spare_reservation_status CHECK (status IN ('reserved', 'issued', 'partially_returned', 'returned', 'cancelled'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_reservation_quantity_positive'
+      AND conrelid = 'maintenance_spare_reservation'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_reservation
+      ADD CONSTRAINT chk_maintenance_spare_reservation_quantity_positive CHECK (quantity > 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_reservation_returned_non_negative'
+      AND conrelid = 'maintenance_spare_reservation'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_reservation
+      ADD CONSTRAINT chk_maintenance_spare_reservation_returned_non_negative CHECK (quantity_returned >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_reservation_returned_bound'
+      AND conrelid = 'maintenance_spare_reservation'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_reservation
+      ADD CONSTRAINT chk_maintenance_spare_reservation_returned_bound CHECK (quantity_returned <= quantity);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_reservation_issue_fields'
+      AND conrelid = 'maintenance_spare_reservation'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_reservation
+      ADD CONSTRAINT chk_maintenance_spare_reservation_issue_fields CHECK (
+        status IN ('reserved', 'cancelled') OR (issued_at IS NOT NULL AND return_due_date IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_spare_reservation TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_spare_reservation TO readonly_user;
+  END IF;
+END $$;
+
+-- Maintenance spare alert (Story 7.4, FR-M-08, FR-M-09). Mirror of
+-- read/projections/maintenance_spare_alert.sql for first-boot container init - change both files
+-- together. Every statement is idempotent. uq_maintenance_spare_alert_day is the same-day
+-- contract: one alert per grain per business_date, NULLS NOT DISTINCT so a null reservation_id
+-- on a min_breach row still collides.
+
+CREATE TABLE IF NOT EXISTS maintenance_spare_alert (
+  alert_id         UUID PRIMARY KEY,
+  alert_type       TEXT NOT NULL,
+  sku              TEXT NOT NULL,
+  location_id      UUID NOT NULL,
+  reservation_id   UUID,
+  on_hand_at_check NUMERIC(18, 6),
+  min_level        NUMERIC(18, 6),
+  return_due_date  DATE,
+  business_date    DATE NOT NULL,
+  flagged_at       TIMESTAMPTZ NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_maintenance_spare_alert_type CHECK (alert_type IN ('min_breach', 'return_overdue')),
+  CONSTRAINT uq_maintenance_spare_alert_day UNIQUE NULLS NOT DISTINCT (alert_type, sku, location_id, reservation_id, business_date),
+  CONSTRAINT chk_maintenance_spare_alert_breach_fields CHECK (
+    alert_type <> 'min_breach' OR (on_hand_at_check IS NOT NULL AND min_level IS NOT NULL)
+  ),
+  CONSTRAINT chk_maintenance_spare_alert_overdue_fields CHECK (
+    alert_type <> 'return_overdue' OR (reservation_id IS NOT NULL AND return_due_date IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_spare_alert_business_date ON maintenance_spare_alert (business_date);
+CREATE INDEX IF NOT EXISTS idx_maintenance_spare_alert_grain ON maintenance_spare_alert (sku, location_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_alert_type'
+      AND conrelid = 'maintenance_spare_alert'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_alert
+      ADD CONSTRAINT chk_maintenance_spare_alert_type CHECK (alert_type IN ('min_breach', 'return_overdue'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_maintenance_spare_alert_day'
+      AND conrelid = 'maintenance_spare_alert'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_alert
+      ADD CONSTRAINT uq_maintenance_spare_alert_day UNIQUE NULLS NOT DISTINCT (alert_type, sku, location_id, reservation_id, business_date);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_alert_breach_fields'
+      AND conrelid = 'maintenance_spare_alert'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_alert
+      ADD CONSTRAINT chk_maintenance_spare_alert_breach_fields CHECK (
+        alert_type <> 'min_breach' OR (on_hand_at_check IS NOT NULL AND min_level IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_spare_alert_overdue_fields'
+      AND conrelid = 'maintenance_spare_alert'::regclass
+  ) THEN
+    ALTER TABLE maintenance_spare_alert
+      ADD CONSTRAINT chk_maintenance_spare_alert_overdue_fields CHECK (
+        alert_type <> 'return_overdue' OR (reservation_id IS NOT NULL AND return_due_date IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_spare_alert TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_spare_alert TO readonly_user;
+  END IF;
+END $$;

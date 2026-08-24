@@ -250,6 +250,18 @@ import {
   reconcileMetersHandler,
   rejectFaultReportHandler,
   sweepGraceWindowsHandler,
+  addAssetPartHandler,
+  cancelSpareReservationHandler,
+  createSpareHandler,
+  issueSpareHandler,
+  listAssetPartsHandler,
+  listSpareAlertsHandler,
+  listSpareReservationsHandler,
+  listSparesHandler,
+  reserveSpareHandler,
+  returnSpareHandler,
+  scanSparesHandler,
+  whereUsedHandler,
 } from './api/v1/maintenance.js';
 import {
   captureSupplierInvoiceHandler,
@@ -613,6 +625,29 @@ export function createAppRouter(): Router {
   router.post('/api/v1/maintenance/work-orders/:workOrderId/downtime/close', closeDowntimeHandler);
   router.post('/api/v1/maintenance/reliability/generate', generateReliabilityReportHandler);
   router.get('/api/v1/maintenance/reliability', listReliabilityMetricsHandler);
+
+  // Story 7.4: Spare Parts Cataloguing, Reservation, and Critical-Spares Alerts (FR-M-07, FR-M-08,
+  // FR-M-09). ROUTE ORDER MATTERS: '/spares/scan' and '/spares/alerts' MUST be registered before
+  // '/spares/:sku/where-used', or the parameter segment shadows both static routes and the scan
+  // trigger silently becomes a where-used lookup for a SKU literally named "scan".
+  router.post('/api/v1/maintenance/spares', createSpareHandler);
+  router.get('/api/v1/maintenance/spares', listSparesHandler);
+  router.post('/api/v1/maintenance/spares/scan', scanSparesHandler);
+  router.get('/api/v1/maintenance/spares/alerts', listSpareAlertsHandler);
+  router.get('/api/v1/maintenance/spares/:sku/where-used', whereUsedHandler);
+  router.post('/api/v1/maintenance/assets/:assetId/parts', addAssetPartHandler);
+  router.get('/api/v1/maintenance/assets/:assetId/parts', listAssetPartsHandler);
+  router.post(
+    '/api/v1/maintenance/work-orders/:workOrderId/spare-reservations',
+    reserveSpareHandler,
+  );
+  router.get('/api/v1/maintenance/spare-reservations', listSpareReservationsHandler);
+  router.post('/api/v1/maintenance/spare-reservations/:reservationId/issue', issueSpareHandler);
+  router.post('/api/v1/maintenance/spare-reservations/:reservationId/return', returnSpareHandler);
+  router.post(
+    '/api/v1/maintenance/spare-reservations/:reservationId/cancel',
+    cancelSpareReservationHandler,
+  );
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

@@ -40,6 +40,25 @@ import {
   runPmGeneration,
 } from '../../maintenance/pm-jobs.js';
 import { runReliabilityReport } from '../../maintenance/reliability-jobs.js';
+import {
+  runCriticalSpareBreachScan,
+  runOverdueReturnSweep,
+} from '../../maintenance/spares-jobs.js';
+import { canonicalSku, deriveReturnDueDate } from '../../compliance/maintenance-spares.js';
+import {
+  getSpareCatalogueById,
+  listSpareCatalogue,
+} from '../../read/projections/maintenance_spare_catalogue.js';
+import {
+  getAssetPartById,
+  listAssetParts,
+  listWhereUsedBySku,
+} from '../../read/projections/asset_parts_list.js';
+import {
+  getSpareReservationById,
+  listSpareReservations,
+} from '../../read/projections/maintenance_spare_reservation.js';
+import { listSpareAlerts } from '../../read/projections/maintenance_spare_alert.js';
 
 /**
  * Story 7.2 REST surface: PM plans, work orders and the generic meter-reading ingestion API
@@ -1587,7 +1606,8 @@ const listReliabilityMetricsBase: RouteHandler = async (req, res, _params) => {
   // key must 400, never silently return an empty page.
   if (scopeKey !== null) {
     const firstSegment = scopeKey.split(':')[0] ?? '';
-    const scopedPart = scopeKey.indexOf(':') === -1 ? null : scopeKey.slice(scopeKey.indexOf(':') + 1);
+    const scopedPart =
+      scopeKey.indexOf(':') === -1 ? null : scopeKey.slice(scopeKey.indexOf(':') + 1);
     const keyOk =
       (scopeType === 'asset' && isUuid(scopeKey)) ||
       (scopeType === 'criticality_class' &&
@@ -1745,3 +1765,744 @@ export const listReliabilityMetricsHandler = requireRole({
   module: 'maintenance',
   functionScope: 'read',
 })(listReliabilityMetricsBase);
+
+// ---------------------------------------------------------------------------
+// Story 7.4: spare cataloguing, asset parts list, reservation lifecycle, alerts
+// ---------------------------------------------------------------------------
+
+const ALERT_TYPES = new Set(['min_breach', 'return_overdue']);
+const RESERVATION_STATUSES = new Set([
+  'reserved',
+  'issued',
+  'partially_returned',
+  'returned',
+  'cancelled',
+]);
+// A NUMERIC(18,6) literal. Quantities and levels travel as STRINGS end to end: 0.1 + 0.2 is not
+// 0.3 in binary floating point, and a spare quantity that fails to reconcile with stock_balance by
+// 1e-17 is a defect nobody can debug from the ledger. A JS number is accepted from the wire and
+// normalized to a string here so a caller sending 2 rather than "2" is not punished.
+const NUMERIC_REGEX = /^\d{1,12}(\.\d{1,6})?$/;
+
+/** Normalizes a wire quantity to a canonical NUMERIC string, or null when it is not one. */
+function numericStringOrNull(value: unknown): string | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    const asString = String(value);
+    return NUMERIC_REGEX.test(asString) ? asString : null;
+  }
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return NUMERIC_REGEX.test(trimmed) ? trimmed : null;
+}
+
+/** A required SKU from the request body, canonicalized exactly as the seam canonicalizes it. */
+function requireSku(body: Record<string, unknown>): string {
+  if (typeof body['sku'] !== 'string' || body['sku'].trim() === '') {
+    throw new AppError(400, 'INVALID_PARAMS', 'sku is required');
+  }
+  return canonicalSku(body['sku']);
+}
+
+function requireUuidField(body: Record<string, unknown>, field: string): string {
+  const value = body[field];
+  if (!isUuid(value)) {
+    throw new AppError(400, 'INVALID_PARAMS', `${field} is required and must be a UUID`);
+  }
+  return value;
+}
+
+function requireQuantity(body: Record<string, unknown>, field: string): string {
+  const normalized = numericStringOrNull(body[field]);
+  if (normalized === null || Number(normalized) <= 0) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `${field} is required and must be a positive number with at most 6 decimals`,
+    );
+  }
+  return normalized;
+}
+
+function optionalNullableText(body: Record<string, unknown>, field: string): string | null {
+  const value = body[field];
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new AppError(400, 'INVALID_PARAMS', `${field} must be a non-blank string when provided`);
+  }
+  return value.trim();
+}
+
+function parseListPaging(
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+  url: URL,
+): { limit: number | undefined; offset: number | undefined } | null {
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+  if (limitRaw !== null && !/^-?\d+$/.test(limitRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'limit must be an integer');
+    return null;
+  }
+  if (offsetRaw !== null && !/^-?\d+$/.test(offsetRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'offset must be an integer');
+    return null;
+  }
+  return {
+    limit: limitRaw === null ? undefined : Number(limitRaw),
+    offset: offsetRaw === null ? undefined : Number(offsetRaw),
+  };
+}
+
+const createSpareBase: RouteHandler = async (req, res, _params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const catalogueId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const sku = requireSku(body);
+    const locationId = requireUuidField(body, 'location_id');
+    // Strict when present: a wire value like the string "true" must not silently catalogue a
+    // non-critical spare (that would disable FR-M-09 alerting with no error) - reject it exactly
+    // like the seam does. An omitted is_critical is a non-critical spare and stays allowed.
+    if (body['is_critical'] !== undefined && typeof body['is_critical'] !== 'boolean') {
+      throw new AppError(400, 'INVALID_PARAMS', 'is_critical must be a boolean');
+    }
+    const isCritical = body['is_critical'] === true;
+
+    // Levels are optional for a non-critical spare and mandatory-minimum for a critical one; the
+    // seam re-validates both, so a direct-event caller gets the same INVALID_MIN_MAX contract.
+    const minLevelRaw = body['min_level'];
+    const maxLevelRaw = body['max_level'];
+    const minLevel =
+      minLevelRaw === undefined || minLevelRaw === null ? null : numericStringOrNull(minLevelRaw);
+    const maxLevel =
+      maxLevelRaw === undefined || maxLevelRaw === null ? null : numericStringOrNull(maxLevelRaw);
+    if (minLevelRaw !== undefined && minLevelRaw !== null && minLevel === null) {
+      throw new AppError(
+        400,
+        'INVALID_MIN_MAX',
+        'min_level must be a number with at most 6 decimals',
+      );
+    }
+    if (maxLevelRaw !== undefined && maxLevelRaw !== null && maxLevel === null) {
+      throw new AppError(
+        400,
+        'INVALID_MIN_MAX',
+        'max_level must be a number with at most 6 decimals',
+      );
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: catalogueId,
+        event_type: 'maintenance.spare_catalogued',
+        payload: {
+          catalogue_id: catalogueId,
+          sku,
+          location_id: locationId,
+          is_critical: isCritical,
+          min_level: minLevel,
+          max_level: maxLevel,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    replayIdOrReject(persisted, 'maintenance.spare_catalogued', 'catalogue_id');
+    // Read back BY ID from the persisted payload (the API Contract rule): on a replay the stored
+    // event carries the ORIGINAL catalogue_id, never the request's sku/location grain.
+    const persistedCatalogueId = (persisted.payload as { catalogue_id?: unknown } | undefined)
+      ?.catalogue_id;
+    const spare =
+      typeof persistedCatalogueId === 'string' && isUuid(persistedCatalogueId)
+        ? await getSpareCatalogueById(persistedCatalogueId)
+        : null;
+    sendJson(res, 201, { event_id: persisted.event_id, spare: spare ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const listSparesBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const sku = url.searchParams.get('sku');
+  const locationId = url.searchParams.get('location_id');
+  const isCriticalRaw = url.searchParams.get('is_critical');
+  if (locationId !== null && !isUuid(locationId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'location_id must be a UUID');
+    return;
+  }
+  if (isCriticalRaw !== null && isCriticalRaw !== 'true' && isCriticalRaw !== 'false') {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'is_critical must be true or false');
+    return;
+  }
+
+  const spares = await listSpareCatalogue({
+    sku: sku === null ? undefined : canonicalSku(sku),
+    location_id: locationId ?? undefined,
+    is_critical: isCriticalRaw === null ? undefined : isCriticalRaw === 'true',
+    limit: paging.limit,
+    offset: paging.offset,
+  });
+  sendJson(res, 200, { spares });
+};
+
+/**
+ * The Phase-1 scheduling surface for spares: one POST runs BOTH cycles for an explicit
+ * business_date. They share a trigger because they share a cadence (daily) and an audience (the
+ * store), and splitting them would double the operator's scheduler entries for no gain. The
+ * counters stay separate in the response so a dropped notification is visible next to the writes.
+ */
+const scanSparesBase: RouteHandler = async (req, res, _params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  try {
+    const businessDate = requireBusinessDate(body);
+    const locationId = body['location_id'];
+    if (locationId !== undefined && locationId !== null && !isUuid(locationId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'location_id must be a UUID when provided');
+    }
+    const skuFilter = body['sku'];
+    if (skuFilter !== undefined && skuFilter !== null && typeof skuFilter !== 'string') {
+      throw new AppError(400, 'INVALID_PARAMS', 'sku must be a string when provided');
+    }
+
+    const scope = {
+      business_date: businessDate,
+      location_id: (locationId as string | undefined) ?? undefined,
+      sku: typeof skuFilter === 'string' ? canonicalSku(skuFilter) : undefined,
+      actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+      auditCtx: auditCtxFor(req, actor, 200),
+    };
+    const breach = await runCriticalSpareBreachScan(scope);
+    const overdue = await runOverdueReturnSweep(scope);
+    sendJson(res, 200, { business_date: businessDate, breach_scan: breach, return_sweep: overdue });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const listSpareAlertsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const alertType = url.searchParams.get('alert_type');
+  const sku = url.searchParams.get('sku');
+  const locationId = url.searchParams.get('location_id');
+  const businessDate = url.searchParams.get('business_date');
+  if (alertType !== null && !ALERT_TYPES.has(alertType)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'alert_type must be one of: min_breach, return_overdue',
+    );
+    return;
+  }
+  if (locationId !== null && !isUuid(locationId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'location_id must be a UUID');
+    return;
+  }
+  if (
+    businessDate !== null &&
+    (!DATE_REGEX.test(businessDate) || Number.isNaN(Date.parse(businessDate)))
+  ) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_date must be YYYY-MM-DD');
+    return;
+  }
+
+  const alerts = await listSpareAlerts({
+    alert_type: alertType ?? undefined,
+    sku: sku === null ? undefined : canonicalSku(sku),
+    location_id: locationId ?? undefined,
+    business_date: businessDate ?? undefined,
+    limit: paging.limit,
+    offset: paging.offset,
+  });
+  sendJson(res, 200, { alerts });
+};
+
+/** AC 1's where-used read: every asset whose parts list references this SKU. */
+const whereUsedBase: RouteHandler = async (req, res, params) => {
+  const rawSku = params?.['sku'];
+  if (!rawSku || rawSku.trim() === '') {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku is required');
+    return;
+  }
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  // The router already decodes path params once; a second decode here would corrupt a SKU that
+  // legitimately contains '%' and throw an uncaught URIError on malformed percent-encoding, so the
+  // decode is guarded and failures surface as a clean 400 instead of a 500.
+  let sku: string;
+  try {
+    sku = canonicalSku(decodeURIComponent(rawSku));
+  } catch {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'sku is not valid percent-encoding');
+    return;
+  }
+  const usages = await listWhereUsedBySku({ sku, limit: paging.limit, offset: paging.offset });
+  sendJson(res, 200, { sku, where_used: usages });
+};
+
+const addAssetPartBase: RouteHandler = async (req, res, params) => {
+  const assetId = params?.['assetId'];
+  if (!assetId || !isUuid(assetId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'assetId must be a UUID');
+    return;
+  }
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const partLineId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const sku = requireSku(body);
+    const quantityPer = requireQuantity(body, 'quantity_per');
+    const positionRef = optionalNullableText(body, 'position_ref');
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: partLineId,
+        event_type: 'maintenance.asset_part_listed',
+        payload: {
+          part_line_id: partLineId,
+          asset_id: assetId,
+          sku,
+          quantity_per: quantityPer,
+          position_ref: positionRef,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    replayIdOrReject(persisted, 'maintenance.asset_part_listed', 'part_line_id');
+    // Read back BY ID from the persisted payload (the API Contract rule): on a replay the stored
+    // event carries the ORIGINAL part_line_id, never the request's asset/sku grain.
+    const persistedPartLineId = (persisted.payload as { part_line_id?: unknown } | undefined)
+      ?.part_line_id;
+    const part =
+      typeof persistedPartLineId === 'string' && isUuid(persistedPartLineId)
+        ? await getAssetPartById(persistedPartLineId)
+        : null;
+    sendJson(res, 201, { event_id: persisted.event_id, part: part ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const listAssetPartsBase: RouteHandler = async (req, res, params) => {
+  const assetId = params?.['assetId'];
+  if (!assetId || !isUuid(assetId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'assetId must be a UUID');
+    return;
+  }
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const asset = await getAssetById(assetId);
+  if (!asset) {
+    sendRequestError(req, res, 404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
+    return;
+  }
+  const parts = await listAssetParts({
+    asset_id: assetId,
+    limit: paging.limit,
+    offset: paging.offset,
+  });
+  sendJson(res, 200, { asset_id: assetId, parts });
+};
+
+const reserveSpareBase: RouteHandler = async (req, res, params) => {
+  const workOrderId = params?.['workOrderId'];
+  if (!workOrderId || !isUuid(workOrderId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'workOrderId must be a UUID');
+    return;
+  }
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const reservationId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const sku = requireSku(body);
+    const locationId = requireUuidField(body, 'location_id');
+    const quantity = requireQuantity(body, 'quantity');
+    const lotId = optionalNullableText(body, 'lot_id');
+
+    // asset_id is resolved from the work order at capture time and DECLARED in the payload; the
+    // seam re-derives it from the LOCKED work order and rejects divergence, so a direct-event
+    // caller cannot bind a reservation to an asset the work order does not name.
+    const workOrder = await getWorkOrderById(workOrderId);
+    if (!workOrder) {
+      throw new AppError(404, 'WORK_ORDER_NOT_FOUND', 'Work order not found', {
+        work_order_id: workOrderId,
+      });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: reservationId,
+        event_type: 'maintenance.spare_reserved',
+        payload: {
+          reservation_id: reservationId,
+          work_order_id: workOrderId,
+          asset_id: workOrder.asset_id,
+          sku,
+          location_id: locationId,
+          lot_id: lotId,
+          quantity,
+          reserved_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedReservationId = replayIdOrReject(
+      persisted,
+      'maintenance.spare_reserved',
+      'reservation_id',
+    );
+    const reservation = await getSpareReservationById(persistedReservationId);
+    sendJson(res, 201, { event_id: persisted.event_id, reservation: reservation ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const listSpareReservationsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const workOrderId = url.searchParams.get('work_order_id');
+  const sku = url.searchParams.get('sku');
+  const locationId = url.searchParams.get('location_id');
+  const status = url.searchParams.get('status');
+  const returnOverdueRaw = url.searchParams.get('return_overdue');
+  const businessDate = url.searchParams.get('business_date');
+
+  if (workOrderId !== null && !isUuid(workOrderId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'work_order_id must be a UUID');
+    return;
+  }
+  if (locationId !== null && !isUuid(locationId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'location_id must be a UUID');
+    return;
+  }
+  if (status !== null && !RESERVATION_STATUSES.has(status)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'status must be one of: reserved, issued, partially_returned, returned, cancelled',
+    );
+    return;
+  }
+  if (returnOverdueRaw !== null && returnOverdueRaw !== 'true' && returnOverdueRaw !== 'false') {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'return_overdue must be true or false');
+    return;
+  }
+  if (
+    businessDate !== null &&
+    (!DATE_REGEX.test(businessDate) || Number.isNaN(Date.parse(businessDate)))
+  ) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_date must be YYYY-MM-DD');
+    return;
+  }
+  // business_date anchors the overdue-return comparison; without return_overdue=true it has no
+  // meaning, so reject the unsupported combination instead of silently returning an unfiltered page.
+  if (businessDate !== null && returnOverdueRaw !== 'true') {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_date requires return_overdue=true');
+    return;
+  }
+
+  const reservations = await listSpareReservations({
+    work_order_id: workOrderId ?? undefined,
+    sku: sku === null ? undefined : canonicalSku(sku),
+    location_id: locationId ?? undefined,
+    status: status ?? undefined,
+    return_overdue: returnOverdueRaw === null ? undefined : returnOverdueRaw === 'true',
+    business_date: businessDate ?? undefined,
+    limit: paging.limit,
+    offset: paging.offset,
+  });
+  sendJson(res, 200, { reservations });
+};
+
+const issueSpareBase: RouteHandler = async (req, res, params) => {
+  const reservationId = params?.['reservationId'];
+  if (!reservationId || !isUuid(reservationId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'reservationId must be a UUID');
+    return;
+  }
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const businessDate = requireBusinessDate(body);
+    const reservation = await getSpareReservationById(reservationId);
+    if (!reservation) {
+      throw new AppError(404, 'RESERVATION_NOT_FOUND', 'Reservation not found', {
+        reservation_id: reservationId,
+      });
+    }
+
+    // The FR-M-08 return clock is derived ONCE here so the declared payload carries it; the seam
+    // re-derives it from the same issue instant under the reservation's lock and rejects any
+    // divergence (SPARE_DERIVATION_MISMATCH), closing the direct-event path.
+    const returnDueDate = deriveReturnDueDate(now);
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: reservationId,
+        event_type: 'maintenance.spare_issued',
+        payload: {
+          reservation_id: reservationId,
+          quantity: reservation.quantity,
+          issued_at: now,
+          return_due_date: returnDueDate,
+          business_date: businessDate,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    replayIdOrReject(persisted, 'maintenance.spare_issued', 'reservation_id');
+    const updated = await getSpareReservationById(reservationId);
+    sendJson(res, 200, { event_id: persisted.event_id, reservation: updated ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const returnSpareBase: RouteHandler = async (req, res, params) => {
+  const reservationId = params?.['reservationId'];
+  if (!reservationId || !isUuid(reservationId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'reservationId must be a UUID');
+    return;
+  }
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const reservation = await getSpareReservationById(reservationId);
+    if (!reservation) {
+      throw new AppError(404, 'RESERVATION_NOT_FOUND', 'Reservation not found', {
+        reservation_id: reservationId,
+      });
+    }
+    // A return with no quantity means "all of it", which is the overwhelmingly common case at the
+    // store counter; an explicit quantity supports the partial return the state machine allows.
+    // The outstanding remainder is computed in SQL NUMERIC (quantity - quantity_returned), never
+    // in JS float - 0.3 - 0.1 is 0.19999999999999998 in binary, which would fail the 6-decimal
+    // NUMERIC regex and strand the reservation in partially_returned.
+    const outstanding = reservation.outstanding;
+    const quantityReturned =
+      body['quantity_returned'] === undefined || body['quantity_returned'] === null
+        ? outstanding
+        : requireQuantity(body, 'quantity_returned');
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: reservationId,
+        event_type: 'maintenance.spare_returned',
+        payload: {
+          reservation_id: reservationId,
+          quantity_returned: quantityReturned,
+          returned_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    replayIdOrReject(persisted, 'maintenance.spare_returned', 'reservation_id');
+    const updated = await getSpareReservationById(reservationId);
+    sendJson(res, 200, { event_id: persisted.event_id, reservation: updated ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const cancelSpareReservationBase: RouteHandler = async (req, res, params) => {
+  const reservationId = params?.['reservationId'];
+  if (!reservationId || !isUuid(reservationId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'reservationId must be a UUID');
+    return;
+  }
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const reason = optionalNullableText(body, 'cancellation_reason');
+    if (reason === null) {
+      throw new AppError(400, 'INVALID_PARAMS', 'cancellation_reason is required');
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: reservationId,
+        event_type: 'maintenance.spare_reservation_cancelled',
+        payload: {
+          reservation_id: reservationId,
+          cancellation_reason: reason,
+          cancelled_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    replayIdOrReject(persisted, 'maintenance.spare_reservation_cancelled', 'reservation_id');
+    const updated = await getSpareReservationById(reservationId);
+    sendJson(res, 200, { event_id: persisted.event_id, reservation: updated ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+export const createSpareHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(createSpareBase);
+
+export const listSparesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listSparesBase);
+
+export const scanSparesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(scanSparesBase);
+
+export const listSpareAlertsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listSpareAlertsBase);
+
+export const whereUsedHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(whereUsedBase);
+
+export const addAssetPartHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(addAssetPartBase);
+
+export const listAssetPartsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listAssetPartsBase);
+
+export const reserveSpareHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(reserveSpareBase);
+
+export const listSpareReservationsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listSpareReservationsBase);
+
+export const issueSpareHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(issueSpareBase);
+
+export const returnSpareHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(returnSpareBase);
+
+export const cancelSpareReservationHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(cancelSpareReservationBase);

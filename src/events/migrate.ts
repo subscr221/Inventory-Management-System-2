@@ -106,6 +106,13 @@ const MIGRATIONS = [
   '../../read/projections/maintenance_fault_report.sql',
   '../../read/projections/maintenance_downtime.sql',
   '../../read/projections/maintenance_reliability_metric.sql',
+  // Story 7.4: the spare catalogue and the parts list carry no FK to item_master/asset (projections
+  // never FK to each other in this codebase), so their order relative to the Epic 2 tables above is
+  // free; keep them last so the maintenance block stays chronological by story.
+  '../../read/projections/maintenance_spare_catalogue.sql',
+  '../../read/projections/asset_parts_list.sql',
+  '../../read/projections/maintenance_spare_reservation.sql',
+  '../../read/projections/maintenance_spare_alert.sql',
 ];
 
 async function migrate(): Promise<void> {

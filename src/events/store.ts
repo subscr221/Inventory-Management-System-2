@@ -150,6 +150,13 @@ import {
   applyMaintenanceReliabilityProjection,
   resolveReliabilityReportConflict,
 } from '../compliance/maintenance-reliability.js';
+import {
+  assertMaintenanceSpareShape,
+  applyMaintenanceSpareProjection,
+  resolveSpareCatalogueDuplicateConflict,
+  resolveAssetPartDuplicateConflict,
+  resolveSpareAlertDuplicateConflict,
+} from '../compliance/maintenance-spares.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -563,6 +570,10 @@ export async function persistEvent(
   // consumes an idempotency key.
   assertMaintenanceFaultShape(envelope);
   assertMaintenanceReliabilityShape(envelope);
+  // Story 7.4: spare catalogue / parts list / reservation lifecycle / alert shape validation is
+  // non-DB and runs with the other pre-transaction asserts, so a malformed spare event never
+  // consumes an idempotency key.
+  assertMaintenanceSpareShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -844,6 +855,12 @@ export async function persistEvent(
     // lands whole (every metric row) or not at all.
     await applyMaintenanceFaultProjection(envelope, client);
     await applyMaintenanceReliabilityProjection(envelope, client);
+    // Story 7.4: the spare projections run inside this same transaction, so the reservation row
+    // and the stock_balance movement it drives (allocate on reserve, deallocate-then-issue on
+    // issue, receipt on return, deallocate on cancel) commit or roll back together. A ledger
+    // rejection - INSUFFICIENT_STOCK from applyStockAllocation - therefore rolls back the
+    // reservation row too, and no maintenance event is ever stored for a movement that failed.
+    await applyMaintenanceSpareProjection(envelope, client);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -1170,11 +1187,42 @@ export async function persistEvent(
           'A reliability snapshot already exists for this period and scope',
           await resolveReliabilityReportConflict(envelope.payload),
         );
+      } else if (constraint === 'uq_maintenance_spare_catalogue_grain') {
+        // Story 7.4: same contract as the seam's sequential pre-check - a concurrent race must not
+        // surface a different code or lose the existing_catalogue_id detail.
+        throw new AppError(
+          409,
+          'SPARE_ALREADY_CATALOGUED',
+          'This spare is already catalogued at this location',
+          await resolveSpareCatalogueDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_asset_parts_list_grain') {
+        // Story 7.4: a concurrent second listing of the same spare on one asset reaches the unique
+        // index; surface the stable ASSET_PART_ALREADY_LISTED with the existing line id.
+        throw new AppError(
+          409,
+          'ASSET_PART_ALREADY_LISTED',
+          'This spare is already on the asset parts list',
+          await resolveAssetPartDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_maintenance_spare_alert_day') {
+        // Story 7.4: the same-day guard. Two concurrent scans for one grain on one business_date
+        // resolve to a single alert with the stable DUPLICATE_SPARE_ALERT contract.
+        throw new AppError(
+          409,
+          'DUPLICATE_SPARE_ALERT',
+          'An alert of this type already exists for this grain on this business date',
+          await resolveSpareAlertDuplicateConflict(envelope.payload),
+        );
       } else if (
         constraint === 'maintenance_sla_policy_pkey' ||
         constraint === 'maintenance_fault_report_pkey' ||
         constraint === 'maintenance_downtime_pkey' ||
-        constraint === 'maintenance_reliability_metric_pkey'
+        constraint === 'maintenance_reliability_metric_pkey' ||
+        constraint === 'maintenance_spare_catalogue_pkey' ||
+        constraint === 'asset_parts_list_pkey' ||
+        constraint === 'maintenance_spare_reservation_pkey' ||
+        constraint === 'maintenance_spare_alert_pkey'
       ) {
         // Story 7.3: server-minted UUIDs make these practically unreachable; mapped for
         // completeness per the maintenance_plan_pkey precedent, so a direct-event duplicate id
@@ -1194,12 +1242,34 @@ export async function persistEvent(
                 }
               : constraint === 'maintenance_downtime_pkey'
                 ? { downtime_id: typeof p['downtime_id'] === 'string' ? p['downtime_id'] : null }
-                : {
-                    metric_id:
-                      firstMetric && typeof firstMetric['metric_id'] === 'string'
-                        ? firstMetric['metric_id']
-                        : null,
-                  };
+                : constraint === 'maintenance_reliability_metric_pkey'
+                  ? {
+                      metric_id:
+                        firstMetric && typeof firstMetric['metric_id'] === 'string'
+                          ? firstMetric['metric_id']
+                          : null,
+                    }
+                  : // Story 7.4: each spare table names its own id, so the chain must not fall
+                    // through to metric_id - reporting the wrong (and always null) field would
+                    // make the 409 undiagnosable.
+                    constraint === 'maintenance_spare_catalogue_pkey'
+                    ? {
+                        catalogue_id:
+                          typeof p['catalogue_id'] === 'string' ? p['catalogue_id'] : null,
+                      }
+                    : constraint === 'asset_parts_list_pkey'
+                      ? {
+                          part_line_id:
+                            typeof p['part_line_id'] === 'string' ? p['part_line_id'] : null,
+                        }
+                      : constraint === 'maintenance_spare_reservation_pkey'
+                        ? {
+                            reservation_id:
+                              typeof p['reservation_id'] === 'string' ? p['reservation_id'] : null,
+                          }
+                        : {
+                            alert_id: typeof p['alert_id'] === 'string' ? p['alert_id'] : null,
+                          };
         throw new AppError(
           409,
           'DUPLICATE_EVENT',

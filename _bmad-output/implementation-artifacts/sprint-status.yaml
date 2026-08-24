@@ -293,7 +293,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-24'
+last_updated: '2026-08-25'
 # story 5-6 dev-story 2026-08-14: implemented all 9 tasks (58 subtasks) from baseline f29765f. Three new
 #   tables (bom_cost_rollup, bom_cost_rollup_line, bom_outbound_message), additive bom_line.supply_source
 #   with a guarded constraint swap, and integration_exception.record_type widened with 'bom' via a
@@ -870,7 +870,29 @@ development_status:
    #   dismissed. story-7-3 30/30 (was 19/19; +10 tests), full suite 964 (948 pass, same 15
    #   pre-existing Epic 1-3 idempotency fails + 1 pre-existing gate_dwell_metric line-ending fail,
    #   0 new); marked done
-  7-4-spare-parts-cataloguing-reservation-and-critical-spares-alerts: ready-for-dev   # PILOT  # create-story 2026-08-25: maintenance-owned asset parts list (new asset_parts_list table, explicitly NOT the Epic 5 BOM per AD-4) with sku reverse-index where-used, spare catalogue at (sku, location_id) grain carrying is_critical and operator-set min-max (inventory_planning_params deliberately NOT widened - its levels are computed outputs), reserve/issue/return/cancel lifecycle riding the Epic 2 ledger helpers only (reservation IS stock_balance.allocated; binding decision: deallocate BEFORE issue, the transfer-request ordering is a known divergence not to copy), 3-working-day return clock frozen at issue via a new addBusinessDays in src/lib/business-days.ts plus a maintenance holiday calendar in config, POST-triggered spares job (min-max breach scan + overdue-return sweep, separate write and delivery counters), 8 events, 4 projections, 1 new seam, 12 routes; flags maintenance_storekeeper as a role no user currently holds; ready-for-dev
+   7-4-spare-parts-cataloguing-reservation-and-critical-spares-alerts: done   # PILOT
+   # - 2026-08-25: implemented (4 projections, 8 events, 1 seam, spares-jobs module, 12 routes,
+   #   addBusinessDays return clock, shared fail-closed holiday parser). Reservation IS
+   #   stock_balance.allocated; deallocate-before-issue verified load-bearing by inverting the
+   #   calls (exactly 1 test fails). story-7-4 45/45, epic-7 + spine 142/142, schema-drift 92/93
+   #   (1 pre-existing gate_dwell CRLF), migrate x2 idempotent, build/lint/format clean, full
+   #   suite 1021 (1004 pass, 17 fail: 15 documented Epic 1-3 idempotency + 1 story-5-3
+   #   clock-window flake + 1 gate_dwell line-ending, ALL verified pre-existing in a pristine
+   #   893e945 worktree, 0 new); moved to review  # create-story 2026-08-25: maintenance-owned asset parts list (new asset_parts_list table, explicitly NOT the Epic 5 BOM per AD-4) with sku reverse-index where-used, spare catalogue at (sku, location_id) grain carrying is_critical and operator-set min-max (inventory_planning_params deliberately NOT widened - its levels are computed outputs), reserve/issue/return/cancel lifecycle riding the Epic 2 ledger helpers only (reservation IS stock_balance.allocated; binding decision: deallocate BEFORE issue, the transfer-request ordering is a known divergence not to copy), 3-working-day return clock frozen at issue via a new addBusinessDays in src/lib/business-days.ts plus a maintenance holiday calendar in config, POST-triggered spares job (min-max breach scan + overdue-return sweep, separate write and delivery counters), 8 events, 4 projections, 1 new seam, 12 routes; flags maintenance_storekeeper as a role no user currently holds; ready-for-dev
+   # - 2026-08-25: code review completed (adversarial pass over baseline 893e945 working tree,
+   #   chunked: schema+seam+events / read+API+jobs / integration tests). 13 patches applied (alert
+   #   appliers now re-derive on_hand/min_level/return_due_date under lock and reject forged alerts
+   #   with SPARE_DERIVATION_MISMATCH; return-all outstanding and the over-return/issue-quantity
+   #   guards settled in SQL NUMERIC instead of JS float; is_critical strict when present; where-used
+   #   percent-decode guarded; 201 read-back by id; addBusinessDays dense-holiday bound +
+   #   MAINTENANCE_SPARE_RETURN_DAYS capped; business_date filter rejected without return_overdue) +
+   #   1 decision resolved (spare SKU case-insensitive canonicalization kept, item_master
+   #   case-sensitivity deferred as a platform decision) + 2 deferred (alert-commit/notification
+   #   crash window, forged-stream direct-event bypass - both pre-existing platform) + 15 dismissed.
+   #   +13 regression tests (fractional lifecycle, concurrency, forged-alert rejection, state-machine
+   #   corners). story-7-4 58/58, story-7-3 30/30, spine 6/6, schema-drift 92/93 (1 pre-existing
+   #   gate_dwell CRLF), business-days 16/16, tsc/eslint/prettier clean, full suite 1034 (1017 pass,
+   #   same 17 pre-existing fails, 0 new); marked done
   7-5-calibration-register-and-non-overridable-lockout: backlog   # PILOT
   7-6-statutory-examinations-cost-accumulation-and-machine-status-broadcast: backlog   # PILOT
   7-7-amc-warranty-and-insurance-tracking: backlog   # PILOT
