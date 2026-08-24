@@ -227,6 +227,21 @@ import {
 } from './api/v1/bom-costing.js';
 import { createAssetHandler, getAssetHandler, listAssetsHandler } from './api/v1/assets.js';
 import {
+  completeWorkOrderHandler,
+  createMeterHandler,
+  createPlanHandler,
+  generateWorkOrdersHandler,
+  getPlanHandler,
+  getWorkOrderHandler,
+  listMeterReadingsHandler,
+  listMetersHandler,
+  listPlansHandler,
+  listWorkOrdersHandler,
+  recordMeterReadingHandler,
+  reconcileMetersHandler,
+  sweepGraceWindowsHandler,
+} from './api/v1/maintenance.js';
+import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
   getSupplierInvoiceHandler,
@@ -556,6 +571,24 @@ export function createAppRouter(): Router {
   router.post('/api/v1/assets', createAssetHandler);
   router.get('/api/v1/assets', listAssetsHandler);
   router.get('/api/v1/assets/:assetId', getAssetHandler);
+
+  // Story 7.2: PM plans, work orders and the meter-reading ingestion API (FR-M-02, FR-M-03).
+  // Static segments register BEFORE their parameterized siblings - the router returns the first
+  // match in registration order and :id compiles to ([^/]+) - so /meters/reconcile precedes
+  // /meters/:meterId/readings and every list route precedes its :id route.
+  router.post('/api/v1/maintenance/plans', createPlanHandler);
+  router.get('/api/v1/maintenance/plans', listPlansHandler);
+  router.get('/api/v1/maintenance/plans/:planId', getPlanHandler);
+  router.post('/api/v1/maintenance/meters', createMeterHandler);
+  router.get('/api/v1/maintenance/meters', listMetersHandler);
+  router.post('/api/v1/maintenance/meters/reconcile', reconcileMetersHandler);
+  router.get('/api/v1/maintenance/meters/:meterId/readings', listMeterReadingsHandler);
+  router.post('/api/v1/maintenance/meter-readings', recordMeterReadingHandler);
+  router.post('/api/v1/maintenance/pm/generate', generateWorkOrdersHandler);
+  router.post('/api/v1/maintenance/pm/grace-sweep', sweepGraceWindowsHandler);
+  router.get('/api/v1/maintenance/work-orders', listWorkOrdersHandler);
+  router.get('/api/v1/maintenance/work-orders/:workOrderId', getWorkOrderHandler);
+  router.post('/api/v1/maintenance/work-orders/:workOrderId/complete', completeWorkOrderHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

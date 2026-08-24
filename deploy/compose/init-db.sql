@@ -5840,3 +5840,420 @@ BEGIN
     GRANT SELECT ON asset TO readonly_user;
   END IF;
 END $$;
+
+-- Asset usage-meter register (Story 7.2, FR-M-03). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.meter_registered,
+-- maintenance.meter_reading_recorded and maintenance.meter_silent_flagged domain events; mutation
+-- happens exclusively through persistEvent, which applies this projection inside the SAME
+-- transaction as the domain_events insert.
+--
+-- One asset can carry more than one meter (running hours AND cycle count), so the meter - not the
+-- asset - is the target of a reading. current_reading is the latest accepted reading and never
+-- decreases (the seam rejects a regression with METER_READING_REGRESSION). silent_after_days is
+-- the per-meter configured interval the monthly reconciliation checks (AC 5), and alert_role
+-- carries the notification target as DATA so no role name is branched on in code.
+--
+-- meter_code is canonicalized with lower() in the unique index (the Story 7.1 review lesson):
+-- keyboard entry and barcode scan may differ in case and a case variant is the same meter. The
+-- guarded DO block below drops a previous exact-match index so a re-applied file self-heals.
+
+CREATE TABLE IF NOT EXISTS asset_meter (
+  meter_id           UUID PRIMARY KEY,
+  asset_id           UUID NOT NULL,
+  meter_code         TEXT NOT NULL,
+  unit               TEXT NOT NULL,
+  current_reading    NUMERIC(18,4) NOT NULL DEFAULT 0,
+  last_reading_at    TIMESTAMPTZ,
+  silent_after_days  INTEGER NOT NULL DEFAULT 30,
+  alert_role         TEXT NOT NULL,
+  silent_flagged_at  TIMESTAMPTZ,
+  last_reconciled_at TIMESTAMPTZ,
+  created_by         UUID NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_asset_meter_unit CHECK (unit IN ('hours', 'cycles', 'km', 'units')),
+  CONSTRAINT chk_asset_meter_silent_after_days CHECK (silent_after_days > 0),
+  CONSTRAINT chk_asset_meter_current_reading CHECK (current_reading >= 0)
+);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'uq_asset_meter_code'
+      AND indexdef NOT LIKE '%lower(meter_code)%'
+  ) THEN
+    DROP INDEX uq_asset_meter_code;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_meter_code ON asset_meter (asset_id, lower(meter_code));
+CREATE INDEX IF NOT EXISTS idx_asset_meter_asset ON asset_meter (asset_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_meter_unit'
+      AND conrelid = 'asset_meter'::regclass
+  ) THEN
+    ALTER TABLE asset_meter
+      ADD CONSTRAINT chk_asset_meter_unit CHECK (unit IN ('hours', 'cycles', 'km', 'units'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_meter_silent_after_days'
+      AND conrelid = 'asset_meter'::regclass
+  ) THEN
+    ALTER TABLE asset_meter
+      ADD CONSTRAINT chk_asset_meter_silent_after_days CHECK (silent_after_days > 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_meter_current_reading'
+      AND conrelid = 'asset_meter'::regclass
+  ) THEN
+    ALTER TABLE asset_meter
+      ADD CONSTRAINT chk_asset_meter_current_reading CHECK (current_reading >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON asset_meter TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON asset_meter TO readonly_user;
+  END IF;
+END $$;
+
+-- Asset meter reading ledger (Story 7.2, FR-M-03). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.meter_reading_recorded domain
+-- events; mutation happens exclusively through persistEvent, which applies this projection inside
+-- the SAME transaction as the domain_events insert. Append-only: a reading is an observation and
+-- is never updated or deleted.
+--
+-- AC 4: a reading is applied identically regardless of where it came from, and every row records
+-- its source and capture method. Phase 1 populates 'manual' / 'manual_entry'; 'hub_booking'
+-- (Epic 10 Story 10.4) and 'station_equipment' (Phase 2, INT-MTR-01) are already accepted so those
+-- feeds need no schema change when they come online.
+
+CREATE TABLE IF NOT EXISTS asset_meter_reading (
+  reading_id     UUID PRIMARY KEY,
+  meter_id       UUID NOT NULL,
+  asset_id       UUID NOT NULL,
+  reading_value  NUMERIC(18,4) NOT NULL,
+  reading_at     TIMESTAMPTZ NOT NULL,
+  source         TEXT NOT NULL,
+  capture_method TEXT NOT NULL,
+  recorded_by    UUID NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_asset_meter_reading_source CHECK (source IN ('manual', 'hub_booking', 'station_equipment')),
+  CONSTRAINT chk_asset_meter_reading_capture_method CHECK (capture_method IN ('manual_entry', 'api', 'device_feed')),
+  CONSTRAINT chk_asset_meter_reading_value CHECK (reading_value >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_meter_reading_meter ON asset_meter_reading (meter_id, reading_at DESC, reading_id ASC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_meter_reading_source'
+      AND conrelid = 'asset_meter_reading'::regclass
+  ) THEN
+    ALTER TABLE asset_meter_reading
+      ADD CONSTRAINT chk_asset_meter_reading_source CHECK (source IN ('manual', 'hub_booking', 'station_equipment'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_meter_reading_capture_method'
+      AND conrelid = 'asset_meter_reading'::regclass
+  ) THEN
+    ALTER TABLE asset_meter_reading
+      ADD CONSTRAINT chk_asset_meter_reading_capture_method CHECK (capture_method IN ('manual_entry', 'api', 'device_feed'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_meter_reading_value'
+      AND conrelid = 'asset_meter_reading'::regclass
+  ) THEN
+    ALTER TABLE asset_meter_reading
+      ADD CONSTRAINT chk_asset_meter_reading_value CHECK (reading_value >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON asset_meter_reading TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON asset_meter_reading TO readonly_user;
+  END IF;
+END $$;
+
+-- Preventive maintenance plan register (Story 7.2, FR-M-02). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.plan_defined and
+-- maintenance.work_order_generated domain events (the latter advances the plan's next-due
+-- cursor); mutation happens exclusively through persistEvent, which applies this projection
+-- inside the SAME transaction as the domain_events insert.
+--
+-- A plan is EITHER calendar-based (interval_days plus next_due_date) OR meter-based (meter_id,
+-- interval_meter_units plus next_due_meter); the two guarded CHECKs make the unused half of the
+-- pair NULL so a plan can never carry a half-configured schedule. grace_period_days is the AC 2
+-- window measured from due_date, and escalation_role carries the notification target as DATA so
+-- no role name is branched on in code. plan_name is canonicalized with lower() in the unique
+-- index per asset (the Story 7.1 review lesson).
+
+CREATE TABLE IF NOT EXISTS maintenance_plan (
+  plan_id              UUID PRIMARY KEY,
+  asset_id             UUID NOT NULL,
+  plan_name            TEXT NOT NULL,
+  plan_type            TEXT NOT NULL,
+  interval_days        INTEGER,
+  meter_id             UUID,
+  interval_meter_units NUMERIC(18,4),
+  grace_period_days    INTEGER NOT NULL,
+  escalation_role      TEXT NOT NULL,
+  anchor_date          DATE NOT NULL,
+  next_due_date        DATE,
+  next_due_meter       NUMERIC(18,4),
+  status               TEXT NOT NULL DEFAULT 'active',
+  created_by           UUID NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_maintenance_plan_type CHECK (plan_type IN ('calendar', 'meter')),
+  CONSTRAINT chk_maintenance_plan_status CHECK (status IN ('active', 'inactive')),
+  CONSTRAINT chk_maintenance_plan_grace CHECK (grace_period_days >= 0),
+  CONSTRAINT chk_maintenance_plan_calendar_fields CHECK (plan_type <> 'calendar' OR (interval_days IS NOT NULL AND interval_days > 0 AND next_due_date IS NOT NULL AND meter_id IS NULL AND interval_meter_units IS NULL AND next_due_meter IS NULL)),
+  CONSTRAINT chk_maintenance_plan_meter_fields CHECK (plan_type <> 'meter' OR (meter_id IS NOT NULL AND interval_meter_units IS NOT NULL AND interval_meter_units > 0 AND next_due_meter IS NOT NULL AND interval_days IS NULL AND next_due_date IS NULL))
+);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'uq_maintenance_plan_name'
+      AND indexdef NOT LIKE '%lower(plan_name)%'
+  ) THEN
+    DROP INDEX uq_maintenance_plan_name;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_plan_name ON maintenance_plan (asset_id, lower(plan_name));
+CREATE INDEX IF NOT EXISTS idx_maintenance_plan_asset ON maintenance_plan (asset_id);
+CREATE INDEX IF NOT EXISTS idx_maintenance_plan_due ON maintenance_plan (status, next_due_date);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_plan_type'
+      AND conrelid = 'maintenance_plan'::regclass
+  ) THEN
+    ALTER TABLE maintenance_plan
+      ADD CONSTRAINT chk_maintenance_plan_type CHECK (plan_type IN ('calendar', 'meter'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_plan_status'
+      AND conrelid = 'maintenance_plan'::regclass
+  ) THEN
+    ALTER TABLE maintenance_plan
+      ADD CONSTRAINT chk_maintenance_plan_status CHECK (status IN ('active', 'inactive'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_plan_grace'
+      AND conrelid = 'maintenance_plan'::regclass
+  ) THEN
+    ALTER TABLE maintenance_plan
+      ADD CONSTRAINT chk_maintenance_plan_grace CHECK (grace_period_days >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_plan_calendar_fields'
+      AND conrelid = 'maintenance_plan'::regclass
+  ) THEN
+    ALTER TABLE maintenance_plan
+      ADD CONSTRAINT chk_maintenance_plan_calendar_fields CHECK (plan_type <> 'calendar' OR (interval_days IS NOT NULL AND interval_days > 0 AND next_due_date IS NOT NULL AND meter_id IS NULL AND interval_meter_units IS NULL AND next_due_meter IS NULL));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_plan_meter_fields'
+      AND conrelid = 'maintenance_plan'::regclass
+  ) THEN
+    ALTER TABLE maintenance_plan
+      ADD CONSTRAINT chk_maintenance_plan_meter_fields CHECK (plan_type <> 'meter' OR (meter_id IS NOT NULL AND interval_meter_units IS NOT NULL AND interval_meter_units > 0 AND next_due_meter IS NOT NULL AND interval_days IS NULL AND next_due_date IS NULL));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_plan TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_plan TO readonly_user;
+  END IF;
+END $$;
+
+-- Maintenance work order register (Story 7.2, FR-M-02). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.work_order_generated,
+-- maintenance.work_order_overdue and maintenance.work_order_completed domain events; mutation
+-- happens exclusively through persistEvent, which applies this projection inside the SAME
+-- transaction as the domain_events insert.
+--
+-- uq_maintenance_work_order_cycle is the anti-double-generation key: the generation job is
+-- re-runnable and two runs over the same due cycle (or two concurrent runs) must produce exactly
+-- ONE work order. The seam pre-check returns the stable DUPLICATE_WORK_ORDER; this partial unique
+-- index is the concurrency backstop and the 23505 mapper resolves the winner.
+--
+-- origin already admits 'breakdown' and plan_id is nullable so Story 7.3 (fault reporting) can
+-- share this table without an ALTER; chk_maintenance_work_order_plan_link keeps every preventive
+-- work order bound to the plan that generated it. Story 7.2 only ever writes 'preventive'.
+
+CREATE TABLE IF NOT EXISTS maintenance_work_order (
+  work_order_id       UUID PRIMARY KEY,
+  plan_id             UUID,
+  asset_id            UUID NOT NULL,
+  origin              TEXT NOT NULL DEFAULT 'preventive',
+  due_date            DATE NOT NULL,
+  grace_until_date    DATE NOT NULL,
+  status              TEXT NOT NULL DEFAULT 'open',
+  generated_for_cycle TEXT NOT NULL,
+  completed_at        TIMESTAMPTZ,
+  completed_by        UUID,
+  overdue_at          TIMESTAMPTZ,
+  escalated_at        TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_maintenance_work_order_status CHECK (status IN ('open', 'overdue', 'completed')),
+  CONSTRAINT chk_maintenance_work_order_origin CHECK (origin IN ('preventive', 'breakdown')),
+  CONSTRAINT chk_maintenance_work_order_plan_link CHECK (origin <> 'preventive' OR plan_id IS NOT NULL),
+  CONSTRAINT chk_maintenance_work_order_grace CHECK (grace_until_date >= due_date)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_work_order_cycle ON maintenance_work_order (plan_id, generated_for_cycle) WHERE plan_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_maintenance_work_order_asset ON maintenance_work_order (asset_id);
+CREATE INDEX IF NOT EXISTS idx_maintenance_work_order_sweep ON maintenance_work_order (status, grace_until_date);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_status'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_status CHECK (status IN ('open', 'overdue', 'completed'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_origin'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_origin CHECK (origin IN ('preventive', 'breakdown'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_plan_link'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_plan_link CHECK (origin <> 'preventive' OR plan_id IS NOT NULL);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_grace'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_grace CHECK (grace_until_date >= due_date);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_work_order TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_work_order TO readonly_user;
+  END IF;
+END $$;

@@ -91,6 +91,13 @@ const MIGRATIONS = [
   '../../read/projections/bom_outbound_message.sql',
   // Story 7.1: the company-wide maintainable asset register (AD-9), opening the maintenance stream.
   '../../read/projections/asset.sql',
+  // Story 7.2: PM plans, work orders, and the usage-meter ingestion register (FR-M-02, FR-M-03).
+  // Appended at the tail; no foreign keys exist between projections, so this order is logical
+  // rather than dependency-forced.
+  '../../read/projections/asset_meter.sql',
+  '../../read/projections/asset_meter_reading.sql',
+  '../../read/projections/maintenance_plan.sql',
+  '../../read/projections/maintenance_work_order.sql',
 ];
 
 async function migrate(): Promise<void> {

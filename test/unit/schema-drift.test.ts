@@ -849,6 +849,58 @@ const EXPECTED = [
     indexes: ['uq_asset_tag', 'uq_asset_serial'],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 7.2: Preventive Maintenance Plans and Work Order Generation
+  {
+    canonical: 'read/projections/asset_meter.sql',
+    table: 'asset_meter',
+    constraints: [
+      'chk_asset_meter_unit',
+      'chk_asset_meter_silent_after_days',
+      'chk_asset_meter_current_reading',
+    ],
+    indexes: ['uq_asset_meter_code', 'idx_asset_meter_asset'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/asset_meter_reading.sql',
+    table: 'asset_meter_reading',
+    constraints: [
+      'chk_asset_meter_reading_source',
+      'chk_asset_meter_reading_capture_method',
+      'chk_asset_meter_reading_value',
+    ],
+    indexes: ['idx_asset_meter_reading_meter'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/maintenance_plan.sql',
+    table: 'maintenance_plan',
+    constraints: [
+      'chk_maintenance_plan_type',
+      'chk_maintenance_plan_status',
+      'chk_maintenance_plan_grace',
+      'chk_maintenance_plan_calendar_fields',
+      'chk_maintenance_plan_meter_fields',
+    ],
+    indexes: ['uq_maintenance_plan_name', 'idx_maintenance_plan_asset', 'idx_maintenance_plan_due'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/maintenance_work_order.sql',
+    table: 'maintenance_work_order',
+    constraints: [
+      'chk_maintenance_work_order_status',
+      'chk_maintenance_work_order_origin',
+      'chk_maintenance_work_order_plan_link',
+      'chk_maintenance_work_order_grace',
+    ],
+    indexes: [
+      'uq_maintenance_work_order_cycle',
+      'idx_maintenance_work_order_asset',
+      'idx_maintenance_work_order_sweep',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

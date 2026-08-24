@@ -127,6 +127,17 @@ import {
   applyAssetProjection,
   resolveAssetDuplicateConflict,
 } from '../compliance/asset.js';
+import {
+  assertAssetMeterShape,
+  applyAssetMeterProjection,
+  resolveMeterDuplicateConflict,
+} from '../compliance/asset-meter.js';
+import {
+  assertMaintenancePlanShape,
+  applyMaintenancePlanProjection,
+  resolvePlanDuplicateConflict,
+  resolveWorkOrderDuplicateConflict,
+} from '../compliance/maintenance-plan.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -530,6 +541,11 @@ export async function persistEvent(
   // vocabulary) is non-DB and runs with the other pre-transaction asserts, so a malformed asset
   // event never consumes an idempotency key.
   assertAssetShape(envelope);
+  // Story 7.2: meter register / reading ingestion and PM plan / work order shape validation is
+  // non-DB and runs with the other pre-transaction asserts, so a malformed maintenance event never
+  // consumes an idempotency key.
+  assertAssetMeterShape(envelope);
+  assertMaintenancePlanShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -800,6 +816,11 @@ export async function persistEvent(
     // asset_tag, then the insert) runs inside this same transaction so the asset row and the
     // domain_events insert commit or roll back together.
     await applyAssetProjection(envelope, client);
+    // Story 7.2: meter register / reading ledger and PM plan / work order projections run inside
+    // this same transaction, so a generated work order and the plan's advanced due cursor - and a
+    // reading and the meter it advances - commit or roll back together.
+    await applyAssetMeterProjection(envelope, client);
+    await applyMaintenancePlanProjection(envelope, client);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -1066,6 +1087,66 @@ export async function persistEvent(
           'DUPLICATE_ASSET',
           'An asset with this serial number or asset tag is already registered',
           details ?? {},
+        );
+      } else if (constraint === 'uq_asset_meter_code') {
+        // Story 7.2: same contract as the seam's sequential pre-check - a concurrent race must not
+        // surface a different code or lose the existing_meter_id detail.
+        throw new AppError(
+          409,
+          'DUPLICATE_METER',
+          'A meter with this code is already registered on this asset',
+          await resolveMeterDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_maintenance_plan_name') {
+        throw new AppError(
+          409,
+          'DUPLICATE_PLAN',
+          'A plan with this name already exists on this asset',
+          await resolvePlanDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_maintenance_work_order_cycle') {
+        throw new AppError(
+          409,
+          'DUPLICATE_WORK_ORDER',
+          'A work order already exists for this plan cycle',
+          await resolveWorkOrderDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'asset_meter_pkey') {
+        // Story 7.2: server-minted UUIDs make these practically unreachable; mapped for
+        // completeness per the asset_pkey precedent, so a direct-event duplicate id surfaces a
+        // stable 409 instead of a raw 23505 500.
+        throw new AppError(409, 'DUPLICATE_EVENT', 'A meter with this meter_id already exists', {
+          meter_id:
+            typeof envelope.payload['meter_id'] === 'string' ? envelope.payload['meter_id'] : null,
+        });
+      } else if (constraint === 'asset_meter_reading_pkey') {
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'A reading with this reading_id already exists',
+          {
+            reading_id:
+              typeof envelope.payload['reading_id'] === 'string'
+                ? envelope.payload['reading_id']
+                : null,
+          },
+        );
+      } else if (constraint === 'maintenance_plan_pkey') {
+        throw new AppError(409, 'DUPLICATE_EVENT', 'A plan with this plan_id already exists', {
+          plan_id:
+            typeof envelope.payload['plan_id'] === 'string' ? envelope.payload['plan_id'] : null,
+        });
+      } else if (constraint === 'maintenance_work_order_pkey') {
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'A work order with this work_order_id already exists',
+          {
+            work_order_id:
+              typeof envelope.payload['work_order_id'] === 'string'
+                ? envelope.payload['work_order_id']
+                : null,
+          },
         );
       } else if (constraint === 'asset_pkey') {
         // Server-minted UUIDs make this practically unreachable; mapped for completeness.

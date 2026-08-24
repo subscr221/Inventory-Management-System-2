@@ -235,3 +235,28 @@
 - stream_type/event_type mismatch bypasses all shape validation and the direct-writes guard [src/api/v1/events.ts:119, src/events/store.ts:199-221] - deferred, pre-existing platform-wide: persistEvent never checks SUPPORTED_EVENT_TYPES membership or stream/event consistency, and every module seam gates on its own stream/event pair; a mismatched pair (e.g. stream_type 'procurement' + event_type 'asset.registered') persists unvalidated with no projection row. Story 7.1 closes the exact-case guard per the engineering precedent; resolve as one platform-level registry check, not a 7.1-only fix.
 - NUL byte in text fields or the search parameter surfaces as a raw 500 (unmapped SQLSTATE) [src/events/store.ts:875-1101] - deferred, pre-existing platform mapper gap (only 23505/23514 mapped) shared by every module's handlers; resolve as one platform error-mapping decision.
 - Failed registrations write no audit entry (409 DUPLICATE_ASSET, 400 INVALID_PARAMS) [src/api/v1/assets.ts:127-129] - deferred, platform convention matching the supplier precedent; duplicate-attempt traceability needs a platform-level decision.
+
+## Deferred from: code review of 7-2-preventive-maintenance-plans-and-work-order-generation (2026-08-16, Group 1)
+
+- Schema-drift gate cannot detect extra constraints in the CREATE body: extractCreateTable compares init-db vs canonical only, and the guarded extractDoBlock check passes unless a constraint is missing, so Task 1.8's claim that the gate enforces every constraint and index is overstated (this story's entries are complete) [test/unit/schema-drift.test.ts] - deferred, pre-existing harness weakness
+
+## Deferred from: code review of 7-2-preventive-maintenance-plans-and-work-order-generation (2026-08-16, Group 2)
+
+- stream_type/event_type mismatch bypasses the registry's streamType: a maintenance.* event posted with a non-maintenance stream_type skips both seams' gates and persists with no projection applied [src/events/store.ts:199-221] - deferred, pre-existing platform-wide gap; same entry already logged under the Story 7.1 review heading (this is a re-affirmation, no separate fix)
+- Client-supplied future metadata.occurred_at stamps projection timestamps in the future: the envelope validator accepts any ISO-8601 timestamp with no upper bound, so completed_at/overdue_at/silent_flagged_at can be written in the future on the direct-event path [src/events/store.ts:325-332] - deferred, platform-wide envelope-validation decision affecting every module (not a 7.2-only fix)
+
+## Deferred from: code review of 7-2-preventive-maintenance-plans-and-work-order-generation (2026-08-16, Group 3)
+
+- TIMESTAMPTZ columns typed string while pg returns Date objects: created_at/last_reading_at/completed_at etc. are Date at runtime; every consumer today is JSON/Date.parse-safe, and asset.ts (the Story 7.1 template) types them identically - deferred, pre-existing platform-wide typing convention; resolve as one platform typing decision (setTypeParser to string, or type columns as Date) [src/read/projections/*.ts]
+
+## Deferred from: code review of 7-2-preventive-maintenance-plans-and-work-order-generation (2026-08-16, Group 4)
+
+- A swallowed notification failure permanently loses the escalation: emitNotification returning ok:false after the work_order_overdue event committed leaves the work order 'overdue' (excluded from the sweep's list forever) with no retry path; the notification_deliveries ledger row is the only durable trace - deferred, AD-17 by design, platform-wide notification-delivery semantics (the sweep exposes the drop via escalations_raised; a future notification-retry story owns the compensating path) [src/maintenance/pm-jobs.ts:208-221]
+
+- 2026-08-17 manifestation: story-5-2 "migrates a qualifying kit ... effective_from should default to today" fails between ~00:00-08:30 IST when the UTC date differs from the IST date (handler stamps UTC-derived date, test asserts IST-derived date; row renders as the shifted local-midnight Date) - same pre-existing repo-wide root cause as the entry above; re-verified that the BOM path is untouched by the 7.2 review changes (git diff clean on test/integration/story-5-2.test.ts, src/api/v1/boms.ts, src/compliance/bom.ts, src/read/projections/bom.ts); passes in the daytime window
+
+## Deferred from: code review of 7-2-preventive-maintenance-plans-and-work-order-generation (2026-08-16, Group 5)
+
+- Same-event-type idempotency-key reuse with different content returns the original event (201/200 with the wrong resource and the new write silently dropped): replayIdOrReject compares event_type and the id field's UUID-ness, never the rest of the payload - deferred, standard idempotency semantics (a key identifies a logical write; a replay returns the stored result) and the Story 7.1 review convention; the harmful cross-event-type reuse already resolves to 409 DUPLICATE_EVENT [src/api/v1/maintenance.ts:109-127]
+
+- 2026-08-17 manifestation (02:00-08:30 IST window): story-5-3 "does not report superseded or retired lines in the where-used impact walk" fails when the clock date crosses the fixture's date boundary; reproduces in isolation; passed at 10:14 IST the same day - same pre-existing clock/date-dependent flake class as the story-5-2 entry above; verified no bom/eco/explosion/cost file is touched by the 7.2 review diff (git diff clean on the whole src tree except maintenance/events/store/server paths)
