@@ -98,6 +98,14 @@ const MIGRATIONS = [
   '../../read/projections/asset_meter_reading.sql',
   '../../read/projections/maintenance_plan.sql',
   '../../read/projections/maintenance_work_order.sql',
+  // Story 7.3: fault reporting, SLA policy, downtime capture and the monthly reliability
+  // snapshot (FR-M-04, FR-M-05, FR-M-06). Appended at the tail after the Story 7.2 files; the
+  // edited maintenance_work_order.sql keeps its position above and its new guarded blocks
+  // re-apply harmlessly.
+  '../../read/projections/maintenance_sla_policy.sql',
+  '../../read/projections/maintenance_fault_report.sql',
+  '../../read/projections/maintenance_downtime.sql',
+  '../../read/projections/maintenance_reliability_metric.sql',
 ];
 
 async function migrate(): Promise<void> {

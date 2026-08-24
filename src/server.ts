@@ -227,18 +227,28 @@ import {
 } from './api/v1/bom-costing.js';
 import { createAssetHandler, getAssetHandler, listAssetsHandler } from './api/v1/assets.js';
 import {
+  acceptFaultReportHandler,
+  closeDowntimeHandler,
   completeWorkOrderHandler,
+  createFaultReportHandler,
   createMeterHandler,
   createPlanHandler,
+  createSlaPolicyHandler,
+  generateReliabilityReportHandler,
   generateWorkOrdersHandler,
+  getFaultReportHandler,
   getPlanHandler,
   getWorkOrderHandler,
+  listFaultReportsHandler,
   listMeterReadingsHandler,
   listMetersHandler,
   listPlansHandler,
+  listReliabilityMetricsHandler,
+  listSlaPoliciesHandler,
   listWorkOrdersHandler,
   recordMeterReadingHandler,
   reconcileMetersHandler,
+  rejectFaultReportHandler,
   sweepGraceWindowsHandler,
 } from './api/v1/maintenance.js';
 import {
@@ -589,6 +599,20 @@ export function createAppRouter(): Router {
   router.get('/api/v1/maintenance/work-orders', listWorkOrdersHandler);
   router.get('/api/v1/maintenance/work-orders/:workOrderId', getWorkOrderHandler);
   router.post('/api/v1/maintenance/work-orders/:workOrderId/complete', completeWorkOrderHandler);
+
+  // Story 7.3: Fault Reporting and Breakdown Work Orders (FR-M-04, FR-M-05, FR-M-06). Static
+  // segments register BEFORE their parameterized siblings, so /fault-reports and /reliability
+  // precede their :id routes and no parameter segment shadows a static one.
+  router.post('/api/v1/maintenance/sla-policies', createSlaPolicyHandler);
+  router.get('/api/v1/maintenance/sla-policies', listSlaPoliciesHandler);
+  router.post('/api/v1/maintenance/fault-reports', createFaultReportHandler);
+  router.get('/api/v1/maintenance/fault-reports', listFaultReportsHandler);
+  router.get('/api/v1/maintenance/fault-reports/:faultReportId', getFaultReportHandler);
+  router.post('/api/v1/maintenance/fault-reports/:faultReportId/accept', acceptFaultReportHandler);
+  router.post('/api/v1/maintenance/fault-reports/:faultReportId/reject', rejectFaultReportHandler);
+  router.post('/api/v1/maintenance/work-orders/:workOrderId/downtime/close', closeDowntimeHandler);
+  router.post('/api/v1/maintenance/reliability/generate', generateReliabilityReportHandler);
+  router.get('/api/v1/maintenance/reliability', listReliabilityMetricsHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

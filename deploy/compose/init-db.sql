@@ -6200,6 +6200,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_work_order_cycle ON maintenance
 CREATE INDEX IF NOT EXISTS idx_maintenance_work_order_asset ON maintenance_work_order (asset_id);
 CREATE INDEX IF NOT EXISTS idx_maintenance_work_order_sweep ON maintenance_work_order (status, grace_until_date);
 
+-- Story 7.3 breakdown arm (FR-M-04, FR-M-05): additive columns on the SAME table so a breakdown
+-- work order shares the work-order register instead of creating a second table. The guarded
+-- ALTER blocks re-apply harmlessly on an existing database. fault_report_id and sla_policy_id are
+-- references without FKs (projections are event-rebuildable read models; referential integrity is
+-- asserted in the seam). priority is a TABLE LOOKUP result from the active SLA policy, never a
+-- hardcoded ladder.
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS fault_report_id UUID;
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS priority TEXT;
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS sla_policy_id UUID;
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS sla_response_due_at TIMESTAMPTZ;
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS sla_resolution_due_at TIMESTAMPTZ;
+
+-- Story 7.3: the anti-double-acceptance key. A fault report may be accepted exactly once; the
+-- seam pre-check returns the stable FAULT_ALREADY_TRIAGED and this partial unique index is the
+-- concurrency backstop (23505 mapper resolves it to FAULT_ALREADY_TRIAGED). These two indexes
+-- reference the columns added above, so they must be created AFTER the ALTER block (a fresh
+-- container boot runs the whole file with ON_ERROR_STOP=1).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_work_order_fault ON maintenance_work_order (fault_report_id) WHERE fault_report_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_maintenance_work_order_priority ON maintenance_work_order (origin, priority, status);
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -6250,10 +6270,362 @@ END $$;
 
 DO $$
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_priority'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_priority CHECK (priority IS NULL OR priority IN ('p1', 'p2', 'p3', 'p4'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_breakdown_link'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_breakdown_link CHECK (origin <> 'breakdown' OR (fault_report_id IS NOT NULL AND priority IS NOT NULL AND sla_policy_id IS NOT NULL));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
     GRANT INSERT, SELECT, UPDATE ON maintenance_work_order TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON maintenance_work_order TO readonly_user;
+  END IF;
+END $$;
+
+-- Maintenance SLA policy (Story 7.3, FR-M-05). Mirror of read/projections/maintenance_sla_policy.sql
+-- for first-boot container init - change both files together. Every statement is idempotent.
+-- uq_maintenance_sla_policy_key is the whole configurability contract: exactly ONE active policy
+-- per (criticality_class, safety_flag) pair.
+
+CREATE TABLE IF NOT EXISTS maintenance_sla_policy (
+  policy_id        UUID PRIMARY KEY,
+  criticality_class TEXT NOT NULL,
+  safety_flag      BOOLEAN NOT NULL,
+  priority         TEXT NOT NULL,
+  response_minutes INTEGER NOT NULL,
+  resolution_hours INTEGER NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'active',
+  created_by       UUID NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_maintenance_sla_policy_criticality CHECK (criticality_class IN ('critical', 'high', 'medium', 'low')),
+  CONSTRAINT chk_maintenance_sla_policy_priority CHECK (priority IN ('p1', 'p2', 'p3', 'p4')),
+  CONSTRAINT chk_maintenance_sla_policy_status CHECK (status IN ('active', 'inactive')),
+  CONSTRAINT chk_maintenance_sla_policy_response CHECK (response_minutes > 0 AND response_minutes <= 100000),
+  CONSTRAINT chk_maintenance_sla_policy_resolution CHECK (resolution_hours > 0 AND resolution_hours <= 100000)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_sla_policy_key ON maintenance_sla_policy (criticality_class, safety_flag) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_maintenance_sla_policy_status ON maintenance_sla_policy (status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_sla_policy_criticality'
+      AND conrelid = 'maintenance_sla_policy'::regclass
+  ) THEN
+    ALTER TABLE maintenance_sla_policy
+      ADD CONSTRAINT chk_maintenance_sla_policy_criticality CHECK (criticality_class IN ('critical', 'high', 'medium', 'low'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_sla_policy_priority'
+      AND conrelid = 'maintenance_sla_policy'::regclass
+  ) THEN
+    ALTER TABLE maintenance_sla_policy
+      ADD CONSTRAINT chk_maintenance_sla_policy_priority CHECK (priority IN ('p1', 'p2', 'p3', 'p4'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_sla_policy_status'
+      AND conrelid = 'maintenance_sla_policy'::regclass
+  ) THEN
+    ALTER TABLE maintenance_sla_policy
+      ADD CONSTRAINT chk_maintenance_sla_policy_status CHECK (status IN ('active', 'inactive'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_sla_policy_response'
+      AND conrelid = 'maintenance_sla_policy'::regclass
+  ) THEN
+    ALTER TABLE maintenance_sla_policy
+      ADD CONSTRAINT chk_maintenance_sla_policy_response CHECK (response_minutes > 0 AND response_minutes <= 100000);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_sla_policy_resolution'
+      AND conrelid = 'maintenance_sla_policy'::regclass
+  ) THEN
+    ALTER TABLE maintenance_sla_policy
+      ADD CONSTRAINT chk_maintenance_sla_policy_resolution CHECK (resolution_hours > 0 AND resolution_hours <= 100000);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_sla_policy TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_sla_policy TO readonly_user;
+  END IF;
+END $$;
+
+-- Maintenance fault report (Story 7.3, FR-M-04). Mirror of
+-- read/projections/maintenance_fault_report.sql for first-boot container init - change both files
+-- together. Every statement is idempotent.
+
+CREATE TABLE IF NOT EXISTS maintenance_fault_report (
+  fault_report_id  UUID PRIMARY KEY,
+  asset_id         UUID NOT NULL,
+  asset_tag        TEXT NOT NULL,
+  reported_by      UUID NOT NULL,
+  reported_at      TIMESTAMPTZ NOT NULL,
+  location_id      UUID NOT NULL,
+  description      TEXT NOT NULL,
+  safety_flag      BOOLEAN NOT NULL DEFAULT false,
+  status           TEXT NOT NULL DEFAULT 'reported',
+  work_order_id    UUID,
+  triaged_at       TIMESTAMPTZ,
+  triaged_by       UUID,
+  rejection_reason TEXT,
+  notified_at      TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_maintenance_fault_report_status CHECK (status IN ('reported', 'accepted', 'rejected')),
+  CONSTRAINT chk_maintenance_fault_report_accept_link CHECK (status <> 'accepted' OR work_order_id IS NOT NULL),
+  CONSTRAINT chk_maintenance_fault_report_reject_reason CHECK (status <> 'rejected' OR (rejection_reason IS NOT NULL AND length(btrim(rejection_reason)) > 0))
+);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_fault_report_asset ON maintenance_fault_report (asset_id, reported_at DESC);
+CREATE INDEX IF NOT EXISTS idx_maintenance_fault_report_triage ON maintenance_fault_report (status, reported_at);
+CREATE INDEX IF NOT EXISTS idx_maintenance_fault_report_location ON maintenance_fault_report (location_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_fault_report_status'
+      AND conrelid = 'maintenance_fault_report'::regclass
+  ) THEN
+    ALTER TABLE maintenance_fault_report
+      ADD CONSTRAINT chk_maintenance_fault_report_status CHECK (status IN ('reported', 'accepted', 'rejected'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_fault_report_accept_link'
+      AND conrelid = 'maintenance_fault_report'::regclass
+  ) THEN
+    ALTER TABLE maintenance_fault_report
+      ADD CONSTRAINT chk_maintenance_fault_report_accept_link CHECK (status <> 'accepted' OR work_order_id IS NOT NULL);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_fault_report_reject_reason'
+      AND conrelid = 'maintenance_fault_report'::regclass
+  ) THEN
+    ALTER TABLE maintenance_fault_report
+      ADD CONSTRAINT chk_maintenance_fault_report_reject_reason CHECK (status <> 'rejected' OR (rejection_reason IS NOT NULL AND length(btrim(rejection_reason)) > 0));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_fault_report TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_fault_report TO readonly_user;
+  END IF;
+END $$;
+
+-- Maintenance downtime window (Story 7.3, FR-M-06). Mirror of
+-- read/projections/maintenance_downtime.sql for first-boot container init - change both files
+-- together. Every statement is idempotent. uq_maintenance_downtime_work_order enforces the
+-- Phase-1 binding decision: exactly ONE downtime window per breakdown work order.
+
+CREATE TABLE IF NOT EXISTS maintenance_downtime (
+  downtime_id      UUID PRIMARY KEY,
+  work_order_id    UUID NOT NULL,
+  asset_id         UUID NOT NULL,
+  started_at       TIMESTAMPTZ NOT NULL,
+  ended_at         TIMESTAMPTZ,
+  duration_minutes NUMERIC(18,4),
+  closed_by        UUID,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_maintenance_downtime_window CHECK (ended_at IS NULL OR ended_at >= started_at),
+  CONSTRAINT chk_maintenance_downtime_closure CHECK ((ended_at IS NULL AND duration_minutes IS NULL AND closed_by IS NULL) OR (ended_at IS NOT NULL AND duration_minutes IS NOT NULL AND closed_by IS NOT NULL)),
+  CONSTRAINT chk_maintenance_downtime_duration CHECK (duration_minutes IS NULL OR duration_minutes >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_downtime_work_order ON maintenance_downtime (work_order_id);
+CREATE INDEX IF NOT EXISTS idx_maintenance_downtime_open ON maintenance_downtime (asset_id) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_maintenance_downtime_period ON maintenance_downtime (asset_id, ended_at);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_downtime_window'
+      AND conrelid = 'maintenance_downtime'::regclass
+  ) THEN
+    ALTER TABLE maintenance_downtime
+      ADD CONSTRAINT chk_maintenance_downtime_window CHECK (ended_at IS NULL OR ended_at >= started_at);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_downtime_closure'
+      AND conrelid = 'maintenance_downtime'::regclass
+  ) THEN
+    ALTER TABLE maintenance_downtime
+      ADD CONSTRAINT chk_maintenance_downtime_closure CHECK ((ended_at IS NULL AND duration_minutes IS NULL AND closed_by IS NULL) OR (ended_at IS NOT NULL AND duration_minutes IS NOT NULL AND closed_by IS NOT NULL));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_downtime_duration'
+      AND conrelid = 'maintenance_downtime'::regclass
+  ) THEN
+    ALTER TABLE maintenance_downtime
+      ADD CONSTRAINT chk_maintenance_downtime_duration CHECK (duration_minutes IS NULL OR duration_minutes >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_downtime TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_downtime TO readonly_user;
+  END IF;
+END $$;
+
+-- Maintenance reliability metric snapshot (Story 7.3, FR-M-06). Mirror of
+-- read/projections/maintenance_reliability_metric.sql for first-boot container init - change both
+-- files together. Every statement is idempotent. uq_maintenance_reliability_metric_scope is the
+-- anti-double-report key: a re-run of the same period/scope must not write a second snapshot.
+-- Append-only per report (INSERT, SELECT grants only).
+
+CREATE TABLE IF NOT EXISTS maintenance_reliability_metric (
+  metric_id         UUID PRIMARY KEY,
+  report_id         UUID NOT NULL,
+  period_start      DATE NOT NULL,
+  period_end        DATE NOT NULL,
+  scope_type        TEXT NOT NULL,
+  scope_key         TEXT NOT NULL,
+  breakdown_count   INTEGER NOT NULL,
+  downtime_minutes  NUMERIC(18,4) NOT NULL,
+  mttr_minutes      NUMERIC(18,4),
+  mtbf_minutes      NUMERIC(18,4),
+  generated_by      UUID NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_maintenance_reliability_metric_scope CHECK (scope_type IN ('asset', 'criticality_class')),
+  CONSTRAINT chk_maintenance_reliability_metric_period CHECK (period_end >= period_start),
+  CONSTRAINT chk_maintenance_reliability_metric_counts CHECK (breakdown_count >= 0 AND downtime_minutes >= 0),
+  CONSTRAINT chk_maintenance_reliability_metric_rates CHECK ((mttr_minutes IS NULL OR mttr_minutes >= 0) AND (mtbf_minutes IS NULL OR mtbf_minutes >= 0))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_reliability_metric_scope ON maintenance_reliability_metric (period_start, period_end, scope_type, scope_key);
+CREATE INDEX IF NOT EXISTS idx_maintenance_reliability_metric_report ON maintenance_reliability_metric (report_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_reliability_metric_scope'
+      AND conrelid = 'maintenance_reliability_metric'::regclass
+  ) THEN
+    ALTER TABLE maintenance_reliability_metric
+      ADD CONSTRAINT chk_maintenance_reliability_metric_scope CHECK (scope_type IN ('asset', 'criticality_class'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_reliability_metric_period'
+      AND conrelid = 'maintenance_reliability_metric'::regclass
+  ) THEN
+    ALTER TABLE maintenance_reliability_metric
+      ADD CONSTRAINT chk_maintenance_reliability_metric_period CHECK (period_end >= period_start);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_reliability_metric_counts'
+      AND conrelid = 'maintenance_reliability_metric'::regclass
+  ) THEN
+    ALTER TABLE maintenance_reliability_metric
+      ADD CONSTRAINT chk_maintenance_reliability_metric_counts CHECK (breakdown_count >= 0 AND downtime_minutes >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_reliability_metric_rates'
+      AND conrelid = 'maintenance_reliability_metric'::regclass
+  ) THEN
+    ALTER TABLE maintenance_reliability_metric
+      ADD CONSTRAINT chk_maintenance_reliability_metric_rates CHECK ((mttr_minutes IS NULL OR mttr_minutes >= 0) AND (mtbf_minutes IS NULL OR mtbf_minutes >= 0));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON maintenance_reliability_metric TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_reliability_metric TO readonly_user;
   END IF;
 END $$;

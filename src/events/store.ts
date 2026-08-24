@@ -138,6 +138,18 @@ import {
   resolvePlanDuplicateConflict,
   resolveWorkOrderDuplicateConflict,
 } from '../compliance/maintenance-plan.js';
+import {
+  assertMaintenanceFaultShape,
+  applyMaintenanceFaultProjection,
+  resolveSlaPolicyDuplicateConflict,
+  resolveFaultTriageConflict,
+  resolveDowntimeConflict,
+} from '../compliance/maintenance-fault.js';
+import {
+  assertMaintenanceReliabilityShape,
+  applyMaintenanceReliabilityProjection,
+  resolveReliabilityReportConflict,
+} from '../compliance/maintenance-reliability.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -546,6 +558,11 @@ export async function persistEvent(
   // consumes an idempotency key.
   assertAssetMeterShape(envelope);
   assertMaintenancePlanShape(envelope);
+  // Story 7.3: fault reporting / SLA policy / breakdown work order / downtime shape validation is
+  // non-DB and runs with the other pre-transaction asserts, so a malformed maintenance event never
+  // consumes an idempotency key.
+  assertMaintenanceFaultShape(envelope);
+  assertMaintenanceReliabilityShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -821,6 +838,12 @@ export async function persistEvent(
     // reading and the meter it advances - commit or roll back together.
     await applyAssetMeterProjection(envelope, client);
     await applyMaintenancePlanProjection(envelope, client);
+    // Story 7.3: fault report / SLA policy / breakdown work order / downtime projections run
+    // inside this same transaction, so the work order, its open downtime window and the fault
+    // report's accepted flip commit or roll back together - and a reliability snapshot either
+    // lands whole (every metric row) or not at all.
+    await applyMaintenanceFaultProjection(envelope, client);
+    await applyMaintenanceReliabilityProjection(envelope, client);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -1110,6 +1133,78 @@ export async function persistEvent(
           'DUPLICATE_WORK_ORDER',
           'A work order already exists for this plan cycle',
           await resolveWorkOrderDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_maintenance_sla_policy_key') {
+        // Story 7.3: same contract as the seam's sequential pre-check - a concurrent race must not
+        // surface a different code or lose the existing_policy_id detail.
+        throw new AppError(
+          409,
+          'DUPLICATE_SLA_POLICY',
+          'An active SLA policy already exists for this (criticality_class, safety_flag) pair',
+          await resolveSlaPolicyDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_maintenance_work_order_fault') {
+        // Story 7.3: a concurrent accept of the same fault report reaches the unique index behind
+        // the report lock; resolve the winner with the SAME FAULT_ALREADY_TRIAGED contract.
+        throw new AppError(
+          409,
+          'FAULT_ALREADY_TRIAGED',
+          'This fault report has already been triaged',
+          await resolveFaultTriageConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_maintenance_downtime_work_order') {
+        // Story 7.3: a concurrent second open window for one work order reaches the unique index;
+        // surface the stable DOWNTIME_ALREADY_OPEN with the existing window id.
+        throw new AppError(
+          409,
+          'DOWNTIME_ALREADY_OPEN',
+          'A downtime window is already open for this work order',
+          await resolveDowntimeConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_maintenance_reliability_metric_scope') {
+        // Story 7.3: a concurrent re-run of the same period/scope reaches the anti-double-report
+        // key; surface the stable DUPLICATE_RELIABILITY_REPORT with the existing metric id.
+        throw new AppError(
+          409,
+          'DUPLICATE_RELIABILITY_REPORT',
+          'A reliability snapshot already exists for this period and scope',
+          await resolveReliabilityReportConflict(envelope.payload),
+        );
+      } else if (
+        constraint === 'maintenance_sla_policy_pkey' ||
+        constraint === 'maintenance_fault_report_pkey' ||
+        constraint === 'maintenance_downtime_pkey' ||
+        constraint === 'maintenance_reliability_metric_pkey'
+      ) {
+        // Story 7.3: server-minted UUIDs make these practically unreachable; mapped for
+        // completeness per the maintenance_plan_pkey precedent, so a direct-event duplicate id
+        // surfaces a stable 409 instead of a raw 23505 500, with the offending id in the details
+        // (the same diagnosable shape the sibling PK mappers expose).
+        const p = envelope.payload as Record<string, unknown>;
+        const firstMetric = Array.isArray(p['metrics'])
+          ? (p['metrics'] as Record<string, unknown>[])[0]
+          : undefined;
+        const offendingId =
+          constraint === 'maintenance_sla_policy_pkey'
+            ? { policy_id: typeof p['policy_id'] === 'string' ? p['policy_id'] : null }
+            : constraint === 'maintenance_fault_report_pkey'
+              ? {
+                  fault_report_id:
+                    typeof p['fault_report_id'] === 'string' ? p['fault_report_id'] : null,
+                }
+              : constraint === 'maintenance_downtime_pkey'
+                ? { downtime_id: typeof p['downtime_id'] === 'string' ? p['downtime_id'] : null }
+                : {
+                    metric_id:
+                      firstMetric && typeof firstMetric['metric_id'] === 'string'
+                        ? firstMetric['metric_id']
+                        : null,
+                  };
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'A maintenance row with this id already exists',
+          { constraint, ...offendingId },
         );
       } else if (constraint === 'asset_meter_pkey') {
         // Story 7.2: server-minted UUIDs make these practically unreachable; mapped for

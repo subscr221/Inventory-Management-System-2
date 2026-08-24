@@ -893,13 +893,75 @@ const EXPECTED = [
       'chk_maintenance_work_order_origin',
       'chk_maintenance_work_order_plan_link',
       'chk_maintenance_work_order_grace',
+      'chk_maintenance_work_order_priority',
+      'chk_maintenance_work_order_breakdown_link',
     ],
     indexes: [
       'uq_maintenance_work_order_cycle',
+      'uq_maintenance_work_order_fault',
+      'idx_maintenance_work_order_priority',
       'idx_maintenance_work_order_asset',
       'idx_maintenance_work_order_sweep',
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/maintenance_sla_policy.sql',
+    table: 'maintenance_sla_policy',
+    constraints: [
+      'chk_maintenance_sla_policy_criticality',
+      'chk_maintenance_sla_policy_priority',
+      'chk_maintenance_sla_policy_status',
+      'chk_maintenance_sla_policy_response',
+      'chk_maintenance_sla_policy_resolution',
+    ],
+    indexes: ['uq_maintenance_sla_policy_key', 'idx_maintenance_sla_policy_status'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/maintenance_fault_report.sql',
+    table: 'maintenance_fault_report',
+    constraints: [
+      'chk_maintenance_fault_report_status',
+      'chk_maintenance_fault_report_accept_link',
+      'chk_maintenance_fault_report_reject_reason',
+    ],
+    indexes: [
+      'idx_maintenance_fault_report_asset',
+      'idx_maintenance_fault_report_triage',
+      'idx_maintenance_fault_report_location',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/maintenance_downtime.sql',
+    table: 'maintenance_downtime',
+    constraints: [
+      'chk_maintenance_downtime_window',
+      'chk_maintenance_downtime_closure',
+      'chk_maintenance_downtime_duration',
+    ],
+    indexes: [
+      'uq_maintenance_downtime_work_order',
+      'idx_maintenance_downtime_open',
+      'idx_maintenance_downtime_period',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/maintenance_reliability_metric.sql',
+    table: 'maintenance_reliability_metric',
+    constraints: [
+      'chk_maintenance_reliability_metric_scope',
+      'chk_maintenance_reliability_metric_period',
+      'chk_maintenance_reliability_metric_counts',
+      'chk_maintenance_reliability_metric_rates',
+    ],
+    indexes: [
+      'uq_maintenance_reliability_metric_scope',
+      'idx_maintenance_reliability_metric_report',
+    ],
+    appUserGrant: 'INSERT, SELECT',
   },
 ];
 

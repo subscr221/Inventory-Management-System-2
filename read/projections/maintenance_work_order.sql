@@ -41,7 +41,25 @@ CREATE TABLE IF NOT EXISTS maintenance_work_order (
   CONSTRAINT chk_maintenance_work_order_grace CHECK (grace_until_date >= due_date)
 );
 
+-- Story 7.3 breakdown arm (FR-M-04, FR-M-05): additive columns on the SAME table so a breakdown
+-- work order shares the work-order register instead of creating a second table. The guarded
+-- ALTER blocks re-apply harmlessly on an existing database. fault_report_id and sla_policy_id are
+-- references without FKs (projections are event-rebuildable read models; referential integrity is
+-- asserted in the seam). priority is a TABLE LOOKUP result from the active SLA policy, never a
+-- hardcoded ladder. The existing chk_maintenance_work_order_plan_link already permits plan_id NULL
+-- for a non-preventive row, so it stays untouched.
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS fault_report_id UUID;
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS priority TEXT;
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS sla_policy_id UUID;
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS sla_response_due_at TIMESTAMPTZ;
+ALTER TABLE maintenance_work_order ADD COLUMN IF NOT EXISTS sla_resolution_due_at TIMESTAMPTZ;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_work_order_cycle ON maintenance_work_order (plan_id, generated_for_cycle) WHERE plan_id IS NOT NULL;
+-- Story 7.3: the anti-double-acceptance key. A fault report may be accepted exactly once; the
+-- seam pre-check returns the stable FAULT_ALREADY_TRIAGED and this partial unique index is the
+-- concurrency backstop (23505 mapper resolves it to FAULT_ALREADY_TRIAGED).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_work_order_fault ON maintenance_work_order (fault_report_id) WHERE fault_report_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_maintenance_work_order_priority ON maintenance_work_order (origin, priority, status);
 CREATE INDEX IF NOT EXISTS idx_maintenance_work_order_asset ON maintenance_work_order (asset_id);
 CREATE INDEX IF NOT EXISTS idx_maintenance_work_order_sweep ON maintenance_work_order (status, grace_until_date);
 
@@ -90,6 +108,30 @@ BEGIN
   ) THEN
     ALTER TABLE maintenance_work_order
       ADD CONSTRAINT chk_maintenance_work_order_grace CHECK (grace_until_date >= due_date);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_priority'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_priority CHECK (priority IS NULL OR priority IN ('p1', 'p2', 'p3', 'p4'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_breakdown_link'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_breakdown_link CHECK (origin <> 'breakdown' OR (fault_report_id IS NOT NULL AND priority IS NOT NULL AND sla_policy_id IS NOT NULL));
   END IF;
 END $$;
 

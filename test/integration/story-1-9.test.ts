@@ -413,6 +413,17 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/maintenance/work-orders',
       'GET /api/v1/maintenance/work-orders/:workOrderId',
       'POST /api/v1/maintenance/work-orders/:workOrderId/complete',
+      // Story 7.3: Fault Reporting and Breakdown Work Orders
+      'POST /api/v1/maintenance/sla-policies',
+      'GET /api/v1/maintenance/sla-policies',
+      'POST /api/v1/maintenance/fault-reports',
+      'GET /api/v1/maintenance/fault-reports',
+      'GET /api/v1/maintenance/fault-reports/:faultReportId',
+      'POST /api/v1/maintenance/fault-reports/:faultReportId/accept',
+      'POST /api/v1/maintenance/fault-reports/:faultReportId/reject',
+      'POST /api/v1/maintenance/work-orders/:workOrderId/downtime/close',
+      'POST /api/v1/maintenance/reliability/generate',
+      'GET /api/v1/maintenance/reliability',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

@@ -12,7 +12,10 @@ import { requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { PersistedEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
+import { emitNotification } from '../../notify/emit.js';
+import { getPool } from '../../config/db.js';
 import { getMeterById, listMeters } from '../../read/projections/asset_meter.js';
+import { getAssetById, getAssetByTag } from '../../read/projections/asset.js';
 import {
   getMeterReadingById,
   listMeterReadings,
@@ -20,10 +23,23 @@ import {
 import { getPlanById, listPlans } from '../../read/projections/maintenance_plan.js';
 import { getWorkOrderById, listWorkOrders } from '../../read/projections/maintenance_work_order.js';
 import {
+  getSlaPolicyById,
+  getActiveSlaPolicy,
+  listSlaPolicies,
+} from '../../read/projections/maintenance_sla_policy.js';
+import {
+  getFaultReportById,
+  listFaultReports,
+  setFaultNotified,
+} from '../../read/projections/maintenance_fault_report.js';
+import { getDowntimeByWorkOrder } from '../../read/projections/maintenance_downtime.js';
+import { listReliabilityMetrics } from '../../read/projections/maintenance_reliability_metric.js';
+import {
   runGraceWindowSweep,
   runMeterReconciliation,
   runPmGeneration,
 } from '../../maintenance/pm-jobs.js';
+import { runReliabilityReport } from '../../maintenance/reliability-jobs.js';
 
 /**
  * Story 7.2 REST surface: PM plans, work orders and the generic meter-reading ingestion API
@@ -52,6 +68,14 @@ const MAX_INTERVAL_DAYS = 100000;
 // Mirrors the seam's reading_at contract: an explicit UTC offset is required so JS Date.parse
 // (process-local time) and pg ::timestamptz (session time) cannot disagree on the stored instant.
 const ISO8601_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+// Story 7.3 vocabularies and bounds, mirroring the SLA policy table's CHECK constraints.
+const CRITICALITY_CLASSES = new Set(['critical', 'high', 'medium', 'low']);
+const PRIORITIES = new Set(['p1', 'p2', 'p3', 'p4']);
+const WORK_ORDER_ORIGINS = new Set(['preventive', 'breakdown']);
+const SLA_POLICY_STATUSES = new Set(['active', 'inactive']);
+const FAULT_STATUSES = new Set(['reported', 'accepted', 'rejected']);
+const RELIABILITY_SCOPE_TYPES = new Set(['asset', 'criticality_class']);
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
@@ -163,6 +187,43 @@ function addDays(isoDate: string, days: number): string {
   const [y, m, d] = isoDate.split('-').map((part) => Number(part));
   const base = Date.UTC(y!, m! - 1, d!);
   return new Date(base + days * 86400000).toISOString().slice(0, 10);
+}
+
+/** Adds whole minutes to an ISO timestamp in UTC; the SLA derivation is pinned to UTC. */
+function addMinutesToIso(iso: string | Date, minutes: number): string {
+  // pg returns timestamptz columns as Date objects; Date.parse(Date) truncates milliseconds via
+  // Date.prototype.toString, so normalize to epoch millis first (a 333ms reported_at must not
+  // become a 000ms SLA due - the seam re-derives the SAME values and rejects divergence).
+  const baseMs = iso instanceof Date ? iso.getTime() : Date.parse(iso);
+  return new Date(baseMs + minutes * 60000).toISOString();
+}
+
+/**
+ * Story 7.3 SLA Derivation Contract, computed ONCE at the handler so the declared event payload
+ * carries every derived field; the seam re-derives the same values from the LOCKED rows and
+ * rejects any divergence (WORK_ORDER_DERIVATION_MISMATCH). due_date is the UTC calendar date of
+ * the resolution target (pinned so no session timezone can shift it); breakdown work orders have
+ * no grace window, so grace_until_date equals due_date.
+ */
+function deriveSlaFields(
+  reportedAt: string | Date,
+  responseMinutes: number,
+  resolutionHours: number,
+): {
+  sla_response_due_at: string;
+  sla_resolution_due_at: string;
+  due_date: string;
+  grace_until_date: string;
+} {
+  const slaResponseDueAt = addMinutesToIso(reportedAt, responseMinutes);
+  const slaResolutionDueAt = addMinutesToIso(reportedAt, resolutionHours * 60);
+  const dueDate = new Date(Date.parse(slaResolutionDueAt)).toISOString().slice(0, 10);
+  return {
+    sla_response_due_at: slaResponseDueAt,
+    sla_resolution_due_at: slaResolutionDueAt,
+    due_date: dueDate,
+    grace_until_date: dueDate,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -659,6 +720,8 @@ const listWorkOrdersBase: RouteHandler = async (req, res, _params) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const assetId = url.searchParams.get('asset_id');
   const planId = url.searchParams.get('plan_id');
+  const origin = url.searchParams.get('origin');
+  const priority = url.searchParams.get('priority');
   const status = url.searchParams.get('status');
   const limitRaw = url.searchParams.get('limit');
   const offsetRaw = url.searchParams.get('offset');
@@ -671,6 +734,22 @@ const listWorkOrdersBase: RouteHandler = async (req, res, _params) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'plan_id must be a UUID');
     return;
   }
+  // Story 7.3: strict filters - an unknown origin or priority must 400, never silently widen the
+  // result (Task 6.5).
+  if (origin !== null && !WORK_ORDER_ORIGINS.has(origin)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'origin must be one of: preventive, breakdown',
+    );
+    return;
+  }
+  if (priority !== null && !PRIORITIES.has(priority)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'priority must be one of: p1, p2, p3, p4');
+    return;
+  }
   if (status !== null && !WORK_ORDER_STATUSES.has(status)) {
     sendRequestError(
       req,
@@ -681,10 +760,20 @@ const listWorkOrdersBase: RouteHandler = async (req, res, _params) => {
     );
     return;
   }
+  if (limitRaw !== null && !/^-?\d+$/.test(limitRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'limit must be an integer');
+    return;
+  }
+  if (offsetRaw !== null && !/^-?\d+$/.test(offsetRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'offset must be an integer');
+    return;
+  }
 
   const workOrders = await listWorkOrders({
     asset_id: assetId ?? undefined,
     plan_id: planId ?? undefined,
+    origin: (origin as 'preventive' | 'breakdown' | null) ?? undefined,
+    priority: (priority as 'p1' | 'p2' | 'p3' | 'p4' | null) ?? undefined,
     status: (status as 'open' | 'overdue' | 'completed' | null) ?? undefined,
     limit: limitRaw === null ? undefined : Number(limitRaw),
     offset: offsetRaw === null ? undefined : Number(offsetRaw),
@@ -772,6 +861,773 @@ const completeWorkOrderBase: RouteHandler = async (req, res, params) => {
 };
 
 // ---------------------------------------------------------------------------
+// Story 7.3: Fault Reporting and Breakdown Work Orders
+// ---------------------------------------------------------------------------
+
+// POST /api/v1/maintenance/sla-policies
+
+const createSlaPolicyBase: RouteHandler = async (req, res, _params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const policyId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: policyId,
+        event_type: 'maintenance.sla_policy_defined',
+        payload: {
+          policy_id: policyId,
+          criticality_class: body['criticality_class'],
+          safety_flag: body['safety_flag'] ?? false,
+          priority: body['priority'],
+          response_minutes: body['response_minutes'],
+          resolution_hours: body['resolution_hours'],
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: {
+            user_id: actor.userId,
+            role: actor.role,
+            location_id: actor.eventLocationId,
+          },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedPolicyId = replayIdOrReject(
+      persisted,
+      'maintenance.sla_policy_defined',
+      'policy_id',
+    );
+    const policy = await getSlaPolicyById(persistedPolicyId);
+    sendJson(res, 201, { event_id: persisted.event_id, policy: policy ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/sla-policies
+
+const listSlaPoliciesBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const criticalityClass = url.searchParams.get('criticality_class');
+  const status = url.searchParams.get('status');
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+
+  // Strict filters: an unknown value must 400, never silently widen the result (Task 6.5).
+  if (criticalityClass !== null && !CRITICALITY_CLASSES.has(criticalityClass)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'criticality_class must be one of: critical, high, medium, low',
+    );
+    return;
+  }
+  if (status !== null && !SLA_POLICY_STATUSES.has(status)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'status must be one of: active, inactive');
+    return;
+  }
+  if (limitRaw !== null && !/^-?\d+$/.test(limitRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'limit must be an integer');
+    return;
+  }
+  if (offsetRaw !== null && !/^-?\d+$/.test(offsetRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'offset must be an integer');
+    return;
+  }
+
+  const policies = await listSlaPolicies({
+    criticality_class: criticalityClass ?? undefined,
+    status: (status as 'active' | 'inactive' | null) ?? undefined,
+    limit: limitRaw === null ? undefined : Number(limitRaw),
+    offset: offsetRaw === null ? undefined : Number(offsetRaw),
+  });
+  sendJson(res, 200, { policies });
+};
+
+// POST /api/v1/maintenance/fault-reports
+
+const createFaultReportBase: RouteHandler = async (req, res, _params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const faultReportId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    // Scan path (AC 1): accept EITHER asset_id or asset_tag. When only the tag is supplied the
+    // handler resolves it case-insensitively so the operator never needs to know a UUID; the
+    // persisted payload always carries the resolved asset_id AND the canonical asset_tag from the
+    // asset row (Task 6.2).
+    let assetId: string;
+    let assetTag: string;
+    const bodyAssetId = body['asset_id'];
+    const bodyAssetTag = body['asset_tag'];
+    if (typeof bodyAssetId === 'string' && bodyAssetId.trim() !== '') {
+      // A supplied asset_id must be a UUID - a malformed id must not be silently ignored while a
+      // tag happens to resolve (strict validation convention).
+      if (!isUuid(bodyAssetId)) {
+        throw new AppError(400, 'INVALID_PARAMS', 'asset_id must be a UUID');
+      }
+      const asset = await getAssetById(bodyAssetId);
+      if (!asset) {
+        throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', {
+          asset_id: bodyAssetId,
+        });
+      }
+      // When both identifiers are supplied they must agree - otherwise the scan could record a
+      // fault against the wrong asset (ASSET_TAG_MISMATCH, Error Code Contract).
+      if (typeof bodyAssetTag === 'string' && bodyAssetTag.trim() !== '') {
+        if (asset.asset_tag.toLowerCase() !== bodyAssetTag.trim().toLowerCase()) {
+          throw new AppError(
+            400,
+            'ASSET_TAG_MISMATCH',
+            'asset_id and asset_tag do not refer to the same asset',
+            { asset_id: bodyAssetId, asset_tag: bodyAssetTag.trim() },
+          );
+        }
+      }
+      assetId = asset.asset_id;
+      assetTag = asset.asset_tag;
+    } else if (typeof bodyAssetTag === 'string' && bodyAssetTag.trim() !== '') {
+      const asset = await getAssetByTag(bodyAssetTag.trim());
+      if (!asset) {
+        throw new AppError(404, 'ASSET_NOT_FOUND', 'No asset matches this tag', {
+          asset_tag: bodyAssetTag.trim(),
+        });
+      }
+      assetId = asset.asset_id;
+      assetTag = asset.asset_tag;
+    } else {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'asset_id (UUID) or asset_tag (string) is required',
+      );
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: faultReportId,
+        event_type: 'maintenance.fault_reported',
+        payload: {
+          fault_report_id: faultReportId,
+          asset_id: assetId,
+          asset_tag: assetTag,
+          description:
+            typeof body['description'] === 'string'
+              ? body['description'].trim()
+              : body['description'],
+          safety_flag: body['safety_flag'] ?? false,
+          reported_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: {
+            user_id: actor.userId,
+            role: actor.role,
+            location_id: actor.eventLocationId,
+          },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedFaultReportId = replayIdOrReject(
+      persisted,
+      'maintenance.fault_reported',
+      'fault_report_id',
+    );
+
+    // The 5-minute AC 1 guarantee is the Story 1.11 escalation window. The emission happens AFTER
+    // the fault event commits, through the non-throwing emitNotification (AD-17): a notification
+    // outage must not block a fault report, so on ok:false the 201 still succeeds and notified_at
+    // stays null (Task 6.3). NEVER emitNotificationInTransaction here.
+    //
+    // A replay of the same idempotency key returns the ORIGINAL event, so the handler would
+    // otherwise emit a second notification; the notification row on the event ledger is the truth
+    // that this report was already notified - skip the re-emission when one exists (the "replay
+    // emits no second notification" acceptance assertion).
+    const existingNotification = await getPool().query(
+      `SELECT 1 FROM domain_events
+        WHERE event_type = 'notification.created'
+          AND payload->>'object_id' = $1
+          AND payload->>'event_type' = 'fault_reported'
+        LIMIT 1`,
+      [persistedFaultReportId],
+    );
+    const asset = await getAssetById(assetId);
+    if (existingNotification.rows.length === 0) {
+      const emission = await emitNotification({
+        target: { role: 'maintenance_supervisor', location_id: actor.eventLocationId },
+        event_type: 'fault_reported',
+        status_verb: 'Reported',
+        object_type: 'fault_report',
+        object_id: persistedFaultReportId,
+        actor_label: `${asset?.asset_name ?? 'asset'} (${assetTag})`,
+        next_step: 'Triage and accept or reject',
+        escalation: { target_role: 'maintenance_manager', acknowledgment_window_seconds: 300 },
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        correlation_id: randomUUID(),
+        occurred_at: now,
+      });
+      if (emission.ok) {
+        const emittedAt = emission.event.metadata.occurred_at ?? emission.event.created_at;
+        try {
+          await setFaultNotified(persistedFaultReportId, emittedAt);
+        } catch (patchErr: unknown) {
+          // The fault report and the notification both committed; a failed notified_at patch must
+          // not turn the 201 into a 500 (AD-17 - the notification must never block the report).
+          console.warn(
+            `[maintenance] notified_at patch failed for fault report ${persistedFaultReportId}`,
+            patchErr,
+          );
+        }
+      }
+    }
+
+    // Read back the created resource BY ID (the 7.2 lesson): notified_at reflects the emission.
+    const faultReport = await getFaultReportById(persistedFaultReportId);
+    sendJson(res, 201, { event_id: persisted.event_id, fault_report: faultReport ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/fault-reports
+
+const listFaultReportsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const assetId = url.searchParams.get('asset_id');
+  const status = url.searchParams.get('status');
+  const locationId = url.searchParams.get('location_id');
+  const from = url.searchParams.get('from');
+  const to = url.searchParams.get('to');
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+
+  // Strict filters: an unknown value must 400, never silently widen the result (Task 6.5).
+  if (assetId !== null && !isUuid(assetId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'asset_id must be a UUID');
+    return;
+  }
+  if (status !== null && !FAULT_STATUSES.has(status)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'status must be one of: reported, accepted, rejected',
+    );
+    return;
+  }
+  if (locationId !== null && !isUuid(locationId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'location_id must be a UUID');
+    return;
+  }
+  // from/to are timestamptz filters; require an explicit UTC offset so a date-only value is not
+  // silently cast at session-local midnight (the documented clock-window failure family).
+  if (from !== null && !ISO8601_TIMESTAMP_REGEX.test(from)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'from must be an ISO-8601 timestamp with an explicit UTC offset',
+    );
+    return;
+  }
+  if (to !== null && !ISO8601_TIMESTAMP_REGEX.test(to)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'to must be an ISO-8601 timestamp with an explicit UTC offset',
+    );
+    return;
+  }
+  if (limitRaw !== null && !/^-?\d+$/.test(limitRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'limit must be an integer');
+    return;
+  }
+  if (offsetRaw !== null && !/^-?\d+$/.test(offsetRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'offset must be an integer');
+    return;
+  }
+
+  const faultReports = await listFaultReports({
+    asset_id: assetId ?? undefined,
+    status: (status as 'reported' | 'accepted' | 'rejected' | null) ?? undefined,
+    location_id: locationId ?? undefined,
+    from: from ?? undefined,
+    to: to ?? undefined,
+    limit: limitRaw === null ? undefined : Number(limitRaw),
+    offset: offsetRaw === null ? undefined : Number(offsetRaw),
+  });
+  sendJson(res, 200, { fault_reports: faultReports });
+};
+
+// GET /api/v1/maintenance/fault-reports/:faultReportId
+
+const getFaultReportBase: RouteHandler = async (req, res, params) => {
+  const faultReportId = params?.['faultReportId'];
+  if (!faultReportId || !isUuid(faultReportId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'faultReportId must be a UUID');
+    return;
+  }
+  const faultReport = await getFaultReportById(faultReportId);
+  if (!faultReport) {
+    sendRequestError(req, res, 404, 'FAULT_REPORT_NOT_FOUND', 'Fault report not found', {
+      fault_report_id: faultReportId,
+    });
+    return;
+  }
+  sendJson(res, 200, { fault_report: faultReport });
+};
+
+// POST /api/v1/maintenance/fault-reports/:faultReportId/accept
+
+const acceptFaultReportBase: RouteHandler = async (req, res, params) => {
+  const faultReportId = params?.['faultReportId'];
+  if (!faultReportId || !isUuid(faultReportId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'faultReportId must be a UUID');
+    return;
+  }
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const report = await getFaultReportById(faultReportId);
+    if (!report) {
+      throw new AppError(404, 'FAULT_REPORT_NOT_FOUND', 'Fault report not found', {
+        fault_report_id: faultReportId,
+      });
+    }
+    // No status pre-check here: the seam re-validates status === 'reported' under FOR UPDATE inside
+    // persistEvent, so a genuinely new double-accept still 409s FAULT_ALREADY_TRIAGED, while a
+    // same-key idempotency replay short-circuits in persistEvent and resolves through
+    // replayIdOrReject to the stored result (AD-16).
+    const asset = await getAssetById(report.asset_id);
+    if (!asset) {
+      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', {
+        asset_id: report.asset_id,
+      });
+    }
+    const policy = await getActiveSlaPolicy(asset.criticality_class, report.safety_flag);
+    if (!policy) {
+      throw new AppError(
+        422,
+        'SLA_POLICY_NOT_FOUND',
+        'No active SLA policy exists for this (criticality_class, safety_flag) pair',
+        { criticality_class: asset.criticality_class, safety_flag: report.safety_flag },
+      );
+    }
+
+    // The SLA derivation is declared in the payload here and RE-VERIFIED by the seam under the
+    // locked rows; divergence rejects WORK_ORDER_DERIVATION_MISMATCH (never silently stored).
+    const derived = deriveSlaFields(
+      report.reported_at as unknown as string,
+      policy.response_minutes,
+      policy.resolution_hours,
+    );
+    const workOrderId = randomUUID();
+    const downtimeId = randomUUID();
+    const businessDate = new Date().toISOString().slice(0, 10);
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: workOrderId,
+        event_type: 'maintenance.breakdown_work_order_created',
+        payload: {
+          work_order_id: workOrderId,
+          fault_report_id: faultReportId,
+          asset_id: report.asset_id,
+          downtime_id: downtimeId,
+          priority: policy.priority,
+          sla_policy_id: policy.policy_id,
+          due_date: derived.due_date,
+          grace_until_date: derived.grace_until_date,
+          sla_response_due_at: derived.sla_response_due_at,
+          sla_resolution_due_at: derived.sla_resolution_due_at,
+          business_date: businessDate,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: {
+            user_id: actor.userId,
+            role: actor.role,
+            location_id: actor.eventLocationId,
+          },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedWorkOrderId = replayIdOrReject(
+      persisted,
+      'maintenance.breakdown_work_order_created',
+      'work_order_id',
+    );
+
+    // AC 2 notification: same service, targeted at the technician at the fault's location, with
+    // the resolution SLA in the next_step. No escalation - the grace sweep already owns the
+    // overdue path. A failed emission is logged and swallowed (AD-17). A same-key replay of a
+    // committed accept returns the ORIGINAL event, so skip the re-emission when the notification
+    // row already exists on the ledger (the "replay emits no second notification" convention).
+    const existingTechnicianNotification = await getPool().query(
+      `SELECT 1 FROM domain_events
+        WHERE event_type = 'notification.created'
+          AND payload->>'object_id' = $1
+          AND payload->>'event_type' = 'breakdown_work_order_created'
+        LIMIT 1`,
+      [persistedWorkOrderId],
+    );
+    if (existingTechnicianNotification.rows.length === 0) {
+      await emitNotification({
+        // The technician is notified at the FAULT's location (report.location_id), not the
+        // acceptor's authorized location - they may differ (Notification Contract).
+        target: { role: 'maintenance_technician', location_id: report.location_id },
+        event_type: 'breakdown_work_order_created',
+        status_verb: 'Created',
+        object_type: 'maintenance_work_order',
+        object_id: persistedWorkOrderId,
+        actor_label: `${asset.asset_name} (${asset.asset_tag})`,
+        next_step: `Resolve by ${derived.sla_resolution_due_at}.`,
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        correlation_id: randomUUID(),
+        occurred_at: now,
+      });
+    }
+
+    const workOrder = await getWorkOrderById(persistedWorkOrderId);
+    const faultReport = await getFaultReportById(faultReportId);
+    sendJson(res, 201, {
+      event_id: persisted.event_id,
+      work_order: workOrder ?? null,
+      fault_report: faultReport ?? null,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// POST /api/v1/maintenance/fault-reports/:faultReportId/reject
+
+const rejectFaultReportBase: RouteHandler = async (req, res, params) => {
+  const faultReportId = params?.['faultReportId'];
+  if (!faultReportId || !isUuid(faultReportId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'faultReportId must be a UUID');
+    return;
+  }
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const report = await getFaultReportById(faultReportId);
+    if (!report) {
+      throw new AppError(404, 'FAULT_REPORT_NOT_FOUND', 'Fault report not found', {
+        fault_report_id: faultReportId,
+      });
+    }
+    // No status pre-check here (same reasoning as accept): the seam re-validates status ===
+    // 'reported' under FOR UPDATE, so a fresh double-reject 409s FAULT_ALREADY_TRIAGED while a
+    // same-key replay resolves to the stored result through replayIdOrReject (AD-16).
+    // Normalize nullable text before persisting; the seam re-asserts non-blank (Task 6.4 lesson).
+    const rejectionReason =
+      typeof body['rejection_reason'] === 'string' ? body['rejection_reason'].trim() : '';
+    if (rejectionReason === '') {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'rejection_reason is required and must be a non-empty string',
+      );
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: faultReportId,
+        event_type: 'maintenance.fault_rejected',
+        payload: {
+          fault_report_id: faultReportId,
+          rejection_reason: rejectionReason,
+          triaged_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: {
+            user_id: actor.userId,
+            role: actor.role,
+            location_id: actor.eventLocationId,
+          },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    const persistedFaultReportId = replayIdOrReject(
+      persisted,
+      'maintenance.fault_rejected',
+      'fault_report_id',
+    );
+    const faultReport = await getFaultReportById(persistedFaultReportId);
+    sendJson(res, 200, { event_id: persisted.event_id, fault_report: faultReport ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// POST /api/v1/maintenance/work-orders/:workOrderId/downtime/close
+
+const closeDowntimeBase: RouteHandler = async (req, res, params) => {
+  const workOrderId = params?.['workOrderId'];
+  if (!workOrderId || !isUuid(workOrderId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'workOrderId must be a UUID');
+    return;
+  }
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    // The payload declares the window id, which the caller cannot guess: resolve it here so the
+    // event names the REAL row (a missing window is 404 DOWNTIME_NOT_FOUND before persisting).
+    const downtime = await getDowntimeByWorkOrder(workOrderId);
+    if (!downtime) {
+      throw new AppError(
+        404,
+        'DOWNTIME_NOT_FOUND',
+        'No downtime window exists for this work order',
+        {
+          work_order_id: workOrderId,
+        },
+      );
+    }
+    // Absence falls back to ingestion time (sanctioned); malformed PRESENCE is a client error. A
+    // non-string ended_at must not be silently replaced with now - that would skew duration_minutes
+    // and the monthly reliability snapshot for a client bug.
+    const endedAtRaw = body['ended_at'];
+    if (endedAtRaw !== undefined && typeof endedAtRaw !== 'string') {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'ended_at must be a string (ISO-8601 timestamp with an explicit UTC offset) when provided',
+      );
+    }
+    const endedAt = endedAtRaw ?? now;
+    if (!ISO8601_TIMESTAMP_REGEX.test(endedAt)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'ended_at must be an ISO-8601 timestamp with an explicit UTC offset when provided',
+      );
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: downtime.downtime_id,
+        event_type: 'maintenance.downtime_closed',
+        payload: {
+          downtime_id: downtime.downtime_id,
+          work_order_id: workOrderId,
+          ended_at: endedAt,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: {
+            user_id: actor.userId,
+            role: actor.role,
+            location_id: actor.eventLocationId,
+          },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    const persistedDowntimeId = replayIdOrReject(
+      persisted,
+      'maintenance.downtime_closed',
+      'downtime_id',
+    );
+    const closedDowntime = await getDowntimeByWorkOrder(workOrderId);
+    sendJson(res, 200, {
+      event_id: persisted.event_id,
+      downtime_id: persistedDowntimeId,
+      downtime: closedDowntime ?? null,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// POST /api/v1/maintenance/reliability/generate
+
+const generateReliabilityReportBase: RouteHandler = async (req, res, _params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  try {
+    // business_date via the shared helper (5.3); period bounds validated at the handler for a
+    // clean 400, then re-validated in full by the job (INVALID_REPORT_PERIOD).
+    const businessDate = requireBusinessDate(body);
+    const periodStart = body['period_start'];
+    const periodEnd = body['period_end'];
+    if (
+      typeof periodStart !== 'string' ||
+      !DATE_REGEX.test(periodStart) ||
+      Number.isNaN(Date.parse(periodStart))
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_REPORT_PERIOD',
+        'period_start is required and must be YYYY-MM-DD',
+      );
+    }
+    if (
+      typeof periodEnd !== 'string' ||
+      !DATE_REGEX.test(periodEnd) ||
+      Number.isNaN(Date.parse(periodEnd))
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_REPORT_PERIOD',
+        'period_end is required and must be YYYY-MM-DD',
+      );
+    }
+
+    const result = await runReliabilityReport({
+      business_date: businessDate,
+      period_start: periodStart,
+      period_end: periodEnd,
+      asset_id: optionalAssetIdFilter(body),
+      actor: {
+        user_id: actor.userId,
+        role: actor.role,
+        location_id: actor.eventLocationId,
+      },
+      auditCtx: auditCtxFor(req, actor, 200),
+    });
+    sendJson(res, 200, result);
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/reliability
+
+const listReliabilityMetricsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const periodStart = url.searchParams.get('period_start');
+  const periodEnd = url.searchParams.get('period_end');
+  const scopeType = url.searchParams.get('scope_type');
+  const scopeKey = url.searchParams.get('scope_key');
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+
+  // Strict filters: an unknown value must 400, never silently widen the result (Task 6.5).
+  if (
+    periodStart !== null &&
+    (Number.isNaN(Date.parse(periodStart)) || !DATE_REGEX.test(periodStart))
+  ) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'period_start must be YYYY-MM-DD');
+    return;
+  }
+  if (periodEnd !== null && (Number.isNaN(Date.parse(periodEnd)) || !DATE_REGEX.test(periodEnd))) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'period_end must be YYYY-MM-DD');
+    return;
+  }
+  if (scopeType !== null && !RELIABILITY_SCOPE_TYPES.has(scopeType)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'scope_type must be one of: asset, criticality_class',
+    );
+    return;
+  }
+  // scope_key must match its scope_type (Task 6.5 strict filters): a UUID for an asset row, a
+  // criticality class (optionally <class>:<asset_id> when narrowed) for a class row. A malformed
+  // key must 400, never silently return an empty page.
+  if (scopeKey !== null) {
+    const firstSegment = scopeKey.split(':')[0] ?? '';
+    const scopedPart = scopeKey.indexOf(':') === -1 ? null : scopeKey.slice(scopeKey.indexOf(':') + 1);
+    const keyOk =
+      (scopeType === 'asset' && isUuid(scopeKey)) ||
+      (scopeType === 'criticality_class' &&
+        CRITICALITY_CLASSES.has(firstSegment) &&
+        (scopedPart === null || isUuid(scopedPart))) ||
+      (scopeType === null &&
+        (isUuid(scopeKey) ||
+          (CRITICALITY_CLASSES.has(firstSegment) && (scopedPart === null || isUuid(scopedPart)))));
+    if (!keyOk) {
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        'scope_key must match scope_type (a UUID for asset, a criticality class for criticality_class)',
+      );
+      return;
+    }
+  }
+  if (limitRaw !== null && !/^-?\d+$/.test(limitRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'limit must be an integer');
+    return;
+  }
+  if (offsetRaw !== null && !/^-?\d+$/.test(offsetRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'offset must be an integer');
+    return;
+  }
+
+  const metrics = await listReliabilityMetrics({
+    period_start: periodStart ?? undefined,
+    period_end: periodEnd ?? undefined,
+    scope_type: (scopeType as 'asset' | 'criticality_class' | null) ?? undefined,
+    scope_key: scopeKey ?? undefined,
+    limit: limitRaw === null ? undefined : Number(limitRaw),
+    offset: offsetRaw === null ? undefined : Number(offsetRaw),
+  });
+  sendJson(res, 200, { metrics });
+};
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
@@ -839,3 +1695,53 @@ export const completeWorkOrderHandler = requireRole({
   module: 'maintenance',
   functionScope: 'write',
 })(completeWorkOrderBase);
+
+export const createSlaPolicyHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(createSlaPolicyBase);
+
+export const listSlaPoliciesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listSlaPoliciesBase);
+
+export const createFaultReportHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(createFaultReportBase);
+
+export const listFaultReportsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listFaultReportsBase);
+
+export const getFaultReportHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getFaultReportBase);
+
+export const acceptFaultReportHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(acceptFaultReportBase);
+
+export const rejectFaultReportHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(rejectFaultReportBase);
+
+export const closeDowntimeHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(closeDowntimeBase);
+
+export const generateReliabilityReportHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(generateReliabilityReportBase);
+
+export const listReliabilityMetricsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listReliabilityMetricsBase);

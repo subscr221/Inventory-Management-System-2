@@ -1,5 +1,5 @@
 # generated: 2026-07-12
-# last_updated: '2026-08-07'
+# last_updated: '2026-08-25'
 # story 4-5 dev-story 2026-08-06: implemented all 9 tasks (35 subtasks) from baseline b32fe25.
 #   New three_way_match projection (one row per match RUN) and append-only payment_clearance_feed
 #   ledger; additive grn.po_id and supplier_invoice.match_status (chk_supplier_invoice_status
@@ -293,7 +293,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-16'
+last_updated: '2026-08-24'
 # story 5-6 dev-story 2026-08-14: implemented all 9 tasks (58 subtasks) from baseline f29765f. Three new
 #   tables (bom_cost_rollup, bom_cost_rollup_line, bom_outbound_message), additive bom_line.supply_source
 #   with a guarded constraint swap, and integration_exception.record_type widened with 'bom' via a
@@ -860,8 +860,17 @@ development_status:
    #   review); moved to done
    # - 2026-08-16: story context created (PM plans, meter ingestion register, 3 POST-triggered
    #   jobs, 4 projections, 7 events, 13 routes); ready-for-dev
-  7-3-fault-reporting-and-breakdown-work-orders: backlog   # PILOT
-  7-4-spare-parts-cataloguing-reservation-and-critical-spares-alerts: backlog   # PILOT
+   7-3-fault-reporting-and-breakdown-work-orders: done   # PILOT  # create-story 2026-08-24: fault reporting via asset-tag scan with 5-minute supervisor notification (Story 1.11 escalation window), operator-configurable SLA policy table keyed (criticality_class, safety_flag) driving breakdown priority, breakdown work orders on the existing maintenance_work_order table (origin/plan_id already shaped by 7.2), one downtime window per breakdown work order, monthly MTTR/MTBF persisted snapshot per asset and per criticality class; 4 new projections + 1 table extension, 6 events, 2 seams, 1 POST-triggered job, 10 REST routes, 8 tasks, baseline 893e945
+   # - 2026-08-24: implemented (4 projections + 1 work-order extension, 6 events, 2 seams,
+   #   reliability-jobs module, 10 routes). story-7-3 19/19, schema-drift 89/89, spine 6/6, edge
+   #   30/30, migrate x2 idempotent, full suite 953 (938 pass, same 15 pre-existing Epic 1-3
+   #   idempotency fails, 0 new); moved to review
+   # - 2026-08-24: code review completed. 35 patches applied (24 production + 11 test), 1 decision
+   #   resolved (asset-narrowed class key scoping), 1 deferred (schema-drift gate ordering), 30
+   #   dismissed. story-7-3 30/30 (was 19/19; +10 tests), full suite 964 (948 pass, same 15
+   #   pre-existing Epic 1-3 idempotency fails + 1 pre-existing gate_dwell_metric line-ending fail,
+   #   0 new); marked done
+  7-4-spare-parts-cataloguing-reservation-and-critical-spares-alerts: ready-for-dev   # PILOT  # create-story 2026-08-25: maintenance-owned asset parts list (new asset_parts_list table, explicitly NOT the Epic 5 BOM per AD-4) with sku reverse-index where-used, spare catalogue at (sku, location_id) grain carrying is_critical and operator-set min-max (inventory_planning_params deliberately NOT widened - its levels are computed outputs), reserve/issue/return/cancel lifecycle riding the Epic 2 ledger helpers only (reservation IS stock_balance.allocated; binding decision: deallocate BEFORE issue, the transfer-request ordering is a known divergence not to copy), 3-working-day return clock frozen at issue via a new addBusinessDays in src/lib/business-days.ts plus a maintenance holiday calendar in config, POST-triggered spares job (min-max breach scan + overdue-return sweep, separate write and delivery counters), 8 events, 4 projections, 1 new seam, 12 routes; flags maintenance_storekeeper as a role no user currently holds; ready-for-dev
   7-5-calibration-register-and-non-overridable-lockout: backlog   # PILOT
   7-6-statutory-examinations-cost-accumulation-and-machine-status-broadcast: backlog   # PILOT
   7-7-amc-warranty-and-insurance-tracking: backlog   # PILOT

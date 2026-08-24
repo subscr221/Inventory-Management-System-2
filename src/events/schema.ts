@@ -2192,6 +2192,138 @@ export interface MaintenanceWorkOrderCompletedEnvelope extends Omit<EventEnvelop
 }
 
 // ---------------------------------------------------------------------------
+// Story 7.3: Fault Reporting and Breakdown Work Orders
+// ---------------------------------------------------------------------------
+
+/**
+ * Defines one active SLA policy for a (criticality_class, safety_flag) pair (FR-M-05). stream_id
+ * is policy_id. created_by is derived server-side from metadata.actor.user_id. The policy is the
+ * operator-configurable mapping that derives breakdown priority, response and resolution targets;
+ * acceptance with no matching active policy is a hard 422, never a silent default.
+ */
+export interface SlaPolicyDefinedPayload {
+  policy_id: string;
+  criticality_class: 'critical' | 'high' | 'medium' | 'low';
+  safety_flag: boolean;
+  priority: 'p1' | 'p2' | 'p3' | 'p4';
+  response_minutes: number;
+  resolution_hours: number;
+}
+
+export interface SlaPolicyDefinedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.sla_policy_defined';
+  payload: SlaPolicyDefinedPayload;
+}
+
+/**
+ * A fault reported by scanning an asset tag (FR-M-04). stream_id is fault_report_id. reported_by
+ * and location_id are derived server-side from metadata.actor (never read from the payload); the
+ * reporter's location is the asset's location for notification purposes. The supervisor
+ * notification is emitted AFTER commit by the handler, never inside the applier (AD-17).
+ */
+export interface FaultReportedPayload {
+  fault_report_id: string;
+  asset_id: string;
+  asset_tag: string;
+  description: string;
+  safety_flag: boolean;
+  reported_at: string;
+}
+
+export interface FaultReportedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.fault_reported';
+  payload: FaultReportedPayload;
+}
+
+/**
+ * A triage rejection of a still-'reported' fault. stream_id is fault_report_id. triaged_at and
+ * triaged_by are derived server-side from the envelope; rejection_reason is trimmed and asserted
+ * non-blank in the shape check.
+ */
+export interface FaultRejectedPayload {
+  fault_report_id: string;
+  rejection_reason: string;
+  triaged_at: string;
+}
+
+export interface FaultRejectedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.fault_rejected';
+  payload: FaultRejectedPayload;
+}
+
+/**
+ * The acceptance of a fault report: creates the breakdown work order, opens the downtime window
+ * and flips the report to 'accepted', all in ONE transaction. stream_id is work_order_id. Every
+ * derived field (priority, sla_policy_id, both SLA timestamps, due_date, grace_until_date,
+ * downtime start) is DECLARED in the payload and CHECKED against the value derived from the locked
+ * rows, never trusted (the 7.2 Group 2 cursor-match decision). generated_for_cycle on the
+ * work-order row is set to fault_report_id by the applier; business_date is carried for the report
+ * joins and is server-validated.
+ */
+export interface BreakdownWorkOrderCreatedPayload {
+  work_order_id: string;
+  fault_report_id: string;
+  asset_id: string;
+  downtime_id: string;
+  priority: 'p1' | 'p2' | 'p3' | 'p4';
+  sla_policy_id: string;
+  due_date: string;
+  grace_until_date: string;
+  sla_response_due_at: string;
+  sla_resolution_due_at: string;
+  business_date: string;
+}
+
+export interface BreakdownWorkOrderCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.breakdown_work_order_created';
+  payload: BreakdownWorkOrderCreatedPayload;
+}
+
+/**
+ * Closes the single open downtime window for a breakdown work order. stream_id is downtime_id.
+ * closed_by is derived server-side from the envelope; duration_minutes is computed IN SQL from the
+ * locked row, never in JS, so the stored number and the reliability report agree exactly.
+ */
+export interface DowntimeClosedPayload {
+  downtime_id: string;
+  work_order_id: string;
+  ended_at: string;
+}
+
+export interface DowntimeClosedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.downtime_closed';
+  payload: DowntimeClosedPayload;
+}
+
+/**
+ * One persisted monthly reliability snapshot (FR-M-06). stream_id is report_id. The payload's
+ * metrics array carries one entry per scope row; the applier inserts one maintenance_reliability_
+ * metric row per entry inside the SAME transaction, so a report either lands whole or not at all.
+ * generated_by is derived server-side from metadata.actor.user_id.
+ */
+export interface ReliabilityMetricPayload {
+  metric_id: string;
+  scope_type: 'asset' | 'criticality_class';
+  scope_key: string;
+  breakdown_count: number;
+  downtime_minutes: number;
+  mttr_minutes: number | null;
+  mtbf_minutes: number | null;
+}
+
+export interface ReliabilityReportGeneratedPayload {
+  report_id: string;
+  period_start: string;
+  period_end: string;
+  metrics: ReliabilityMetricPayload[];
+}
+
+export interface ReliabilityReportGeneratedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.reliability_report_generated';
+  payload: ReliabilityReportGeneratedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -2712,6 +2844,34 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'maintenance.work_order_completed': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 7.3: fault reporting, SLA policy, breakdown work orders, downtime capture and the
+  // monthly reliability snapshot on the same 'maintenance' stream. All operational state, never a
+  // tagged inventory movement, so requiresBusinessStream stays false (the asset.registered and
+  // Story 7.2 precedent).
+  'maintenance.sla_policy_defined': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.fault_reported': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.fault_rejected': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.breakdown_work_order_created': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.downtime_closed': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.reliability_report_generated': {
     streamType: 'maintenance',
     requiresBusinessStream: false,
   },
