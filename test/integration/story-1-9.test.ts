@@ -437,6 +437,17 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/maintenance/spare-reservations/:reservationId/issue',
       'POST /api/v1/maintenance/spare-reservations/:reservationId/return',
       'POST /api/v1/maintenance/spare-reservations/:reservationId/cancel',
+      // Story 7.5: calibration register, certificates, staged alerts, expiry scan, escalations.
+      'POST /api/v1/maintenance/calibration/scan',
+      'GET /api/v1/maintenance/calibration/alerts',
+      'GET /api/v1/maintenance/calibration/escalations',
+      'POST /api/v1/maintenance/calibration/escalations/:escalationId/resolve',
+      'POST /api/v1/maintenance/instruments',
+      'GET /api/v1/maintenance/instruments',
+      'GET /api/v1/maintenance/instruments/:instrumentRecordId',
+      'POST /api/v1/maintenance/instruments/:instrumentRecordId/certificates',
+      'GET /api/v1/maintenance/instruments/:instrumentRecordId/certificates',
+      'POST /api/v1/maintenance/instruments/:instrumentRecordId/escalations',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

@@ -14,6 +14,7 @@ import type { PersistedEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { emitNotification } from '../../notify/emit.js';
 import { getPool } from '../../config/db.js';
+import { isValidCalendarDate } from '../../lib/business-days.js';
 import { getMeterById, listMeters } from '../../read/projections/asset_meter.js';
 import { getAssetById, getAssetByTag } from '../../read/projections/asset.js';
 import {
@@ -59,6 +60,32 @@ import {
   listSpareReservations,
 } from '../../read/projections/maintenance_spare_reservation.js';
 import { listSpareAlerts } from '../../read/projections/maintenance_spare_alert.js';
+import { runCalibrationExpiryScan } from '../../maintenance/calibration-jobs.js';
+import {
+  CALIBRATION_STAGES,
+  MAX_CALIBRATION_INTERVAL_DAYS,
+  MAX_CERTIFICATE_NUMBER_LENGTH,
+  MAX_INSTRUMENT_ID_LENGTH,
+  canonicalCertificateNumber,
+  canonicalInstrumentId,
+} from '../../compliance/calibration-register.js';
+import { getLocationById } from '../../read/projections/location_register.js';
+import { findFirstActiveDoaEntry, findRoleHolder } from '../../read/projections/doa_registry.js';
+import {
+  getInstrumentRecordById,
+  listInstrumentRecords,
+} from '../../read/projections/instrument_register.js';
+import {
+  getActiveCertificate,
+  getCertificateById,
+  listCertificatesByInstrument,
+} from '../../read/projections/instrument_calibration_certificate.js';
+import { listCalibrationAlerts } from '../../read/projections/instrument_calibration_alert.js';
+import {
+  getEscalationById,
+  listEscalations,
+} from '../../read/projections/instrument_calibration_escalation.js';
+import { getInstrumentCalibrationStatus } from '../../read/projections/instrument_calibration.js';
 
 /**
  * Story 7.2 REST surface: PM plans, work orders and the generic meter-reading ingestion API
@@ -182,10 +209,10 @@ function replayIdOrReject(
 function requireBusinessDate(body: Record<string, unknown>): string {
   if (
     typeof body['business_date'] !== 'string' ||
-    !DATE_REGEX.test(body['business_date']) ||
-    // The regex accepts impossible dates like 2026-02-30; they fail later as an unmapped SQL
-    // date-cast 500 instead of the Table 4-promised INVALID_PARAMS 400.
-    Number.isNaN(Date.parse(body['business_date']))
+    // The regex and Date.parse admit impossible dates like 2026-02-30 (Date.parse normalizes
+    // them); they fail later as an unmapped SQL date-cast 500 instead of the promised
+    // INVALID_PARAMS 400. The round-trip check rejects them here.
+    !isValidCalendarDate(body['business_date'])
   ) {
     throw new AppError(400, 'INVALID_PARAMS', 'business_date is required and must be YYYY-MM-DD');
   }
@@ -2506,3 +2533,687 @@ export const cancelSpareReservationHandler = requireRole({
   module: 'maintenance',
   functionScope: 'write',
 })(cancelSpareReservationBase);
+
+// ---------------------------------------------------------------------------
+// Story 7.5: calibration register and non-overridable lockout (FR-M-12, FR-M-13, AD-8)
+// ---------------------------------------------------------------------------
+//
+// These handlers own only the capture-time resolutions - server-minted ids, actor stamping,
+// canonicalization of human-entered keys, and resolving the DOA route at raise time. Every
+// decision lives in src/compliance/calibration-register.ts, which re-derives each declared field
+// under lock, so a direct POST /api/v1/events cannot bypass any of it.
+//
+// The 423 in updateCalibrationStatusBase (src/api/v1/instruments.ts) is the other half of AC 2 and
+// stays there, on the Story 1.7 endpoint it closes.
+
+const CALIBRATION_TYPES = new Set(['in_house', 'iso_17025']);
+const CALIBRATION_STAGE_SET = new Set<number>(CALIBRATION_STAGES);
+const ESCALATION_STATUSES = new Set(['open', 'resolved']);
+const CALIBRATION_STATUSES = new Set(['calibrated', 'out_of_calibration']);
+
+/** A path segment that must be a UUID, rejected as 400 rather than looked up as garbage. */
+function requireUuidParam(params: Record<string, string> | undefined, name: string): string {
+  const value = params?.[name];
+  if (!value || !isUuid(value)) {
+    throw new AppError(400, 'INVALID_PARAMS', `${name} must be a UUID`);
+  }
+  return value;
+}
+
+/** A required calendar date field from the body, distinct from business_date. */
+function requireCalendarDate(
+  body: Record<string, unknown>,
+  field: string,
+  errorCode: string,
+): string {
+  const value = body[field];
+  // isValidCalendarDate rejects impossible dates (e.g. 2026-02-30) that Date.parse normalizes, so
+  // they cannot reach a $N::date SQL cast as an unmapped 22008 500.
+  if (typeof value !== 'string' || !isValidCalendarDate(value)) {
+    throw new AppError(400, errorCode, `${field} is required and must be YYYY-MM-DD`);
+  }
+  return value;
+}
+
+const createInstrumentBase: RouteHandler = async (req, res, _params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const instrumentRecordId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const assetId = requireUuidField(body, 'asset_id');
+    const locationId = requireUuidField(body, 'location_id');
+    if (
+      typeof body['instrument_id'] !== 'string' ||
+      body['instrument_id'].trim() === '' ||
+      body['instrument_id'].trim().length > MAX_INSTRUMENT_ID_LENGTH
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `instrument_id is required and must be at most ${MAX_INSTRUMENT_ID_LENGTH} characters`,
+      );
+    }
+    // Canonicalized in the handler AND in the seam, so the direct-event path cannot bypass it.
+    const instrumentId = canonicalInstrumentId(body['instrument_id']);
+
+    // Rejected, never coerced: "365" as a string would otherwise become an unmapped constraint
+    // violation instead of a stable 400 (the Story 7.4 wire-boolean lesson applied to integers).
+    const interval = body['calibration_interval_days'];
+    if (
+      typeof interval !== 'number' ||
+      !Number.isInteger(interval) ||
+      interval < 1 ||
+      interval > MAX_CALIBRATION_INTERVAL_DAYS
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `calibration_interval_days must be an integer between 1 and ${MAX_CALIBRATION_INTERVAL_DAYS}`,
+      );
+    }
+
+    const asset = await getAssetById(assetId);
+    if (!asset) {
+      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
+    }
+    const location = await getLocationById(locationId);
+    if (!location) {
+      throw new AppError(404, 'LOCATION_NOT_FOUND', 'Location not found', {
+        location_id: locationId,
+      });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: instrumentRecordId,
+        event_type: 'maintenance.instrument_registered',
+        payload: {
+          instrument_record_id: instrumentRecordId,
+          asset_id: assetId,
+          instrument_id: instrumentId,
+          location_id: locationId,
+          calibration_interval_days: interval,
+          registered_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    // Read back BY ID from the persisted payload's own id: on a replay the stored event carries
+    // the ORIGINAL instrument_record_id, never this request's freshly minted one.
+    const persistedId = replayIdOrReject(
+      persisted,
+      'maintenance.instrument_registered',
+      'instrument_record_id',
+    );
+    const instrument = await getInstrumentRecordById(persistedId);
+    const status = instrument
+      ? await getInstrumentCalibrationStatus(instrument.instrument_id)
+      : null;
+    sendJson(res, 201, {
+      event_id: persisted.event_id,
+      instrument: instrument ?? null,
+      calibration_status: status?.calibration_status ?? null,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const listInstrumentsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const assetId = url.searchParams.get('asset_id');
+  const locationId = url.searchParams.get('location_id');
+  const calibrationStatus = url.searchParams.get('calibration_status');
+  if (assetId !== null && !isUuid(assetId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'asset_id must be a UUID');
+    return;
+  }
+  if (locationId !== null && !isUuid(locationId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'location_id must be a UUID');
+    return;
+  }
+  // A filter that would otherwise be silently ignored returns 400 instead (the Story 7.4 lesson).
+  if (calibrationStatus !== null && !CALIBRATION_STATUSES.has(calibrationStatus)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'calibration_status must be one of: calibrated, out_of_calibration',
+    );
+    return;
+  }
+
+  const instruments = await listInstrumentRecords({
+    asset_id: assetId ?? undefined,
+    location_id: locationId ?? undefined,
+    calibration_status: calibrationStatus ?? undefined,
+    limit: paging.limit,
+    offset: paging.offset,
+  });
+  sendJson(res, 200, { instruments });
+};
+
+const getInstrumentBase: RouteHandler = async (req, res, params) => {
+  try {
+    const instrumentRecordId = requireUuidParam(params, 'instrumentRecordId');
+    const instrument = await getInstrumentRecordById(instrumentRecordId);
+    if (!instrument) {
+      throw new AppError(404, 'INSTRUMENT_NOT_FOUND', 'Instrument not found', {
+        instrument_record_id: instrumentRecordId,
+      });
+    }
+    const [certificate, status] = await Promise.all([
+      getActiveCertificate(instrumentRecordId),
+      getInstrumentCalibrationStatus(instrument.instrument_id),
+    ]);
+    sendJson(res, 200, {
+      instrument,
+      active_certificate: certificate ?? null,
+      calibration_status: status?.calibration_status ?? null,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const recordCertificateBase: RouteHandler = async (req, res, params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const certificateId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const instrumentRecordId = requireUuidParam(params, 'instrumentRecordId');
+    const businessDate = requireBusinessDate(body);
+
+    const calibrationType = body['calibration_type'];
+    if (typeof calibrationType !== 'string' || !CALIBRATION_TYPES.has(calibrationType)) {
+      throw new AppError(
+        400,
+        'INVALID_CALIBRATION_TYPE',
+        'calibration_type must be in_house or iso_17025',
+      );
+    }
+    // issuing_lab follows the seam's rule, not optionalNullableText: a blank value on an iso_17025
+    // certificate is 'without issuing_lab' and must surface INVALID_CALIBRATION_TYPE (the Error
+    // Code Contract), the same code the direct-event path returns for this input.
+    const issuingLabRaw = body['issuing_lab'];
+    let issuingLab: string | null = null;
+    if (issuingLabRaw !== undefined && issuingLabRaw !== null) {
+      if (typeof issuingLabRaw !== 'string' || issuingLabRaw.trim() === '') {
+        throw new AppError(
+          400,
+          'INVALID_CALIBRATION_TYPE',
+          'issuing_lab must be a non-blank string or null',
+        );
+      }
+      issuingLab = issuingLabRaw.trim();
+    }
+    if (calibrationType === 'iso_17025' && issuingLab === null) {
+      throw new AppError(
+        400,
+        'INVALID_CALIBRATION_TYPE',
+        'an iso_17025 certificate requires an issuing_lab',
+      );
+    }
+    if (
+      typeof body['certificate_number'] !== 'string' ||
+      body['certificate_number'].trim() === '' ||
+      body['certificate_number'].trim().length > MAX_CERTIFICATE_NUMBER_LENGTH
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `certificate_number is required and must be at most ${MAX_CERTIFICATE_NUMBER_LENGTH} characters`,
+      );
+    }
+    const certificateNumber = canonicalCertificateNumber(body['certificate_number']);
+    const calibratedOn = requireCalendarDate(body, 'calibrated_on', 'INVALID_CERTIFICATE_VALIDITY');
+    const validUntil = requireCalendarDate(body, 'valid_until', 'INVALID_CERTIFICATE_VALIDITY');
+    if (validUntil < calibratedOn) {
+      throw new AppError(
+        400,
+        'INVALID_CERTIFICATE_VALIDITY',
+        'valid_until must not precede calibrated_on',
+        { calibrated_on: calibratedOn, valid_until: validUntil },
+      );
+    }
+
+    // instrument_id is resolved from the register at capture time and DECLARED in the payload; the
+    // seam re-derives it from the LOCKED register row and rejects divergence.
+    const instrument = await getInstrumentRecordById(instrumentRecordId);
+    if (!instrument) {
+      throw new AppError(404, 'INSTRUMENT_NOT_FOUND', 'Instrument not found', {
+        instrument_record_id: instrumentRecordId,
+      });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: certificateId,
+        event_type: 'maintenance.calibration_certificate_recorded',
+        payload: {
+          certificate_id: certificateId,
+          instrument_record_id: instrumentRecordId,
+          instrument_id: instrument.instrument_id,
+          calibration_type: calibrationType,
+          certificate_number: certificateNumber,
+          issuing_lab: issuingLab,
+          calibrated_on: calibratedOn,
+          valid_until: validUntil,
+          business_date: businessDate,
+          recorded_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedId = replayIdOrReject(
+      persisted,
+      'maintenance.calibration_certificate_recorded',
+      'certificate_id',
+    );
+    const certificate = await getCertificateById(persistedId);
+    const status = await getInstrumentCalibrationStatus(instrument.instrument_id);
+    sendJson(res, 201, {
+      event_id: persisted.event_id,
+      certificate: certificate ?? null,
+      calibration_status: status?.calibration_status ?? null,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const listCertificatesBase: RouteHandler = async (req, res, params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  try {
+    const instrumentRecordId = requireUuidParam(params, 'instrumentRecordId');
+    const status = url.searchParams.get('status');
+    if (status !== null && !['active', 'superseded', 'expired'].includes(status)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'status must be one of: active, superseded, expired',
+      );
+    }
+    const certificates = await listCertificatesByInstrument({
+      instrument_record_id: instrumentRecordId,
+      status: status ?? undefined,
+      limit: paging.limit,
+      offset: paging.offset,
+    });
+    sendJson(res, 200, { certificates });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const raiseCalibrationEscalationBase: RouteHandler = async (req, res, params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const escalationId = randomUUID();
+  const correlationId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const instrumentRecordId = requireUuidParam(params, 'instrumentRecordId');
+    const reason = optionalNullableText(body, 'reason');
+
+    const instrument = await getInstrumentRecordById(instrumentRecordId);
+    if (!instrument) {
+      throw new AppError(404, 'INSTRUMENT_NOT_FOUND', 'Instrument not found', {
+        instrument_record_id: instrumentRecordId,
+      });
+    }
+
+    // The Story 1.7 DOA route, reused rather than reinvented. The seam re-derives both values
+    // under lock, so these are capture-time resolutions, not trusted authority.
+    const entry = await findFirstActiveDoaEntry('calibration.escalation');
+    if (!entry) {
+      throw new AppError(404, 'NO_DOA_ENTRY_MATCH', 'No DOA entry governs calibration.escalation');
+    }
+    const approver = await findRoleHolder(entry.role);
+    if (!approver) {
+      throw new AppError(404, 'NO_APPROVER_FOUND', `No active user holds role "${entry.role}"`);
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: escalationId,
+        event_type: 'maintenance.calibration_escalation_raised',
+        payload: {
+          escalation_id: escalationId,
+          instrument_record_id: instrumentRecordId,
+          instrument_id: instrument.instrument_id,
+          doa_entry_id: entry.entry_id,
+          routed_approver_user_id: approver.user_id,
+          reason,
+          raised_at: now,
+        },
+        metadata: {
+          correlation_id: correlationId,
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedId = replayIdOrReject(
+      persisted,
+      'maintenance.calibration_escalation_raised',
+      'escalation_id',
+    );
+    const escalation = await getEscalationById(persistedId);
+
+    // On a replay (idempotency-key reuse) persistEvent returns the ORIGINAL stored event, whose
+    // escalation_id differs from the freshly minted one here - so the notification is emitted only
+    // for a newly persisted escalation, never re-sent on a retry (and never routed to a DOA
+    // approver who was resolved fresh on the replay).
+    const isReplay = persistedId !== escalationId;
+
+    // AFTER the event commits, non-throwing (AD-17). The next_step wording is part of AC 3: the
+    // person receiving this must not read it as an unlock authorization. Targeted at the resolved
+    // approver by user_id through the Story 4.3 direct-user path, so it cannot fan out to zero
+    // recipients the way a role-only target can.
+    if (!isReplay) {
+      await emitNotification({
+        target: { role: entry.role, user_id: approver.user_id },
+        event_type: 'calibration_escalation_raised',
+        status_verb: 'Escalated',
+        object_type: 'instrument',
+        object_id: persistedId,
+        actor_label: `${instrument.instrument_id}${reason ? `: ${reason}` : ''}`,
+        next_step: 'Expedite re-calibration; the lockout stays in force',
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        correlation_id: correlationId,
+        occurred_at: now,
+      });
+    }
+
+    sendJson(res, 201, {
+      event_id: persisted.event_id,
+      escalation: escalation ?? null,
+      matched_entry: {
+        entry_id: entry.entry_id,
+        role: entry.role,
+        transaction_type: entry.transaction_type,
+        value_min: entry.value_min,
+        value_max: entry.value_max,
+      },
+      approver,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+/**
+ * The Phase-1 scheduling surface for calibration: one POST runs the staged alert pass and the
+ * expiry flip for an explicit business_date. The four counters stay separate in the response so a
+ * dropped notification is visible next to the writes.
+ */
+const scanCalibrationBase: RouteHandler = async (req, res, _params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  try {
+    const businessDate = requireBusinessDate(body);
+    const instrumentRecordId = body['instrument_record_id'];
+    if (
+      instrumentRecordId !== undefined &&
+      instrumentRecordId !== null &&
+      !isUuid(instrumentRecordId)
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'instrument_record_id must be a UUID when provided',
+      );
+    }
+    const locationId = body['location_id'];
+    if (locationId !== undefined && locationId !== null && !isUuid(locationId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'location_id must be a UUID when provided');
+    }
+
+    const result = await runCalibrationExpiryScan({
+      business_date: businessDate,
+      instrument_record_id: (instrumentRecordId as string | undefined) ?? undefined,
+      location_id: (locationId as string | undefined) ?? undefined,
+      actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+      auditCtx: auditCtxFor(req, actor, 200),
+    });
+    sendJson(res, 200, result);
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const listCalibrationAlertsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const instrumentRecordId = url.searchParams.get('instrument_record_id');
+  const stageDaysRaw = url.searchParams.get('stage_days');
+  const businessDate = url.searchParams.get('business_date');
+
+  if (instrumentRecordId !== null && !isUuid(instrumentRecordId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'instrument_record_id must be a UUID');
+    return;
+  }
+  if (stageDaysRaw !== null && !CALIBRATION_STAGE_SET.has(Number(stageDaysRaw))) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'stage_days must be one of: 30, 14, 7');
+    return;
+  }
+  if (
+    businessDate !== null &&
+    (!DATE_REGEX.test(businessDate) || Number.isNaN(Date.parse(businessDate)))
+  ) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_date must be YYYY-MM-DD');
+    return;
+  }
+
+  const alerts = await listCalibrationAlerts({
+    instrument_record_id: instrumentRecordId ?? undefined,
+    stage_days: stageDaysRaw === null ? undefined : Number(stageDaysRaw),
+    business_date: businessDate ?? undefined,
+    limit: paging.limit,
+    offset: paging.offset,
+  });
+  sendJson(res, 200, { alerts });
+};
+
+const listCalibrationEscalationsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const instrumentRecordId = url.searchParams.get('instrument_record_id');
+  const status = url.searchParams.get('status');
+  if (instrumentRecordId !== null && !isUuid(instrumentRecordId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'instrument_record_id must be a UUID');
+    return;
+  }
+  if (status !== null && !ESCALATION_STATUSES.has(status)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'status must be one of: open, resolved');
+    return;
+  }
+
+  const escalations = await listEscalations({
+    instrument_record_id: instrumentRecordId ?? undefined,
+    status: status ?? undefined,
+    limit: paging.limit,
+    offset: paging.offset,
+  });
+  sendJson(res, 200, { escalations });
+};
+
+/**
+ * Closes an open escalation against an ACTIVE certificate. Recording a certificate already
+ * auto-resolves an open escalation inside the certificate applier's transaction; this route exists
+ * for the case where the certificate was recorded before the escalation was noticed.
+ */
+const resolveCalibrationEscalationBase: RouteHandler = async (req, res, params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const escalationId = requireUuidParam(params, 'escalationId');
+    const escalation = await getEscalationById(escalationId);
+    if (!escalation) {
+      throw new AppError(404, 'ESCALATION_NOT_FOUND', 'Escalation not found', {
+        escalation_id: escalationId,
+      });
+    }
+    // The ESCALATION_NOT_OPEN rejection deliberately lives in the seam, not here: a pre-check in
+    // the handler would fire on a legitimate REPLAY of this route (the escalation is resolved by
+    // then) and return 409 instead of the stored result, which is not what an idempotency key
+    // promises. The seam's alreadyPersisted guard short-circuits a replay before the state check.
+
+    // The resolving certificate defaults to the instrument's current active certificate, which is
+    // the only certificate that can legitimately close an escalation. An already-resolved
+    // escalation defaults to the certificate it was closed against, so a replay rebuilds the exact
+    // payload. An explicitly named certificate is still validated against the rule in the seam.
+    let resolvingCertificateId = body['certificate_id'];
+    if (resolvingCertificateId === undefined || resolvingCertificateId === null) {
+      const active =
+        escalation.resolving_certificate_id !== null
+          ? { certificate_id: escalation.resolving_certificate_id }
+          : await getActiveCertificate(escalation.instrument_record_id);
+      if (!active) {
+        throw new AppError(
+          422,
+          'CERTIFICATE_EXPIRED',
+          'This instrument has no active certificate to resolve the escalation against',
+          { escalation_id: escalationId },
+        );
+      }
+      resolvingCertificateId = active.certificate_id;
+    }
+    if (!isUuid(resolvingCertificateId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'certificate_id must be a UUID when provided');
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: escalationId,
+        event_type: 'maintenance.calibration_escalation_resolved',
+        payload: {
+          escalation_id: escalationId,
+          resolving_certificate_id: resolvingCertificateId,
+          resolved_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    const persistedId = replayIdOrReject(
+      persisted,
+      'maintenance.calibration_escalation_resolved',
+      'escalation_id',
+    );
+    const updated = await getEscalationById(persistedId);
+    sendJson(res, 200, { event_id: persisted.event_id, escalation: updated ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+export const createInstrumentHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(createInstrumentBase);
+
+export const listInstrumentsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listInstrumentsBase);
+
+export const getInstrumentHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getInstrumentBase);
+
+export const recordCertificateHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(recordCertificateBase);
+
+export const listCertificatesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listCertificatesBase);
+
+export const raiseCalibrationEscalationHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(raiseCalibrationEscalationBase);
+
+export const scanCalibrationHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(scanCalibrationBase);
+
+export const listCalibrationAlertsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listCalibrationAlertsBase);
+
+export const listCalibrationEscalationsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listCalibrationEscalationsBase);
+
+export const resolveCalibrationEscalationHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(resolveCalibrationEscalationBase);

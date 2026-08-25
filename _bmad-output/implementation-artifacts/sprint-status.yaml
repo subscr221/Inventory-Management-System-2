@@ -893,7 +893,20 @@ development_status:
    #   corners). story-7-4 58/58, story-7-3 30/30, spine 6/6, schema-drift 92/93 (1 pre-existing
    #   gate_dwell CRLF), business-days 16/16, tsc/eslint/prettier clean, full suite 1034 (1017 pass,
    #   same 17 pre-existing fails, 0 new); marked done
-  7-5-calibration-register-and-non-overridable-lockout: backlog   # PILOT
+   # story 7-5 code review 2026-08-25 (chunked adversarial pass: schema+seam+events / read+API+jobs /
+   #   integration tests, baseline eca5aca working tree; Blind Hunter + Edge Case Hunter + Acceptance
+   #   Auditor per group, all returned findings, none failed). 22 patches applied across the three
+   #   groups, 2 deferred (both pre-existing platform gaps already logged under dev-story 7-5 in
+   #   deferred-work.md: maintenance.* on a non-maintenance stream_type skips the seam, and
+   #   same-event-type idempotency reuse returns the original event), 15 dismissed. Headline fixes: applyEscalationResolved and the calibration-jobs
+   #   expiry pass inverted the Locking Contract and AB-BA deadlocked against applyCertificateRecorded
+   #   (40P01 unmapped 500) - both reordered to certificate/register-first; AC 2 TOCTOU closed with
+   #   FOR UPDATE + canonical status-case rename; impossible dates (2026-02-30) rejected across the
+   #   seam, handlers and read projections instead of an unmapped 22008 500; stream_id cross-checked;
+   #   four new pkeys added to the 23505 mapper; replay no longer re-emits the escalation
+   #   notification. Story 7.5 suite grown 34 -> 36, all passing; spine 6/6, 7.1-7.4 133/133, gates
+   #   clean; Story 1.7 unchanged at its one documented pre-existing baseline failure; moved to done
+  7-5-calibration-register-and-non-overridable-lockout: done   # PILOT  # create-story 2026-08-25: calibration register feeding the EXISTING Story 1.7 lockout gate (src/compliance/calibration.ts stays untouched, story-1-7 and Spine 4 in story-1-9 must pass unchanged); instrument_register keyed to the Story 7.1 asset register with case-insensitive instrument_id, in-house/ISO 17025 certificates with one active certificate per instrument, staged 30/14/7 alerts once per (certificate_id, stage_days) with catch-up, POST-triggered expiry scan flipping status out_of_calibration, DOA-routed escalation register that is status-neutral by construction, and closure of the manual-reinstatement override (PUT calibration-status to calibrated on a REGISTERED instrument returns 423 CALIBRATION_LOCKOUT); 4 new projections + 1 index on the existing status table, 6 events, 1 new seam, 1 job module, 10 REST routes, 9 tasks, baseline eca5aca
   7-6-statutory-examinations-cost-accumulation-and-machine-status-broadcast: backlog   # PILOT
   7-7-amc-warranty-and-insurance-tracking: backlog   # PILOT
   7-8-offline-technician-workflow-and-closure-codes: backlog   # PILOT

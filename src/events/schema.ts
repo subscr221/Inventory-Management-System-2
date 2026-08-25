@@ -2482,6 +2482,155 @@ export interface SpareReturnOverdueFlaggedEnvelope extends Omit<EventEnvelope, '
 }
 
 // ---------------------------------------------------------------------------
+// Story 7.5: calibration register and non-overridable lockout (FR-M-12, FR-M-13, AD-8)
+// ---------------------------------------------------------------------------
+//
+// The lockout GATE already exists (src/compliance/calibration.ts, called from persistEvent for
+// every qc.result_recorded). These six events build the register that FEEDS it. Every payload
+// field an applier can derive from a locked row is DECLARED here and CHECKED against the
+// derivation in src/compliance/calibration-register.ts, never trusted: a declared-but-unchecked
+// field is a silent corruption channel on the direct POST /api/v1/events path, and here that
+// channel writes a LOCKOUT status. Divergence rejects 409 CALIBRATION_DERIVATION_MISMATCH.
+//
+// All calendar fields (calibrated_on, valid_until, business_date) are DATE strings in YYYY-MM-DD.
+// All instants (registered_at, recorded_at, flagged_at, expired_at, raised_at, resolved_at)
+// require an explicit UTC offset (the Story 7.2 offset lesson).
+
+/**
+ * Story 7.5 (FR-M-12): one Story 7.1 asset registered as a measuring instrument. stream_id is
+ * instrument_record_id. Registration is FAIL CLOSED: the applier writes
+ * instrument_calibration_statuses at 'out_of_calibration', never through
+ * ensureInstrumentCalibrationRow, whose 'calibrated' default would silently make every new
+ * instrument usable for measurement - the exact defect AD-8 exists to prevent.
+ */
+export interface InstrumentRegisteredPayload {
+  instrument_record_id: string;
+  asset_id: string;
+  instrument_id: string;
+  location_id: string;
+  calibration_interval_days: number;
+  registered_at: string;
+}
+
+export interface InstrumentRegisteredEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.instrument_registered';
+  payload: InstrumentRegisteredPayload;
+}
+
+/**
+ * Story 7.5 (FR-M-12): an in-house or ISO 17025 calibration certificate recorded against a
+ * registered instrument. stream_id is certificate_id. Supersedes the previous active certificate
+ * in the SAME transaction, writes calibration_status 'calibrated', and auto-resolves any open
+ * escalation. instrument_id is DECLARED and CHECKED against the locked register row: a forged
+ * certificate event is the one payload in this story that can UNLOCK an instrument.
+ * A certificate whose valid_until precedes business_date is rejected 422 CERTIFICATE_EXPIRED
+ * rather than silently accepted - accepting it would leave the operator believing the instrument
+ * is usable while the gate still blocks every measurement.
+ */
+export interface CalibrationCertificateRecordedPayload {
+  certificate_id: string;
+  instrument_record_id: string;
+  instrument_id: string;
+  calibration_type: 'in_house' | 'iso_17025';
+  certificate_number: string;
+  issuing_lab: string | null;
+  calibrated_on: string;
+  valid_until: string;
+  business_date: string;
+  recorded_at: string;
+}
+
+export interface CalibrationCertificateRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.calibration_certificate_recorded';
+  payload: CalibrationCertificateRecordedPayload;
+}
+
+/**
+ * Story 7.5 (FR-M-12, AC 1): a staged 30/14/7-day expiry warning raised by the POST-triggered
+ * scan. stream_id is alert_id. The grain is (certificate_id, stage_days) - once per stage per
+ * certificate, not once per day - enforced by uq_instrument_calibration_alert_stage. valid_until
+ * and the stage arithmetic are re-derived under the certificate row's FOR UPDATE lock: a forged
+ * alert occupying a (certificate_id, stage_days) grain would suppress the genuine warning.
+ */
+export interface CalibrationExpiryFlaggedPayload {
+  alert_id: string;
+  certificate_id: string;
+  instrument_record_id: string;
+  stage_days: number;
+  valid_until: string;
+  business_date: string;
+  flagged_at: string;
+}
+
+export interface CalibrationExpiryFlaggedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.calibration_expiry_flagged';
+  payload: CalibrationExpiryFlaggedPayload;
+}
+
+/**
+ * Story 7.5 (FR-M-13, AC 2): the expiry flip. stream_id is instrument_record_id. Marks the
+ * certificate 'expired' and writes calibration_status 'out_of_calibration' through
+ * setCalibrationStatusFromRegister, which locks the instrument for measurement. valid_until is
+ * re-derived from the locked certificate and the business_date comparison re-evaluated, so a
+ * forged event cannot expire a certificate that is still valid.
+ */
+export interface CalibrationExpiredPayload {
+  instrument_record_id: string;
+  instrument_id: string;
+  certificate_id: string;
+  valid_until: string;
+  business_date: string;
+  expired_at: string;
+}
+
+export interface CalibrationExpiredEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.calibration_expired';
+  payload: CalibrationExpiredPayload;
+}
+
+/**
+ * Story 7.5 (FR-M-13, AC 3): a DOA-routed escalation on a locked-out instrument. stream_id is
+ * escalation_id. The applier inserts one 'open' escalation row and NOTHING else: it must not
+ * touch instrument_calibration_statuses, must not write a certificate, and must not set any
+ * expiry field. AC 3 is a NEGATIVE property - the escalation expedites re-calibration but never
+ * bypasses the lockout - so the table itself carries no status column and the applier has no
+ * status write path at all.
+ */
+export interface CalibrationEscalationRaisedPayload {
+  escalation_id: string;
+  instrument_record_id: string;
+  instrument_id: string;
+  doa_entry_id: string;
+  routed_approver_user_id: string;
+  reason: string | null;
+  raised_at: string;
+}
+
+export interface CalibrationEscalationRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.calibration_escalation_raised';
+  payload: CalibrationEscalationRaisedPayload;
+}
+
+/**
+ * Story 7.5 (AC 3): an open escalation closed against an ACTIVE certificate. stream_id is
+ * escalation_id. Emitted both by the standalone resolve route and from inside the certificate
+ * applier's transaction when recording a certificate auto-resolves an open escalation. Resolution
+ * requires a certificate that is active for that instrument at resolve time, so an escalation
+ * cannot be closed without the re-calibration it exists to expedite. Like the raise, it has NO
+ * calibration status effect: the certificate event is what sets 'calibrated'.
+ */
+export interface CalibrationEscalationResolvedPayload {
+  escalation_id: string;
+  resolving_certificate_id: string;
+  resolved_at: string;
+}
+
+export interface CalibrationEscalationResolvedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.calibration_escalation_resolved';
+  payload: CalibrationEscalationResolvedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -3068,6 +3217,34 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'maintenance.spare_return_overdue_flagged': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 7.5: the calibration register that FEEDS the existing Story 1.7 lockout gate. All six
+  // ride the same 'maintenance' stream as the rest of Epic 7. They move no stock and carry no
+  // business stream, so requiresBusinessStream stays false. The QC-side gate they feed
+  // (qc.result_recorded) is unchanged and stays on the 'qc' stream.
+  'maintenance.instrument_registered': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.calibration_certificate_recorded': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.calibration_expiry_flagged': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.calibration_expired': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.calibration_escalation_raised': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.calibration_escalation_resolved': {
     streamType: 'maintenance',
     requiresBusinessStream: false,
   },

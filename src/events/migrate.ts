@@ -113,6 +113,15 @@ const MIGRATIONS = [
   '../../read/projections/asset_parts_list.sql',
   '../../read/projections/maintenance_spare_reservation.sql',
   '../../read/projections/maintenance_spare_alert.sql',
+  // Story 7.5: the calibration register that FEEDS the existing Story 1.7 lockout gate. The edited
+  // instrument_calibration.sql keeps its position above (its new guarded lower() index block
+  // re-applies harmlessly); these four are appended at the tail so the maintenance block stays
+  // chronological by story. instrument_register carries asset_id but no FK - projections never FK
+  // to each other in this codebase - so its order relative to asset.sql above is free.
+  '../../read/projections/instrument_register.sql',
+  '../../read/projections/instrument_calibration_certificate.sql',
+  '../../read/projections/instrument_calibration_alert.sql',
+  '../../read/projections/instrument_calibration_escalation.sql',
 ];
 
 async function migrate(): Promise<void> {

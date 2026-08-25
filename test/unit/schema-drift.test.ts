@@ -1015,6 +1015,74 @@ const EXPECTED = [
     indexes: ['idx_maintenance_spare_alert_business_date', 'idx_maintenance_spare_alert_grain'],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 7.5: the calibration register feeding the existing Story 1.7 lockout gate. The status
+  // table itself is listed here for the first time because this story adds an index to it; its
+  // CREATE body and its one constraint are unchanged and are now pinned against drift as well.
+  {
+    canonical: 'read/projections/instrument_calibration.sql',
+    table: 'instrument_calibration_statuses',
+    constraints: ['chk_instrument_calibration_status'],
+    indexes: [
+      'idx_instrument_calibration_statuses_instrument_id',
+      'idx_instrument_calibration_statuses_instrument_id_lower',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/instrument_register.sql',
+    table: 'instrument_register',
+    constraints: ['uq_instrument_register_asset', 'chk_instrument_register_interval'],
+    indexes: [
+      'uq_instrument_register_instrument_id',
+      'idx_instrument_register_location',
+      'idx_instrument_register_asset',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/instrument_calibration_certificate.sql',
+    table: 'instrument_calibration_certificate',
+    constraints: [
+      'chk_instrument_calibration_certificate_type',
+      'chk_instrument_calibration_certificate_status',
+      'chk_instrument_calibration_certificate_validity',
+      'chk_instrument_calibration_certificate_iso_lab',
+    ],
+    indexes: [
+      'uq_instrument_calibration_certificate_active',
+      'uq_instrument_calibration_certificate_number',
+      'idx_instrument_calibration_certificate_valid_until',
+      'idx_instrument_calibration_certificate_instrument',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/instrument_calibration_alert.sql',
+    table: 'instrument_calibration_alert',
+    constraints: [
+      'chk_instrument_calibration_alert_stage',
+      'uq_instrument_calibration_alert_stage',
+    ],
+    indexes: [
+      'idx_instrument_calibration_alert_business_date',
+      'idx_instrument_calibration_alert_instrument',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/instrument_calibration_escalation.sql',
+    table: 'instrument_calibration_escalation',
+    constraints: [
+      'chk_instrument_calibration_escalation_status',
+      'chk_instrument_calibration_escalation_resolution',
+    ],
+    indexes: [
+      'uq_instrument_calibration_escalation_open',
+      'idx_instrument_calibration_escalation_approver',
+      'idx_instrument_calibration_escalation_instrument',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

@@ -262,6 +262,16 @@ import {
   returnSpareHandler,
   scanSparesHandler,
   whereUsedHandler,
+  createInstrumentHandler,
+  listInstrumentsHandler,
+  getInstrumentHandler,
+  recordCertificateHandler,
+  listCertificatesHandler,
+  raiseCalibrationEscalationHandler,
+  scanCalibrationHandler,
+  listCalibrationAlertsHandler,
+  listCalibrationEscalationsHandler,
+  resolveCalibrationEscalationHandler,
 } from './api/v1/maintenance.js';
 import {
   captureSupplierInvoiceHandler,
@@ -647,6 +657,36 @@ export function createAppRouter(): Router {
   router.post(
     '/api/v1/maintenance/spare-reservations/:reservationId/cancel',
     cancelSpareReservationHandler,
+  );
+
+  // Story 7.5: Calibration Register and Non-Overridable Lockout (FR-M-12, FR-M-13, AD-8).
+  // ROUTE ORDER MATTERS: every static segment under '/calibration/' is registered before any
+  // '/calibration/:param' route, and '/instruments' before '/instruments/:instrumentRecordId', or
+  // the parameter segment shadows the static ones and the scan trigger silently becomes a lookup
+  // for an instrument literally named "scan". These live under '/api/v1/maintenance/instruments';
+  // the Story 1.7 admin endpoints stay under '/api/v1/instruments' and the two prefixes are
+  // distinct, so neither block shadows the other.
+  router.post('/api/v1/maintenance/calibration/scan', scanCalibrationHandler);
+  router.get('/api/v1/maintenance/calibration/alerts', listCalibrationAlertsHandler);
+  router.get('/api/v1/maintenance/calibration/escalations', listCalibrationEscalationsHandler);
+  router.post(
+    '/api/v1/maintenance/calibration/escalations/:escalationId/resolve',
+    resolveCalibrationEscalationHandler,
+  );
+  router.post('/api/v1/maintenance/instruments', createInstrumentHandler);
+  router.get('/api/v1/maintenance/instruments', listInstrumentsHandler);
+  router.get('/api/v1/maintenance/instruments/:instrumentRecordId', getInstrumentHandler);
+  router.post(
+    '/api/v1/maintenance/instruments/:instrumentRecordId/certificates',
+    recordCertificateHandler,
+  );
+  router.get(
+    '/api/v1/maintenance/instruments/:instrumentRecordId/certificates',
+    listCertificatesHandler,
+  );
+  router.post(
+    '/api/v1/maintenance/instruments/:instrumentRecordId/escalations',
+    raiseCalibrationEscalationHandler,
   );
 
   // Story 4.7: Supplier Invoice Capture

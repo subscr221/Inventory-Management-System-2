@@ -157,6 +157,16 @@ import {
   resolveAssetPartDuplicateConflict,
   resolveSpareAlertDuplicateConflict,
 } from '../compliance/maintenance-spares.js';
+import {
+  assertCalibrationRegisterShape,
+  applyCalibrationRegisterProjection,
+  resolveInstrumentRegisterDuplicateConflict,
+  resolveInstrumentAssetDuplicateConflict,
+  resolveCertificateNumberDuplicateConflict,
+  resolveActiveCertificateDuplicateConflict,
+  resolveCalibrationAlertDuplicateConflict,
+  resolveOpenEscalationDuplicateConflict,
+} from '../compliance/calibration-register.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -574,6 +584,10 @@ export async function persistEvent(
   // non-DB and runs with the other pre-transaction asserts, so a malformed spare event never
   // consumes an idempotency key.
   assertMaintenanceSpareShape(envelope);
+  // Story 7.5: instrument registration / certificate / staged alert / expiry / escalation shape
+  // validation is non-DB and runs with the other pre-transaction asserts, so a malformed
+  // calibration event never consumes an idempotency key.
+  assertCalibrationRegisterShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -861,6 +875,11 @@ export async function persistEvent(
     // rejection - INSUFFICIENT_STOCK from applyStockAllocation - therefore rolls back the
     // reservation row too, and no maintenance event is ever stored for a movement that failed.
     await applyMaintenanceSpareProjection(envelope, client);
+    // Story 7.5: the calibration register projections run inside this same transaction, so the
+    // register/certificate/escalation row and the instrument_calibration_statuses write the
+    // lockout gate reads commit or roll back together. eventId is passed through because the
+    // status row records which event changed it and the domain_events row does not exist yet.
+    await applyCalibrationRegisterProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -1214,6 +1233,59 @@ export async function persistEvent(
           'An alert of this type already exists for this grain on this business date',
           await resolveSpareAlertDuplicateConflict(envelope.payload),
         );
+      } else if (constraint === 'uq_instrument_register_instrument_id') {
+        // Story 7.5: two concurrent registrations of the same instrument id resolve to one winner;
+        // the loser gets the same code and the same existing_instrument_record_id the sequential
+        // pre-check produces.
+        throw new AppError(
+          409,
+          'INSTRUMENT_ALREADY_REGISTERED',
+          'An instrument is already registered under this instrument id',
+          await resolveInstrumentRegisterDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_instrument_register_asset') {
+        // Story 7.5 (AD-9): one asset is at most one instrument record.
+        throw new AppError(
+          409,
+          'ASSET_ALREADY_INSTRUMENT',
+          'This asset already has an instrument record',
+          await resolveInstrumentAssetDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_instrument_calibration_certificate_number') {
+        // Story 7.5: the same certificate number recorded twice against one instrument.
+        throw new AppError(
+          409,
+          'CERTIFICATE_ALREADY_RECORDED',
+          'A certificate with this number is already recorded for this instrument',
+          await resolveCertificateNumberDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_instrument_calibration_certificate_active') {
+        // Story 7.5: two concurrent certificate recordings for one instrument. Exactly one active
+        // certificate may exist, so the loser is told which certificate holds the slot rather than
+        // surfacing a raw 23505 500 - or worse, both appearing to unlock the instrument.
+        throw new AppError(
+          409,
+          'CERTIFICATE_ALREADY_RECORDED',
+          'Another certificate is already the active certificate for this instrument',
+          await resolveActiveCertificateDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_instrument_calibration_alert_stage') {
+        // Story 7.5: the once-per-stage grain. Two concurrent scans for one certificate stage
+        // resolve to a single alert with the stable DUPLICATE_CALIBRATION_ALERT contract.
+        throw new AppError(
+          409,
+          'DUPLICATE_CALIBRATION_ALERT',
+          'This certificate has already been flagged at this stage',
+          await resolveCalibrationAlertDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_instrument_calibration_escalation_open') {
+        // Story 7.5: at most one open escalation per instrument.
+        throw new AppError(
+          409,
+          'ESCALATION_ALREADY_OPEN',
+          'An escalation is already open for this instrument',
+          await resolveOpenEscalationDuplicateConflict(envelope.payload),
+        );
       } else if (
         constraint === 'maintenance_sla_policy_pkey' ||
         constraint === 'maintenance_fault_report_pkey' ||
@@ -1222,7 +1294,11 @@ export async function persistEvent(
         constraint === 'maintenance_spare_catalogue_pkey' ||
         constraint === 'asset_parts_list_pkey' ||
         constraint === 'maintenance_spare_reservation_pkey' ||
-        constraint === 'maintenance_spare_alert_pkey'
+        constraint === 'maintenance_spare_alert_pkey' ||
+        constraint === 'instrument_register_pkey' ||
+        constraint === 'instrument_calibration_certificate_pkey' ||
+        constraint === 'instrument_calibration_alert_pkey' ||
+        constraint === 'instrument_calibration_escalation_pkey'
       ) {
         // Story 7.3: server-minted UUIDs make these practically unreachable; mapped for
         // completeness per the maintenance_plan_pkey precedent, so a direct-event duplicate id
@@ -1267,9 +1343,35 @@ export async function persistEvent(
                             reservation_id:
                               typeof p['reservation_id'] === 'string' ? p['reservation_id'] : null,
                           }
-                        : {
-                            alert_id: typeof p['alert_id'] === 'string' ? p['alert_id'] : null,
-                          };
+                        : constraint === 'maintenance_spare_alert_pkey'
+                          ? {
+                              alert_id: typeof p['alert_id'] === 'string' ? p['alert_id'] : null,
+                            }
+                          : constraint === 'instrument_register_pkey'
+                            ? {
+                                instrument_record_id:
+                                  typeof p['instrument_record_id'] === 'string'
+                                    ? p['instrument_record_id']
+                                    : null,
+                              }
+                            : constraint === 'instrument_calibration_certificate_pkey'
+                              ? {
+                                  certificate_id:
+                                    typeof p['certificate_id'] === 'string'
+                                      ? p['certificate_id']
+                                      : null,
+                                }
+                              : constraint === 'instrument_calibration_alert_pkey'
+                                ? {
+                                    alert_id:
+                                      typeof p['alert_id'] === 'string' ? p['alert_id'] : null,
+                                  }
+                                : {
+                                    escalation_id:
+                                      typeof p['escalation_id'] === 'string'
+                                        ? p['escalation_id']
+                                        : null,
+                                  };
         throw new AppError(
           409,
           'DUPLICATE_EVENT',

@@ -23,6 +23,19 @@ export function toIstCalendarDate(utc: Date): string {
   return IST_DATE_FORMAT.format(utc);
 }
 
+/**
+ * True when `date` is a REAL calendar date in YYYY-MM-DD. The regex alone admits impossible
+ * dates (2026-02-30) that Date.parse silently normalizes, and a forged date passed to a
+ * `$N::date` SQL cast dies as an unmapped 22008 500. The round-trip component check rejects
+ * day-of-month overflow and non-leap Feb 29 while accepting every valid date.
+ */
+export function isValidCalendarDate(date: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const [y, m, d] = date.split('-').map((part) => Number(part));
+  const dt = new Date(Date.UTC(y!, m! - 1, d!));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m! - 1 && dt.getUTCDate() === d;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** UTC day-of-week (0 = Sunday .. 6 = Saturday) of a YYYY-MM-DD calendar date. */

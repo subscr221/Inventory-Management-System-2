@@ -20,6 +20,7 @@ import {
 } from '../../read/projections/instrument_calibration.js';
 import type { CalibrationStatus } from '../../read/projections/instrument_calibration.js';
 import { findFirstActiveDoaEntry, findRoleHolder } from '../../read/projections/doa_registry.js';
+import { getInstrumentRecordByInstrumentId } from '../../read/projections/instrument_register.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const MAX_INSTRUMENT_ID_LENGTH = 128;
@@ -118,15 +119,45 @@ const updateCalibrationStatusBase: RouteHandler = async (req, res, params) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const existedBefore = (await getInstrumentCalibrationStatus(instrumentId, client)) !== null;
-    const before = await ensureInstrumentCalibrationRow(instrumentId, actor.userId, client);
+    // Story 7.5 (Non-Overridable Contract, AC 2). Once an instrument is in the calibration
+    // register, only a recorded certificate can return it to 'calibrated': manual reinstatement is
+    // precisely the role override AD-8 forbids, and closing it is the point of AC 2. The check
+    // runs INSIDE this transaction and BEFORE persistEvent, so a rejected reinstatement writes no
+    // event and leaves no trace of a status change; the 423's audit entry comes from the existing
+    // error path. Locking DOWN is never a bypass, so 'out_of_calibration' stays open to every
+    // maintenance:write holder for registered and unregistered instruments alike, and an
+    // unregistered instrument id keeps the Story 1.7 behaviour byte for byte - which is what keeps
+    // the Spine Acceptance Contract green.
+    // The register lookup is FOR UPDATE so a concurrent maintenance.instrument_registered
+    // serializes here instead of committing between this read and the status write below. Without
+    // the lock, the handler could see 'registered = null', then a registration commits, and this
+    // path would write a second case-variant status row whose lower() match makes the lockout gate
+    // ambiguous.
+    const registered = await getInstrumentRecordByInstrumentId(instrumentId, client, true);
+    if (registered && calibrationStatus === 'calibrated') {
+      throw new AppError(
+        423,
+        'CALIBRATION_LOCKOUT',
+        'A registered instrument can only be returned to calibrated by recording a calibration certificate',
+        {
+          instrument_id: registered.instrument_id,
+          instrument_record_id: registered.instrument_record_id,
+        },
+      );
+    }
+    // For a registered instrument the status row is keyed by the id AS STORED in the register, so
+    // a case variant in the URL cannot create a second status row and make the lower() lookup the
+    // gate depends on ambiguous.
+    const statusKey = registered ? registered.instrument_id : instrumentId;
+    const existedBefore = (await getInstrumentCalibrationStatus(statusKey, client)) !== null;
+    const before = await ensureInstrumentCalibrationRow(statusKey, actor.userId, client);
     const event = await persistEvent(
       {
         stream_type: 'maintenance',
         stream_id: before.instrument_uuid,
         event_type: 'instrument.calibration_status_updated',
         payload: {
-          instrument_id: instrumentId,
+          instrument_id: statusKey,
           previous_status: existedBefore ? before.calibration_status : 'unknown',
           calibration_status: calibrationStatus,
           reason,
@@ -142,7 +173,7 @@ const updateCalibrationStatusBase: RouteHandler = async (req, res, params) => {
     );
     const updated = await updateInstrumentCalibrationStatus(
       {
-        instrument_id: instrumentId,
+        instrument_id: statusKey,
         calibration_status: calibrationStatus,
         status_event_id: event.event_id,
         status_event_version: event.event_version,

@@ -34,3 +34,22 @@ BEGIN
     GRANT SELECT ON instrument_calibration_statuses TO readonly_user;
   END IF;
 END $$;
+
+-- Story 7.5 (Status Write-Through Contract): the calibration register writes and reads this row by
+-- the instrument id AS STORED in instrument_register, and instrument ids are canonicalized with
+-- lower() everywhere they are human-entered. Without a lower() index the lookup either scans or
+-- misses: an instrument stored as 'ins-42' and queried as 'INS-42' returns null, and null is
+-- treated as locked, so the failure mode is a spurious lockout rather than a bypass. Fail-closed
+-- is correct but wrong for the operator, and the repo convention (Story 7.1 asset tags, Story 7.2
+-- scanned-versus-typed keys) is to canonicalize. The guarded DO block makes a re-applied file
+-- self-heal; no existing column or constraint on this table is changed.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'idx_instrument_calibration_statuses_instrument_id_lower'
+  ) THEN
+    CREATE INDEX idx_instrument_calibration_statuses_instrument_id_lower
+      ON instrument_calibration_statuses (lower(instrument_id));
+  END IF;
+END $$;

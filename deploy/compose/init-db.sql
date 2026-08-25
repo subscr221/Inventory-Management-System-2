@@ -558,6 +558,25 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 7.5 (Status Write-Through Contract): the calibration register writes and reads this row by
+-- the instrument id AS STORED in instrument_register, and instrument ids are canonicalized with
+-- lower() everywhere they are human-entered. Without a lower() index the lookup either scans or
+-- misses: an instrument stored as 'ins-42' and queried as 'INS-42' returns null, and null is
+-- treated as locked, so the failure mode is a spurious lockout rather than a bypass. Fail-closed
+-- is correct but wrong for the operator, and the repo convention (Story 7.1 asset tags, Story 7.2
+-- scanned-versus-typed keys) is to canonicalize. The guarded DO block makes a re-applied file
+-- self-heal; no existing column or constraint on this table is changed.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'idx_instrument_calibration_statuses_instrument_id_lower'
+  ) THEN
+    CREATE INDEX idx_instrument_calibration_statuses_instrument_id_lower
+      ON instrument_calibration_statuses (lower(instrument_id));
+  END IF;
+END $$;
+
 
 -- ---------------------------------------------------------------------------
 -- Notification and Alerting Foundation (Story 1.11). The section below MUST stay identical to
@@ -6979,5 +6998,374 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON maintenance_spare_alert TO readonly_user;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Story 7.5: Calibration Register and Non-Overridable Lockout (FR-M-12, FR-M-13, AD-8).
+-- The four sections below MUST stay identical to their canonical files under
+-- read/projections/ (applied by src/events/migrate.ts and the test harness); those files
+-- are the source of truth for tables, indexes, constraints AND grants.
+-- ---------------------------------------------------------------------------
+
+-- Instrument register (Story 7.5, FR-M-12, FR-M-13, AD-8, AD-9). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.instrument_registered domain
+-- events; mutation happens exclusively through persistEvent, which applies this projection inside
+-- the SAME transaction as the domain_events insert.
+--
+-- An instrument IS an asset (AD-9): asset_id references the single Story 7.1 register and is
+-- unique on it, so one asset is at most one instrument record. There is deliberately no
+-- is_instrument flag on the asset table - that would push maintenance state into a shared
+-- projection every module reads.
+--
+-- instrument_id is the QC-facing TEXT key that qc.result_recorded carries and that the Story 1.7
+-- lockout gate looks up in instrument_calibration_statuses. This table is the ONE row where the
+-- text key and the asset id meet. Uniqueness on it is canonicalized with lower() (the Story 7.1
+-- asset-tag precedent and the Story 7.2 scanned-versus-typed lesson): a case variant of an
+-- existing instrument id is the same physical instrument. The guarded DO block below drops a
+-- previous exact-match index so a re-applied file self-heals to the lower() definition.
+--
+-- There is NO calibration status column here. Certificate validity is the only source of
+-- calibrated status for a registered instrument, and two places holding the same fact is how a
+-- lockout gets defeated. calibration_interval_days is captured for the alert horizon only; no
+-- scheduling surface is built on it in this story.
+
+CREATE TABLE IF NOT EXISTS instrument_register (
+  instrument_record_id      UUID PRIMARY KEY,
+  asset_id                  UUID NOT NULL,
+  instrument_id             TEXT NOT NULL,
+  location_id               UUID NOT NULL,
+  calibration_interval_days INTEGER NOT NULL,
+  registered_by             UUID NOT NULL,
+  registered_at             TIMESTAMPTZ NOT NULL,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_instrument_register_asset UNIQUE (asset_id),
+  CONSTRAINT chk_instrument_register_interval CHECK (calibration_interval_days > 0 AND calibration_interval_days <= 3650)
+);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'uq_instrument_register_instrument_id'
+      AND indexdef NOT LIKE '%lower(instrument_id)%'
+  ) THEN
+    DROP INDEX uq_instrument_register_instrument_id;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_instrument_register_instrument_id ON instrument_register (lower(instrument_id));
+CREATE INDEX IF NOT EXISTS idx_instrument_register_location ON instrument_register (location_id);
+CREATE INDEX IF NOT EXISTS idx_instrument_register_asset ON instrument_register (asset_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_instrument_register_asset'
+      AND conrelid = 'instrument_register'::regclass
+  ) THEN
+    ALTER TABLE instrument_register
+      ADD CONSTRAINT uq_instrument_register_asset UNIQUE (asset_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_instrument_register_interval'
+      AND conrelid = 'instrument_register'::regclass
+  ) THEN
+    ALTER TABLE instrument_register
+      ADD CONSTRAINT chk_instrument_register_interval CHECK (calibration_interval_days > 0 AND calibration_interval_days <= 3650);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON instrument_register TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON instrument_register TO readonly_user;
+  END IF;
+END $$;
+
+-- Instrument calibration certificates (Story 7.5, FR-M-12, AD-8). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying
+-- maintenance.calibration_certificate_recorded / maintenance.calibration_expired domain events;
+-- mutation happens exclusively through persistEvent, which applies this projection inside the
+-- SAME transaction as the domain_events insert.
+--
+-- Certificate validity is the ONLY source of calibrated status for a registered instrument:
+-- calibration_status = 'calibrated' if and only if an 'active' certificate exists whose
+-- valid_until >= business_date. Exactly one active certificate per instrument is enforced by the
+-- partial unique index uq_instrument_calibration_certificate_active, not only by the seam's
+-- pre-check (the Story 7.1 one-record lesson) - a pre-check alone loses the concurrent race, and
+-- the row that would win here is the one that unlocks an instrument.
+--
+-- History is RETAINED: a superseded or expired certificate keeps its row and changes status, it is
+-- never deleted, so the register can always answer what the instrument was calibrated under on any
+-- past date. certificate_number is unique per instrument case-insensitively, matching the register's
+-- lower() canonicalization of human-entered keys.
+
+CREATE TABLE IF NOT EXISTS instrument_calibration_certificate (
+  certificate_id       UUID PRIMARY KEY,
+  instrument_record_id UUID NOT NULL,
+  instrument_id        TEXT NOT NULL,
+  calibration_type     TEXT NOT NULL,
+  certificate_number   TEXT NOT NULL,
+  issuing_lab          TEXT,
+  calibrated_on        DATE NOT NULL,
+  valid_until          DATE NOT NULL,
+  status               TEXT NOT NULL DEFAULT 'active',
+  recorded_by          UUID NOT NULL,
+  recorded_at          TIMESTAMPTZ NOT NULL,
+  superseded_at        TIMESTAMPTZ,
+  expired_at           TIMESTAMPTZ,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_instrument_calibration_certificate_type CHECK (calibration_type IN ('in_house', 'iso_17025')),
+  CONSTRAINT chk_instrument_calibration_certificate_status CHECK (status IN ('active', 'superseded', 'expired')),
+  CONSTRAINT chk_instrument_calibration_certificate_validity CHECK (valid_until >= calibrated_on),
+  CONSTRAINT chk_instrument_calibration_certificate_iso_lab CHECK (calibration_type <> 'iso_17025' OR issuing_lab IS NOT NULL)
+);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE indexname = 'uq_instrument_calibration_certificate_number'
+      AND indexdef NOT LIKE '%lower(certificate_number)%'
+  ) THEN
+    DROP INDEX uq_instrument_calibration_certificate_number;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_instrument_calibration_certificate_active ON instrument_calibration_certificate (instrument_record_id) WHERE status = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_instrument_calibration_certificate_number ON instrument_calibration_certificate (instrument_record_id, lower(certificate_number));
+CREATE INDEX IF NOT EXISTS idx_instrument_calibration_certificate_valid_until ON instrument_calibration_certificate (valid_until) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_instrument_calibration_certificate_instrument ON instrument_calibration_certificate (instrument_record_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_instrument_calibration_certificate_type'
+      AND conrelid = 'instrument_calibration_certificate'::regclass
+  ) THEN
+    ALTER TABLE instrument_calibration_certificate
+      ADD CONSTRAINT chk_instrument_calibration_certificate_type CHECK (calibration_type IN ('in_house', 'iso_17025'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_instrument_calibration_certificate_status'
+      AND conrelid = 'instrument_calibration_certificate'::regclass
+  ) THEN
+    ALTER TABLE instrument_calibration_certificate
+      ADD CONSTRAINT chk_instrument_calibration_certificate_status CHECK (status IN ('active', 'superseded', 'expired'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_instrument_calibration_certificate_validity'
+      AND conrelid = 'instrument_calibration_certificate'::regclass
+  ) THEN
+    ALTER TABLE instrument_calibration_certificate
+      ADD CONSTRAINT chk_instrument_calibration_certificate_validity CHECK (valid_until >= calibrated_on);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_instrument_calibration_certificate_iso_lab'
+      AND conrelid = 'instrument_calibration_certificate'::regclass
+  ) THEN
+    ALTER TABLE instrument_calibration_certificate
+      ADD CONSTRAINT chk_instrument_calibration_certificate_iso_lab CHECK (calibration_type <> 'iso_17025' OR issuing_lab IS NOT NULL);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON instrument_calibration_certificate TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON instrument_calibration_certificate TO readonly_user;
+  END IF;
+END $$;
+
+-- Staged calibration expiry alerts (Story 7.5, FR-M-12, AC 1). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.calibration_expiry_flagged
+-- domain events; mutation happens exclusively through persistEvent, which applies this projection
+-- inside the SAME transaction as the domain_events insert.
+--
+-- The grain is (certificate_id, stage_days), NOT (certificate_id, business_date): an expiry
+-- countdown fires ONCE PER STAGE per certificate, unlike the Story 7.4 daily breach alert where a
+-- persisting breach earns a daily nudge. uq_instrument_calibration_alert_stage is what makes a
+-- same-day re-run a no-op and what makes a skipped day catch up rather than lose a stage - the
+-- scan asks which stages are due and unfired, never whether the day count equals a stage exactly.
+-- A renewal issues a NEW certificate_id and therefore a fresh set of three stages.
+
+CREATE TABLE IF NOT EXISTS instrument_calibration_alert (
+  alert_id             UUID PRIMARY KEY,
+  certificate_id       UUID NOT NULL,
+  instrument_record_id UUID NOT NULL,
+  stage_days           INTEGER NOT NULL,
+  valid_until          DATE NOT NULL,
+  business_date        DATE NOT NULL,
+  flagged_at           TIMESTAMPTZ NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_instrument_calibration_alert_stage CHECK (stage_days IN (30, 14, 7)),
+  CONSTRAINT uq_instrument_calibration_alert_stage UNIQUE (certificate_id, stage_days)
+);
+
+CREATE INDEX IF NOT EXISTS idx_instrument_calibration_alert_business_date ON instrument_calibration_alert (business_date);
+CREATE INDEX IF NOT EXISTS idx_instrument_calibration_alert_instrument ON instrument_calibration_alert (instrument_record_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_instrument_calibration_alert_stage'
+      AND conrelid = 'instrument_calibration_alert'::regclass
+  ) THEN
+    ALTER TABLE instrument_calibration_alert
+      ADD CONSTRAINT chk_instrument_calibration_alert_stage CHECK (stage_days IN (30, 14, 7));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_instrument_calibration_alert_stage'
+      AND conrelid = 'instrument_calibration_alert'::regclass
+  ) THEN
+    ALTER TABLE instrument_calibration_alert
+      ADD CONSTRAINT uq_instrument_calibration_alert_stage UNIQUE (certificate_id, stage_days);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON instrument_calibration_alert TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON instrument_calibration_alert TO readonly_user;
+  END IF;
+END $$;
+
+-- Calibration lockout escalations (Story 7.5, FR-M-13, AC 3, AD-8). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying
+-- maintenance.calibration_escalation_raised / maintenance.calibration_escalation_resolved domain
+-- events; mutation happens exclusively through persistEvent, which applies this projection inside
+-- the SAME transaction as the domain_events insert.
+--
+-- This table is STATUS-NEUTRAL BY CONSTRUCTION (AC 3): it carries no calibration_status column and
+-- no expiry field, so an escalation expedites re-calibration without any structural way to bypass
+-- the lockout. Resolution requires a resolving_certificate_id, enforced by
+-- chk_instrument_calibration_escalation_resolution, so an escalation cannot be closed without the
+-- re-calibration it exists to expedite.
+--
+-- At most one OPEN escalation per instrument, enforced by the partial unique index
+-- uq_instrument_calibration_escalation_open rather than only by the seam's pre-check. The DOA route
+-- is the Story 1.7 calibration.escalation entry; doa_entry_id and routed_approver_user_id record
+-- which entry and which approver the raise resolved to, so the routing is auditable after the fact.
+
+CREATE TABLE IF NOT EXISTS instrument_calibration_escalation (
+  escalation_id            UUID PRIMARY KEY,
+  instrument_record_id     UUID NOT NULL,
+  instrument_id            TEXT NOT NULL,
+  doa_entry_id             UUID NOT NULL,
+  routed_approver_user_id  UUID NOT NULL,
+  reason                   TEXT,
+  status                   TEXT NOT NULL DEFAULT 'open',
+  raised_by                UUID NOT NULL,
+  raised_at                TIMESTAMPTZ NOT NULL,
+  resolved_at              TIMESTAMPTZ,
+  resolving_certificate_id UUID,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_instrument_calibration_escalation_status CHECK (status IN ('open', 'resolved')),
+  CONSTRAINT chk_instrument_calibration_escalation_resolution CHECK (status = 'open' OR (resolved_at IS NOT NULL AND resolving_certificate_id IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_instrument_calibration_escalation_open ON instrument_calibration_escalation (instrument_record_id) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_instrument_calibration_escalation_approver ON instrument_calibration_escalation (routed_approver_user_id);
+CREATE INDEX IF NOT EXISTS idx_instrument_calibration_escalation_instrument ON instrument_calibration_escalation (instrument_record_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_instrument_calibration_escalation_status'
+      AND conrelid = 'instrument_calibration_escalation'::regclass
+  ) THEN
+    ALTER TABLE instrument_calibration_escalation
+      ADD CONSTRAINT chk_instrument_calibration_escalation_status CHECK (status IN ('open', 'resolved'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_instrument_calibration_escalation_resolution'
+      AND conrelid = 'instrument_calibration_escalation'::regclass
+  ) THEN
+    ALTER TABLE instrument_calibration_escalation
+      ADD CONSTRAINT chk_instrument_calibration_escalation_resolution CHECK (status = 'open' OR (resolved_at IS NOT NULL AND resolving_certificate_id IS NOT NULL));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON instrument_calibration_escalation TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON instrument_calibration_escalation TO readonly_user;
   END IF;
 END $$;
