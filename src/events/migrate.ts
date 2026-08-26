@@ -122,6 +122,28 @@ const MIGRATIONS = [
   '../../read/projections/instrument_calibration_certificate.sql',
   '../../read/projections/instrument_calibration_alert.sql',
   '../../read/projections/instrument_calibration_escalation.sql',
+  // Story 7.6: the statutory examination register, its record history, the machine-status
+  // projection and the per-asset maintenance cost rollup (FR-M-14, FR-M-15, FR-M-16). Appended at
+  // the tail after the Story 7.5 files; the edited maintenance_work_order.sql keeps its position
+  // above and its new guarded cost-column blocks re-apply harmlessly. No FKs exist between
+  // projections, so this order is logical rather than dependency-forced.
+  '../../read/projections/statutory_examination.sql',
+  '../../read/projections/statutory_examination_record.sql',
+  '../../read/projections/asset_operational_status.sql',
+  '../../read/projections/maintenance_asset_cost.sql',
+  // Story 6.1: the production order projection (FR-MO-01/02/03). Appended at the tail after the
+  // Story 7.6 files; the sequence and its USAGE grant live in the same file (the indent_number_seq
+  // pattern). The projection is enterprise-scoped (no site column) and no FK ties it to item_master,
+  // location_register or bom, so this order is logical rather than dependency-forced.
+  '../../read/projections/production_order.sql',
+  // Story 7.7: the asset coverage register (AMC, warranty, insurance), its staged 90/60/30 expiry
+  // alerts and the reason-coded warranty override grain (FR-M-10, FR-M-11). Appended at the tail
+  // after the Story 6.1 file; the edited maintenance_work_order.sql keeps its position above and
+  // its new guarded warranty-column blocks re-apply harmlessly. No FKs exist between projections,
+  // so this order is logical rather than dependency-forced.
+  '../../read/projections/asset_coverage.sql',
+  '../../read/projections/asset_coverage_alert.sql',
+  '../../read/projections/maintenance_warranty_override.sql',
 ];
 
 async function migrate(): Promise<void> {

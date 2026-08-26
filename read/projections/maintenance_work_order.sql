@@ -135,6 +135,93 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 7.6 cost arm (FR-M-15): additive cost columns on the SAME table so lifecycle costing rides
+-- the existing work-order register instead of creating a second one. The guarded DO blocks
+-- re-apply harmlessly on an existing database. Costs are NUMERIC(14,3) strings end to end (the
+-- Story 5.6 BOM cost rollup pattern): total_cost = labor_cost + parts_cost is computed in SQL
+-- NUMERIC by the applier, and capitalization_flagged is the server-derived strictly-greater-than
+-- threshold comparison (config.maintenance.capitalizationThreshold), never client-entered. The
+-- existing columns, constraints and indexes are untouched.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'labor_cost'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN labor_cost NUMERIC(14,3) NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'parts_cost'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN parts_cost NUMERIC(14,3) NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'total_cost'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN total_cost NUMERIC(14,3) NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'capitalization_flagged'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN capitalization_flagged BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_labor_non_negative'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_labor_non_negative CHECK (labor_cost >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_parts_non_negative'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_parts_non_negative CHECK (parts_cost >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_total_non_negative'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_total_non_negative CHECK (total_cost >= 0);
+  END IF;
+END $$;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
@@ -142,5 +229,35 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON maintenance_work_order TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 7.7 warranty arm (FR-M-11): two additive columns on the SAME work-order register so the
+-- warranty check rides the existing row instead of a side table. Both are SERVER-DERIVED in
+-- applyBreakdownWorkOrderCreated from the active-warranty lookup against the payload business_date
+-- (Binding Decisions 3 and 4): a declared warranty_flagged or warranty_coverage_id in the envelope
+-- is rejected with WORK_ORDER_DERIVATION_MISMATCH, so there is no client write path. Preventive
+-- work orders are never checked and keep the false default (Binding Decision 2). No CHECK
+-- constraint is needed: a defaulted boolean and a nullable UUID are self-validating. The existing
+-- columns, constraints and indexes are untouched.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'warranty_flagged'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN warranty_flagged BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'warranty_coverage_id'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN warranty_coverage_id UUID;
   END IF;
 END $$;

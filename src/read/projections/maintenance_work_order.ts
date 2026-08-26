@@ -20,6 +20,18 @@ export interface MaintenanceWorkOrderRow {
   completed_by: string | null;
   overdue_at: string | null;
   escalated_at: string | null;
+  // Story 7.6 (FR-M-15): the additive cost columns. NUMERIC(14,3) rendered as exact decimal
+  // strings, never a JS float. capitalization_flagged is SERVER-derived at closure and this is its
+  // only read surface - without it the repair-versus-capitalize decision would be write-only.
+  labor_cost: string;
+  parts_cost: string;
+  total_cost: string;
+  capitalization_flagged: boolean;
+  // Story 7.7 (FR-M-11): the warranty check result. Both are SEAM-derived in
+  // applyBreakdownWorkOrderCreated and never client-supplied; this is their only read surface, and
+  // the chargeable-work gate in applyWorkOrderCompleted reads warranty_flagged off the locked row.
+  warranty_flagged: boolean;
+  warranty_coverage_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +52,12 @@ const WORK_ORDER_COLUMNS = `work_order_id, plan_id, asset_id, origin,
     to_char(grace_until_date, 'YYYY-MM-DD') AS grace_until_date,
     status, generated_for_cycle, fault_report_id, priority, sla_policy_id,
     sla_response_due_at, sla_resolution_due_at, completed_at, completed_by, overdue_at, escalated_at,
+    labor_cost::text AS labor_cost,
+    parts_cost::text AS parts_cost,
+    total_cost::text AS total_cost,
+    capitalization_flagged,
+    warranty_flagged,
+    warranty_coverage_id,
     created_at, updated_at`;
 
 export async function getWorkOrderById(
@@ -110,6 +128,9 @@ export interface InsertMaintenanceWorkOrderRow {
   sla_policy_id?: string | null;
   sla_response_due_at?: string | null;
   sla_resolution_due_at?: string | null;
+  /** Story 7.7: server-derived warranty check result; absent means an unchecked preventive order. */
+  warranty_flagged?: boolean;
+  warranty_coverage_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -122,8 +143,9 @@ export async function insertWorkOrder(
     `INSERT INTO maintenance_work_order (
       work_order_id, plan_id, asset_id, origin, due_date, grace_until_date,
       status, generated_for_cycle, fault_report_id, priority, sla_policy_id,
-      sla_response_due_at, sla_resolution_due_at, created_at, updated_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,$12,$13,$14)`,
+      sla_response_due_at, sla_resolution_due_at, warranty_flagged, warranty_coverage_id,
+      created_at, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
     [
       row.work_order_id,
       row.plan_id,
@@ -137,6 +159,8 @@ export async function insertWorkOrder(
       row.sla_policy_id ?? null,
       row.sla_response_due_at ?? null,
       row.sla_resolution_due_at ?? null,
+      row.warranty_flagged ?? false,
+      row.warranty_coverage_id ?? null,
       row.created_at,
       row.updated_at,
     ],
@@ -174,6 +198,35 @@ export async function setWorkOrderOverdue(
       WHERE work_order_id = $1`,
     [workOrderId, overdueAt],
   );
+}
+
+/**
+ * Story 7.6 (FR-M-15): writes the additive cost columns on a completed work order. The caller
+ * (applyWorkOrderCompleted) passes the SQL-NUMERIC-derived total_cost and the server-computed
+ * capitalization_flagged; costs are exact decimal strings and are never coerced to a JS float here.
+ * The RETURNING clause takes the row lock so a concurrent cost write on the same work order
+ * serializes with the applier's own FOR UPDATE read.
+ */
+export async function setWorkOrderCosts(
+  workOrderId: string,
+  laborCost: string,
+  partsCost: string,
+  totalCost: string,
+  capitalizationFlagged: boolean,
+  client: PoolClient,
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE maintenance_work_order
+        SET labor_cost = $2::numeric,
+            parts_cost = $3::numeric,
+            total_cost = $4::numeric,
+            capitalization_flagged = $5,
+            updated_at = now()
+      WHERE work_order_id = $1
+      RETURNING work_order_id`,
+    [workOrderId, laborCost, partsCost, totalCost, capitalizationFlagged],
+  );
+  return result.rows.length > 0;
 }
 
 export interface ListWorkOrdersParams {

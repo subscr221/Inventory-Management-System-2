@@ -1,5 +1,21 @@
 # generated: 2026-07-12
-# last_updated: '2026-08-25'
+# last_updated: '2026-08-27'
+# story 7-6 created 2026-08-25 via create-story workflow: Statutory Examinations, Cost
+#   Accumulation, and Machine Status Broadcast (FR-M-14, FR-M-15, FR-M-16). New statutory
+#   examination register keyed by (asset_id, examination_type) with a weighbridge device_key
+#   for the Epic 3 trade-weighment lockout (pre-transaction assertWeighbridgeStampLockout in
+#   persistEvent mirroring assertCalibrationLockout, fail-open for unregistered device keys),
+#   additive cost columns on maintenance_work_order plus a per-asset maintenance_asset_cost
+#   rollup riding additively on maintenance.work_order_completed (server-derived total_cost /
+#   capitalization_flagged written back onto the payload), asset_operational_status projection
+#   with a DOA-gated return-to-service sign-off (resolveApprover('maintenance.return_to_service',
+#   0), APPROVAL_REQUIRED per AC5) and a Story 1.11 notification broadcast to production_planner
+#   and hub_booking_coordinator, and a POST-triggered statutory scan job (overdue flip only, no
+#   staged pre-due alerts per the sprint-change-proposal rescope). Completed work orders on a
+#   weighbridge asset invalidate the stamp (repair signal). Capitalization threshold is a NUMERIC
+#   string compared exactly in SQL, strictly greater than. FR-FA capitalization routing deferred
+#   to Phase 2 Epic 17; offline workflows and closure codes moved to 7.8. 9 tasks, baseline e93014f;
+#   ready-for-dev
 # story 4-5 dev-story 2026-08-06: implemented all 9 tasks (35 subtasks) from baseline b32fe25.
 #   New three_way_match projection (one row per match RUN) and append-only payment_clearance_feed
 #   ledger; additive grn.po_id and supplier_invoice.match_status (chk_supplier_invoice_status
@@ -293,9 +309,12 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-08-25'
-# story 5-6 dev-story 2026-08-14: implemented all 9 tasks (58 subtasks) from baseline f29765f. Three new
-#   tables (bom_cost_rollup, bom_cost_rollup_line, bom_outbound_message), additive bom_line.supply_source
+last_updated: '2026-08-27'
+# story 6-1 dev-story 2026-08-26: implemented all 9 tasks (67 subtasks) from baseline e93014f; moved to review
+# story 6-1 dev-story 2026-08-26: implementation started from baseline e93014f; moved to in-progress
+# story 7-6 dev-story 2026-08-25: implementation started from baseline e93014f; moved to in-progress
+# story 7-6 dev-story 2026-08-25: implemented all 9 tasks; moved to review
+# story 5-6 dev-story 2026-08-14: implemented all 9 tasks (58 subtasks) from baseline f29765f. Three new#   tables (bom_cost_rollup, bom_cost_rollup_line, bom_outbound_message), additive bom_line.supply_source
 #   with a guarded constraint swap, and integration_exception.record_type widened with 'bom' via a
 #   DROP-then-ADD block; all mirrored into init-db.sql, migrate re-run twice cleanly. Three new
 #   engineering-stream events (bom.cost_rollup_snapshotted, bom.job_work_kit_tagged,
@@ -808,8 +827,8 @@ development_status:
   epic-5-retrospective: optional
 
   # --- Epic 6: Production Orders and Manufacturing WIP (wave, post-pilot) ---
-  epic-6: backlog
-  6-1-production-order-creation-and-release-gate: backlog
+  epic-6: in-progress
+  6-1-production-order-creation-and-release-gate: done   # code review 2026-08-27 (chunked adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance Auditor, 3 groups over baseline e93014f). Group A (schema/events/seam/projections): 1 decision + 9 patches applied - actor-is-approver check for release override (AC7), hard-fail on truncated/empty explosion even under override, released_at/cancelled_at read as ISO strings, release gate evaluated on server time (client occurred_at no longer selects the gate's business date), canonicalized trim write-back, UTC offset bounded to 15:59, length bounds on override_reason/source_reference_id, blank reason_code rejected, cancelled payload declares + re-derives unreversed_transaction_count. Group B (release gate/API/wiring): 1 decision + 7 patches applied - plant-location scoping on all 7 routes (Story 4.3 indents precedent), replayIdOrReject stream_id check closing cross-order idempotency-key reuse, list filter/pagination validation, release-gate UUID case-normalization, blank reason_code handler check, order_quantity positivity, idempotencyKey reuse. Group C (tests): 11 patches applied - OVERRIDE_REASON_REQUIRED/BOM_NOT_FOUND/DUPLICATE_PRODUCTION_ORDER_NUMBER tests, AC2 error-code-on-every-pair, seam AC4 guard via direct event, forged wrong-revision/sku/previous_status re-derivation tests, numeric/text/timestamp boundary tests, list filter+pagination+validation tests, dry-run per-line assertions, ORDER_NUMBER_IMMUTABLE year fix, AC7 audit approver assertion, schema-drift comment corrected; 5 deferred (3 delegated codes unreachable via API, depth_truncated/empty_requirement_set fixtures). 2 defers total across groups (stream_type/event_type registry, APPROVAL_UNRESOLVED 404-vs-409 - both pre-existing platform-wide). story-6-1 41/41, spine 6/6, schema-drift 107/108 (1 pre-existing gate_dwell CRLF), story-7-7 39/39, build/lint/prettier clean; moved to done
   6-2-material-staging-issue-and-wip-ledger: backlog
   6-3-production-completions-and-qc-hand-off: backlog
   6-4-lot-genealogy-closure-and-offline-execution: backlog
@@ -860,7 +879,7 @@ development_status:
    #   review); moved to done
    # - 2026-08-16: story context created (PM plans, meter ingestion register, 3 POST-triggered
    #   jobs, 4 projections, 7 events, 13 routes); ready-for-dev
-   7-3-fault-reporting-and-breakdown-work-orders: done   # PILOT  # create-story 2026-08-24: fault reporting via asset-tag scan with 5-minute supervisor notification (Story 1.11 escalation window), operator-configurable SLA policy table keyed (criticality_class, safety_flag) driving breakdown priority, breakdown work orders on the existing maintenance_work_order table (origin/plan_id already shaped by 7.2), one downtime window per breakdown work order, monthly MTTR/MTBF persisted snapshot per asset and per criticality class; 4 new projections + 1 table extension, 6 events, 2 seams, 1 POST-triggered job, 10 REST routes, 8 tasks, baseline 893e945
+  7-3-fault-reporting-and-breakdown-work-orders: done   # PILOT  # create-story 2026-08-24: fault reporting via asset-tag scan with 5-minute supervisor notification (Story 1.11 escalation window), operator-configurable SLA policy table keyed (criticality_class, safety_flag) driving breakdown priority, breakdown work orders on the existing maintenance_work_order table (origin/plan_id already shaped by 7.2), one downtime window per breakdown work order, monthly MTTR/MTBF persisted snapshot per asset and per criticality class; 4 new projections + 1 table extension, 6 events, 2 seams, 1 POST-triggered job, 10 REST routes, 8 tasks, baseline 893e945
    # - 2026-08-24: implemented (4 projections + 1 work-order extension, 6 events, 2 seams,
    #   reliability-jobs module, 10 routes). story-7-3 19/19, schema-drift 89/89, spine 6/6, edge
    #   30/30, migrate x2 idempotent, full suite 953 (938 pass, same 15 pre-existing Epic 1-3
@@ -870,7 +889,7 @@ development_status:
    #   dismissed. story-7-3 30/30 (was 19/19; +10 tests), full suite 964 (948 pass, same 15
    #   pre-existing Epic 1-3 idempotency fails + 1 pre-existing gate_dwell_metric line-ending fail,
    #   0 new); marked done
-   7-4-spare-parts-cataloguing-reservation-and-critical-spares-alerts: done   # PILOT
+  7-4-spare-parts-cataloguing-reservation-and-critical-spares-alerts: done   # PILOT
    # - 2026-08-25: implemented (4 projections, 8 events, 1 seam, spares-jobs module, 12 routes,
    #   addBusinessDays return clock, shared fail-closed holiday parser). Reservation IS
    #   stock_balance.allocated; deallocate-before-issue verified load-bearing by inverting the
@@ -907,8 +926,61 @@ development_status:
    #   notification. Story 7.5 suite grown 34 -> 36, all passing; spine 6/6, 7.1-7.4 133/133, gates
    #   clean; Story 1.7 unchanged at its one documented pre-existing baseline failure; moved to done
   7-5-calibration-register-and-non-overridable-lockout: done   # PILOT  # create-story 2026-08-25: calibration register feeding the EXISTING Story 1.7 lockout gate (src/compliance/calibration.ts stays untouched, story-1-7 and Spine 4 in story-1-9 must pass unchanged); instrument_register keyed to the Story 7.1 asset register with case-insensitive instrument_id, in-house/ISO 17025 certificates with one active certificate per instrument, staged 30/14/7 alerts once per (certificate_id, stage_days) with catch-up, POST-triggered expiry scan flipping status out_of_calibration, DOA-routed escalation register that is status-neutral by construction, and closure of the manual-reinstatement override (PUT calibration-status to calibrated on a REGISTERED instrument returns 423 CALIBRATION_LOCKOUT); 4 new projections + 1 index on the existing status table, 6 events, 1 new seam, 1 job module, 10 REST routes, 9 tasks, baseline eca5aca
-  7-6-statutory-examinations-cost-accumulation-and-machine-status-broadcast: backlog   # PILOT
-  7-7-amc-warranty-and-insurance-tracking: backlog   # PILOT
+  7-6-statutory-examinations-cost-accumulation-and-machine-status-broadcast: done   # PILOT  # dev-story 2026-08-25: implemented all 9 tasks (44 subtasks) from baseline e93014f. Three new tables plus the additive work-order cost columns (statutory_examination keyed (asset_id, examination_type) with a lower(device_key) unique index for the Epic 3 trade-weighment lockout, statutory_examination_record evidence history, asset_operational_status with sign-off fields, maintenance_asset_cost rollup, plus labor_cost/parts_cost/total_cost NUMERIC(14,3) + capitalization_flagged on maintenance_work_order), mirrored verbatim into init-db.sql (CRLF) and pinned in schema-drift. Three new maintenance-stream events (statutory_examination_recorded/.overdue, asset_status_changed; requiresBusinessStream false) plus the additive cost extension on maintenance.work_order_completed. Two new seams (maintenance-statutory.ts with SQL-DATE next_due_date re-derivation and fail-closed EXAMINATION_ALREADY_OVERDUE; asset-operational-status.ts with Table 5 transitions and DOA-resolved return-to-service whose sign-off is re-derived under lock); assertWeighbridgeStampLockout (423 WEIGHBRIDGE_OUT_OF_STAMP, fail-open for unregistered device keys) wired into persistEvent pre-transaction next to assertCalibrationLockout; applyWorkOrderCompleted rides additively (SQL NUMERIC total, strict greater-than capitalization threshold, weighbridge stamp invalidated on any completion per Binding Decision 6); POST-triggered statutory-jobs scan with separate write/delivery counters and escalating notification; 9 routes + spine allowlist; config.maintenance.capitalizationThreshold NUMERIC string. Gates: build/lint/format clean, migrate x2 idempotent, schema-drift 101/102 (1 pre-existing gate_dwell CRLF), story-7-6 33/33, spine 6/6, story-7-1/7-2/7-3/7-4/7-5 green, edge 30/30, full suite 1096 pass (16 fail = 15 documented Epic 1-3 idempotency + 1 gate_dwell CRLF, 0 new); moved to review
+   # story 7-6 code review 2026-08-26 (chunked adversarial pass over baseline e93014f working tree:
+   #   Group A schema+seams+events / Group B read+API+jobs / Group C integration tests; Blind Hunter +
+   #   Edge Case Hunter + Acceptance Auditor per group, nine subagent runs, all returned findings,
+   #   none failed). 39 patches applied across the three groups, 5 decisions resolved, 15 deferred,
+   #   39 dismissed. Group A headline fixes: the weighbridge lockout looked up the register with the
+   #   raw untrimmed device_id while the register stores it trimmed and lowered, so one leading space
+   #   failed the AC2 lockout open; applyStatutoryExaminationRecorded used getAssetById (no FOR
+   #   UPDATE) so the Locking Contract step-1 asset lock its own comment claimed was never taken; a
+   #   re-stamp omitting device_key NULLed the device mapping and disabled the lockout permanently;
+   #   forged total_cost/capitalization_flagged persisted unchecked when neither cost field was
+   #   present; 22003 mapped to 422 COST_VALUE_OUT_OF_RANGE; the four ADD COLUMN guards schema-
+   #   qualified in both files and pinned by a new drift test. Group B: the four cost columns had NO
+   #   read surface at all (FR-M-15's derived capitalization decision was write-only); the AC4
+   #   broadcast discarded both emitNotification results and gated the pair on one correlation-id
+   #   marker, making a half-delivered broadcast unrecoverable, now deduped per target role with
+   #   delivered/dropped counters; the AC1 use-lock enforced in the seam per AD-12 and scoped to
+   #   transitions into 'running' (decision) so a locked asset can still be taken into maintenance;
+   #   the AC5 sign-off gate widened to ANY transition into 'running' (decision) closing the
+   #   breakdown -> idle -> running laundering path, Table 5 amended to match; the scan notification
+   #   retargeted to location_id null (decision) so it reaches supervisors outside the scan runner's
+   #   location; the state machine now has one owner instead of two copies. Group C: three mandatory
+   #   Testing Requirements assertions were missing (weighbridge_event not read at all, AC5's "remains
+   #   out of service" never asserted); four negative tests asserted a catch-all code the seam raises
+   #   from six branches, now pinned by details; Task 8.3 and 8.7 were only nominally met (no scan
+   #   replay test, no coverage of uq_statutory_examination_record_number, DUPLICATE_STATUTORY_
+   #   EXAMINATION_OVERDUE never provoked); the new certificate-number test caught a real follow-on
+   #   defect in resolveStatutoryRecordDuplicateConflict, which resolved the record grain with the
+   #   payload's examination_id instead of the register row's. Story 7.6 suite grown 33 -> 49 tests,
+   #   all passing; story-7-1/7-2/7-3/7-4/7-5 168/168, spine 6/6, schema-drift 102/103 (1 pre-existing
+   #   gate_dwell CRLF), tsc/eslint/prettier clean, migrate x2 idempotent, full suite 1129 (1113 pass,
+   #   16 pre-existing fails, 0 new); moved to done
+   # story 7-7 created 2026-08-26 via create-story workflow: AMC, Warranty, and Insurance
+   #   Tracking (FR-M-10/11). One additive asset_coverage model (amc | warranty | insurance, grain
+   #   (asset_id, coverage_type, lower(reference_number_ext)), fail-closed COVERAGE_ALREADY_EXPIRED
+   #   and COVERAGE_FUTURE_START) with the Story 7.5 staged-alert contract verbatim at stages
+   #   90/60/30 (grain (coverage_id, stage_days), catch-up by due-and-unfired SQL, same-day re-run
+   #   no-op, renewal earns fresh stages) driven by a POST-triggered coverage-jobs scan with
+   #   separate write/delivery counters; alerts target maintenance_manager at location_id null
+   #   (company-wide asset register, AD-9), only the 30-day stage escalates to maintenance_supervisor
+   #   (86400s window). Warranty check rides applyBreakdownWorkOrderCreated as a DERIVED-ONLY flag
+   #   (declared values reject WORK_ORDER_DERIVATION_MISMATCH) written back onto the payload and
+   #   persisted on additive warranty_flagged / warranty_coverage_id columns on maintenance_work_order;
+   #   chargeable work is defined as completing a flagged work order, gated 403 APPROVAL_REQUIRED
+   #   INSIDE applyWorkOrderCompleted under FOR UPDATE (AD-12, handler pre-check mirrored) until a
+   #   one-per-work-order reason-coded override is recorded through DOA-resolved authority
+   #   (transaction_type maintenance.warranty_override, value 0, maintenance_supervisor approval hat
+   #   per access matrix 3.5; 404 APPROVAL_UNRESOLVED fail-closed) and captured in the event stream
+   #   with server-derived overridden_by. Three new maintenance-stream events (coverage_recorded,
+   #   coverage_expiry_flagged, warranty_override_recorded, requiresBusinessStream false), three new
+   #   tables plus the additive work-order columns, eight routes plus spine allowlist, configurable
+   #   override reason codes via MAINTENANCE_WARRANTY_OVERRIDE_REASON_CODES (fail-closed), no edge
+   #   surface (Story 7.8 owns offline), no insurance claims administration (PRD Non-Goal). 9 tasks,
+   #   baseline e93014f working tree (carries uncommitted 7.6 and 6.1); ready-for-dev
+  7-7-amc-warranty-and-insurance-tracking: review   # PILOT  # dev-story 2026-08-27: implemented all 9 tasks (44 subtasks) from baseline e93014f. Three new projections (asset_coverage as ONE model for AMC/warranty/insurance with the expression UNIQUE INDEX uq_asset_coverage_reference on (asset_id, coverage_type, lower(reference_number_ext)); asset_coverage_alert at the (coverage_id, stage_days) grain pinning 90/60/30; append-only maintenance_warranty_override with INSERT,SELECT grants only), plus two additive guarded ADD COLUMN blocks on maintenance_work_order (warranty_flagged, warranty_coverage_id), all mirrored verbatim into init-db.sql in CRLF and pinned in schema-drift. Three new maintenance-stream events (coverage_recorded / coverage_expiry_flagged / warranty_override_recorded, requiresBusinessStream false) plus the additive seam-derived write-back fields on BreakdownWorkOrderCreatedPayload. New seam src/compliance/maintenance-coverage.ts (pure shape assert + three appliers, fail-closed COVERAGE_ALREADY_EXPIRED / COVERAGE_FUTURE_START date gates, derived recorded_by/overridden_by write-back, DOA re-resolution of maintenance.warranty_override under the work-order lock, three 23505 resolvers + three pkey chain entries). AC2 derivation is step 4b of applyBreakdownWorkOrderCreated (declared warranty_flagged rejects WORK_ORDER_DERIVATION_MISMATCH; active warranty resolved in SQL, latest expiry wins, unlocked SELECT after the SLA policy lock so the lock order is unchanged); AC3 chargeable-work gate is in applyWorkOrderCompleted under the work-order lock with a matching handler pre-check, leaving the Story 7.6 cost arm and weighbridge stamp flip untouched. POST-triggered coverage-jobs scan (one transaction per stage, coverage row FOR UPDATE, DUPLICATE_COVERAGE_ALERT skipped not fatal, escalation only on the 30-day stage to maintenance_supervisor, location_id null for company-wide fan-out, delivered/dropped counted separately). 8 routes + spine allowlist; config.maintenance.warrantyOverrideReasonCodes fail-closed at load. The override route deliberately omits the grain pre-check (the raiseCalibrationEscalationBase precedent) so the AD-16 replay contract holds; the seam and the unique index still return the identical 409 + existing_override_id. Gates: build/tsc/lint clean, prettier clean on every touched file, migrate x2 idempotent, schema-drift 108 (107 pass, 1 pre-existing gate_dwell CRLF), spine 6/6, story-7-7 39/39, story-7-2/7-3/7-4/7-5/7-6 199/199 unchanged, edge 30/30, full suite 1199 (1182 pass, 17 fail = 15 documented Epic 1-3 idempotency + 1 gate_dwell CRLF + 1 pre-existing story-1-7 direct-maintenance-stream guard from commit ce42587, 0 new); moved to review
   7-8-offline-technician-workflow-and-closure-codes: backlog   # PILOT
   epic-7-retrospective: optional
 

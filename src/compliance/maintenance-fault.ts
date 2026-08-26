@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { getAssetById } from '../read/projections/asset.js';
+// Story 7.7 (FR-M-11): the AC 2 warranty check at work-order creation.
+import { getActiveWarrantyForAsset } from '../read/projections/asset_coverage.js';
 import { getActiveSlaPolicy, insertSlaPolicy } from '../read/projections/maintenance_sla_policy.js';
 import {
   getFaultReportById,
@@ -578,6 +580,37 @@ async function applyBreakdownWorkOrderCreated(
     });
   }
 
+  // Step 4b (Story 7.7, FR-M-11, AC 2): the warranty check. warranty_flagged and
+  // warranty_coverage_id are DERIVED here and written back onto the persisted payload; a DECLARED
+  // value in the inbound envelope is a corruption channel on the direct-event path and rejects
+  // (Binding Decision 3, the Story 7.6 derived-field rule for total_cost).
+  if (p['warranty_flagged'] !== undefined || p['warranty_coverage_id'] !== undefined) {
+    reject(
+      'WORK_ORDER_DERIVATION_MISMATCH',
+      'warranty_flagged is derived and cannot be declared',
+      {
+        fault_report_id: faultReportId,
+        warranty_flagged: p['warranty_flagged'],
+        warranty_coverage_id: p['warranty_coverage_id'],
+      },
+      409,
+    );
+  }
+  // A plain SELECT placed AFTER the SLA policy lock: it takes no lock of its own, so the existing
+  // fault report -> asset -> SLA policy -> work order -> downtime order is preserved and no new
+  // deadlock class is introduced. The flag is advisory ("may be covered"), so the millisecond race
+  // with a concurrent coverage recording is acceptable - and that recording locks the ASSET row,
+  // never a coverage row, so it cannot invert against anything held here.
+  const activeWarranty = await getActiveWarrantyForAsset(
+    report.asset_id,
+    p['business_date'] as string,
+    client,
+  );
+  const warrantyFlagged = Boolean(activeWarranty);
+  const warrantyCoverageId = activeWarranty?.coverage_id ?? null;
+  p['warranty_flagged'] = warrantyFlagged;
+  p['warranty_coverage_id'] = warrantyCoverageId;
+
   // Step 5: insert the breakdown work order. plan_id is NULL (chk_maintenance_work_order_plan_link
   // permits it for a non-preventive row) and generated_for_cycle carries the fault_report_id - the
   // column is NOT NULL and uq_maintenance_work_order_cycle is partial on plan_id IS NOT NULL, so a
@@ -597,6 +630,8 @@ async function applyBreakdownWorkOrderCreated(
       sla_policy_id: policy.policy_id,
       sla_response_due_at: slaResponseDueAt,
       sla_resolution_due_at: slaResolutionDueAt,
+      warranty_flagged: warrantyFlagged,
+      warranty_coverage_id: warrantyCoverageId,
       created_at: now,
       updated_at: now,
     },

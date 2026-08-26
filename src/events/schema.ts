@@ -2179,11 +2179,24 @@ export interface MaintenanceWorkOrderOverdueEnvelope extends Omit<EventEnvelope,
  * Minimal completion so the grace sweep can tell a done work order from an open one (AC 2).
  * Closure codes, labour, downtime and parts consumption belong to Stories 7.3 and 7.8.
  * completed_by is derived server-side from metadata.actor.user_id.
+ *
+ * Story 7.6 additive extension (FR-M-15): the payload gains OPTIONAL labor_cost and parts_cost
+ * NUMERIC strings. When present, the applier computes total_cost = labor_cost + parts_cost in SQL
+ * NUMERIC and capitalization_flagged = (total_cost > config.maintenance.capitalizationThreshold)
+ * server-side and writes BOTH derived fields back onto the persisted payload before the
+ * domain_events insert. Existing Story 7.2 payloads with no cost fields are unchanged: the cost
+ * columns default to 0 and no cost path runs.
  */
 export interface MaintenanceWorkOrderCompletedPayload {
   work_order_id: string;
   asset_id: string;
   completed_at: string;
+  labor_cost?: string;
+  parts_cost?: string;
+  /** Derived by the applier in SQL NUMERIC; declared only for the persisted-payload write-back. */
+  total_cost?: string;
+  /** Derived by the applier (strictly greater than the configured threshold); persisted write-back. */
+  capitalization_flagged?: boolean;
 }
 
 export interface MaintenanceWorkOrderCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -2272,6 +2285,15 @@ export interface BreakdownWorkOrderCreatedPayload {
   sla_response_due_at: string;
   sla_resolution_due_at: string;
   business_date: string;
+  /**
+   * Story 7.7 additive extension (FR-M-11): the warranty check result. Both fields are SEAM-DERIVED
+   * write-back in applyBreakdownWorkOrderCreated from the active-warranty lookup against
+   * business_date - NEVER client-supplied. A declared value in the inbound envelope is rejected
+   * 409 WORK_ORDER_DERIVATION_MISMATCH (Binding Decision 3), so they are optional on the way in and
+   * always present on the persisted payload.
+   */
+  warranty_flagged?: boolean;
+  warranty_coverage_id?: string | null;
 }
 
 export interface BreakdownWorkOrderCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -2628,6 +2650,325 @@ export interface CalibrationEscalationResolvedPayload {
 export interface CalibrationEscalationResolvedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'maintenance.calibration_escalation_resolved';
   payload: CalibrationEscalationResolvedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 7.6: statutory examinations, cost accumulation, and machine status broadcast
+// (FR-M-14, FR-M-15, FR-M-16)
+// ---------------------------------------------------------------------------
+//
+// Three new events on the existing 'maintenance' stream, all requiresBusinessStream false (the
+// Story 7.2 precedent: maintenance operational state, never a tagged inventory movement). Every
+// payload field an applier can derive from a locked row is DECLARED here and CHECKED against the
+// derivation in src/compliance/maintenance-statutory.ts / src/compliance/asset-operational-status.ts,
+// never trusted: a declared-but-unchecked field is a silent corruption channel on the direct
+// POST /api/v1/events path, and here a forged statutory_examination_recorded would suppress the
+// genuine lockout while a forged asset_status_changed with a fabricated sign_off_by would bypass
+// the return-to-service gate. Divergence rejects 409 STATUTORY_DERIVATION_MISMATCH or 409
+// COST_DERIVATION_MISMATCH.
+//
+// All calendar fields (examined_on, next_due_date, business_date) are DATE strings in YYYY-MM-DD.
+// All instants (recorded_at, flagged_at, changed_at, sign_off_at) require an explicit UTC offset
+// (the Story 7.2 offset lesson).
+
+/**
+ * Story 7.6 (FR-M-14): records a statutory examination event against an asset - either an OSH
+ * Code examination or a weighbridge legal-metrology stamp. stream_id is examination_id. Inserts or
+ * updates one statutory_examination row (status 'compliant', next_due_date re-derived as
+ * examined_on + interval_months in SQL) and inserts one statutory_examination_record row.
+ * next_due_date is DECLARED and CHECKED against the derivation under the asset's lock, so a forged
+ * event cannot push a due date out. Recording an examination whose next_due_date is already before
+ * business_date is rejected 422 EXAMINATION_ALREADY_OVERDUE, never silently accepted.
+ */
+export interface StatutoryExaminationRecordedPayload {
+  examination_id: string;
+  asset_id: string;
+  examination_type: 'osh_code' | 'weighbridge_legal_metrology';
+  interval_months: number;
+  examined_on: string;
+  /** Derivable: examined_on + interval_months in SQL; declared and checked under lock. */
+  next_due_date: string;
+  certificate_number_ext: string | null;
+  device_key: string | null;
+  business_date: string;
+  recorded_at: string;
+}
+
+export interface StatutoryExaminationRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.statutory_examination_recorded';
+  payload: StatutoryExaminationRecordedPayload;
+}
+
+/**
+ * Story 7.6 (FR-M-14, AC 1 / AC 2): the overdue flip emitted by the POST-triggered scan. stream_id
+ * is examination_id. Flips statutory_examination.status to 'overdue', which locks the asset from
+ * use (AC1) and blocks trade weighment on the device (AC2). The scan holds the examination row
+ * under FOR UPDATE so two concurrent scans serialize into one overdue flip; a lost race to
+ * uq_statutory_examination_asset_type is skipped, never failing the whole scan.
+ */
+export interface StatutoryExaminationOverduePayload {
+  examination_id: string;
+  asset_id: string;
+  examination_type: 'osh_code' | 'weighbridge_legal_metrology';
+  next_due_date: string;
+  business_date: string;
+  flagged_at: string;
+}
+
+export interface StatutoryExaminationOverdueEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.statutory_examination_overdue';
+  payload: StatutoryExaminationOverduePayload;
+}
+
+/**
+ * Story 7.6 (FR-M-16): one machine status transition. stream_id is asset_id. The applier validates
+ * the state machine (Table 5), re-derives previous_status from the locked row, resolves the DOA
+ * approver for return-to-service transitions under lock, writes sign_off_by / sign_off_at back onto
+ * the persisted payload, and upserts asset_operational_status. previous_status is null on the
+ * first transition (no prior row). A transition to 'running' from 'breakdown' or 'maintenance'
+ * requires a supervisor sign-off (AC5); a fabricated sign_off_by is rejected 409
+ * COST_DERIVATION_MISMATCH under the applier's re-derivation.
+ */
+export interface AssetStatusChangedPayload {
+  asset_id: string;
+  previous_status: 'running' | 'idle' | 'breakdown' | 'maintenance' | null;
+  new_status: 'running' | 'idle' | 'breakdown' | 'maintenance';
+  changed_by: string;
+  changed_at: string;
+  /** Derived under lock: resolved DOA approver for a return-to-service transition, else null. */
+  sign_off_by: string | null;
+  sign_off_at: string | null;
+}
+
+export interface AssetStatusChangedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.asset_status_changed';
+  payload: AssetStatusChangedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 6.1: production order creation and release gate (FR-MO-01, FR-MO-02, FR-MO-03)
+// ---------------------------------------------------------------------------
+//
+// Four new events on a new 'production' stream. Only production_order.created carries
+// requiresBusinessStream: true - that is what makes AC1's UNTAGGED_TRANSACTION fire inside
+// persistEvent with zero handler-side code (the indent.raised precedent). The lifecycle
+// transitions do not re-carry a business stream: the order row already holds it, and re-tagging
+// every transition would make the tag a mutable field, which AD-14 forbids.
+//
+// Every payload field an applier can derive from a locked row is DECLARED here and CHECKED against
+// the derivation in src/compliance/production-order.ts, never trusted: a declared-but-unchecked
+// field is a silent corruption channel on the direct POST /api/v1/events path. Divergence rejects
+// 409 PRODUCTION_ORDER_DERIVATION_MISMATCH, except for the order number, which has its own 409
+// ORDER_NUMBER_IMMUTABLE. order_quantity is an exact decimal STRING (never a JS number); every
+// instant (created_at, released_at, changed_at, cancelled_at) requires an explicit UTC offset (the
+// Story 7.2 offset lesson); business_date is a DATE string in YYYY-MM-DD.
+//
+// production_order.released is the highest-risk applier in this story: a forged release with
+// expediting_flag true and a fabricated override_by would defeat AC6 and AC7 in one move, and a
+// forged release with no override on a short order would defeat AC5. Both paths are re-derived
+// inside the transaction, not merely checked in the handler.
+
+/**
+ * Story 6.1 (FR-MO-01): creates a Planned production order. stream_id is production_order_id.
+ * order_number_ext is DECLARED but NEVER trusted: the applier allocates it from the sequence and
+ * rejects 409 ORDER_NUMBER_IMMUTABLE on any declared value that disagrees. output_sku and order_uom
+ * are re-derived from item_master under lock. source_reference_id is recorded but NOT resolved
+ * against Story 2.9 / Story 4.3 projections in Phase 1 (Binding Scope Decision 10).
+ */
+export interface ProductionOrderCreatedPayload {
+  production_order_id: string;
+  /** Server-allocated from production_order_number_seq in MO-YYYY-NNNN format; declared and rejected on disagreement. */
+  order_number_ext: string;
+  output_item_id: string;
+  /** Derivable: output_item_id -> item_master.sku; declared and checked under lock. */
+  output_sku: string;
+  order_quantity: string;
+  /** Derivable: output_item_id -> item_master.uom; declared and checked under lock. */
+  order_uom: string;
+  plant_location_id: string;
+  bom_id: string;
+  business_stream: string;
+  source_reference_type: 'erp_sales_order' | 'indent' | 'rd_project' | 'manual';
+  source_reference_id: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ProductionOrderCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.created';
+  payload: ProductionOrderCreatedPayload;
+}
+
+/**
+ * Story 6.1 (FR-MO-03): releases a Planned order. stream_id is production_order_id. The applier
+ * re-runs the release gate under lock: released_revision_id is re-derived from the explosion
+ * result, the gate satisfied verdict is recomputed, and override_by is re-resolved through the DOA
+ * registry (AD-3) when expediting_flag is true. A forged release with a fabricated override_by is
+ * rejected 403 APPROVAL_REQUIRED; a shortfall without an override is rejected 409
+ * INSUFFICIENT_STOCK. override_by / override_reason must both be null when expediting_flag is
+ * false (the expediting-pairing CHECK backstops the same rule at the database level).
+ */
+export interface ProductionOrderReleasedPayload {
+  production_order_id: string;
+  /** Derivable: current released revision of the BOM from the explosion result; declared and checked. */
+  released_revision_id: string;
+  business_date: string;
+  expediting_flag: boolean;
+  /** Derivable: resolved DOA approver when expediting_flag is true, else null; declared and checked. */
+  override_by: string | null;
+  override_reason: string | null;
+  released_by: string;
+  released_at: string;
+}
+
+export interface ProductionOrderReleasedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.released';
+  payload: ProductionOrderReleasedPayload;
+}
+
+/**
+ * Story 6.1 (FR-MO-02): one lifecycle transition on the planned -> released -> in_process ->
+ * completed -> closed spine. stream_id is production_order_id. previous_status is re-derived from
+ * the locked row and checked; a transition not listed in the Lifecycle Contract (Table 2) rejects
+ * 400 INVALID_STATE_TRANSITION.
+ */
+export interface ProductionOrderStateChangedPayload {
+  production_order_id: string;
+  /** Derivable: status of the locked order row; declared and checked. */
+  previous_status: string;
+  new_status: 'in_process' | 'completed' | 'closed';
+  changed_by: string;
+  changed_at: string;
+}
+
+export interface ProductionOrderStateChangedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.state_changed';
+  payload: ProductionOrderStateChangedPayload;
+}
+
+/**
+ * Story 6.1 (FR-MO-02): cancels from planned or released. stream_id is production_order_id.
+ * previous_status and unreversed_transaction_count are re-derived from the locked row: a cancel
+ * from a state that is not planned or released rejects 400 INVALID_STATE_TRANSITION (AC3), and a
+ * cancel from released while unreversed_transaction_count > 0 rejects 409 UNREVERSED_TRANSACTIONS
+ * (AC4). The counter is written only by Story 6.2's issue/return paths.
+ */
+export interface ProductionOrderCancelledPayload {
+  production_order_id: string;
+  /** Derivable: status of the locked order row; declared and checked. */
+  previous_status: string;
+  /** Derivable: unreversed_transaction_count of the locked order row; declared and checked. */
+  unreversed_transaction_count: number;
+  cancelled_by: string;
+  cancelled_at: string;
+  reason_code: string | null;
+}
+
+export interface ProductionOrderCancelledEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.cancelled';
+  payload: ProductionOrderCancelledPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 7.7: AMC, warranty, and insurance tracking (FR-M-10, FR-M-11)
+// ---------------------------------------------------------------------------
+//
+// Three new events on the existing 'maintenance' stream, all requiresBusinessStream false (the
+// Story 7.2 / 7.6 precedent: maintenance operational state, never a tagged inventory movement).
+// One coverage model serves AMC, warranty, and insurance (Binding Decision 13); only 'warranty'
+// drives the work-order check.
+//
+// Every payload field an applier can derive from a locked row is DECLARED here and CHECKED against
+// the derivation in src/compliance/maintenance-coverage.ts, never trusted: a declared-but-unchecked
+// field is a silent corruption channel on the direct POST /api/v1/events path. Here a forged
+// overridden_by would hand the warranty override to someone the DOA registry never authorized, and
+// a forged coverage_expiry_flagged would burn an alert stage that the genuine scan then skips.
+// Divergence rejects 409 COVERAGE_DERIVATION_MISMATCH.
+//
+// All calendar fields (start_date, expiry_date, business_date) are DATE strings in YYYY-MM-DD;
+// every instant (recorded_at, flagged_at, overridden_at) requires an explicit UTC offset (the
+// Story 7.2 offset lesson); contract_value is an exact decimal STRING, never a JS number.
+
+/**
+ * Story 7.7 (FR-M-10): records one AMC, warranty, or insurance contract against an asset.
+ * stream_id is asset_id. Inserts one asset_coverage row. Records are append-only: a renewal is a
+ * NEW coverage_id with a fresh set of 90/60/30 alert stages, never an amendment (Binding
+ * Decision 5). Recording a coverage that already expired relative to business_date rejects 422
+ * COVERAGE_ALREADY_EXPIRED and a future start rejects 422 COVERAGE_FUTURE_START (Binding
+ * Decision 6), so neither can corrupt the active-warranty derivation. recorded_by is re-derived
+ * from metadata.actor.user_id under the asset's lock and written back onto the persisted payload.
+ */
+export interface AssetCoverageRecordedPayload {
+  coverage_id: string;
+  asset_id: string;
+  coverage_type: 'amc' | 'warranty' | 'insurance';
+  provider_name: string;
+  reference_number_ext: string;
+  start_date: string;
+  expiry_date: string;
+  /** Exact decimal string (NUMERIC(14,3)) or null; never a JS number. */
+  contract_value: string | null;
+  /** Derived under lock from metadata.actor.user_id; declared and checked. */
+  recorded_by: string;
+  recorded_at: string;
+  business_date: string;
+}
+
+export interface AssetCoverageRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.coverage_recorded';
+  payload: AssetCoverageRecordedPayload;
+}
+
+/**
+ * Story 7.7 (FR-M-10, AC 1): one staged expiry alert emitted by the POST-triggered coverage scan.
+ * stream_id is alert_id. Inserts one asset_coverage_alert row at the (coverage_id, stage_days)
+ * grain, which is what makes a same-day re-run a no-op and a skipped day catch up. asset_id,
+ * coverage_type and expiry_date are re-derived from the coverage row held FOR UPDATE; a lost race
+ * to uq_asset_coverage_alert_stage surfaces 409 DUPLICATE_COVERAGE_ALERT and the scan skips that
+ * stage rather than failing.
+ */
+export interface CoverageExpiryFlaggedPayload {
+  alert_id: string;
+  coverage_id: string;
+  /** Derivable: asset_id of the locked coverage row; declared and checked. */
+  asset_id: string;
+  /** Derivable: coverage_type of the locked coverage row; declared and checked. */
+  coverage_type: 'amc' | 'warranty' | 'insurance';
+  stage_days: 90 | 60 | 30;
+  /** Derivable: expiry_date of the locked coverage row; declared and checked. */
+  expiry_date: string;
+  business_date: string;
+  flagged_at: string;
+}
+
+export interface CoverageExpiryFlaggedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.coverage_expiry_flagged';
+  payload: CoverageExpiryFlaggedPayload;
+}
+
+/**
+ * Story 7.7 (FR-M-11, AC 3 and AC 4): the reason-coded override that unblocks chargeable work on a
+ * warranty-flagged breakdown work order. stream_id is work_order_id. Inserts one
+ * maintenance_warranty_override row, at most one per work order (Binding Decision 11). The applier
+ * re-derives the DOA approver for maintenance.warranty_override under the work order's lock and
+ * checks overridden_by against it: a forged actor rejects 409 COVERAGE_DERIVATION_MISMATCH, an
+ * unauthorized one 403 APPROVAL_REQUIRED, and no governing DOA entry 404 APPROVAL_UNRESOLVED. The
+ * event itself IS the durable record of the decision (Binding Decision 15).
+ */
+export interface WarrantyOverrideRecordedPayload {
+  override_id: string;
+  work_order_id: string;
+  /** Derivable: warranty_coverage_id of the locked work-order row; declared and checked. */
+  warranty_coverage_id: string;
+  reason_code: string;
+  /** Derived under lock: the resolved DOA approver, re-checked against metadata.actor.user_id. */
+  overridden_by: string;
+  overridden_at: string;
+}
+
+export interface WarrantyOverrideRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.warranty_override_recorded';
+  payload: WarrantyOverrideRecordedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -3246,6 +3587,62 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'maintenance.calibration_escalation_resolved': {
     streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 7.6: statutory examinations (FR-M-14), machine status broadcast (FR-M-16), and the cost
+  // extension rides on the existing maintenance.work_order_completed entry above. All three ride
+  // the same 'maintenance' stream; they move no stock and carry no business stream, so
+  // requiresBusinessStream stays false. The weighbridge lockout they feed (weighbridge.recorded on
+  // the 'weighbridge' stream) is unchanged.
+  'maintenance.statutory_examination_recorded': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.statutory_examination_overdue': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.asset_status_changed': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 7.7: AMC, warranty, and insurance coverage (FR-M-10), its staged 90/60/30 expiry alerts,
+  // and the reason-coded warranty override (FR-M-11). All three ride the same 'maintenance' stream;
+  // maintenance operational state moves no stock and carries no business stream, so
+  // requiresBusinessStream stays false (the asset.registered precedent). The chargeable-work gate
+  // they feed rides on the existing maintenance.work_order_completed entry above, unchanged.
+  'maintenance.coverage_recorded': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.coverage_expiry_flagged': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.warranty_override_recorded': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 6.1: the production stream (FR-MO-01/02/03). production_order.created is the ONLY tagged
+  // event - requiresBusinessStream true is what makes AC1's UNTAGGED_TRANSACTION fire inside
+  // persistEvent with no handler-side code. The lifecycle transitions are untagged: the order row
+  // already holds the tag, and re-tagging every transition would make the tag a mutable field
+  // (AD-14). The stream is NOT added to INVENTORY_MOVEMENT_STREAM_TYPES: widening that set would
+  // force a business_stream onto every lifecycle transition and break the AC2 transition events.
+  'production_order.created': {
+    streamType: 'production',
+    requiresBusinessStream: true,
+  },
+  'production_order.released': {
+    streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  'production_order.state_changed': {
+    streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  'production_order.cancelled': {
+    streamType: 'production',
     requiresBusinessStream: false,
   },
 } as const;

@@ -7,6 +7,7 @@ import type { AuditEntryPayload } from '../read/projections/audit_log.js';
 import { isAuditTamperError, recordTamperAttempt } from '../middleware/audit-tamper-guard.js';
 import { assertInventoryTagging } from '../compliance/business-stream.js';
 import { assertCalibrationLockout } from '../compliance/calibration.js';
+import { assertWeighbridgeStampLockout } from '../compliance/weighbridge.js';
 import { assertLocationInvariant } from '../compliance/location.js';
 import { assertInventoryMasterReferences } from '../compliance/inventory-master.js';
 import {
@@ -167,6 +168,29 @@ import {
   resolveCalibrationAlertDuplicateConflict,
   resolveOpenEscalationDuplicateConflict,
 } from '../compliance/calibration-register.js';
+import {
+  assertStatutoryExaminationShape,
+  applyStatutoryExaminationProjection,
+  resolveStatutoryExaminationDuplicateConflict,
+  resolveStatutoryDeviceKeyDuplicateConflict,
+  resolveStatutoryRecordDuplicateConflict,
+} from '../compliance/maintenance-statutory.js';
+import {
+  assertAssetStatusChangedShape,
+  applyAssetOperationalStatusProjection,
+} from '../compliance/asset-operational-status.js';
+import {
+  assertMaintenanceCoverageShape,
+  applyMaintenanceCoverageProjection,
+  resolveCoverageDuplicateConflict,
+  resolveCoverageAlertDuplicateConflict,
+  resolveWarrantyOverrideDuplicateConflict,
+} from '../compliance/maintenance-coverage.js';
+import {
+  assertProductionOrderShape,
+  applyProductionOrderProjection,
+  resolveProductionOrderNumberDuplicateConflict,
+} from '../compliance/production-order.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -416,6 +440,12 @@ export async function persistEvent(
   // inside assertInventoryTagging - byte-for-byte unaffected.
   await assertInventoryTagging(envelope);
   await assertCalibrationLockout(envelope);
+  // Story 7.6 (FR-M-14, AC 2): the weighbridge trade-weighment lockout runs with the other
+  // pre-transaction asserts, BEFORE any DB write, so a weighment on a weighbridge whose statutory
+  // stamp is overdue is rejected 423 WEIGHBRIDGE_OUT_OF_STAMP without consuming an idempotency key.
+  // It is a DB-backed read (getExaminationByDeviceKey), like assertCalibrationLockout; fail-open for
+  // device keys not in the register, so the existing story-3-2/3-3/3-4 suites are unchanged.
+  await assertWeighbridgeStampLockout(envelope);
   // Story 2.1: inventory master validation (SKU existence, target-location existence, actor
   // location registration, zone compatibility) also runs BEFORE any DB write, gated to inventory
   // events that actually reference master fields. May throw ZoneIncompatibleWarning (not an
@@ -588,6 +618,24 @@ export async function persistEvent(
   // validation is non-DB and runs with the other pre-transaction asserts, so a malformed
   // calibration event never consumes an idempotency key.
   assertCalibrationRegisterShape(envelope);
+  // Story 7.6: statutory examination record/overdue shape validation (strict UUIDs, enum
+  // vocabulary, DATE and TIMESTAMPTZ formats, bounded interval) is non-DB and runs with the other
+  // pre-transaction asserts, so a malformed statutory event never consumes an idempotency key.
+  assertStatutoryExaminationShape(envelope);
+  // Story 7.6: machine status transition shape validation (Table 5 vocabulary, sign-off fields)
+  // is non-DB and runs with the other pre-transaction asserts.
+  assertAssetStatusChangedShape(envelope);
+  // Story 7.7: coverage recording / staged expiry flag / warranty override shape validation
+  // (strict UUIDs, the coverage-type enum, DATE round-trip validity, explicit-offset timestamps,
+  // exact-decimal contract_value) is non-DB and runs with the other pre-transaction asserts, so a
+  // malformed coverage event never consumes an idempotency key.
+  assertMaintenanceCoverageShape(envelope);
+  // Story 6.1: production order lifecycle shape validation (strict UUIDs, exact decimal order
+  // quantity, the source-reference enum, the state vocabulary, the expediting pairing) is non-DB
+  // and runs with the other pre-transaction asserts, so a malformed production event never
+  // consumes an idempotency key. AC1's UNTAGGED_TRANSACTION fires in assertInventoryTagging for
+  // production_order.created (requiresBusinessStream true); this assert adds the shape rules.
+  assertProductionOrderShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -880,6 +928,23 @@ export async function persistEvent(
     // lockout gate reads commit or roll back together. eventId is passed through because the
     // status row records which event changed it and the domain_events row does not exist yet.
     await applyCalibrationRegisterProjection(envelope, client, eventId);
+    // Story 7.6: the statutory examination register, its record history, and the machine status
+    // projection run inside this same transaction, so the register flip, the evidence record and
+    // the domain_events insert commit or roll back together. The status flip that feeds the
+    // weighbridge lockout and the AC1 use-lock is applied here, never outside persistEvent.
+    await applyStatutoryExaminationProjection(envelope, client);
+    await applyAssetOperationalStatusProjection(envelope, client);
+    // Story 7.7: the coverage register, its staged expiry alerts and the reason-coded warranty
+    // override run inside this same transaction, so the projection row and the domain_events
+    // insert commit or roll back together. The DOA re-resolution behind the override lives here,
+    // never only in the HTTP handler (AD-12).
+    await applyMaintenanceCoverageProjection(envelope, client);
+    // Story 6.1: the production order projection runs inside this same transaction, so the order
+    // row (create, release with its re-run release gate, state transitions, cancel with the
+    // unreversed-transactions guard) and the domain_events insert commit or roll back together.
+    // The gate re-run, the DOA override re-resolution and the order-number allocation all live
+    // here, never only in the HTTP handler (AD-12).
+    await applyProductionOrderProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -1286,6 +1351,75 @@ export async function persistEvent(
           'An escalation is already open for this instrument',
           await resolveOpenEscalationDuplicateConflict(envelope.payload),
         );
+      } else if (constraint === 'uq_statutory_examination_asset_type') {
+        // Story 7.6: two concurrent records for the same (asset_id, examination_type) grain
+        // resolve to one winner; the loser gets the same code and the same existing_examination_id
+        // detail the sequential pre-check produces (DUPLICATE_STATUTORY_EXAMINATION).
+        throw new AppError(
+          409,
+          'DUPLICATE_STATUTORY_EXAMINATION',
+          'A statutory examination already exists for this asset and type',
+          await resolveStatutoryExaminationDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_statutory_examination_device_key') {
+        // Story 7.6: one weighbridge device_key maps to at most one statutory examination. There
+        // is no sequential pre-check (the seam's device-key guard is the index itself), so the
+        // sequential and the race path surface the SAME DUPLICATE_EVENT detail.
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'A statutory examination already uses this device key',
+          await resolveStatutoryDeviceKeyDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_statutory_examination_record_number') {
+        // Story 7.6: one certificate number per examination. Same contract as the device key: the
+        // index is the guard, and the resolver reports the existing record.
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'A statutory examination record with this certificate number already exists',
+          await resolveStatutoryRecordDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_asset_coverage_reference') {
+        // Story 7.7: the coverage uniqueness grain (asset_id, coverage_type, lower(reference)).
+        // Two concurrent recordings resolve to one winner; the loser gets the same code and the
+        // same existing_coverage_id detail the sequential pre-check produces.
+        throw new AppError(
+          409,
+          'DUPLICATE_COVERAGE',
+          'A coverage with this reference already exists for the asset and coverage type',
+          await resolveCoverageDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_asset_coverage_alert_stage') {
+        // Story 7.7: the once-per-stage grain. Two concurrent scans for one coverage stage resolve
+        // to a single alert with the stable DUPLICATE_COVERAGE_ALERT contract, and the scan skips
+        // that stage rather than failing the whole run.
+        throw new AppError(
+          409,
+          'DUPLICATE_COVERAGE_ALERT',
+          'This coverage has already been flagged at this stage',
+          await resolveCoverageAlertDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_maintenance_warranty_override_work_order') {
+        // Story 7.7: one reason-coded override per work order (Binding Decision 11). The race path
+        // returns the same code and the same existing_override_id as the sequential pre-check.
+        throw new AppError(
+          409,
+          'WARRANTY_OVERRIDE_ALREADY_RECORDED',
+          'A warranty override has already been recorded for this work order',
+          await resolveWarrantyOverrideDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_production_order_number_ext') {
+        // Story 6.1: the server-allocated order number is unique. The sequential pre-check (the
+        // applier's allocation) makes this practically unreachable, but a concurrent race on the
+        // SAME event (same production_order_id) must surface the stable DUPLICATE_PRODUCTION_ORDER_
+        // NUMBER with the existing order detail, never a raw 23505 500.
+        throw new AppError(
+          409,
+          'DUPLICATE_PRODUCTION_ORDER_NUMBER',
+          'A production order with this order number already exists',
+          await resolveProductionOrderNumberDuplicateConflict(envelope.payload),
+        );
       } else if (
         constraint === 'maintenance_sla_policy_pkey' ||
         constraint === 'maintenance_fault_report_pkey' ||
@@ -1298,7 +1432,22 @@ export async function persistEvent(
         constraint === 'instrument_register_pkey' ||
         constraint === 'instrument_calibration_certificate_pkey' ||
         constraint === 'instrument_calibration_alert_pkey' ||
-        constraint === 'instrument_calibration_escalation_pkey'
+        constraint === 'instrument_calibration_escalation_pkey' ||
+        // Story 7.6: server-minted UUIDs make these practically unreachable; mapped for the same
+        // completeness reason as the siblings above.
+        constraint === 'statutory_examination_pkey' ||
+        constraint === 'statutory_examination_record_pkey' ||
+        constraint === 'asset_operational_status_pkey' ||
+        constraint === 'maintenance_asset_cost_pkey' ||
+        // Story 6.1: server-minted UUIDs make this practically unreachable; mapped for the same
+        // completeness reason as the siblings above.
+        constraint === 'production_order_pkey' ||
+        // Story 7.7: server-minted UUIDs make these practically unreachable; mapped for the same
+        // completeness reason as the siblings above. Each names its OWN id field below, so the
+        // chain never falls through to a wrong (and always null) field.
+        constraint === 'asset_coverage_pkey' ||
+        constraint === 'asset_coverage_alert_pkey' ||
+        constraint === 'maintenance_warranty_override_pkey'
       ) {
         // Story 7.3: server-minted UUIDs make these practically unreachable; mapped for
         // completeness per the maintenance_plan_pkey precedent, so a direct-event duplicate id
@@ -1361,17 +1510,60 @@ export async function persistEvent(
                                       ? p['certificate_id']
                                       : null,
                                 }
-                              : constraint === 'instrument_calibration_alert_pkey'
+                              : constraint === 'instrument_calibration_alert_pkey' ||
+                                  constraint === 'asset_coverage_alert_pkey'
                                 ? {
                                     alert_id:
                                       typeof p['alert_id'] === 'string' ? p['alert_id'] : null,
                                   }
-                                : {
-                                    escalation_id:
-                                      typeof p['escalation_id'] === 'string'
-                                        ? p['escalation_id']
-                                        : null,
-                                  };
+                                : constraint === 'instrument_calibration_escalation_pkey'
+                                  ? {
+                                      escalation_id:
+                                        typeof p['escalation_id'] === 'string'
+                                          ? p['escalation_id']
+                                          : null,
+                                    }
+                                  : constraint === 'statutory_examination_pkey'
+                                    ? {
+                                        examination_id:
+                                          typeof p['examination_id'] === 'string'
+                                            ? p['examination_id']
+                                            : null,
+                                      }
+                                    : constraint === 'statutory_examination_record_pkey'
+                                      ? {
+                                          record_id:
+                                            typeof p['record_id'] === 'string'
+                                              ? p['record_id']
+                                              : null,
+                                        }
+                                      : constraint === 'production_order_pkey'
+                                        ? {
+                                            production_order_id:
+                                              typeof p['production_order_id'] === 'string'
+                                                ? p['production_order_id']
+                                                : null,
+                                          }
+                                        : constraint === 'asset_coverage_pkey'
+                                          ? {
+                                              coverage_id:
+                                                typeof p['coverage_id'] === 'string'
+                                                  ? p['coverage_id']
+                                                  : null,
+                                            }
+                                          : constraint === 'maintenance_warranty_override_pkey'
+                                            ? {
+                                                override_id:
+                                                  typeof p['override_id'] === 'string'
+                                                    ? p['override_id']
+                                                    : null,
+                                              }
+                                            : {
+                                                asset_id:
+                                                  typeof p['asset_id'] === 'string'
+                                                    ? p['asset_id']
+                                                    : null,
+                                              };
         throw new AppError(
           409,
           'DUPLICATE_EVENT',
@@ -1446,6 +1638,27 @@ export async function persistEvent(
             typeof envelope.payload['match_id'] === 'string' ? envelope.payload['match_id'] : null,
         });
       }
+    }
+    // Story 7.6: a numeric_value_out_of_range from the maintenance cost path is a caller-supplied
+    // magnitude problem, not a server fault. The per-field COST_NUMERIC_REGEX bounds one value at
+    // NUMERIC(14,3), but labor_cost + parts_cost can still overflow the column, and the per-asset
+    // maintenance_asset_cost rollup ADDS to a running total with no ceiling at all - left unmapped
+    // that surfaced as a 500 and, in the rollup case, permanently blocked every later completion
+    // for that asset.
+    if (err && typeof err === 'object' && 'code' in err && err.code === '22003') {
+      throw new AppError(
+        422,
+        'COST_VALUE_OUT_OF_RANGE',
+        'The cost value or the resulting total exceeds the NUMERIC(14,3) range of the cost columns',
+        {
+          work_order_id:
+            typeof envelope.payload['work_order_id'] === 'string'
+              ? envelope.payload['work_order_id']
+              : null,
+          asset_id:
+            typeof envelope.payload['asset_id'] === 'string' ? envelope.payload['asset_id'] : null,
+        },
+      );
     }
     throw err;
   } finally {

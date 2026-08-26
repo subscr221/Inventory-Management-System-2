@@ -7369,3 +7369,795 @@ BEGIN
     GRANT SELECT ON instrument_calibration_escalation TO readonly_user;
   END IF;
 END $$;
+-- Statutory examination register (Story 7.6, FR-M-14, AD-9). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.statutory_examination_recorded,
+-- maintenance.statutory_examination_overdue AND maintenance.work_order_completed domain events;
+-- mutation happens exclusively through persistEvent, which applies this projection inside the SAME
+-- transaction as the domain_events insert. work_order_completed belongs in that replay set because
+-- the Binding Decision 6 stamp invalidation flips a weighbridge row to 'overdue' from the work
+-- order applier, with no statutory event of its own: a rebuild that omits it resurrects every
+-- work-order-invalidated stamp as 'compliant' and silently unlocks the device for trade weighment.
+--
+-- A statutory subject IS an asset (AD-9): asset_id references the single Story 7.1 register. The
+-- grain is (asset_id, examination_type), so one asset carries at most one OSH Code examination and
+-- at most one weighbridge legal-metrology stamp. The weighbridge device_id (free text on
+-- weighbridge_event) is mapped via device_key, canonicalized with lower() to match the Story 7.1
+-- asset-tag and Story 7.5 instrument-id precedent: a case variant of a registered device key is the
+-- same physical weighbridge.
+--
+-- status is the lockout flag the Story 7.6 gates read: 'compliant' allows use, 'overdue' locks the
+-- asset from use (AC1) and blocks trade weighment on the device (AC2). It is written only by the
+-- examination applier and the overdue scan; no other surface flips it.
+
+CREATE TABLE IF NOT EXISTS statutory_examination (
+  examination_id    UUID PRIMARY KEY,
+  asset_id          UUID NOT NULL,
+  examination_type  TEXT NOT NULL,
+  interval_months   INTEGER NOT NULL,
+  next_due_date     DATE NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'compliant',
+  device_key        TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_statutory_examination_asset_type UNIQUE (asset_id, examination_type),
+  CONSTRAINT chk_statutory_examination_type CHECK (examination_type IN ('osh_code', 'weighbridge_legal_metrology')),
+  CONSTRAINT chk_statutory_examination_status CHECK (status IN ('compliant', 'overdue')),
+  CONSTRAINT chk_statutory_examination_interval CHECK (interval_months > 0 AND interval_months <= 120)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_statutory_examination_device_key ON statutory_examination (lower(device_key)) WHERE device_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_statutory_examination_status_due ON statutory_examination (status, next_due_date);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_statutory_examination_asset_type'
+      AND conrelid = 'statutory_examination'::regclass
+  ) THEN
+    ALTER TABLE statutory_examination
+      ADD CONSTRAINT uq_statutory_examination_asset_type UNIQUE (asset_id, examination_type);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_statutory_examination_type'
+      AND conrelid = 'statutory_examination'::regclass
+  ) THEN
+    ALTER TABLE statutory_examination
+      ADD CONSTRAINT chk_statutory_examination_type CHECK (examination_type IN ('osh_code', 'weighbridge_legal_metrology'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_statutory_examination_status'
+      AND conrelid = 'statutory_examination'::regclass
+  ) THEN
+    ALTER TABLE statutory_examination
+      ADD CONSTRAINT chk_statutory_examination_status CHECK (status IN ('compliant', 'overdue'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_statutory_examination_interval'
+      AND conrelid = 'statutory_examination'::regclass
+  ) THEN
+    ALTER TABLE statutory_examination
+      ADD CONSTRAINT chk_statutory_examination_interval CHECK (interval_months > 0 AND interval_months <= 120);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON statutory_examination TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON statutory_examination TO readonly_user;
+  END IF;
+END $$;
+-- Statutory examination records (Story 7.6, FR-M-14). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.statutory_examination_recorded
+-- domain events; mutation happens exclusively through persistEvent, which applies this projection
+-- inside the SAME transaction as the domain_events insert.
+--
+-- Each row is one examination event (the certificate-style evidence record) against a statutory
+-- examination register row. One examination can be recorded many times (re-stamping); the register
+-- row carries the CURRENT compliance state while this table keeps the immutable history.
+-- certificate_number_ext is canonicalized with lower() for the unique index, matching the
+-- instrument_calibration_certificate precedent: a case variant of a recorded certificate number is
+-- the same document.
+
+CREATE TABLE IF NOT EXISTS statutory_examination_record (
+  record_id              UUID PRIMARY KEY,
+  examination_id         UUID NOT NULL,
+  examined_on            DATE NOT NULL,
+  next_due_date          DATE NOT NULL,
+  certificate_number_ext TEXT,
+  examined_by            UUID,
+  examined_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_statutory_examination_record_dates CHECK (next_due_date >= examined_on)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_statutory_examination_record_number ON statutory_examination_record (examination_id, lower(certificate_number_ext)) WHERE certificate_number_ext IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_statutory_examination_record_examination ON statutory_examination_record (examination_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_statutory_examination_record_dates'
+      AND conrelid = 'statutory_examination_record'::regclass
+  ) THEN
+    ALTER TABLE statutory_examination_record
+      ADD CONSTRAINT chk_statutory_examination_record_dates CHECK (next_due_date >= examined_on);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON statutory_examination_record TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON statutory_examination_record TO readonly_user;
+  END IF;
+END $$;
+-- Asset operational status projection (Story 7.6, FR-M-16). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.asset_status_changed domain
+-- events; mutation happens exclusively through persistEvent, which applies this projection inside
+-- the SAME transaction as the domain_events insert.
+--
+-- The status vocabulary is the machine-status contract (Table 5): running, idle, breakdown,
+-- maintenance. sign_off_by / sign_off_at are the return-to-service supervisor sign-off (AC5),
+-- written back onto the payload by the applier from the resolved DOA approver under lock; they are
+-- only ever set on a transition TO running from breakdown or maintenance.
+
+CREATE TABLE IF NOT EXISTS asset_operational_status (
+  asset_id     UUID PRIMARY KEY,
+  status       TEXT NOT NULL DEFAULT 'idle',
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by   UUID,
+  sign_off_by  UUID,
+  sign_off_at  TIMESTAMPTZ,
+  CONSTRAINT chk_asset_operational_status CHECK (status IN ('running', 'idle', 'breakdown', 'maintenance'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_operational_status'
+      AND conrelid = 'asset_operational_status'::regclass
+  ) THEN
+    ALTER TABLE asset_operational_status
+      ADD CONSTRAINT chk_asset_operational_status CHECK (status IN ('running', 'idle', 'breakdown', 'maintenance'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON asset_operational_status TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON asset_operational_status TO readonly_user;
+  END IF;
+END $$;
+-- Per-asset maintenance cost rollup (Story 7.6, FR-M-15). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.work_order_completed domain
+-- events; mutation happens exclusively through persistEvent, which applies this projection inside
+-- the SAME transaction as the domain_events insert.
+--
+-- The three totals are the SUM of the matching columns across all completed maintenance_work_order
+-- rows for the asset (Story 5.6 BOM cost rollup pattern): all arithmetic runs in PostgreSQL
+-- NUMERIC, costs enter and leave as exact decimal strings, and the applier ADDS the new costs to
+-- the existing totals inside the same transaction. last_work_order_id / last_closed_at point at the
+-- most recent completing work order for the lifecycle-costing read.
+
+CREATE TABLE IF NOT EXISTS maintenance_asset_cost (
+  asset_id            UUID PRIMARY KEY,
+  total_labor_cost    NUMERIC(14,3) NOT NULL DEFAULT 0,
+  total_parts_cost    NUMERIC(14,3) NOT NULL DEFAULT 0,
+  total_cost          NUMERIC(14,3) NOT NULL DEFAULT 0,
+  last_work_order_id  UUID,
+  last_closed_at      TIMESTAMPTZ,
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_maintenance_asset_cost_labor_non_negative CHECK (total_labor_cost >= 0),
+  CONSTRAINT chk_maintenance_asset_cost_parts_non_negative CHECK (total_parts_cost >= 0),
+  CONSTRAINT chk_maintenance_asset_cost_total_non_negative CHECK (total_cost >= 0)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_asset_cost_labor_non_negative'
+      AND conrelid = 'maintenance_asset_cost'::regclass
+  ) THEN
+    ALTER TABLE maintenance_asset_cost
+      ADD CONSTRAINT chk_maintenance_asset_cost_labor_non_negative CHECK (total_labor_cost >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_asset_cost_parts_non_negative'
+      AND conrelid = 'maintenance_asset_cost'::regclass
+  ) THEN
+    ALTER TABLE maintenance_asset_cost
+      ADD CONSTRAINT chk_maintenance_asset_cost_parts_non_negative CHECK (total_parts_cost >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_asset_cost_total_non_negative'
+      AND conrelid = 'maintenance_asset_cost'::regclass
+  ) THEN
+    ALTER TABLE maintenance_asset_cost
+      ADD CONSTRAINT chk_maintenance_asset_cost_total_non_negative CHECK (total_cost >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_asset_cost TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_asset_cost TO readonly_user;
+  END IF;
+END $$;
+-- Story 7.6 cost arm (FR-M-15): additive cost columns on the SAME table so lifecycle costing rides
+-- the existing work-order register instead of creating a second one. The guarded DO blocks
+-- re-apply harmlessly on an existing database. Costs are NUMERIC(14,3) strings end to end (the
+-- Story 5.6 BOM cost rollup pattern): total_cost = labor_cost + parts_cost is computed in SQL
+-- NUMERIC by the applier, and capitalization_flagged is the server-derived strictly-greater-than
+-- threshold comparison (config.maintenance.capitalizationThreshold), never client-entered. The
+-- existing columns, constraints and indexes are untouched.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'labor_cost'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN labor_cost NUMERIC(14,3) NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'parts_cost'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN parts_cost NUMERIC(14,3) NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'total_cost'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN total_cost NUMERIC(14,3) NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'capitalization_flagged'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN capitalization_flagged BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_labor_non_negative'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_labor_non_negative CHECK (labor_cost >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_parts_non_negative'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_parts_non_negative CHECK (parts_cost >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_total_non_negative'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_total_non_negative CHECK (total_cost >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON maintenance_work_order TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_work_order TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 6.1: production order projection (FR-MO-01/02/03). Mirror of read/projections/production_order.sql.
+-- Production order read model (Story 6.1, FR-MO-01/02/03, AD-5). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying production_order.* domain events;
+-- mutation happens exclusively through persistEvent, which applies this projection inside the SAME
+-- transaction as the domain_events insert. status is the six-state lifecycle machine (Table 2):
+-- planned -> released -> in_process -> completed -> closed, with planned|released -> cancelled.
+-- order_number_ext is server-allocated from production_order_number_seq in the MO-YYYY-NNNN format
+-- (the IND-YYYY-NNNN pattern, with an MO- prefix so the PO- namespace owned by purchase orders is
+-- never entered) and immutable thereafter: the applier allocates the number and writes it back onto
+-- the persisted payload, and any declared number that disagrees rejects ORDER_NUMBER_IMMUTABLE.
+--
+-- chk_production_order_expediting_pairing makes an expediting flag without a recorded overrider and
+-- reason structurally impossible (AC6 enforced by the database). chk_production_order_unreversed_non_
+-- negative makes a decrement below zero fail loudly in Story 6.2 rather than silently unlocking a
+-- cancel that AC4 forbids. released_revision_id is deliberately nullable and set only at release:
+-- the revision is pinned from the explosion result so a BOM released after creation cannot
+-- retroactively change what a released order was gated against.
+
+CREATE TABLE IF NOT EXISTS production_order (
+  production_order_id       UUID PRIMARY KEY,
+  order_number_ext          TEXT NOT NULL,
+  output_item_id            UUID NOT NULL,
+  output_sku                TEXT NOT NULL,
+  order_quantity            NUMERIC(18,6) NOT NULL,
+  order_uom                 TEXT NOT NULL,
+  plant_location_id         UUID NOT NULL,
+  bom_id                    UUID NOT NULL,
+  released_revision_id      UUID,
+  business_stream           TEXT NOT NULL,
+  source_reference_type     TEXT NOT NULL,
+  source_reference_id       TEXT NOT NULL,
+  status                    TEXT NOT NULL DEFAULT 'planned',
+  expediting_flag           BOOLEAN NOT NULL DEFAULT false,
+  override_by               UUID,
+  override_reason           TEXT,
+  released_at               TIMESTAMPTZ,
+  released_by               UUID,
+  cancelled_at              TIMESTAMPTZ,
+  cancelled_by              UUID,
+  unreversed_transaction_count INTEGER NOT NULL DEFAULT 0,
+  created_by                UUID NOT NULL,
+  correlation_id            UUID,
+  source_event_id           UUID NOT NULL,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_production_order_status CHECK (status IN ('planned','released','in_process','completed','closed','cancelled')),
+  CONSTRAINT chk_production_order_quantity_positive CHECK (order_quantity > 0),
+  CONSTRAINT chk_production_order_source_reference_type CHECK (source_reference_type IN ('erp_sales_order','indent','rd_project','manual')),
+  CONSTRAINT chk_production_order_unreversed_non_negative CHECK (unreversed_transaction_count >= 0),
+  CONSTRAINT chk_production_order_expediting_pairing CHECK ((expediting_flag = true AND override_by IS NOT NULL AND override_reason IS NOT NULL AND btrim(override_reason) <> '') OR (expediting_flag = false AND override_by IS NULL AND override_reason IS NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_production_order_number_ext ON production_order (order_number_ext);
+CREATE INDEX IF NOT EXISTS idx_production_order_status ON production_order (status);
+CREATE INDEX IF NOT EXISTS idx_production_order_plant ON production_order (plant_location_id);
+CREATE INDEX IF NOT EXISTS idx_production_order_output_item ON production_order (output_item_id);
+CREATE INDEX IF NOT EXISTS idx_production_order_bom ON production_order (bom_id);
+CREATE INDEX IF NOT EXISTS idx_production_order_business_stream ON production_order (business_stream);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_status'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_status CHECK (status IN ('planned','released','in_process','completed','closed','cancelled'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_quantity_positive'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_quantity_positive CHECK (order_quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_source_reference_type'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_source_reference_type CHECK (source_reference_type IN ('erp_sales_order','indent','rd_project','manual'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_unreversed_non_negative'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_unreversed_non_negative CHECK (unreversed_transaction_count >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_expediting_pairing'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_expediting_pairing CHECK ((expediting_flag = true AND override_by IS NOT NULL AND override_reason IS NOT NULL AND btrim(override_reason) <> '') OR (expediting_flag = false AND override_by IS NULL AND override_reason IS NULL));
+  END IF;
+END $$;
+
+-- Server-side human-ID allocation for the MO-YYYY-NNNN format. A sequence is the only lock-free
+-- allocator that survives concurrent creations; the year prefix is applied in the applier. Gaps on
+-- rolled-back creates are acceptable - uniqueness is what matters (the indent_number_seq precedent).
+CREATE SEQUENCE IF NOT EXISTS production_order_number_seq;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON production_order TO app_user;
+    GRANT USAGE ON SEQUENCE production_order_number_seq TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON production_order TO readonly_user;
+  END IF;
+END $$;
+
+
+-- Asset coverage register: AMC, warranty, and insurance contracts (Story 7.7, FR-M-10/11, AD-9).
+-- This file is the CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and
+-- the integration-test harness. It carries its OWN grants (guarded DO blocks) so a
+-- migrate-provisioned database can serve reads/writes as app_user without depending on
+-- deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates this content for first-boot
+-- container init - change both files together. Every statement is idempotent (IF NOT EXISTS /
+-- guarded DO blocks) so the file can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.coverage_recorded domain
+-- events; mutation happens exclusively through persistEvent, which applies this projection inside
+-- the SAME transaction as the domain_events insert.
+--
+-- One table serves all three coverage kinds (Binding Decision 13): AMC, warranty, and insurance
+-- rows differ only in coverage_type and in the fact that only 'warranty' drives the Story 7.7
+-- work-order check. asset_id references the single Story 7.1 company-wide asset register (AD-9),
+-- so there is no location column and no site scoping.
+--
+-- Records are APPEND-ONLY with no amendment, void, or supersede path in Phase 1 (Binding
+-- Decision 5): a renewal is a NEW row with a new coverage_id, which earns a fresh set of 90/60/30
+-- alert stages. The uniqueness grain is (asset_id, coverage_type, lower(reference_number_ext)),
+-- expressed as a UNIQUE INDEX because it contains an expression - never a table-level UNIQUE on an
+-- expression (the Story 7.5 rule). Case canonicalization matches the Story 7.1 asset-tag and Story
+-- 7.5 instrument-id precedent: a case variant of a contract reference is the same contract.
+
+CREATE TABLE IF NOT EXISTS asset_coverage (
+  coverage_id          UUID PRIMARY KEY,
+  asset_id             UUID NOT NULL,
+  coverage_type        TEXT NOT NULL,
+  provider_name        TEXT NOT NULL,
+  reference_number_ext TEXT NOT NULL,
+  start_date           DATE NOT NULL,
+  expiry_date          DATE NOT NULL,
+  contract_value       NUMERIC(14,3),
+  recorded_by          UUID NOT NULL,
+  recorded_at          TIMESTAMPTZ NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_asset_coverage_type CHECK (coverage_type IN ('amc', 'warranty', 'insurance')),
+  CONSTRAINT chk_asset_coverage_provider_name CHECK (btrim(provider_name) <> ''),
+  CONSTRAINT chk_asset_coverage_reference_ext CHECK (btrim(reference_number_ext) <> ''),
+  CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date > start_date),
+  CONSTRAINT chk_asset_coverage_value_non_negative CHECK (contract_value IS NULL OR contract_value >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_coverage_reference ON asset_coverage (asset_id, coverage_type, lower(reference_number_ext));
+CREATE INDEX IF NOT EXISTS idx_asset_coverage_asset ON asset_coverage (asset_id);
+CREATE INDEX IF NOT EXISTS idx_asset_coverage_expiry ON asset_coverage (expiry_date);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_coverage_type'
+      AND conrelid = 'asset_coverage'::regclass
+  ) THEN
+    ALTER TABLE asset_coverage
+      ADD CONSTRAINT chk_asset_coverage_type CHECK (coverage_type IN ('amc', 'warranty', 'insurance'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_coverage_provider_name'
+      AND conrelid = 'asset_coverage'::regclass
+  ) THEN
+    ALTER TABLE asset_coverage
+      ADD CONSTRAINT chk_asset_coverage_provider_name CHECK (btrim(provider_name) <> '');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_coverage_reference_ext'
+      AND conrelid = 'asset_coverage'::regclass
+  ) THEN
+    ALTER TABLE asset_coverage
+      ADD CONSTRAINT chk_asset_coverage_reference_ext CHECK (btrim(reference_number_ext) <> '');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_coverage_dates'
+      AND conrelid = 'asset_coverage'::regclass
+  ) THEN
+    ALTER TABLE asset_coverage
+      ADD CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date > start_date);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_coverage_value_non_negative'
+      AND conrelid = 'asset_coverage'::regclass
+  ) THEN
+    ALTER TABLE asset_coverage
+      ADD CONSTRAINT chk_asset_coverage_value_non_negative CHECK (contract_value IS NULL OR contract_value >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON asset_coverage TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON asset_coverage TO readonly_user;
+  END IF;
+END $$;
+
+-- Staged coverage expiry alerts (Story 7.7, FR-M-10, AC 1). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.coverage_expiry_flagged domain
+-- events; mutation happens exclusively through persistEvent, which applies this projection inside
+-- the SAME transaction as the domain_events insert.
+--
+-- The grain is (coverage_id, stage_days), NOT (coverage_id, business_date): an expiry countdown
+-- fires ONCE PER STAGE per coverage. uq_asset_coverage_alert_stage is what makes a same-day re-run
+-- a no-op and what makes a skipped day catch up rather than lose a stage - the scan asks which
+-- stages are due AND unfired, never whether the day count equals a stage exactly. A renewal is a
+-- NEW coverage_id and therefore earns a fresh set of three stages (Binding Decision 5 and 7).
+-- The stages 90/60/30 are pinned by FR-M-10 itself, so they are a module constant and never
+-- deployment configuration.
+
+CREATE TABLE IF NOT EXISTS asset_coverage_alert (
+  alert_id      UUID PRIMARY KEY,
+  coverage_id   UUID NOT NULL,
+  asset_id      UUID NOT NULL,
+  stage_days    INTEGER NOT NULL,
+  expiry_date   DATE NOT NULL,
+  business_date DATE NOT NULL,
+  flagged_at    TIMESTAMPTZ NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_asset_coverage_alert_stage CHECK (stage_days IN (90, 60, 30)),
+  CONSTRAINT uq_asset_coverage_alert_stage UNIQUE (coverage_id, stage_days)
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_coverage_alert_business_date ON asset_coverage_alert (business_date);
+CREATE INDEX IF NOT EXISTS idx_asset_coverage_alert_asset ON asset_coverage_alert (asset_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_asset_coverage_alert_stage'
+      AND conrelid = 'asset_coverage_alert'::regclass
+  ) THEN
+    ALTER TABLE asset_coverage_alert
+      ADD CONSTRAINT chk_asset_coverage_alert_stage CHECK (stage_days IN (90, 60, 30));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_asset_coverage_alert_stage'
+      AND conrelid = 'asset_coverage_alert'::regclass
+  ) THEN
+    ALTER TABLE asset_coverage_alert
+      ADD CONSTRAINT uq_asset_coverage_alert_stage UNIQUE (coverage_id, stage_days);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON asset_coverage_alert TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON asset_coverage_alert TO readonly_user;
+  END IF;
+END $$;
+
+-- Reason-coded warranty overrides on breakdown work orders (Story 7.7, FR-M-11, AC 3 and AC 4).
+-- This file is the CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and
+-- the integration-test harness. It carries its OWN grants (guarded DO blocks) so a
+-- migrate-provisioned database can serve reads/writes as app_user without depending on
+-- deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates this content for first-boot
+-- container init - change both files together. Every statement is idempotent (IF NOT EXISTS /
+-- guarded DO blocks) so the file can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying maintenance.warranty_override_recorded
+-- domain events; mutation happens exclusively through persistEvent, which applies this projection
+-- inside the SAME transaction as the domain_events insert.
+--
+-- The grain is ONE override per work order (Binding Decision 11): a reason-coded override is a
+-- one-time supervisor decision, and uq_maintenance_warranty_override_work_order is the concurrency
+-- backstop behind the sequential pre-check (a 23505 on it resolves to 409
+-- WARRANTY_OVERRIDE_ALREADY_RECORDED with the existing override id, so the race path and the
+-- sequential path return the same shape).
+--
+-- Append-only: app_user holds INSERT and SELECT only, never UPDATE (the maintenance_reliability_
+-- metric precedent). An override is never mutated; a mistaken one stands in the record.
+
+CREATE TABLE IF NOT EXISTS maintenance_warranty_override (
+  override_id          UUID PRIMARY KEY,
+  work_order_id        UUID NOT NULL,
+  warranty_coverage_id UUID NOT NULL,
+  reason_code          TEXT NOT NULL,
+  overridden_by        UUID NOT NULL,
+  overridden_at        TIMESTAMPTZ NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_maintenance_warranty_override_work_order UNIQUE (work_order_id),
+  CONSTRAINT chk_maintenance_warranty_override_reason CHECK (btrim(reason_code) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_warranty_override_coverage ON maintenance_warranty_override (warranty_coverage_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_maintenance_warranty_override_work_order'
+      AND conrelid = 'maintenance_warranty_override'::regclass
+  ) THEN
+    ALTER TABLE maintenance_warranty_override
+      ADD CONSTRAINT uq_maintenance_warranty_override_work_order UNIQUE (work_order_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_warranty_override_reason'
+      AND conrelid = 'maintenance_warranty_override'::regclass
+  ) THEN
+    ALTER TABLE maintenance_warranty_override
+      ADD CONSTRAINT chk_maintenance_warranty_override_reason CHECK (btrim(reason_code) <> '');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON maintenance_warranty_override TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON maintenance_warranty_override TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 7.7 warranty arm (FR-M-11): two additive columns on the SAME work-order register so the
+-- warranty check rides the existing row instead of a side table. Both are SERVER-DERIVED in
+-- applyBreakdownWorkOrderCreated from the active-warranty lookup against the payload business_date
+-- (Binding Decisions 3 and 4): a declared warranty_flagged or warranty_coverage_id in the envelope
+-- is rejected with WORK_ORDER_DERIVATION_MISMATCH, so there is no client write path. Preventive
+-- work orders are never checked and keep the false default (Binding Decision 2). No CHECK
+-- constraint is needed: a defaulted boolean and a nullable UUID are self-validating. The existing
+-- columns, constraints and indexes are untouched.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'warranty_flagged'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN warranty_flagged BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'warranty_coverage_id'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN warranty_coverage_id UUID;
+  END IF;
+END $$;

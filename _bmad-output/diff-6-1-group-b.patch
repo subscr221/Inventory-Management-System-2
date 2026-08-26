@@ -1,0 +1,1185 @@
+diff --git a/src/server.ts b/src/server.ts
+index 6a357aa..5c97a6c 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -272,7 +272,33 @@ import {
+   listCalibrationAlertsHandler,
+   listCalibrationEscalationsHandler,
+   resolveCalibrationEscalationHandler,
++  createStatutoryExaminationHandler,
++  listStatutoryExaminationsHandler,
++  getStatutoryExaminationHandler,
++  scanStatutoryExaminationsHandler,
++  setAssetStatusHandler,
++  getAssetStatusHandler,
++  listAssetStatusesHandler,
++  getAssetCostsHandler,
++  listAssetCostsHandler,
++  recordCoverageHandler,
++  listAssetCoveragesHandler,
++  listCoveragesHandler,
++  listCoverageAlertsHandler,
++  scanCoveragesHandler,
++  getCoverageHandler,
++  recordWarrantyOverrideHandler,
++  getWarrantyOverrideHandler,
+ } from './api/v1/maintenance.js';
++import {
++  createProductionOrderHandler,
++  listProductionOrdersHandler,
++  getProductionOrderHandler,
++  getProductionReleaseGateHandler,
++  releaseProductionOrderHandler,
++  transitionProductionOrderHandler,
++  cancelProductionOrderHandler,
++} from './api/v1/production-orders.js';
+ import {
+   captureSupplierInvoiceHandler,
+   captureDuplicateOverrideHandler,
+@@ -689,6 +715,62 @@ export function createAppRouter(): Router {
+     raiseCalibrationEscalationHandler,
+   );
+ 
++  // Story 7.6: statutory examinations, cost accumulation, and machine status broadcast
++  // (FR-M-14, FR-M-15, FR-M-16). ROUTE ORDER MATTERS: '/statutory-examinations/scan' is registered
++  // BEFORE '/statutory-examinations/:examinationId', and the literal list segments '/asset-status'
++  // and '/asset-costs' BEFORE their parameterized '/assets/:assetId/...' siblings - the router
++  // returns the first match in registration order and ':param' compiles to ([^/]+). None of these
++  // shadows the existing '/assets/:assetId/parts' routes (distinct literal segments).
++  router.post('/api/v1/maintenance/statutory-examinations', createStatutoryExaminationHandler);
++  router.get('/api/v1/maintenance/statutory-examinations', listStatutoryExaminationsHandler);
++  router.post('/api/v1/maintenance/statutory-examinations/scan', scanStatutoryExaminationsHandler);
++  router.get(
++    '/api/v1/maintenance/statutory-examinations/:examinationId',
++    getStatutoryExaminationHandler,
++  );
++  router.get('/api/v1/maintenance/asset-status', listAssetStatusesHandler);
++  router.get('/api/v1/maintenance/asset-costs', listAssetCostsHandler);
++  router.get('/api/v1/maintenance/assets/:assetId/status', getAssetStatusHandler);
++  router.post('/api/v1/maintenance/assets/:assetId/status', setAssetStatusHandler);
++  router.get('/api/v1/maintenance/assets/:assetId/costs', getAssetCostsHandler);
++
++  // Story 7.7: AMC, warranty, and insurance tracking (FR-M-10, FR-M-11). ROUTE ORDER MATTERS: the
++  // literal '/coverages', '/coverages/alerts' and '/coverages/scan' segments are all registered
++  // BEFORE '/coverages/:coverageId' - the router returns the first match in registration order and
++  // ':param' compiles to ([^/]+), so a parameter route placed first would swallow both the alerts
++  // list and the scan trigger. The '/assets/:assetId/coverages' and
++  // '/work-orders/:workOrderId/warranty-overrides' routes carry distinct literal tail segments, so
++  // they shadow none of the existing '/assets/:assetId/...' or '/work-orders/:workOrderId/...'
++  // siblings.
++  router.post('/api/v1/maintenance/assets/:assetId/coverages', recordCoverageHandler);
++  router.get('/api/v1/maintenance/assets/:assetId/coverages', listAssetCoveragesHandler);
++  router.get('/api/v1/maintenance/coverages', listCoveragesHandler);
++  router.get('/api/v1/maintenance/coverages/alerts', listCoverageAlertsHandler);
++  router.post('/api/v1/maintenance/coverages/scan', scanCoveragesHandler);
++  router.get('/api/v1/maintenance/coverages/:coverageId', getCoverageHandler);
++  router.post(
++    '/api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
++    recordWarrantyOverrideHandler,
++  );
++  router.get(
++    '/api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
++    getWarrantyOverrideHandler,
++  );
++
++  // Story 6.1: Production Order Creation and Release Gate (FR-MO-01/02/03). ROUTE ORDER MATTERS:
++  // '/production-orders' (both verbs) is registered BEFORE any '/production-orders/:orderId' route,
++  // and the three sub-resource routes after the bare '/:orderId' route, so no parameter segment
++  // shadows the list route. The '/api/v1/production-orders' prefix is distinct from the existing
++  // '/api/v1/purchase-orders' block; a careless parameter route placed before the list route would
++  // swallow it, which is the exact defect this ordering prevents.
++  router.post('/api/v1/production-orders', createProductionOrderHandler);
++  router.get('/api/v1/production-orders', listProductionOrdersHandler);
++  router.get('/api/v1/production-orders/:orderId', getProductionOrderHandler);
++  router.get('/api/v1/production-orders/:orderId/release-gate', getProductionReleaseGateHandler);
++  router.post('/api/v1/production-orders/:orderId/release', releaseProductionOrderHandler);
++  router.post('/api/v1/production-orders/:orderId/transition', transitionProductionOrderHandler);
++  router.post('/api/v1/production-orders/:orderId/cancel', cancelProductionOrderHandler);
++
+   // Story 4.7: Supplier Invoice Capture
+   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);
+   router.post('/api/v1/supplier-invoices/duplicate-overrides', captureDuplicateOverrideHandler);
+diff --git a/test/integration/story-1-9.test.ts b/test/integration/story-1-9.test.ts
+index c3094ea..0a6336e 100644
+--- a/test/integration/story-1-9.test.ts
++++ b/test/integration/story-1-9.test.ts
+@@ -448,6 +448,33 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
+       'POST /api/v1/maintenance/instruments/:instrumentRecordId/certificates',
+       'GET /api/v1/maintenance/instruments/:instrumentRecordId/certificates',
+       'POST /api/v1/maintenance/instruments/:instrumentRecordId/escalations',
++      // Story 7.6: Statutory Examinations, Cost Accumulation, and Machine Status Broadcast
++      'POST /api/v1/maintenance/statutory-examinations',
++      'GET /api/v1/maintenance/statutory-examinations',
++      'POST /api/v1/maintenance/statutory-examinations/scan',
++      'GET /api/v1/maintenance/statutory-examinations/:examinationId',
++      'POST /api/v1/maintenance/assets/:assetId/status',
++      'GET /api/v1/maintenance/assets/:assetId/status',
++      'GET /api/v1/maintenance/asset-status',
++      'GET /api/v1/maintenance/assets/:assetId/costs',
++      'GET /api/v1/maintenance/asset-costs',
++      // Story 7.7: AMC, Warranty, and Insurance Tracking
++      'POST /api/v1/maintenance/assets/:assetId/coverages',
++      'GET /api/v1/maintenance/assets/:assetId/coverages',
++      'GET /api/v1/maintenance/coverages',
++      'GET /api/v1/maintenance/coverages/alerts',
++      'POST /api/v1/maintenance/coverages/scan',
++      'GET /api/v1/maintenance/coverages/:coverageId',
++      'POST /api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
++      'GET /api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
++      // Story 6.1: Production Order Creation and Release Gate
++      'POST /api/v1/production-orders',
++      'GET /api/v1/production-orders',
++      'GET /api/v1/production-orders/:orderId',
++      'GET /api/v1/production-orders/:orderId/release-gate',
++      'POST /api/v1/production-orders/:orderId/release',
++      'POST /api/v1/production-orders/:orderId/transition',
++      'POST /api/v1/production-orders/:orderId/cancel',
+       // Story 4.7: Supplier Invoice Capture
+       'POST /api/v1/supplier-invoices',
+       'POST /api/v1/supplier-invoices/duplicate-overrides',
+diff --git a/src/production/release-gate.ts b/src/production/release-gate.ts
+new file mode 100644
+index 0000000..f80a35a
+--- /dev/null
++++ b/src/production/release-gate.ts
+@@ -0,0 +1,220 @@
++import type { PoolClient } from 'pg';
++import { getPool } from '../config/db.js';
++import { AppError } from '../middleware/error.js';
++import { getBomById } from '../read/projections/bom.js';
++import { getAvailableBalanceUnderSite } from '../read/projections/stock_balance.js';
++import { explodeBomForExecution } from '../engineering/bom-explosion.js';
++
++/**
++ * Story 6.1 production-order release gate (FR-MO-03).
++ *
++ * `evaluateReleaseGate` is PURE read-and-compute: it performs no persistence, no event emission and
++ * no HTTP work, so a caller can run it inside its own transaction by passing a PoolClient. It is
++ * deliberately NOT a release seam - the compliance seam (src/compliance/production-order.ts) owns
++ * the transition rules; this service owns exactly the two checks FR-MO-03 adds on top of the
++ * explosion service, plus the per-line availability verdict the dry-run read route and the release
++ * path share.
++ *
++ * DELIBERATELY NO LOCK: the gate takes no FOR UPDATE lock on any stock_balance row and performs no
++ * allocation. Availability is advisory at release - a caller that reads `satisfied: true` and
++ * releases has a true statement about the moment of release, not a reservation. Hard enforcement
++ * under lock is Story 6.2's staging and issue path. Do not read the absence of a lock as a defect.
++ *
++ * The BOM walk is DELEGATED, never re-implemented: the gate calls the exported Story 5.5 service
++ * `explodeBomForExecution`, which already owns BOM existence (BOM_NOT_FOUND 404), the Story 5.4
++ * R&D execution bar (RD_EXECUTION_BARRED 409), released-BOM and released-revision status
++ * (BOM_NOT_RELEASED 409), date effectivity, the depth cap, cycle detection
++ * (BOM_EXPLOSION_CYCLE_DETECTED 409) and the NUMERIC quantity contract
++ * (EXPLOSION_QUANTITY_INVALID 400). The gate adds exactly two things: the output-item-to-BOM
++ * identity check, and the per-line availability comparison. Every delegated code is surfaced
++ * unchanged.
++ *
++ * This service NEVER throws INSUFFICIENT_STOCK: it reports `satisfied: false` plus per-line
++ * shortfalls and the caller decides - the dry-run read route returns the same verdict as a 200 body
++ * while the release path raises 409 INSUFFICIENT_STOCK. A truncated walk means the requirement set
++ * is incomplete, so `depth_truncated: true` returns `satisfied: false` regardless of the per-line
++ * verdicts; an explosion with zero requirement lines returns `satisfied: false` with
++ * `empty_requirement_set: true`, never a trivially satisfied verdict (the Story 5.6 empty-rollup
++ * decision applied here).
++ *
++ * All arithmetic happens in PostgreSQL NUMERIC: availability is summed by
++ * getAvailableBalanceUnderSite (owned stock at or beneath the plant site, the generated `available`
++ * column) and every comparison and shortfall is evaluated in SQL. No value in this path is ever
++ * converted to a JS float.
++ */
++
++const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++
++export interface EvaluateReleaseGateInput {
++  bom_id: string;
++  output_item_id: string;
++  plant_location_id: string;
++  quantity: string;
++  occurred_at?: string;
++}
++
++export interface ReleaseGateLine {
++  component_item_id: string;
++  component_sku: string;
++  required_quantity: string;
++  available_quantity: string;
++  shortfall_quantity: string;
++  satisfied: boolean;
++}
++
++export interface ReleaseGateResult {
++  revision_id: string;
++  business_date: string;
++  depth_truncated: boolean;
++  satisfied: boolean;
++  empty_requirement_set: boolean;
++  lines: ReleaseGateLine[];
++}
++
++function reject(
++  code: string,
++  message: string,
++  details?: Record<string, unknown>,
++  status: number = 400,
++): never {
++  throw new AppError(status, code, message, details);
++}
++
++/**
++ * Compares availability against the requirement in SQL NUMERIC and returns the per-line verdict
++ * plus an exact shortfall. NEVER parsed as a JS float.
++ */
++async function compareAvailability(
++  componentSku: string,
++  plantLocationId: string,
++  requiredQuantity: string,
++  client?: PoolClient,
++): Promise<Pick<ReleaseGateLine, 'available_quantity' | 'shortfall_quantity' | 'satisfied'>> {
++  const runner = client ?? getPool();
++  const availableQuantity = await getAvailableBalanceUnderSite(
++    componentSku,
++    plantLocationId,
++    client,
++  );
++  const result = await runner.query(
++    `SELECT $1::numeric AS required_quantity,
++            $2::numeric AS available_quantity,
++            ($2::numeric >= $1::numeric) AS satisfied,
++            GREATEST($1::numeric - $2::numeric, 0)::text AS shortfall_quantity`,
++    [requiredQuantity, availableQuantity],
++  );
++  return {
++    available_quantity: String(result.rows[0]!['available_quantity']),
++    shortfall_quantity: result.rows[0]!['shortfall_quantity'] as string,
++    satisfied: result.rows[0]!['satisfied'] === true,
++  };
++}
++
++export async function evaluateReleaseGate(
++  input: EvaluateReleaseGateInput,
++  client?: PoolClient,
++): Promise<ReleaseGateResult> {
++  if (typeof input?.bom_id !== 'string' || !UUID_REGEX.test(input.bom_id)) {
++    reject('INVALID_PARAMS', 'bom_id is required and must be a UUID');
++  }
++  if (typeof input?.output_item_id !== 'string' || !UUID_REGEX.test(input.output_item_id)) {
++    reject('INVALID_PARAMS', 'output_item_id is required and must be a UUID');
++  }
++  if (typeof input?.plant_location_id !== 'string' || !UUID_REGEX.test(input.plant_location_id)) {
++    reject('INVALID_PARAMS', 'plant_location_id is required and must be a UUID');
++  }
++
++  // Table 3 guard sequence is fail-closed and order-sensitive: identity before status, status
++  // before quantity, quantity before availability, so an invalid input never reaches the walk.
++  // Step 2 (BOM exists) is owned by explodeBomForExecution; the identity check below surfaces the
++  // same BOM_NOT_FOUND code up front so the order-level check and the delegated check agree.
++  const bom = await getBomById(input.bom_id, client);
++  if (!bom) {
++    reject('BOM_NOT_FOUND', 'BOM not found', { bom_id: input.bom_id }, 404);
++  }
++  if (bom.parent_item_id !== input.output_item_id) {
++    reject(
++      'BOM_ITEM_MISMATCH',
++      'The BOM parent item does not match the production order output item',
++      {
++        bom_id: bom.bom_id,
++        bom_parent_item_id: bom.parent_item_id,
++        order_output_item_id: input.output_item_id,
++      },
++      409,
++    );
++  }
++
++  // Steps 4 to 7 are delegated: assertNotRdDraft, released-BOM/revision status, the quantity
++  // contract and cycle detection all live inside the service. Re-deriving any of them here would be
++  // a defect, not a safety net.
++  const explosion = await explodeBomForExecution(
++    input.occurred_at !== undefined
++      ? { bom_id: input.bom_id, quantity: input.quantity, occurred_at: input.occurred_at }
++      : { bom_id: input.bom_id, quantity: input.quantity },
++    client,
++  );
++
++  const lines: ReleaseGateLine[] = [];
++  for (const requirement of explosion.requirements) {
++    // Both directed_issue AND backflush lines count: AC5 says every component line.
++    if (typeof requirement.component_sku !== 'string' || requirement.component_sku === '') {
++      reject(
++        'COMPONENT_SKU_UNRESOLVED',
++        'A requirement line has no resolvable component SKU',
++        {
++          bom_id: input.bom_id,
++          bom_line_id: requirement.bom_line_id,
++          component_item_id: requirement.component_item_id,
++        },
++        409,
++      );
++    }
++    const availability = await compareAvailability(
++      requirement.component_sku,
++      input.plant_location_id,
++      requirement.required_quantity,
++      client,
++    );
++    lines.push({
++      component_item_id: requirement.component_item_id,
++      component_sku: requirement.component_sku,
++      required_quantity: requirement.required_quantity,
++      ...availability,
++    });
++  }
++
++  // A truncated walk means the requirement set is incomplete: releasing against it would commit
++  // the order to a build whose full bill of materials is unknown. Never trivially satisfied.
++  if (explosion.depth_truncated) {
++    return {
++      revision_id: explosion.revision_id,
++      business_date: explosion.business_date,
++      depth_truncated: true,
++      satisfied: false,
++      empty_requirement_set: false,
++      lines,
++    };
++  }
++
++  if (explosion.requirements.length === 0) {
++    return {
++      revision_id: explosion.revision_id,
++      business_date: explosion.business_date,
++      depth_truncated: false,
++      satisfied: false,
++      empty_requirement_set: true,
++      lines,
++    };
++  }
++
++  const satisfied = lines.every((line) => line.satisfied);
++  return {
++    revision_id: explosion.revision_id,
++    business_date: explosion.business_date,
++    depth_truncated: false,
++    satisfied,
++    empty_requirement_set: false,
++    lines,
++  };
++}
+diff --git a/src/api/v1/production-orders.ts b/src/api/v1/production-orders.ts
+new file mode 100644
+index 0000000..451828c
+--- /dev/null
++++ b/src/api/v1/production-orders.ts
+@@ -0,0 +1,814 @@
++import type { IncomingMessage } from 'node:http';
++import { randomUUID } from 'node:crypto';
++import type { RouteHandler } from '../../middleware/error.js';
++import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
++import {
++  getParsedBody,
++  getAuthContext,
++  getAuthorizedAssignment,
++  getTraceId,
++} from '../../middleware/context.js';
++import { requireRole } from '../../middleware/rbac.js';
++import { persistEvent } from '../../events/store.js';
++import type { PersistedEvent } from '../../events/store.js';
++import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
++import { logAuditEntry } from '../../read/projections/audit_log.js';
++import { getPool } from '../../config/db.js';
++import { getItemById } from '../../read/projections/item_master.js';
++import {
++  getProductionOrderById,
++  listProductionOrders,
++  type ProductionOrderRow,
++} from '../../read/projections/production_order.js';
++import { evaluateReleaseGate, type ReleaseGateResult } from '../../production/release-gate.js';
++import { resolveApprover } from './indents.js';
++
++/**
++ * Story 6.1 REST surface: production order creation, read, the release-gate dry run, release,
++ * transition and cancel (FR-MO-01/02/03).
++ *
++ * All decisions live in src/compliance/production-order.ts, not here, so a direct
++ * POST /api/v1/events cannot bypass them (AD-12); these handlers own only the capture-time
++ * resolutions (server-minted ids, actor stamping, the pre-run of the release gate so the release
++ * payload can declare the derived revision id) and the response shape. The seam re-runs every rule
++ * inside its transaction - removing a handler check must never change what is possible through the
++ * direct-event path.
++ *
++ * AC7 (a non-approver attempting a release override) is the one rule enforced HERE first with an
++ * explicit audit-log row, because the rejected attempt never reaches persistEvent and the seam's
++ * own audit write cannot cover it. The seam re-checks the same authority on the direct-event path.
++ */
++
++const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
++const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++const STATE_CHANGE_STATUSES = new Set(['in_process', 'completed', 'closed']);
++// Lifecycle Contract (Table 2): the edges the transition route may request.
++const STATE_CHANGE_EDGES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
++  ['released', new Set(['in_process'])],
++  ['in_process', new Set(['completed'])],
++  ['completed', new Set(['closed'])],
++]);
++
++function isUuid(value: unknown): value is string {
++  return typeof value === 'string' && UUID_REGEX.test(value);
++}
++
++interface ActorContext {
++  userId: string;
++  role: string;
++  auditLocationId: string;
++  eventLocationId: string;
++}
++
++function actorContext(req: IncomingMessage): ActorContext {
++  const authContext = getAuthContext(req);
++  const assignment = getAuthorizedAssignment(req);
++  const userId = authContext?.userId ?? NO_LOCATION_UUID;
++  const role = assignment?.role ?? '';
++  const auditLocationId = assignment?.locationId ?? '*';
++  const eventLocationId = auditLocationId === '*' ? NO_LOCATION_UUID : auditLocationId;
++  return { userId, role, auditLocationId, eventLocationId };
++}
++
++function auditCtxFor(
++  req: IncomingMessage,
++  actor: ActorContext,
++  httpStatus: number,
++): Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'> {
++  return {
++    trace_id: getTraceId(req) ?? '',
++    user_id: actor.userId,
++    role: actor.role,
++    location_id: actor.auditLocationId,
++    endpoint: req.url ?? '',
++    method: req.method ?? 'POST',
++    http_status: httpStatus,
++  };
++}
++
++function sendAppError(req: IncomingMessage, res: Parameters<RouteHandler>[1], err: unknown): void {
++  if (err instanceof AppError) {
++    sendRequestError(req, res, err.statusCode, err.errorCode, err.message, err.details);
++    return;
++  }
++  throw err;
++}
++
++/**
++ * A blank or non-string idempotency key is "not supplied": passing '' through would make two
++ * genuinely different writes collide on the uq_idempotency row and collapse into one replay of the
++ * first (the Story 7.1 review lesson).
++ */
++function idempotencyKeyFrom(body: Record<string, unknown>): string {
++  return typeof body['idempotency_key'] === 'string' && body['idempotency_key'].trim() !== ''
++    ? body['idempotency_key']
++    : randomUUID();
++}
++
++/**
++ * persistEvent returns ANY event already holding this idempotency key, regardless of stream or
++ * event type. A legitimate replay is the same event type carrying the same id field; anything else
++ * means the client reused a key from a different write - surface a 409 instead of a phantom 201
++ * built from a foreign event's payload (the Story 7.1 review lesson).
++ */
++function replayIdOrReject(
++  persisted: PersistedEvent,
++  expectedEventType: string,
++  idField: string,
++): string {
++  const value = (persisted.payload as Record<string, unknown> | undefined)?.[idField];
++  if (persisted.event_type !== expectedEventType || !isUuid(value)) {
++    throw new AppError(
++      409,
++      'DUPLICATE_EVENT',
++      'This idempotency key is already in use by a different event',
++      {
++        existing_event_id: persisted.event_id,
++        existing_event_type: persisted.event_type,
++      },
++    );
++  }
++  return value;
++}
++
++/** A path segment that must be a UUID, rejected as 400 rather than looked up as garbage. */
++function requireUuidParam(params: Record<string, string> | undefined, name: string): string {
++  const value = params?.[name];
++  if (!value || !isUuid(value)) {
++    throw new AppError(400, 'INVALID_PARAMS', `${name} must be a UUID`);
++  }
++  return value;
++}
++
++/**
++ * AD-16 replay detection: persistEvent short-circuits on a reused idempotency key, but these
++ * handlers run state pre-checks (planned-only release, unreversed-transactions cancel) BEFORE
++ * persistEvent - a same-key replay of a write that already advanced the order would be rejected by
++ * its own pre-check instead of returning the stored result. Look the key up first, scoped to this
++ * order, so a legitimate replay returns the current order row while a cross-stream or cross-type
++ * reuse still falls through to persistEvent and surfaces 409 DUPLICATE_EVENT.
++ */
++async function findReplayForOrder(
++  orderId: string,
++  idempotencyKey: string,
++): Promise<PersistedEvent | null> {
++  if (!idempotencyKey || idempotencyKey.trim() === '') return null;
++  const result = await getPool().query(
++    `SELECT event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at
++       FROM domain_events
++      WHERE idempotency_key = $1 AND stream_id = $2::uuid
++      LIMIT 1`,
++    [idempotencyKey, orderId],
++  );
++  if (result.rows.length === 0) return null;
++  const row = result.rows[0]!;
++  const createdAt =
++    row['created_at'] instanceof Date ? row['created_at'].toISOString() : String(row['created_at']);
++  return {
++    event_id: row['event_id'] as string,
++    stream_type: row['stream_type'] as string,
++    stream_id: row['stream_id'] as string,
++    event_type: row['event_type'] as string,
++    event_version: row['event_version'] as number,
++    payload: row['payload'] as Record<string, unknown>,
++    metadata: row['metadata'] as PersistedEvent['metadata'],
++    schema_version: row['schema_version'] as number,
++    idempotency_key: row['idempotency_key'] as string | null,
++    created_at: createdAt,
++  };
++}
++
++async function sendReplayOrNull(
++  res: Parameters<RouteHandler>[1],
++  orderId: string,
++  idempotencyKey: string,
++  expectedEventType: string,
++): Promise<boolean> {
++  const replay = await findReplayForOrder(orderId, idempotencyKey);
++  if (!replay) return false;
++  const replayedOrderId = replayIdOrReject(replay, expectedEventType, 'production_order_id');
++  const updated = await getProductionOrderById(replayedOrderId);
++  sendJson(res, 200, updated ? orderToJson(updated) : { production_order_id: replayedOrderId });
++  return true;
++}
++
++function orderToJson(order: ProductionOrderRow): Record<string, unknown> {
++  return {
++    production_order_id: order.production_order_id,
++    order_number_ext: order.order_number_ext,
++    output_item_id: order.output_item_id,
++    output_sku: order.output_sku,
++    order_quantity: order.order_quantity,
++    order_uom: order.order_uom,
++    plant_location_id: order.plant_location_id,
++    bom_id: order.bom_id,
++    released_revision_id: order.released_revision_id,
++    business_stream: order.business_stream,
++    source_reference_type: order.source_reference_type,
++    source_reference_id: order.source_reference_id,
++    status: order.status,
++    expediting_flag: order.expediting_flag,
++    override_by: order.override_by,
++    override_reason: order.override_reason,
++    released_at: order.released_at,
++    released_by: order.released_by,
++    cancelled_at: order.cancelled_at,
++    cancelled_by: order.cancelled_by,
++    unreversed_transaction_count: order.unreversed_transaction_count,
++    created_by: order.created_by,
++    correlation_id: order.correlation_id,
++    source_event_id: order.source_event_id,
++    created_at: order.created_at,
++    updated_at: order.updated_at,
++  };
++}
++
++function gateToJson(gate: ReleaseGateResult): Record<string, unknown> {
++  return {
++    revision_id: gate.revision_id,
++    business_date: gate.business_date,
++    depth_truncated: gate.depth_truncated,
++    satisfied: gate.satisfied,
++    empty_requirement_set: gate.empty_requirement_set,
++    lines: gate.lines.map((line) => ({
++      component_item_id: line.component_item_id,
++      component_sku: line.component_sku,
++      required_quantity: line.required_quantity,
++      available_quantity: line.available_quantity,
++      shortfall_quantity: line.shortfall_quantity,
++      satisfied: line.satisfied,
++    })),
++  };
++}
++
++async function loadOrderOr404(orderId: string): Promise<ProductionOrderRow> {
++  const order = await getProductionOrderById(orderId);
++  if (!order) {
++    throw new AppError(404, 'PRODUCTION_ORDER_NOT_FOUND', 'The production order does not resolve', {
++      production_order_id: orderId,
++    });
++  }
++  return order;
++}
++
++// ---------------------------------------------------------------------------
++// POST /api/v1/production-orders
++// ---------------------------------------------------------------------------
++
++const createProductionOrderBase: RouteHandler = async (req, res, _params) => {
++  const body = getParsedBody(req) as Record<string, unknown> | undefined;
++  if (!body) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
++    return;
++  }
++
++  const actor = actorContext(req);
++  const productionOrderId = randomUUID();
++  const now = new Date().toISOString();
++
++  try {
++    const outputItemId = body['output_item_id'];
++    if (!isUuid(outputItemId)) {
++      throw new AppError(400, 'INVALID_PARAMS', 'output_item_id must be a UUID');
++    }
++    const orderQuantity = body['order_quantity'];
++    if (typeof orderQuantity !== 'string' || !/^\d{1,12}(\.\d{1,6})?$/.test(orderQuantity)) {
++      throw new AppError(
++        400,
++        'INVALID_ORDER_QUANTITY',
++        'order_quantity is required and must be a positive decimal string with at most 6 decimal places',
++      );
++    }
++    const plantLocationId = body['plant_location_id'];
++    if (!isUuid(plantLocationId)) {
++      throw new AppError(400, 'INVALID_PARAMS', 'plant_location_id must be a UUID');
++    }
++    const bomId = body['bom_id'];
++    if (!isUuid(bomId)) {
++      throw new AppError(400, 'INVALID_PARAMS', 'bom_id must be a UUID');
++    }
++    const businessStream =
++      typeof body['business_stream'] === 'string' ? body['business_stream'] : '';
++    // A blank or missing business_stream is deliberately NOT rejected here: persistEvent's
++    // assertInventoryTagging is the single owner of AC1's UNTAGGED_TRANSACTION and must fire on the
++    // handler path exactly as it does on the direct-event path (test 8.3 demands both).
++    const sourceReferenceType = body['source_reference_type'];
++    if (
++      typeof sourceReferenceType !== 'string' ||
++      !['erp_sales_order', 'indent', 'rd_project', 'manual'].includes(sourceReferenceType)
++    ) {
++      throw new AppError(
++        400,
++        'SOURCE_REFERENCE_REQUIRED',
++        'source_reference_type is required and must be erp_sales_order, indent, rd_project or manual',
++      );
++    }
++    const sourceReferenceId = body['source_reference_id'];
++    if (typeof sourceReferenceId !== 'string' || sourceReferenceId.trim() === '') {
++      throw new AppError(
++        400,
++        'SOURCE_REFERENCE_REQUIRED',
++        'source_reference_id is required and must not be blank',
++      );
++    }
++
++    // The output item supplies the derived fields the payload must declare; the seam re-derives
++    // both under lock and rejects a mismatch (PRODUCTION_ORDER_DERIVATION_MISMATCH).
++    const item = await getItemById(outputItemId);
++    if (!item) {
++      throw new AppError(404, 'ITEM_NOT_FOUND', 'The output item does not resolve', {
++        output_item_id: outputItemId,
++      });
++    }
++
++    // A client-supplied order_number_ext is deliberately IGNORED here (Task 5.5 / test 8.3): the
++    // seam allocates the number from the sequence. The payload declares an empty string so the
++    // applier's write-back is the persisted truth.
++    const persisted = await persistEvent(
++      {
++        stream_type: 'production',
++        stream_id: productionOrderId,
++        event_type: 'production_order.created',
++        payload: {
++          production_order_id: productionOrderId,
++          order_number_ext: '',
++          output_item_id: outputItemId,
++          output_sku: item.sku,
++          order_quantity: orderQuantity,
++          order_uom: item.uom,
++          plant_location_id: plantLocationId,
++          bom_id: bomId,
++          business_stream: businessStream.trim(),
++          source_reference_type: sourceReferenceType,
++          source_reference_id: sourceReferenceId.trim(),
++          created_by: actor.userId,
++          created_at: now,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++          occurred_at: now,
++        },
++        idempotency_key: idempotencyKeyFrom(body),
++        // eslint-disable-next-line @typescript-eslint/no-explicit-any
++      } as any,
++      auditCtxFor(req, actor, 201),
++    );
++
++    const persistedOrderId = replayIdOrReject(
++      persisted,
++      'production_order.created',
++      'production_order_id',
++    );
++    const order = await getProductionOrderById(persistedOrderId);
++    sendJson(res, 201, order ? orderToJson(order) : { production_order_id: persistedOrderId });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// ---------------------------------------------------------------------------
++// GET /api/v1/production-orders
++// ---------------------------------------------------------------------------
++
++const listProductionOrdersBase: RouteHandler = async (req, res, _params) => {
++  try {
++    const url = new URL(req.url ?? '/', 'http://localhost');
++    const status = url.searchParams.get('status');
++    const plantLocationId = url.searchParams.get('plant_location_id');
++    const outputItemId = url.searchParams.get('output_item_id');
++    const businessStream = url.searchParams.get('business_stream');
++    const limitRaw = url.searchParams.get('limit');
++    const offsetRaw = url.searchParams.get('offset');
++
++    if (
++      status &&
++      !['planned', 'released', 'in_process', 'completed', 'closed', 'cancelled'].includes(status)
++    ) {
++      throw new AppError(400, 'INVALID_PARAMS', 'status is not a valid production order status');
++    }
++
++    const orders = await listProductionOrders({
++      status: (status as ProductionOrderRow['status']) ?? undefined,
++      plantLocationId: plantLocationId ?? undefined,
++      outputItemId: outputItemId ?? undefined,
++      businessStream: businessStream ?? undefined,
++      limit: limitRaw ? Number(limitRaw) : undefined,
++      offset: offsetRaw ? Number(offsetRaw) : undefined,
++    });
++    sendJson(res, 200, { orders: orders.map(orderToJson) });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// ---------------------------------------------------------------------------
++// GET /api/v1/production-orders/:orderId
++// ---------------------------------------------------------------------------
++
++const getProductionOrderBase: RouteHandler = async (req, res, params) => {
++  try {
++    const orderId = requireUuidParam(params, 'orderId');
++    const order = await loadOrderOr404(orderId);
++    sendJson(res, 200, orderToJson(order));
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// ---------------------------------------------------------------------------
++// GET /api/v1/production-orders/:orderId/release-gate
++// ---------------------------------------------------------------------------
++
++const getReleaseGateBase: RouteHandler = async (req, res, params) => {
++  try {
++    const orderId = requireUuidParam(params, 'orderId');
++    const order = await loadOrderOr404(orderId);
++    // Table 3 step 1: the gate runs only on a Planned order; a dry-run on any other state is the
++    // same INVALID_STATE_TRANSITION the release path raises.
++    if (order.status !== 'planned') {
++      throw new AppError(
++        400,
++        'INVALID_STATE_TRANSITION',
++        'The release gate runs only on a planned production order',
++        { production_order_id: orderId, status: order.status },
++      );
++    }
++    // A shortfall is a 200 body with satisfied: false, not a 409: the dry run must not fail the
++    // read. The delegated error codes (BOM_NOT_FOUND, BOM_ITEM_MISMATCH, RD_EXECUTION_BARRED,
++    // BOM_NOT_RELEASED, ...) throw exactly as they do on the release path.
++    const gate = await evaluateReleaseGate({
++      bom_id: order.bom_id,
++      output_item_id: order.output_item_id,
++      plant_location_id: order.plant_location_id,
++      quantity: order.order_quantity,
++      occurred_at: new Date().toISOString(),
++    });
++    sendJson(res, 200, gateToJson(gate));
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// ---------------------------------------------------------------------------
++// POST /api/v1/production-orders/:orderId/release
++// ---------------------------------------------------------------------------
++
++const releaseProductionOrderBase: RouteHandler = async (req, res, params) => {
++  const body = getParsedBody(req) as Record<string, unknown> | undefined;
++  if (!body) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
++    return;
++  }
++
++  const actor = actorContext(req);
++  const now = new Date().toISOString();
++  const idempotencyKey = idempotencyKeyFrom(body);
++
++  try {
++    const orderId = requireUuidParam(params, 'orderId');
++    // AD-16: a same-key replay of a successful release must return the stored result, not be
++    // rejected by the planned-only pre-check below.
++    if (await sendReplayOrNull(res, orderId, idempotencyKey, 'production_order.released')) {
++      return;
++    }
++    const order = await loadOrderOr404(orderId);
++    if (order.status !== 'planned') {
++      throw new AppError(
++        400,
++        'INVALID_STATE_TRANSITION',
++        'Only a planned production order can be released',
++        { production_order_id: orderId, status: order.status },
++      );
++    }
++
++    // Presence of `override` is what sets expediting_flag; its absence means a shortfall is a hard
++    // 409. A blank or missing reason is 400 BEFORE any DOA resolution runs, so a non-approver
++    // cannot probe the registry with an empty body (API Contract).
++    const override = body['override'];
++    const expediting = override !== undefined && override !== null;
++    let overrideReason: string | null = null;
++    if (expediting) {
++      const reason = (override as Record<string, unknown>)?.['reason'];
++      if (typeof reason !== 'string' || reason.trim() === '') {
++        throw new AppError(
++          400,
++          'OVERRIDE_REASON_REQUIRED',
++          'An expediting release requires a non-blank override_reason',
++        );
++      }
++      overrideReason = reason.trim();
++    }
++
++    // AC6 / AC7 (AD-3): the override authority is DOA-resolved, never a hard-coded role.
++    let approverActorId: string | null = null;
++    if (expediting) {
++      const approval = await resolveApprover('production_order.release_override', 0);
++      if (!approval.requiresApproval || approval.approverActorId === null) {
++        throw new AppError(
++          404,
++          'APPROVAL_UNRESOLVED',
++          'No DOA entry governs production_order.release_override',
++          { transaction_type: 'production_order.release_override' },
++        );
++      }
++      if (approval.approverActorId !== actor.userId) {
++        // AC7: the rejected attempt never reaches persistEvent, so its audit write cannot cover it.
++        // Write the explicit edit-log row on a dedicated pool client (the gate.ts precedent) before
++        // throwing.
++        const auditClient = await getPool().connect();
++        try {
++          await logAuditEntry(auditClient, {
++            ...auditCtxFor(req, actor, 403),
++            event_id: null,
++            error_code: 'APPROVAL_REQUIRED',
++            details: {
++              production_order_id: orderId,
++              resolved_approver_user_id: approval.approverActorId,
++            },
++          });
++        } finally {
++          auditClient.release();
++        }
++        throw new AppError(
++          403,
++          'APPROVAL_REQUIRED',
++          'A release override requires the resolved DOA approver',
++          { production_order_id: orderId, resolved_approver_user_id: approval.approverActorId },
++        );
++      }
++      approverActorId = approval.approverActorId;
++    }
++
++    // The handler pre-runs the gate so the release payload can declare the derived
++    // released_revision_id (the seam re-runs it inside the transaction and re-checks everything).
++    const gate = await evaluateReleaseGate({
++      bom_id: order.bom_id,
++      output_item_id: order.output_item_id,
++      plant_location_id: order.plant_location_id,
++      quantity: order.order_quantity,
++      occurred_at: now,
++    });
++    if (!gate.satisfied && !expediting) {
++      throw new AppError(
++        409,
++        'INSUFFICIENT_STOCK',
++        'Material availability does not cover every component line',
++        {
++          production_order_id: orderId,
++          bom_id: order.bom_id,
++          depth_truncated: gate.depth_truncated,
++          empty_requirement_set: gate.empty_requirement_set,
++          lines: gate.lines.map((line) => ({
++            component_item_id: line.component_item_id,
++            component_sku: line.component_sku,
++            required_quantity: line.required_quantity,
++            available_quantity: line.available_quantity,
++            shortfall_quantity: line.shortfall_quantity,
++            satisfied: line.satisfied,
++          })),
++        },
++      );
++    }
++
++    const persisted = await persistEvent(
++      {
++        stream_type: 'production',
++        stream_id: orderId,
++        event_type: 'production_order.released',
++        payload: {
++          production_order_id: orderId,
++          released_revision_id: gate.revision_id,
++          business_date: gate.business_date,
++          expediting_flag: expediting,
++          override_by: approverActorId,
++          override_reason: overrideReason,
++          released_by: actor.userId,
++          released_at: now,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++          occurred_at: now,
++        },
++        idempotency_key: idempotencyKeyFrom(body),
++        // eslint-disable-next-line @typescript-eslint/no-explicit-any
++      } as any,
++      auditCtxFor(req, actor, 200),
++    );
++
++    const persistedOrderId = replayIdOrReject(
++      persisted,
++      'production_order.released',
++      'production_order_id',
++    );
++    const updated = await getProductionOrderById(persistedOrderId);
++    sendJson(res, 200, updated ? orderToJson(updated) : { production_order_id: persistedOrderId });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// ---------------------------------------------------------------------------
++// POST /api/v1/production-orders/:orderId/transition
++// ---------------------------------------------------------------------------
++
++const transitionProductionOrderBase: RouteHandler = async (req, res, params) => {
++  const body = getParsedBody(req) as Record<string, unknown> | undefined;
++  if (!body) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
++    return;
++  }
++
++  const actor = actorContext(req);
++  const now = new Date().toISOString();
++  const idempotencyKey = idempotencyKeyFrom(body);
++
++  try {
++    const orderId = requireUuidParam(params, 'orderId');
++    // AD-16: a same-key replay of an accepted transition returns the stored result, not a
++    // INVALID_STATE_TRANSITION from the edge pre-check below.
++    if (await sendReplayOrNull(res, orderId, idempotencyKey, 'production_order.state_changed')) {
++      return;
++    }
++    const order = await loadOrderOr404(orderId);
++
++    const newStatus = body['new_status'];
++    if (typeof newStatus !== 'string' || !STATE_CHANGE_STATUSES.has(newStatus)) {
++      throw new AppError(
++        400,
++        'INVALID_STATE_TRANSITION',
++        'new_status must be one of: in_process, completed, closed',
++      );
++    }
++    // Pre-check the Table 2 edge so a rejected transition returns a clean 400 before any event is
++    // written; the seam enforces the same table under lock.
++    const allowed = STATE_CHANGE_EDGES.get(order.status);
++    if (!allowed || !allowed.has(newStatus)) {
++      throw new AppError(400, 'INVALID_STATE_TRANSITION', 'The status transition is not allowed', {
++        production_order_id: orderId,
++        previous_status: order.status,
++        new_status: newStatus,
++      });
++    }
++
++    const persisted = await persistEvent(
++      {
++        stream_type: 'production',
++        stream_id: orderId,
++        event_type: 'production_order.state_changed',
++        payload: {
++          production_order_id: orderId,
++          previous_status: order.status,
++          new_status: newStatus,
++          changed_by: actor.userId,
++          changed_at: now,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++          occurred_at: now,
++        },
++        idempotency_key: idempotencyKeyFrom(body),
++        // eslint-disable-next-line @typescript-eslint/no-explicit-any
++      } as any,
++      auditCtxFor(req, actor, 200),
++    );
++
++    const persistedOrderId = replayIdOrReject(
++      persisted,
++      'production_order.state_changed',
++      'production_order_id',
++    );
++    const updated = await getProductionOrderById(persistedOrderId);
++    sendJson(res, 200, updated ? orderToJson(updated) : { production_order_id: persistedOrderId });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// ---------------------------------------------------------------------------
++// POST /api/v1/production-orders/:orderId/cancel
++// ---------------------------------------------------------------------------
++
++const cancelProductionOrderBase: RouteHandler = async (req, res, params) => {
++  const body = getParsedBody(req) as Record<string, unknown> | undefined;
++  if (!body) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
++    return;
++  }
++
++  const actor = actorContext(req);
++  const now = new Date().toISOString();
++  const idempotencyKey = idempotencyKeyFrom(body);
++
++  try {
++    const orderId = requireUuidParam(params, 'orderId');
++    // AD-16: a same-key replay of a successful cancel returns the stored result, not an
++    // INVALID_STATE_TRANSITION from the reachability pre-check below.
++    if (await sendReplayOrNull(res, orderId, idempotencyKey, 'production_order.cancelled')) {
++      return;
++    }
++    const order = await loadOrderOr404(orderId);
++
++    // AC3 pre-check: cancelled is reachable only from planned or released.
++    if (order.status !== 'planned' && order.status !== 'released') {
++      throw new AppError(
++        400,
++        'INVALID_STATE_TRANSITION',
++        'Cancellation is only allowed from planned or released',
++        { production_order_id: orderId, status: order.status },
++      );
++    }
++    // AC4 pre-check: a released order with unreversed material transactions cannot be cancelled.
++    if (order.status === 'released' && order.unreversed_transaction_count > 0) {
++      throw new AppError(
++        409,
++        'UNREVERSED_TRANSACTIONS',
++        'The order has unreversed material transactions and cannot be cancelled',
++        {
++          production_order_id: orderId,
++          unreversed_transaction_count: order.unreversed_transaction_count,
++        },
++      );
++    }
++
++    const reasonCode = body['reason_code'];
++    if (reasonCode !== undefined && reasonCode !== null && typeof reasonCode !== 'string') {
++      throw new AppError(400, 'INVALID_PARAMS', 'reason_code must be a string or null');
++    }
++
++    const persisted = await persistEvent(
++      {
++        stream_type: 'production',
++        stream_id: orderId,
++        event_type: 'production_order.cancelled',
++        payload: {
++          production_order_id: orderId,
++          previous_status: order.status,
++          unreversed_transaction_count: order.unreversed_transaction_count,
++          cancelled_by: actor.userId,
++          cancelled_at: now,
++          reason_code: typeof reasonCode === 'string' ? reasonCode : null,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++          occurred_at: now,
++        },
++        idempotency_key: idempotencyKeyFrom(body),
++        // eslint-disable-next-line @typescript-eslint/no-explicit-any
++      } as any,
++      auditCtxFor(req, actor, 200),
++    );
++
++    const persistedOrderId = replayIdOrReject(
++      persisted,
++      'production_order.cancelled',
++      'production_order_id',
++    );
++    const updated = await getProductionOrderById(persistedOrderId);
++    sendJson(res, 200, updated ? orderToJson(updated) : { production_order_id: persistedOrderId });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// ---------------------------------------------------------------------------
++// Exports
++// ---------------------------------------------------------------------------
++
++export const createProductionOrderHandler = requireRole({
++  module: 'production',
++  functionScope: 'write',
++})(createProductionOrderBase);
++
++export const listProductionOrdersHandler = requireRole({
++  module: 'production',
++  functionScope: 'read',
++})(listProductionOrdersBase);
++
++export const getProductionOrderHandler = requireRole({
++  module: 'production',
++  functionScope: 'read',
++})(getProductionOrderBase);
++
++export const getProductionReleaseGateHandler = requireRole({
++  module: 'production',
++  functionScope: 'read',
++})(getReleaseGateBase);
++
++export const releaseProductionOrderHandler = requireRole({
++  module: 'production',
++  functionScope: 'write',
++})(releaseProductionOrderBase);
++
++export const transitionProductionOrderHandler = requireRole({
++  module: 'production',
++  functionScope: 'write',
++})(transitionProductionOrderBase);
++
++export const cancelProductionOrderHandler = requireRole({
++  module: 'production',
++  functionScope: 'write',
++})(cancelProductionOrderBase);

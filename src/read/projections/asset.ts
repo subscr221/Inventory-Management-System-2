@@ -30,6 +30,20 @@ export async function getAssetById(assetId: string, client?: PoolClient): Promis
   return (result.rows[0] as AssetRow) ?? null;
 }
 
+/**
+ * The Locking Contract's step-1 asset lock: locks the Story 7.1 asset row FOR UPDATE so every
+ * multi-row applier that mutates maintenance state on an asset serializes on the SAME row in the
+ * SAME order. Assets are never deleted, so the lock is ordering discipline rather than existence
+ * protection; returns whether the asset exists. Story 7.6 appliers take this before any other row.
+ */
+export async function lockAssetById(assetId: string, client: PoolClient): Promise<boolean> {
+  if (!UUID_REGEX.test(assetId)) return false;
+  const result = await client.query(`SELECT 1 FROM asset WHERE asset_id = $1 FOR UPDATE`, [
+    assetId,
+  ]);
+  return result.rows.length > 0;
+}
+
 export async function getAssetByTag(
   assetTag: string,
   client?: PoolClient,

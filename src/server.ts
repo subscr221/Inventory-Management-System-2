@@ -272,7 +272,33 @@ import {
   listCalibrationAlertsHandler,
   listCalibrationEscalationsHandler,
   resolveCalibrationEscalationHandler,
+  createStatutoryExaminationHandler,
+  listStatutoryExaminationsHandler,
+  getStatutoryExaminationHandler,
+  scanStatutoryExaminationsHandler,
+  setAssetStatusHandler,
+  getAssetStatusHandler,
+  listAssetStatusesHandler,
+  getAssetCostsHandler,
+  listAssetCostsHandler,
+  recordCoverageHandler,
+  listAssetCoveragesHandler,
+  listCoveragesHandler,
+  listCoverageAlertsHandler,
+  scanCoveragesHandler,
+  getCoverageHandler,
+  recordWarrantyOverrideHandler,
+  getWarrantyOverrideHandler,
 } from './api/v1/maintenance.js';
+import {
+  createProductionOrderHandler,
+  listProductionOrdersHandler,
+  getProductionOrderHandler,
+  getProductionReleaseGateHandler,
+  releaseProductionOrderHandler,
+  transitionProductionOrderHandler,
+  cancelProductionOrderHandler,
+} from './api/v1/production-orders.js';
 import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
@@ -688,6 +714,62 @@ export function createAppRouter(): Router {
     '/api/v1/maintenance/instruments/:instrumentRecordId/escalations',
     raiseCalibrationEscalationHandler,
   );
+
+  // Story 7.6: statutory examinations, cost accumulation, and machine status broadcast
+  // (FR-M-14, FR-M-15, FR-M-16). ROUTE ORDER MATTERS: '/statutory-examinations/scan' is registered
+  // BEFORE '/statutory-examinations/:examinationId', and the literal list segments '/asset-status'
+  // and '/asset-costs' BEFORE their parameterized '/assets/:assetId/...' siblings - the router
+  // returns the first match in registration order and ':param' compiles to ([^/]+). None of these
+  // shadows the existing '/assets/:assetId/parts' routes (distinct literal segments).
+  router.post('/api/v1/maintenance/statutory-examinations', createStatutoryExaminationHandler);
+  router.get('/api/v1/maintenance/statutory-examinations', listStatutoryExaminationsHandler);
+  router.post('/api/v1/maintenance/statutory-examinations/scan', scanStatutoryExaminationsHandler);
+  router.get(
+    '/api/v1/maintenance/statutory-examinations/:examinationId',
+    getStatutoryExaminationHandler,
+  );
+  router.get('/api/v1/maintenance/asset-status', listAssetStatusesHandler);
+  router.get('/api/v1/maintenance/asset-costs', listAssetCostsHandler);
+  router.get('/api/v1/maintenance/assets/:assetId/status', getAssetStatusHandler);
+  router.post('/api/v1/maintenance/assets/:assetId/status', setAssetStatusHandler);
+  router.get('/api/v1/maintenance/assets/:assetId/costs', getAssetCostsHandler);
+
+  // Story 7.7: AMC, warranty, and insurance tracking (FR-M-10, FR-M-11). ROUTE ORDER MATTERS: the
+  // literal '/coverages', '/coverages/alerts' and '/coverages/scan' segments are all registered
+  // BEFORE '/coverages/:coverageId' - the router returns the first match in registration order and
+  // ':param' compiles to ([^/]+), so a parameter route placed first would swallow both the alerts
+  // list and the scan trigger. The '/assets/:assetId/coverages' and
+  // '/work-orders/:workOrderId/warranty-overrides' routes carry distinct literal tail segments, so
+  // they shadow none of the existing '/assets/:assetId/...' or '/work-orders/:workOrderId/...'
+  // siblings.
+  router.post('/api/v1/maintenance/assets/:assetId/coverages', recordCoverageHandler);
+  router.get('/api/v1/maintenance/assets/:assetId/coverages', listAssetCoveragesHandler);
+  router.get('/api/v1/maintenance/coverages', listCoveragesHandler);
+  router.get('/api/v1/maintenance/coverages/alerts', listCoverageAlertsHandler);
+  router.post('/api/v1/maintenance/coverages/scan', scanCoveragesHandler);
+  router.get('/api/v1/maintenance/coverages/:coverageId', getCoverageHandler);
+  router.post(
+    '/api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
+    recordWarrantyOverrideHandler,
+  );
+  router.get(
+    '/api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
+    getWarrantyOverrideHandler,
+  );
+
+  // Story 6.1: Production Order Creation and Release Gate (FR-MO-01/02/03). ROUTE ORDER MATTERS:
+  // '/production-orders' (both verbs) is registered BEFORE any '/production-orders/:orderId' route,
+  // and the three sub-resource routes after the bare '/:orderId' route, so no parameter segment
+  // shadows the list route. The '/api/v1/production-orders' prefix is distinct from the existing
+  // '/api/v1/purchase-orders' block; a careless parameter route placed before the list route would
+  // swallow it, which is the exact defect this ordering prevents.
+  router.post('/api/v1/production-orders', createProductionOrderHandler);
+  router.get('/api/v1/production-orders', listProductionOrdersHandler);
+  router.get('/api/v1/production-orders/:orderId', getProductionOrderHandler);
+  router.get('/api/v1/production-orders/:orderId/release-gate', getProductionReleaseGateHandler);
+  router.post('/api/v1/production-orders/:orderId/release', releaseProductionOrderHandler);
+  router.post('/api/v1/production-orders/:orderId/transition', transitionProductionOrderHandler);
+  router.post('/api/v1/production-orders/:orderId/cancel', cancelProductionOrderHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

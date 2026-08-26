@@ -1,7 +1,8 @@
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
-import { getAssetById } from '../read/projections/asset.js';
+import { config } from '../config/index.js';
+import { getAssetById, lockAssetById } from '../read/projections/asset.js';
 import { getMeterById } from '../read/projections/asset_meter.js';
 import {
   advancePlanCalendarDue,
@@ -15,14 +16,27 @@ import {
   getWorkOrderById,
   insertWorkOrder,
   setWorkOrderCompleted,
+  setWorkOrderCosts,
   setWorkOrderOverdue,
 } from '../read/projections/maintenance_work_order.js';
+import { upsertMaintenanceAssetCost } from '../read/projections/maintenance_asset_cost.js';
+// Story 7.7 (FR-M-11): the chargeable-work gate reads the reason-coded override grain.
+import { getWarrantyOverrideByWorkOrder } from '../read/projections/maintenance_warranty_override.js';
+import {
+  getExaminationByAssetAndType,
+  setStatutoryExaminationStatus,
+} from '../read/projections/statutory_examination.js';
 
 /**
  * Story 7.2 compliance seam for PM plans and their work orders (FR-M-02). Structurally mirrors
  * src/compliance/asset.ts. Every read-then-write takes FOR UPDATE on the row it is about to
  * change, and the generation applier advances the plan's due cursor in the SAME transaction as
  * the work-order insert so a plan can never emit two work orders for one cycle.
+ *
+ * Story 7.6 (FR-M-15) added the additive cost arm to applyWorkOrderCompleted, and Story 7.7
+ * (FR-M-11, AC 3) added the chargeable-work gate ahead of it: a warranty-flagged work order cannot
+ * be completed without a recorded reason-coded override, enforced in the seam so a direct event
+ * cannot bypass it (AD-12).
  */
 
 const MAINTENANCE_STREAM_TYPES = new Set(['maintenance']);
@@ -36,6 +50,10 @@ const MAINTENANCE_PLAN_EVENT_TYPES = new Set([
 const PLAN_TYPES = new Set(['calendar', 'meter']);
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+// Story 7.6 (FR-M-15): the cost columns are NUMERIC(14,3), so a cost string can carry at most 11
+// integer digits and 3 decimals - a wider value would overflow the column as an unmapped 22003 500.
+// Costs are exact decimal strings end to end; they are never converted to a JS float.
+const COST_NUMERIC_REGEX = /^\d{1,11}(\.\d{1,3})?$/;
 // Day-count cap for the interval fields: 100000 days is ~274 years, far beyond any real PM plan,
 // and keeps PostgreSQL date arithmetic (and the jobs' JS addDays) inside their ranges - the
 // INTEGER-column range alone (2^31-1 days, ~5.8M years) overflows both.
@@ -314,6 +332,27 @@ function assertWorkOrderCompletedShape(p: Record<string, unknown>): void {
       completed_at: p['completed_at'],
     });
   }
+  // Story 7.6 (FR-M-15): optional additive cost fields, NUMERIC strings. A declared non-string or
+  // a string that fails the regex is rejected INVALID_COST, never coerced (the wire-boolean lesson
+  // applied to costs). Absent fields mean the completion carries no cost and the cost path is
+  // skipped; total_cost / capitalization_flagged are applier-derived and only ever appear on
+  // persisted write-backs, so a forged declaration is checked in the applier, not here.
+  const laborCost = p['labor_cost'];
+  if (laborCost !== undefined && laborCost !== null) {
+    if (typeof laborCost !== 'string' || !COST_NUMERIC_REGEX.test(laborCost)) {
+      reject('INVALID_COST', 'labor_cost must be a NUMERIC string with at most 3 decimals', {
+        labor_cost: laborCost,
+      });
+    }
+  }
+  const partsCost = p['parts_cost'];
+  if (partsCost !== undefined && partsCost !== null) {
+    if (typeof partsCost !== 'string' || !COST_NUMERIC_REGEX.test(partsCost)) {
+      reject('INVALID_COST', 'parts_cost must be a NUMERIC string with at most 3 decimals', {
+        parts_cost: partsCost,
+      });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -565,10 +604,45 @@ async function applyWorkOrderCompleted(envelope: EventEnvelope, client: PoolClie
 
   const p = envelope.payload as Record<string, unknown>;
   const workOrderId = p['work_order_id'] as string;
+  const declaredAssetId = p['asset_id'] as string;
 
+  // Locking contract step 1: the asset row, FOR UPDATE. The payload declares asset_id; the work
+  // order's binding is re-verified below under the work order's own lock, and a mismatch rejects
+  // COST_DERIVATION_MISMATCH (a completion can never hang costs or a stamp flip on a foreign asset).
+  const assetExists = await lockAssetById(declaredAssetId, client);
+  if (!assetExists) {
+    reject('ASSET_NOT_FOUND', 'Asset not found', { asset_id: declaredAssetId }, 404);
+  }
+
+  // Locking contract step 2: the weighbridge statutory examination row for this asset, if it
+  // exists. Binding Decision 6: a completed work order on a weighbridge asset invalidates the
+  // stamp (re-stamp required, AC2). Conservative Phase-1: ANY completed work order flips it, and
+  // the lock serializes the flip against a concurrent re-stamp.
+  const weighbridgeExamination = await getExaminationByAssetAndType(
+    declaredAssetId,
+    'weighbridge_legal_metrology',
+    client,
+    true,
+  );
+
+  // Locking contract step 6: the work order row, FOR UPDATE. Read after the asset and the
+  // weighbridge row so every multi-row applier in this story acquires those locks in the same
+  // fixed order; a rejection below rolls back the earlier row touches with no residue.
   const workOrder = await getWorkOrderById(workOrderId, client, true);
   if (!workOrder) {
     reject('WORK_ORDER_NOT_FOUND', 'Work order not found', { work_order_id: workOrderId }, 404);
+  }
+  if (workOrder.asset_id !== declaredAssetId) {
+    reject(
+      'COST_DERIVATION_MISMATCH',
+      'Declared asset_id does not match the work order',
+      {
+        work_order_id: workOrderId,
+        declared_asset_id: declaredAssetId,
+        derived_asset_id: workOrder.asset_id,
+      },
+      409,
+    );
   }
   if (workOrder.status === 'completed') {
     reject(
@@ -581,12 +655,161 @@ async function applyWorkOrderCompleted(envelope: EventEnvelope, client: PoolClie
   // An overdue work order CAN be completed - late completion is normal maintenance reality and
   // must not be blocked.
 
+  // Story 7.7 (FR-M-11, AC 3): the chargeable-work gate. Completion IS the charge event in this
+  // codebase (the Story 7.6 cost arm posts labor_cost, parts_cost and total_cost only here), so a
+  // warranty-flagged work order cannot be completed until a reason-coded override is recorded -
+  // regardless of whether cost fields are present (Binding Decision 1). Enforced HERE under the
+  // work order's own lock, not only in completeWorkOrderBase, so the direct-event and future edge
+  // upload paths cannot bypass it (AD-12). The override read is a plain SELECT under the lock
+  // already held, so the asset -> weighbridge examination -> work order order is unchanged.
+  if (workOrder.warranty_flagged === true) {
+    const override = await getWarrantyOverrideByWorkOrder(workOrderId, client);
+    if (!override) {
+      reject(
+        'APPROVAL_REQUIRED',
+        'This work order is warranty-flagged: record a reason-coded override before completing it',
+        {
+          work_order_id: workOrderId,
+          warranty_coverage_id: workOrder.warranty_coverage_id,
+        },
+        403,
+      );
+    }
+  }
+
   await setWorkOrderCompleted(
     workOrderId,
     envelope.metadata.occurred_at ?? new Date().toISOString(),
     envelope.metadata.actor.user_id,
     client,
   );
+
+  // Story 7.6 (FR-M-15): the additive cost path runs only when cost fields are present. All
+  // arithmetic runs in PostgreSQL NUMERIC; costs enter and leave as exact decimal strings, never a
+  // JS float (the Story 5.6 BOM cost rollup pattern). total_cost and capitalization_flagged are
+  // DERIVED here and written back onto the persisted payload; a forged declared value that
+  // disagrees rejects COST_DERIVATION_MISMATCH (a declared-but-unchecked field is a silent
+  // corruption channel).
+  // An explicit null means "no cost on this completion", exactly as an absent field does: treating
+  // null as present derived '0' + '0' and wrote a phantom zero-cost rollup row that also moved the
+  // asset's last-closure pointer to a completion carrying no cost data at all.
+  const declaredTotalCost = p['total_cost'];
+  const declaredCapitalizationFlagged = p['capitalization_flagged'];
+  const hasCostFields =
+    (p['labor_cost'] !== undefined && p['labor_cost'] !== null) ||
+    (p['parts_cost'] !== undefined && p['parts_cost'] !== null);
+  if (!hasCostFields) {
+    // total_cost and capitalization_flagged are DERIVED fields. With no labor_cost and no
+    // parts_cost there is nothing to derive them from, so a declared value cannot be checked - and
+    // an unchecked declared field is the silent corruption channel the direct POST /api/v1/events
+    // path exists to exploit. Reject rather than persist a fabricated capitalization decision.
+    if (declaredTotalCost !== undefined && declaredTotalCost !== null) {
+      reject(
+        'COST_DERIVATION_MISMATCH',
+        'total_cost is derived and cannot be declared without labor_cost or parts_cost',
+        { work_order_id: workOrderId, declared_total_cost: declaredTotalCost },
+        409,
+      );
+    }
+    if (declaredCapitalizationFlagged !== undefined && declaredCapitalizationFlagged !== null) {
+      reject(
+        'COST_DERIVATION_MISMATCH',
+        'capitalization_flagged is derived and cannot be declared without labor_cost or parts_cost',
+        {
+          work_order_id: workOrderId,
+          declared_capitalization_flagged: declaredCapitalizationFlagged,
+        },
+        409,
+      );
+    }
+  }
+  if (hasCostFields) {
+    const laborCost = (p['labor_cost'] as string | null | undefined) ?? '0';
+    const partsCost = (p['parts_cost'] as string | null | undefined) ?? '0';
+    // A declared total_cost reaches the comparison as a query parameter, so it must be a NUMERIC
+    // string before it gets there; anything else would surface as an unmapped 22P02 500.
+    if (declaredTotalCost !== undefined && declaredTotalCost !== null) {
+      if (typeof declaredTotalCost !== 'string' || !COST_NUMERIC_REGEX.test(declaredTotalCost)) {
+        reject('INVALID_COST', 'total_cost must be a NUMERIC string with at most 3 decimals', {
+          total_cost: declaredTotalCost,
+        });
+      }
+    }
+    const threshold = config.maintenance.capitalizationThreshold;
+    // The declared/derived comparison runs in SQL NUMERIC, not as a JS string compare: PostgreSQL
+    // renders ('10.5'::numeric + '0'::numeric)::text as '10.5', so a client echoing back the
+    // projection's own '10.500' was rejected for a numerically identical value.
+    const derived = await client.query(
+      `SELECT ($1::numeric + $2::numeric)::text AS total_cost,
+              (($1::numeric + $2::numeric) > $3::numeric) AS capitalization_flagged,
+              ($4::numeric IS NULL OR ($1::numeric + $2::numeric) = $4::numeric) AS total_cost_matches`,
+      [laborCost, partsCost, threshold, declaredTotalCost === undefined ? null : declaredTotalCost],
+    );
+    const totalCost = derived.rows[0]!['total_cost'] as string;
+    const capitalizationFlagged = derived.rows[0]!['capitalization_flagged'] === true;
+
+    if (derived.rows[0]!['total_cost_matches'] !== true) {
+      reject(
+        'COST_DERIVATION_MISMATCH',
+        'Declared total_cost does not match labor_cost + parts_cost',
+        {
+          work_order_id: workOrderId,
+          declared_total_cost: declaredTotalCost,
+          derived_total_cost: totalCost,
+        },
+        409,
+      );
+    }
+    if (
+      declaredCapitalizationFlagged !== undefined &&
+      declaredCapitalizationFlagged !== null &&
+      declaredCapitalizationFlagged !== capitalizationFlagged
+    ) {
+      reject(
+        'COST_DERIVATION_MISMATCH',
+        'Declared capitalization_flagged does not match the threshold comparison',
+        {
+          work_order_id: workOrderId,
+          declared_capitalization_flagged: declaredCapitalizationFlagged,
+          derived_capitalization_flagged: capitalizationFlagged,
+        },
+        409,
+      );
+    }
+
+    const written = await setWorkOrderCosts(
+      workOrderId,
+      laborCost,
+      partsCost,
+      totalCost,
+      capitalizationFlagged,
+      client,
+    );
+    if (!written) {
+      reject('WORK_ORDER_NOT_FOUND', 'Work order not found', { work_order_id: workOrderId }, 404);
+    }
+    await upsertMaintenanceAssetCost(
+      {
+        asset_id: workOrder.asset_id,
+        labor_cost: laborCost,
+        parts_cost: partsCost,
+        total_cost: totalCost,
+        work_order_id: workOrderId,
+        closed_at: envelope.metadata.occurred_at ?? new Date().toISOString(),
+      },
+      client,
+    );
+
+    p['total_cost'] = totalCost;
+    p['capitalization_flagged'] = capitalizationFlagged;
+  }
+
+  // Binding Decision 6: a completed work order on a weighbridge asset invalidates the stamp. Only a
+  // COMPLIANT stamp flips (an already-overdue stamp stays overdue; the scan's own grain guard owns
+  // that path).
+  if (weighbridgeExamination && weighbridgeExamination.status === 'compliant') {
+    await setStatutoryExaminationStatus(weighbridgeExamination.examination_id, 'overdue', client);
+  }
 }
 
 /**

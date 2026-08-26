@@ -1,0 +1,2815 @@
+diff --git a/deploy/compose/init-db.sql b/deploy/compose/init-db.sql
+index 8c780db..02e4187 100644
+--- a/deploy/compose/init-db.sql
++++ b/deploy/compose/init-db.sql
+@@ -7369,3 +7369,795 @@ BEGIN
+     GRANT SELECT ON instrument_calibration_escalation TO readonly_user;
+   END IF;
+ END $$;
++-- Statutory examination register (Story 7.6, FR-M-14, AD-9). This file is the CANONICAL
++-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
++-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
++-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
++-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
++-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
++-- can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying maintenance.statutory_examination_recorded,
++-- maintenance.statutory_examination_overdue AND maintenance.work_order_completed domain events;
++-- mutation happens exclusively through persistEvent, which applies this projection inside the SAME
++-- transaction as the domain_events insert. work_order_completed belongs in that replay set because
++-- the Binding Decision 6 stamp invalidation flips a weighbridge row to 'overdue' from the work
++-- order applier, with no statutory event of its own: a rebuild that omits it resurrects every
++-- work-order-invalidated stamp as 'compliant' and silently unlocks the device for trade weighment.
++--
++-- A statutory subject IS an asset (AD-9): asset_id references the single Story 7.1 register. The
++-- grain is (asset_id, examination_type), so one asset carries at most one OSH Code examination and
++-- at most one weighbridge legal-metrology stamp. The weighbridge device_id (free text on
++-- weighbridge_event) is mapped via device_key, canonicalized with lower() to match the Story 7.1
++-- asset-tag and Story 7.5 instrument-id precedent: a case variant of a registered device key is the
++-- same physical weighbridge.
++--
++-- status is the lockout flag the Story 7.6 gates read: 'compliant' allows use, 'overdue' locks the
++-- asset from use (AC1) and blocks trade weighment on the device (AC2). It is written only by the
++-- examination applier and the overdue scan; no other surface flips it.
++
++CREATE TABLE IF NOT EXISTS statutory_examination (
++  examination_id    UUID PRIMARY KEY,
++  asset_id          UUID NOT NULL,
++  examination_type  TEXT NOT NULL,
++  interval_months   INTEGER NOT NULL,
++  next_due_date     DATE NOT NULL,
++  status            TEXT NOT NULL DEFAULT 'compliant',
++  device_key        TEXT,
++  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
++  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT uq_statutory_examination_asset_type UNIQUE (asset_id, examination_type),
++  CONSTRAINT chk_statutory_examination_type CHECK (examination_type IN ('osh_code', 'weighbridge_legal_metrology')),
++  CONSTRAINT chk_statutory_examination_status CHECK (status IN ('compliant', 'overdue')),
++  CONSTRAINT chk_statutory_examination_interval CHECK (interval_months > 0 AND interval_months <= 120)
++);
++
++CREATE UNIQUE INDEX IF NOT EXISTS uq_statutory_examination_device_key ON statutory_examination (lower(device_key)) WHERE device_key IS NOT NULL;
++CREATE INDEX IF NOT EXISTS idx_statutory_examination_status_due ON statutory_examination (status, next_due_date);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'uq_statutory_examination_asset_type'
++      AND conrelid = 'statutory_examination'::regclass
++  ) THEN
++    ALTER TABLE statutory_examination
++      ADD CONSTRAINT uq_statutory_examination_asset_type UNIQUE (asset_id, examination_type);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_statutory_examination_type'
++      AND conrelid = 'statutory_examination'::regclass
++  ) THEN
++    ALTER TABLE statutory_examination
++      ADD CONSTRAINT chk_statutory_examination_type CHECK (examination_type IN ('osh_code', 'weighbridge_legal_metrology'));
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_statutory_examination_status'
++      AND conrelid = 'statutory_examination'::regclass
++  ) THEN
++    ALTER TABLE statutory_examination
++      ADD CONSTRAINT chk_statutory_examination_status CHECK (status IN ('compliant', 'overdue'));
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_statutory_examination_interval'
++      AND conrelid = 'statutory_examination'::regclass
++  ) THEN
++    ALTER TABLE statutory_examination
++      ADD CONSTRAINT chk_statutory_examination_interval CHECK (interval_months > 0 AND interval_months <= 120);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT, UPDATE ON statutory_examination TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON statutory_examination TO readonly_user;
++  END IF;
++END $$;
++-- Statutory examination records (Story 7.6, FR-M-14). This file is the CANONICAL definition,
++-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
++-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
++-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
++-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
++-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
++-- can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying maintenance.statutory_examination_recorded
++-- domain events; mutation happens exclusively through persistEvent, which applies this projection
++-- inside the SAME transaction as the domain_events insert.
++--
++-- Each row is one examination event (the certificate-style evidence record) against a statutory
++-- examination register row. One examination can be recorded many times (re-stamping); the register
++-- row carries the CURRENT compliance state while this table keeps the immutable history.
++-- certificate_number_ext is canonicalized with lower() for the unique index, matching the
++-- instrument_calibration_certificate precedent: a case variant of a recorded certificate number is
++-- the same document.
++
++CREATE TABLE IF NOT EXISTS statutory_examination_record (
++  record_id              UUID PRIMARY KEY,
++  examination_id         UUID NOT NULL,
++  examined_on            DATE NOT NULL,
++  next_due_date          DATE NOT NULL,
++  certificate_number_ext TEXT,
++  examined_by            UUID,
++  examined_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
++  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT chk_statutory_examination_record_dates CHECK (next_due_date >= examined_on)
++);
++
++CREATE UNIQUE INDEX IF NOT EXISTS uq_statutory_examination_record_number ON statutory_examination_record (examination_id, lower(certificate_number_ext)) WHERE certificate_number_ext IS NOT NULL;
++CREATE INDEX IF NOT EXISTS idx_statutory_examination_record_examination ON statutory_examination_record (examination_id);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_statutory_examination_record_dates'
++      AND conrelid = 'statutory_examination_record'::regclass
++  ) THEN
++    ALTER TABLE statutory_examination_record
++      ADD CONSTRAINT chk_statutory_examination_record_dates CHECK (next_due_date >= examined_on);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT, UPDATE ON statutory_examination_record TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON statutory_examination_record TO readonly_user;
++  END IF;
++END $$;
++-- Asset operational status projection (Story 7.6, FR-M-16). This file is the CANONICAL definition,
++-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
++-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
++-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
++-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
++-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
++-- can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying maintenance.asset_status_changed domain
++-- events; mutation happens exclusively through persistEvent, which applies this projection inside
++-- the SAME transaction as the domain_events insert.
++--
++-- The status vocabulary is the machine-status contract (Table 5): running, idle, breakdown,
++-- maintenance. sign_off_by / sign_off_at are the return-to-service supervisor sign-off (AC5),
++-- written back onto the payload by the applier from the resolved DOA approver under lock; they are
++-- only ever set on a transition TO running from breakdown or maintenance.
++
++CREATE TABLE IF NOT EXISTS asset_operational_status (
++  asset_id     UUID PRIMARY KEY,
++  status       TEXT NOT NULL DEFAULT 'idle',
++  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
++  updated_by   UUID,
++  sign_off_by  UUID,
++  sign_off_at  TIMESTAMPTZ,
++  CONSTRAINT chk_asset_operational_status CHECK (status IN ('running', 'idle', 'breakdown', 'maintenance'))
++);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_asset_operational_status'
++      AND conrelid = 'asset_operational_status'::regclass
++  ) THEN
++    ALTER TABLE asset_operational_status
++      ADD CONSTRAINT chk_asset_operational_status CHECK (status IN ('running', 'idle', 'breakdown', 'maintenance'));
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT, UPDATE ON asset_operational_status TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON asset_operational_status TO readonly_user;
++  END IF;
++END $$;
++-- Per-asset maintenance cost rollup (Story 7.6, FR-M-15). This file is the CANONICAL definition,
++-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
++-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
++-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
++-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
++-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
++-- can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying maintenance.work_order_completed domain
++-- events; mutation happens exclusively through persistEvent, which applies this projection inside
++-- the SAME transaction as the domain_events insert.
++--
++-- The three totals are the SUM of the matching columns across all completed maintenance_work_order
++-- rows for the asset (Story 5.6 BOM cost rollup pattern): all arithmetic runs in PostgreSQL
++-- NUMERIC, costs enter and leave as exact decimal strings, and the applier ADDS the new costs to
++-- the existing totals inside the same transaction. last_work_order_id / last_closed_at point at the
++-- most recent completing work order for the lifecycle-costing read.
++
++CREATE TABLE IF NOT EXISTS maintenance_asset_cost (
++  asset_id            UUID PRIMARY KEY,
++  total_labor_cost    NUMERIC(14,3) NOT NULL DEFAULT 0,
++  total_parts_cost    NUMERIC(14,3) NOT NULL DEFAULT 0,
++  total_cost          NUMERIC(14,3) NOT NULL DEFAULT 0,
++  last_work_order_id  UUID,
++  last_closed_at      TIMESTAMPTZ,
++  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT chk_maintenance_asset_cost_labor_non_negative CHECK (total_labor_cost >= 0),
++  CONSTRAINT chk_maintenance_asset_cost_parts_non_negative CHECK (total_parts_cost >= 0),
++  CONSTRAINT chk_maintenance_asset_cost_total_non_negative CHECK (total_cost >= 0)
++);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_maintenance_asset_cost_labor_non_negative'
++      AND conrelid = 'maintenance_asset_cost'::regclass
++  ) THEN
++    ALTER TABLE maintenance_asset_cost
++      ADD CONSTRAINT chk_maintenance_asset_cost_labor_non_negative CHECK (total_labor_cost >= 0);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_maintenance_asset_cost_parts_non_negative'
++      AND conrelid = 'maintenance_asset_cost'::regclass
++  ) THEN
++    ALTER TABLE maintenance_asset_cost
++      ADD CONSTRAINT chk_maintenance_asset_cost_parts_non_negative CHECK (total_parts_cost >= 0);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_maintenance_asset_cost_total_non_negative'
++      AND conrelid = 'maintenance_asset_cost'::regclass
++  ) THEN
++    ALTER TABLE maintenance_asset_cost
++      ADD CONSTRAINT chk_maintenance_asset_cost_total_non_negative CHECK (total_cost >= 0);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT, UPDATE ON maintenance_asset_cost TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON maintenance_asset_cost TO readonly_user;
++  END IF;
++END $$;
++-- Story 7.6 cost arm (FR-M-15): additive cost columns on the SAME table so lifecycle costing rides
++-- the existing work-order register instead of creating a second one. The guarded DO blocks
++-- re-apply harmlessly on an existing database. Costs are NUMERIC(14,3) strings end to end (the
++-- Story 5.6 BOM cost rollup pattern): total_cost = labor_cost + parts_cost is computed in SQL
++-- NUMERIC by the applier, and capitalization_flagged is the server-derived strictly-greater-than
++-- threshold comparison (config.maintenance.capitalizationThreshold), never client-entered. The
++-- existing columns, constraints and indexes are untouched.
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM information_schema.columns
++    WHERE table_schema = current_schema()
++      AND table_name = 'maintenance_work_order' AND column_name = 'labor_cost'
++  ) THEN
++    ALTER TABLE maintenance_work_order ADD COLUMN labor_cost NUMERIC(14,3) NOT NULL DEFAULT 0;
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM information_schema.columns
++    WHERE table_schema = current_schema()
++      AND table_name = 'maintenance_work_order' AND column_name = 'parts_cost'
++  ) THEN
++    ALTER TABLE maintenance_work_order ADD COLUMN parts_cost NUMERIC(14,3) NOT NULL DEFAULT 0;
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM information_schema.columns
++    WHERE table_schema = current_schema()
++      AND table_name = 'maintenance_work_order' AND column_name = 'total_cost'
++  ) THEN
++    ALTER TABLE maintenance_work_order ADD COLUMN total_cost NUMERIC(14,3) NOT NULL DEFAULT 0;
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM information_schema.columns
++    WHERE table_schema = current_schema()
++      AND table_name = 'maintenance_work_order' AND column_name = 'capitalization_flagged'
++  ) THEN
++    ALTER TABLE maintenance_work_order ADD COLUMN capitalization_flagged BOOLEAN NOT NULL DEFAULT false;
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_maintenance_work_order_labor_non_negative'
++      AND conrelid = 'maintenance_work_order'::regclass
++  ) THEN
++    ALTER TABLE maintenance_work_order
++      ADD CONSTRAINT chk_maintenance_work_order_labor_non_negative CHECK (labor_cost >= 0);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_maintenance_work_order_parts_non_negative'
++      AND conrelid = 'maintenance_work_order'::regclass
++  ) THEN
++    ALTER TABLE maintenance_work_order
++      ADD CONSTRAINT chk_maintenance_work_order_parts_non_negative CHECK (parts_cost >= 0);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_maintenance_work_order_total_non_negative'
++      AND conrelid = 'maintenance_work_order'::regclass
++  ) THEN
++    ALTER TABLE maintenance_work_order
++      ADD CONSTRAINT chk_maintenance_work_order_total_non_negative CHECK (total_cost >= 0);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT, UPDATE ON maintenance_work_order TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON maintenance_work_order TO readonly_user;
++  END IF;
++END $$;
++
++-- Story 6.1: production order projection (FR-MO-01/02/03). Mirror of read/projections/production_order.sql.
++-- Production order read model (Story 6.1, FR-MO-01/02/03, AD-5). This file is the CANONICAL
++-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
++-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
++-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
++-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
++-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
++-- can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying production_order.* domain events;
++-- mutation happens exclusively through persistEvent, which applies this projection inside the SAME
++-- transaction as the domain_events insert. status is the six-state lifecycle machine (Table 2):
++-- planned -> released -> in_process -> completed -> closed, with planned|released -> cancelled.
++-- order_number_ext is server-allocated from production_order_number_seq in the MO-YYYY-NNNN format
++-- (the IND-YYYY-NNNN pattern, with an MO- prefix so the PO- namespace owned by purchase orders is
++-- never entered) and immutable thereafter: the applier allocates the number and writes it back onto
++-- the persisted payload, and any declared number that disagrees rejects ORDER_NUMBER_IMMUTABLE.
++--
++-- chk_production_order_expediting_pairing makes an expediting flag without a recorded overrider and
++-- reason structurally impossible (AC6 enforced by the database). chk_production_order_unreversed_non_
++-- negative makes a decrement below zero fail loudly in Story 6.2 rather than silently unlocking a
++-- cancel that AC4 forbids. released_revision_id is deliberately nullable and set only at release:
++-- the revision is pinned from the explosion result so a BOM released after creation cannot
++-- retroactively change what a released order was gated against.
++
++CREATE TABLE IF NOT EXISTS production_order (
++  production_order_id       UUID PRIMARY KEY,
++  order_number_ext          TEXT NOT NULL,
++  output_item_id            UUID NOT NULL,
++  output_sku                TEXT NOT NULL,
++  order_quantity            NUMERIC(18,6) NOT NULL,
++  order_uom                 TEXT NOT NULL,
++  plant_location_id         UUID NOT NULL,
++  bom_id                    UUID NOT NULL,
++  released_revision_id      UUID,
++  business_stream           TEXT NOT NULL,
++  source_reference_type     TEXT NOT NULL,
++  source_reference_id       TEXT NOT NULL,
++  status                    TEXT NOT NULL DEFAULT 'planned',
++  expediting_flag           BOOLEAN NOT NULL DEFAULT false,
++  override_by               UUID,
++  override_reason           TEXT,
++  released_at               TIMESTAMPTZ,
++  released_by               UUID,
++  cancelled_at              TIMESTAMPTZ,
++  cancelled_by              UUID,
++  unreversed_transaction_count INTEGER NOT NULL DEFAULT 0,
++  created_by                UUID NOT NULL,
++  correlation_id            UUID,
++  source_event_id           UUID NOT NULL,
++  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
++  updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT chk_production_order_status CHECK (status IN ('planned','released','in_process','completed','closed','cancelled')),
++  CONSTRAINT chk_production_order_quantity_positive CHECK (order_quantity > 0),
++  CONSTRAINT chk_production_order_source_reference_type CHECK (source_reference_type IN ('erp_sales_order','indent','rd_project','manual')),
++  CONSTRAINT chk_production_order_unreversed_non_negative CHECK (unreversed_transaction_count >= 0),
++  CONSTRAINT chk_production_order_expediting_pairing CHECK ((expediting_flag = true AND override_by IS NOT NULL AND override_reason IS NOT NULL AND btrim(override_reason) <> '') OR (expediting_flag = false AND override_by IS NULL AND override_reason IS NULL))
++);
++
++CREATE UNIQUE INDEX IF NOT EXISTS uq_production_order_number_ext ON production_order (order_number_ext);
++CREATE INDEX IF NOT EXISTS idx_production_order_status ON production_order (status);
++CREATE INDEX IF NOT EXISTS idx_production_order_plant ON production_order (plant_location_id);
++CREATE INDEX IF NOT EXISTS idx_production_order_output_item ON production_order (output_item_id);
++CREATE INDEX IF NOT EXISTS idx_production_order_bom ON production_order (bom_id);
++CREATE INDEX IF NOT EXISTS idx_production_order_business_stream ON production_order (business_stream);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_status'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_status CHECK (status IN ('planned','released','in_process','completed','closed','cancelled'));
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_quantity_positive'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_quantity_positive CHECK (order_quantity > 0);
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_source_reference_type'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_source_reference_type CHECK (source_reference_type IN ('erp_sales_order','indent','rd_project','manual'));
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_unreversed_non_negative'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_unreversed_non_negative CHECK (unreversed_transaction_count >= 0);
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_expediting_pairing'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_expediting_pairing CHECK ((expediting_flag = true AND override_by IS NOT NULL AND override_reason IS NOT NULL AND btrim(override_reason) <> '') OR (expediting_flag = false AND override_by IS NULL AND override_reason IS NULL));
++  END IF;
++END $$;
++
++-- Server-side human-ID allocation for the MO-YYYY-NNNN format. A sequence is the only lock-free
++-- allocator that survives concurrent creations; the year prefix is applied in the applier. Gaps on
++-- rolled-back creates are acceptable - uniqueness is what matters (the indent_number_seq precedent).
++CREATE SEQUENCE IF NOT EXISTS production_order_number_seq;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT, UPDATE ON production_order TO app_user;
++    GRANT USAGE ON SEQUENCE production_order_number_seq TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON production_order TO readonly_user;
++  END IF;
++END $$;
++
++
++-- Asset coverage register: AMC, warranty, and insurance contracts (Story 7.7, FR-M-10/11, AD-9).
++-- This file is the CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and
++-- the integration-test harness. It carries its OWN grants (guarded DO blocks) so a
++-- migrate-provisioned database can serve reads/writes as app_user without depending on
++-- deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates this content for first-boot
++-- container init - change both files together. Every statement is idempotent (IF NOT EXISTS /
++-- guarded DO blocks) so the file can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying maintenance.coverage_recorded domain
++-- events; mutation happens exclusively through persistEvent, which applies this projection inside
++-- the SAME transaction as the domain_events insert.
++--
++-- One table serves all three coverage kinds (Binding Decision 13): AMC, warranty, and insurance
++-- rows differ only in coverage_type and in the fact that only 'warranty' drives the Story 7.7
++-- work-order check. asset_id references the single Story 7.1 company-wide asset register (AD-9),
++-- so there is no location column and no site scoping.
++--
++-- Records are APPEND-ONLY with no amendment, void, or supersede path in Phase 1 (Binding
++-- Decision 5): a renewal is a NEW row with a new coverage_id, which earns a fresh set of 90/60/30
++-- alert stages. The uniqueness grain is (asset_id, coverage_type, lower(reference_number_ext)),
++-- expressed as a UNIQUE INDEX because it contains an expression - never a table-level UNIQUE on an
++-- expression (the Story 7.5 rule). Case canonicalization matches the Story 7.1 asset-tag and Story
++-- 7.5 instrument-id precedent: a case variant of a contract reference is the same contract.
++
++CREATE TABLE IF NOT EXISTS asset_coverage (
++  coverage_id          UUID PRIMARY KEY,
++  asset_id             UUID NOT NULL,
++  coverage_type        TEXT NOT NULL,
++  provider_name        TEXT NOT NULL,
++  reference_number_ext TEXT NOT NULL,
++  start_date           DATE NOT NULL,
++  expiry_date          DATE NOT NULL,
++  contract_value       NUMERIC(14,3),
++  recorded_by          UUID NOT NULL,
++  recorded_at          TIMESTAMPTZ NOT NULL,
++  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
++  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT chk_asset_coverage_type CHECK (coverage_type IN ('amc', 'warranty', 'insurance')),
++  CONSTRAINT chk_asset_coverage_provider_name CHECK (btrim(provider_name) <> ''),
++  CONSTRAINT chk_asset_coverage_reference_ext CHECK (btrim(reference_number_ext) <> ''),
++  CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date > start_date),
++  CONSTRAINT chk_asset_coverage_value_non_negative CHECK (contract_value IS NULL OR contract_value >= 0)
++);
++
++CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_coverage_reference ON asset_coverage (asset_id, coverage_type, lower(reference_number_ext));
++CREATE INDEX IF NOT EXISTS idx_asset_coverage_asset ON asset_coverage (asset_id);
++CREATE INDEX IF NOT EXISTS idx_asset_coverage_expiry ON asset_coverage (expiry_date);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_asset_coverage_type'
++      AND conrelid = 'asset_coverage'::regclass
++  ) THEN
++    ALTER TABLE asset_coverage
++      ADD CONSTRAINT chk_asset_coverage_type CHECK (coverage_type IN ('amc', 'warranty', 'insurance'));
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_asset_coverage_provider_name'
++      AND conrelid = 'asset_coverage'::regclass
++  ) THEN
++    ALTER TABLE asset_coverage
++      ADD CONSTRAINT chk_asset_coverage_provider_name CHECK (btrim(provider_name) <> '');
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_asset_coverage_reference_ext'
++      AND conrelid = 'asset_coverage'::regclass
++  ) THEN
++    ALTER TABLE asset_coverage
++      ADD CONSTRAINT chk_asset_coverage_reference_ext CHECK (btrim(reference_number_ext) <> '');
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_asset_coverage_dates'
++      AND conrelid = 'asset_coverage'::regclass
++  ) THEN
++    ALTER TABLE asset_coverage
++      ADD CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date > start_date);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_asset_coverage_value_non_negative'
++      AND conrelid = 'asset_coverage'::regclass
++  ) THEN
++    ALTER TABLE asset_coverage
++      ADD CONSTRAINT chk_asset_coverage_value_non_negative CHECK (contract_value IS NULL OR contract_value >= 0);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT, UPDATE ON asset_coverage TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON asset_coverage TO readonly_user;
++  END IF;
++END $$;
++
++-- Staged coverage expiry alerts (Story 7.7, FR-M-10, AC 1). This file is the CANONICAL definition,
++-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
++-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
++-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
++-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
++-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
++-- can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying maintenance.coverage_expiry_flagged domain
++-- events; mutation happens exclusively through persistEvent, which applies this projection inside
++-- the SAME transaction as the domain_events insert.
++--
++-- The grain is (coverage_id, stage_days), NOT (coverage_id, business_date): an expiry countdown
++-- fires ONCE PER STAGE per coverage. uq_asset_coverage_alert_stage is what makes a same-day re-run
++-- a no-op and what makes a skipped day catch up rather than lose a stage - the scan asks which
++-- stages are due AND unfired, never whether the day count equals a stage exactly. A renewal is a
++-- NEW coverage_id and therefore earns a fresh set of three stages (Binding Decision 5 and 7).
++-- The stages 90/60/30 are pinned by FR-M-10 itself, so they are a module constant and never
++-- deployment configuration.
++
++CREATE TABLE IF NOT EXISTS asset_coverage_alert (
++  alert_id      UUID PRIMARY KEY,
++  coverage_id   UUID NOT NULL,
++  asset_id      UUID NOT NULL,
++  stage_days    INTEGER NOT NULL,
++  expiry_date   DATE NOT NULL,
++  business_date DATE NOT NULL,
++  flagged_at    TIMESTAMPTZ NOT NULL,
++  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT chk_asset_coverage_alert_stage CHECK (stage_days IN (90, 60, 30)),
++  CONSTRAINT uq_asset_coverage_alert_stage UNIQUE (coverage_id, stage_days)
++);
++
++CREATE INDEX IF NOT EXISTS idx_asset_coverage_alert_business_date ON asset_coverage_alert (business_date);
++CREATE INDEX IF NOT EXISTS idx_asset_coverage_alert_asset ON asset_coverage_alert (asset_id);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_asset_coverage_alert_stage'
++      AND conrelid = 'asset_coverage_alert'::regclass
++  ) THEN
++    ALTER TABLE asset_coverage_alert
++      ADD CONSTRAINT chk_asset_coverage_alert_stage CHECK (stage_days IN (90, 60, 30));
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'uq_asset_coverage_alert_stage'
++      AND conrelid = 'asset_coverage_alert'::regclass
++  ) THEN
++    ALTER TABLE asset_coverage_alert
++      ADD CONSTRAINT uq_asset_coverage_alert_stage UNIQUE (coverage_id, stage_days);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT, UPDATE ON asset_coverage_alert TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON asset_coverage_alert TO readonly_user;
++  END IF;
++END $$;
++
++-- Reason-coded warranty overrides on breakdown work orders (Story 7.7, FR-M-11, AC 3 and AC 4).
++-- This file is the CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and
++-- the integration-test harness. It carries its OWN grants (guarded DO blocks) so a
++-- migrate-provisioned database can serve reads/writes as app_user without depending on
++-- deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates this content for first-boot
++-- container init - change both files together. Every statement is idempotent (IF NOT EXISTS /
++-- guarded DO blocks) so the file can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying maintenance.warranty_override_recorded
++-- domain events; mutation happens exclusively through persistEvent, which applies this projection
++-- inside the SAME transaction as the domain_events insert.
++--
++-- The grain is ONE override per work order (Binding Decision 11): a reason-coded override is a
++-- one-time supervisor decision, and uq_maintenance_warranty_override_work_order is the concurrency
++-- backstop behind the sequential pre-check (a 23505 on it resolves to 409
++-- WARRANTY_OVERRIDE_ALREADY_RECORDED with the existing override id, so the race path and the
++-- sequential path return the same shape).
++--
++-- Append-only: app_user holds INSERT and SELECT only, never UPDATE (the maintenance_reliability_
++-- metric precedent). An override is never mutated; a mistaken one stands in the record.
++
++CREATE TABLE IF NOT EXISTS maintenance_warranty_override (
++  override_id          UUID PRIMARY KEY,
++  work_order_id        UUID NOT NULL,
++  warranty_coverage_id UUID NOT NULL,
++  reason_code          TEXT NOT NULL,
++  overridden_by        UUID NOT NULL,
++  overridden_at        TIMESTAMPTZ NOT NULL,
++  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT uq_maintenance_warranty_override_work_order UNIQUE (work_order_id),
++  CONSTRAINT chk_maintenance_warranty_override_reason CHECK (btrim(reason_code) <> '')
++);
++
++CREATE INDEX IF NOT EXISTS idx_maintenance_warranty_override_coverage ON maintenance_warranty_override (warranty_coverage_id);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'uq_maintenance_warranty_override_work_order'
++      AND conrelid = 'maintenance_warranty_override'::regclass
++  ) THEN
++    ALTER TABLE maintenance_warranty_override
++      ADD CONSTRAINT uq_maintenance_warranty_override_work_order UNIQUE (work_order_id);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_maintenance_warranty_override_reason'
++      AND conrelid = 'maintenance_warranty_override'::regclass
++  ) THEN
++    ALTER TABLE maintenance_warranty_override
++      ADD CONSTRAINT chk_maintenance_warranty_override_reason CHECK (btrim(reason_code) <> '');
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT ON maintenance_warranty_override TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON maintenance_warranty_override TO readonly_user;
++  END IF;
++END $$;
++
++-- Story 7.7 warranty arm (FR-M-11): two additive columns on the SAME work-order register so the
++-- warranty check rides the existing row instead of a side table. Both are SERVER-DERIVED in
++-- applyBreakdownWorkOrderCreated from the active-warranty lookup against the payload business_date
++-- (Binding Decisions 3 and 4): a declared warranty_flagged or warranty_coverage_id in the envelope
++-- is rejected with WORK_ORDER_DERIVATION_MISMATCH, so there is no client write path. Preventive
++-- work orders are never checked and keep the false default (Binding Decision 2). No CHECK
++-- constraint is needed: a defaulted boolean and a nullable UUID are self-validating. The existing
++-- columns, constraints and indexes are untouched.
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM information_schema.columns
++    WHERE table_schema = current_schema()
++      AND table_name = 'maintenance_work_order' AND column_name = 'warranty_flagged'
++  ) THEN
++    ALTER TABLE maintenance_work_order ADD COLUMN warranty_flagged BOOLEAN NOT NULL DEFAULT false;
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM information_schema.columns
++    WHERE table_schema = current_schema()
++      AND table_name = 'maintenance_work_order' AND column_name = 'warranty_coverage_id'
++  ) THEN
++    ALTER TABLE maintenance_work_order ADD COLUMN warranty_coverage_id UUID;
++  END IF;
++END $$;
+diff --git a/src/events/migrate.ts b/src/events/migrate.ts
+index 026c02e..db851f4 100644
+--- a/src/events/migrate.ts
++++ b/src/events/migrate.ts
+@@ -122,6 +122,28 @@ const MIGRATIONS = [
+   '../../read/projections/instrument_calibration_certificate.sql',
+   '../../read/projections/instrument_calibration_alert.sql',
+   '../../read/projections/instrument_calibration_escalation.sql',
++  // Story 7.6: the statutory examination register, its record history, the machine-status
++  // projection and the per-asset maintenance cost rollup (FR-M-14, FR-M-15, FR-M-16). Appended at
++  // the tail after the Story 7.5 files; the edited maintenance_work_order.sql keeps its position
++  // above and its new guarded cost-column blocks re-apply harmlessly. No FKs exist between
++  // projections, so this order is logical rather than dependency-forced.
++  '../../read/projections/statutory_examination.sql',
++  '../../read/projections/statutory_examination_record.sql',
++  '../../read/projections/asset_operational_status.sql',
++  '../../read/projections/maintenance_asset_cost.sql',
++  // Story 6.1: the production order projection (FR-MO-01/02/03). Appended at the tail after the
++  // Story 7.6 files; the sequence and its USAGE grant live in the same file (the indent_number_seq
++  // pattern). The projection is enterprise-scoped (no site column) and no FK ties it to item_master,
++  // location_register or bom, so this order is logical rather than dependency-forced.
++  '../../read/projections/production_order.sql',
++  // Story 7.7: the asset coverage register (AMC, warranty, insurance), its staged 90/60/30 expiry
++  // alerts and the reason-coded warranty override grain (FR-M-10, FR-M-11). Appended at the tail
++  // after the Story 6.1 file; the edited maintenance_work_order.sql keeps its position above and
++  // its new guarded warranty-column blocks re-apply harmlessly. No FKs exist between projections,
++  // so this order is logical rather than dependency-forced.
++  '../../read/projections/asset_coverage.sql',
++  '../../read/projections/asset_coverage_alert.sql',
++  '../../read/projections/maintenance_warranty_override.sql',
+ ];
+ 
+ async function migrate(): Promise<void> {
+diff --git a/src/events/schema.ts b/src/events/schema.ts
+index 991f756..0476931 100644
+--- a/src/events/schema.ts
++++ b/src/events/schema.ts
+@@ -2179,11 +2179,24 @@ export interface MaintenanceWorkOrderOverdueEnvelope extends Omit<EventEnvelope,
+  * Minimal completion so the grace sweep can tell a done work order from an open one (AC 2).
+  * Closure codes, labour, downtime and parts consumption belong to Stories 7.3 and 7.8.
+  * completed_by is derived server-side from metadata.actor.user_id.
++ *
++ * Story 7.6 additive extension (FR-M-15): the payload gains OPTIONAL labor_cost and parts_cost
++ * NUMERIC strings. When present, the applier computes total_cost = labor_cost + parts_cost in SQL
++ * NUMERIC and capitalization_flagged = (total_cost > config.maintenance.capitalizationThreshold)
++ * server-side and writes BOTH derived fields back onto the persisted payload before the
++ * domain_events insert. Existing Story 7.2 payloads with no cost fields are unchanged: the cost
++ * columns default to 0 and no cost path runs.
+  */
+ export interface MaintenanceWorkOrderCompletedPayload {
+   work_order_id: string;
+   asset_id: string;
+   completed_at: string;
++  labor_cost?: string;
++  parts_cost?: string;
++  /** Derived by the applier in SQL NUMERIC; declared only for the persisted-payload write-back. */
++  total_cost?: string;
++  /** Derived by the applier (strictly greater than the configured threshold); persisted write-back. */
++  capitalization_flagged?: boolean;
+ }
+ 
+ export interface MaintenanceWorkOrderCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
+@@ -2272,6 +2285,15 @@ export interface BreakdownWorkOrderCreatedPayload {
+   sla_response_due_at: string;
+   sla_resolution_due_at: string;
+   business_date: string;
++  /**
++   * Story 7.7 additive extension (FR-M-11): the warranty check result. Both fields are SEAM-DERIVED
++   * write-back in applyBreakdownWorkOrderCreated from the active-warranty lookup against
++   * business_date - NEVER client-supplied. A declared value in the inbound envelope is rejected
++   * 409 WORK_ORDER_DERIVATION_MISMATCH (Binding Decision 3), so they are optional on the way in and
++   * always present on the persisted payload.
++   */
++  warranty_flagged?: boolean;
++  warranty_coverage_id?: string | null;
+ }
+ 
+ export interface BreakdownWorkOrderCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+@@ -2630,6 +2652,323 @@ export interface CalibrationEscalationResolvedEnvelope extends Omit<EventEnvelop
+   payload: CalibrationEscalationResolvedPayload;
+ }
+ 
++// ---------------------------------------------------------------------------
++// Story 7.6: statutory examinations, cost accumulation, and machine status broadcast
++// (FR-M-14, FR-M-15, FR-M-16)
++// ---------------------------------------------------------------------------
++//
++// Three new events on the existing 'maintenance' stream, all requiresBusinessStream false (the
++// Story 7.2 precedent: maintenance operational state, never a tagged inventory movement). Every
++// payload field an applier can derive from a locked row is DECLARED here and CHECKED against the
++// derivation in src/compliance/maintenance-statutory.ts / src/compliance/asset-operational-status.ts,
++// never trusted: a declared-but-unchecked field is a silent corruption channel on the direct
++// POST /api/v1/events path, and here a forged statutory_examination_recorded would suppress the
++// genuine lockout while a forged asset_status_changed with a fabricated sign_off_by would bypass
++// the return-to-service gate. Divergence rejects 409 STATUTORY_DERIVATION_MISMATCH or 409
++// COST_DERIVATION_MISMATCH.
++//
++// All calendar fields (examined_on, next_due_date, business_date) are DATE strings in YYYY-MM-DD.
++// All instants (recorded_at, flagged_at, changed_at, sign_off_at) require an explicit UTC offset
++// (the Story 7.2 offset lesson).
++
++/**
++ * Story 7.6 (FR-M-14): records a statutory examination event against an asset - either an OSH
++ * Code examination or a weighbridge legal-metrology stamp. stream_id is examination_id. Inserts or
++ * updates one statutory_examination row (status 'compliant', next_due_date re-derived as
++ * examined_on + interval_months in SQL) and inserts one statutory_examination_record row.
++ * next_due_date is DECLARED and CHECKED against the derivation under the asset's lock, so a forged
++ * event cannot push a due date out. Recording an examination whose next_due_date is already before
++ * business_date is rejected 422 EXAMINATION_ALREADY_OVERDUE, never silently accepted.
++ */
++export interface StatutoryExaminationRecordedPayload {
++  examination_id: string;
++  asset_id: string;
++  examination_type: 'osh_code' | 'weighbridge_legal_metrology';
++  interval_months: number;
++  examined_on: string;
++  /** Derivable: examined_on + interval_months in SQL; declared and checked under lock. */
++  next_due_date: string;
++  certificate_number_ext: string | null;
++  device_key: string | null;
++  business_date: string;
++  recorded_at: string;
++}
++
++export interface StatutoryExaminationRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'maintenance.statutory_examination_recorded';
++  payload: StatutoryExaminationRecordedPayload;
++}
++
++/**
++ * Story 7.6 (FR-M-14, AC 1 / AC 2): the overdue flip emitted by the POST-triggered scan. stream_id
++ * is examination_id. Flips statutory_examination.status to 'overdue', which locks the asset from
++ * use (AC1) and blocks trade weighment on the device (AC2). The scan holds the examination row
++ * under FOR UPDATE so two concurrent scans serialize into one overdue flip; a lost race to
++ * uq_statutory_examination_asset_type is skipped, never failing the whole scan.
++ */
++export interface StatutoryExaminationOverduePayload {
++  examination_id: string;
++  asset_id: string;
++  examination_type: 'osh_code' | 'weighbridge_legal_metrology';
++  next_due_date: string;
++  business_date: string;
++  flagged_at: string;
++}
++
++export interface StatutoryExaminationOverdueEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'maintenance.statutory_examination_overdue';
++  payload: StatutoryExaminationOverduePayload;
++}
++
++/**
++ * Story 7.6 (FR-M-16): one machine status transition. stream_id is asset_id. The applier validates
++ * the state machine (Table 5), re-derives previous_status from the locked row, resolves the DOA
++ * approver for return-to-service transitions under lock, writes sign_off_by / sign_off_at back onto
++ * the persisted payload, and upserts asset_operational_status. previous_status is null on the
++ * first transition (no prior row). A transition to 'running' from 'breakdown' or 'maintenance'
++ * requires a supervisor sign-off (AC5); a fabricated sign_off_by is rejected 409
++ * COST_DERIVATION_MISMATCH under the applier's re-derivation.
++ */
++export interface AssetStatusChangedPayload {
++  asset_id: string;
++  previous_status: 'running' | 'idle' | 'breakdown' | 'maintenance' | null;
++  new_status: 'running' | 'idle' | 'breakdown' | 'maintenance';
++  changed_by: string;
++  changed_at: string;
++  /** Derived under lock: resolved DOA approver for a return-to-service transition, else null. */
++  sign_off_by: string | null;
++  sign_off_at: string | null;
++}
++
++export interface AssetStatusChangedEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'maintenance.asset_status_changed';
++  payload: AssetStatusChangedPayload;
++}
++
++// ---------------------------------------------------------------------------
++// Story 6.1: production order creation and release gate (FR-MO-01, FR-MO-02, FR-MO-03)
++// ---------------------------------------------------------------------------
++//
++// Four new events on a new 'production' stream. Only production_order.created carries
++// requiresBusinessStream: true - that is what makes AC1's UNTAGGED_TRANSACTION fire inside
++// persistEvent with zero handler-side code (the indent.raised precedent). The lifecycle
++// transitions do not re-carry a business stream: the order row already holds it, and re-tagging
++// every transition would make the tag a mutable field, which AD-14 forbids.
++//
++// Every payload field an applier can derive from a locked row is DECLARED here and CHECKED against
++// the derivation in src/compliance/production-order.ts, never trusted: a declared-but-unchecked
++// field is a silent corruption channel on the direct POST /api/v1/events path. Divergence rejects
++// 409 PRODUCTION_ORDER_DERIVATION_MISMATCH, except for the order number, which has its own 409
++// ORDER_NUMBER_IMMUTABLE. order_quantity is an exact decimal STRING (never a JS number); every
++// instant (created_at, released_at, changed_at, cancelled_at) requires an explicit UTC offset (the
++// Story 7.2 offset lesson); business_date is a DATE string in YYYY-MM-DD.
++//
++// production_order.released is the highest-risk applier in this story: a forged release with
++// expediting_flag true and a fabricated override_by would defeat AC6 and AC7 in one move, and a
++// forged release with no override on a short order would defeat AC5. Both paths are re-derived
++// inside the transaction, not merely checked in the handler.
++
++/**
++ * Story 6.1 (FR-MO-01): creates a Planned production order. stream_id is production_order_id.
++ * order_number_ext is DECLARED but NEVER trusted: the applier allocates it from the sequence and
++ * rejects 409 ORDER_NUMBER_IMMUTABLE on any declared value that disagrees. output_sku and order_uom
++ * are re-derived from item_master under lock. source_reference_id is recorded but NOT resolved
++ * against Story 2.9 / Story 4.3 projections in Phase 1 (Binding Scope Decision 10).
++ */
++export interface ProductionOrderCreatedPayload {
++  production_order_id: string;
++  /** Server-allocated from production_order_number_seq in MO-YYYY-NNNN format; declared and rejected on disagreement. */
++  order_number_ext: string;
++  output_item_id: string;
++  /** Derivable: output_item_id -> item_master.sku; declared and checked under lock. */
++  output_sku: string;
++  order_quantity: string;
++  /** Derivable: output_item_id -> item_master.uom; declared and checked under lock. */
++  order_uom: string;
++  plant_location_id: string;
++  bom_id: string;
++  business_stream: string;
++  source_reference_type: 'erp_sales_order' | 'indent' | 'rd_project' | 'manual';
++  source_reference_id: string;
++  created_by: string;
++  created_at: string;
++}
++
++export interface ProductionOrderCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'production_order.created';
++  payload: ProductionOrderCreatedPayload;
++}
++
++/**
++ * Story 6.1 (FR-MO-03): releases a Planned order. stream_id is production_order_id. The applier
++ * re-runs the release gate under lock: released_revision_id is re-derived from the explosion
++ * result, the gate satisfied verdict is recomputed, and override_by is re-resolved through the DOA
++ * registry (AD-3) when expediting_flag is true. A forged release with a fabricated override_by is
++ * rejected 403 APPROVAL_REQUIRED; a shortfall without an override is rejected 409
++ * INSUFFICIENT_STOCK. override_by / override_reason must both be null when expediting_flag is
++ * false (the expediting-pairing CHECK backstops the same rule at the database level).
++ */
++export interface ProductionOrderReleasedPayload {
++  production_order_id: string;
++  /** Derivable: current released revision of the BOM from the explosion result; declared and checked. */
++  released_revision_id: string;
++  business_date: string;
++  expediting_flag: boolean;
++  /** Derivable: resolved DOA approver when expediting_flag is true, else null; declared and checked. */
++  override_by: string | null;
++  override_reason: string | null;
++  released_by: string;
++  released_at: string;
++}
++
++export interface ProductionOrderReleasedEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'production_order.released';
++  payload: ProductionOrderReleasedPayload;
++}
++
++/**
++ * Story 6.1 (FR-MO-02): one lifecycle transition on the planned -> released -> in_process ->
++ * completed -> closed spine. stream_id is production_order_id. previous_status is re-derived from
++ * the locked row and checked; a transition not listed in the Lifecycle Contract (Table 2) rejects
++ * 400 INVALID_STATE_TRANSITION.
++ */
++export interface ProductionOrderStateChangedPayload {
++  production_order_id: string;
++  /** Derivable: status of the locked order row; declared and checked. */
++  previous_status: string;
++  new_status: 'in_process' | 'completed' | 'closed';
++  changed_by: string;
++  changed_at: string;
++}
++
++export interface ProductionOrderStateChangedEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'production_order.state_changed';
++  payload: ProductionOrderStateChangedPayload;
++}
++
++/**
++ * Story 6.1 (FR-MO-02): cancels from planned or released. stream_id is production_order_id.
++ * previous_status and unreversed_transaction_count are re-derived from the locked row: a cancel
++ * from a state that is not planned or released rejects 400 INVALID_STATE_TRANSITION (AC3), and a
++ * cancel from released while unreversed_transaction_count > 0 rejects 409 UNREVERSED_TRANSACTIONS
++ * (AC4). The counter is written only by Story 6.2's issue/return paths.
++ */
++export interface ProductionOrderCancelledPayload {
++  production_order_id: string;
++  /** Derivable: status of the locked order row; declared and checked. */
++  previous_status: string;
++  cancelled_by: string;
++  cancelled_at: string;
++  reason_code: string | null;
++}
++
++export interface ProductionOrderCancelledEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'production_order.cancelled';
++  payload: ProductionOrderCancelledPayload;
++}
++
++// ---------------------------------------------------------------------------
++// Story 7.7: AMC, warranty, and insurance tracking (FR-M-10, FR-M-11)
++// ---------------------------------------------------------------------------
++//
++// Three new events on the existing 'maintenance' stream, all requiresBusinessStream false (the
++// Story 7.2 / 7.6 precedent: maintenance operational state, never a tagged inventory movement).
++// One coverage model serves AMC, warranty, and insurance (Binding Decision 13); only 'warranty'
++// drives the work-order check.
++//
++// Every payload field an applier can derive from a locked row is DECLARED here and CHECKED against
++// the derivation in src/compliance/maintenance-coverage.ts, never trusted: a declared-but-unchecked
++// field is a silent corruption channel on the direct POST /api/v1/events path. Here a forged
++// overridden_by would hand the warranty override to someone the DOA registry never authorized, and
++// a forged coverage_expiry_flagged would burn an alert stage that the genuine scan then skips.
++// Divergence rejects 409 COVERAGE_DERIVATION_MISMATCH.
++//
++// All calendar fields (start_date, expiry_date, business_date) are DATE strings in YYYY-MM-DD;
++// every instant (recorded_at, flagged_at, overridden_at) requires an explicit UTC offset (the
++// Story 7.2 offset lesson); contract_value is an exact decimal STRING, never a JS number.
++
++/**
++ * Story 7.7 (FR-M-10): records one AMC, warranty, or insurance contract against an asset.
++ * stream_id is asset_id. Inserts one asset_coverage row. Records are append-only: a renewal is a
++ * NEW coverage_id with a fresh set of 90/60/30 alert stages, never an amendment (Binding
++ * Decision 5). Recording a coverage that already expired relative to business_date rejects 422
++ * COVERAGE_ALREADY_EXPIRED and a future start rejects 422 COVERAGE_FUTURE_START (Binding
++ * Decision 6), so neither can corrupt the active-warranty derivation. recorded_by is re-derived
++ * from metadata.actor.user_id under the asset's lock and written back onto the persisted payload.
++ */
++export interface AssetCoverageRecordedPayload {
++  coverage_id: string;
++  asset_id: string;
++  coverage_type: 'amc' | 'warranty' | 'insurance';
++  provider_name: string;
++  reference_number_ext: string;
++  start_date: string;
++  expiry_date: string;
++  /** Exact decimal string (NUMERIC(14,3)) or null; never a JS number. */
++  contract_value: string | null;
++  /** Derived under lock from metadata.actor.user_id; declared and checked. */
++  recorded_by: string;
++  recorded_at: string;
++  business_date: string;
++}
++
++export interface AssetCoverageRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'maintenance.coverage_recorded';
++  payload: AssetCoverageRecordedPayload;
++}
++
++/**
++ * Story 7.7 (FR-M-10, AC 1): one staged expiry alert emitted by the POST-triggered coverage scan.
++ * stream_id is alert_id. Inserts one asset_coverage_alert row at the (coverage_id, stage_days)
++ * grain, which is what makes a same-day re-run a no-op and a skipped day catch up. asset_id,
++ * coverage_type and expiry_date are re-derived from the coverage row held FOR UPDATE; a lost race
++ * to uq_asset_coverage_alert_stage surfaces 409 DUPLICATE_COVERAGE_ALERT and the scan skips that
++ * stage rather than failing.
++ */
++export interface CoverageExpiryFlaggedPayload {
++  alert_id: string;
++  coverage_id: string;
++  /** Derivable: asset_id of the locked coverage row; declared and checked. */
++  asset_id: string;
++  /** Derivable: coverage_type of the locked coverage row; declared and checked. */
++  coverage_type: 'amc' | 'warranty' | 'insurance';
++  stage_days: 90 | 60 | 30;
++  /** Derivable: expiry_date of the locked coverage row; declared and checked. */
++  expiry_date: string;
++  business_date: string;
++  flagged_at: string;
++}
++
++export interface CoverageExpiryFlaggedEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'maintenance.coverage_expiry_flagged';
++  payload: CoverageExpiryFlaggedPayload;
++}
++
++/**
++ * Story 7.7 (FR-M-11, AC 3 and AC 4): the reason-coded override that unblocks chargeable work on a
++ * warranty-flagged breakdown work order. stream_id is work_order_id. Inserts one
++ * maintenance_warranty_override row, at most one per work order (Binding Decision 11). The applier
++ * re-derives the DOA approver for maintenance.warranty_override under the work order's lock and
++ * checks overridden_by against it: a forged actor rejects 409 COVERAGE_DERIVATION_MISMATCH, an
++ * unauthorized one 403 APPROVAL_REQUIRED, and no governing DOA entry 404 APPROVAL_UNRESOLVED. The
++ * event itself IS the durable record of the decision (Binding Decision 15).
++ */
++export interface WarrantyOverrideRecordedPayload {
++  override_id: string;
++  work_order_id: string;
++  /** Derivable: warranty_coverage_id of the locked work-order row; declared and checked. */
++  warranty_coverage_id: string;
++  reason_code: string;
++  /** Derived under lock: the resolved DOA approver, re-checked against metadata.actor.user_id. */
++  overridden_by: string;
++  overridden_at: string;
++}
++
++export interface WarrantyOverrideRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'maintenance.warranty_override_recorded';
++  payload: WarrantyOverrideRecordedPayload;
++}
++
+ // ---------------------------------------------------------------------------
+ // Supported event types registry
+ // ---------------------------------------------------------------------------
+@@ -3248,4 +3587,60 @@ export const SUPPORTED_EVENT_TYPES = {
+     streamType: 'maintenance',
+     requiresBusinessStream: false,
+   },
++  // Story 7.6: statutory examinations (FR-M-14), machine status broadcast (FR-M-16), and the cost
++  // extension rides on the existing maintenance.work_order_completed entry above. All three ride
++  // the same 'maintenance' stream; they move no stock and carry no business stream, so
++  // requiresBusinessStream stays false. The weighbridge lockout they feed (weighbridge.recorded on
++  // the 'weighbridge' stream) is unchanged.
++  'maintenance.statutory_examination_recorded': {
++    streamType: 'maintenance',
++    requiresBusinessStream: false,
++  },
++  'maintenance.statutory_examination_overdue': {
++    streamType: 'maintenance',
++    requiresBusinessStream: false,
++  },
++  'maintenance.asset_status_changed': {
++    streamType: 'maintenance',
++    requiresBusinessStream: false,
++  },
++  // Story 7.7: AMC, warranty, and insurance coverage (FR-M-10), its staged 90/60/30 expiry alerts,
++  // and the reason-coded warranty override (FR-M-11). All three ride the same 'maintenance' stream;
++  // maintenance operational state moves no stock and carries no business stream, so
++  // requiresBusinessStream stays false (the asset.registered precedent). The chargeable-work gate
++  // they feed rides on the existing maintenance.work_order_completed entry above, unchanged.
++  'maintenance.coverage_recorded': {
++    streamType: 'maintenance',
++    requiresBusinessStream: false,
++  },
++  'maintenance.coverage_expiry_flagged': {
++    streamType: 'maintenance',
++    requiresBusinessStream: false,
++  },
++  'maintenance.warranty_override_recorded': {
++    streamType: 'maintenance',
++    requiresBusinessStream: false,
++  },
++  // Story 6.1: the production stream (FR-MO-01/02/03). production_order.created is the ONLY tagged
++  // event - requiresBusinessStream true is what makes AC1's UNTAGGED_TRANSACTION fire inside
++  // persistEvent with no handler-side code. The lifecycle transitions are untagged: the order row
++  // already holds the tag, and re-tagging every transition would make the tag a mutable field
++  // (AD-14). The stream is NOT added to INVENTORY_MOVEMENT_STREAM_TYPES: widening that set would
++  // force a business_stream onto every lifecycle transition and break the AC2 transition events.
++  'production_order.created': {
++    streamType: 'production',
++    requiresBusinessStream: true,
++  },
++  'production_order.released': {
++    streamType: 'production',
++    requiresBusinessStream: false,
++  },
++  'production_order.state_changed': {
++    streamType: 'production',
++    requiresBusinessStream: false,
++  },
++  'production_order.cancelled': {
++    streamType: 'production',
++    requiresBusinessStream: false,
++  },
+ } as const;
+diff --git a/src/events/store.ts b/src/events/store.ts
+index be7f6c1..2f98f4a 100644
+--- a/src/events/store.ts
++++ b/src/events/store.ts
+@@ -7,6 +7,7 @@ import type { AuditEntryPayload } from '../read/projections/audit_log.js';
+ import { isAuditTamperError, recordTamperAttempt } from '../middleware/audit-tamper-guard.js';
+ import { assertInventoryTagging } from '../compliance/business-stream.js';
+ import { assertCalibrationLockout } from '../compliance/calibration.js';
++import { assertWeighbridgeStampLockout } from '../compliance/weighbridge.js';
+ import { assertLocationInvariant } from '../compliance/location.js';
+ import { assertInventoryMasterReferences } from '../compliance/inventory-master.js';
+ import {
+@@ -167,6 +168,29 @@ import {
+   resolveCalibrationAlertDuplicateConflict,
+   resolveOpenEscalationDuplicateConflict,
+ } from '../compliance/calibration-register.js';
++import {
++  assertStatutoryExaminationShape,
++  applyStatutoryExaminationProjection,
++  resolveStatutoryExaminationDuplicateConflict,
++  resolveStatutoryDeviceKeyDuplicateConflict,
++  resolveStatutoryRecordDuplicateConflict,
++} from '../compliance/maintenance-statutory.js';
++import {
++  assertAssetStatusChangedShape,
++  applyAssetOperationalStatusProjection,
++} from '../compliance/asset-operational-status.js';
++import {
++  assertMaintenanceCoverageShape,
++  applyMaintenanceCoverageProjection,
++  resolveCoverageDuplicateConflict,
++  resolveCoverageAlertDuplicateConflict,
++  resolveWarrantyOverrideDuplicateConflict,
++} from '../compliance/maintenance-coverage.js';
++import {
++  assertProductionOrderShape,
++  applyProductionOrderProjection,
++  resolveProductionOrderNumberDuplicateConflict,
++} from '../compliance/production-order.js';
+ import type {
+   PickTaskCreatedEnvelope,
+   PickLineConfirmedEnvelope,
+@@ -416,6 +440,12 @@ export async function persistEvent(
+   // inside assertInventoryTagging - byte-for-byte unaffected.
+   await assertInventoryTagging(envelope);
+   await assertCalibrationLockout(envelope);
++  // Story 7.6 (FR-M-14, AC 2): the weighbridge trade-weighment lockout runs with the other
++  // pre-transaction asserts, BEFORE any DB write, so a weighment on a weighbridge whose statutory
++  // stamp is overdue is rejected 423 WEIGHBRIDGE_OUT_OF_STAMP without consuming an idempotency key.
++  // It is a DB-backed read (getExaminationByDeviceKey), like assertCalibrationLockout; fail-open for
++  // device keys not in the register, so the existing story-3-2/3-3/3-4 suites are unchanged.
++  await assertWeighbridgeStampLockout(envelope);
+   // Story 2.1: inventory master validation (SKU existence, target-location existence, actor
+   // location registration, zone compatibility) also runs BEFORE any DB write, gated to inventory
+   // events that actually reference master fields. May throw ZoneIncompatibleWarning (not an
+@@ -588,6 +618,24 @@ export async function persistEvent(
+   // validation is non-DB and runs with the other pre-transaction asserts, so a malformed
+   // calibration event never consumes an idempotency key.
+   assertCalibrationRegisterShape(envelope);
++  // Story 7.6: statutory examination record/overdue shape validation (strict UUIDs, enum
++  // vocabulary, DATE and TIMESTAMPTZ formats, bounded interval) is non-DB and runs with the other
++  // pre-transaction asserts, so a malformed statutory event never consumes an idempotency key.
++  assertStatutoryExaminationShape(envelope);
++  // Story 7.6: machine status transition shape validation (Table 5 vocabulary, sign-off fields)
++  // is non-DB and runs with the other pre-transaction asserts.
++  assertAssetStatusChangedShape(envelope);
++  // Story 7.7: coverage recording / staged expiry flag / warranty override shape validation
++  // (strict UUIDs, the coverage-type enum, DATE round-trip validity, explicit-offset timestamps,
++  // exact-decimal contract_value) is non-DB and runs with the other pre-transaction asserts, so a
++  // malformed coverage event never consumes an idempotency key.
++  assertMaintenanceCoverageShape(envelope);
++  // Story 6.1: production order lifecycle shape validation (strict UUIDs, exact decimal order
++  // quantity, the source-reference enum, the state vocabulary, the expediting pairing) is non-DB
++  // and runs with the other pre-transaction asserts, so a malformed production event never
++  // consumes an idempotency key. AC1's UNTAGGED_TRANSACTION fires in assertInventoryTagging for
++  // production_order.created (requiresBusinessStream true); this assert adds the shape rules.
++  assertProductionOrderShape(envelope);
+   assertThreeWayMatchShape(envelope);
+   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
+   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
+@@ -880,6 +928,23 @@ export async function persistEvent(
+     // lockout gate reads commit or roll back together. eventId is passed through because the
+     // status row records which event changed it and the domain_events row does not exist yet.
+     await applyCalibrationRegisterProjection(envelope, client, eventId);
++    // Story 7.6: the statutory examination register, its record history, and the machine status
++    // projection run inside this same transaction, so the register flip, the evidence record and
++    // the domain_events insert commit or roll back together. The status flip that feeds the
++    // weighbridge lockout and the AC1 use-lock is applied here, never outside persistEvent.
++    await applyStatutoryExaminationProjection(envelope, client);
++    await applyAssetOperationalStatusProjection(envelope, client);
++    // Story 7.7: the coverage register, its staged expiry alerts and the reason-coded warranty
++    // override run inside this same transaction, so the projection row and the domain_events
++    // insert commit or roll back together. The DOA re-resolution behind the override lives here,
++    // never only in the HTTP handler (AD-12).
++    await applyMaintenanceCoverageProjection(envelope, client);
++    // Story 6.1: the production order projection runs inside this same transaction, so the order
++    // row (create, release with its re-run release gate, state transitions, cancel with the
++    // unreversed-transactions guard) and the domain_events insert commit or roll back together.
++    // The gate re-run, the DOA override re-resolution and the order-number allocation all live
++    // here, never only in the HTTP handler (AD-12).
++    await applyProductionOrderProjection(envelope, client, eventId);
+     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
+     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
+     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
+@@ -1286,6 +1351,75 @@ export async function persistEvent(
+           'An escalation is already open for this instrument',
+           await resolveOpenEscalationDuplicateConflict(envelope.payload),
+         );
++      } else if (constraint === 'uq_statutory_examination_asset_type') {
++        // Story 7.6: two concurrent records for the same (asset_id, examination_type) grain
++        // resolve to one winner; the loser gets the same code and the same existing_examination_id
++        // detail the sequential pre-check produces (DUPLICATE_STATUTORY_EXAMINATION).
++        throw new AppError(
++          409,
++          'DUPLICATE_STATUTORY_EXAMINATION',
++          'A statutory examination already exists for this asset and type',
++          await resolveStatutoryExaminationDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_statutory_examination_device_key') {
++        // Story 7.6: one weighbridge device_key maps to at most one statutory examination. There
++        // is no sequential pre-check (the seam's device-key guard is the index itself), so the
++        // sequential and the race path surface the SAME DUPLICATE_EVENT detail.
++        throw new AppError(
++          409,
++          'DUPLICATE_EVENT',
++          'A statutory examination already uses this device key',
++          await resolveStatutoryDeviceKeyDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_statutory_examination_record_number') {
++        // Story 7.6: one certificate number per examination. Same contract as the device key: the
++        // index is the guard, and the resolver reports the existing record.
++        throw new AppError(
++          409,
++          'DUPLICATE_EVENT',
++          'A statutory examination record with this certificate number already exists',
++          await resolveStatutoryRecordDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_asset_coverage_reference') {
++        // Story 7.7: the coverage uniqueness grain (asset_id, coverage_type, lower(reference)).
++        // Two concurrent recordings resolve to one winner; the loser gets the same code and the
++        // same existing_coverage_id detail the sequential pre-check produces.
++        throw new AppError(
++          409,
++          'DUPLICATE_COVERAGE',
++          'A coverage with this reference already exists for the asset and coverage type',
++          await resolveCoverageDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_asset_coverage_alert_stage') {
++        // Story 7.7: the once-per-stage grain. Two concurrent scans for one coverage stage resolve
++        // to a single alert with the stable DUPLICATE_COVERAGE_ALERT contract, and the scan skips
++        // that stage rather than failing the whole run.
++        throw new AppError(
++          409,
++          'DUPLICATE_COVERAGE_ALERT',
++          'This coverage has already been flagged at this stage',
++          await resolveCoverageAlertDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_maintenance_warranty_override_work_order') {
++        // Story 7.7: one reason-coded override per work order (Binding Decision 11). The race path
++        // returns the same code and the same existing_override_id as the sequential pre-check.
++        throw new AppError(
++          409,
++          'WARRANTY_OVERRIDE_ALREADY_RECORDED',
++          'A warranty override has already been recorded for this work order',
++          await resolveWarrantyOverrideDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_production_order_number_ext') {
++        // Story 6.1: the server-allocated order number is unique. The sequential pre-check (the
++        // applier's allocation) makes this practically unreachable, but a concurrent race on the
++        // SAME event (same production_order_id) must surface the stable DUPLICATE_PRODUCTION_ORDER_
++        // NUMBER with the existing order detail, never a raw 23505 500.
++        throw new AppError(
++          409,
++          'DUPLICATE_PRODUCTION_ORDER_NUMBER',
++          'A production order with this order number already exists',
++          await resolveProductionOrderNumberDuplicateConflict(envelope.payload),
++        );
+       } else if (
+         constraint === 'maintenance_sla_policy_pkey' ||
+         constraint === 'maintenance_fault_report_pkey' ||
+@@ -1298,7 +1432,22 @@ export async function persistEvent(
+         constraint === 'instrument_register_pkey' ||
+         constraint === 'instrument_calibration_certificate_pkey' ||
+         constraint === 'instrument_calibration_alert_pkey' ||
+-        constraint === 'instrument_calibration_escalation_pkey'
++        constraint === 'instrument_calibration_escalation_pkey' ||
++        // Story 7.6: server-minted UUIDs make these practically unreachable; mapped for the same
++        // completeness reason as the siblings above.
++        constraint === 'statutory_examination_pkey' ||
++        constraint === 'statutory_examination_record_pkey' ||
++        constraint === 'asset_operational_status_pkey' ||
++        constraint === 'maintenance_asset_cost_pkey' ||
++        // Story 6.1: server-minted UUIDs make this practically unreachable; mapped for the same
++        // completeness reason as the siblings above.
++        constraint === 'production_order_pkey' ||
++        // Story 7.7: server-minted UUIDs make these practically unreachable; mapped for the same
++        // completeness reason as the siblings above. Each names its OWN id field below, so the
++        // chain never falls through to a wrong (and always null) field.
++        constraint === 'asset_coverage_pkey' ||
++        constraint === 'asset_coverage_alert_pkey' ||
++        constraint === 'maintenance_warranty_override_pkey'
+       ) {
+         // Story 7.3: server-minted UUIDs make these practically unreachable; mapped for
+         // completeness per the maintenance_plan_pkey precedent, so a direct-event duplicate id
+@@ -1361,17 +1510,60 @@ export async function persistEvent(
+                                       ? p['certificate_id']
+                                       : null,
+                                 }
+-                              : constraint === 'instrument_calibration_alert_pkey'
++                              : constraint === 'instrument_calibration_alert_pkey' ||
++                                  constraint === 'asset_coverage_alert_pkey'
+                                 ? {
+                                     alert_id:
+                                       typeof p['alert_id'] === 'string' ? p['alert_id'] : null,
+                                   }
+-                                : {
+-                                    escalation_id:
+-                                      typeof p['escalation_id'] === 'string'
+-                                        ? p['escalation_id']
+-                                        : null,
+-                                  };
++                                : constraint === 'instrument_calibration_escalation_pkey'
++                                  ? {
++                                      escalation_id:
++                                        typeof p['escalation_id'] === 'string'
++                                          ? p['escalation_id']
++                                          : null,
++                                    }
++                                  : constraint === 'statutory_examination_pkey'
++                                    ? {
++                                        examination_id:
++                                          typeof p['examination_id'] === 'string'
++                                            ? p['examination_id']
++                                            : null,
++                                      }
++                                    : constraint === 'statutory_examination_record_pkey'
++                                      ? {
++                                          record_id:
++                                            typeof p['record_id'] === 'string'
++                                              ? p['record_id']
++                                              : null,
++                                        }
++                                      : constraint === 'production_order_pkey'
++                                        ? {
++                                            production_order_id:
++                                              typeof p['production_order_id'] === 'string'
++                                                ? p['production_order_id']
++                                                : null,
++                                          }
++                                        : constraint === 'asset_coverage_pkey'
++                                          ? {
++                                              coverage_id:
++                                                typeof p['coverage_id'] === 'string'
++                                                  ? p['coverage_id']
++                                                  : null,
++                                            }
++                                          : constraint === 'maintenance_warranty_override_pkey'
++                                            ? {
++                                                override_id:
++                                                  typeof p['override_id'] === 'string'
++                                                    ? p['override_id']
++                                                    : null,
++                                              }
++                                            : {
++                                                asset_id:
++                                                  typeof p['asset_id'] === 'string'
++                                                    ? p['asset_id']
++                                                    : null,
++                                              };
+         throw new AppError(
+           409,
+           'DUPLICATE_EVENT',
+@@ -1447,6 +1639,27 @@ export async function persistEvent(
+         });
+       }
+     }
++    // Story 7.6: a numeric_value_out_of_range from the maintenance cost path is a caller-supplied
++    // magnitude problem, not a server fault. The per-field COST_NUMERIC_REGEX bounds one value at
++    // NUMERIC(14,3), but labor_cost + parts_cost can still overflow the column, and the per-asset
++    // maintenance_asset_cost rollup ADDS to a running total with no ceiling at all - left unmapped
++    // that surfaced as a 500 and, in the rollup case, permanently blocked every later completion
++    // for that asset.
++    if (err && typeof err === 'object' && 'code' in err && err.code === '22003') {
++      throw new AppError(
++        422,
++        'COST_VALUE_OUT_OF_RANGE',
++        'The cost value or the resulting total exceeds the NUMERIC(14,3) range of the cost columns',
++        {
++          work_order_id:
++            typeof envelope.payload['work_order_id'] === 'string'
++              ? envelope.payload['work_order_id']
++              : null,
++          asset_id:
++            typeof envelope.payload['asset_id'] === 'string' ? envelope.payload['asset_id'] : null,
++        },
++      );
++    }
+     throw err;
+   } finally {
+     if (ownsTransaction) client.release();
+diff --git a/src/read/projections/stock_balance.ts b/src/read/projections/stock_balance.ts
+index e312293..45326c5 100644
+--- a/src/read/projections/stock_balance.ts
++++ b/src/read/projections/stock_balance.ts
+@@ -191,6 +191,39 @@ export async function getForwardPickBalance(
+   return String(result.rows[0]!['balance']);
+ }
+ 
++/**
++ * Story 6.1 (FR-MO-03): the owned UNAALLOCATED balance for a SKU summed across every stock_balance
++ * row at or beneath a plant site, summed in SQL NUMERIC. Structurally identical to
++ * getForwardPickBalance (same depth-capped recursive descendant walk, same stock_class = 'owned'
++ * scoping) but summing `available` (the generated on_hand - allocated - picked column), not
++ * `on_hand`: a production order release gates on stock that is actually free to stage, and a fully
++ * reserved-but-present bin is not availability. Returns a NUMERIC string, never coerced to a JS
++ * number, so a large balance cannot lose precision and the caller's comparison stays exact. Do not
++ * generalize this and getForwardPickBalance into one helper; the two stay deliberately separate so
++ * each sums the column its contract names.
++ */
++export async function getAvailableBalanceUnderSite(
++  sku: string,
++  siteLocationId: string,
++  client?: PoolClient,
++): Promise<string> {
++  const result = await runner(client).query(
++    `WITH RECURSIVE descendants AS (
++       SELECT location_id, 0 AS depth FROM location_register WHERE location_id = $1
++       UNION ALL
++       SELECT lr.location_id, d.depth + 1
++         FROM location_register lr
++         JOIN descendants d ON lr.parent_location_id = d.location_id
++        WHERE d.depth < 10
++     )
++     SELECT COALESCE(SUM(sb.available), 0)::text AS balance
++       FROM stock_balance sb
++      WHERE sb.sku = $2 AND sb.stock_class = 'owned' AND sb.location_id IN (SELECT location_id FROM descendants)`,
++    [siteLocationId, sku],
++  );
++  return String(result.rows[0]!['balance']);
++}
++
+ /**
+  * Applies a stock.received event: on_hand at the target location (and lot, when given) increases
+  * by the received quantity. The upsert takes a row lock on conflict, so concurrent receipts to
+diff --git a/read/projections/production_order.sql b/read/projections/production_order.sql
+new file mode 100644
+index 0000000..7fb6374
+--- /dev/null
++++ b/read/projections/production_order.sql
+@@ -0,0 +1,124 @@
++-- Production order read model (Story 6.1, FR-MO-01/02/03, AD-5). This file is the CANONICAL
++-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
++-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
++-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
++-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
++-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
++-- can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying production_order.* domain events;
++-- mutation happens exclusively through persistEvent, which applies this projection inside the SAME
++-- transaction as the domain_events insert. status is the six-state lifecycle machine (Table 2):
++-- planned -> released -> in_process -> completed -> closed, with planned|released -> cancelled.
++-- order_number_ext is server-allocated from production_order_number_seq in the MO-YYYY-NNNN format
++-- (the IND-YYYY-NNNN pattern, with an MO- prefix so the PO- namespace owned by purchase orders is
++-- never entered) and immutable thereafter: the applier allocates the number and writes it back onto
++-- the persisted payload, and any declared number that disagrees rejects ORDER_NUMBER_IMMUTABLE.
++--
++-- chk_production_order_expediting_pairing makes an expediting flag without a recorded overrider and
++-- reason structurally impossible (AC6 enforced by the database). chk_production_order_unreversed_non_
++-- negative makes a decrement below zero fail loudly in Story 6.2 rather than silently unlocking a
++-- cancel that AC4 forbids. released_revision_id is deliberately nullable and set only at release:
++-- the revision is pinned from the explosion result so a BOM released after creation cannot
++-- retroactively change what a released order was gated against.
++
++CREATE TABLE IF NOT EXISTS production_order (
++  production_order_id       UUID PRIMARY KEY,
++  order_number_ext          TEXT NOT NULL,
++  output_item_id            UUID NOT NULL,
++  output_sku                TEXT NOT NULL,
++  order_quantity            NUMERIC(18,6) NOT NULL,
++  order_uom                 TEXT NOT NULL,
++  plant_location_id         UUID NOT NULL,
++  bom_id                    UUID NOT NULL,
++  released_revision_id      UUID,
++  business_stream           TEXT NOT NULL,
++  source_reference_type     TEXT NOT NULL,
++  source_reference_id       TEXT NOT NULL,
++  status                    TEXT NOT NULL DEFAULT 'planned',
++  expediting_flag           BOOLEAN NOT NULL DEFAULT false,
++  override_by               UUID,
++  override_reason           TEXT,
++  released_at               TIMESTAMPTZ,
++  released_by               UUID,
++  cancelled_at              TIMESTAMPTZ,
++  cancelled_by              UUID,
++  unreversed_transaction_count INTEGER NOT NULL DEFAULT 0,
++  created_by                UUID NOT NULL,
++  correlation_id            UUID,
++  source_event_id           UUID NOT NULL,
++  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
++  updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT chk_production_order_status CHECK (status IN ('planned','released','in_process','completed','closed','cancelled')),
++  CONSTRAINT chk_production_order_quantity_positive CHECK (order_quantity > 0),
++  CONSTRAINT chk_production_order_source_reference_type CHECK (source_reference_type IN ('erp_sales_order','indent','rd_project','manual')),
++  CONSTRAINT chk_production_order_unreversed_non_negative CHECK (unreversed_transaction_count >= 0),
++  CONSTRAINT chk_production_order_expediting_pairing CHECK ((expediting_flag = true AND override_by IS NOT NULL AND override_reason IS NOT NULL AND btrim(override_reason) <> '') OR (expediting_flag = false AND override_by IS NULL AND override_reason IS NULL))
++);
++
++CREATE UNIQUE INDEX IF NOT EXISTS uq_production_order_number_ext ON production_order (order_number_ext);
++CREATE INDEX IF NOT EXISTS idx_production_order_status ON production_order (status);
++CREATE INDEX IF NOT EXISTS idx_production_order_plant ON production_order (plant_location_id);
++CREATE INDEX IF NOT EXISTS idx_production_order_output_item ON production_order (output_item_id);
++CREATE INDEX IF NOT EXISTS idx_production_order_bom ON production_order (bom_id);
++CREATE INDEX IF NOT EXISTS idx_production_order_business_stream ON production_order (business_stream);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_status'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_status CHECK (status IN ('planned','released','in_process','completed','closed','cancelled'));
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_quantity_positive'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_quantity_positive CHECK (order_quantity > 0);
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_source_reference_type'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_source_reference_type CHECK (source_reference_type IN ('erp_sales_order','indent','rd_project','manual'));
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_unreversed_non_negative'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_unreversed_non_negative CHECK (unreversed_transaction_count >= 0);
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_production_order_expediting_pairing'
++      AND conrelid = 'production_order'::regclass
++  ) THEN
++    ALTER TABLE production_order
++      ADD CONSTRAINT chk_production_order_expediting_pairing CHECK ((expediting_flag = true AND override_by IS NOT NULL AND override_reason IS NOT NULL AND btrim(override_reason) <> '') OR (expediting_flag = false AND override_by IS NULL AND override_reason IS NULL));
++  END IF;
++END $$;
++
++-- Server-side human-ID allocation for the MO-YYYY-NNNN format. A sequence is the only lock-free
++-- allocator that survives concurrent creations; the year prefix is applied in the applier. Gaps on
++-- rolled-back creates are acceptable - uniqueness is what matters (the indent_number_seq precedent).
++CREATE SEQUENCE IF NOT EXISTS production_order_number_seq;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT, UPDATE ON production_order TO app_user;
++    GRANT USAGE ON SEQUENCE production_order_number_seq TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON production_order TO readonly_user;
++  END IF;
++END $$;
+diff --git a/src/compliance/production-order.ts b/src/compliance/production-order.ts
+new file mode 100644
+index 0000000..66cb539
+--- /dev/null
++++ b/src/compliance/production-order.ts
+@@ -0,0 +1,763 @@
++import type { PoolClient } from 'pg';
++import type { EventEnvelope } from '../events/store.js';
++import { AppError } from '../middleware/error.js';
++import { resolveApprover } from '../api/v1/indents.js';
++import { isReleasedItemMaster } from './bom.js';
++import { evaluateReleaseGate } from '../production/release-gate.js';
++import {
++  allocateProductionOrderNumber,
++  getProductionOrderById,
++  getProductionOrderByIdForUpdate,
++  insertProductionOrder,
++  updateProductionOrderState,
++} from '../read/projections/production_order.js';
++
++/**
++ * Story 6.1 compliance seam for the production order lifecycle (FR-MO-01/02/03). Structurally
++ * mirrors src/compliance/calibration-register.ts: a stream gate, a PURE pre-transaction shape
++ * assert, an in-transaction projection switch, an alreadyPersisted guard and the same reject()
++ * AppError helper, copied verbatim rather than re-derived.
++ *
++ * This seam is the enforcement point, NOT the handler. Every rule in the Lifecycle Contract
++ * (Table 2) and the Release Gate Contract (Table 3) is enforced inside applyProductionOrderProjection,
++ * so a direct POST /api/v1/events call cannot bypass any of them (AD-12). The handler may check the
++ * same rules first to return a cleaner error earlier, but removing a handler check must never change
++ * what is possible through the direct-event path.
++ *
++ * State is a projection column, transitions are events (AD-14): production_order.status is written
++ * only by these appliers inside the event transaction. Every accepted transition produces an event
++ * and therefore an edit-log row through persistEvent (FR-AC-13, AC2). No applier silently no-ops on
++ * a state it should reject.
++ *
++ * Locking contract: every applier that mutates more than one row takes SELECT ... FOR UPDATE in
++ * this FIXED order - production order row (absent on create, the row is being inserted), then item
++ * master row (if applicable), then location register row (if applicable), then the BOM rows the
++ * explosion service reads (plain SELECTs, never locked). No stock_balance row is ever locked by
++ * this story (Binding Scope Decision 5): the release gate verifies availability, it does not
++ * reserve it.
++ *
++ * Re-derivation contract: every payload field an applier can derive from a locked row is DECLARED
++ * and CHECKED, never trusted - a declared-but-unchecked field is a silent corruption channel on the
++ * direct-event path. Divergence rejects 409 PRODUCTION_ORDER_DERIVATION_MISMATCH, except the order
++ * number, which has its own 409 ORDER_NUMBER_IMMUTABLE. Canonicalized values (the allocated order
++ * number, a trimmed source_reference_id, a trimmed override_reason) are written back onto the
++ * payload so the direct-event path and the handler path persist byte-identical payloads.
++ */
++
++const PRODUCTION_STREAM_TYPES = new Set(['production']);
++const PRODUCTION_ORDER_EVENT_TYPES = new Set([
++  'production_order.created',
++  'production_order.released',
++  'production_order.state_changed',
++  'production_order.cancelled',
++]);
++
++export const PRODUCTION_ORDER_STATUSES = new Set([
++  'planned',
++  'released',
++  'in_process',
++  'completed',
++  'closed',
++  'cancelled',
++]);
++const SOURCE_REFERENCE_TYPES = new Set(['erp_sales_order', 'indent', 'rd_project', 'manual']);
++// Lifecycle Contract (Table 2): the only legal non-terminal edges.
++const STATE_CHANGE_EDGES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
++  ['released', new Set(['in_process'])],
++  ['in_process', new Set(['completed'])],
++  ['completed', new Set(['closed'])],
++]);
++
++const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++// Matches the NUMERIC(18,6) ceiling used across the BOM and production modules.
++const DECIMAL_REGEX = /^\d{1,12}(\.\d{1,6})?$/;
++const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
++// An explicit UTC offset is REQUIRED (the Story 7.2 offset lesson).
++const ISO8601_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
++const MAX_TEXT_LENGTH = 512;
++
++function isUuid(value: unknown): value is string {
++  return typeof value === 'string' && UUID_REGEX.test(value);
++}
++
++function isNonEmptyString(value: unknown): value is string {
++  return typeof value === 'string' && value.trim().length > 0;
++}
++
++function isIsoDate(value: unknown): value is string {
++  if (typeof value !== 'string' || !DATE_REGEX.test(value)) return false;
++  const [y, m, d] = value.split('-').map((part) => Number(part));
++  const dt = new Date(Date.UTC(y!, m! - 1, d!));
++  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m! - 1 && dt.getUTCDate() === d;
++}
++
++function isIsoTimestamp(value: unknown): value is string {
++  if (typeof value !== 'string' || !ISO8601_TIMESTAMP_REGEX.test(value)) return false;
++  const datePart = value.slice(0, 10);
++  const [y, m, d] = datePart.split('-').map((part) => Number(part));
++  const dt = new Date(Date.UTC(y!, m! - 1, d!));
++  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m! - 1 || dt.getUTCDate() !== d)
++    return false;
++  const timeMatch = value.match(/T(\d{2}):(\d{2}):(\d{2})/);
++  if (!timeMatch) return false;
++  const hh = Number(timeMatch[1]);
++  const mm = Number(timeMatch[2]);
++  const ss = Number(timeMatch[3]);
++  return hh <= 23 && mm <= 59 && ss <= 59;
++}
++
++export function productionOrderEventType(envelope: EventEnvelope): string | null {
++  if (!PRODUCTION_STREAM_TYPES.has(envelope.stream_type)) return null;
++  if (!PRODUCTION_ORDER_EVENT_TYPES.has(envelope.event_type)) return null;
++  return envelope.event_type;
++}
++
++function reject(
++  code: string,
++  message: string,
++  details?: Record<string, unknown>,
++  status: number = 400,
++): never {
++  throw new AppError(status, code, message, details);
++}
++
++// ---------------------------------------------------------------------------
++// Pre-transaction shape validation (no DB access)
++// ---------------------------------------------------------------------------
++
++export function assertProductionOrderShape(envelope: EventEnvelope): void {
++  const type = productionOrderEventType(envelope);
++  if (!type) return;
++  const p = envelope.payload as Record<string, unknown>;
++
++  if (!isUuid(p['production_order_id'])) {
++    reject('INVALID_PAYLOAD', 'production_order_id must be a UUID');
++  }
++  if (envelope.stream_id !== p['production_order_id']) {
++    reject('INVALID_PAYLOAD', 'stream_id must match the payload production_order_id', {
++      stream_id: envelope.stream_id,
++      payload_production_order_id: p['production_order_id'],
++    });
++  }
++
++  switch (type) {
++    case 'production_order.created':
++      assertCreatedShape(p);
++      break;
++    case 'production_order.released':
++      assertReleasedShape(p);
++      break;
++    case 'production_order.state_changed':
++      assertStateChangedShape(p);
++      break;
++    case 'production_order.cancelled':
++      assertCancelledShape(p);
++      break;
++  }
++}
++
++function assertCreatedShape(p: Record<string, unknown>): void {
++  // order_number_ext is server-allocated. A declared value is legal (it is rejected in the
++  // applier when it disagrees with the allocation) but it must at least be a string when present.
++  if (p['order_number_ext'] !== undefined && p['order_number_ext'] !== null) {
++    if (typeof p['order_number_ext'] !== 'string') {
++      reject('INVALID_PAYLOAD', 'order_number_ext must be a string when present');
++    }
++  }
++  if (!isUuid(p['output_item_id'])) reject('INVALID_PAYLOAD', 'output_item_id must be a UUID');
++  if (!isNonEmptyString(p['output_sku'])) {
++    reject('INVALID_PAYLOAD', 'output_sku is required');
++  }
++  assertOrderQuantity(p['order_quantity']);
++  if (!isNonEmptyString(p['order_uom'])) reject('INVALID_PAYLOAD', 'order_uom is required');
++  if (!isUuid(p['plant_location_id'])) {
++    reject('INVALID_PAYLOAD', 'plant_location_id must be a UUID');
++  }
++  if (!isUuid(p['bom_id'])) reject('INVALID_PAYLOAD', 'bom_id must be a UUID');
++  if (!isNonEmptyString(p['business_stream'])) {
++    reject('INVALID_PAYLOAD', 'business_stream is required');
++  }
++  const sourceType = p['source_reference_type'];
++  if (typeof sourceType !== 'string' || !SOURCE_REFERENCE_TYPES.has(sourceType)) {
++    reject(
++      'SOURCE_REFERENCE_REQUIRED',
++      'source_reference_type is required and must be erp_sales_order, indent, rd_project or manual',
++    );
++  }
++  const sourceId = p['source_reference_id'];
++  if (typeof sourceId !== 'string' || sourceId.trim() === '') {
++    reject('SOURCE_REFERENCE_REQUIRED', 'source_reference_id is required and must not be blank');
++  }
++  if (!isUuid(p['created_by'])) reject('INVALID_PAYLOAD', 'created_by must be a UUID');
++  if (!isIsoTimestamp(p['created_at'])) {
++    reject('INVALID_PAYLOAD', 'created_at must be an ISO 8601 timestamp with an explicit offset');
++  }
++}
++
++function assertOrderQuantity(value: unknown): asserts value is string {
++  if (typeof value !== 'string' || !DECIMAL_REGEX.test(value)) {
++    reject(
++      'INVALID_ORDER_QUANTITY',
++      'order_quantity is required and must be a positive decimal string with at most 6 decimal places',
++      { order_quantity: typeof value === 'string' ? value : null },
++    );
++  }
++  if (Number(value) <= 0) {
++    reject('INVALID_ORDER_QUANTITY', 'order_quantity must be strictly positive', {
++      order_quantity: value,
++    });
++  }
++}
++
++function assertReleasedShape(p: Record<string, unknown>): void {
++  if (!isUuid(p['released_revision_id'])) {
++    reject('INVALID_PAYLOAD', 'released_revision_id must be a UUID');
++  }
++  if (!isIsoDate(p['business_date'])) {
++    reject('INVALID_PAYLOAD', 'business_date must be a YYYY-MM-DD calendar date');
++  }
++  if (typeof p['expediting_flag'] !== 'boolean') {
++    reject('INVALID_PAYLOAD', 'expediting_flag must be a boolean');
++  }
++  const overrideBy = p['override_by'];
++  const overrideReason = p['override_reason'];
++  if (p['expediting_flag'] === true) {
++    // OVERRIDE_REASON_REQUIRED is checked BEFORE any DOA resolution runs, so a non-approver cannot
++    // probe the registry with an empty override body.
++    if (typeof overrideReason !== 'string' || overrideReason.trim() === '') {
++      reject(
++        'OVERRIDE_REASON_REQUIRED',
++        'An expediting release requires a non-blank override_reason',
++      );
++    }
++    if (!isUuid(overrideBy)) {
++      reject('INVALID_PAYLOAD', 'override_by must be a UUID on an expediting release');
++    }
++  } else {
++    if (overrideBy !== null || overrideReason !== null) {
++      reject(
++        'INVALID_PAYLOAD',
++        'override_by and override_reason must be null on a non-expediting release',
++      );
++    }
++  }
++  if (!isUuid(p['released_by'])) reject('INVALID_PAYLOAD', 'released_by must be a UUID');
++  if (!isIsoTimestamp(p['released_at'])) {
++    reject('INVALID_PAYLOAD', 'released_at must be an ISO 8601 timestamp with an explicit offset');
++  }
++}
++
++function assertStateChangedShape(p: Record<string, unknown>): void {
++  const previousStatus = p['previous_status'];
++  if (typeof previousStatus !== 'string' || !PRODUCTION_ORDER_STATUSES.has(previousStatus)) {
++    reject(
++      'INVALID_PAYLOAD',
++      'previous_status must be one of: planned, released, in_process, completed, closed, cancelled',
++    );
++  }
++  const newStatus = p['new_status'];
++  if (
++    typeof newStatus !== 'string' ||
++    !new Set(['in_process', 'completed', 'closed']).has(newStatus)
++  ) {
++    reject('INVALID_PAYLOAD', 'new_status must be one of: in_process, completed, closed');
++  }
++  if (!isUuid(p['changed_by'])) reject('INVALID_PAYLOAD', 'changed_by must be a UUID');
++  if (!isIsoTimestamp(p['changed_at'])) {
++    reject('INVALID_PAYLOAD', 'changed_at must be an ISO 8601 timestamp with an explicit offset');
++  }
++}
++
++function assertCancelledShape(p: Record<string, unknown>): void {
++  const previousStatus = p['previous_status'];
++  if (typeof previousStatus !== 'string' || !PRODUCTION_ORDER_STATUSES.has(previousStatus)) {
++    reject(
++      'INVALID_PAYLOAD',
++      'previous_status must be one of: planned, released, in_process, completed, closed, cancelled',
++    );
++  }
++  if (!isUuid(p['cancelled_by'])) reject('INVALID_PAYLOAD', 'cancelled_by must be a UUID');
++  if (!isIsoTimestamp(p['cancelled_at'])) {
++    reject('INVALID_PAYLOAD', 'cancelled_at must be an ISO 8601 timestamp with an explicit offset');
++  }
++  const reasonCode = p['reason_code'];
++  if (
++    reasonCode !== null &&
++    (typeof reasonCode !== 'string' || reasonCode.trim().length > MAX_TEXT_LENGTH)
++  ) {
++    reject('INVALID_PAYLOAD', 'reason_code must be a non-blank string or null');
++  }
++}
++
++// ---------------------------------------------------------------------------
++// In-transaction appliers
++// ---------------------------------------------------------------------------
++
++async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Promise<boolean> {
++  if (!envelope.idempotency_key?.trim() && !envelope.event_id) return false;
++  const existing = await client.query(
++    `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 LIMIT 1`,
++    [envelope.idempotency_key ?? null, envelope.event_id ?? null],
++  );
++  return existing.rows.length > 0;
++}
++
++export async function applyProductionOrderProjection(
++  envelope: EventEnvelope,
++  client: PoolClient,
++  eventId: string,
++): Promise<void> {
++  const type = productionOrderEventType(envelope);
++  if (!type) return;
++
++  switch (type) {
++    case 'production_order.created':
++      await applyCreated(envelope, client, eventId);
++      break;
++    case 'production_order.released':
++      await applyReleased(envelope, client);
++      break;
++    case 'production_order.state_changed':
++      await applyStateChanged(envelope, client);
++      break;
++    case 'production_order.cancelled':
++      await applyCancelled(envelope, client);
++      break;
++  }
++}
++
++async function applyCreated(
++  envelope: EventEnvelope,
++  client: PoolClient,
++  eventId: string,
++): Promise<void> {
++  if (await alreadyPersisted(envelope, client)) return;
++
++  const p = envelope.payload as Record<string, unknown>;
++  const productionOrderId = p['production_order_id'] as string;
++  const outputItemId = p['output_item_id'] as string;
++  const plantLocationId = p['plant_location_id'] as string;
++
++  // Locking contract: no order row exists yet (it is being inserted), so the fixed order starts
++  // at the item master row, then the location register row.
++  const itemResult = await client.query(`SELECT * FROM item_master WHERE item_id = $1 FOR UPDATE`, [
++    outputItemId,
++  ]);
++  if (itemResult.rows.length === 0) {
++    reject(
++      'ITEM_NOT_FOUND',
++      'The output item does not resolve',
++      { output_item_id: outputItemId },
++      404,
++    );
++  }
++  const item = itemResult.rows[0] as Record<string, unknown>;
++  // AC1: the output item must be an active (released) item master - the Story 5.1 A-11 predicate.
++  if (!isReleasedItemMaster(item as { status: string })) {
++    reject(
++      'OUTPUT_ITEM_NOT_ACTIVE',
++      'The output item resolves but is not active',
++      { output_item_id: outputItemId, status: item['status'] },
++      409,
++    );
++  }
++  // output_sku and order_uom are DERIVED from the item master under lock, never trusted.
++  const derivedSku = item['sku'] as string;
++  const derivedUom = item['uom'] as string;
++  if (p['output_sku'] !== derivedSku) {
++    reject(
++      'PRODUCTION_ORDER_DERIVATION_MISMATCH',
++      'Declared output_sku does not match the item master',
++      {
++        production_order_id: productionOrderId,
++        declared_output_sku: p['output_sku'],
++        derived_output_sku: derivedSku,
++      },
++      409,
++    );
++  }
++  if (p['order_uom'] !== derivedUom) {
++    reject(
++      'PRODUCTION_ORDER_DERIVATION_MISMATCH',
++      'Declared order_uom does not match the item master',
++      {
++        production_order_id: productionOrderId,
++        declared_order_uom: p['order_uom'],
++        derived_order_uom: derivedUom,
++      },
++      409,
++    );
++  }
++
++  const locationResult = await client.query(
++    `SELECT * FROM location_register WHERE location_id = $1 FOR UPDATE`,
++    [plantLocationId],
++  );
++  if (locationResult.rows.length === 0) {
++    reject(
++      'PLANT_NOT_FOUND',
++      'The plant location does not resolve',
++      { plant_location_id: plantLocationId },
++      404,
++    );
++  }
++  const location = locationResult.rows[0] as Record<string, unknown>;
++  // A production order's plant must be an ACTIVE site-level row in the Story 3.1 topology.
++  if (location['level'] !== 'site' || location['status'] !== 'active') {
++    reject(
++      'INVALID_PLANT',
++      'The plant location resolves but is not an active site',
++      {
++        plant_location_id: plantLocationId,
++        level: location['level'],
++        status: location['status'],
++      },
++      400,
++    );
++  }
++
++  // The order number is server-allocated from the sequence and immutable thereafter (Binding
++  // Scope Decision 3): never MAX(...)+1, never client-supplied. The year prefix derives from the
++  // event's occurred_at exactly as the indent applier does.
++  const occurredAt = envelope.metadata.occurred_at;
++  if (
++    !occurredAt ||
++    typeof occurredAt !== 'string' ||
++    Number.isNaN(new Date(occurredAt).getTime())
++  ) {
++    reject('INVALID_PARAMS', 'occurred_at is required and must be a valid ISO 8601 date string');
++  }
++  const year = new Date(occurredAt).getUTCFullYear();
++  const allocatedNumber = await allocateProductionOrderNumber(year, client);
++  const declaredNumber = p['order_number_ext'];
++  if (
++    typeof declaredNumber === 'string' &&
++    declaredNumber.trim() !== '' &&
++    declaredNumber.trim() !== allocatedNumber
++  ) {
++    reject(
++      'ORDER_NUMBER_IMMUTABLE',
++      'The order number is server-allocated and cannot be supplied by the caller',
++      {
++        production_order_id: productionOrderId,
++        declared_order_number_ext: declaredNumber,
++        allocated_order_number_ext: allocatedNumber,
++      },
++      409,
++    );
++  }
++  p['order_number_ext'] = allocatedNumber;
++  p['created_by'] = envelope.metadata.actor.user_id;
++
++  await insertProductionOrder(
++    {
++      production_order_id: productionOrderId,
++      order_number_ext: allocatedNumber,
++      output_item_id: outputItemId,
++      output_sku: derivedSku,
++      order_quantity: p['order_quantity'] as string,
++      order_uom: derivedUom,
++      plant_location_id: plantLocationId,
++      bom_id: p['bom_id'] as string,
++      business_stream: (p['business_stream'] as string).trim(),
++      source_reference_type: p['source_reference_type'] as string,
++      source_reference_id: (p['source_reference_id'] as string).trim(),
++      status: 'planned',
++      expediting_flag: false,
++      override_by: null,
++      override_reason: null,
++      released_at: null,
++      released_by: null,
++      cancelled_at: null,
++      cancelled_by: null,
++      unreversed_transaction_count: 0,
++      created_by: envelope.metadata.actor.user_id,
++      correlation_id: envelope.metadata.correlation_id ?? null,
++      source_event_id: eventId,
++      created_at: p['created_at'] as string,
++    },
++    client,
++  );
++}
++
++async function applyReleased(envelope: EventEnvelope, client: PoolClient): Promise<void> {
++  if (await alreadyPersisted(envelope, client)) return;
++
++  const p = envelope.payload as Record<string, unknown>;
++  const productionOrderId = p['production_order_id'] as string;
++  const declaredOverrideBy = p['override_by'] as string | null;
++  const expeditingFlag = p['expediting_flag'] === true;
++
++  // Locking contract step 1: the production order row, FOR UPDATE.
++  const order = await getProductionOrderByIdForUpdate(productionOrderId, client);
++  if (!order) {
++    reject(
++      'PRODUCTION_ORDER_NOT_FOUND',
++      'The production order does not resolve',
++      { production_order_id: productionOrderId },
++      404,
++    );
++  }
++
++  // Lifecycle Contract: planned -> released is the only legal release edge.
++  if (order.status !== 'planned') {
++    reject(
++      'INVALID_STATE_TRANSITION',
++      'Only a planned production order can be released',
++      {
++        production_order_id: productionOrderId,
++        status: order.status,
++      },
++      400,
++    );
++  }
++
++  // The gate re-runs INSIDE this transaction so the verdict reflects the moment of release. The
++  // declared released_revision_id is re-derived from the explosion result, never trusted.
++  const gate = await evaluateReleaseGate(
++    {
++      bom_id: order.bom_id,
++      output_item_id: order.output_item_id,
++      plant_location_id: order.plant_location_id,
++      quantity: order.order_quantity,
++      occurred_at: envelope.metadata.occurred_at,
++    },
++    client,
++  );
++  if (p['released_revision_id'] !== gate.revision_id) {
++    reject(
++      'PRODUCTION_ORDER_DERIVATION_MISMATCH',
++      'Declared released_revision_id does not match the release gate revision',
++      {
++        production_order_id: productionOrderId,
++        declared_released_revision_id: p['released_revision_id'],
++        derived_released_revision_id: gate.revision_id,
++      },
++      409,
++    );
++  }
++
++  let overrideBy: string | null = null;
++  let overrideReason: string | null = null;
++  if (expeditingFlag) {
++    // AC6 / AC7, re-derived under the transaction (AD-12): the override authority is the DOA
++    // registry, never a hard-coded role, and a forged override_by cannot bypass it.
++    const approval = await resolveApprover('production_order.release_override', 0);
++    if (!approval.requiresApproval || approval.approverActorId === null) {
++      reject(
++        'APPROVAL_UNRESOLVED',
++        'No DOA entry governs production_order.release_override',
++        { transaction_type: 'production_order.release_override' },
++        404,
++      );
++    }
++    if (declaredOverrideBy !== approval.approverActorId) {
++      reject(
++        'APPROVAL_REQUIRED',
++        'A release override requires the resolved DOA approver',
++        {
++          production_order_id: productionOrderId,
++          resolved_approver_user_id: approval.approverActorId,
++        },
++        403,
++      );
++    }
++    overrideBy = approval.approverActorId;
++    overrideReason = (p['override_reason'] as string).trim();
++    p['override_by'] = overrideBy;
++    p['override_reason'] = overrideReason;
++  } else if (!gate.satisfied) {
++    // AC5: availability must cover every component line; no override means a hard 409. The gate
++    // never throws INSUFFICIENT_STOCK - the release path raises it with the per-line shortfalls.
++    reject(
++      'INSUFFICIENT_STOCK',
++      'Material availability does not cover every component line',
++      {
++        production_order_id: productionOrderId,
++        bom_id: order.bom_id,
++        depth_truncated: gate.depth_truncated,
++        empty_requirement_set: gate.empty_requirement_set,
++        lines: gate.lines.map((line) => ({
++          component_item_id: line.component_item_id,
++          component_sku: line.component_sku,
++          required_quantity: line.required_quantity,
++          available_quantity: line.available_quantity,
++          shortfall_quantity: line.shortfall_quantity,
++          satisfied: line.satisfied,
++        })),
++      },
++      409,
++    );
++  }
++
++  p['released_by'] = envelope.metadata.actor.user_id;
++
++  await updateProductionOrderState(
++    productionOrderId,
++    {
++      status: 'released',
++      released_revision_id: gate.revision_id,
++      expediting_flag: expeditingFlag,
++      override_by: overrideBy,
++      override_reason: overrideReason,
++      released_at: p['released_at'] as string,
++      released_by: envelope.metadata.actor.user_id,
++    },
++    client,
++  );
++}
++
++async function applyStateChanged(envelope: EventEnvelope, client: PoolClient): Promise<void> {
++  if (await alreadyPersisted(envelope, client)) return;
++
++  const p = envelope.payload as Record<string, unknown>;
++  const productionOrderId = p['production_order_id'] as string;
++  const declaredPreviousStatus = p['previous_status'] as string;
++  const newStatus = p['new_status'] as 'in_process' | 'completed' | 'closed';
++
++  const order = await getProductionOrderByIdForUpdate(productionOrderId, client);
++  if (!order) {
++    reject(
++      'PRODUCTION_ORDER_NOT_FOUND',
++      'The production order does not resolve',
++      { production_order_id: productionOrderId },
++      404,
++    );
++  }
++
++  // previous_status is re-derived from the locked row, never trusted.
++  if (order.status !== declaredPreviousStatus) {
++    reject(
++      'PRODUCTION_ORDER_DERIVATION_MISMATCH',
++      'Declared previous_status does not match the order status',
++      {
++        production_order_id: productionOrderId,
++        declared_previous_status: declaredPreviousStatus,
++        derived_previous_status: order.status,
++      },
++      409,
++    );
++  }
++
++  // Lifecycle Contract (Table 2): released -> in_process -> completed -> closed. Any other pair
++  // rejects; no silent no-op.
++  const allowed = STATE_CHANGE_EDGES.get(order.status);
++  if (!allowed || !allowed.has(newStatus)) {
++    reject(
++      'INVALID_STATE_TRANSITION',
++      'The status transition is not allowed',
++      {
++        production_order_id: productionOrderId,
++        previous_status: order.status,
++        new_status: newStatus,
++      },
++      400,
++    );
++  }
++
++  p['changed_by'] = envelope.metadata.actor.user_id;
++
++  await updateProductionOrderState(productionOrderId, { status: newStatus }, client);
++}
++
++async function applyCancelled(envelope: EventEnvelope, client: PoolClient): Promise<void> {
++  if (await alreadyPersisted(envelope, client)) return;
++
++  const p = envelope.payload as Record<string, unknown>;
++  const productionOrderId = p['production_order_id'] as string;
++  const declaredPreviousStatus = p['previous_status'] as string;
++
++  const order = await getProductionOrderByIdForUpdate(productionOrderId, client);
++  if (!order) {
++    reject(
++      'PRODUCTION_ORDER_NOT_FOUND',
++      'The production order does not resolve',
++      { production_order_id: productionOrderId },
++      404,
++    );
++  }
++
++  if (order.status !== declaredPreviousStatus) {
++    reject(
++      'PRODUCTION_ORDER_DERIVATION_MISMATCH',
++      'Declared previous_status does not match the order status',
++      {
++        production_order_id: productionOrderId,
++        declared_previous_status: declaredPreviousStatus,
++        derived_previous_status: order.status,
++      },
++      409,
++    );
++  }
++
++  // Lifecycle Contract (AC3): cancelled is reachable only from planned or released. Terminal
++  // states (cancelled, closed) and work states (in_process, completed) reject.
++  if (order.status !== 'planned' && order.status !== 'released') {
++    reject(
++      'INVALID_STATE_TRANSITION',
++      'Cancellation is only allowed from planned or released',
++      {
++        production_order_id: productionOrderId,
++        status: order.status,
++      },
++      400,
++    );
++  }
++
++  // AC4: a released order with unreversed material transactions cannot be cancelled until every
++  // issue is returned or reversed. The counter is written only by Story 6.2.
++  if (order.status === 'released' && order.unreversed_transaction_count > 0) {
++    reject(
++      'UNREVERSED_TRANSACTIONS',
++      'The order has unreversed material transactions and cannot be cancelled',
++      {
++        production_order_id: productionOrderId,
++        unreversed_transaction_count: order.unreversed_transaction_count,
++      },
++      409,
++    );
++  }
++
++  p['cancelled_by'] = envelope.metadata.actor.user_id;
++
++  await updateProductionOrderState(
++    productionOrderId,
++    {
++      status: 'cancelled',
++      cancelled_at: p['cancelled_at'] as string,
++      cancelled_by: envelope.metadata.actor.user_id,
++    },
++    client,
++  );
++}
++
++// ---------------------------------------------------------------------------
++// 23505 duplicate resolvers
++// ---------------------------------------------------------------------------
++
++/**
++ * The race path and the sequential path return the SAME error code with the SAME existing_* detail
++ * (the Story 7.2 lesson). The number is server-allocated, so the only realistic race is two
++ * concurrent applications of the SAME event (same production_order_id); resolve against that row so
++ * a caller that lost a concurrent race is told exactly what a caller that arrived second
++ * sequentially is told.
++ */
++export async function resolveProductionOrderNumberDuplicateConflict(
++  payload: Record<string, unknown>,
++): Promise<Record<string, unknown>> {
++  const productionOrderId = isUuid(payload['production_order_id'])
++    ? (payload['production_order_id'] as string)
++    : null;
++  const attempted: Record<string, unknown> = { production_order_id: productionOrderId };
++  if (productionOrderId !== null) {
++    const existing = await getProductionOrderById(productionOrderId);
++    if (existing) {
++      return {
++        ...attempted,
++        existing_order_id: existing.production_order_id,
++        existing_order_number_ext: existing.order_number_ext,
++      };
++    }
++  }
++  return attempted;
++}
+diff --git a/src/read/projections/production_order.ts b/src/read/projections/production_order.ts
+new file mode 100644
+index 0000000..748a238
+--- /dev/null
++++ b/src/read/projections/production_order.ts
+@@ -0,0 +1,303 @@
++import type { PoolClient } from 'pg';
++import { getPool } from '../../config/db.js';
++
++/**
++ * Production order read model (Story 6.1, FR-MO-01/02/03). Derived state only: every row is
++ * rebuildable by replaying production_order.* domain events, and mutation happens exclusively
++ * through persistEvent, which applies this projection inside the SAME transaction as the
++ * domain_events insert. status is the six-state lifecycle machine (planned -> released ->
++ * in_process -> completed -> closed, plus planned|released -> cancelled).
++ *
++ * NUMERIC and DATE columns are read as strings out of pg and never coerced to a JS number - an
++ * order quantity is an exact decimal, and the release gate compares it (and the availability sums
++ * it meets) in SQL NUMERIC, never in IEEE 754.
++ */
++
++export interface ProductionOrderRow {
++  production_order_id: string;
++  order_number_ext: string;
++  output_item_id: string;
++  output_sku: string;
++  order_quantity: string;
++  order_uom: string;
++  plant_location_id: string;
++  bom_id: string;
++  released_revision_id: string | null;
++  business_stream: string;
++  source_reference_type: string;
++  source_reference_id: string;
++  status: 'planned' | 'released' | 'in_process' | 'completed' | 'closed' | 'cancelled';
++  expediting_flag: boolean;
++  override_by: string | null;
++  override_reason: string | null;
++  released_at: string | null;
++  released_by: string | null;
++  cancelled_at: string | null;
++  cancelled_by: string | null;
++  unreversed_transaction_count: number;
++  created_by: string;
++  correlation_id: string | null;
++  source_event_id: string;
++  created_at: string;
++  updated_at: string;
++}
++
++export type ProductionOrderStatus = ProductionOrderRow['status'];
++
++type Queryable = Pick<PoolClient, 'query'>;
++
++function runner(client?: PoolClient): Queryable {
++  return client ?? getPool();
++}
++
++const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++
++function mapRow(row: Record<string, unknown>): ProductionOrderRow {
++  const iso = (value: unknown): string =>
++    value instanceof Date ? value.toISOString() : String(value);
++  return {
++    production_order_id: row['production_order_id'] as string,
++    order_number_ext: row['order_number_ext'] as string,
++    output_item_id: row['output_item_id'] as string,
++    output_sku: row['output_sku'] as string,
++    // pg returns NUMERIC as a string; it stays a string - never Number().
++    order_quantity: String(row['order_quantity']),
++    order_uom: row['order_uom'] as string,
++    plant_location_id: row['plant_location_id'] as string,
++    bom_id: row['bom_id'] as string,
++    released_revision_id: (row['released_revision_id'] as string | null) ?? null,
++    business_stream: row['business_stream'] as string,
++    source_reference_type: row['source_reference_type'] as string,
++    source_reference_id: row['source_reference_id'] as string,
++    status: row['status'] as ProductionOrderRow['status'],
++    expediting_flag: row['expediting_flag'] === true,
++    override_by: (row['override_by'] as string | null) ?? null,
++    override_reason: (row['override_reason'] as string | null) ?? null,
++    released_at: (row['released_at'] as string | null) ?? null,
++    released_by: (row['released_by'] as string | null) ?? null,
++    cancelled_at: (row['cancelled_at'] as string | null) ?? null,
++    cancelled_by: (row['cancelled_by'] as string | null) ?? null,
++    unreversed_transaction_count: Number(row['unreversed_transaction_count']),
++    created_by: row['created_by'] as string,
++    correlation_id: (row['correlation_id'] as string | null) ?? null,
++    source_event_id: row['source_event_id'] as string,
++    created_at: iso(row['created_at']),
++    updated_at: iso(row['updated_at']),
++  };
++}
++
++const ORDER_COLUMNS = `production_order_id, order_number_ext, output_item_id, output_sku,
++       order_quantity, order_uom, plant_location_id, bom_id, released_revision_id,
++       business_stream, source_reference_type, source_reference_id, status,
++       expediting_flag, override_by, override_reason, released_at, released_by,
++       cancelled_at, cancelled_by, unreversed_transaction_count, created_by,
++       correlation_id, source_event_id, created_at, updated_at`;
++
++export interface InsertProductionOrderInput {
++  production_order_id: string;
++  order_number_ext: string;
++  output_item_id: string;
++  output_sku: string;
++  order_quantity: string;
++  order_uom: string;
++  plant_location_id: string;
++  bom_id: string;
++  business_stream: string;
++  source_reference_type: string;
++  source_reference_id: string;
++  status: ProductionOrderStatus;
++  expediting_flag: boolean;
++  override_by: string | null;
++  override_reason: string | null;
++  released_at: string | null;
++  released_by: string | null;
++  cancelled_at: string | null;
++  cancelled_by: string | null;
++  unreversed_transaction_count: number;
++  created_by: string;
++  correlation_id: string | null;
++  source_event_id: string;
++  created_at: string;
++}
++
++export async function insertProductionOrder(
++  input: InsertProductionOrderInput,
++  client: PoolClient,
++): Promise<void> {
++  await client.query(
++    `INSERT INTO production_order (
++      production_order_id, order_number_ext, output_item_id, output_sku, order_quantity,
++      order_uom, plant_location_id, bom_id, business_stream, source_reference_type,
++      source_reference_id, status, expediting_flag, override_by, override_reason,
++      released_at, released_by, cancelled_at, cancelled_by, unreversed_transaction_count,
++      created_by, correlation_id, source_event_id, created_at
++    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
++    [
++      input.production_order_id,
++      input.order_number_ext,
++      input.output_item_id,
++      input.output_sku,
++      input.order_quantity,
++      input.order_uom,
++      input.plant_location_id,
++      input.bom_id,
++      input.business_stream,
++      input.source_reference_type,
++      input.source_reference_id,
++      input.status,
++      input.expediting_flag,
++      input.override_by,
++      input.override_reason,
++      input.released_at,
++      input.released_by,
++      input.cancelled_at,
++      input.cancelled_by,
++      input.unreversed_transaction_count,
++      input.created_by,
++      input.correlation_id,
++      input.source_event_id,
++      input.created_at,
++    ],
++  );
++}
++
++export async function getProductionOrderById(
++  orderId: string,
++  client?: PoolClient,
++): Promise<ProductionOrderRow | null> {
++  if (!UUID_REGEX.test(orderId)) return null;
++  const result = await runner(client).query(
++    `SELECT ${ORDER_COLUMNS} FROM production_order WHERE production_order_id = $1`,
++    [orderId],
++  );
++  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
++}
++
++export async function getProductionOrderByIdForUpdate(
++  orderId: string,
++  client: PoolClient,
++): Promise<ProductionOrderRow | null> {
++  if (!UUID_REGEX.test(orderId)) return null;
++  const result = await client.query(
++    `SELECT ${ORDER_COLUMNS} FROM production_order WHERE production_order_id = $1 FOR UPDATE`,
++    [orderId],
++  );
++  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
++}
++
++export async function getProductionOrderByNumber(
++  orderNumberExt: string,
++  client?: PoolClient,
++): Promise<ProductionOrderRow | null> {
++  const result = await runner(client).query(
++    `SELECT ${ORDER_COLUMNS} FROM production_order WHERE order_number_ext = $1`,
++    [orderNumberExt],
++  );
++  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
++}
++
++export interface ListProductionOrdersParams {
++  status?: ProductionOrderStatus | undefined;
++  plantLocationId?: string | undefined;
++  outputItemId?: string | undefined;
++  businessStream?: string | undefined;
++  limit?: number | undefined;
++  offset?: number | undefined;
++}
++
++export async function listProductionOrders(
++  params: ListProductionOrdersParams,
++  client?: PoolClient,
++): Promise<ProductionOrderRow[]> {
++  const r = runner(client);
++  const conditions: string[] = [];
++  const values: unknown[] = [];
++  let idx = 1;
++
++  if (params.status) {
++    conditions.push(`status = $${idx++}`);
++    values.push(params.status);
++  }
++  if (params.plantLocationId) {
++    if (!UUID_REGEX.test(params.plantLocationId)) return [];
++    conditions.push(`plant_location_id = $${idx++}`);
++    values.push(params.plantLocationId);
++  }
++  if (params.outputItemId) {
++    if (!UUID_REGEX.test(params.outputItemId)) return [];
++    conditions.push(`output_item_id = $${idx++}`);
++    values.push(params.outputItemId);
++  }
++  if (params.businessStream) {
++    conditions.push(`business_stream = $${idx++}`);
++    values.push(params.businessStream);
++  }
++
++  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
++  const limit =
++    Number.isInteger(params.limit) && params.limit! > 0 ? Math.min(params.limit!, 200) : 50;
++  const offset = Number.isInteger(params.offset) && params.offset! >= 0 ? params.offset! : 0;
++  const result = await r.query(
++    `SELECT ${ORDER_COLUMNS} FROM production_order ${where} ORDER BY created_at DESC, production_order_id ASC LIMIT $${idx} OFFSET $${idx + 1}`,
++    [...values, limit, offset],
++  );
++  return result.rows.map(mapRow);
++}
++
++export interface UpdateProductionOrderStatePatch {
++  status: ProductionOrderStatus;
++  released_revision_id?: string | null;
++  expediting_flag?: boolean;
++  override_by?: string | null;
++  override_reason?: string | null;
++  released_at?: string | null;
++  released_by?: string | null;
++  cancelled_at?: string | null;
++  cancelled_by?: string | null;
++}
++
++export async function updateProductionOrderState(
++  orderId: string,
++  patch: UpdateProductionOrderStatePatch,
++  client: PoolClient,
++): Promise<void> {
++  const sets: string[] = ['status = $2', 'updated_at = now()'];
++  const values: unknown[] = [orderId, patch.status];
++  let idx = 3;
++
++  const push = (column: string, value: unknown): void => {
++    values.push(value);
++    sets.push(`${column} = $${idx++}`);
++  };
++
++  if (patch.released_revision_id !== undefined)
++    push('released_revision_id', patch.released_revision_id);
++  if (patch.expediting_flag !== undefined) push('expediting_flag', patch.expediting_flag);
++  if (patch.override_by !== undefined) push('override_by', patch.override_by);
++  if (patch.override_reason !== undefined) push('override_reason', patch.override_reason);
++  if (patch.released_at !== undefined) push('released_at', patch.released_at);
++  if (patch.released_by !== undefined) push('released_by', patch.released_by);
++  if (patch.cancelled_at !== undefined) push('cancelled_at', patch.cancelled_at);
++  if (patch.cancelled_by !== undefined) push('cancelled_by', patch.cancelled_by);
++
++  await client.query(
++    `UPDATE production_order SET ${sets.join(', ')} WHERE production_order_id = $1`,
++    values,
++  );
++}
++
++/**
++ * Allocates the next human-readable production order number in the MO-YYYY-NNNN format from the
++ * production_order_number_seq sequence - server-side only, never client-supplied, never
++ * MAX(...)+1 (the race the sequence exists to prevent). NNNN is zero-padded to at least 4 digits
++ * and simply grows wider beyond 9999. The MO- prefix is deliberate: PO- already belongs to purchase
++ * orders (po_number_seq).
++ */
++export async function allocateProductionOrderNumber(
++  year: number,
++  client: PoolClient,
++): Promise<string> {
++  const result = await client.query(`SELECT nextval('production_order_number_seq') AS n`);
++  const n = String(result.rows[0]['n']);
++  return `MO-${year}-${n.padStart(4, '0')}`;
++}

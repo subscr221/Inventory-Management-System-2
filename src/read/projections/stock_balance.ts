@@ -192,6 +192,39 @@ export async function getForwardPickBalance(
 }
 
 /**
+ * Story 6.1 (FR-MO-03): the owned UNAALLOCATED balance for a SKU summed across every stock_balance
+ * row at or beneath a plant site, summed in SQL NUMERIC. Structurally identical to
+ * getForwardPickBalance (same depth-capped recursive descendant walk, same stock_class = 'owned'
+ * scoping) but summing `available` (the generated on_hand - allocated - picked column), not
+ * `on_hand`: a production order release gates on stock that is actually free to stage, and a fully
+ * reserved-but-present bin is not availability. Returns a NUMERIC string, never coerced to a JS
+ * number, so a large balance cannot lose precision and the caller's comparison stays exact. Do not
+ * generalize this and getForwardPickBalance into one helper; the two stay deliberately separate so
+ * each sums the column its contract names.
+ */
+export async function getAvailableBalanceUnderSite(
+  sku: string,
+  siteLocationId: string,
+  client?: PoolClient,
+): Promise<string> {
+  const result = await runner(client).query(
+    `WITH RECURSIVE descendants AS (
+       SELECT location_id, 0 AS depth FROM location_register WHERE location_id = $1
+       UNION ALL
+       SELECT lr.location_id, d.depth + 1
+         FROM location_register lr
+         JOIN descendants d ON lr.parent_location_id = d.location_id
+        WHERE d.depth < 10
+     )
+     SELECT COALESCE(SUM(sb.available), 0)::text AS balance
+       FROM stock_balance sb
+      WHERE sb.sku = $2 AND sb.stock_class = 'owned' AND sb.location_id IN (SELECT location_id FROM descendants)`,
+    [siteLocationId, sku],
+  );
+  return String(result.rows[0]!['balance']);
+}
+
+/**
  * Applies a stock.received event: on_hand at the target location (and lot, when given) increases
  * by the received quantity. The upsert takes a row lock on conflict, so concurrent receipts to
  * the same grain serialize. Must run on the SAME client/transaction as the domain event insert.

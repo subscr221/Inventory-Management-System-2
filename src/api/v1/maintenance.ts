@@ -14,7 +14,8 @@ import type { PersistedEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { emitNotification } from '../../notify/emit.js';
 import { getPool } from '../../config/db.js';
-import { isValidCalendarDate } from '../../lib/business-days.js';
+import { isValidCalendarDate, toIstCalendarDate } from '../../lib/business-days.js';
+import { config } from '../../config/index.js';
 import { getMeterById, listMeters } from '../../read/projections/asset_meter.js';
 import { getAssetById, getAssetByTag } from '../../read/projections/asset.js';
 import {
@@ -61,6 +62,7 @@ import {
 } from '../../read/projections/maintenance_spare_reservation.js';
 import { listSpareAlerts } from '../../read/projections/maintenance_spare_alert.js';
 import { runCalibrationExpiryScan } from '../../maintenance/calibration-jobs.js';
+import { runStatutoryExaminationScan } from '../../maintenance/statutory-jobs.js';
 import {
   CALIBRATION_STAGES,
   MAX_CALIBRATION_INTERVAL_DAYS,
@@ -69,6 +71,20 @@ import {
   canonicalCertificateNumber,
   canonicalInstrumentId,
 } from '../../compliance/calibration-register.js';
+import {
+  MAX_EXAMINATION_INTERVAL_MONTHS,
+  STATUTORY_EXAMINATION_STATUSES,
+  STATUTORY_EXAMINATION_TYPES,
+  canonicalDeviceKey,
+} from '../../compliance/maintenance-statutory.js';
+import {
+  ALLOWED_TRANSITIONS,
+  ASSET_OPERATIONAL_STATUSES,
+  NO_STATUS_KEY,
+  RETURN_TO_SERVICE_DOA_TYPE,
+  requiresReturnToServiceSignOff,
+} from '../../compliance/asset-operational-status.js';
+import { resolveApprover } from './indents.js';
 import { getLocationById } from '../../read/projections/location_register.js';
 import { findFirstActiveDoaEntry, findRoleHolder } from '../../read/projections/doa_registry.js';
 import {
@@ -86,6 +102,34 @@ import {
   listEscalations,
 } from '../../read/projections/instrument_calibration_escalation.js';
 import { getInstrumentCalibrationStatus } from '../../read/projections/instrument_calibration.js';
+import {
+  getExaminationByAssetAndType,
+  getExaminationById,
+  listExaminations,
+} from '../../read/projections/statutory_examination.js';
+import { listRecordsByExamination } from '../../read/projections/statutory_examination_record.js';
+import {
+  getAssetOperationalStatus,
+  listAssetOperationalStatuses,
+} from '../../read/projections/asset_operational_status.js';
+import {
+  getMaintenanceAssetCost,
+  listMaintenanceAssetCosts,
+} from '../../read/projections/maintenance_asset_cost.js';
+// Story 7.7 (FR-M-10, FR-M-11): AMC, warranty and insurance coverage plus the reason-coded
+// warranty override.
+import {
+  COVERAGE_TYPES,
+  WARRANTY_OVERRIDE_DOA_TYPE,
+  MAX_REASON_CODE_LENGTH,
+} from '../../compliance/maintenance-coverage.js';
+import { getCoverageById, listCoverages } from '../../read/projections/asset_coverage.js';
+import { listCoverageAlerts } from '../../read/projections/asset_coverage_alert.js';
+import {
+  getWarrantyOverrideById,
+  getWarrantyOverrideByWorkOrder,
+} from '../../read/projections/maintenance_warranty_override.js';
+import { runCoverageExpiryScan } from '../../maintenance/coverage-jobs.js';
 
 /**
  * Story 7.2 REST surface: PM plans, work orders and the generic meter-reading ingestion API
@@ -869,6 +913,52 @@ const completeWorkOrderBase: RouteHandler = async (req, res, params) => {
       });
     }
 
+    // Story 7.7 (FR-M-11, AC 3): the chargeable-work pre-check, for a clean early 403 before the
+    // event is minted. The AUTHORITATIVE gate is in applyWorkOrderCompleted under the work order's
+    // lock, so the direct-event path cannot bypass it (AD-12); this mirrors the way
+    // setAssetStatusBase pre-checks the Story 7.6 statutory use-lock.
+    if (existing.warranty_flagged === true) {
+      const override = await getWarrantyOverrideByWorkOrder(workOrderId);
+      if (!override) {
+        throw new AppError(
+          403,
+          'APPROVAL_REQUIRED',
+          'This work order is warranty-flagged: record a reason-coded override before completing it',
+          {
+            work_order_id: workOrderId,
+            warranty_coverage_id: existing.warranty_coverage_id,
+          },
+        );
+      }
+    }
+
+    // Story 7.6 (FR-M-15): optional additive cost fields, NUMERIC strings. A declared non-string
+    // or a string that fails the regex is rejected INVALID_COST, never coerced (the wire-boolean
+    // lesson applied to costs). The seam validates them again and derives total_cost /
+    // capitalization_flagged server-side, writing both back onto the persisted payload.
+    const laborCostRaw = body['labor_cost'];
+    if (laborCostRaw !== undefined && laborCostRaw !== null) {
+      if (typeof laborCostRaw !== 'string' || !COST_NUMERIC_REGEX.test(laborCostRaw)) {
+        throw new AppError(
+          400,
+          'INVALID_COST',
+          'labor_cost must be a NUMERIC string with at most 3 decimals',
+          { labor_cost: laborCostRaw },
+        );
+      }
+    }
+    const partsCostRaw = body['parts_cost'];
+    if (partsCostRaw !== undefined && partsCostRaw !== null) {
+      if (typeof partsCostRaw !== 'string' || !COST_NUMERIC_REGEX.test(partsCostRaw)) {
+        throw new AppError(
+          400,
+          'INVALID_COST',
+          'parts_cost must be a NUMERIC string with at most 3 decimals',
+          { parts_cost: partsCostRaw },
+        );
+      }
+    }
+
     const persisted = await persistEvent(
       {
         stream_type: 'maintenance',
@@ -878,6 +968,12 @@ const completeWorkOrderBase: RouteHandler = async (req, res, params) => {
           work_order_id: workOrderId,
           asset_id: existing.asset_id,
           completed_at: now,
+          ...(laborCostRaw === undefined || laborCostRaw === null
+            ? {}
+            : { labor_cost: laborCostRaw }),
+          ...(partsCostRaw === undefined || partsCostRaw === null
+            ? {}
+            : { parts_cost: partsCostRaw }),
         },
         metadata: {
           correlation_id: randomUUID(),
@@ -2535,6 +2631,42 @@ export const cancelSpareReservationHandler = requireRole({
 })(cancelSpareReservationBase);
 
 // ---------------------------------------------------------------------------
+// Story 7.6: statutory examinations, cost accumulation, and machine status broadcast
+// (FR-M-14, FR-M-15, FR-M-16)
+// ---------------------------------------------------------------------------
+//
+// These handlers own only the capture-time resolutions - server-minted ids, actor stamping,
+// canonicalization of human-entered keys, the next-due derivation, and resolving the DOA route for
+// return-to-service. Every decision lives in src/compliance/maintenance-statutory.ts,
+// src/compliance/asset-operational-status.ts and src/compliance/maintenance-plan.ts, which
+// re-derive each declared field under lock, so a direct POST /api/v1/events cannot bypass any of
+// it.
+
+// The status vocabulary, the DOA transaction type and the Table 5 state machine are IMPORTED from
+// the seams that enforce them, never re-declared here. A duplicated copy lets the handler's
+// pre-check and the applier's enforcement drift apart, and a widening applied to only one of them
+// is a gate that silently opens.
+const EXAMINATION_TYPES = STATUTORY_EXAMINATION_TYPES;
+const EXAMINATION_STATUSES = STATUTORY_EXAMINATION_STATUSES;
+const ASSET_STATUSES = ASSET_OPERATIONAL_STATUSES;
+// The cost columns are NUMERIC(14,3): at most 11 integer digits and 3 decimals (the seam mirrors
+// this regex; a wider value would overflow the column as an unmapped 22003 500).
+const COST_NUMERIC_REGEX = /^\d{1,11}(\.\d{1,3})?$/;
+
+// Table 5: the machine status state machine, owned by src/compliance/asset-operational-status.ts.
+const MACHINE_STATUS_TRANSITIONS = ALLOWED_TRANSITIONS;
+
+/** Whole-month addition in SQL DATE arithmetic; make_interval clamps the day, which JS cannot
+ *  replicate, so the handler asks the database for the same derivation the seam re-checks. */
+async function deriveNextDueDate(examinedOn: string, intervalMonths: number): Promise<string> {
+  const result = await getPool().query(
+    `SELECT ($1::date + make_interval(months => $2))::date::text AS next_due`,
+    [examinedOn, intervalMonths],
+  );
+  return result.rows[0]!['next_due'] as string;
+}
+
+// ---------------------------------------------------------------------------
 // Story 7.5: calibration register and non-overridable lockout (FR-M-12, FR-M-13, AD-8)
 // ---------------------------------------------------------------------------
 //
@@ -3217,3 +3349,990 @@ export const resolveCalibrationEscalationHandler = requireRole({
   module: 'maintenance',
   functionScope: 'write',
 })(resolveCalibrationEscalationBase);
+
+// ---------------------------------------------------------------------------
+// Story 7.6: statutory examinations, cost accumulation, machine status broadcast
+// ---------------------------------------------------------------------------
+
+// POST /api/v1/maintenance/statutory-examinations
+
+const createStatutoryExaminationBase: RouteHandler = async (req, res, _params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const examinationId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const assetId = requireUuidField(body, 'asset_id');
+    const examinationType = body['examination_type'];
+    if (typeof examinationType !== 'string' || !EXAMINATION_TYPES.has(examinationType)) {
+      throw new AppError(
+        400,
+        'INVALID_EXAMINATION_TYPE',
+        'examination_type must be osh_code or weighbridge_legal_metrology',
+      );
+    }
+    const intervalMonths = body['interval_months'];
+    if (
+      typeof intervalMonths !== 'number' ||
+      !Number.isInteger(intervalMonths) ||
+      intervalMonths < 1 ||
+      intervalMonths > MAX_EXAMINATION_INTERVAL_MONTHS
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_INTERVAL',
+        `interval_months must be an integer between 1 and ${MAX_EXAMINATION_INTERVAL_MONTHS}`,
+      );
+    }
+    const examinedOn = requireCalendarDate(body, 'examined_on', 'INVALID_PARAMS');
+    const businessDate = requireBusinessDate(body);
+    // The due date is derived ONCE here in the SAME SQL arithmetic the seam re-checks under the
+    // asset's lock, so a divergence can never fire on the happy path.
+    const nextDueDate = await deriveNextDueDate(examinedOn, intervalMonths);
+    const certificateNumberExtRaw = optionalNullableText(body, 'certificate_number_ext');
+    // Canonicalized in the handler AND in the seam, like the sibling device_key: the Compliance
+    // Seam Contract names both layers, so the invariant never rests on a single one.
+    const certificateNumberExt =
+      certificateNumberExtRaw === null ? null : canonicalDeviceKey(certificateNumberExtRaw);
+    const deviceKeyRaw = optionalNullableText(body, 'device_key');
+    // Canonicalized in the handler AND in the seam, so the direct-event path cannot bypass it.
+    const deviceKey = deviceKeyRaw === null ? null : canonicalDeviceKey(deviceKeyRaw);
+
+    const asset = await getAssetById(assetId);
+    if (!asset) {
+      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: examinationId,
+        event_type: 'maintenance.statutory_examination_recorded',
+        payload: {
+          examination_id: examinationId,
+          asset_id: assetId,
+          examination_type: examinationType,
+          interval_months: intervalMonths,
+          examined_on: examinedOn,
+          next_due_date: nextDueDate,
+          certificate_number_ext: certificateNumberExt,
+          device_key: deviceKey,
+          business_date: businessDate,
+          recorded_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedId = replayIdOrReject(
+      persisted,
+      'maintenance.statutory_examination_recorded',
+      'examination_id',
+    );
+    // Read back BY ID from the persisted payload's own id (the API Contract rule).
+    // Read back BY ID from the persisted payload's own id (the API Contract rule). A RE-STAMP is
+    // the one case where that id is not the register row's: this handler mints a fresh
+    // examination_id per POST (stream_id must equal it), while the register row keeps the id it
+    // was first registered under, so the by-id read misses and the grain is the only way back to
+    // the row this event just updated. Records hang off the register row's id, not the payload's.
+    //
+    // The grain comes from the PERSISTED payload, never from the request body: on an
+    // idempotency-key replay `persisted` is the ORIGINAL event, and keying the fallback off this
+    // request's asset_id would build a 201 out of a foreign asset's register row - the exact
+    // phantom-response class replayIdOrReject exists to prevent.
+    const persistedPayload = persisted.payload as Record<string, unknown>;
+    const persistedAssetId =
+      typeof persistedPayload['asset_id'] === 'string'
+        ? (persistedPayload['asset_id'] as string)
+        : assetId;
+    const persistedExaminationType =
+      typeof persistedPayload['examination_type'] === 'string'
+        ? (persistedPayload['examination_type'] as string)
+        : examinationType;
+    const examination =
+      (await getExaminationById(persistedId)) ??
+      (await getExaminationByAssetAndType(persistedAssetId, persistedExaminationType));
+    const records = await listRecordsByExamination(examination?.examination_id ?? persistedId);
+    sendJson(res, 201, {
+      event_id: persisted.event_id,
+      examination: examination ?? null,
+      records,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/statutory-examinations
+
+const listStatutoryExaminationsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const assetId = url.searchParams.get('asset_id');
+  const status = url.searchParams.get('status');
+  const examinationType = url.searchParams.get('examination_type');
+  if (assetId !== null && !isUuid(assetId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'asset_id must be a UUID');
+    return;
+  }
+  if (status !== null && !EXAMINATION_STATUSES.has(status)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'status must be one of: compliant, overdue');
+    return;
+  }
+  if (examinationType !== null && !EXAMINATION_TYPES.has(examinationType)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'examination_type must be one of: osh_code, weighbridge_legal_metrology',
+    );
+    return;
+  }
+
+  const examinations = await listExaminations({
+    asset_id: assetId ?? undefined,
+    status: (status as 'compliant' | 'overdue' | null) ?? undefined,
+    examination_type:
+      (examinationType as 'osh_code' | 'weighbridge_legal_metrology' | null) ?? undefined,
+    limit: paging.limit,
+    offset: paging.offset,
+  });
+  sendJson(res, 200, { examinations });
+};
+
+// GET /api/v1/maintenance/statutory-examinations/:examinationId
+
+const getStatutoryExaminationBase: RouteHandler = async (req, res, params) => {
+  try {
+    const examinationId = requireUuidParam(params, 'examinationId');
+    const examination = await getExaminationById(examinationId);
+    if (!examination) {
+      throw new AppError(404, 'EXAMINATION_NOT_FOUND', 'Statutory examination not found', {
+        examination_id: examinationId,
+      });
+    }
+    const records = await listRecordsByExamination(examinationId);
+    sendJson(res, 200, { examination, records });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// POST /api/v1/maintenance/statutory-examinations/scan
+
+const scanStatutoryExaminationsBase: RouteHandler = async (req, res, _params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  try {
+    const businessDate = requireBusinessDate(body);
+    const assetId = body['asset_id'];
+    if (assetId !== undefined && assetId !== null && !isUuid(assetId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'asset_id must be a UUID when provided');
+    }
+    const result = await runStatutoryExaminationScan({
+      business_date: businessDate,
+      asset_id: (assetId as string | undefined) ?? undefined,
+      actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+      auditCtx: auditCtxFor(req, actor, 200),
+    });
+    sendJson(res, 200, result);
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// POST /api/v1/maintenance/assets/:assetId/status
+
+const setAssetStatusBase: RouteHandler = async (req, res, params) => {
+  const assetId = params?.['assetId'];
+  if (!assetId || !isUuid(assetId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'assetId must be a UUID');
+    return;
+  }
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const asset = await getAssetById(assetId);
+    if (!asset) {
+      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
+    }
+
+    const newStatus = body['new_status'];
+    if (typeof newStatus !== 'string' || !ASSET_STATUSES.has(newStatus)) {
+      throw new AppError(
+        400,
+        'INVALID_STATUS_TRANSITION',
+        'new_status must be one of: running, idle, breakdown, maintenance',
+      );
+    }
+
+    // AC1 enforcement (Task 5.2): an asset with ANY overdue statutory examination is locked from
+    // USE until re-examined, regardless of which examination type is due. Scoped to transitions
+    // into 'running' so a locked asset can still be recorded as 'maintenance' or 'breakdown' while
+    // the re-examination is performed, and so the AC4 broadcast still fires. The seam applies the
+    // same scope, so the direct-event path cannot bypass it either.
+    const examinations =
+      newStatus === 'running' ? await listExaminations({ asset_id: assetId }) : [];
+    const overdue = examinations.find((e) => e.status === 'overdue');
+    if (overdue) {
+      throw new AppError(
+        423,
+        'STATUTORY_EXAMINATION_OVERDUE',
+        'The asset is locked: a statutory examination is overdue',
+        {
+          asset_id: assetId,
+          examination_id: overdue.examination_id,
+          examination_type: overdue.examination_type,
+        },
+      );
+    }
+
+    // Table 5 state machine: the current status is derived from the projection; a transition not
+    // listed is rejected here so the caller gets a clean 400 before any event is written.
+    const current = await getAssetOperationalStatus(assetId);
+    const previousStatus = current?.status ?? null;
+    const fromKey = previousStatus ?? NO_STATUS_KEY;
+    const allowed = MACHINE_STATUS_TRANSITIONS.get(fromKey);
+    if (!allowed || !allowed.has(newStatus)) {
+      throw new AppError(400, 'INVALID_STATUS_TRANSITION', 'The status transition is not allowed', {
+        asset_id: assetId,
+        previous_status: previousStatus,
+        new_status: newStatus,
+      });
+    }
+
+    // Return-to-service authority (AC5, Table 6): a transition to 'running' from 'breakdown' or
+    // 'maintenance' requires a supervisor sign-off, DOA-resolved (AD-3). The 403 is a business
+    // rule raised AFTER the RBAC wrapper, per the Architecture Compliance note.
+    const needsSignOff = requiresReturnToServiceSignOff(newStatus);
+    let signOffBy: string | null = null;
+    let signOffAt: string | null = null;
+    if (needsSignOff) {
+      const approval = await resolveApprover(RETURN_TO_SERVICE_DOA_TYPE, 0);
+      if (!approval.requiresApproval || approval.approverActorId === null) {
+        throw new AppError(
+          404,
+          'APPROVAL_UNRESOLVED',
+          'No DOA entry governs maintenance.return_to_service',
+          { transaction_type: RETURN_TO_SERVICE_DOA_TYPE },
+        );
+      }
+      if (approval.approverActorId !== actor.userId) {
+        throw new AppError(
+          403,
+          'APPROVAL_REQUIRED',
+          'Return to service requires the resolved DOA approver to sign off',
+          {
+            asset_id: assetId,
+            resolved_approver_user_id: approval.approverActorId,
+          },
+        );
+      }
+      signOffBy = approval.approverActorId;
+      signOffAt = now;
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: assetId,
+        event_type: 'maintenance.asset_status_changed',
+        payload: {
+          asset_id: assetId,
+          previous_status: previousStatus,
+          new_status: newStatus,
+          changed_by: actor.userId,
+          changed_at: now,
+          sign_off_by: signOffBy,
+          sign_off_at: signOffAt,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    const persistedAssetId = replayIdOrReject(
+      persisted,
+      'maintenance.asset_status_changed',
+      'asset_id',
+    );
+
+    // AC4 broadcast: the status change is fan-out to BOTH production planning and hub booking
+    // after the event commits, non-throwing (AD-17). A same-key replay returns the ORIGINAL event
+    // with the ORIGINAL correlation_id, so keying the dedup on that correlation_id skips the
+    // re-emission without ever suppressing a later, legitimate transition on the same asset (the
+    // "replay emits no second notification" convention, made per-transition rather than per-asset).
+    // The dedup is PER TARGET ROLE, not per correlation_id. Gating both emissions on a single
+    // marker meant a first-succeeds/second-fails broadcast was unrecoverable: the replay found the
+    // planner's row and skipped the block, so hub booking was never told, permanently and on every
+    // retry. Asking which roles already have a notification for this correlation_id lets a replay
+    // fill in exactly the half that is missing.
+    const existingNotifications = await getPool().query(
+      `SELECT payload->'target'->>'role' AS role
+         FROM domain_events
+        WHERE event_type = 'notification.created'
+          AND metadata->>'correlation_id' = $1`,
+      [persisted.metadata.correlation_id],
+    );
+    const alreadyNotified = new Set(
+      existingNotifications.rows
+        .map((row) => (row as Record<string, unknown>)['role'])
+        .filter((role): role is string => typeof role === 'string'),
+    );
+
+    const actorLabel = `${asset.asset_name} (${asset.asset_tag}), ${previousStatus ?? 'none'} -> ${newStatus}`;
+    const base = {
+      event_type: 'asset_status_changed',
+      status_verb: newStatus,
+      object_type: 'asset',
+      object_id: persistedAssetId,
+      actor_label: actorLabel,
+      next_step: 'Update planning and booking accordingly',
+      actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+      // The persisted event's correlation_id, so the replay dedup above can match.
+      correlation_id: persisted.metadata.correlation_id,
+      occurred_at: now,
+    };
+    // emitNotification never throws and reports failure in its result (AD-17). Discarding that
+    // result made a silently undelivered broadcast indistinguishable from a delivered one; the
+    // scan job in this same story counts delivered and dropped separately for exactly this reason.
+    let notificationsDelivered = 0;
+    let notificationsDropped = 0;
+    for (const role of ['production_planner', 'hub_booking_coordinator']) {
+      if (alreadyNotified.has(role)) continue;
+      const emitted = await emitNotification({ ...base, target: { role } });
+      if (emitted.ok) notificationsDelivered += 1;
+      else notificationsDropped += 1;
+    }
+
+    const status = await getAssetOperationalStatus(persistedAssetId);
+    sendJson(res, 200, {
+      event_id: persisted.event_id,
+      asset_id: persistedAssetId,
+      status: status ?? null,
+      notifications_delivered: notificationsDelivered,
+      notifications_dropped: notificationsDropped,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/assets/:assetId/status
+
+const getAssetStatusBase: RouteHandler = async (req, res, params) => {
+  try {
+    const assetId = requireUuidParam(params, 'assetId');
+    const asset = await getAssetById(assetId);
+    if (!asset) {
+      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
+    }
+    const status = await getAssetOperationalStatus(assetId);
+    sendJson(res, 200, { asset_id: assetId, status: status ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/asset-status
+
+const listAssetStatusesBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const status = url.searchParams.get('status');
+  if (status !== null && !ASSET_STATUSES.has(status)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'status must be one of: running, idle, breakdown, maintenance',
+    );
+    return;
+  }
+
+  const statuses = await listAssetOperationalStatuses({
+    status: (status as 'running' | 'idle' | 'breakdown' | 'maintenance' | null) ?? undefined,
+    limit: paging.limit,
+    offset: paging.offset,
+  });
+  sendJson(res, 200, { asset_statuses: statuses });
+};
+
+// GET /api/v1/maintenance/assets/:assetId/costs
+
+const getAssetCostsBase: RouteHandler = async (req, res, params) => {
+  try {
+    const assetId = requireUuidParam(params, 'assetId');
+    const asset = await getAssetById(assetId);
+    if (!asset) {
+      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
+    }
+    const costs = await getMaintenanceAssetCost(assetId);
+    sendJson(res, 200, { asset_id: assetId, costs: costs ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/asset-costs
+
+const listAssetCostsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const costs = await listMaintenanceAssetCosts({ limit: paging.limit, offset: paging.offset });
+  sendJson(res, 200, { asset_costs: costs });
+};
+
+export const createStatutoryExaminationHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(createStatutoryExaminationBase);
+
+export const listStatutoryExaminationsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listStatutoryExaminationsBase);
+
+export const getStatutoryExaminationHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getStatutoryExaminationBase);
+
+export const scanStatutoryExaminationsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(scanStatutoryExaminationsBase);
+
+export const setAssetStatusHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(setAssetStatusBase);
+
+export const getAssetStatusHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getAssetStatusBase);
+
+export const listAssetStatusesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listAssetStatusesBase);
+
+export const getAssetCostsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getAssetCostsBase);
+
+export const listAssetCostsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listAssetCostsBase);
+
+// ---------------------------------------------------------------------------
+// Story 7.7: AMC, Warranty, and Insurance Tracking (FR-M-10, FR-M-11)
+// ---------------------------------------------------------------------------
+//
+// Every decision lives in src/compliance/maintenance-coverage.ts (and, for the chargeable-work
+// gate, in src/compliance/maintenance-plan.ts), not here: these handlers own only the capture-time
+// resolutions (server-minted ids, actor stamping, the DOA pre-check for a clean early 403) and the
+// response shape, so a direct POST /api/v1/events cannot bypass any of them (AD-12).
+
+// POST /api/v1/maintenance/assets/:assetId/coverages
+
+const recordCoverageBase: RouteHandler = async (req, res, params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const coverageId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const assetId = requireUuidParam(params, 'assetId');
+    const coverageType = body['coverage_type'];
+    if (typeof coverageType !== 'string' || !COVERAGE_TYPES.has(coverageType)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'coverage_type must be one of: amc, warranty, insurance',
+      );
+    }
+    const providerName = body['provider_name'];
+    if (typeof providerName !== 'string' || providerName.trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'provider_name is required');
+    }
+    const referenceNumberExt = body['reference_number_ext'];
+    if (typeof referenceNumberExt !== 'string' || referenceNumberExt.trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'reference_number_ext is required');
+    }
+    const startDate = requireCalendarDate(body, 'start_date', 'INVALID_PARAMS');
+    const expiryDate = requireCalendarDate(body, 'expiry_date', 'INVALID_PARAMS');
+    // Both are validated YYYY-MM-DD strings, so the lexical comparison IS the calendar comparison.
+    if (expiryDate <= startDate) {
+      throw new AppError(400, 'INVALID_PARAMS', 'expiry_date must be after start_date', {
+        start_date: startDate,
+        expiry_date: expiryDate,
+      });
+    }
+    const businessDate = requireBusinessDate(body);
+    // An exact decimal string end to end; a JS number would silently round the contract value.
+    const contractValueRaw = body['contract_value'];
+    let contractValue: string | null = null;
+    if (contractValueRaw !== undefined && contractValueRaw !== null) {
+      if (typeof contractValueRaw !== 'string' || !COST_NUMERIC_REGEX.test(contractValueRaw)) {
+        throw new AppError(
+          400,
+          'INVALID_PARAMS',
+          'contract_value must be a NUMERIC string with at most 3 decimals',
+          { contract_value: contractValueRaw },
+        );
+      }
+      contractValue = contractValueRaw;
+    }
+
+    const asset = await getAssetById(assetId);
+    if (!asset) {
+      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: assetId,
+        event_type: 'maintenance.coverage_recorded',
+        payload: {
+          coverage_id: coverageId,
+          asset_id: assetId,
+          coverage_type: coverageType,
+          provider_name: providerName.trim(),
+          reference_number_ext: referenceNumberExt.trim(),
+          start_date: startDate,
+          expiry_date: expiryDate,
+          contract_value: contractValue,
+          recorded_by: actor.userId,
+          recorded_at: now,
+          business_date: businessDate,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedId = replayIdOrReject(persisted, 'maintenance.coverage_recorded', 'coverage_id');
+    // Read back BY ID from the persisted payload's own id (the API Contract rule), never by
+    // re-querying the newest row.
+    const coverage = await getCoverageById(persistedId);
+    sendJson(res, 201, { event_id: persisted.event_id, coverage: coverage ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+/**
+ * `status` is resolved against a business_date, never the server clock inside SQL. When the caller
+ * supplies none, the server's IST calendar date is used: the deployment's business day, not a UTC
+ * instant sliced to ten characters.
+ */
+function coverageStatusFilter(
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+  url: URL,
+): { ok: true; status: string | undefined; businessDate: string | undefined } | { ok: false } {
+  const status = url.searchParams.get('status');
+  if (status === null) return { ok: true, status: undefined, businessDate: undefined };
+  if (!['active', 'expired', 'future'].includes(status)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'status must be one of: active, expired, future',
+    );
+    return { ok: false };
+  }
+  const businessDateRaw = url.searchParams.get('business_date');
+  if (businessDateRaw !== null && !isValidCalendarDate(businessDateRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_date must be YYYY-MM-DD');
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    status,
+    businessDate: businessDateRaw ?? toIstCalendarDate(new Date()),
+  };
+}
+
+// GET /api/v1/maintenance/assets/:assetId/coverages
+
+const listAssetCoveragesBase: RouteHandler = async (req, res, params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const assetId = params?.['assetId'];
+  if (!assetId || !isUuid(assetId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'assetId must be a UUID');
+    return;
+  }
+  const coverageType = url.searchParams.get('coverage_type');
+  if (coverageType !== null && !COVERAGE_TYPES.has(coverageType)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'coverage_type must be one of: amc, warranty, insurance',
+    );
+    return;
+  }
+  const statusFilter = coverageStatusFilter(req, res, url);
+  if (!statusFilter.ok) return;
+
+  const coverages = await listCoverages(
+    {
+      asset_id: assetId,
+      coverage_type: coverageType,
+      status: statusFilter.status,
+      business_date: statusFilter.businessDate,
+    },
+    { limit: paging.limit, offset: paging.offset },
+  );
+  sendJson(res, 200, { coverages });
+};
+
+// GET /api/v1/maintenance/coverages
+
+const listCoveragesBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const assetId = url.searchParams.get('asset_id');
+  if (assetId !== null && !isUuid(assetId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'asset_id must be a UUID');
+    return;
+  }
+  const coverageType = url.searchParams.get('coverage_type');
+  if (coverageType !== null && !COVERAGE_TYPES.has(coverageType)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'coverage_type must be one of: amc, warranty, insurance',
+    );
+    return;
+  }
+  const statusFilter = coverageStatusFilter(req, res, url);
+  if (!statusFilter.ok) return;
+
+  const coverages = await listCoverages(
+    {
+      asset_id: assetId,
+      coverage_type: coverageType,
+      status: statusFilter.status,
+      business_date: statusFilter.businessDate,
+    },
+    { limit: paging.limit, offset: paging.offset },
+  );
+  sendJson(res, 200, { coverages });
+};
+
+// GET /api/v1/maintenance/coverages/alerts
+
+const listCoverageAlertsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const paging = parseListPaging(req, res, url);
+  if (!paging) return;
+
+  const coverageId = url.searchParams.get('coverage_id');
+  const assetId = url.searchParams.get('asset_id');
+  const stageDaysRaw = url.searchParams.get('stage_days');
+  if (coverageId !== null && !isUuid(coverageId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'coverage_id must be a UUID');
+    return;
+  }
+  if (assetId !== null && !isUuid(assetId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'asset_id must be a UUID');
+    return;
+  }
+  if (stageDaysRaw !== null && !/^\d+$/.test(stageDaysRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'stage_days must be an integer');
+    return;
+  }
+
+  const alerts = await listCoverageAlerts(
+    {
+      coverage_id: coverageId,
+      asset_id: assetId,
+      stage_days: stageDaysRaw === null ? undefined : Number(stageDaysRaw),
+    },
+    { limit: paging.limit, offset: paging.offset },
+  );
+  sendJson(res, 200, { alerts });
+};
+
+// POST /api/v1/maintenance/coverages/scan
+
+const scanCoveragesBase: RouteHandler = async (req, res, _params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  try {
+    const businessDate = requireBusinessDate(body);
+    const assetId = optionalAssetIdFilter(body);
+    const result = await runCoverageExpiryScan({
+      business_date: businessDate,
+      asset_id: assetId,
+      actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+      auditCtx: auditCtxFor(req, actor, 200),
+    });
+    sendJson(res, 200, result);
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/coverages/:coverageId
+
+const getCoverageBase: RouteHandler = async (req, res, params) => {
+  try {
+    const coverageId = requireUuidParam(params, 'coverageId');
+    const coverage = await getCoverageById(coverageId);
+    if (!coverage) {
+      throw new AppError(404, 'COVERAGE_NOT_FOUND', 'Coverage not found', {
+        coverage_id: coverageId,
+      });
+    }
+    sendJson(res, 200, { coverage });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// POST /api/v1/maintenance/work-orders/:workOrderId/warranty-overrides
+
+const recordWarrantyOverrideBase: RouteHandler = async (req, res, params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const overrideId = randomUUID();
+  const now = new Date().toISOString();
+
+  try {
+    const workOrderId = requireUuidParam(params, 'workOrderId');
+    const reasonCodeRaw = body['reason_code'];
+    if (
+      typeof reasonCodeRaw !== 'string' ||
+      reasonCodeRaw.trim() === '' ||
+      reasonCodeRaw.trim().length > MAX_REASON_CODE_LENGTH
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `reason_code is required and must be at most ${MAX_REASON_CODE_LENGTH} characters`,
+      );
+    }
+    const reasonCode = reasonCodeRaw.trim();
+
+    const workOrder = await getWorkOrderById(workOrderId);
+    if (!workOrder) {
+      throw new AppError(404, 'WORK_ORDER_NOT_FOUND', 'Work order not found', {
+        work_order_id: workOrderId,
+      });
+    }
+    if (workOrder.warranty_flagged !== true) {
+      throw new AppError(
+        409,
+        'WARRANTY_OVERRIDE_NOT_REQUIRED',
+        'The work order is not warranty-flagged, so no override applies',
+        { work_order_id: workOrderId },
+      );
+    }
+    if (workOrder.status === 'completed') {
+      throw new AppError(
+        409,
+        'WORK_ORDER_ALREADY_COMPLETED',
+        'The work order is already completed',
+        { work_order_id: workOrderId, completed_at: workOrder.completed_at },
+      );
+    }
+    // The one-override-per-work-order grain is deliberately NOT pre-checked here (the
+    // raiseCalibrationEscalationBase precedent): a pre-check runs before persistEvent's
+    // idempotency lookup, so it would turn a legitimate same-key REPLAY into a 409 and break the
+    // AD-16 contract. The seam enforces the grain under the work order's lock (after its
+    // alreadyPersisted guard) and the uq_maintenance_warranty_override_work_order 23505 resolver
+    // backs it, so a genuine second override still returns 409
+    // WARRANTY_OVERRIDE_ALREADY_RECORDED with the same existing_override_id detail.
+
+    // AD-3: the override is an approval capability resolved through the DOA registry, never a
+    // hard-coded role check. The seam re-resolves this under the work order's lock; the pre-check
+    // exists so an unauthorized caller gets a clean 403 before an event is minted. Business-rule
+    // rejections are raised HERE, after the RBAC wrapper, never inside it.
+    const approval = await resolveApprover(WARRANTY_OVERRIDE_DOA_TYPE, 0);
+    if (!approval.requiresApproval || approval.approverActorId === null) {
+      throw new AppError(
+        404,
+        'APPROVAL_UNRESOLVED',
+        'No DOA entry governs maintenance.warranty_override',
+        { transaction_type: WARRANTY_OVERRIDE_DOA_TYPE },
+      );
+    }
+    if (approval.approverActorId !== actor.userId) {
+      throw new AppError(
+        403,
+        'APPROVAL_REQUIRED',
+        'The warranty override requires the resolved DOA approver',
+        {
+          work_order_id: workOrderId,
+          resolved_approver_user_id: approval.approverActorId,
+        },
+      );
+    }
+
+    if (!config.maintenance.warrantyOverrideReasonCodes.includes(reasonCode)) {
+      throw new AppError(
+        422,
+        'WARRANTY_OVERRIDE_REASON_INVALID',
+        'The reason code is not a configured warranty override reason',
+        {
+          work_order_id: workOrderId,
+          reason_code: reasonCode,
+          allowed: config.maintenance.warrantyOverrideReasonCodes,
+        },
+      );
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: workOrderId,
+        event_type: 'maintenance.warranty_override_recorded',
+        payload: {
+          override_id: overrideId,
+          work_order_id: workOrderId,
+          warranty_coverage_id: workOrder.warranty_coverage_id,
+          reason_code: reasonCode,
+          overridden_by: actor.userId,
+          overridden_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+
+    const persistedId = replayIdOrReject(
+      persisted,
+      'maintenance.warranty_override_recorded',
+      'override_id',
+    );
+    const override = await getWarrantyOverrideById(persistedId);
+    sendJson(res, 201, { event_id: persisted.event_id, override: override ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/work-orders/:workOrderId/warranty-overrides
+
+const getWarrantyOverrideBase: RouteHandler = async (req, res, params) => {
+  try {
+    const workOrderId = requireUuidParam(params, 'workOrderId');
+    const override = await getWarrantyOverrideByWorkOrder(workOrderId);
+    sendJson(res, 200, { override: override ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+export const recordCoverageHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(recordCoverageBase);
+
+export const listAssetCoveragesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listAssetCoveragesBase);
+
+export const listCoveragesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listCoveragesBase);
+
+export const listCoverageAlertsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listCoverageAlertsBase);
+
+export const scanCoveragesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(scanCoveragesBase);
+
+export const getCoverageHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getCoverageBase);
+
+export const recordWarrantyOverrideHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(recordWarrantyOverrideBase);
+
+export const getWarrantyOverrideHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getWarrantyOverrideBase);

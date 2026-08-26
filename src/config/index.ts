@@ -299,6 +299,42 @@ export const config = {
       }
       return days;
     })(),
+    // Story 7.6 (FR-M-15, Binding Decision 7): the repair-vs-capitalize threshold is a NUMERIC
+    // STRING, never a JS float, compared in SQL with ::numeric. The comparison is strictly greater
+    // than: total_cost equal to the threshold is NOT flagged. A malformed env value fails closed at
+    // load time (the config.msme precedent) so a typo cannot silently change every capitalization
+    // decision.
+    capitalizationThreshold: (() => {
+      const raw = process.env['MAINTENANCE_CAPITALIZATION_THRESHOLD'];
+      if (raw === undefined || raw.trim() === '') return '50000';
+      const value = raw.trim();
+      if (!/^\d{1,12}(\.\d{1,6})?$/.test(value)) {
+        throw new Error(
+          `Invalid MAINTENANCE_CAPITALIZATION_THRESHOLD "${raw}": must be a NUMERIC string with at most 6 decimals.`,
+        );
+      }
+      return value;
+    })(),
+    // Story 7.7 (FR-M-11): the reason codes a warranty override may cite. Commercial policy, not
+    // code: comma-separated, trimmed, unique, at least one entry. A malformed env value fails
+    // closed at load time (the capitalizationThreshold precedent).
+    warrantyOverrideReasonCodes: (() => {
+      const raw = process.env['MAINTENANCE_WARRANTY_OVERRIDE_REASON_CODES'];
+      const value =
+        raw === undefined || raw.trim() === ''
+          ? 'OUT_OF_WARRANTY_SCOPE,WARRANTY_NOT_APPLICABLE,PREVIOUS_UNAUTHORIZED_REPAIR,EMERGENCY_REPAIR'
+          : raw;
+      const codes = value
+        .split(',')
+        .map((c) => c.trim())
+        .filter((c) => c.length > 0);
+      if (codes.length === 0 || new Set(codes).size !== codes.length) {
+        throw new Error(
+          `Invalid MAINTENANCE_WARRANTY_OVERRIDE_REASON_CODES "${raw}": must be a non-empty, duplicate-free, comma-separated list.`,
+        );
+      }
+      return codes;
+    })(),
   },
   bom: {
     maxDepth: parsePositiveIntEnv('BOM_MAX_DEPTH', 20),

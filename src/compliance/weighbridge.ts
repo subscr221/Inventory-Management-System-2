@@ -4,6 +4,8 @@ import { AppError } from '../middleware/error.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import { getLocationByCode } from '../read/projections/location_register.js';
 import { upsertWeighbridgeEvent } from '../read/projections/weighbridge_event.js';
+import { getExaminationByDeviceKey } from '../read/projections/statutory_examination.js';
+import type { StatutoryExaminationRow } from '../read/projections/statutory_examination.js';
 
 /** AC3: tolerance breaches are routed to the receiving supervisor for review before receipt. */
 const TOLERANCE_BREACH_TARGET_ROLE = 'receiving_supervisor';
@@ -38,6 +40,66 @@ function weighbridgeEventType(envelope: EventEnvelope): string | null {
   if (!WEIGHBRIDGE_STREAM_TYPES.has(envelope.stream_type)) return null;
   if (!WEIGHBRIDGE_EVENT_TYPES.has(envelope.event_type)) return null;
   return envelope.event_type;
+}
+
+export interface WeighbridgeLockoutDeps {
+  getExaminationByDeviceKey: (deviceKey: string) => Promise<StatutoryExaminationRow | null>;
+}
+
+const defaultWeighbridgeLockoutDeps: WeighbridgeLockoutDeps = {
+  getExaminationByDeviceKey,
+};
+
+/**
+ * Story 7.6 (FR-M-14, AC 2): the pre-transaction weighbridge trade-weighment lockout, mirroring
+ * assertCalibrationLockout in src/compliance/calibration.ts. Called from persistEvent for every
+ * stream_type === 'weighbridge' && event_type === 'weighbridge.recorded' envelope, BEFORE any DB
+ * write, so the direct-event path and the edge upload path (which converges on persistEvent) both
+ * hit it.
+ *
+ * The weighbridge identity is resolved from payload.device_id through the statutory examination
+ * register's device_key (canonicalized with lower() on both sides). A weighbridge whose stamp is
+ * OVERDUE is blocked 423 WEIGHBRIDGE_OUT_OF_STAMP until it is re-stamped. Fail-open for device keys
+ * not in the register (no statutory examination row - the device is not governed): the Story 7.5
+ * lesson, applied unchanged, so the existing story-3-2/3-3/3-4 suites keep their exact behavior.
+ */
+export async function assertWeighbridgeStampLockout(
+  envelope: EventEnvelope,
+  deps: WeighbridgeLockoutDeps = defaultWeighbridgeLockoutDeps,
+): Promise<void> {
+  if (!WEIGHBRIDGE_STREAM_TYPES.has(envelope.stream_type)) return;
+  if (envelope.event_type !== 'weighbridge.recorded') return;
+
+  const deviceId = envelope.payload['device_id'];
+  if (!isNonEmptyString(deviceId)) {
+    throw new AppError(400, 'INVALID_PARAMS', 'weighbridge.recorded payload is missing device_id', {
+      missing_field: 'device_id',
+    });
+  }
+
+  // Canonicalized on BOTH sides before the lookup. The register stores device_key trimmed and
+  // lowercased; getExaminationByDeviceKey matches on lower() but does NOT trim, and this assert runs
+  // BEFORE assertWeighbridgeRecordedShape (which is where the payload's device_id gets trimmed), so
+  // passing the raw value here let a single leading space miss the register and fail the lockout
+  // open on an out-of-stamp weighbridge.
+  const deviceKey = deviceId.trim().toLowerCase();
+  const examination = await deps.getExaminationByDeviceKey(deviceKey);
+  if (!examination) return;
+  // Only a legal-metrology stamp governs trade weighment; any other examination type on this device
+  // key is not the weighbridge's stamp and must fail open (Table 3, "device not governed").
+  if (examination.examination_type !== 'weighbridge_legal_metrology') return;
+  if (examination.status === 'overdue') {
+    throw new AppError(
+      423,
+      'WEIGHBRIDGE_OUT_OF_STAMP',
+      'Weighbridge statutory stamp is overdue; re-stamp before trade weighment',
+      {
+        device_id: deviceId,
+        examination_id: examination.examination_id,
+        next_due_date: examination.next_due_date,
+      },
+    );
+  }
 }
 
 /**

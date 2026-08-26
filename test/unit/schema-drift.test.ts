@@ -895,6 +895,10 @@ const EXPECTED = [
       'chk_maintenance_work_order_grace',
       'chk_maintenance_work_order_priority',
       'chk_maintenance_work_order_breakdown_link',
+      // Story 7.6 (FR-M-15): the additive cost columns carry their own non-negative checks.
+      'chk_maintenance_work_order_labor_non_negative',
+      'chk_maintenance_work_order_parts_non_negative',
+      'chk_maintenance_work_order_total_non_negative',
     ],
     indexes: [
       'uq_maintenance_work_order_cycle',
@@ -1082,6 +1086,113 @@ const EXPECTED = [
       'idx_instrument_calibration_escalation_instrument',
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 7.6: the statutory examination register (FR-M-14), its record history, the
+  // machine-status projection (FR-M-16) and the per-asset maintenance cost rollup (FR-M-15).
+  {
+    canonical: 'read/projections/statutory_examination.sql',
+    table: 'statutory_examination',
+    constraints: [
+      'uq_statutory_examination_asset_type',
+      'chk_statutory_examination_type',
+      'chk_statutory_examination_status',
+      'chk_statutory_examination_interval',
+    ],
+    indexes: ['uq_statutory_examination_device_key', 'idx_statutory_examination_status_due'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/statutory_examination_record.sql',
+    table: 'statutory_examination_record',
+    constraints: ['chk_statutory_examination_record_dates'],
+    indexes: [
+      'uq_statutory_examination_record_number',
+      'idx_statutory_examination_record_examination',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/asset_operational_status.sql',
+    table: 'asset_operational_status',
+    constraints: ['chk_asset_operational_status'],
+    indexes: [],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/maintenance_asset_cost.sql',
+    table: 'maintenance_asset_cost',
+    constraints: [
+      'chk_maintenance_asset_cost_labor_non_negative',
+      'chk_maintenance_asset_cost_parts_non_negative',
+      'chk_maintenance_asset_cost_total_non_negative',
+    ],
+    indexes: [],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 6.1: the production order projection (FR-MO-01/02/03). The expediting-pairing and
+  // unreversed-counter constraints carry real semantics (AC6 and AC4 enforced by the database).
+  // The production_order_number_seq and its USAGE grant live in the same canonical file (the
+  // indent_number_seq pattern) but are NOT pinned here: the harness loop below asserts only CREATE
+  // TABLE bodies, named constraint DO blocks, index presence and table grants, never sequences or
+  // sequence grants. The sequence is exercised indirectly by the story-6-1 allocation tests.
+  {
+    canonical: 'read/projections/production_order.sql',
+    table: 'production_order',
+    constraints: [
+      'chk_production_order_status',
+      'chk_production_order_quantity_positive',
+      'chk_production_order_source_reference_type',
+      'chk_production_order_unreversed_non_negative',
+      'chk_production_order_expediting_pairing',
+    ],
+    indexes: [
+      'uq_production_order_number_ext',
+      'idx_production_order_status',
+      'idx_production_order_plant',
+      'idx_production_order_output_item',
+      'idx_production_order_bom',
+      'idx_production_order_business_stream',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 7.7: the asset coverage register (AMC, warranty, insurance), its staged 90/60/30 expiry
+  // alerts and the reason-coded warranty override grain (FR-M-10, FR-M-11). The coverage
+  // uniqueness grain is an EXPRESSION index (lower(reference_number_ext)) and therefore lives in
+  // the index list, not the constraint list; the override table is append-only, so its app_user
+  // grant deliberately omits UPDATE.
+  {
+    canonical: 'read/projections/asset_coverage.sql',
+    table: 'asset_coverage',
+    constraints: [
+      'chk_asset_coverage_type',
+      'chk_asset_coverage_provider_name',
+      'chk_asset_coverage_reference_ext',
+      'chk_asset_coverage_dates',
+      'chk_asset_coverage_value_non_negative',
+    ],
+    indexes: [
+      'uq_asset_coverage_reference',
+      'idx_asset_coverage_asset',
+      'idx_asset_coverage_expiry',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/asset_coverage_alert.sql',
+    table: 'asset_coverage_alert',
+    constraints: ['chk_asset_coverage_alert_stage', 'uq_asset_coverage_alert_stage'],
+    indexes: ['idx_asset_coverage_alert_business_date', 'idx_asset_coverage_alert_asset'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/maintenance_warranty_override.sql',
+    table: 'maintenance_warranty_override',
+    constraints: [
+      'uq_maintenance_warranty_override_work_order',
+      'chk_maintenance_warranty_override_reason',
+    ],
+    indexes: ['idx_maintenance_warranty_override_coverage'],
+    appUserGrant: 'INSERT, SELECT',
   },
 ];
 
@@ -1365,6 +1476,70 @@ describe('Story 2.1 schema drift guard', () => {
         assert.ok(canonical.includes(fragment), `${table}.sql missing ${fragment}`);
         assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment} (from ${table}.sql)`);
       }
+    }
+  });
+
+  // The EXPECTED loop above compares CREATE TABLE bodies, named constraint blocks, indexes and
+  // grants. The four Story 7.6 cost columns are none of those: they are added by guarded
+  // DO $$ ... ALTER TABLE ... ADD COLUMN blocks on an already-existing table, so drift in a column
+  // type, default or guard would ship green. Pin the guard blocks themselves.
+  it('Story 7.6 mirrors the additive maintenance_work_order cost columns into init-db.sql', () => {
+    const workOrderSql = read('read/projections/maintenance_work_order.sql');
+    for (const column of ['labor_cost', 'parts_cost', 'total_cost', 'capitalization_flagged']) {
+      const key = `column_name = '${column}'`;
+      assert.strictEqual(
+        extractDoBlock(initDb, key),
+        extractDoBlock(workOrderSql, key),
+        `maintenance_work_order.${column} ADD COLUMN guard drifted from init-db.sql`,
+      );
+      // The guard must be schema-qualified: matching on table_name alone lets a same-named table in
+      // another schema on the search path report the column as present, skipping the real ALTER and
+      // leaving every cost-carrying completion to fail 42703 at runtime.
+      assert.ok(
+        extractDoBlock(workOrderSql, key).includes('table_schema = current_schema()'),
+        `maintenance_work_order.${column} guard must be schema-qualified`,
+      );
+    }
+    for (const fragment of [
+      'ADD COLUMN labor_cost NUMERIC(14,3) NOT NULL DEFAULT 0;',
+      'ADD COLUMN parts_cost NUMERIC(14,3) NOT NULL DEFAULT 0;',
+      'ADD COLUMN total_cost NUMERIC(14,3) NOT NULL DEFAULT 0;',
+      'ADD COLUMN capitalization_flagged BOOLEAN NOT NULL DEFAULT false;',
+    ]) {
+      assert.ok(workOrderSql.includes(fragment), `maintenance_work_order.sql missing ${fragment}`);
+      assert.ok(
+        initDb.includes(fragment),
+        `init-db.sql missing ${fragment} (from maintenance_work_order.sql)`,
+      );
+    }
+  });
+
+  // Same reasoning as the Story 7.6 test above: the two Story 7.7 warranty columns arrive through
+  // guarded ADD COLUMN blocks, so the EXPECTED loop cannot see them. A drifted default on
+  // warranty_flagged would silently flag or unflag every work order the gate reads.
+  it('Story 7.7 mirrors the additive maintenance_work_order warranty columns into init-db.sql', () => {
+    const workOrderSql = read('read/projections/maintenance_work_order.sql');
+    for (const column of ['warranty_flagged', 'warranty_coverage_id']) {
+      const key = `column_name = '${column}'`;
+      assert.strictEqual(
+        extractDoBlock(initDb, key),
+        extractDoBlock(workOrderSql, key),
+        `maintenance_work_order.${column} ADD COLUMN guard drifted from init-db.sql`,
+      );
+      assert.ok(
+        extractDoBlock(workOrderSql, key).includes('table_schema = current_schema()'),
+        `maintenance_work_order.${column} guard must be schema-qualified`,
+      );
+    }
+    for (const fragment of [
+      'ADD COLUMN warranty_flagged BOOLEAN NOT NULL DEFAULT false;',
+      'ADD COLUMN warranty_coverage_id UUID;',
+    ]) {
+      assert.ok(workOrderSql.includes(fragment), `maintenance_work_order.sql missing ${fragment}`);
+      assert.ok(
+        initDb.includes(fragment),
+        `init-db.sql missing ${fragment} (from maintenance_work_order.sql)`,
+      );
     }
   });
 
