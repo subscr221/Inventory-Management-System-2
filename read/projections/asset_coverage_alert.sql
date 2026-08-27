@@ -61,7 +61,7 @@ END $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-    GRANT INSERT, SELECT, UPDATE ON asset_coverage_alert TO app_user;
+    GRANT INSERT, SELECT ON asset_coverage_alert TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON asset_coverage_alert TO readonly_user;

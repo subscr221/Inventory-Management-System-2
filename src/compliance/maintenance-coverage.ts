@@ -98,6 +98,17 @@ function isIsoTimestamp(value: unknown): value is string {
   return typeof value === 'string' && ISO8601_TIMESTAMP_REGEX.test(value);
 }
 
+/**
+ * Whole days from `from` to `to`, both YYYY-MM-DD calendar dates, computed the way SQL DATE
+ * subtraction computes it. Pure arithmetic on two supplied strings: no clock is read, so this
+ * carries none of the wall-clock hazards the module docblock warns about.
+ */
+function calendarDaysBetween(from: string, to: string): number {
+  const [fy, fm, fd] = from.split('-').map(Number) as [number, number, number];
+  const [ty, tm, td] = to.split('-').map(Number) as [number, number, number];
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86400000);
+}
+
 /** Canonical form of a human-entered contract reference (the lower() unique index). */
 export function canonicalCoverageReference(value: string): string {
   return value.trim().toLowerCase();
@@ -137,11 +148,13 @@ function assertCoverageRecordedShape(envelope: EventEnvelope): void {
   if (typeof coverageType !== 'string' || !COVERAGE_TYPES.has(coverageType)) {
     reject('INVALID_PAYLOAD', 'coverage_type must be one of: amc, warranty, insurance');
   }
+  // Measured on the TRIMMED value, which is what gets persisted: measuring the raw string let a
+  // 520-character name with ten leading spaces through and stored it at 510.
   const providerName = p['provider_name'];
   if (
     typeof providerName !== 'string' ||
     providerName.trim() === '' ||
-    providerName.length > MAX_TEXT_LENGTH
+    providerName.trim().length > MAX_TEXT_LENGTH
   ) {
     reject('INVALID_PAYLOAD', 'provider_name must be a non-empty string');
   }
@@ -149,7 +162,7 @@ function assertCoverageRecordedShape(envelope: EventEnvelope): void {
   if (
     typeof reference !== 'string' ||
     reference.trim() === '' ||
-    reference.length > MAX_TEXT_LENGTH
+    reference.trim().length > MAX_TEXT_LENGTH
   ) {
     reject('INVALID_PAYLOAD', 'reference_number_ext must be a non-empty string');
   }
@@ -211,6 +224,16 @@ function assertCoverageExpiryFlaggedShape(envelope: EventEnvelope): void {
   }
   if (!isIsoTimestamp(p['flagged_at'])) {
     reject('INVALID_PAYLOAD', 'flagged_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  // Both siblings bind stream_id to their aggregate (coverage_recorded to asset_id,
+  // warranty_override_recorded to work_order_id) and this assert bound nothing, so a direct poster
+  // could file a real alert row onto any unrelated aggregate's maintenance stream and fragment
+  // per-stream replay. The scan sets stream_id to the alert id and the schema documents it.
+  if (envelope.stream_id !== p['alert_id']) {
+    reject(
+      'INVALID_PAYLOAD',
+      'stream_id must be the alert_id for maintenance.coverage_expiry_flagged',
+    );
   }
 }
 
@@ -429,6 +452,29 @@ async function applyCoverageExpiryFlagged(
         derived_coverage_type: coverage.coverage_type,
         declared_expiry_date: declaredExpiryDate,
         derived_expiry_date: coverage.expiry_date,
+      },
+      409,
+    );
+  }
+
+  // stage_days is derivable from the locked row and the business date, so it must be CHECKED like
+  // every other derivable field, not taken on trust. Without this a direct
+  // maintenance.coverage_expiry_flagged carrying stage_days 30 against a coverage 900 days from
+  // expiry is accepted, occupies the (coverage_id, 30) grain, and because listCoverageStagesDue
+  // joins on a.alert_id IS NULL the genuine 30-day warning - the only stage carrying the
+  // maintenance_supervisor escalation clock - can then never fire for that contract. This is the
+  // same due-ness relation the scan uses to select the stage in the first place.
+  const daysRemaining = calendarDaysBetween(businessDate, coverage.expiry_date);
+  if (daysRemaining > stageDays) {
+    reject(
+      'COVERAGE_DERIVATION_MISMATCH',
+      'The declared stage is not due for this coverage on this business date',
+      {
+        coverage_id: coverageId,
+        stage_days: stageDays,
+        days_remaining: daysRemaining,
+        business_date: businessDate,
+        expiry_date: coverage.expiry_date,
       },
       409,
     );

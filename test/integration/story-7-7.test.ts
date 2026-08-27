@@ -704,6 +704,78 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     }
     assert.deepStrictEqual(stagesInOrder, [30, 60, 90], 'most-urgent stage must fire first');
     assert.strictEqual((await alertRowsFor(coverageId)).length, 3);
+
+    // Review decision D5: the ledger caught up on all three stages, but a single contract owes the
+    // supervisor ONE message, not three. Only the most urgent stage actually flagged is notified.
+    assert.strictEqual(res.body['notifications_delivered'], 1);
+    assert.strictEqual(res.body['notifications_dropped'], 0);
+    // The two withheld messages are COUNTED, so a healthy run cannot be mistaken for one that
+    // silently lost two emissions: delivered + dropped + suppressed reconciles with alerts_raised.
+    assert.strictEqual(res.body['notifications_suppressed'], 2);
+    assert.strictEqual(res.body['coverages_evaluated'], 1, 'one contract, not three stage rows');
+    const notifiedStages: number[] = [];
+    for (const alertId of alertIds) {
+      if ((await notificationCountFor(alertId, 'maintenance_manager')) > 0) {
+        const r = await getAdminPool().query(
+          `SELECT stage_days FROM asset_coverage_alert WHERE alert_id = $1`,
+          [alertId],
+        );
+        notifiedStages.push(r.rows[0]!['stage_days'] as number);
+      }
+    }
+    assert.deepStrictEqual(notifiedStages, [30], 'only the most urgent caught-up stage notifies');
+  });
+
+  it('AC1: a coverage recorded inside the 90-day window writes every stage but notifies once', async () => {
+    // A 25-day cover note is legal under chk_asset_coverage_dates, so 90, 60 and 30 are all due and
+    // unfired on its very first scan (review decision D5).
+    const expiry = addDays(ANCHOR, 25);
+    const assetId = await createAsset();
+    const { coverageId } = await recordCoverageOk(assetId, {
+      coverage_type: 'insurance',
+      expiry_date: expiry,
+    });
+
+    const res = await scan(ANCHOR, { asset_id: assetId });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body['alerts_raised'], 3, 'the ledger records every due stage');
+    assert.strictEqual(res.body['notifications_delivered'], 1, 'one contract, one message');
+    assert.strictEqual((await alertRowsFor(coverageId)).length, 3);
+  });
+
+  it('AC1: every concurrent coverage of one type is alerted, not just the latest-expiring', async () => {
+    // The uniqueness grain is (asset_id, coverage_type, lower(reference_number_ext)), so two
+    // policies of one type in force at once on one asset are legal and ordinary: a
+    // machinery-breakdown policy and a fire policy are both coverage_type 'insurance'. A review
+    // pass briefly narrowed the scan to the latest-expiring row per (asset_id, coverage_type),
+    // which silenced the policy nearest to lapsing - the one that most needed the warning. This
+    // test pins the revert.
+    const assetId = await createAsset();
+    const nearExpiry = addDays(ANCHOR, 100);
+    const farExpiry = addDays(ANCHOR, 400);
+    const { coverageId: nearPolicy } = await recordCoverageOk(assetId, {
+      coverage_type: 'insurance',
+      reference_number_ext: `INS-BREAKDOWN-${randomUUID().slice(0, 6)}`,
+      expiry_date: nearExpiry,
+    });
+    const { coverageId: farPolicy } = await recordCoverageOk(assetId, {
+      coverage_type: 'insurance',
+      reference_number_ext: `INS-FIRE-${randomUUID().slice(0, 6)}`,
+      expiry_date: farExpiry,
+    });
+
+    const res = await scan(addDays(nearExpiry, -90), { asset_id: assetId });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(
+      (await alertRowsFor(nearPolicy)).map((r) => r['stage_days']),
+      [90],
+      'the earlier-expiring concurrent policy must still be warned',
+    );
+    assert.strictEqual(
+      (await alertRowsFor(farPolicy)).length,
+      0,
+      'the later-expiring policy is not due yet',
+    );
   });
 
   it('AC1: a renewal earns a fresh set of stages while the old coverage keeps its fired ones', async () => {
@@ -742,6 +814,50 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body['alerts_raised'], 0);
     assert.strictEqual((await alertRowsFor(coverageId)).length, 0);
+  });
+
+  it('AC1: a forged not-yet-due stage cannot burn the grain the real warning needs', async () => {
+    // stage_days is derivable from the locked row and the business date, so the applier must CHECK
+    // it. Unchecked, a direct event claiming stage 30 against a contract a year out occupies the
+    // (coverage_id, 30) grain, and because the scan joins on `alert_id IS NULL` the genuine 30-day
+    // warning - the only stage carrying the supervisor escalation - could then never fire.
+    const expiry = addDays(ANCHOR, 300);
+    const assetId = await createAsset();
+    const { coverageId } = await recordCoverageOk(assetId, { expiry_date: expiry });
+
+    const now = new Date().toISOString();
+    const alertId = randomUUID();
+    await assert.rejects(
+      persistEvent({
+        stream_type: 'maintenance',
+        stream_id: alertId,
+        event_type: 'maintenance.coverage_expiry_flagged',
+        payload: {
+          alert_id: alertId,
+          coverage_id: coverageId,
+          asset_id: assetId,
+          coverage_type: 'amc',
+          stage_days: 30,
+          expiry_date: expiry,
+          business_date: ANCHOR,
+          flagged_at: now,
+        },
+        metadata: forgedMetadata(),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+      (err: unknown) =>
+        (err as { errorCode?: string }).errorCode === 'COVERAGE_DERIVATION_MISMATCH' &&
+        (err as { statusCode?: number }).statusCode === 409,
+    );
+    assert.strictEqual((await alertRowsFor(coverageId)).length, 0, 'no grain may be occupied');
+
+    // The real 30-day warning still fires when it is genuinely due.
+    const res = await scan(addDays(expiry, -30), { asset_id: assetId });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.ok(
+      (await alertRowsFor(coverageId)).some((r) => r['stage_days'] === 30),
+      'the genuine 30-day stage must still be available',
+    );
   });
 
   it('AC1: a direct double-flag of the same grain is rejected 409 DUPLICATE_COVERAGE_ALERT', async () => {

@@ -87,7 +87,7 @@ Table 1 records the decisions that fix the story's interpretation. Every one of 
   - [x] 4.2 Implement `applyMaintenanceCoverageProjection(envelope, client)` switch:
     - `applyCoverageRecorded`: `alreadyPersisted` guard; Locking Contract step 1 `lockAssetById(asset_id, client)` (404 `ASSET_NOT_FOUND`); date gates against payload `business_date` (422 `COVERAGE_ALREADY_EXPIRED` when `expiry_date < business_date`, 422 `COVERAGE_FUTURE_START` when `start_date > business_date`); duplicate pre-check `getCoverageByReference(assetId, type, reference.trim().toLowerCase(), client, false)` under the asset lock (409 `DUPLICATE_COVERAGE` with `existing_coverage_id`); `recorded_by` derivation check against `envelope.metadata.actor.user_id` (409 `COVERAGE_DERIVATION_MISMATCH` on divergence) and write-back of the derived `recorded_by` onto the persisted payload; `insertCoverage`.
     - `applyCoverageExpiryFlagged`: `alreadyPersisted` guard; lock the coverage row `getCoverageById(coverage_id, client, true)` (404 `COVERAGE_NOT_FOUND`); re-read guard: coverage `expiry_date` still on or after payload `business_date` (a lapsed row rejects 422 `COVERAGE_ALREADY_EXPIRED`, same family); declared `asset_id`, `coverage_type`, `expiry_date` re-derived against the locked row (409 `COVERAGE_DERIVATION_MISMATCH`); alert-grain check `getCoverageAlertForStage` (409 `DUPLICATE_COVERAGE_ALERT` with the existing alert id when present); `insertCoverageAlert`.
-    - `applyWarrantyOverrideRecorded`: `alreadyPersisted` guard; Locking Contract: work order row FOR UPDATE (`getWorkOrderById(workOrderId, client, true)`), then the override grain; 404 `WORK_ORDER_NOT_FOUND`; require `workOrder.warranty_flagged === true` (409 `WARRANTY_OVERRIDE_NOT_REQUIRED` with the work order id); require `workOrder.status !== 'completed'` (409 `WORK_ORDER_ALREADY_COMPLETED` with `completed_at`, reusing the existing code); declared `warranty_coverage_id` must equal `workOrder.warranty_coverage_id` (409 `COVERAGE_DERIVATION_MISMATCH`); `overridden_by` must equal `envelope.metadata.actor.user_id` (409 `COVERAGE_DERIVATION_MISMATCH`); `reason_code` (trimmed) must be a member of `config.maintenance.warrantyOverrideReasonCodes` (422 `WARRANTY_OVERRIDE_REASON_INVALID` listing the allowed codes); DOA re-derivation under lock via `resolveApprover(WARRANTY_OVERRIDE_DOA_TYPE, 0)`: no governing entry rejects 404 `APPROVAL_UNRESOLVED`, a null declared `overridden_by` rejects 403 `APPROVAL_REQUIRED`, a declared actor who is not the resolved approver rejects 409 `COVERAGE_DERIVATION_MISMATCH` (the `applyAssetOperationalStatusProjection` return-to-service structure verbatim); grain check `getWarrantyOverrideByWorkOrder` (409 `WARRANTY_OVERRIDE_ALREADY_RECORDED` with `existing_override_id`); write derived `overridden_by` back onto the persisted payload; `insertWarrantyOverride`.
+    - `applyWarrantyOverrideRecorded`: `alreadyPersisted` guard; Locking Contract: work order row FOR UPDATE (`getWorkOrderById(workOrderId, client, true)`), then the override grain; 404 `WORK_ORDER_NOT_FOUND`; require `workOrder.warranty_flagged === true` (409 `WARRANTY_OVERRIDE_NOT_REQUIRED` with the work order id); require `workOrder.status !== 'completed'` (409 `WORK_ORDER_ALREADY_COMPLETED` with `completed_at`, reusing the existing code); declared `warranty_coverage_id` must equal `workOrder.warranty_coverage_id` (409 `COVERAGE_DERIVATION_MISMATCH`); `overridden_by` must equal `envelope.metadata.actor.user_id` (409 `COVERAGE_DERIVATION_MISMATCH`); `reason_code` (trimmed) must be a member of `config.maintenance.warrantyOverrideReasonCodes` (422 `WARRANTY_OVERRIDE_REASON_INVALID` listing the allowed codes); DOA re-derivation under lock via `resolveApprover(WARRANTY_OVERRIDE_DOA_TYPE, 0)`: no governing entry rejects 404 `APPROVAL_UNRESOLVED`, a null declared `overridden_by` rejects 403 `APPROVAL_REQUIRED`, a declared actor who is not the resolved approver rejects 403 `APPROVAL_REQUIRED` (corrected by code review 2026-08-27: this clause originally read 409 `COVERAGE_DERIVATION_MISMATCH`, contradicting Task 5.2 and Table 4. `overridden_by` is separately re-derived against the envelope actor immediately above, so this branch can only fire for an actor who IS the declared user but is NOT the approver, which is an authority failure, not a derivation failure); grain check `getWarrantyOverrideByWorkOrder` (409 `WARRANTY_OVERRIDE_ALREADY_RECORDED` with `existing_override_id`); write derived `overridden_by` back onto the persisted payload; `insertWarrantyOverride`.
   - [x] 4.3 Edit `src/compliance/maintenance-fault.ts` `applyBreakdownWorkOrderCreated`: after the SLA derivation block (step 4) and before `insertWorkOrder` (step 5), reject any DECLARED `warranty_flagged` or `warranty_coverage_id` in the payload with `WORK_ORDER_DERIVATION_MISMATCH` and the message "warranty_flagged is derived and cannot be declared" (the Story 7.6 derived-field rule), then derive via `getActiveWarrantyForAsset(report.asset_id, p['business_date'] as string, client)`; set `p['warranty_flagged']` to `Boolean(derived)` and `p['warranty_coverage_id']` to the derived coverage id or null; pass both into `insertWorkOrder`. The derivation is a plain SELECT placed AFTER the SLA policy lock; it introduces no new lock type, so the existing fault report to SLA policy to work order to downtime lock order is preserved and no deadlock class is added.
   - [x] 4.4 Edit `src/compliance/maintenance-plan.ts` `applyWorkOrderCompleted`: after the locked work order checks (`WORK_ORDER_NOT_FOUND`, asset correspondence, `WORK_ORDER_ALREADY_COMPLETED`) and BEFORE `setWorkOrderCompleted`, add the chargeable-work gate: when `workOrder.warranty_flagged === true`, read `getWarrantyOverrideByWorkOrder(workOrderId, client)` and reject 403 `APPROVAL_REQUIRED` with message "This work order is warranty-flagged: record a reason-coded override before completing it" and details `{ work_order_id, warranty_coverage_id: workOrder.warranty_coverage_id }` when no override exists. The override read is a plain SELECT under the already-held work order lock; the lock order (asset, weighbridge examination, work order) is unchanged. Extend the story banner comment to cite Story 7.7. ALSO add the matching handler pre-check in `completeWorkOrderBase` (src/api/v1/maintenance.ts): read the work order (already fetched) and, when `warranty_flagged` is true, read the override row and throw the SAME 403 `APPROVAL_REQUIRED` with the same details before `persistEvent`, exactly as `setAssetStatusBase` pre-checks the statutory use-lock (the seam remains the authoritative gate for the direct-event path).
   - [x] 4.5 Wire into `src/events/store.ts`: import the shape assert and applier; call `assertMaintenanceCoverageShape(envelope)` in the pre-transaction assert block immediately after `assertAssetStatusChangedShape` with a Story 7.7 comment; call `applyMaintenanceCoverageProjection(envelope, client)` in the seam switch immediately after `applyAssetOperationalStatusProjection` with a Story 7.7 comment (projection plus domain_events insert commit or roll back together).
@@ -145,6 +145,114 @@ Table 1 records the decisions that fix the story's interpretation. Every one of 
   - [x] 9.1 Append Story 7.7 entries to `_bmad-output/implementation-artifacts/deferred-work.md` under a `Story 7.7` heading: (a) no amendment/void/supersede path for coverages (renewal is a new record; a mistaken record persists until expiry); (b) no reservation-time warranty prompt (Binding Decision 14, the Story 7.4 deferral stands as written); (c) insurance claims administration out of scope (PRD Non-Goal); (d) no edge/offline capture (Story 7.8 owns it); (e) the accept-handler `business_date` is a UTC `slice(0,10)` (the pre-existing Story 7.3 behavior at src/api/v1/maintenance.ts:1368); the warranty derivation consistently consumes the payload business_date so the IST-vs-UTC near-midnight sliver is inherited unchanged, not introduced here; (f) re-affirm the inherited platform gaps exactly as logged under 7.5/7.6: maintenance.* on a mismatched stream_type skips every seam (a forged coverage or override could smuggle past on a non-maintenance stream), same-event-type idempotency reuse returns the original event, the alert-commit/notification crash window, `requireBusinessDate` validates calendar form only (a 2999-01-01 business_date on the record route is implausible-but-valid), unprovisioned notification roles fan out to zero recipients reporting success, and the notification dedup rides an unindexed `payload->>'object_id'` scan (same class as the 7.6 Group B deferral). Do NOT fix any of these in-story.
   - [x] 9.2 Run the full gate battery and record the exact counts in the Dev Agent Record: `npm run build`; `npx tsc --noEmit`; `npx eslint src/ test/`; `npm run format:check` (or prettier pass on touched files); `npm run db:migrate` twice; `test/unit/schema-drift.test.ts`; `npm run spine-acceptance-contract` (6/6); `npm test` full suite with the pre-existing baseline only (16 failures: the 15 documented Epic 1-3 idempotency-replay failures plus the 1 `gate_dwell_metric` CRLF artifact; the intermittent story-5-3 clock-window flake is the known conditional 17th; ZERO new failures is the bar); `npm run edge:test` unchanged 30/30; edge typecheck/lint/build unchanged; `git diff --check`.
   - [x] 9.3 Run `graphify update .` after the gates pass (AST-only, no API cost).
+
+### Review Findings
+
+Code review of Story 7.7, Group A (schema, events, projections, migrations), 2026-08-27.
+Adversarial pass: Blind Hunter, Edge Case Hunter, Acceptance Auditor, over baseline
+`e93014f` to HEAD `d46c348`. Groups B and C are reviewed separately.
+
+- [x] [Review][Patch] Narrow `listCoverageStagesDue` to the current coverage per asset and coverage type - resolved D1 to option 1: reuse the single-winner rule `getActiveWarrantyForAsset` already applies (`ORDER BY expiry_date DESC, coverage_id ASC LIMIT 1`) so AC 1 and AC 2 agree on which row is current, no schema change and no Binding Decision 5 amendment. Correct the docblock in the same patch [src/read/projections/asset_coverage.ts:246-286]
+- [x] [Review][Patch] Backfill `warranty_flagged` and `warranty_coverage_id` for breakdown work orders open at migration time - resolved D2 to option 1: a one-shot guarded `UPDATE ... FROM asset_coverage` block in the canonical SQL, deriving with the same single-winner rule as D1, mirrored into init-db.sql. Sequence after D1 [read/projections/maintenance_work_order.sql:236-263]
+- [x] [Review][Patch] Drop the UPDATE grant from `asset_coverage` and `asset_coverage_alert` - resolved D3 to option 1: dead privilege that contradicts Binding Decision 5 and falsifies the ledger claim that a coverage can only be corrected by direct SQL. Update the drift pin and the init-db mirror with it [read/projections/asset_coverage.sql:112, read/projections/asset_coverage_alert.sql:64]
+- [x] [Review][Defer] Replaying a pre-7.7 breakdown payload re-derives the warranty flag against today's register [src/events/schema.ts:2288-2297, src/read/projections/maintenance_work_order.ts:162-163] - deferred, resolved D4 to option 3: real replay non-determinism, but the correct fix makes persisted payloads carry derived values, which changes the declared-field contract Binding Decision 3 pins and Group B enforces across 39 tests
+- [x] [Review][Patch] Separate the alert grain from the notification in the coverage scan - resolved D5 to option 1 modified: write every due and unfired grain row so catch-up stays structural, but emit only the most urgent stage notification per coverage per run. The alert table is a ledger, the notification is a message. Touches Group B `runCoverageExpiryScan` [src/maintenance/coverage-jobs.ts, src/read/projections/asset_coverage.ts:262-267]
+- [x] [Review][Patch] Add the `warranty_flagged` / `warranty_coverage_id` pairing CHECK - resolved D6 to option 1: one guarded constraint, matching `chk_production_order_expediting_pairing` which Story 6.1 landed in the same migration batch, closing the direct-SQL `(true, null)` row that can never be completed [read/projections/maintenance_work_order.sql:236-262]
+- [x] [Review][Patch] `listBreakdownWorkOrdersInPeriod` returns rows that lie about their own type [src/read/projections/maintenance_work_order.ts:336-355]
+- [x] [Review][Patch] Schema drift pins `uq_asset_coverage_reference` by bare name substring, never by index body [test/unit/schema-drift.test.ts:1174,1565-1567]
+- [x] [Review][Patch] `listCoverageStagesDue` accepts stages the alert CHECK rejects and does not dedupe the stage list [src/read/projections/asset_coverage.ts:259]
+- [x] [Review][Patch] `listCoverageAlerts` orders by an instant that is identical across a catch-up batch [src/read/projections/asset_coverage_alert.ts:136]
+- [x] [Review][Patch] `insertCoverage` and `insertCoverageAlert` cast raw strings to `::date` with no calendar validation [src/read/projections/asset_coverage.ts:84, src/read/projections/asset_coverage_alert.ts:52]
+- [x] [Review][Patch] Empty-string filters are treated as absent while other invalid values return an empty list [src/read/projections/asset_coverage.ts:192,197,202, src/read/projections/asset_coverage_alert.ts:111,116]
+- [x] [Review][Patch] The migration list justifies its ordering with a false invariant about foreign keys [src/events/migrate.ts:127,142]
+- [x] [Review][Defer] `coverage_type` is declared on the alert payload but has no column to land in [read/projections/asset_coverage_alert.sql:21-32] - deferred, pre-existing
+- [x] [Review][Defer] `asset_coverage.updated_at` is a dead column with no writer [read/projections/asset_coverage.sql:37] - deferred, pre-existing
+- [x] [Review][Defer] Contract references are matched case-folded but not trim-folded [read/projections/asset_coverage.sql:45] - deferred, pre-existing
+- [x] [Review][Defer] `lower()` is collation-dependent and no collation or locale is pinned [read/projections/asset_coverage.sql:30,45] - deferred, pre-existing
+- [x] [Review][Defer] `reference_number_ext` is unbounded TEXT under a B-tree expression index [read/projections/asset_coverage.sql:30,45] - deferred, pre-existing
+- [x] [Review][Defer] Stages still unfired when a coverage lapses are lost with no closing record [src/read/projections/asset_coverage.ts:265] - deferred, pre-existing
+- [x] [Review][Defer] `asset_coverage_alert` denormalises asset and expiry with no foreign key and no consistency guard [read/projections/asset_coverage_alert.sql:26-27] - deferred, pre-existing
+- [x] [Review][Defer] `maintenance_warranty_override.warranty_coverage_id` has no foreign key, so a replay can orphan it [read/projections/maintenance_warranty_override.sql:25,35] - deferred, pre-existing
+- [x] [Review][Defer] `chk_asset_coverage_dates` is strictly greater, so a one-day cover note cannot be recorded [read/projections/asset_coverage.sql:41] - deferred, pre-existing
+- [x] [Review][Defer] `business_date` and `flagged_at` on an alert row are unconstrained relative to each other [read/projections/asset_coverage_alert.sql:26-28] - deferred, pre-existing
+- [x] [Review][Defer] The schema-drift suite is left red by the pre-existing `gate_dwell_metric` CRLF failure [test/unit/schema-drift.test.ts:1598] - deferred, pre-existing
+
+
+Group A patches applied 2026-08-27. Gates after the patch pass: `tsc --noEmit` exit 0, eslint
+clean at `--max-warnings=0`, prettier clean on every touched file, `db:migrate` run twice and
+idempotent, schema-drift 109 (108 pass, 1 pre-existing `gate_dwell_metric` CRLF), story-7-7 41/41
+(three new AC 1 cases pinning review decisions D1 and D5), story-6-1 and story-7-2 through 7-6
+240/240 unchanged, full suite 1217 (1201 pass, 16 fail: the documented pre-existing 15 idempotency
+plus `gate_dwell_metric`, 0 new; the baseline set was 17).
+
+Groups B (seam, jobs, API, wiring) and C (integration tests) are NOT yet reviewed. Review decision
+D5 reached into Group B `runCoverageExpiryScan` because the fix lives there, so that file is
+already patched when its own review runs.
+
+### Review Findings: Group B
+
+Code review of Story 7.7, Group B (compliance seam, scan job, REST surface, event-store wiring,
+config), 2026-08-27. Adversarial pass: Blind Hunter, Edge Case Hunter, Acceptance Auditor, over
+baseline `e93014f` against the working tree already carrying the Group A patches. 41 raw findings
+deduped to 30.
+
+- [x] [Review][Decision] RESOLVED to option 1 (revert): the current-coverage narrowing was removed and `listCoverageStagesDue` scans every in-force coverage again. No data-only rule separates a renewal from a second live contract (both carry a fresh reference number), so the renewal double-alert is logged in deferred-work rather than papered over. The Group A test that asserted the dropped alerts as correct is replaced by one pinning the revert. [src/read/projections/asset_coverage.ts, test/integration/story-7-7.test.ts]
+- [x] [Review][Decision] RESOLVED to option 1: the three MUTABLE handler pre-checks (`WORK_ORDER_ALREADY_COMPLETED`, `APPROVAL_UNRESOLVED`, `APPROVAL_REQUIRED`) were removed and now live only in the seam, which re-evaluates them under the work-order lock after the alreadyPersisted guard and raises identical codes, messages and details. `WARRANTY_OVERRIDE_NOT_REQUIRED` and the reason-code check were deliberately KEPT: `warranty_flagged` never mutates after work-order creation and the allowed codes are load-time config, so neither answer can change under a legitimate replay. [src/api/v1/maintenance.ts]
+- [x] [Review][Patch] `applyCoverageExpiryFlagged` never re-derives stage due-ness, so a forged event burns an alert stage the genuine scan then skips forever [src/compliance/maintenance-coverage.ts:416-449]
+- [x] [Review][Patch] `coverages_evaluated` counts due stage rows, not coverages, inflating by up to 3x [src/maintenance/coverage-jobs.ts:229]
+- [x] [Review][Patch] D5 suppression increments no counter, so a healthy run and a run that lost two notifications report identically [src/maintenance/coverage-jobs.ts:196-197,225-232]
+- [x] [Review][Patch] `getAssetById` is awaited outside the try, so a transient failure 500s a run whose alert rows already committed and are never reported in `alert_ids` [src/maintenance/coverage-jobs.ts:180-199]
+- [x] [Review][Patch] The scan tolerates only `DUPLICATE_COVERAGE_ALERT`, so three other codes its own applier raises abort the whole run mid-loop [src/maintenance/coverage-jobs.ts:189]
+- [x] [Review][Patch] The SQLSTATE 22003 mapping is ungated by event family, so a coverage `contract_value` overflow returns `COST_VALUE_OUT_OF_RANGE` with a null `work_order_id` [src/events/store.ts:1639-1660]
+- [x] [Review][Patch] `assertCoverageExpiryFlaggedShape` pins no `stream_id` binding, unlike both siblings, so an alert can be filed onto any aggregate's stream [src/compliance/maintenance-coverage.ts:188-215]
+- [x] [Review][Patch] The record-coverage handler enforces no length bound, so one route answers two failures of the same field with two different error codes, and the seam measures the untrimmed value [src/api/v1/maintenance.ts:3897-3904, src/compliance/maintenance-coverage.ts:139-155]
+- [x] [Review][Patch] `GET /work-orders/:workOrderId/warranty-overrides` returns 200 with a null body for a work order that does not exist [src/api/v1/maintenance.ts:4290-4298]
+- [x] [Review][Patch] The declared-warranty rejection always names `warranty_flagged` even when only `warranty_coverage_id` was declared [src/compliance/maintenance-fault.ts:585-596]
+- [x] [Review][Patch] `warrantyOverrideReasonCodes` silently substitutes the permissive defaults for a whitespace-only env value, and validates no per-entry length or character class [src/config/index.ts:321-336]
+- [x] [Review][Patch] The alerts-list `stage_days` param is digits-only, so a huge value 500s from PostgreSQL 22003 instead of 400ing; the Story 7.5 twin pins its stage set [src/api/v1/maintenance.ts:4102-4113]
+- [x] [Review][Patch] Task 4.2 of this spec pins 409 `COVERAGE_DERIVATION_MISMATCH` for a non-approver override while Task 5.2 and Table 4 pin 403 `APPROVAL_REQUIRED`; the code follows Table 4, which is the correct reading, so the task wording is what needs correcting [spec Task 4.2]
+- [x] [Review][Defer] A nested pool checkout happens while a row lock is held, so the pool can deadlock against itself [src/compliance/maintenance-coverage.ts:544, src/events/store.ts:440-446] - deferred, pre-existing
+- [x] [Review][Defer] Preventive and scheduled work orders are never warranty-checked, so chargeable work on an in-warranty asset bypasses the AC 3 gate [src/compliance/maintenance-plan.ts:535,665] - deferred, pre-existing
+- [x] [Review][Defer] `applyWorkOrderCompleted` takes the weighbridge examination lock before it reaches the AC 3 gate, so a doomed completion still serializes against re-stamping [src/compliance/maintenance-plan.ts:620-626,665-677] - deferred, pre-existing
+- [x] [Review][Defer] D5's one-message-per-coverage property is per-run only, so two concurrent scans both notify one contract and the second carries no escalation [src/maintenance/coverage-jobs.ts:189,196-197] - deferred, pre-existing
+- [x] [Review][Defer] `INVALID_PAYLOAD` is raised by all three shape asserts but appears nowhere in the story's Error Code Contract [src/compliance/maintenance-coverage.ts:135-282] - deferred, pre-existing
+- [x] [Review][Defer] `business_date` on the cross-asset coverage list is silently ignored and unvalidated unless `status` is also supplied [src/api/v1/maintenance.ts:3979-4005] - deferred, pre-existing
+- [x] [Review][Defer] The IST default business date is never echoed, so a near-midnight response cannot be interpreted [src/api/v1/maintenance.ts:4004,4040-4046] - deferred, pre-existing
+- [x] [Review][Defer] The reason-code allow-list is case and whitespace exact while the contract reference in the same module is case-folded [src/config/index.ts:326-335, src/compliance/maintenance-coverage.ts:103] - deferred, pre-existing
+- [x] [Review][Defer] The handler and the seam validate DOA authority and reason code in opposite order, so one input yields 403 through REST and 422 through the direct event path [src/api/v1/maintenance.ts:4218-4253, src/compliance/maintenance-coverage.ts:532-563] - deferred, pre-existing
+- [x] [Review][Defer] The completion handler runs the warranty gate before any already-completed check, so it can shadow `WORK_ORDER_ALREADY_COMPLETED` (not reachable through the API today) [src/api/v1/maintenance.ts:920-933] - deferred, pre-existing
+
+
+### Session Handoff (2026-08-27, review paused)
+
+Groups A and B of the code review are COMPLETE and every patch is applied to the working tree.
+Nothing is committed. Group C (`test/integration/story-7-7.test.ts`, the integration suite itself)
+has NOT been reviewed; its diff is already written to `_bmad-output/diff-7-7-group-c.patch`, though
+it must be regenerated against the working tree because the file has since gained four tests.
+
+Verification state at the pause:
+
+- The last full green run was AFTER every source patch landed: `tsc --noEmit` exit 0, eslint clean
+  at `--max-warnings=0`, prettier clean, story-7-7 41/41.
+- Two test assertions were added AFTER that run and are UNVERIFIED: the forged not-yet-due stage
+  test, and the `notifications_suppressed` / `coverages_evaluated` assertions in the catch-up test.
+- The Docker Desktop Linux engine then began returning HTTP 500 on every API route, so PostgreSQL
+  is unreachable and no integration test can run. This is an environment failure, not a code one:
+  a bare `pg` client connect returns "timeout expired".
+
+To resume: restart Docker Desktop, re-run `node --env-file=.env.test --import tsx --test
+--test-concurrency=1 test/integration/story-7-7.test.ts`, then the 7-2 through 7-6 and 6-1
+regressions and the full suite, then review Group C.
+
+Two judgement calls made during the Group B patch pass that a later reader should know about:
+
+1. The config reason-code length bound is 200, matching `MAX_REASON_CODE_LENGTH` in
+   `src/compliance/maintenance-coverage.ts`. It is duplicated rather than imported because config
+   loads before the seams; the two must be kept equal.
+2. The SQLSTATE 22003 mapping in `src/events/store.ts` is now gated on a new
+   `COST_BEARING_EVENT_TYPES` set holding only `maintenance.work_order_completed`. Any future event
+   family that writes the NUMERIC(14,3) cost columns must be added to that set or its overflow will
+   surface as an unmapped 500.
 
 ## Dev Notes
 

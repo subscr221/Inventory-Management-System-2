@@ -1159,7 +1159,10 @@ const EXPECTED = [
   // alerts and the reason-coded warranty override grain (FR-M-10, FR-M-11). The coverage
   // uniqueness grain is an EXPRESSION index (lower(reference_number_ext)) and therefore lives in
   // the index list, not the constraint list; the override table is append-only, so its app_user
-  // grant deliberately omits UPDATE.
+  // grant deliberately omits UPDATE. Review decision D3 removed the UPDATE grant from
+  // asset_coverage and asset_coverage_alert too: Binding Decision 5 declares both append-only,
+  // neither module exposes an UPDATE accessor, and leaving the privilege granted made the
+  // deferred-work claim that a coverage can only be corrected by direct SQL false.
   {
     canonical: 'read/projections/asset_coverage.sql',
     table: 'asset_coverage',
@@ -1175,14 +1178,21 @@ const EXPECTED = [
       'idx_asset_coverage_asset',
       'idx_asset_coverage_expiry',
     ],
-    appUserGrant: 'INSERT, SELECT, UPDATE',
+    // Review patch P2: a name-only substring match would stay green if the init-db copy lost the
+    // lower() call, and the ENTIRE semantic content of this index is that call. Case-variant
+    // duplicate contracts would then be insertable on container-initialised databases while the
+    // migrate path kept rejecting them. Expression indexes get their body pinned, not their name.
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_coverage_reference ON asset_coverage (asset_id, coverage_type, lower(reference_number_ext));',
+    ],
+    appUserGrant: 'INSERT, SELECT',
   },
   {
     canonical: 'read/projections/asset_coverage_alert.sql',
     table: 'asset_coverage_alert',
     constraints: ['chk_asset_coverage_alert_stage', 'uq_asset_coverage_alert_stage'],
     indexes: ['idx_asset_coverage_alert_business_date', 'idx_asset_coverage_alert_asset'],
-    appUserGrant: 'INSERT, SELECT, UPDATE',
+    appUserGrant: 'INSERT, SELECT',
   },
   {
     canonical: 'read/projections/maintenance_warranty_override.sql',
@@ -1541,6 +1551,39 @@ describe('Story 2.1 schema drift guard', () => {
         `init-db.sql missing ${fragment} (from maintenance_work_order.sql)`,
       );
     }
+    // Review decision D6: the pairing CHECK is what stops a (true, null) row that can never be
+    // completed. It is an additive ALTER on an existing table, so the EXPECTED loop cannot see it.
+    assert.strictEqual(
+      extractDoBlock(initDb, 'chk_maintenance_work_order_warranty_pairing'),
+      extractDoBlock(workOrderSql, 'chk_maintenance_work_order_warranty_pairing'),
+      'chk_maintenance_work_order_warranty_pairing drifted from init-db.sql',
+    );
+    assert.ok(
+      workOrderSql.includes(
+        'CHECK ((warranty_flagged = false AND warranty_coverage_id IS NULL) OR (warranty_flagged = true AND warranty_coverage_id IS NOT NULL))',
+      ),
+      'the warranty pairing CHECK body must pin both directions of the pair',
+    );
+  });
+
+  // Review decision D2: the one-shot backfill closes AC 2 and AC 3 for breakdown work orders that
+  // were already open at migration time. It lives in asset_coverage.sql because the work-order file
+  // migrates first, and the column comment is its one-shot marker: without that guard a re-run
+  // would retroactively flag work orders against coverages recorded after the backfill.
+  it('Story 7.7 mirrors the one-shot warranty_flagged backfill into init-db.sql', () => {
+    const coverageSql = read('read/projections/asset_coverage.sql');
+    for (const fragment of [
+      "col_description('maintenance_work_order'::regclass, marker_attnum) IS NOT NULL",
+      'SELECT DISTINCT ON (asset_id) asset_id, coverage_id',
+      "AND w.status IN ('open', 'overdue')",
+      'COMMENT ON COLUMN maintenance_work_order.warranty_flagged IS',
+    ]) {
+      assert.ok(coverageSql.includes(fragment), `asset_coverage.sql backfill missing ${fragment}`);
+      assert.ok(
+        initDb.includes(fragment),
+        `init-db.sql missing ${fragment} (from the asset_coverage.sql backfill)`,
+      );
+    }
   });
 
   for (const entry of EXPECTED) {
@@ -1564,6 +1607,11 @@ describe('Story 2.1 schema drift guard', () => {
       for (const index of indexes) {
         assert.ok(canonicalSql.includes(index), `canonical SQL missing index ${index}`);
         assert.ok(initDb.includes(index), `init-db.sql missing index ${index}`);
+      }
+      const indexBodies = (entry as { indexBodies?: string[] }).indexBodies ?? [];
+      for (const body of indexBodies) {
+        assert.ok(canonicalSql.includes(body), `canonical SQL missing index body: ${body}`);
+        assert.ok(initDb.includes(body), `init-db.sql missing index body: ${body}`);
       }
       const grant = appUserGrant ?? 'INSERT, SELECT, UPDATE';
       assert.ok(

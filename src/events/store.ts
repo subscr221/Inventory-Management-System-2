@@ -426,6 +426,12 @@ function mapRowToEvent(row: Record<string, unknown>): PersistedEvent {
   };
 }
 
+/**
+ * The event families whose appliers write the NUMERIC(14,3) maintenance cost columns, and so the
+ * only ones for which a SQLSTATE 22003 means a cost magnitude problem.
+ */
+const COST_BEARING_EVENT_TYPES = new Set(['maintenance.work_order_completed']);
+
 export async function persistEvent(
   envelope: EventEnvelope,
   auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
@@ -1645,7 +1651,17 @@ export async function persistEvent(
     // maintenance_asset_cost rollup ADDS to a running total with no ceiling at all - left unmapped
     // that surfaced as a 500 and, in the rollup case, permanently blocked every later completion
     // for that asset.
-    if (err && typeof err === 'object' && 'code' in err && err.code === '22003') {
+    // Gated on the cost-bearing event families. Left ungated, a Story 7.7
+    // maintenance.coverage_recorded whose contract_value overflows NUMERIC(14,3) came back as
+    // COST_VALUE_OUT_OF_RANGE with a null work_order_id, pointing at cost columns the coverage
+    // register does not have - and so did every 22003 raised anywhere else in the platform.
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      err.code === '22003' &&
+      COST_BEARING_EVENT_TYPES.has(envelope.event_type)
+    ) {
       throw new AppError(
         422,
         'COST_VALUE_OUT_OF_RANGE',

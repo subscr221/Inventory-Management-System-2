@@ -338,7 +338,14 @@ export async function listBreakdownWorkOrdersInPeriod(
             to_char(w.grace_until_date, 'YYYY-MM-DD') AS grace_until_date,
             w.status, w.generated_for_cycle, w.fault_report_id, w.priority, w.sla_policy_id,
             w.sla_response_due_at, w.sla_resolution_due_at, w.completed_at, w.completed_by,
-            w.overdue_at, w.escalated_at, w.created_at, w.updated_at
+            w.overdue_at, w.escalated_at,
+            w.labor_cost::text AS labor_cost,
+            w.parts_cost::text AS parts_cost,
+            w.total_cost::text AS total_cost,
+            w.capitalization_flagged,
+            w.warranty_flagged,
+            w.warranty_coverage_id,
+            w.created_at, w.updated_at
        FROM maintenance_work_order w
       WHERE w.origin = 'breakdown'
         AND w.plan_id IS NULL

@@ -7986,7 +7986,7 @@ END $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-    GRANT INSERT, SELECT, UPDATE ON asset_coverage TO app_user;
+    GRANT INSERT, SELECT ON asset_coverage TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON asset_coverage TO readonly_user;
@@ -8056,7 +8056,7 @@ END $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-    GRANT INSERT, SELECT, UPDATE ON asset_coverage_alert TO app_user;
+    GRANT INSERT, SELECT ON asset_coverage_alert TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON asset_coverage_alert TO readonly_user;
@@ -8137,9 +8137,10 @@ END $$;
 -- applyBreakdownWorkOrderCreated from the active-warranty lookup against the payload business_date
 -- (Binding Decisions 3 and 4): a declared warranty_flagged or warranty_coverage_id in the envelope
 -- is rejected with WORK_ORDER_DERIVATION_MISMATCH, so there is no client write path. Preventive
--- work orders are never checked and keep the false default (Binding Decision 2). No CHECK
--- constraint is needed: a defaulted boolean and a nullable UUID are self-validating. The existing
--- columns, constraints and indexes are untouched.
+-- work orders are never checked and keep the false default (Binding Decision 2). The two columns
+-- are paired by chk_maintenance_work_order_warranty_pairing below, so a flagged row always carries
+-- the coverage the override grain requires. The existing columns, constraints and indexes are
+-- untouched.
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -8160,4 +8161,78 @@ BEGIN
   ) THEN
     ALTER TABLE maintenance_work_order ADD COLUMN warranty_coverage_id UUID;
   END IF;
+END $$;
+
+-- Review decision D6: pair the two warranty columns at the database level. A row carrying
+-- warranty_flagged = true with warranty_coverage_id IS NULL is otherwise structurally legal and can
+-- NEVER be completed, because the override applier re-derives the coverage id from the locked work
+-- order row and maintenance_warranty_override.warranty_coverage_id is NOT NULL, so the completion
+-- raises SQLSTATE 23502 as an unmapped 500 forever. The seam always derives the pair together, so
+-- the only writer that can produce the broken shape is direct SQL; Story 6.1 pins exactly this
+-- class in the same migration batch with chk_production_order_expediting_pairing.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_warranty_pairing'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_warranty_pairing CHECK ((warranty_flagged = false AND warranty_coverage_id IS NULL) OR (warranty_flagged = true AND warranty_coverage_id IS NOT NULL));
+  END IF;
+END $$;
+
+-- Review decision D2: warranty_flagged is derived exactly once, at breakdown work-order creation,
+-- so every breakdown work order still OPEN when this migration runs would keep the false default
+-- permanently and complete without ever demanding an override. AC 2 and AC 3 would silently not
+-- apply to the whole pre-migration backlog. This one-shot pass re-derives the pair for those rows
+-- with the SAME single-winner rule getActiveWarrantyForAsset applies (coverage_type 'warranty', in
+-- force on the date, latest expiry wins, lowest coverage_id breaks the tie).
+--
+-- It lives in asset_coverage.sql, not in maintenance_work_order.sql, because the work-order file
+-- migrates FIRST and the coverage register does not exist yet at that point.
+--
+-- The column comment is the one-shot marker: a re-run returns before touching a row, so a coverage
+-- recorded after the backfill can never retroactively flag a work order (the replay-determinism
+-- class logged under review decision D4). CURRENT_DATE is read deliberately and is the only clock
+-- read on the Story 7.7 path: a migration has no payload business_date to derive from.
+DO $$
+DECLARE
+  marker_attnum SMALLINT;
+BEGIN
+  IF to_regclass('maintenance_work_order') IS NULL THEN
+    RETURN;
+  END IF;
+  SELECT attnum INTO marker_attnum
+    FROM pg_attribute
+   WHERE attrelid = 'maintenance_work_order'::regclass
+     AND attname = 'warranty_flagged'
+     AND NOT attisdropped;
+  IF marker_attnum IS NULL THEN
+    RETURN;
+  END IF;
+  IF col_description('maintenance_work_order'::regclass, marker_attnum) IS NOT NULL THEN
+    RETURN;
+  END IF;
+
+  UPDATE maintenance_work_order w
+     SET warranty_flagged = true,
+         warranty_coverage_id = cur.coverage_id,
+         updated_at = now()
+    FROM (
+      SELECT DISTINCT ON (asset_id) asset_id, coverage_id
+        FROM asset_coverage
+       WHERE coverage_type = 'warranty'
+         AND start_date <= CURRENT_DATE
+         AND expiry_date >= CURRENT_DATE
+       ORDER BY asset_id, expiry_date DESC, coverage_id ASC
+    ) cur
+   WHERE w.asset_id = cur.asset_id
+     AND w.origin = 'breakdown'
+     AND w.status IN ('open', 'overdue')
+     AND w.warranty_flagged = false
+     AND w.warranty_coverage_id IS NULL;
+
+  EXECUTE 'COMMENT ON COLUMN maintenance_work_order.warranty_flagged IS ' ||
+    quote_literal('Story 7.7 AC 2: server-derived at breakdown work-order creation; rows open at migration time backfilled once by asset_coverage.sql');
 END $$;

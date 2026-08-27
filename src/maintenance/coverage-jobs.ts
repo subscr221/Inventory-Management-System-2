@@ -53,6 +53,13 @@ export interface CoverageScanResult {
   alerts_raised: number;
   notifications_delivered: number;
   notifications_dropped: number;
+  /**
+   * Stages whose alert row committed but whose message was intentionally withheld, because a more
+   * urgent stage for the same coverage had already been notified in this run. Without this counter
+   * a healthy run and a run that silently lost two emissions produce the identical result, which
+   * defeats the write-versus-delivery separation this job header calls load-bearing.
+   */
+  notifications_suppressed: number;
   alert_ids: string[];
 }
 
@@ -109,15 +116,36 @@ async function inTransaction<T>(
  * column to flip - it simply stops satisfying the active-warranty predicate, which is evaluated in
  * SQL against business_date at work-order creation time. Coverages are append-only, and a renewal
  * is a new row with its own fresh set of stages (Binding Decision 5).
+ *
+ * Every coverage in force is scanned, including several of one type on one asset, because that is a
+ * legal shape under the (asset_id, coverage_type, lower(reference_number_ext)) uniqueness grain. A
+ * consequence, logged in deferred-work rather than fixed here: a renewal recorded before the old
+ * contract lapses leaves BOTH rows eligible, so the superseded contract still raises its remaining
+ * unfired stages.
  */
 export async function runCoverageExpiryScan(scope: CoverageScanScope): Promise<CoverageScanResult> {
   const filters = { asset_id: scope.asset_id ?? null };
 
   const dueStages = await listCoverageStagesDue(scope.business_date, COVERAGE_STAGES, filters);
 
+  // dueStages is the CROSS JOIN of coverages against the stage array, so its length is a stage
+  // count, not a coverage count: one contract with three due stages is ONE coverage evaluated.
+  const coveragesEvaluated = new Set(dueStages.map((d) => d.coverage_id)).size;
+
   const alertIds: string[] = [];
+  let notificationsSuppressed = 0;
   let notificationsDelivered = 0;
   let notificationsDropped = 0;
+  // Review decision D5: the alert table is a LEDGER, the notification is a MESSAGE, and conflating
+  // them turned one contract into a pile of pages. Every due and unfired stage still gets its grain
+  // row, so catch-up stays structural and a skipped scan never loses a stage - but only the most
+  // urgent stage actually flagged for a coverage in this run is notified. Without this, a coverage
+  // recorded inside the 90-day window (a 45-day insurance cover note is legal under
+  // chk_asset_coverage_dates) fires 90, 60 and 30 simultaneously on its first scan, three
+  // notifications for a contract nobody has had a chance to act on, one of them carrying the
+  // maintenance_supervisor escalation clock. dueStages is ordered stage_days ASC within a coverage,
+  // so the first stage that commits for a coverage IS its most urgent one.
+  const notifiedCoverages = new Set<string>();
 
   for (const due of dueStages) {
     const flaggedAt = new Date().toISOString();
@@ -168,49 +196,79 @@ export async function runCoverageExpiryScan(scope: CoverageScanScope): Promise<C
           return true;
         })) === true;
     } catch (err: unknown) {
-      // A concurrent scan won the race to uq_asset_coverage_alert_stage. Nothing was persisted by
-      // this pass, so nothing may be counted or notified - but one lost race must not fail the
-      // whole scan.
-      if (isAppErrorWithCode(err, 'DUPLICATE_COVERAGE_ALERT')) continue;
+      // Every rejection applyCoverageExpiryFlagged can raise means "this one stage is no longer
+      // alertable", never "the run is broken": DUPLICATE_COVERAGE_ALERT is a lost race to
+      // uq_asset_coverage_alert_stage, and COVERAGE_NOT_FOUND, COVERAGE_ALREADY_EXPIRED and
+      // COVERAGE_DERIVATION_MISMATCH all mean the row moved between the list read and the lock.
+      // Nothing was persisted by this pass in any of those cases, so nothing may be counted or
+      // notified - but one skipped stage must not abort a scan and strand the alert_ids of every
+      // stage already committed.
+      if (
+        isAppErrorWithCode(err, 'DUPLICATE_COVERAGE_ALERT') ||
+        isAppErrorWithCode(err, 'COVERAGE_NOT_FOUND') ||
+        isAppErrorWithCode(err, 'COVERAGE_ALREADY_EXPIRED') ||
+        isAppErrorWithCode(err, 'COVERAGE_DERIVATION_MISMATCH')
+      ) {
+        continue;
+      }
       throw err;
     }
     if (!flagged) continue;
     alertIds.push(alertId);
 
-    const asset = await getAssetById(due.asset_id);
-    const emitted = await emitNotification({
-      target: { role: COVERAGE_ROLE, location_id: null },
-      event_type: 'coverage_expiry_due',
-      status_verb: 'Due',
-      object_type: 'asset_coverage',
-      object_id: alertId,
-      // A human-readable subject, never a raw id (the 7.2 Group 4 patch).
-      actor_label: `${asset?.asset_name ?? due.asset_id} (${asset?.asset_tag ?? 'unknown tag'}), ${due.coverage_type} ${due.reference_number_ext}, ${due.days_remaining} days remaining`,
-      next_step: 'Renew the contract or record a new coverage',
-      actor: scope.actor,
-      correlation_id: correlationId,
-      occurred_at: flaggedAt,
-      // Escalating a quarter-out reminder is noise; the 30-day stage is the last warning before
-      // the contract lapses, so only that one carries an acknowledgment window.
-      ...(due.stage_days === ESCALATING_STAGE_DAYS
-        ? {
-            escalation: {
-              target_role: ESCALATION_ROLE,
-              acknowledgment_window_seconds: ACKNOWLEDGMENT_WINDOW_SECONDS,
-            },
-          }
-        : {}),
-    });
+    // The grain row is committed either way; only the message is suppressed, and the suppression
+    // is counted so it never hides behind the write count.
+    if (notifiedCoverages.has(due.coverage_id)) {
+      notificationsSuppressed += 1;
+      continue;
+    }
+    notifiedCoverages.add(due.coverage_id);
+
+    // BP4: the asset read and the emission sit INSIDE the tolerant block. The alert row for this
+    // stage is already committed, so letting a transient pool failure here propagate would 500 the
+    // whole scan and discard alert_ids for every stage already written - and a re-run would then
+    // skip those stages as already fired and never notify on them. A failure to notify is exactly
+    // what notifications_dropped exists to report.
+    let emitted: { ok: boolean };
+    try {
+      const asset = await getAssetById(due.asset_id);
+      emitted = await emitNotification({
+        target: { role: COVERAGE_ROLE, location_id: null },
+        event_type: 'coverage_expiry_due',
+        status_verb: 'Due',
+        object_type: 'asset_coverage',
+        object_id: alertId,
+        // A human-readable subject, never a raw id (the 7.2 Group 4 patch).
+        actor_label: `${asset?.asset_name ?? due.asset_id} (${asset?.asset_tag ?? 'unknown tag'}), ${due.coverage_type} ${due.reference_number_ext}, ${due.days_remaining} days remaining`,
+        next_step: 'Renew the contract or record a new coverage',
+        actor: scope.actor,
+        correlation_id: correlationId,
+        occurred_at: flaggedAt,
+        // Escalating a quarter-out reminder is noise; the 30-day stage is the last warning before
+        // the contract lapses, so only that one carries an acknowledgment window.
+        ...(due.stage_days === ESCALATING_STAGE_DAYS
+          ? {
+              escalation: {
+                target_role: ESCALATION_ROLE,
+                acknowledgment_window_seconds: ACKNOWLEDGMENT_WINDOW_SECONDS,
+              },
+            }
+          : {}),
+      });
+    } catch {
+      emitted = { ok: false };
+    }
     if (emitted.ok) notificationsDelivered += 1;
     else notificationsDropped += 1;
   }
 
   return {
     business_date: scope.business_date,
-    coverages_evaluated: dueStages.length,
+    coverages_evaluated: coveragesEvaluated,
     alerts_raised: alertIds.length,
     notifications_delivered: notificationsDelivered,
     notifications_dropped: notificationsDropped,
+    notifications_suppressed: notificationsSuppressed,
     alert_ids: alertIds,
   };
 }

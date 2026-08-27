@@ -1,0 +1,2621 @@
+diff --git a/src/api/v1/maintenance.ts b/src/api/v1/maintenance.ts
+index 9942689..6f0f8c1 100644
+--- a/src/api/v1/maintenance.ts
++++ b/src/api/v1/maintenance.ts
+@@ -14,7 +14,8 @@ import type { PersistedEvent } from '../../events/store.js';
+ import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
+ import { emitNotification } from '../../notify/emit.js';
+ import { getPool } from '../../config/db.js';
+-import { isValidCalendarDate } from '../../lib/business-days.js';
++import { isValidCalendarDate, toIstCalendarDate } from '../../lib/business-days.js';
++import { config } from '../../config/index.js';
+ import { getMeterById, listMeters } from '../../read/projections/asset_meter.js';
+ import { getAssetById, getAssetByTag } from '../../read/projections/asset.js';
+ import {
+@@ -61,6 +62,7 @@ import {
+ } from '../../read/projections/maintenance_spare_reservation.js';
+ import { listSpareAlerts } from '../../read/projections/maintenance_spare_alert.js';
+ import { runCalibrationExpiryScan } from '../../maintenance/calibration-jobs.js';
++import { runStatutoryExaminationScan } from '../../maintenance/statutory-jobs.js';
+ import {
+   CALIBRATION_STAGES,
+   MAX_CALIBRATION_INTERVAL_DAYS,
+@@ -69,6 +71,20 @@ import {
+   canonicalCertificateNumber,
+   canonicalInstrumentId,
+ } from '../../compliance/calibration-register.js';
++import {
++  MAX_EXAMINATION_INTERVAL_MONTHS,
++  STATUTORY_EXAMINATION_STATUSES,
++  STATUTORY_EXAMINATION_TYPES,
++  canonicalDeviceKey,
++} from '../../compliance/maintenance-statutory.js';
++import {
++  ALLOWED_TRANSITIONS,
++  ASSET_OPERATIONAL_STATUSES,
++  NO_STATUS_KEY,
++  RETURN_TO_SERVICE_DOA_TYPE,
++  requiresReturnToServiceSignOff,
++} from '../../compliance/asset-operational-status.js';
++import { resolveApprover } from './indents.js';
+ import { getLocationById } from '../../read/projections/location_register.js';
+ import { findFirstActiveDoaEntry, findRoleHolder } from '../../read/projections/doa_registry.js';
+ import {
+@@ -86,6 +102,34 @@ import {
+   listEscalations,
+ } from '../../read/projections/instrument_calibration_escalation.js';
+ import { getInstrumentCalibrationStatus } from '../../read/projections/instrument_calibration.js';
++import {
++  getExaminationByAssetAndType,
++  getExaminationById,
++  listExaminations,
++} from '../../read/projections/statutory_examination.js';
++import { listRecordsByExamination } from '../../read/projections/statutory_examination_record.js';
++import {
++  getAssetOperationalStatus,
++  listAssetOperationalStatuses,
++} from '../../read/projections/asset_operational_status.js';
++import {
++  getMaintenanceAssetCost,
++  listMaintenanceAssetCosts,
++} from '../../read/projections/maintenance_asset_cost.js';
++// Story 7.7 (FR-M-10, FR-M-11): AMC, warranty and insurance coverage plus the reason-coded
++// warranty override.
++import {
++  COVERAGE_TYPES,
++  WARRANTY_OVERRIDE_DOA_TYPE,
++  MAX_REASON_CODE_LENGTH,
++} from '../../compliance/maintenance-coverage.js';
++import { getCoverageById, listCoverages } from '../../read/projections/asset_coverage.js';
++import { listCoverageAlerts } from '../../read/projections/asset_coverage_alert.js';
++import {
++  getWarrantyOverrideById,
++  getWarrantyOverrideByWorkOrder,
++} from '../../read/projections/maintenance_warranty_override.js';
++import { runCoverageExpiryScan } from '../../maintenance/coverage-jobs.js';
+ 
+ /**
+  * Story 7.2 REST surface: PM plans, work orders and the generic meter-reading ingestion API
+@@ -869,6 +913,52 @@ const completeWorkOrderBase: RouteHandler = async (req, res, params) => {
+       });
+     }
+ 
++    // Story 7.7 (FR-M-11, AC 3): the chargeable-work pre-check, for a clean early 403 before the
++    // event is minted. The AUTHORITATIVE gate is in applyWorkOrderCompleted under the work order's
++    // lock, so the direct-event path cannot bypass it (AD-12); this mirrors the way
++    // setAssetStatusBase pre-checks the Story 7.6 statutory use-lock.
++    if (existing.warranty_flagged === true) {
++      const override = await getWarrantyOverrideByWorkOrder(workOrderId);
++      if (!override) {
++        throw new AppError(
++          403,
++          'APPROVAL_REQUIRED',
++          'This work order is warranty-flagged: record a reason-coded override before completing it',
++          {
++            work_order_id: workOrderId,
++            warranty_coverage_id: existing.warranty_coverage_id,
++          },
++        );
++      }
++    }
++
++    // Story 7.6 (FR-M-15): optional additive cost fields, NUMERIC strings. A declared non-string
++    // or a string that fails the regex is rejected INVALID_COST, never coerced (the wire-boolean
++    // lesson applied to costs). The seam validates them again and derives total_cost /
++    // capitalization_flagged server-side, writing both back onto the persisted payload.
++    const laborCostRaw = body['labor_cost'];
++    if (laborCostRaw !== undefined && laborCostRaw !== null) {
++      if (typeof laborCostRaw !== 'string' || !COST_NUMERIC_REGEX.test(laborCostRaw)) {
++        throw new AppError(
++          400,
++          'INVALID_COST',
++          'labor_cost must be a NUMERIC string with at most 3 decimals',
++          { labor_cost: laborCostRaw },
++        );
++      }
++    }
++    const partsCostRaw = body['parts_cost'];
++    if (partsCostRaw !== undefined && partsCostRaw !== null) {
++      if (typeof partsCostRaw !== 'string' || !COST_NUMERIC_REGEX.test(partsCostRaw)) {
++        throw new AppError(
++          400,
++          'INVALID_COST',
++          'parts_cost must be a NUMERIC string with at most 3 decimals',
++          { parts_cost: partsCostRaw },
++        );
++      }
++    }
++
+     const persisted = await persistEvent(
+       {
+         stream_type: 'maintenance',
+@@ -878,6 +968,12 @@ const completeWorkOrderBase: RouteHandler = async (req, res, params) => {
+           work_order_id: workOrderId,
+           asset_id: existing.asset_id,
+           completed_at: now,
++          ...(laborCostRaw === undefined || laborCostRaw === null
++            ? {}
++            : { labor_cost: laborCostRaw }),
++          ...(partsCostRaw === undefined || partsCostRaw === null
++            ? {}
++            : { parts_cost: partsCostRaw }),
+         },
+         metadata: {
+           correlation_id: randomUUID(),
+@@ -2534,6 +2630,42 @@ export const cancelSpareReservationHandler = requireRole({
+   functionScope: 'write',
+ })(cancelSpareReservationBase);
+ 
++// ---------------------------------------------------------------------------
++// Story 7.6: statutory examinations, cost accumulation, and machine status broadcast
++// (FR-M-14, FR-M-15, FR-M-16)
++// ---------------------------------------------------------------------------
++//
++// These handlers own only the capture-time resolutions - server-minted ids, actor stamping,
++// canonicalization of human-entered keys, the next-due derivation, and resolving the DOA route for
++// return-to-service. Every decision lives in src/compliance/maintenance-statutory.ts,
++// src/compliance/asset-operational-status.ts and src/compliance/maintenance-plan.ts, which
++// re-derive each declared field under lock, so a direct POST /api/v1/events cannot bypass any of
++// it.
++
++// The status vocabulary, the DOA transaction type and the Table 5 state machine are IMPORTED from
++// the seams that enforce them, never re-declared here. A duplicated copy lets the handler's
++// pre-check and the applier's enforcement drift apart, and a widening applied to only one of them
++// is a gate that silently opens.
++const EXAMINATION_TYPES = STATUTORY_EXAMINATION_TYPES;
++const EXAMINATION_STATUSES = STATUTORY_EXAMINATION_STATUSES;
++const ASSET_STATUSES = ASSET_OPERATIONAL_STATUSES;
++// The cost columns are NUMERIC(14,3): at most 11 integer digits and 3 decimals (the seam mirrors
++// this regex; a wider value would overflow the column as an unmapped 22003 500).
++const COST_NUMERIC_REGEX = /^\d{1,11}(\.\d{1,3})?$/;
++
++// Table 5: the machine status state machine, owned by src/compliance/asset-operational-status.ts.
++const MACHINE_STATUS_TRANSITIONS = ALLOWED_TRANSITIONS;
++
++/** Whole-month addition in SQL DATE arithmetic; make_interval clamps the day, which JS cannot
++ *  replicate, so the handler asks the database for the same derivation the seam re-checks. */
++async function deriveNextDueDate(examinedOn: string, intervalMonths: number): Promise<string> {
++  const result = await getPool().query(
++    `SELECT ($1::date + make_interval(months => $2))::date::text AS next_due`,
++    [examinedOn, intervalMonths],
++  );
++  return result.rows[0]!['next_due'] as string;
++}
++
+ // ---------------------------------------------------------------------------
+ // Story 7.5: calibration register and non-overridable lockout (FR-M-12, FR-M-13, AD-8)
+ // ---------------------------------------------------------------------------
+@@ -3217,3 +3349,990 @@ export const resolveCalibrationEscalationHandler = requireRole({
+   module: 'maintenance',
+   functionScope: 'write',
+ })(resolveCalibrationEscalationBase);
++
++// ---------------------------------------------------------------------------
++// Story 7.6: statutory examinations, cost accumulation, machine status broadcast
++// ---------------------------------------------------------------------------
++
++// POST /api/v1/maintenance/statutory-examinations
++
++const createStatutoryExaminationBase: RouteHandler = async (req, res, _params) => {
++  const body = getParsedBody(req) as Record<string, unknown> | undefined;
++  if (!body) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
++    return;
++  }
++
++  const actor = actorContext(req);
++  const examinationId = randomUUID();
++  const now = new Date().toISOString();
++
++  try {
++    const assetId = requireUuidField(body, 'asset_id');
++    const examinationType = body['examination_type'];
++    if (typeof examinationType !== 'string' || !EXAMINATION_TYPES.has(examinationType)) {
++      throw new AppError(
++        400,
++        'INVALID_EXAMINATION_TYPE',
++        'examination_type must be osh_code or weighbridge_legal_metrology',
++      );
++    }
++    const intervalMonths = body['interval_months'];
++    if (
++      typeof intervalMonths !== 'number' ||
++      !Number.isInteger(intervalMonths) ||
++      intervalMonths < 1 ||
++      intervalMonths > MAX_EXAMINATION_INTERVAL_MONTHS
++    ) {
++      throw new AppError(
++        400,
++        'INVALID_INTERVAL',
++        `interval_months must be an integer between 1 and ${MAX_EXAMINATION_INTERVAL_MONTHS}`,
++      );
++    }
++    const examinedOn = requireCalendarDate(body, 'examined_on', 'INVALID_PARAMS');
++    const businessDate = requireBusinessDate(body);
++    // The due date is derived ONCE here in the SAME SQL arithmetic the seam re-checks under the
++    // asset's lock, so a divergence can never fire on the happy path.
++    const nextDueDate = await deriveNextDueDate(examinedOn, intervalMonths);
++    const certificateNumberExtRaw = optionalNullableText(body, 'certificate_number_ext');
++    // Canonicalized in the handler AND in the seam, like the sibling device_key: the Compliance
++    // Seam Contract names both layers, so the invariant never rests on a single one.
++    const certificateNumberExt =
++      certificateNumberExtRaw === null ? null : canonicalDeviceKey(certificateNumberExtRaw);
++    const deviceKeyRaw = optionalNullableText(body, 'device_key');
++    // Canonicalized in the handler AND in the seam, so the direct-event path cannot bypass it.
++    const deviceKey = deviceKeyRaw === null ? null : canonicalDeviceKey(deviceKeyRaw);
++
++    const asset = await getAssetById(assetId);
++    if (!asset) {
++      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
++    }
++
++    const persisted = await persistEvent(
++      {
++        stream_type: 'maintenance',
++        stream_id: examinationId,
++        event_type: 'maintenance.statutory_examination_recorded',
++        payload: {
++          examination_id: examinationId,
++          asset_id: assetId,
++          examination_type: examinationType,
++          interval_months: intervalMonths,
++          examined_on: examinedOn,
++          next_due_date: nextDueDate,
++          certificate_number_ext: certificateNumberExt,
++          device_key: deviceKey,
++          business_date: businessDate,
++          recorded_at: now,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++          occurred_at: now,
++        },
++        idempotency_key: idempotencyKeyFrom(body),
++        // eslint-disable-next-line @typescript-eslint/no-explicit-any
++      } as any,
++      auditCtxFor(req, actor, 201),
++    );
++
++    const persistedId = replayIdOrReject(
++      persisted,
++      'maintenance.statutory_examination_recorded',
++      'examination_id',
++    );
++    // Read back BY ID from the persisted payload's own id (the API Contract rule).
++    // Read back BY ID from the persisted payload's own id (the API Contract rule). A RE-STAMP is
++    // the one case where that id is not the register row's: this handler mints a fresh
++    // examination_id per POST (stream_id must equal it), while the register row keeps the id it
++    // was first registered under, so the by-id read misses and the grain is the only way back to
++    // the row this event just updated. Records hang off the register row's id, not the payload's.
++    //
++    // The grain comes from the PERSISTED payload, never from the request body: on an
++    // idempotency-key replay `persisted` is the ORIGINAL event, and keying the fallback off this
++    // request's asset_id would build a 201 out of a foreign asset's register row - the exact
++    // phantom-response class replayIdOrReject exists to prevent.
++    const persistedPayload = persisted.payload as Record<string, unknown>;
++    const persistedAssetId =
++      typeof persistedPayload['asset_id'] === 'string'
++        ? (persistedPayload['asset_id'] as string)
++        : assetId;
++    const persistedExaminationType =
++      typeof persistedPayload['examination_type'] === 'string'
++        ? (persistedPayload['examination_type'] as string)
++        : examinationType;
++    const examination =
++      (await getExaminationById(persistedId)) ??
++      (await getExaminationByAssetAndType(persistedAssetId, persistedExaminationType));
++    const records = await listRecordsByExamination(examination?.examination_id ?? persistedId);
++    sendJson(res, 201, {
++      event_id: persisted.event_id,
++      examination: examination ?? null,
++      records,
++    });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// GET /api/v1/maintenance/statutory-examinations
++
++const listStatutoryExaminationsBase: RouteHandler = async (req, res, _params) => {
++  const url = new URL(req.url ?? '/', 'http://localhost');
++  const paging = parseListPaging(req, res, url);
++  if (!paging) return;
++
++  const assetId = url.searchParams.get('asset_id');
++  const status = url.searchParams.get('status');
++  const examinationType = url.searchParams.get('examination_type');
++  if (assetId !== null && !isUuid(assetId)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'asset_id must be a UUID');
++    return;
++  }
++  if (status !== null && !EXAMINATION_STATUSES.has(status)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'status must be one of: compliant, overdue');
++    return;
++  }
++  if (examinationType !== null && !EXAMINATION_TYPES.has(examinationType)) {
++    sendRequestError(
++      req,
++      res,
++      400,
++      'INVALID_PARAMS',
++      'examination_type must be one of: osh_code, weighbridge_legal_metrology',
++    );
++    return;
++  }
++
++  const examinations = await listExaminations({
++    asset_id: assetId ?? undefined,
++    status: (status as 'compliant' | 'overdue' | null) ?? undefined,
++    examination_type:
++      (examinationType as 'osh_code' | 'weighbridge_legal_metrology' | null) ?? undefined,
++    limit: paging.limit,
++    offset: paging.offset,
++  });
++  sendJson(res, 200, { examinations });
++};
++
++// GET /api/v1/maintenance/statutory-examinations/:examinationId
++
++const getStatutoryExaminationBase: RouteHandler = async (req, res, params) => {
++  try {
++    const examinationId = requireUuidParam(params, 'examinationId');
++    const examination = await getExaminationById(examinationId);
++    if (!examination) {
++      throw new AppError(404, 'EXAMINATION_NOT_FOUND', 'Statutory examination not found', {
++        examination_id: examinationId,
++      });
++    }
++    const records = await listRecordsByExamination(examinationId);
++    sendJson(res, 200, { examination, records });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// POST /api/v1/maintenance/statutory-examinations/scan
++
++const scanStatutoryExaminationsBase: RouteHandler = async (req, res, _params) => {
++  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
++  const actor = actorContext(req);
++  try {
++    const businessDate = requireBusinessDate(body);
++    const assetId = body['asset_id'];
++    if (assetId !== undefined && assetId !== null && !isUuid(assetId)) {
++      throw new AppError(400, 'INVALID_PARAMS', 'asset_id must be a UUID when provided');
++    }
++    const result = await runStatutoryExaminationScan({
++      business_date: businessDate,
++      asset_id: (assetId as string | undefined) ?? undefined,
++      actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++      auditCtx: auditCtxFor(req, actor, 200),
++    });
++    sendJson(res, 200, result);
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// POST /api/v1/maintenance/assets/:assetId/status
++
++const setAssetStatusBase: RouteHandler = async (req, res, params) => {
++  const assetId = params?.['assetId'];
++  if (!assetId || !isUuid(assetId)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'assetId must be a UUID');
++    return;
++  }
++  const body = getParsedBody(req) as Record<string, unknown> | undefined;
++  if (!body) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
++    return;
++  }
++
++  const actor = actorContext(req);
++  const now = new Date().toISOString();
++
++  try {
++    const asset = await getAssetById(assetId);
++    if (!asset) {
++      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
++    }
++
++    const newStatus = body['new_status'];
++    if (typeof newStatus !== 'string' || !ASSET_STATUSES.has(newStatus)) {
++      throw new AppError(
++        400,
++        'INVALID_STATUS_TRANSITION',
++        'new_status must be one of: running, idle, breakdown, maintenance',
++      );
++    }
++
++    // AC1 enforcement (Task 5.2): an asset with ANY overdue statutory examination is locked from
++    // USE until re-examined, regardless of which examination type is due. Scoped to transitions
++    // into 'running' so a locked asset can still be recorded as 'maintenance' or 'breakdown' while
++    // the re-examination is performed, and so the AC4 broadcast still fires. The seam applies the
++    // same scope, so the direct-event path cannot bypass it either.
++    const examinations =
++      newStatus === 'running' ? await listExaminations({ asset_id: assetId }) : [];
++    const overdue = examinations.find((e) => e.status === 'overdue');
++    if (overdue) {
++      throw new AppError(
++        423,
++        'STATUTORY_EXAMINATION_OVERDUE',
++        'The asset is locked: a statutory examination is overdue',
++        {
++          asset_id: assetId,
++          examination_id: overdue.examination_id,
++          examination_type: overdue.examination_type,
++        },
++      );
++    }
++
++    // Table 5 state machine: the current status is derived from the projection; a transition not
++    // listed is rejected here so the caller gets a clean 400 before any event is written.
++    const current = await getAssetOperationalStatus(assetId);
++    const previousStatus = current?.status ?? null;
++    const fromKey = previousStatus ?? NO_STATUS_KEY;
++    const allowed = MACHINE_STATUS_TRANSITIONS.get(fromKey);
++    if (!allowed || !allowed.has(newStatus)) {
++      throw new AppError(400, 'INVALID_STATUS_TRANSITION', 'The status transition is not allowed', {
++        asset_id: assetId,
++        previous_status: previousStatus,
++        new_status: newStatus,
++      });
++    }
++
++    // Return-to-service authority (AC5, Table 6): a transition to 'running' from 'breakdown' or
++    // 'maintenance' requires a supervisor sign-off, DOA-resolved (AD-3). The 403 is a business
++    // rule raised AFTER the RBAC wrapper, per the Architecture Compliance note.
++    const needsSignOff = requiresReturnToServiceSignOff(newStatus);
++    let signOffBy: string | null = null;
++    let signOffAt: string | null = null;
++    if (needsSignOff) {
++      const approval = await resolveApprover(RETURN_TO_SERVICE_DOA_TYPE, 0);
++      if (!approval.requiresApproval || approval.approverActorId === null) {
++        throw new AppError(
++          404,
++          'APPROVAL_UNRESOLVED',
++          'No DOA entry governs maintenance.return_to_service',
++          { transaction_type: RETURN_TO_SERVICE_DOA_TYPE },
++        );
++      }
++      if (approval.approverActorId !== actor.userId) {
++        throw new AppError(
++          403,
++          'APPROVAL_REQUIRED',
++          'Return to service requires the resolved DOA approver to sign off',
++          {
++            asset_id: assetId,
++            resolved_approver_user_id: approval.approverActorId,
++          },
++        );
++      }
++      signOffBy = approval.approverActorId;
++      signOffAt = now;
++    }
++
++    const persisted = await persistEvent(
++      {
++        stream_type: 'maintenance',
++        stream_id: assetId,
++        event_type: 'maintenance.asset_status_changed',
++        payload: {
++          asset_id: assetId,
++          previous_status: previousStatus,
++          new_status: newStatus,
++          changed_by: actor.userId,
++          changed_at: now,
++          sign_off_by: signOffBy,
++          sign_off_at: signOffAt,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++          occurred_at: now,
++        },
++        idempotency_key: idempotencyKeyFrom(body),
++        // eslint-disable-next-line @typescript-eslint/no-explicit-any
++      } as any,
++      auditCtxFor(req, actor, 200),
++    );
++
++    const persistedAssetId = replayIdOrReject(
++      persisted,
++      'maintenance.asset_status_changed',
++      'asset_id',
++    );
++
++    // AC4 broadcast: the status change is fan-out to BOTH production planning and hub booking
++    // after the event commits, non-throwing (AD-17). A same-key replay returns the ORIGINAL event
++    // with the ORIGINAL correlation_id, so keying the dedup on that correlation_id skips the
++    // re-emission without ever suppressing a later, legitimate transition on the same asset (the
++    // "replay emits no second notification" convention, made per-transition rather than per-asset).
++    // The dedup is PER TARGET ROLE, not per correlation_id. Gating both emissions on a single
++    // marker meant a first-succeeds/second-fails broadcast was unrecoverable: the replay found the
++    // planner's row and skipped the block, so hub booking was never told, permanently and on every
++    // retry. Asking which roles already have a notification for this correlation_id lets a replay
++    // fill in exactly the half that is missing.
++    const existingNotifications = await getPool().query(
++      `SELECT payload->'target'->>'role' AS role
++         FROM domain_events
++        WHERE event_type = 'notification.created'
++          AND metadata->>'correlation_id' = $1`,
++      [persisted.metadata.correlation_id],
++    );
++    const alreadyNotified = new Set(
++      existingNotifications.rows
++        .map((row) => (row as Record<string, unknown>)['role'])
++        .filter((role): role is string => typeof role === 'string'),
++    );
++
++    const actorLabel = `${asset.asset_name} (${asset.asset_tag}), ${previousStatus ?? 'none'} -> ${newStatus}`;
++    const base = {
++      event_type: 'asset_status_changed',
++      status_verb: newStatus,
++      object_type: 'asset',
++      object_id: persistedAssetId,
++      actor_label: actorLabel,
++      next_step: 'Update planning and booking accordingly',
++      actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++      // The persisted event's correlation_id, so the replay dedup above can match.
++      correlation_id: persisted.metadata.correlation_id,
++      occurred_at: now,
++    };
++    // emitNotification never throws and reports failure in its result (AD-17). Discarding that
++    // result made a silently undelivered broadcast indistinguishable from a delivered one; the
++    // scan job in this same story counts delivered and dropped separately for exactly this reason.
++    let notificationsDelivered = 0;
++    let notificationsDropped = 0;
++    for (const role of ['production_planner', 'hub_booking_coordinator']) {
++      if (alreadyNotified.has(role)) continue;
++      const emitted = await emitNotification({ ...base, target: { role } });
++      if (emitted.ok) notificationsDelivered += 1;
++      else notificationsDropped += 1;
++    }
++
++    const status = await getAssetOperationalStatus(persistedAssetId);
++    sendJson(res, 200, {
++      event_id: persisted.event_id,
++      asset_id: persistedAssetId,
++      status: status ?? null,
++      notifications_delivered: notificationsDelivered,
++      notifications_dropped: notificationsDropped,
++    });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// GET /api/v1/maintenance/assets/:assetId/status
++
++const getAssetStatusBase: RouteHandler = async (req, res, params) => {
++  try {
++    const assetId = requireUuidParam(params, 'assetId');
++    const asset = await getAssetById(assetId);
++    if (!asset) {
++      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
++    }
++    const status = await getAssetOperationalStatus(assetId);
++    sendJson(res, 200, { asset_id: assetId, status: status ?? null });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// GET /api/v1/maintenance/asset-status
++
++const listAssetStatusesBase: RouteHandler = async (req, res, _params) => {
++  const url = new URL(req.url ?? '/', 'http://localhost');
++  const paging = parseListPaging(req, res, url);
++  if (!paging) return;
++
++  const status = url.searchParams.get('status');
++  if (status !== null && !ASSET_STATUSES.has(status)) {
++    sendRequestError(
++      req,
++      res,
++      400,
++      'INVALID_PARAMS',
++      'status must be one of: running, idle, breakdown, maintenance',
++    );
++    return;
++  }
++
++  const statuses = await listAssetOperationalStatuses({
++    status: (status as 'running' | 'idle' | 'breakdown' | 'maintenance' | null) ?? undefined,
++    limit: paging.limit,
++    offset: paging.offset,
++  });
++  sendJson(res, 200, { asset_statuses: statuses });
++};
++
++// GET /api/v1/maintenance/assets/:assetId/costs
++
++const getAssetCostsBase: RouteHandler = async (req, res, params) => {
++  try {
++    const assetId = requireUuidParam(params, 'assetId');
++    const asset = await getAssetById(assetId);
++    if (!asset) {
++      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
++    }
++    const costs = await getMaintenanceAssetCost(assetId);
++    sendJson(res, 200, { asset_id: assetId, costs: costs ?? null });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// GET /api/v1/maintenance/asset-costs
++
++const listAssetCostsBase: RouteHandler = async (req, res, _params) => {
++  const url = new URL(req.url ?? '/', 'http://localhost');
++  const paging = parseListPaging(req, res, url);
++  if (!paging) return;
++
++  const costs = await listMaintenanceAssetCosts({ limit: paging.limit, offset: paging.offset });
++  sendJson(res, 200, { asset_costs: costs });
++};
++
++export const createStatutoryExaminationHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'write',
++})(createStatutoryExaminationBase);
++
++export const listStatutoryExaminationsHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(listStatutoryExaminationsBase);
++
++export const getStatutoryExaminationHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(getStatutoryExaminationBase);
++
++export const scanStatutoryExaminationsHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'write',
++})(scanStatutoryExaminationsBase);
++
++export const setAssetStatusHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'write',
++})(setAssetStatusBase);
++
++export const getAssetStatusHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(getAssetStatusBase);
++
++export const listAssetStatusesHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(listAssetStatusesBase);
++
++export const getAssetCostsHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(getAssetCostsBase);
++
++export const listAssetCostsHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(listAssetCostsBase);
++
++// ---------------------------------------------------------------------------
++// Story 7.7: AMC, Warranty, and Insurance Tracking (FR-M-10, FR-M-11)
++// ---------------------------------------------------------------------------
++//
++// Every decision lives in src/compliance/maintenance-coverage.ts (and, for the chargeable-work
++// gate, in src/compliance/maintenance-plan.ts), not here: these handlers own only the capture-time
++// resolutions (server-minted ids, actor stamping, the DOA pre-check for a clean early 403) and the
++// response shape, so a direct POST /api/v1/events cannot bypass any of them (AD-12).
++
++// POST /api/v1/maintenance/assets/:assetId/coverages
++
++const recordCoverageBase: RouteHandler = async (req, res, params) => {
++  const body = getParsedBody(req) as Record<string, unknown> | undefined;
++  if (!body) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
++    return;
++  }
++
++  const actor = actorContext(req);
++  const coverageId = randomUUID();
++  const now = new Date().toISOString();
++
++  try {
++    const assetId = requireUuidParam(params, 'assetId');
++    const coverageType = body['coverage_type'];
++    if (typeof coverageType !== 'string' || !COVERAGE_TYPES.has(coverageType)) {
++      throw new AppError(
++        400,
++        'INVALID_PARAMS',
++        'coverage_type must be one of: amc, warranty, insurance',
++      );
++    }
++    const providerName = body['provider_name'];
++    if (typeof providerName !== 'string' || providerName.trim() === '') {
++      throw new AppError(400, 'INVALID_PARAMS', 'provider_name is required');
++    }
++    const referenceNumberExt = body['reference_number_ext'];
++    if (typeof referenceNumberExt !== 'string' || referenceNumberExt.trim() === '') {
++      throw new AppError(400, 'INVALID_PARAMS', 'reference_number_ext is required');
++    }
++    const startDate = requireCalendarDate(body, 'start_date', 'INVALID_PARAMS');
++    const expiryDate = requireCalendarDate(body, 'expiry_date', 'INVALID_PARAMS');
++    // Both are validated YYYY-MM-DD strings, so the lexical comparison IS the calendar comparison.
++    if (expiryDate <= startDate) {
++      throw new AppError(400, 'INVALID_PARAMS', 'expiry_date must be after start_date', {
++        start_date: startDate,
++        expiry_date: expiryDate,
++      });
++    }
++    const businessDate = requireBusinessDate(body);
++    // An exact decimal string end to end; a JS number would silently round the contract value.
++    const contractValueRaw = body['contract_value'];
++    let contractValue: string | null = null;
++    if (contractValueRaw !== undefined && contractValueRaw !== null) {
++      if (typeof contractValueRaw !== 'string' || !COST_NUMERIC_REGEX.test(contractValueRaw)) {
++        throw new AppError(
++          400,
++          'INVALID_PARAMS',
++          'contract_value must be a NUMERIC string with at most 3 decimals',
++          { contract_value: contractValueRaw },
++        );
++      }
++      contractValue = contractValueRaw;
++    }
++
++    const asset = await getAssetById(assetId);
++    if (!asset) {
++      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
++    }
++
++    const persisted = await persistEvent(
++      {
++        stream_type: 'maintenance',
++        stream_id: assetId,
++        event_type: 'maintenance.coverage_recorded',
++        payload: {
++          coverage_id: coverageId,
++          asset_id: assetId,
++          coverage_type: coverageType,
++          provider_name: providerName.trim(),
++          reference_number_ext: referenceNumberExt.trim(),
++          start_date: startDate,
++          expiry_date: expiryDate,
++          contract_value: contractValue,
++          recorded_by: actor.userId,
++          recorded_at: now,
++          business_date: businessDate,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++          occurred_at: now,
++        },
++        idempotency_key: idempotencyKeyFrom(body),
++        // eslint-disable-next-line @typescript-eslint/no-explicit-any
++      } as any,
++      auditCtxFor(req, actor, 201),
++    );
++
++    const persistedId = replayIdOrReject(persisted, 'maintenance.coverage_recorded', 'coverage_id');
++    // Read back BY ID from the persisted payload's own id (the API Contract rule), never by
++    // re-querying the newest row.
++    const coverage = await getCoverageById(persistedId);
++    sendJson(res, 201, { event_id: persisted.event_id, coverage: coverage ?? null });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++/**
++ * `status` is resolved against a business_date, never the server clock inside SQL. When the caller
++ * supplies none, the server's IST calendar date is used: the deployment's business day, not a UTC
++ * instant sliced to ten characters.
++ */
++function coverageStatusFilter(
++  req: IncomingMessage,
++  res: Parameters<RouteHandler>[1],
++  url: URL,
++): { ok: true; status: string | undefined; businessDate: string | undefined } | { ok: false } {
++  const status = url.searchParams.get('status');
++  if (status === null) return { ok: true, status: undefined, businessDate: undefined };
++  if (!['active', 'expired', 'future'].includes(status)) {
++    sendRequestError(
++      req,
++      res,
++      400,
++      'INVALID_PARAMS',
++      'status must be one of: active, expired, future',
++    );
++    return { ok: false };
++  }
++  const businessDateRaw = url.searchParams.get('business_date');
++  if (businessDateRaw !== null && !isValidCalendarDate(businessDateRaw)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_date must be YYYY-MM-DD');
++    return { ok: false };
++  }
++  return {
++    ok: true,
++    status,
++    businessDate: businessDateRaw ?? toIstCalendarDate(new Date()),
++  };
++}
++
++// GET /api/v1/maintenance/assets/:assetId/coverages
++
++const listAssetCoveragesBase: RouteHandler = async (req, res, params) => {
++  const url = new URL(req.url ?? '/', 'http://localhost');
++  const paging = parseListPaging(req, res, url);
++  if (!paging) return;
++
++  const assetId = params?.['assetId'];
++  if (!assetId || !isUuid(assetId)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'assetId must be a UUID');
++    return;
++  }
++  const coverageType = url.searchParams.get('coverage_type');
++  if (coverageType !== null && !COVERAGE_TYPES.has(coverageType)) {
++    sendRequestError(
++      req,
++      res,
++      400,
++      'INVALID_PARAMS',
++      'coverage_type must be one of: amc, warranty, insurance',
++    );
++    return;
++  }
++  const statusFilter = coverageStatusFilter(req, res, url);
++  if (!statusFilter.ok) return;
++
++  const coverages = await listCoverages(
++    {
++      asset_id: assetId,
++      coverage_type: coverageType,
++      status: statusFilter.status,
++      business_date: statusFilter.businessDate,
++    },
++    { limit: paging.limit, offset: paging.offset },
++  );
++  sendJson(res, 200, { coverages });
++};
++
++// GET /api/v1/maintenance/coverages
++
++const listCoveragesBase: RouteHandler = async (req, res, _params) => {
++  const url = new URL(req.url ?? '/', 'http://localhost');
++  const paging = parseListPaging(req, res, url);
++  if (!paging) return;
++
++  const assetId = url.searchParams.get('asset_id');
++  if (assetId !== null && !isUuid(assetId)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'asset_id must be a UUID');
++    return;
++  }
++  const coverageType = url.searchParams.get('coverage_type');
++  if (coverageType !== null && !COVERAGE_TYPES.has(coverageType)) {
++    sendRequestError(
++      req,
++      res,
++      400,
++      'INVALID_PARAMS',
++      'coverage_type must be one of: amc, warranty, insurance',
++    );
++    return;
++  }
++  const statusFilter = coverageStatusFilter(req, res, url);
++  if (!statusFilter.ok) return;
++
++  const coverages = await listCoverages(
++    {
++      asset_id: assetId,
++      coverage_type: coverageType,
++      status: statusFilter.status,
++      business_date: statusFilter.businessDate,
++    },
++    { limit: paging.limit, offset: paging.offset },
++  );
++  sendJson(res, 200, { coverages });
++};
++
++// GET /api/v1/maintenance/coverages/alerts
++
++const listCoverageAlertsBase: RouteHandler = async (req, res, _params) => {
++  const url = new URL(req.url ?? '/', 'http://localhost');
++  const paging = parseListPaging(req, res, url);
++  if (!paging) return;
++
++  const coverageId = url.searchParams.get('coverage_id');
++  const assetId = url.searchParams.get('asset_id');
++  const stageDaysRaw = url.searchParams.get('stage_days');
++  if (coverageId !== null && !isUuid(coverageId)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'coverage_id must be a UUID');
++    return;
++  }
++  if (assetId !== null && !isUuid(assetId)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'asset_id must be a UUID');
++    return;
++  }
++  if (stageDaysRaw !== null && !/^\d+$/.test(stageDaysRaw)) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'stage_days must be an integer');
++    return;
++  }
++
++  const alerts = await listCoverageAlerts(
++    {
++      coverage_id: coverageId,
++      asset_id: assetId,
++      stage_days: stageDaysRaw === null ? undefined : Number(stageDaysRaw),
++    },
++    { limit: paging.limit, offset: paging.offset },
++  );
++  sendJson(res, 200, { alerts });
++};
++
++// POST /api/v1/maintenance/coverages/scan
++
++const scanCoveragesBase: RouteHandler = async (req, res, _params) => {
++  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
++  const actor = actorContext(req);
++  try {
++    const businessDate = requireBusinessDate(body);
++    const assetId = optionalAssetIdFilter(body);
++    const result = await runCoverageExpiryScan({
++      business_date: businessDate,
++      asset_id: assetId,
++      actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++      auditCtx: auditCtxFor(req, actor, 200),
++    });
++    sendJson(res, 200, result);
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// GET /api/v1/maintenance/coverages/:coverageId
++
++const getCoverageBase: RouteHandler = async (req, res, params) => {
++  try {
++    const coverageId = requireUuidParam(params, 'coverageId');
++    const coverage = await getCoverageById(coverageId);
++    if (!coverage) {
++      throw new AppError(404, 'COVERAGE_NOT_FOUND', 'Coverage not found', {
++        coverage_id: coverageId,
++      });
++    }
++    sendJson(res, 200, { coverage });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// POST /api/v1/maintenance/work-orders/:workOrderId/warranty-overrides
++
++const recordWarrantyOverrideBase: RouteHandler = async (req, res, params) => {
++  const body = getParsedBody(req) as Record<string, unknown> | undefined;
++  if (!body) {
++    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
++    return;
++  }
++
++  const actor = actorContext(req);
++  const overrideId = randomUUID();
++  const now = new Date().toISOString();
++
++  try {
++    const workOrderId = requireUuidParam(params, 'workOrderId');
++    const reasonCodeRaw = body['reason_code'];
++    if (
++      typeof reasonCodeRaw !== 'string' ||
++      reasonCodeRaw.trim() === '' ||
++      reasonCodeRaw.trim().length > MAX_REASON_CODE_LENGTH
++    ) {
++      throw new AppError(
++        400,
++        'INVALID_PARAMS',
++        `reason_code is required and must be at most ${MAX_REASON_CODE_LENGTH} characters`,
++      );
++    }
++    const reasonCode = reasonCodeRaw.trim();
++
++    const workOrder = await getWorkOrderById(workOrderId);
++    if (!workOrder) {
++      throw new AppError(404, 'WORK_ORDER_NOT_FOUND', 'Work order not found', {
++        work_order_id: workOrderId,
++      });
++    }
++    if (workOrder.warranty_flagged !== true) {
++      throw new AppError(
++        409,
++        'WARRANTY_OVERRIDE_NOT_REQUIRED',
++        'The work order is not warranty-flagged, so no override applies',
++        { work_order_id: workOrderId },
++      );
++    }
++    if (workOrder.status === 'completed') {
++      throw new AppError(
++        409,
++        'WORK_ORDER_ALREADY_COMPLETED',
++        'The work order is already completed',
++        { work_order_id: workOrderId, completed_at: workOrder.completed_at },
++      );
++    }
++    // The one-override-per-work-order grain is deliberately NOT pre-checked here (the
++    // raiseCalibrationEscalationBase precedent): a pre-check runs before persistEvent's
++    // idempotency lookup, so it would turn a legitimate same-key REPLAY into a 409 and break the
++    // AD-16 contract. The seam enforces the grain under the work order's lock (after its
++    // alreadyPersisted guard) and the uq_maintenance_warranty_override_work_order 23505 resolver
++    // backs it, so a genuine second override still returns 409
++    // WARRANTY_OVERRIDE_ALREADY_RECORDED with the same existing_override_id detail.
++
++    // AD-3: the override is an approval capability resolved through the DOA registry, never a
++    // hard-coded role check. The seam re-resolves this under the work order's lock; the pre-check
++    // exists so an unauthorized caller gets a clean 403 before an event is minted. Business-rule
++    // rejections are raised HERE, after the RBAC wrapper, never inside it.
++    const approval = await resolveApprover(WARRANTY_OVERRIDE_DOA_TYPE, 0);
++    if (!approval.requiresApproval || approval.approverActorId === null) {
++      throw new AppError(
++        404,
++        'APPROVAL_UNRESOLVED',
++        'No DOA entry governs maintenance.warranty_override',
++        { transaction_type: WARRANTY_OVERRIDE_DOA_TYPE },
++      );
++    }
++    if (approval.approverActorId !== actor.userId) {
++      throw new AppError(
++        403,
++        'APPROVAL_REQUIRED',
++        'The warranty override requires the resolved DOA approver',
++        {
++          work_order_id: workOrderId,
++          resolved_approver_user_id: approval.approverActorId,
++        },
++      );
++    }
++
++    if (!config.maintenance.warrantyOverrideReasonCodes.includes(reasonCode)) {
++      throw new AppError(
++        422,
++        'WARRANTY_OVERRIDE_REASON_INVALID',
++        'The reason code is not a configured warranty override reason',
++        {
++          work_order_id: workOrderId,
++          reason_code: reasonCode,
++          allowed: config.maintenance.warrantyOverrideReasonCodes,
++        },
++      );
++    }
++
++    const persisted = await persistEvent(
++      {
++        stream_type: 'maintenance',
++        stream_id: workOrderId,
++        event_type: 'maintenance.warranty_override_recorded',
++        payload: {
++          override_id: overrideId,
++          work_order_id: workOrderId,
++          warranty_coverage_id: workOrder.warranty_coverage_id,
++          reason_code: reasonCode,
++          overridden_by: actor.userId,
++          overridden_at: now,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
++          occurred_at: now,
++        },
++        idempotency_key: idempotencyKeyFrom(body),
++        // eslint-disable-next-line @typescript-eslint/no-explicit-any
++      } as any,
++      auditCtxFor(req, actor, 201),
++    );
++
++    const persistedId = replayIdOrReject(
++      persisted,
++      'maintenance.warranty_override_recorded',
++      'override_id',
++    );
++    const override = await getWarrantyOverrideById(persistedId);
++    sendJson(res, 201, { event_id: persisted.event_id, override: override ?? null });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++// GET /api/v1/maintenance/work-orders/:workOrderId/warranty-overrides
++
++const getWarrantyOverrideBase: RouteHandler = async (req, res, params) => {
++  try {
++    const workOrderId = requireUuidParam(params, 'workOrderId');
++    const override = await getWarrantyOverrideByWorkOrder(workOrderId);
++    sendJson(res, 200, { override: override ?? null });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
++export const recordCoverageHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'write',
++})(recordCoverageBase);
++
++export const listAssetCoveragesHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(listAssetCoveragesBase);
++
++export const listCoveragesHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(listCoveragesBase);
++
++export const listCoverageAlertsHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(listCoverageAlertsBase);
++
++export const scanCoveragesHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'write',
++})(scanCoveragesBase);
++
++export const getCoverageHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(getCoverageBase);
++
++export const recordWarrantyOverrideHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'write',
++})(recordWarrantyOverrideBase);
++
++export const getWarrantyOverrideHandler = requireRole({
++  module: 'maintenance',
++  functionScope: 'read',
++})(getWarrantyOverrideBase);
+diff --git a/src/compliance/maintenance-coverage.ts b/src/compliance/maintenance-coverage.ts
+new file mode 100644
+index 0000000..1d440fe
+--- /dev/null
++++ b/src/compliance/maintenance-coverage.ts
+@@ -0,0 +1,688 @@
++import type { PoolClient } from 'pg';
++import type { EventEnvelope } from '../events/store.js';
++import { AppError } from '../middleware/error.js';
++import { resolveApprover } from '../api/v1/indents.js';
++import { config } from '../config/index.js';
++import { lockAssetById } from '../read/projections/asset.js';
++import {
++  getCoverageById,
++  getCoverageByReference,
++  insertCoverage,
++} from '../read/projections/asset_coverage.js';
++import {
++  getCoverageAlertForStage,
++  insertCoverageAlert,
++} from '../read/projections/asset_coverage_alert.js';
++import { getWorkOrderById } from '../read/projections/maintenance_work_order.js';
++import {
++  getWarrantyOverrideByWorkOrder,
++  insertWarrantyOverride,
++} from '../read/projections/maintenance_warranty_override.js';
++
++/**
++ * Story 7.7 compliance seam for AMC, warranty, and insurance tracking (FR-M-10, FR-M-11).
++ * Structurally mirrors src/compliance/asset-operational-status.ts: a stream gate, a PURE
++ * pre-transaction shape assert, an in-transaction projection switch, an alreadyPersisted guard and
++ * the same reject() AppError helper, copied verbatim rather than re-derived.
++ *
++ * Three appliers:
++ * - coverage_recorded inserts one append-only asset_coverage row (a renewal is a NEW row, never an
++ *   amendment) with fail-closed date gates against the payload business_date.
++ * - coverage_expiry_flagged inserts one asset_coverage_alert row at the (coverage_id, stage_days)
++ *   grain, re-deriving asset_id, coverage_type and expiry_date from the locked coverage row.
++ * - warranty_override_recorded inserts the at-most-one reason-coded override per work order, with
++ *   the DOA authority for maintenance.warranty_override re-resolved under the work order's lock.
++ *
++ * LOCKING CONTRACT (verified against every sibling seam that touches these rows):
++ * - applyCoverageRecorded: asset FOR UPDATE (Locking Contract step 1), then plain reads of
++ *   asset_coverage. It takes no coverage lock, so it can never hold one while waiting for an asset.
++ * - applyCoverageExpiryFlagged: the coverage row FOR UPDATE only. It touches no asset row, so it
++ *   introduces no ordering relationship with the asset-first appliers at all.
++ * - applyWarrantyOverrideRecorded: the work-order row FOR UPDATE, then a plain read of the override
++ *   grain. The unique index on work_order_id is the concurrency backstop behind that read.
++ * - The DOA registry read (resolveApprover) is a plain SELECT on append-only configuration, so it
++ *   carries no lock-order dependency (the Story 7.6 precedent).
++ *
++ * No AB-BA inversion exists against the appliers that share these rows:
++ * applyBreakdownWorkOrderCreated takes fault report, asset, SLA policy, then INSERTS the work order
++ * and only READS asset_coverage (added by Story 7.7, unlocked, strictly after the SLA policy lock);
++ * applyWorkOrderCompleted takes asset, weighbridge examination, work order, then only READS the
++ * override grain; runCoverageExpiryScan locks the coverage row alone. Every path that touches both
++ * an asset and a coverage takes the asset first, and every path that touches both a work order and
++ * an override takes the work order first.
++ */
++
++const MAINTENANCE_STREAM_TYPES = new Set(['maintenance']);
++const COVERAGE_RECORDED = 'maintenance.coverage_recorded';
++const COVERAGE_EXPIRY_FLAGGED = 'maintenance.coverage_expiry_flagged';
++const WARRANTY_OVERRIDE_RECORDED = 'maintenance.warranty_override_recorded';
++
++const COVERAGE_EVENT_TYPES = new Set([
++  COVERAGE_RECORDED,
++  COVERAGE_EXPIRY_FLAGGED,
++  WARRANTY_OVERRIDE_RECORDED,
++]);
++
++const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
++// An explicit UTC offset is REQUIRED (the Story 7.2 offset lesson).
++const ISO8601_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
++// The Story 7.6 cost family: an exact decimal string, never a JS number.
++const COVERAGE_NUMERIC_REGEX = /^\d{1,11}(\.\d{1,3})?$/;
++
++/**
++ * FR-M-10 pins the numbers 90, 60 and 30 itself, so they are a module constant and NOT deployment
++ * configuration (Binding Decision 7). Ordered most-urgent-last to match the SQL ordering the scan
++ * relies on; the scan itself orders by expiry then stage in SQL.
++ */
++export const COVERAGE_STAGES = [90, 60, 30] as const;
++export const COVERAGE_TYPES = new Set(['amc', 'warranty', 'insurance']);
++export const WARRANTY_OVERRIDE_DOA_TYPE = 'maintenance.warranty_override';
++export const MAX_REASON_CODE_LENGTH = 200;
++export const MAX_TEXT_LENGTH = 512;
++
++function isUuid(value: unknown): value is string {
++  return typeof value === 'string' && UUID_REGEX.test(value);
++}
++
++function isIsoDate(value: unknown): value is string {
++  if (typeof value !== 'string' || !ISO_DATE_REGEX.test(value)) return false;
++  // Round-trip check: reject impossible calendar dates (e.g. 2026-02-30) that Date.parse silently
++  // normalizes into a 500 from PostgreSQL 22008 (the Story 7.5 round-trip pattern).
++  const [y, m, d] = value.split('-').map((part) => Number(part));
++  const dt = new Date(Date.UTC(y!, m! - 1, d!));
++  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m! - 1 && dt.getUTCDate() === d;
++}
++
++function isIsoTimestamp(value: unknown): value is string {
++  return typeof value === 'string' && ISO8601_TIMESTAMP_REGEX.test(value);
++}
++
++/** Canonical form of a human-entered contract reference (the lower() unique index). */
++export function canonicalCoverageReference(value: string): string {
++  return value.trim().toLowerCase();
++}
++
++export function maintenanceCoverageEventType(envelope: EventEnvelope): string | null {
++  if (!MAINTENANCE_STREAM_TYPES.has(envelope.stream_type)) return null;
++  if (!COVERAGE_EVENT_TYPES.has(envelope.event_type)) return null;
++  return envelope.event_type;
++}
++
++function reject(
++  code: string,
++  message: string,
++  details?: Record<string, unknown>,
++  status: number = 400,
++): never {
++  throw new AppError(status, code, message, details);
++}
++
++// ---------------------------------------------------------------------------
++// Pre-transaction shape validation (no DB access)
++// ---------------------------------------------------------------------------
++
++function assertCoverageRecordedShape(envelope: EventEnvelope): void {
++  const p = envelope.payload as Record<string, unknown>;
++
++  if (!isUuid(p['coverage_id'])) reject('INVALID_PAYLOAD', 'coverage_id must be a UUID');
++  if (!isUuid(p['asset_id'])) reject('INVALID_PAYLOAD', 'asset_id must be a UUID');
++  if (envelope.stream_id !== p['asset_id']) {
++    reject('INVALID_PAYLOAD', 'stream_id must match the payload asset_id', {
++      stream_id: envelope.stream_id,
++      payload_asset_id: p['asset_id'],
++    });
++  }
++  const coverageType = p['coverage_type'];
++  if (typeof coverageType !== 'string' || !COVERAGE_TYPES.has(coverageType)) {
++    reject('INVALID_PAYLOAD', 'coverage_type must be one of: amc, warranty, insurance');
++  }
++  const providerName = p['provider_name'];
++  if (
++    typeof providerName !== 'string' ||
++    providerName.trim() === '' ||
++    providerName.length > MAX_TEXT_LENGTH
++  ) {
++    reject('INVALID_PAYLOAD', 'provider_name must be a non-empty string');
++  }
++  const reference = p['reference_number_ext'];
++  if (
++    typeof reference !== 'string' ||
++    reference.trim() === '' ||
++    reference.length > MAX_TEXT_LENGTH
++  ) {
++    reject('INVALID_PAYLOAD', 'reference_number_ext must be a non-empty string');
++  }
++  if (!isIsoDate(p['start_date'])) {
++    reject('INVALID_PAYLOAD', 'start_date must be a valid calendar date in YYYY-MM-DD');
++  }
++  if (!isIsoDate(p['expiry_date'])) {
++    reject('INVALID_PAYLOAD', 'expiry_date must be a valid calendar date in YYYY-MM-DD');
++  }
++  if (!isIsoDate(p['business_date'])) {
++    reject('INVALID_PAYLOAD', 'business_date must be a valid calendar date in YYYY-MM-DD');
++  }
++  // Both are validated YYYY-MM-DD strings, so a lexical comparison IS the calendar comparison.
++  if ((p['expiry_date'] as string) <= (p['start_date'] as string)) {
++    reject('INVALID_PAYLOAD', 'expiry_date must be after start_date', {
++      start_date: p['start_date'],
++      expiry_date: p['expiry_date'],
++    });
++  }
++  const contractValue = p['contract_value'];
++  if (
++    contractValue !== null &&
++    (typeof contractValue !== 'string' || !COVERAGE_NUMERIC_REGEX.test(contractValue))
++  ) {
++    reject(
++      'INVALID_PAYLOAD',
++      'contract_value must be null or a decimal string with at most 3 decimal places',
++    );
++  }
++  if (!isUuid(p['recorded_by'])) reject('INVALID_PAYLOAD', 'recorded_by must be a UUID');
++  if (!isIsoTimestamp(p['recorded_at'])) {
++    reject('INVALID_PAYLOAD', 'recorded_at must be an ISO 8601 timestamp with an explicit offset');
++  }
++}
++
++function assertCoverageExpiryFlaggedShape(envelope: EventEnvelope): void {
++  const p = envelope.payload as Record<string, unknown>;
++
++  if (!isUuid(p['alert_id'])) reject('INVALID_PAYLOAD', 'alert_id must be a UUID');
++  if (!isUuid(p['coverage_id'])) reject('INVALID_PAYLOAD', 'coverage_id must be a UUID');
++  if (!isUuid(p['asset_id'])) reject('INVALID_PAYLOAD', 'asset_id must be a UUID');
++  const coverageType = p['coverage_type'];
++  if (typeof coverageType !== 'string' || !COVERAGE_TYPES.has(coverageType)) {
++    reject('INVALID_PAYLOAD', 'coverage_type must be one of: amc, warranty, insurance');
++  }
++  const stageDays = p['stage_days'];
++  if (
++    typeof stageDays !== 'number' ||
++    !Number.isInteger(stageDays) ||
++    !(COVERAGE_STAGES as readonly number[]).includes(stageDays)
++  ) {
++    reject('INVALID_PAYLOAD', 'stage_days must be one of: 90, 60, 30');
++  }
++  if (!isIsoDate(p['expiry_date'])) {
++    reject('INVALID_PAYLOAD', 'expiry_date must be a valid calendar date in YYYY-MM-DD');
++  }
++  if (!isIsoDate(p['business_date'])) {
++    reject('INVALID_PAYLOAD', 'business_date must be a valid calendar date in YYYY-MM-DD');
++  }
++  if (!isIsoTimestamp(p['flagged_at'])) {
++    reject('INVALID_PAYLOAD', 'flagged_at must be an ISO 8601 timestamp with an explicit offset');
++  }
++}
++
++function assertWarrantyOverrideRecordedShape(envelope: EventEnvelope): void {
++  const p = envelope.payload as Record<string, unknown>;
++
++  if (!isUuid(p['override_id'])) reject('INVALID_PAYLOAD', 'override_id must be a UUID');
++  if (!isUuid(p['work_order_id'])) reject('INVALID_PAYLOAD', 'work_order_id must be a UUID');
++  if (envelope.stream_id !== p['work_order_id']) {
++    reject('INVALID_PAYLOAD', 'stream_id must match the payload work_order_id', {
++      stream_id: envelope.stream_id,
++      payload_work_order_id: p['work_order_id'],
++    });
++  }
++  if (!isUuid(p['warranty_coverage_id'])) {
++    reject('INVALID_PAYLOAD', 'warranty_coverage_id must be a UUID');
++  }
++  const reasonCode = p['reason_code'];
++  if (
++    typeof reasonCode !== 'string' ||
++    reasonCode.trim() === '' ||
++    reasonCode.trim().length > MAX_REASON_CODE_LENGTH
++  ) {
++    reject(
++      'INVALID_PAYLOAD',
++      `reason_code must be a non-empty string of at most ${MAX_REASON_CODE_LENGTH} characters`,
++    );
++  }
++  if (!isUuid(p['overridden_by'])) reject('INVALID_PAYLOAD', 'overridden_by must be a UUID');
++  if (!isIsoTimestamp(p['overridden_at'])) {
++    reject(
++      'INVALID_PAYLOAD',
++      'overridden_at must be an ISO 8601 timestamp with an explicit offset',
++    );
++  }
++}
++
++export function assertMaintenanceCoverageShape(envelope: EventEnvelope): void {
++  switch (maintenanceCoverageEventType(envelope)) {
++    case COVERAGE_RECORDED:
++      assertCoverageRecordedShape(envelope);
++      return;
++    case COVERAGE_EXPIRY_FLAGGED:
++      assertCoverageExpiryFlaggedShape(envelope);
++      return;
++    case WARRANTY_OVERRIDE_RECORDED:
++      assertWarrantyOverrideRecordedShape(envelope);
++      return;
++    default:
++      return;
++  }
++}
++
++// ---------------------------------------------------------------------------
++// In-transaction appliers
++// ---------------------------------------------------------------------------
++
++async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Promise<boolean> {
++  if (!envelope.idempotency_key?.trim() && !envelope.event_id) return false;
++  const existing = await client.query(
++    `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 LIMIT 1`,
++    [envelope.idempotency_key ?? null, envelope.event_id ?? null],
++  );
++  return existing.rows.length > 0;
++}
++
++async function applyCoverageRecorded(envelope: EventEnvelope, client: PoolClient): Promise<void> {
++  const p = envelope.payload as Record<string, unknown>;
++  const coverageId = p['coverage_id'] as string;
++  const assetId = p['asset_id'] as string;
++  const coverageType = p['coverage_type'] as 'amc' | 'warranty' | 'insurance';
++  const providerName = (p['provider_name'] as string).trim();
++  const reference = (p['reference_number_ext'] as string).trim();
++  const startDate = p['start_date'] as string;
++  const expiryDate = p['expiry_date'] as string;
++  const businessDate = p['business_date'] as string;
++  const contractValue = p['contract_value'] as string | null;
++  const declaredRecordedBy = p['recorded_by'] as string;
++  const recordedAt = p['recorded_at'] as string;
++
++  // Locking contract step 1: the asset row, FOR UPDATE.
++  const assetExists = await lockAssetById(assetId, client);
++  if (!assetExists) {
++    reject('ASSET_NOT_FOUND', 'The asset does not resolve', { asset_id: assetId }, 404);
++  }
++
++  // Fail-closed date gates (Binding Decision 6): an already-lapsed contract serves neither lapse
++  // prevention nor a warranty check, and a future start would corrupt the active-warranty
++  // derivation, which tests start_date <= business_date.
++  if (expiryDate < businessDate) {
++    reject(
++      'COVERAGE_ALREADY_EXPIRED',
++      'The coverage expiry date is before the business date',
++      { coverage_id: coverageId, expiry_date: expiryDate, business_date: businessDate },
++      422,
++    );
++  }
++  if (startDate > businessDate) {
++    reject(
++      'COVERAGE_FUTURE_START',
++      'The coverage start date is after the business date',
++      { coverage_id: coverageId, start_date: startDate, business_date: businessDate },
++      422,
++    );
++  }
++
++  // Duplicate pre-check on the uniqueness grain, run under the asset lock. The 23505 resolver on
++  // uq_asset_coverage_reference returns the SAME code and the SAME existing_coverage_id when a
++  // concurrent writer wins the race, so both paths are indistinguishable to the caller.
++  const existing = await getCoverageByReference(
++    assetId,
++    coverageType,
++    canonicalCoverageReference(reference),
++    client,
++    false,
++  );
++  if (existing) {
++    reject(
++      'DUPLICATE_COVERAGE',
++      'A coverage with this reference already exists for the asset and coverage type',
++      {
++        asset_id: assetId,
++        coverage_type: coverageType,
++        reference_number_ext: reference,
++        existing_coverage_id: existing.coverage_id,
++      },
++      409,
++    );
++  }
++
++  // recorded_by is actor-derived; the payload's declared value must match the envelope actor.
++  if (declaredRecordedBy !== envelope.metadata.actor.user_id) {
++    reject(
++      'COVERAGE_DERIVATION_MISMATCH',
++      'Declared recorded_by does not match the acting user',
++      {
++        coverage_id: coverageId,
++        declared_recorded_by: declaredRecordedBy,
++        derived_recorded_by: envelope.metadata.actor.user_id,
++      },
++      409,
++    );
++  }
++
++  // Write the re-derived and normalized fields back onto the persisted payload so the stored event
++  // carries exactly what this process derived and stored.
++  p['recorded_by'] = envelope.metadata.actor.user_id;
++  p['provider_name'] = providerName;
++  p['reference_number_ext'] = reference;
++
++  await insertCoverage(
++    {
++      coverage_id: coverageId,
++      asset_id: assetId,
++      coverage_type: coverageType,
++      provider_name: providerName,
++      reference_number_ext: reference,
++      start_date: startDate,
++      expiry_date: expiryDate,
++      contract_value: contractValue,
++      recorded_by: envelope.metadata.actor.user_id,
++      recorded_at: recordedAt,
++    },
++    client,
++  );
++}
++
++async function applyCoverageExpiryFlagged(
++  envelope: EventEnvelope,
++  client: PoolClient,
++): Promise<void> {
++  const p = envelope.payload as Record<string, unknown>;
++  const alertId = p['alert_id'] as string;
++  const coverageId = p['coverage_id'] as string;
++  const declaredAssetId = p['asset_id'] as string;
++  const declaredCoverageType = p['coverage_type'] as string;
++  const stageDays = p['stage_days'] as number;
++  const declaredExpiryDate = p['expiry_date'] as string;
++  const businessDate = p['business_date'] as string;
++  const flaggedAt = p['flagged_at'] as string;
++
++  // Locking contract: the coverage row FOR UPDATE. Two concurrent scans serialize here, so the
++  // grain check below cannot be read stale by the loser.
++  const coverage = await getCoverageById(coverageId, client, true);
++  if (!coverage) {
++    reject('COVERAGE_NOT_FOUND', 'The coverage does not resolve', { coverage_id: coverageId }, 404);
++  }
++
++  // Re-read guard: a coverage that has lapsed since the scan selected it is never alerted.
++  if (coverage.expiry_date < businessDate) {
++    reject(
++      'COVERAGE_ALREADY_EXPIRED',
++      'The coverage expiry date is before the business date',
++      {
++        coverage_id: coverageId,
++        expiry_date: coverage.expiry_date,
++        business_date: businessDate,
++      },
++      422,
++    );
++  }
++
++  if (
++    coverage.asset_id !== declaredAssetId ||
++    coverage.coverage_type !== declaredCoverageType ||
++    coverage.expiry_date !== declaredExpiryDate
++  ) {
++    reject(
++      'COVERAGE_DERIVATION_MISMATCH',
++      'Declared coverage facts do not match the locked coverage row',
++      {
++        coverage_id: coverageId,
++        declared_asset_id: declaredAssetId,
++        derived_asset_id: coverage.asset_id,
++        declared_coverage_type: declaredCoverageType,
++        derived_coverage_type: coverage.coverage_type,
++        declared_expiry_date: declaredExpiryDate,
++        derived_expiry_date: coverage.expiry_date,
++      },
++      409,
++    );
++  }
++
++  const existingAlert = await getCoverageAlertForStage(coverageId, stageDays, client);
++  if (existingAlert) {
++    reject(
++      'DUPLICATE_COVERAGE_ALERT',
++      'This coverage stage has already been alerted',
++      {
++        coverage_id: coverageId,
++        stage_days: stageDays,
++        existing_alert_id: existingAlert.alert_id,
++      },
++      409,
++    );
++  }
++
++  await insertCoverageAlert(
++    {
++      alert_id: alertId,
++      coverage_id: coverageId,
++      asset_id: coverage.asset_id,
++      stage_days: stageDays,
++      expiry_date: coverage.expiry_date,
++      business_date: businessDate,
++      flagged_at: flaggedAt,
++    },
++    client,
++  );
++}
++
++async function applyWarrantyOverrideRecorded(
++  envelope: EventEnvelope,
++  client: PoolClient,
++): Promise<void> {
++  const p = envelope.payload as Record<string, unknown>;
++  const overrideId = p['override_id'] as string;
++  const workOrderId = p['work_order_id'] as string;
++  const declaredCoverageId = p['warranty_coverage_id'] as string;
++  const reasonCode = (p['reason_code'] as string).trim();
++  const declaredOverriddenBy = p['overridden_by'] as string;
++  const overriddenAt = p['overridden_at'] as string;
++
++  // Locking contract: the work order row FOR UPDATE, then the override grain.
++  const workOrder = await getWorkOrderById(workOrderId, client, true);
++  if (!workOrder) {
++    reject(
++      'WORK_ORDER_NOT_FOUND',
++      'The work order does not resolve',
++      { work_order_id: workOrderId },
++      404,
++    );
++  }
++
++  if (workOrder.warranty_flagged !== true) {
++    reject(
++      'WARRANTY_OVERRIDE_NOT_REQUIRED',
++      'The work order is not warranty-flagged, so no override applies',
++      { work_order_id: workOrderId },
++      409,
++    );
++  }
++
++  if (workOrder.status === 'completed') {
++    reject(
++      'WORK_ORDER_ALREADY_COMPLETED',
++      'The work order is already completed',
++      { work_order_id: workOrderId, completed_at: workOrder.completed_at },
++      409,
++    );
++  }
++
++  if (declaredCoverageId !== workOrder.warranty_coverage_id) {
++    reject(
++      'COVERAGE_DERIVATION_MISMATCH',
++      'Declared warranty_coverage_id does not match the work order',
++      {
++        work_order_id: workOrderId,
++        declared_warranty_coverage_id: declaredCoverageId,
++        derived_warranty_coverage_id: workOrder.warranty_coverage_id,
++      },
++      409,
++    );
++  }
++
++  if (declaredOverriddenBy !== envelope.metadata.actor.user_id) {
++    reject(
++      'COVERAGE_DERIVATION_MISMATCH',
++      'Declared overridden_by does not match the acting user',
++      {
++        work_order_id: workOrderId,
++        declared_overridden_by: declaredOverriddenBy,
++        derived_overridden_by: envelope.metadata.actor.user_id,
++      },
++      409,
++    );
++  }
++
++  const allowedReasonCodes = config.maintenance.warrantyOverrideReasonCodes;
++  if (!allowedReasonCodes.includes(reasonCode)) {
++    reject(
++      'WARRANTY_OVERRIDE_REASON_INVALID',
++      'The reason code is not a configured warranty override reason',
++      { work_order_id: workOrderId, reason_code: reasonCode, allowed: allowedReasonCodes },
++      422,
++    );
++  }
++
++  // AD-3: override authority resolves through the DOA registry under the work order's lock, so a
++  // direct event cannot hand the override to someone the registry never authorized.
++  const approval = await resolveApprover(WARRANTY_OVERRIDE_DOA_TYPE, 0);
++  if (!approval.requiresApproval || approval.approverActorId === null) {
++    reject(
++      'APPROVAL_UNRESOLVED',
++      'No DOA entry governs maintenance.warranty_override',
++      { transaction_type: WARRANTY_OVERRIDE_DOA_TYPE },
++      404,
++    );
++  }
++  if (declaredOverriddenBy !== approval.approverActorId) {
++    reject(
++      'APPROVAL_REQUIRED',
++      'The warranty override requires the resolved DOA approver',
++      {
++        work_order_id: workOrderId,
++        resolved_approver_user_id: approval.approverActorId,
++      },
++      403,
++    );
++  }
++
++  const existingOverride = await getWarrantyOverrideByWorkOrder(workOrderId, client);
++  if (existingOverride) {
++    reject(
++      'WARRANTY_OVERRIDE_ALREADY_RECORDED',
++      'A warranty override has already been recorded for this work order',
++      { work_order_id: workOrderId, existing_override_id: existingOverride.override_id },
++      409,
++    );
++  }
++
++  // Write the re-derived and normalized fields back onto the persisted payload.
++  p['overridden_by'] = envelope.metadata.actor.user_id;
++  p['reason_code'] = reasonCode;
++
++  await insertWarrantyOverride(
++    {
++      override_id: overrideId,
++      work_order_id: workOrderId,
++      warranty_coverage_id: workOrder.warranty_coverage_id as string,
++      reason_code: reasonCode,
++      overridden_by: envelope.metadata.actor.user_id,
++      overridden_at: overriddenAt,
++    },
++    client,
++  );
++}
++
++export async function applyMaintenanceCoverageProjection(
++  envelope: EventEnvelope,
++  client: PoolClient,
++): Promise<void> {
++  const eventType = maintenanceCoverageEventType(envelope);
++  if (eventType === null) return;
++  if (await alreadyPersisted(envelope, client)) return;
++
++  switch (eventType) {
++    case COVERAGE_RECORDED:
++      await applyCoverageRecorded(envelope, client);
++      return;
++    case COVERAGE_EXPIRY_FLAGGED:
++      await applyCoverageExpiryFlagged(envelope, client);
++      return;
++    case WARRANTY_OVERRIDE_RECORDED:
++      await applyWarrantyOverrideRecorded(envelope, client);
++      return;
++    default:
++      return;
++  }
++}
++
++// ---------------------------------------------------------------------------
++// 23505 duplicate resolvers
++// ---------------------------------------------------------------------------
++
++/**
++ * The race path and the sequential path must return the SAME error code with the SAME existing_*
++ * detail (the Story 7.2 lesson). Each resolver re-reads the winning row so a caller that lost a
++ * concurrent race is told exactly what a caller that arrived second sequentially is told.
++ */
++export async function resolveCoverageDuplicateConflict(
++  payload: Record<string, unknown>,
++): Promise<Record<string, unknown>> {
++  const assetId = isUuid(payload['asset_id']) ? (payload['asset_id'] as string) : null;
++  const coverageType =
++    typeof payload['coverage_type'] === 'string' ? (payload['coverage_type'] as string) : null;
++  const reference =
++    typeof payload['reference_number_ext'] === 'string' &&
++    payload['reference_number_ext'].trim() !== ''
++      ? (payload['reference_number_ext'] as string).trim()
++      : null;
++  const attempted: Record<string, unknown> = {
++    asset_id: assetId,
++    coverage_type: coverageType,
++    reference_number_ext: reference,
++  };
++  if (assetId !== null && coverageType !== null && reference !== null) {
++    const existing = await getCoverageByReference(
++      assetId,
++      coverageType,
++      canonicalCoverageReference(reference),
++    );
++    if (existing) {
++      return { ...attempted, existing_coverage_id: existing.coverage_id };
++    }
++  }
++  return attempted;
++}
++
++export async function resolveCoverageAlertDuplicateConflict(
++  payload: Record<string, unknown>,
++): Promise<Record<string, unknown>> {
++  const coverageId = isUuid(payload['coverage_id']) ? (payload['coverage_id'] as string) : null;
++  const stageDays =
++    typeof payload['stage_days'] === 'number' && Number.isInteger(payload['stage_days'])
++      ? (payload['stage_days'] as number)
++      : null;
++  const attempted: Record<string, unknown> = {
++    coverage_id: coverageId,
++    stage_days: stageDays,
++  };
++  if (coverageId !== null && stageDays !== null) {
++    const existing = await getCoverageAlertForStage(coverageId, stageDays);
++    if (existing) {
++      return { ...attempted, existing_alert_id: existing.alert_id };
++    }
++  }
++  return attempted;
++}
++
++export async function resolveWarrantyOverrideDuplicateConflict(
++  payload: Record<string, unknown>,
++): Promise<Record<string, unknown>> {
++  const workOrderId = isUuid(payload['work_order_id'])
++    ? (payload['work_order_id'] as string)
++    : null;
++  const attempted: Record<string, unknown> = { work_order_id: workOrderId };
++  if (workOrderId !== null) {
++    const existing = await getWarrantyOverrideByWorkOrder(workOrderId);
++    if (existing) {
++      return { ...attempted, existing_override_id: existing.override_id };
++    }
++  }
++  return attempted;
++}
+diff --git a/src/compliance/maintenance-fault.ts b/src/compliance/maintenance-fault.ts
+index bf85d6a..df9894a 100644
+--- a/src/compliance/maintenance-fault.ts
++++ b/src/compliance/maintenance-fault.ts
+@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
+ import type { EventEnvelope } from '../events/store.js';
+ import { AppError } from '../middleware/error.js';
+ import { getAssetById } from '../read/projections/asset.js';
++// Story 7.7 (FR-M-11): the AC 2 warranty check at work-order creation.
++import { getActiveWarrantyForAsset } from '../read/projections/asset_coverage.js';
+ import { getActiveSlaPolicy, insertSlaPolicy } from '../read/projections/maintenance_sla_policy.js';
+ import {
+   getFaultReportById,
+@@ -578,6 +580,37 @@ async function applyBreakdownWorkOrderCreated(
+     });
+   }
+ 
++  // Step 4b (Story 7.7, FR-M-11, AC 2): the warranty check. warranty_flagged and
++  // warranty_coverage_id are DERIVED here and written back onto the persisted payload; a DECLARED
++  // value in the inbound envelope is a corruption channel on the direct-event path and rejects
++  // (Binding Decision 3, the Story 7.6 derived-field rule for total_cost).
++  if (p['warranty_flagged'] !== undefined || p['warranty_coverage_id'] !== undefined) {
++    reject(
++      'WORK_ORDER_DERIVATION_MISMATCH',
++      'warranty_flagged is derived and cannot be declared',
++      {
++        fault_report_id: faultReportId,
++        warranty_flagged: p['warranty_flagged'],
++        warranty_coverage_id: p['warranty_coverage_id'],
++      },
++      409,
++    );
++  }
++  // A plain SELECT placed AFTER the SLA policy lock: it takes no lock of its own, so the existing
++  // fault report -> asset -> SLA policy -> work order -> downtime order is preserved and no new
++  // deadlock class is introduced. The flag is advisory ("may be covered"), so the millisecond race
++  // with a concurrent coverage recording is acceptable - and that recording locks the ASSET row,
++  // never a coverage row, so it cannot invert against anything held here.
++  const activeWarranty = await getActiveWarrantyForAsset(
++    report.asset_id,
++    p['business_date'] as string,
++    client,
++  );
++  const warrantyFlagged = Boolean(activeWarranty);
++  const warrantyCoverageId = activeWarranty?.coverage_id ?? null;
++  p['warranty_flagged'] = warrantyFlagged;
++  p['warranty_coverage_id'] = warrantyCoverageId;
++
+   // Step 5: insert the breakdown work order. plan_id is NULL (chk_maintenance_work_order_plan_link
+   // permits it for a non-preventive row) and generated_for_cycle carries the fault_report_id - the
+   // column is NOT NULL and uq_maintenance_work_order_cycle is partial on plan_id IS NOT NULL, so a
+@@ -597,6 +630,8 @@ async function applyBreakdownWorkOrderCreated(
+       sla_policy_id: policy.policy_id,
+       sla_response_due_at: slaResponseDueAt,
+       sla_resolution_due_at: slaResolutionDueAt,
++      warranty_flagged: warrantyFlagged,
++      warranty_coverage_id: warrantyCoverageId,
+       created_at: now,
+       updated_at: now,
+     },
+diff --git a/src/config/index.ts b/src/config/index.ts
+index 95ef6c9..6181b83 100644
+--- a/src/config/index.ts
++++ b/src/config/index.ts
+@@ -299,6 +299,42 @@ export const config = {
+       }
+       return days;
+     })(),
++    // Story 7.6 (FR-M-15, Binding Decision 7): the repair-vs-capitalize threshold is a NUMERIC
++    // STRING, never a JS float, compared in SQL with ::numeric. The comparison is strictly greater
++    // than: total_cost equal to the threshold is NOT flagged. A malformed env value fails closed at
++    // load time (the config.msme precedent) so a typo cannot silently change every capitalization
++    // decision.
++    capitalizationThreshold: (() => {
++      const raw = process.env['MAINTENANCE_CAPITALIZATION_THRESHOLD'];
++      if (raw === undefined || raw.trim() === '') return '50000';
++      const value = raw.trim();
++      if (!/^\d{1,12}(\.\d{1,6})?$/.test(value)) {
++        throw new Error(
++          `Invalid MAINTENANCE_CAPITALIZATION_THRESHOLD "${raw}": must be a NUMERIC string with at most 6 decimals.`,
++        );
++      }
++      return value;
++    })(),
++    // Story 7.7 (FR-M-11): the reason codes a warranty override may cite. Commercial policy, not
++    // code: comma-separated, trimmed, unique, at least one entry. A malformed env value fails
++    // closed at load time (the capitalizationThreshold precedent).
++    warrantyOverrideReasonCodes: (() => {
++      const raw = process.env['MAINTENANCE_WARRANTY_OVERRIDE_REASON_CODES'];
++      const value =
++        raw === undefined || raw.trim() === ''
++          ? 'OUT_OF_WARRANTY_SCOPE,WARRANTY_NOT_APPLICABLE,PREVIOUS_UNAUTHORIZED_REPAIR,EMERGENCY_REPAIR'
++          : raw;
++      const codes = value
++        .split(',')
++        .map((c) => c.trim())
++        .filter((c) => c.length > 0);
++      if (codes.length === 0 || new Set(codes).size !== codes.length) {
++        throw new Error(
++          `Invalid MAINTENANCE_WARRANTY_OVERRIDE_REASON_CODES "${raw}": must be a non-empty, duplicate-free, comma-separated list.`,
++        );
++      }
++      return codes;
++    })(),
+   },
+   bom: {
+     maxDepth: parsePositiveIntEnv('BOM_MAX_DEPTH', 20),
+diff --git a/src/events/store.ts b/src/events/store.ts
+index be7f6c1..2f98f4a 100644
+--- a/src/events/store.ts
++++ b/src/events/store.ts
+@@ -7,6 +7,7 @@ import type { AuditEntryPayload } from '../read/projections/audit_log.js';
+ import { isAuditTamperError, recordTamperAttempt } from '../middleware/audit-tamper-guard.js';
+ import { assertInventoryTagging } from '../compliance/business-stream.js';
+ import { assertCalibrationLockout } from '../compliance/calibration.js';
++import { assertWeighbridgeStampLockout } from '../compliance/weighbridge.js';
+ import { assertLocationInvariant } from '../compliance/location.js';
+ import { assertInventoryMasterReferences } from '../compliance/inventory-master.js';
+ import {
+@@ -167,6 +168,29 @@ import {
+   resolveCalibrationAlertDuplicateConflict,
+   resolveOpenEscalationDuplicateConflict,
+ } from '../compliance/calibration-register.js';
++import {
++  assertStatutoryExaminationShape,
++  applyStatutoryExaminationProjection,
++  resolveStatutoryExaminationDuplicateConflict,
++  resolveStatutoryDeviceKeyDuplicateConflict,
++  resolveStatutoryRecordDuplicateConflict,
++} from '../compliance/maintenance-statutory.js';
++import {
++  assertAssetStatusChangedShape,
++  applyAssetOperationalStatusProjection,
++} from '../compliance/asset-operational-status.js';
++import {
++  assertMaintenanceCoverageShape,
++  applyMaintenanceCoverageProjection,
++  resolveCoverageDuplicateConflict,
++  resolveCoverageAlertDuplicateConflict,
++  resolveWarrantyOverrideDuplicateConflict,
++} from '../compliance/maintenance-coverage.js';
++import {
++  assertProductionOrderShape,
++  applyProductionOrderProjection,
++  resolveProductionOrderNumberDuplicateConflict,
++} from '../compliance/production-order.js';
+ import type {
+   PickTaskCreatedEnvelope,
+   PickLineConfirmedEnvelope,
+@@ -416,6 +440,12 @@ export async function persistEvent(
+   // inside assertInventoryTagging - byte-for-byte unaffected.
+   await assertInventoryTagging(envelope);
+   await assertCalibrationLockout(envelope);
++  // Story 7.6 (FR-M-14, AC 2): the weighbridge trade-weighment lockout runs with the other
++  // pre-transaction asserts, BEFORE any DB write, so a weighment on a weighbridge whose statutory
++  // stamp is overdue is rejected 423 WEIGHBRIDGE_OUT_OF_STAMP without consuming an idempotency key.
++  // It is a DB-backed read (getExaminationByDeviceKey), like assertCalibrationLockout; fail-open for
++  // device keys not in the register, so the existing story-3-2/3-3/3-4 suites are unchanged.
++  await assertWeighbridgeStampLockout(envelope);
+   // Story 2.1: inventory master validation (SKU existence, target-location existence, actor
+   // location registration, zone compatibility) also runs BEFORE any DB write, gated to inventory
+   // events that actually reference master fields. May throw ZoneIncompatibleWarning (not an
+@@ -588,6 +618,24 @@ export async function persistEvent(
+   // validation is non-DB and runs with the other pre-transaction asserts, so a malformed
+   // calibration event never consumes an idempotency key.
+   assertCalibrationRegisterShape(envelope);
++  // Story 7.6: statutory examination record/overdue shape validation (strict UUIDs, enum
++  // vocabulary, DATE and TIMESTAMPTZ formats, bounded interval) is non-DB and runs with the other
++  // pre-transaction asserts, so a malformed statutory event never consumes an idempotency key.
++  assertStatutoryExaminationShape(envelope);
++  // Story 7.6: machine status transition shape validation (Table 5 vocabulary, sign-off fields)
++  // is non-DB and runs with the other pre-transaction asserts.
++  assertAssetStatusChangedShape(envelope);
++  // Story 7.7: coverage recording / staged expiry flag / warranty override shape validation
++  // (strict UUIDs, the coverage-type enum, DATE round-trip validity, explicit-offset timestamps,
++  // exact-decimal contract_value) is non-DB and runs with the other pre-transaction asserts, so a
++  // malformed coverage event never consumes an idempotency key.
++  assertMaintenanceCoverageShape(envelope);
++  // Story 6.1: production order lifecycle shape validation (strict UUIDs, exact decimal order
++  // quantity, the source-reference enum, the state vocabulary, the expediting pairing) is non-DB
++  // and runs with the other pre-transaction asserts, so a malformed production event never
++  // consumes an idempotency key. AC1's UNTAGGED_TRANSACTION fires in assertInventoryTagging for
++  // production_order.created (requiresBusinessStream true); this assert adds the shape rules.
++  assertProductionOrderShape(envelope);
+   assertThreeWayMatchShape(envelope);
+   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
+   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
+@@ -880,6 +928,23 @@ export async function persistEvent(
+     // lockout gate reads commit or roll back together. eventId is passed through because the
+     // status row records which event changed it and the domain_events row does not exist yet.
+     await applyCalibrationRegisterProjection(envelope, client, eventId);
++    // Story 7.6: the statutory examination register, its record history, and the machine status
++    // projection run inside this same transaction, so the register flip, the evidence record and
++    // the domain_events insert commit or roll back together. The status flip that feeds the
++    // weighbridge lockout and the AC1 use-lock is applied here, never outside persistEvent.
++    await applyStatutoryExaminationProjection(envelope, client);
++    await applyAssetOperationalStatusProjection(envelope, client);
++    // Story 7.7: the coverage register, its staged expiry alerts and the reason-coded warranty
++    // override run inside this same transaction, so the projection row and the domain_events
++    // insert commit or roll back together. The DOA re-resolution behind the override lives here,
++    // never only in the HTTP handler (AD-12).
++    await applyMaintenanceCoverageProjection(envelope, client);
++    // Story 6.1: the production order projection runs inside this same transaction, so the order
++    // row (create, release with its re-run release gate, state transitions, cancel with the
++    // unreversed-transactions guard) and the domain_events insert commit or roll back together.
++    // The gate re-run, the DOA override re-resolution and the order-number allocation all live
++    // here, never only in the HTTP handler (AD-12).
++    await applyProductionOrderProjection(envelope, client, eventId);
+     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
+     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
+     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
+@@ -1286,6 +1351,75 @@ export async function persistEvent(
+           'An escalation is already open for this instrument',
+           await resolveOpenEscalationDuplicateConflict(envelope.payload),
+         );
++      } else if (constraint === 'uq_statutory_examination_asset_type') {
++        // Story 7.6: two concurrent records for the same (asset_id, examination_type) grain
++        // resolve to one winner; the loser gets the same code and the same existing_examination_id
++        // detail the sequential pre-check produces (DUPLICATE_STATUTORY_EXAMINATION).
++        throw new AppError(
++          409,
++          'DUPLICATE_STATUTORY_EXAMINATION',
++          'A statutory examination already exists for this asset and type',
++          await resolveStatutoryExaminationDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_statutory_examination_device_key') {
++        // Story 7.6: one weighbridge device_key maps to at most one statutory examination. There
++        // is no sequential pre-check (the seam's device-key guard is the index itself), so the
++        // sequential and the race path surface the SAME DUPLICATE_EVENT detail.
++        throw new AppError(
++          409,
++          'DUPLICATE_EVENT',
++          'A statutory examination already uses this device key',
++          await resolveStatutoryDeviceKeyDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_statutory_examination_record_number') {
++        // Story 7.6: one certificate number per examination. Same contract as the device key: the
++        // index is the guard, and the resolver reports the existing record.
++        throw new AppError(
++          409,
++          'DUPLICATE_EVENT',
++          'A statutory examination record with this certificate number already exists',
++          await resolveStatutoryRecordDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_asset_coverage_reference') {
++        // Story 7.7: the coverage uniqueness grain (asset_id, coverage_type, lower(reference)).
++        // Two concurrent recordings resolve to one winner; the loser gets the same code and the
++        // same existing_coverage_id detail the sequential pre-check produces.
++        throw new AppError(
++          409,
++          'DUPLICATE_COVERAGE',
++          'A coverage with this reference already exists for the asset and coverage type',
++          await resolveCoverageDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_asset_coverage_alert_stage') {
++        // Story 7.7: the once-per-stage grain. Two concurrent scans for one coverage stage resolve
++        // to a single alert with the stable DUPLICATE_COVERAGE_ALERT contract, and the scan skips
++        // that stage rather than failing the whole run.
++        throw new AppError(
++          409,
++          'DUPLICATE_COVERAGE_ALERT',
++          'This coverage has already been flagged at this stage',
++          await resolveCoverageAlertDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_maintenance_warranty_override_work_order') {
++        // Story 7.7: one reason-coded override per work order (Binding Decision 11). The race path
++        // returns the same code and the same existing_override_id as the sequential pre-check.
++        throw new AppError(
++          409,
++          'WARRANTY_OVERRIDE_ALREADY_RECORDED',
++          'A warranty override has already been recorded for this work order',
++          await resolveWarrantyOverrideDuplicateConflict(envelope.payload),
++        );
++      } else if (constraint === 'uq_production_order_number_ext') {
++        // Story 6.1: the server-allocated order number is unique. The sequential pre-check (the
++        // applier's allocation) makes this practically unreachable, but a concurrent race on the
++        // SAME event (same production_order_id) must surface the stable DUPLICATE_PRODUCTION_ORDER_
++        // NUMBER with the existing order detail, never a raw 23505 500.
++        throw new AppError(
++          409,
++          'DUPLICATE_PRODUCTION_ORDER_NUMBER',
++          'A production order with this order number already exists',
++          await resolveProductionOrderNumberDuplicateConflict(envelope.payload),
++        );
+       } else if (
+         constraint === 'maintenance_sla_policy_pkey' ||
+         constraint === 'maintenance_fault_report_pkey' ||
+@@ -1298,7 +1432,22 @@ export async function persistEvent(
+         constraint === 'instrument_register_pkey' ||
+         constraint === 'instrument_calibration_certificate_pkey' ||
+         constraint === 'instrument_calibration_alert_pkey' ||
+-        constraint === 'instrument_calibration_escalation_pkey'
++        constraint === 'instrument_calibration_escalation_pkey' ||
++        // Story 7.6: server-minted UUIDs make these practically unreachable; mapped for the same
++        // completeness reason as the siblings above.
++        constraint === 'statutory_examination_pkey' ||
++        constraint === 'statutory_examination_record_pkey' ||
++        constraint === 'asset_operational_status_pkey' ||
++        constraint === 'maintenance_asset_cost_pkey' ||
++        // Story 6.1: server-minted UUIDs make this practically unreachable; mapped for the same
++        // completeness reason as the siblings above.
++        constraint === 'production_order_pkey' ||
++        // Story 7.7: server-minted UUIDs make these practically unreachable; mapped for the same
++        // completeness reason as the siblings above. Each names its OWN id field below, so the
++        // chain never falls through to a wrong (and always null) field.
++        constraint === 'asset_coverage_pkey' ||
++        constraint === 'asset_coverage_alert_pkey' ||
++        constraint === 'maintenance_warranty_override_pkey'
+       ) {
+         // Story 7.3: server-minted UUIDs make these practically unreachable; mapped for
+         // completeness per the maintenance_plan_pkey precedent, so a direct-event duplicate id
+@@ -1361,17 +1510,60 @@ export async function persistEvent(
+                                       ? p['certificate_id']
+                                       : null,
+                                 }
+-                              : constraint === 'instrument_calibration_alert_pkey'
++                              : constraint === 'instrument_calibration_alert_pkey' ||
++                                  constraint === 'asset_coverage_alert_pkey'
+                                 ? {
+                                     alert_id:
+                                       typeof p['alert_id'] === 'string' ? p['alert_id'] : null,
+                                   }
+-                                : {
+-                                    escalation_id:
+-                                      typeof p['escalation_id'] === 'string'
+-                                        ? p['escalation_id']
+-                                        : null,
+-                                  };
++                                : constraint === 'instrument_calibration_escalation_pkey'
++                                  ? {
++                                      escalation_id:
++                                        typeof p['escalation_id'] === 'string'
++                                          ? p['escalation_id']
++                                          : null,
++                                    }
++                                  : constraint === 'statutory_examination_pkey'
++                                    ? {
++                                        examination_id:
++                                          typeof p['examination_id'] === 'string'
++                                            ? p['examination_id']
++                                            : null,
++                                      }
++                                    : constraint === 'statutory_examination_record_pkey'
++                                      ? {
++                                          record_id:
++                                            typeof p['record_id'] === 'string'
++                                              ? p['record_id']
++                                              : null,
++                                        }
++                                      : constraint === 'production_order_pkey'
++                                        ? {
++                                            production_order_id:
++                                              typeof p['production_order_id'] === 'string'
++                                                ? p['production_order_id']
++                                                : null,
++                                          }
++                                        : constraint === 'asset_coverage_pkey'
++                                          ? {
++                                              coverage_id:
++                                                typeof p['coverage_id'] === 'string'
++                                                  ? p['coverage_id']
++                                                  : null,
++                                            }
++                                          : constraint === 'maintenance_warranty_override_pkey'
++                                            ? {
++                                                override_id:
++                                                  typeof p['override_id'] === 'string'
++                                                    ? p['override_id']
++                                                    : null,
++                                              }
++                                            : {
++                                                asset_id:
++                                                  typeof p['asset_id'] === 'string'
++                                                    ? p['asset_id']
++                                                    : null,
++                                              };
+         throw new AppError(
+           409,
+           'DUPLICATE_EVENT',
+@@ -1447,6 +1639,27 @@ export async function persistEvent(
+         });
+       }
+     }
++    // Story 7.6: a numeric_value_out_of_range from the maintenance cost path is a caller-supplied
++    // magnitude problem, not a server fault. The per-field COST_NUMERIC_REGEX bounds one value at
++    // NUMERIC(14,3), but labor_cost + parts_cost can still overflow the column, and the per-asset
++    // maintenance_asset_cost rollup ADDS to a running total with no ceiling at all - left unmapped
++    // that surfaced as a 500 and, in the rollup case, permanently blocked every later completion
++    // for that asset.
++    if (err && typeof err === 'object' && 'code' in err && err.code === '22003') {
++      throw new AppError(
++        422,
++        'COST_VALUE_OUT_OF_RANGE',
++        'The cost value or the resulting total exceeds the NUMERIC(14,3) range of the cost columns',
++        {
++          work_order_id:
++            typeof envelope.payload['work_order_id'] === 'string'
++              ? envelope.payload['work_order_id']
++              : null,
++          asset_id:
++            typeof envelope.payload['asset_id'] === 'string' ? envelope.payload['asset_id'] : null,
++        },
++      );
++    }
+     throw err;
+   } finally {
+     if (ownsTransaction) client.release();
+diff --git a/src/maintenance/coverage-jobs.ts b/src/maintenance/coverage-jobs.ts
+new file mode 100644
+index 0000000..0b62f07
+--- /dev/null
++++ b/src/maintenance/coverage-jobs.ts
+@@ -0,0 +1,235 @@
++import { randomUUID } from 'node:crypto';
++import type { PoolClient } from 'pg';
++import { getPool } from '../config/db.js';
++import { persistEvent } from '../events/store.js';
++import { AppError } from '../middleware/error.js';
++import { emitNotification } from '../notify/emit.js';
++import type { AuditEntryPayload } from '../read/projections/audit_log.js';
++import { getAssetById } from '../read/projections/asset.js';
++import { COVERAGE_STAGES } from '../compliance/maintenance-coverage.js';
++import { getCoverageById, listCoverageStagesDue } from '../read/projections/asset_coverage.js';
++import { getCoverageAlertForStage } from '../read/projections/asset_coverage_alert.js';
++
++/**
++ * Story 7.7 coverage expiry scan cycle (FR-M-10, AC 1). A pure function driven by the authenticated
++ * POST trigger in src/api/v1/maintenance.ts, structurally cloned from
++ * src/maintenance/calibration-jobs.ts. There is deliberately NO scheduler, no timer and no
++ * container: the only setInterval in the process is the Story 1.11 notification dispatcher, and
++ * every other periodic cycle in this codebase is a POST with an explicit business_date.
++ *
++ * business_date is the ONLY notion of "today" inside the job. Wall-clock time is used solely for
++ * flagged_at, occurred_at and audit timestamps, which are TIMESTAMPTZ instants with explicit
++ * offsets. Every date comparison happens in SQL DATE arithmetic, never in JS.
++ *
++ * Each coverage stage is processed in its OWN transaction: the coverage row it decides on is locked
++ * FOR UPDATE and the resulting event is persisted through persistEvent on that SAME client, so two
++ * concurrent scans serialize into exactly one alert rather than racing to the unique index. The
++ * index remains the backstop, and a lost race is skipped rather than failing the whole scan.
++ * Notifications are emitted AFTER the transaction commits, using the non-throwing emitNotification
++ * (AD-17), so a notification failure can never roll back an alert.
++ *
++ * Write counters and delivery counters are kept SEPARATE in the result, so a dropped notification
++ * stays visible instead of hiding behind the write count (the Story 7.2 and 7.4 lesson).
++ */
++
++export type AuditCtx = Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>;
++
++export interface CoverageJobActor {
++  user_id: string;
++  role: string;
++  location_id: string;
++}
++
++export interface CoverageScanScope {
++  business_date: string;
++  asset_id?: string | undefined;
++  actor: CoverageJobActor;
++  auditCtx?: AuditCtx | undefined;
++}
++
++export interface CoverageScanResult {
++  business_date: string;
++  coverages_evaluated: number;
++  alerts_raised: number;
++  notifications_delivered: number;
++  notifications_dropped: number;
++  alert_ids: string[];
++}
++
++/** The 30-day stage is the last warning before the contract lapses, so it alone escalates. */
++const ESCALATING_STAGE_DAYS = 30;
++const ACKNOWLEDGMENT_WINDOW_SECONDS = 86400;
++/**
++ * The story persona receives the alert and the override authority escalates. location_id is null
++ * on purpose: the asset register is company-wide (AD-9) and carries no location, so a
++ * location-scoped target would silently reach nobody outside the scan actor's own site (the Story
++ * 7.6 Group B lesson).
++ */
++const COVERAGE_ROLE = 'maintenance_manager';
++const ESCALATION_ROLE = 'maintenance_supervisor';
++
++function isAppErrorWithCode(err: unknown, code: string): boolean {
++  return err instanceof AppError && err.errorCode === code;
++}
++
++/** Runs `work` inside its own transaction, rolling back unless it signals success. */
++async function inTransaction<T>(
++  work: (client: PoolClient) => Promise<T | null>,
++): Promise<T | null> {
++  const client = await getPool().connect();
++  let committed = false;
++  try {
++    await client.query('BEGIN');
++    const result = await work(client);
++    await client.query('COMMIT');
++    committed = true;
++    return result;
++  } finally {
++    if (!committed) {
++      try {
++        await client.query('ROLLBACK');
++      } catch {
++        // A rollback failure on an already-aborted connection must not mask the original error.
++      }
++    }
++    client.release();
++  }
++}
++
++/**
++ * AC 1: the staged 90/60/30-day expiry warnings across AMC, warranty and insurance coverages.
++ *
++ * Catch-up is structural, not special-cased: listCoverageStagesDue asks which stages are DUE and
++ * UNFIRED, so a scan skipped for several days fires every missed stage on the next run, most urgent
++ * first, and a second scan on the same business_date fires nothing because every due stage already
++ * occupies its grain. An equality test on the day count would silently drop a stage whenever the
++ * job is not run daily.
++ *
++ * There is no expiry-flip pass here (unlike the Story 7.5 twin): a lapsed coverage has no status
++ * column to flip - it simply stops satisfying the active-warranty predicate, which is evaluated in
++ * SQL against business_date at work-order creation time. Coverages are append-only, and a renewal
++ * is a new row with its own fresh set of stages (Binding Decision 5).
++ *
++ * Because there is no supersede path, listCoverageStagesDue narrows to the CURRENT coverage per
++ * (asset_id, coverage_type) using the same single-winner rule the AC 2 warranty check applies
++ * (review decision D1). The superseded row keeps the stages it already fired and stops earning new
++ * ones, so a renewal no longer re-raises the old contract's remaining warnings.
++ */
++export async function runCoverageExpiryScan(scope: CoverageScanScope): Promise<CoverageScanResult> {
++  const filters = { asset_id: scope.asset_id ?? null };
++
++  const dueStages = await listCoverageStagesDue(scope.business_date, COVERAGE_STAGES, filters);
++
++  const alertIds: string[] = [];
++  let notificationsDelivered = 0;
++  let notificationsDropped = 0;
++  // Review decision D5: the alert table is a LEDGER, the notification is a MESSAGE, and conflating
++  // them turned one contract into a pile of pages. Every due and unfired stage still gets its grain
++  // row, so catch-up stays structural and a skipped scan never loses a stage - but only the most
++  // urgent stage actually flagged for a coverage in this run is notified. Without this, a coverage
++  // recorded inside the 90-day window (a 45-day insurance cover note is legal under
++  // chk_asset_coverage_dates) fires 90, 60 and 30 simultaneously on its first scan, three
++  // notifications for a contract nobody has had a chance to act on, one of them carrying the
++  // maintenance_supervisor escalation clock. dueStages is ordered stage_days ASC within a coverage,
++  // so the first stage that commits for a coverage IS its most urgent one.
++  const notifiedCoverages = new Set<string>();
++
++  for (const due of dueStages) {
++    const flaggedAt = new Date().toISOString();
++    const correlationId = randomUUID();
++    const alertId = randomUUID();
++
++    let flagged = false;
++    try {
++      flagged =
++        (await inTransaction(async (client) => {
++          // Lock the coverage so a concurrent scan for this grain serializes: the loser waits,
++          // then sees the alert the winner committed and skips it.
++          const locked = await getCoverageById(due.coverage_id, client, true);
++          if (!locked) return null;
++          // A renewal or correction that moved the expiry date since the list read invalidates the
++          // stage this pass selected; the next scan recomputes it from the new date.
++          if (locked.expiry_date !== due.expiry_date) return null;
++
++          const existing = await getCoverageAlertForStage(due.coverage_id, due.stage_days, client);
++          if (existing) return null;
++
++          await persistEvent(
++            {
++              stream_type: 'maintenance',
++              stream_id: alertId,
++              event_type: 'maintenance.coverage_expiry_flagged',
++              payload: {
++                alert_id: alertId,
++                coverage_id: locked.coverage_id,
++                asset_id: locked.asset_id,
++                coverage_type: locked.coverage_type,
++                stage_days: due.stage_days,
++                expiry_date: locked.expiry_date,
++                business_date: scope.business_date,
++                flagged_at: flaggedAt,
++              },
++              metadata: {
++                correlation_id: correlationId,
++                actor: scope.actor,
++                occurred_at: flaggedAt,
++              },
++              idempotency_key: randomUUID(),
++              // eslint-disable-next-line @typescript-eslint/no-explicit-any
++            } as any,
++            scope.auditCtx,
++            client,
++          );
++          return true;
++        })) === true;
++    } catch (err: unknown) {
++      // A concurrent scan won the race to uq_asset_coverage_alert_stage. Nothing was persisted by
++      // this pass, so nothing may be counted or notified - but one lost race must not fail the
++      // whole scan.
++      if (isAppErrorWithCode(err, 'DUPLICATE_COVERAGE_ALERT')) continue;
++      throw err;
++    }
++    if (!flagged) continue;
++    alertIds.push(alertId);
++
++    // The grain row is committed either way; only the message is suppressed.
++    if (notifiedCoverages.has(due.coverage_id)) continue;
++    notifiedCoverages.add(due.coverage_id);
++
++    const asset = await getAssetById(due.asset_id);
++    const emitted = await emitNotification({
++      target: { role: COVERAGE_ROLE, location_id: null },
++      event_type: 'coverage_expiry_due',
++      status_verb: 'Due',
++      object_type: 'asset_coverage',
++      object_id: alertId,
++      // A human-readable subject, never a raw id (the 7.2 Group 4 patch).
++      actor_label: `${asset?.asset_name ?? due.asset_id} (${asset?.asset_tag ?? 'unknown tag'}), ${due.coverage_type} ${due.reference_number_ext}, ${due.days_remaining} days remaining`,
++      next_step: 'Renew the contract or record a new coverage',
++      actor: scope.actor,
++      correlation_id: correlationId,
++      occurred_at: flaggedAt,
++      // Escalating a quarter-out reminder is noise; the 30-day stage is the last warning before
++      // the contract lapses, so only that one carries an acknowledgment window.
++      ...(due.stage_days === ESCALATING_STAGE_DAYS
++        ? {
++            escalation: {
++              target_role: ESCALATION_ROLE,
++              acknowledgment_window_seconds: ACKNOWLEDGMENT_WINDOW_SECONDS,
++            },
++          }
++        : {}),
++    });
++    if (emitted.ok) notificationsDelivered += 1;
++    else notificationsDropped += 1;
++  }
++
++  return {
++    business_date: scope.business_date,
++    coverages_evaluated: dueStages.length,
++    alerts_raised: alertIds.length,
++    notifications_delivered: notificationsDelivered,
++    notifications_dropped: notificationsDropped,
++    alert_ids: alertIds,
++  };
++}
+diff --git a/src/server.ts b/src/server.ts
+index 6a357aa..5c97a6c 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -272,7 +272,33 @@ import {
+   listCalibrationAlertsHandler,
+   listCalibrationEscalationsHandler,
+   resolveCalibrationEscalationHandler,
++  createStatutoryExaminationHandler,
++  listStatutoryExaminationsHandler,
++  getStatutoryExaminationHandler,
++  scanStatutoryExaminationsHandler,
++  setAssetStatusHandler,
++  getAssetStatusHandler,
++  listAssetStatusesHandler,
++  getAssetCostsHandler,
++  listAssetCostsHandler,
++  recordCoverageHandler,
++  listAssetCoveragesHandler,
++  listCoveragesHandler,
++  listCoverageAlertsHandler,
++  scanCoveragesHandler,
++  getCoverageHandler,
++  recordWarrantyOverrideHandler,
++  getWarrantyOverrideHandler,
+ } from './api/v1/maintenance.js';
++import {
++  createProductionOrderHandler,
++  listProductionOrdersHandler,
++  getProductionOrderHandler,
++  getProductionReleaseGateHandler,
++  releaseProductionOrderHandler,
++  transitionProductionOrderHandler,
++  cancelProductionOrderHandler,
++} from './api/v1/production-orders.js';
+ import {
+   captureSupplierInvoiceHandler,
+   captureDuplicateOverrideHandler,
+@@ -689,6 +715,62 @@ export function createAppRouter(): Router {
+     raiseCalibrationEscalationHandler,
+   );
+ 
++  // Story 7.6: statutory examinations, cost accumulation, and machine status broadcast
++  // (FR-M-14, FR-M-15, FR-M-16). ROUTE ORDER MATTERS: '/statutory-examinations/scan' is registered
++  // BEFORE '/statutory-examinations/:examinationId', and the literal list segments '/asset-status'
++  // and '/asset-costs' BEFORE their parameterized '/assets/:assetId/...' siblings - the router
++  // returns the first match in registration order and ':param' compiles to ([^/]+). None of these
++  // shadows the existing '/assets/:assetId/parts' routes (distinct literal segments).
++  router.post('/api/v1/maintenance/statutory-examinations', createStatutoryExaminationHandler);
++  router.get('/api/v1/maintenance/statutory-examinations', listStatutoryExaminationsHandler);
++  router.post('/api/v1/maintenance/statutory-examinations/scan', scanStatutoryExaminationsHandler);
++  router.get(
++    '/api/v1/maintenance/statutory-examinations/:examinationId',
++    getStatutoryExaminationHandler,
++  );
++  router.get('/api/v1/maintenance/asset-status', listAssetStatusesHandler);
++  router.get('/api/v1/maintenance/asset-costs', listAssetCostsHandler);
++  router.get('/api/v1/maintenance/assets/:assetId/status', getAssetStatusHandler);
++  router.post('/api/v1/maintenance/assets/:assetId/status', setAssetStatusHandler);
++  router.get('/api/v1/maintenance/assets/:assetId/costs', getAssetCostsHandler);
++
++  // Story 7.7: AMC, warranty, and insurance tracking (FR-M-10, FR-M-11). ROUTE ORDER MATTERS: the
++  // literal '/coverages', '/coverages/alerts' and '/coverages/scan' segments are all registered
++  // BEFORE '/coverages/:coverageId' - the router returns the first match in registration order and
++  // ':param' compiles to ([^/]+), so a parameter route placed first would swallow both the alerts
++  // list and the scan trigger. The '/assets/:assetId/coverages' and
++  // '/work-orders/:workOrderId/warranty-overrides' routes carry distinct literal tail segments, so
++  // they shadow none of the existing '/assets/:assetId/...' or '/work-orders/:workOrderId/...'
++  // siblings.
++  router.post('/api/v1/maintenance/assets/:assetId/coverages', recordCoverageHandler);
++  router.get('/api/v1/maintenance/assets/:assetId/coverages', listAssetCoveragesHandler);
++  router.get('/api/v1/maintenance/coverages', listCoveragesHandler);
++  router.get('/api/v1/maintenance/coverages/alerts', listCoverageAlertsHandler);
++  router.post('/api/v1/maintenance/coverages/scan', scanCoveragesHandler);
++  router.get('/api/v1/maintenance/coverages/:coverageId', getCoverageHandler);
++  router.post(
++    '/api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
++    recordWarrantyOverrideHandler,
++  );
++  router.get(
++    '/api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
++    getWarrantyOverrideHandler,
++  );
++
++  // Story 6.1: Production Order Creation and Release Gate (FR-MO-01/02/03). ROUTE ORDER MATTERS:
++  // '/production-orders' (both verbs) is registered BEFORE any '/production-orders/:orderId' route,
++  // and the three sub-resource routes after the bare '/:orderId' route, so no parameter segment
++  // shadows the list route. The '/api/v1/production-orders' prefix is distinct from the existing
++  // '/api/v1/purchase-orders' block; a careless parameter route placed before the list route would
++  // swallow it, which is the exact defect this ordering prevents.
++  router.post('/api/v1/production-orders', createProductionOrderHandler);
++  router.get('/api/v1/production-orders', listProductionOrdersHandler);
++  router.get('/api/v1/production-orders/:orderId', getProductionOrderHandler);
++  router.get('/api/v1/production-orders/:orderId/release-gate', getProductionReleaseGateHandler);
++  router.post('/api/v1/production-orders/:orderId/release', releaseProductionOrderHandler);
++  router.post('/api/v1/production-orders/:orderId/transition', transitionProductionOrderHandler);
++  router.post('/api/v1/production-orders/:orderId/cancel', cancelProductionOrderHandler);
++
+   // Story 4.7: Supplier Invoice Capture
+   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);
+   router.post('/api/v1/supplier-invoices/duplicate-overrides', captureDuplicateOverrideHandler);

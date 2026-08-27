@@ -119,9 +119,10 @@ import {
 // Story 7.7 (FR-M-10, FR-M-11): AMC, warranty and insurance coverage plus the reason-coded
 // warranty override.
 import {
+  COVERAGE_STAGES,
   COVERAGE_TYPES,
-  WARRANTY_OVERRIDE_DOA_TYPE,
   MAX_REASON_CODE_LENGTH,
+  MAX_TEXT_LENGTH as MAX_COVERAGE_TEXT_LENGTH,
 } from '../../compliance/maintenance-coverage.js';
 import { getCoverageById, listCoverages } from '../../read/projections/asset_coverage.js';
 import { listCoverageAlerts } from '../../read/projections/asset_coverage_alert.js';
@@ -3894,13 +3895,31 @@ const recordCoverageBase: RouteHandler = async (req, res, params) => {
         'coverage_type must be one of: amc, warranty, insurance',
       );
     }
+    // Bounded HERE as well as in the seam, and bounded on the TRIMMED value the handler actually
+    // persists. The seam measured the untrimmed string, so a 520-character name with ten leading
+    // spaces was accepted and stored at 510, and an over-long value came back as 400
+    // INVALID_PAYLOAD while every other failure on this route is 400 INVALID_PARAMS.
     const providerName = body['provider_name'];
     if (typeof providerName !== 'string' || providerName.trim() === '') {
       throw new AppError(400, 'INVALID_PARAMS', 'provider_name is required');
     }
+    if (providerName.trim().length > MAX_COVERAGE_TEXT_LENGTH) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `provider_name must be at most ${MAX_COVERAGE_TEXT_LENGTH} characters`,
+      );
+    }
     const referenceNumberExt = body['reference_number_ext'];
     if (typeof referenceNumberExt !== 'string' || referenceNumberExt.trim() === '') {
       throw new AppError(400, 'INVALID_PARAMS', 'reference_number_ext is required');
+    }
+    if (referenceNumberExt.trim().length > MAX_COVERAGE_TEXT_LENGTH) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `reference_number_ext must be at most ${MAX_COVERAGE_TEXT_LENGTH} characters`,
+      );
     }
     const startDate = requireCalendarDate(body, 'start_date', 'INVALID_PARAMS');
     const expiryDate = requireCalendarDate(body, 'expiry_date', 'INVALID_PARAMS');
@@ -4099,8 +4118,11 @@ const listCoverageAlertsBase: RouteHandler = async (req, res, _params) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'asset_id must be a UUID');
     return;
   }
-  if (stageDaysRaw !== null && !/^\d+$/.test(stageDaysRaw)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'stage_days must be an integer');
+  if (
+    stageDaysRaw !== null &&
+    !(COVERAGE_STAGES as readonly number[]).includes(Number(stageDaysRaw))
+  ) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'stage_days must be one of: 90, 60, 30');
     return;
   }
 
@@ -4195,47 +4217,25 @@ const recordWarrantyOverrideBase: RouteHandler = async (req, res, params) => {
         { work_order_id: workOrderId },
       );
     }
-    if (workOrder.status === 'completed') {
-      throw new AppError(
-        409,
-        'WORK_ORDER_ALREADY_COMPLETED',
-        'The work order is already completed',
-        { work_order_id: workOrderId, completed_at: workOrder.completed_at },
-      );
-    }
-    // The one-override-per-work-order grain is deliberately NOT pre-checked here (the
-    // raiseCalibrationEscalationBase precedent): a pre-check runs before persistEvent's
-    // idempotency lookup, so it would turn a legitimate same-key REPLAY into a 409 and break the
-    // AD-16 contract. The seam enforces the grain under the work order's lock (after its
-    // alreadyPersisted guard) and the uq_maintenance_warranty_override_work_order 23505 resolver
-    // backs it, so a genuine second override still returns 409
-    // WARRANTY_OVERRIDE_ALREADY_RECORDED with the same existing_override_id detail.
-
-    // AD-3: the override is an approval capability resolved through the DOA registry, never a
-    // hard-coded role check. The seam re-resolves this under the work order's lock; the pre-check
-    // exists so an unauthorized caller gets a clean 403 before an event is minted. Business-rule
-    // rejections are raised HERE, after the RBAC wrapper, never inside it.
-    const approval = await resolveApprover(WARRANTY_OVERRIDE_DOA_TYPE, 0);
-    if (!approval.requiresApproval || approval.approverActorId === null) {
-      throw new AppError(
-        404,
-        'APPROVAL_UNRESOLVED',
-        'No DOA entry governs maintenance.warranty_override',
-        { transaction_type: WARRANTY_OVERRIDE_DOA_TYPE },
-      );
-    }
-    if (approval.approverActorId !== actor.userId) {
-      throw new AppError(
-        403,
-        'APPROVAL_REQUIRED',
-        'The warranty override requires the resolved DOA approver',
-        {
-          work_order_id: workOrderId,
-          resolved_approver_user_id: approval.approverActorId,
-        },
-      );
-    }
-
+    // Review decision BD2: a handler pre-check runs BEFORE persistEvent resolves the idempotency
+    // key, so any pre-check whose answer can legitimately change between the original write and a
+    // same-key retry turns a valid REPLAY into an error and breaks the AD-16 contract. That is why
+    // the one-override-per-work-order grain was never pre-checked here (the
+    // raiseCalibrationEscalationBase precedent) - but the same reasoning had been applied
+    // inconsistently, and three MUTABLE conditions were still pre-checked:
+    //
+    //   WORK_ORDER_ALREADY_COMPLETED - the normal AC 3 flow is override, THEN complete, so a
+    //     client retrying its original POST after a timeout got a 409 instead of its 201.
+    //   APPROVAL_UNRESOLVED / APPROVAL_REQUIRED - a DOA delegation rotating between the write and
+    //     the retry produced a 404 or 403 on a request that had already succeeded.
+    //
+    // All three now live only in the seam, which re-evaluates them under the work order's lock and
+    // AFTER the alreadyPersisted guard, raising the identical code, message and details. Nothing is
+    // committed on rejection, so an unauthorized caller still mints no event.
+    //
+    // WARRANTY_OVERRIDE_NOT_REQUIRED above and the reason-code check below are deliberately KEPT:
+    // warranty_flagged is derived once at work-order creation and never mutates, and the allowed
+    // reason codes are load-time config, so neither answer can change under a legitimate replay.
     if (!config.maintenance.warrantyOverrideReasonCodes.includes(reasonCode)) {
       throw new AppError(
         422,
@@ -4290,6 +4290,12 @@ const recordWarrantyOverrideBase: RouteHandler = async (req, res, params) => {
 const getWarrantyOverrideBase: RouteHandler = async (req, res, params) => {
   try {
     const workOrderId = requireUuidParam(params, 'workOrderId');
+    const workOrder = await getWorkOrderById(workOrderId);
+    if (!workOrder) {
+      throw new AppError(404, 'WORK_ORDER_NOT_FOUND', 'Work order not found', {
+        work_order_id: workOrderId,
+      });
+    }
     const override = await getWarrantyOverrideByWorkOrder(workOrderId);
     sendJson(res, 200, { override: override ?? null });
   } catch (err: unknown) {

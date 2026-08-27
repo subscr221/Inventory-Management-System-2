@@ -125,8 +125,10 @@ const MIGRATIONS = [
   // Story 7.6: the statutory examination register, its record history, the machine-status
   // projection and the per-asset maintenance cost rollup (FR-M-14, FR-M-15, FR-M-16). Appended at
   // the tail after the Story 7.5 files; the edited maintenance_work_order.sql keeps its position
-  // above and its new guarded cost-column blocks re-apply harmlessly. No FKs exist between
-  // projections, so this order is logical rather than dependency-forced.
+  // above and its new guarded cost-column blocks re-apply harmlessly. These four tables carry no
+  // FKs, so their order is logical rather than dependency-forced. Note this is a property of THESE
+  // files, not of the migration list: cross_dock_task.sql and cross_dock_constraints.sql do carry
+  // real FOREIGN KEY clauses, so the list as a whole is not free to reorder.
   '../../read/projections/statutory_examination.sql',
   '../../read/projections/statutory_examination_record.sql',
   '../../read/projections/asset_operational_status.sql',
@@ -139,8 +141,9 @@ const MIGRATIONS = [
   // Story 7.7: the asset coverage register (AMC, warranty, insurance), its staged 90/60/30 expiry
   // alerts and the reason-coded warranty override grain (FR-M-10, FR-M-11). Appended at the tail
   // after the Story 6.1 file; the edited maintenance_work_order.sql keeps its position above and
-  // its new guarded warranty-column blocks re-apply harmlessly. No FKs exist between projections,
-  // so this order is logical rather than dependency-forced.
+  // its new guarded warranty-column blocks re-apply harmlessly. These three tables carry no FKs, so
+  // their order is logical rather than dependency-forced; the list as a whole is not, since the
+  // cross-dock files above hold real FOREIGN KEY clauses.
   '../../read/projections/asset_coverage.sql',
   '../../read/projections/asset_coverage_alert.sql',
   '../../read/projections/maintenance_warranty_override.sql',

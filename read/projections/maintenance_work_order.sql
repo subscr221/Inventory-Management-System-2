@@ -237,9 +237,10 @@ END $$;
 -- applyBreakdownWorkOrderCreated from the active-warranty lookup against the payload business_date
 -- (Binding Decisions 3 and 4): a declared warranty_flagged or warranty_coverage_id in the envelope
 -- is rejected with WORK_ORDER_DERIVATION_MISMATCH, so there is no client write path. Preventive
--- work orders are never checked and keep the false default (Binding Decision 2). No CHECK
--- constraint is needed: a defaulted boolean and a nullable UUID are self-validating. The existing
--- columns, constraints and indexes are untouched.
+-- work orders are never checked and keep the false default (Binding Decision 2). The two columns
+-- are paired by chk_maintenance_work_order_warranty_pairing below, so a flagged row always carries
+-- the coverage the override grain requires. The existing columns, constraints and indexes are
+-- untouched.
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -259,5 +260,24 @@ BEGIN
       AND table_name = 'maintenance_work_order' AND column_name = 'warranty_coverage_id'
   ) THEN
     ALTER TABLE maintenance_work_order ADD COLUMN warranty_coverage_id UUID;
+  END IF;
+END $$;
+
+-- Review decision D6: pair the two warranty columns at the database level. A row carrying
+-- warranty_flagged = true with warranty_coverage_id IS NULL is otherwise structurally legal and can
+-- NEVER be completed, because the override applier re-derives the coverage id from the locked work
+-- order row and maintenance_warranty_override.warranty_coverage_id is NOT NULL, so the completion
+-- raises SQLSTATE 23502 as an unmapped 500 forever. The seam always derives the pair together, so
+-- the only writer that can produce the broken shape is direct SQL; Story 6.1 pins exactly this
+-- class in the same migration batch with chk_production_order_expediting_pairing.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_warranty_pairing'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_warranty_pairing CHECK ((warranty_flagged = false AND warranty_coverage_id IS NULL) OR (warranty_flagged = true AND warranty_coverage_id IS NOT NULL));
   END IF;
 END $$;

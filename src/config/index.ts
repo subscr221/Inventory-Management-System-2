@@ -320,17 +320,27 @@ export const config = {
     // closed at load time (the capitalizationThreshold precedent).
     warrantyOverrideReasonCodes: (() => {
       const raw = process.env['MAINTENANCE_WARRANTY_OVERRIDE_REASON_CODES'];
+      // Only an ABSENT variable takes the defaults. A variable that is present but blank (or all
+      // whitespace) is an operator statement, almost always "allow no overrides", and silently
+      // substituting the four permissive defaults for it is the opposite of failing closed.
       const value =
-        raw === undefined || raw.trim() === ''
+        raw === undefined
           ? 'OUT_OF_WARRANTY_SCOPE,WARRANTY_NOT_APPLICABLE,PREVIOUS_UNAUTHORIZED_REPAIR,EMERGENCY_REPAIR'
           : raw;
       const codes = value
         .split(',')
         .map((c) => c.trim())
         .filter((c) => c.length > 0);
-      if (codes.length === 0 || new Set(codes).size !== codes.length) {
+      // Bounded to the same ceiling the override route enforces on a cited code. An unbounded
+      // entry loaded happily and was then permanently unreachable, while still being advertised in
+      // the 422 `allowed` detail as if a caller could use it.
+      // Kept equal to MAX_REASON_CODE_LENGTH in src/compliance/maintenance-coverage.ts. Not
+      // imported: config is loaded before the seams and must not depend on them.
+      const MAX_REASON_CODE_LENGTH = 200;
+      const malformed = codes.some((c) => c.length > MAX_REASON_CODE_LENGTH || /[\r\n,]/.test(c));
+      if (codes.length === 0 || new Set(codes).size !== codes.length || malformed) {
         throw new Error(
-          `Invalid MAINTENANCE_WARRANTY_OVERRIDE_REASON_CODES "${raw}": must be a non-empty, duplicate-free, comma-separated list.`,
+          `Invalid MAINTENANCE_WARRANTY_OVERRIDE_REASON_CODES "${raw}": must be a non-empty, duplicate-free, comma-separated list of codes at most ${MAX_REASON_CODE_LENGTH} characters with no line breaks.`,
         );
       }
       return codes;

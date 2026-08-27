@@ -585,9 +585,11 @@ async function applyBreakdownWorkOrderCreated(
   // value in the inbound envelope is a corruption channel on the direct-event path and rejects
   // (Binding Decision 3, the Story 7.6 derived-field rule for total_cost).
   if (p['warranty_flagged'] !== undefined || p['warranty_coverage_id'] !== undefined) {
+    const declaredField =
+      p['warranty_flagged'] !== undefined ? 'warranty_flagged' : 'warranty_coverage_id';
     reject(
       'WORK_ORDER_DERIVATION_MISMATCH',
-      'warranty_flagged is derived and cannot be declared',
+      `${declaredField} is derived and cannot be declared`,
       {
         fault_report_id: faultReportId,
         warranty_flagged: p['warranty_flagged'],

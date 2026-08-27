@@ -51,6 +51,19 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 const COVERAGE_TYPE_VALUES: readonly string[] = ['amc', 'warranty', 'insurance'];
 
+/**
+ * The alert stages FR-M-10 pins, mirrored from chk_asset_coverage_alert_stage. Declared here rather
+ * than imported from the compliance seam so the read layer keeps no dependency on it; the drift
+ * test pins the CHECK, and listCoverageStagesDue rejects anything outside this set so a caller can
+ * never be handed due rows whose insert would raise an unmapped SQLSTATE 23514 mid-scan.
+ */
+const ALERT_STAGE_DAYS: readonly number[] = [90, 60, 30];
+
+/** A filter is SUPPLIED when the caller passed a value, including '' - only null/undefined mean absent. */
+function isSupplied(value: string | null | undefined): value is string {
+  return value !== null && value !== undefined;
+}
+
 export const COVERAGE_COLUMNS = `coverage_id, asset_id, coverage_type, provider_name, reference_number_ext,
     to_char(start_date, 'YYYY-MM-DD') AS start_date,
     to_char(expiry_date, 'YYYY-MM-DD') AS expiry_date,
@@ -77,6 +90,17 @@ export interface InsertCoverageRow {
 }
 
 export async function insertCoverage(row: InsertCoverageRow, client: PoolClient): Promise<void> {
+  // The read accessors validate calendar form before they cast; the write path must too, or a
+  // ::date cast quietly accepts the Postgres special literals ('infinity', 'today', 'now'). An
+  // 'infinity' expiry_date passes chk_asset_coverage_dates, matches every warranty check forever,
+  // and then makes (expiry_date - $1::date) raise "cannot subtract infinite dates", which fails
+  // every subsequent coverage scan for the whole tenant against a row that has no delete path.
+  if (!isValidCalendarDate(row.start_date)) {
+    throw new Error(`insertCoverage: start_date is not a calendar date: ${row.start_date}`);
+  }
+  if (!isValidCalendarDate(row.expiry_date)) {
+    throw new Error(`insertCoverage: expiry_date is not a calendar date: ${row.expiry_date}`);
+  }
   await client.query(
     `INSERT INTO asset_coverage (
       coverage_id, asset_id, coverage_type, provider_name, reference_number_ext,
@@ -189,17 +213,21 @@ export async function listCoverages(
   const conditions: string[] = [];
   const values: (string | number)[] = [];
   let idx = 1;
-  if (filters.asset_id) {
+  // Presence tests, not truthiness: '' is a SUPPLIED filter that matches nothing, so it must take
+  // the same path as any other unparseable value and return []. A truthiness test sends '' down
+  // the "filter absent" branch instead, and a caller whose asset id resolved to empty gets the
+  // whole company's register back behind a 200.
+  if (isSupplied(filters.asset_id)) {
     if (!UUID_REGEX.test(filters.asset_id)) return [];
     conditions.push(`asset_id = $${idx++}`);
     values.push(filters.asset_id);
   }
-  if (filters.coverage_type) {
+  if (isSupplied(filters.coverage_type)) {
     if (!COVERAGE_TYPE_VALUES.includes(filters.coverage_type)) return [];
     conditions.push(`coverage_type = $${idx++}`);
     values.push(filters.coverage_type);
   }
-  if (filters.status) {
+  if (isSupplied(filters.status)) {
     const businessDate = filters.business_date;
     if (!businessDate || !isValidCalendarDate(businessDate)) return [];
     if (filters.status === 'active') {
@@ -246,8 +274,19 @@ export interface CoverageStageDueFilters {
  * instead of losing the warning.
  *
  * Scope is narrowed HERE, not in a JS filter afterwards, or the job's counters would overstate what
- * was evaluated (the Story 7.4 lesson). A renewal is a new coverage_id with no alert rows, so it
- * produces a fresh set of three stages while the superseded contract keeps its fired ones.
+ * was evaluated (the Story 7.4 lesson).
+ *
+ * EVERY coverage in force is scanned, never a single winner per (asset_id, coverage_type). The
+ * uniqueness grain is (asset_id, coverage_type, lower(reference_number_ext)), so several coverages
+ * of one type simultaneously in force on one asset are legal and ordinary: a machinery-breakdown
+ * policy and a fire policy are both coverage_type 'insurance', and two overlapping AMCs from
+ * different vendors are equally legal. A review pass narrowed this to the latest-expiring row per
+ * (asset_id, coverage_type) to stop a renewal re-raising the superseded contract's remaining
+ * stages; that narrowing was REVERTED, because it silenced every earlier-expiring concurrent
+ * policy - the contract nearest to lapsing was exactly the one that lost its warning. Binding
+ * Decision 5 gives coverages no supersede column, and no data-only rule separates a renewal from a
+ * second live contract (both carry a fresh reference number), so the renewal double-alert is
+ * logged in deferred-work instead of being papered over here.
  */
 export async function listCoverageStagesDue(
   businessDate: string,
@@ -256,7 +295,11 @@ export async function listCoverageStagesDue(
   client?: PoolClient,
 ): Promise<CoverageStageDueRow[]> {
   if (!isValidCalendarDate(businessDate)) return [];
-  const stageList = stages.filter((s) => Number.isInteger(s) && s > 0);
+  // Deduplicated and pinned to the stages chk_asset_coverage_alert_stage accepts. A repeated stage
+  // would unnest twice and make the scan's second insert collide 23505 with the grain its own first
+  // insert just created; a non-member stage would return due rows whose insert raises 23514, a
+  // class the 23505 duplicate resolver does not map, failing the whole scan transaction.
+  const stageList = [...new Set(stages)].filter((s) => ALERT_STAGE_DAYS.includes(s));
   if (stageList.length === 0) return [];
 
   const conditions = [
@@ -266,7 +309,7 @@ export async function listCoverageStagesDue(
   ];
   const values: (string | number | number[])[] = [businessDate, stageList];
   let idx = 3;
-  if (filters.asset_id) {
+  if (isSupplied(filters.asset_id)) {
     if (!UUID_REGEX.test(filters.asset_id)) return [];
     conditions.push(`c.asset_id = $${idx++}`);
     values.push(filters.asset_id);
