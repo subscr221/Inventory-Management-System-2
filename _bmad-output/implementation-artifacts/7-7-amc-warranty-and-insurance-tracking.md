@@ -4,7 +4,7 @@ baseline_commit: e93014f224de6e8b3e717fb599dba7f9d0761d15
 
 # Story 7.7: AMC, Warranty, and Insurance Tracking
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -101,7 +101,7 @@ Table 1 records the decisions that fix the story's interpretation. Every one of 
   - [x] 5.4 No role-name literals anywhere: `requireRole({ module: 'maintenance', functionScope: ... })` for RBAC, DOA for authority; `npm run lint` runs the `no-hardcoded-role-in-workflow` rule inside the spine gate.
 
 - [x] Task 6: Coverage expiry scan job (AC: 1)
-  - [x] 6.1 Create `src/maintenance/coverage-jobs.ts` cloned structurally from `src/maintenance/calibration-jobs.ts` (header comment included): `runCoverageExpiryScan(scope)` with scope `{ business_date, asset_id?, actor, auditCtx? }` and result `{ business_date, coverages_evaluated, alerts_raised, notifications_delivered, notifications_dropped, alert_ids }`. Per coverage-stage row: own transaction via the same `inTransaction` shape; lock the coverage row FOR UPDATE and skip when it vanished or its `expiry_date` moved (renewal race); alert-grain existence check skips; persist `maintenance.coverage_expiry_flagged` with `stream_id: alertId` through `persistEvent` on the SAME client; catch `DUPLICATE_COVERAGE_ALERT` and continue (one lost race never fails the whole scan); after commit emit the notification and count delivered vs dropped SEPARATELY.
+  - [x] 6.1 Create `src/maintenance/coverage-jobs.ts` cloned structurally from `src/maintenance/calibration-jobs.ts` (header comment included): `runCoverageExpiryScan(scope)` with scope `{ business_date, asset_id?, actor, auditCtx? }` and result `{ business_date, coverages_evaluated, alerts_raised, notifications_delivered, notifications_dropped, notifications_suppressed, alert_ids }` (`notifications_suppressed` is the Group B / D5 amendment: catch-up runs withhold all but the most urgent stage message per coverage and COUNT the withheld ones, so delivered + dropped + suppressed reconciles with alerts_raised). Per coverage-stage row: own transaction via the same `inTransaction` shape; lock the coverage row FOR UPDATE and skip when it vanished or its `expiry_date` moved (renewal race); alert-grain existence check skips; persist `maintenance.coverage_expiry_flagged` with `stream_id: alertId` through `persistEvent` on the SAME client; catch `DUPLICATE_COVERAGE_ALERT` and continue (one lost race never fails the whole scan); after commit emit the notification and count delivered vs dropped SEPARATELY.
   - [x] 6.2 Notification emission per alert: `emitNotification({ target: { role: 'maintenance_manager', location_id: null }, event_type: 'coverage_expiry_due', status_verb: 'Due', object_type: 'asset_coverage', object_id: alertId, actor_label: '<asset name> (<asset tag>), <coverage_type> <reference_number_ext>, <days_remaining> days remaining', next_step: 'Renew the contract or record a new coverage', actor: scope.actor, correlation_id, occurred_at: flaggedAt })`, with `escalation: { target_role: 'maintenance_supervisor', acknowledgment_window_seconds: 86400 }` ONLY when `stage_days === 30`. Resolve the asset via `getAssetById` for the human-readable label; never a raw id. `location_id: null` targets every holder of the role (company-wide asset register, AD-9).
   - [x] 6.3 Scheduling discipline: NO `setInterval`, NO `node-cron`, NO new container. The only timer in the process remains the Story 1.11 notification dispatcher; this job runs solely via the authenticated POST trigger with an explicit `business_date`.
 
@@ -223,6 +223,54 @@ deduped to 30.
 - [x] [Review][Defer] The completion handler runs the warranty gate before any already-completed check, so it can shadow `WORK_ORDER_ALREADY_COMPLETED` (not reachable through the API today) [src/api/v1/maintenance.ts:920-933] - deferred, pre-existing
 
 
+### Review Findings: Group C
+
+Code review of Story 7.7, Group C (the integration suite `test/integration/story-7-7.test.ts`
+itself, per the regenerated `_bmad-output/diff-7-7-group-c.patch`), 2026-08-27. Adversarial
+pass: Blind Hunter, Edge Case Hunter, Acceptance Auditor, over the committed tree at `a6abe60`
+(Groups A and B applied and verified: story 42/42, full suite 1202/1218 with only the 16
+pre-existing failures). 44 raw findings deduped to 31. Full reports:
+`code-review-7-7-c-blind-hunter.md`, `code-review-7-7-c-edge-case-hunter.md`,
+`code-review-7-7-c-acceptance-auditor.md`. Line references are test-file lines at review time.
+
+Outcome (2026-08-27): both decisions resolved by the user (option 2 re-word and defer; option 1
+amend the spec), all 19 patches applied (12 new tests, suite 42 grows to 54), 9 deferred to the
+ledger, 1 dismissed. Verified after patching: prettier, eslint `--max-warnings=0` and
+`tsc --noEmit` all clean; story-7-7 54/54; 7-2 through 7-6 plus 6-1 regressions 240/240; full
+suite 1214/1230 with exactly the 16 known pre-existing failures (15 idempotency, 1 gate_dwell
+CRLF) and zero new. Review closed; story status set to done.
+
+- [x] [Review][Decision] RESOLVED to option 2 (re-word and defer): the preventive-work-order test keeps its raw-SQL fixture and now claims only what it proves - the `warranty_flagged` column `DEFAULT false` and that an unflagged preventive order completes without an override. The unexercised Story 7.2 seam path is logged in deferred-work alongside the Group B "preventive orders are never warranty-checked" entry. [test/integration/story-7-7.test.ts]
+- [x] [Review][Decision] RESOLVED to option 1 (amend the spec): the code is the Group-B-approved behavior. Table 4's `COVERAGE_DERIVATION_MISMATCH` row now lists stage due-ness among the divergence causes, and Task 6.1's scan result shape now includes `notifications_suppressed` with the D5 reconciliation rule (delivered + dropped + suppressed reconciles with alerts_raised). Tests unchanged. [spec Table 4, Task 6.1]
+- [x] [Review][Patch] HIGH: the WORK_ORDER_ALREADY_COMPLETED test accepts either of two codes and its fixture contradicts its comment (no second work order exists), so deleting the completed-status seam check stays green; pin the exact code (the seam checks completed status before duplicate override) and cover WARRANTY_OVERRIDE_ALREADY_RECORDED with its own second-order case [test/integration/story-7-7.test.ts:1364-1386]
+- [x] [Review][Patch] HIGH: no successful scan ever omits `asset_id`, so the unfiltered query shape the nightly job actually runs is untested; add an unfiltered-scan success test isolated by a unique far-window anchor date [test/integration/story-7-7.test.ts:616-908]
+- [x] [Review][Patch] HIGH: `WORK_ORDER_NOT_FOUND` appears in zero tests despite the Table 4 every-code rule, and the Group B change of the override GET from 200-null to 404 is unpinned; add override POST and GET against an unknown work-order UUID plus non-UUID path-param 400s [src/api/v1/maintenance.ts:4206-4211,4293-4298]
+- [x] [Review][Patch] No forgery test declares `warranty_coverage_id` on the breakdown path (the branch whose rejection message Group B specifically fixed); only `warranty_flagged` is declared [test/integration/story-7-7.test.ts:1073-1075]
+- [x] [Review][Patch] The cross-event-type idempotency test asserts only `existing_event_id`; the response also carries `existing_event_type` (Task 8.6 pins both) [test/integration/story-7-7.test.ts:1669-1675]
+- [x] [Review][Patch] Race-path losers assert the existing-id detail is truthy but never that it equals the winner's id, so a resolver returning a wrong row's id passes [test/integration/story-7-7.test.ts:1356,1566]
+- [x] [Review][Patch] The APPROVAL_UNRESOLVED test works only because it is declared before any sibling seeds the DOA entry - order-coupled, misfiled under the AC2 banner, and the helper comment says "above" while the test sits below; delete the DOA rows explicitly at test start and refile [test/integration/story-7-7.test.ts:441,1084-1108]
+- [x] [Review][Patch] Expiry-day boundaries unpinned: no scan at `business_date == expiry_date` (last-day alert vs already-expired), no breakdown warranty check with a warranty starting or expiring today, no 201 for a coverage recorded on its own start or expiry boundary [test/integration/story-7-7.test.ts:621-627,813-823,968-976,1575-1590]
+- [x] [Review][Patch] No partial catch-up scan (for example day -45: stages 90 and 60 due, 30 not, `notifications_suppressed == 1`); only exact-stage and full three-stage runs exist [test/integration/story-7-7.test.ts:693-733]
+- [x] [Review][Patch] The escalation test never counts per-stage notifications, and `notificationFor` orders by `event_id DESC` (a random UUID tiebreak), so a duplicated 90-day emission can pass or fail nondeterministically; assert exact per-stage counts [test/integration/story-7-7.test.ts:389-410,638-671]
+- [x] [Review][Patch] RBAC sweep covers only coverage-record and scan; add 401/403 for GET coverage-by-id, GET alerts, GET and POST warranty-overrides, and a technician-invoked scan (the existing override 403 tests DOA resolution, not the module guard) [test/integration/story-7-7.test.ts:1740-1761]
+- [x] [Review][Patch] The DUPLICATE_COVERAGE grain is never proven across assets: same reference and type on a different asset must be 201 [test/integration/story-7-7.test.ts:1549-1554]
+- [x] [Review][Patch] Reason-code input edges untested: empty, whitespace-only, and over-length values 400 as INVALID_PARAMS before the 422 allow-list check, and the allow-list is case-exact; none is pinned [src/api/v1/maintenance.ts:4192-4203,4239]
+- [x] [Review][Patch] Forged `coverage_expiry_flagged` branches untested: unknown coverage 404, flag against an expired coverage, declared vs derived `expiry_date` mismatch, `stream_id != alert_id`, and `stage_days` outside {90,60,30} [src/compliance/maintenance-coverage.ts:211-217,230-236,422,426,442-454]
+- [x] [Review][Patch] The Task 8.4 cost matrix is half-covered: unflagged breakdown completes only with costs, preventive only without; add the two missing cells [test/integration/story-7-7.test.ts:1013-1014,1179-1188]
+- [x] [Review][Patch] The equal-expiry warranty tie-break (lowest `coverage_id`, Binding Decision 4) never runs; the two-warranty test uses distinct expiries only [test/integration/story-7-7.test.ts:972-992]
+- [x] [Review][Patch] Input-validation edges: zero-length coverage (`start == expiry`) rejection, `contract_value` regex boundaries (negative, four decimals, twelve integer digits, empty), and whitespace-only or over-length `provider_name` / `reference_number_ext` [src/api/v1/maintenance.ts:3903-3927]
+- [x] [Review][Patch] List-filter branches: `status=future` and non-UUID `coverage_id` on the alerts list [src/api/v1/maintenance.ts:4005,4113-4114]
+- [x] [Review][Patch] Test hygiene: the declared-`warranty_flagged` forgery test claims mismatch detection but the seam rejects on key presence alone (reword and trim the dead SLA reconstruction); `REASON_CODE[0]!` crashes with a bare TypeError on empty config; scan and override-read statuses unchecked at four sites; `escalation_window` hard-codes `'86400'` [test/integration/story-7-7.test.ts:134,647-649,664,718,789,1011-1082,1285]
+- [x] [Review][Defer] Two parallel scans on one `business_date` (the race the row lock in `coverage-jobs.ts:158-168` serializes) are untested - the outcome split is nondeterministic and the sequential same-date re-run pins the grain; revisit if the lock changes [test/integration/story-7-7.test.ts:679-691] - deferred
+- [x] [Review][Defer] `notifications_dropped > 0` (zero-recipient or emit-failure path) never fires - exercising it means tearing down role assignments the rest of the suite depends on [src/maintenance/coverage-jobs.ts:228-231] - deferred
+- [x] [Review][Defer] Fan-out is asserted by role-assignment counts and scan counters, never by reading delivery rows - the dispatch surface is outside this story's scope [test/integration/story-7-7.test.ts:429-436,598-607] - deferred
+- [x] [Review][Defer] Projection-only fixtures (`insertCoverageFixture`, `insertPreventiveWorkOrder`) create states no write path can reach, including a future-start warranty the API forbids - deliberate fixture strategy; revisit if replay re-derivation lands [test/integration/story-7-7.test.ts:223-246,293-303,965] - deferred
+- [x] [Review][Defer] The renewal-overlap window (both rows raising stages before lapse) is dodged: the renewal test scans only where the original is already expired - already logged in deferred-work from Group B [test/integration/story-7-7.test.ts:781-806] - deferred, pre-existing
+- [x] [Review][Defer] Same-key idempotent replay with a DIFFERENT body silently returns the original 201 - platform-wide semantics predating this story [test/integration/story-7-7.test.ts:1630-1655] - deferred, pre-existing
+- [x] [Review][Defer] Capitalization at exactly the threshold (`>` vs `>=`) is unpinned - Story 7.6 surface [test/integration/story-7-7.test.ts:1183-1213] - deferred, pre-existing
+- [x] [Review][Defer] `TODAY` is captured once at module load while handlers read the wall clock per request; a suite spanning UTC midnight shifts every fixture with no attributing assertion (acknowledged in the file comment) [test/integration/story-7-7.test.ts:25-28,132] - deferred, pre-existing
+- [x] [Review][Defer] Gate persistence after warranty lapse (flagged order still 403 without override once the warranty expires) is only implied - testing it requires mutating projection rows mid-test, the same anti-pattern as the fixture defer [src/compliance/maintenance-coverage.ts:543] - deferred
+
 ### Session Handoff (2026-08-27, review paused)
 
 Groups A and B of the code review are COMPLETE and every patch is applied to the working tree.
@@ -321,7 +369,7 @@ Table 4 lists every code this story introduces or reuses. Every code must appear
 | COVERAGE_NOT_FOUND | 404 | get route, expiry-flag applier | coverage_id does not resolve |
 | COVERAGE_ALREADY_EXPIRED | 422 | record applier, expiry-flag applier | expiry_date before business_date (fail-closed) |
 | COVERAGE_FUTURE_START | 422 | record applier | start_date after business_date (fail-closed) |
-| COVERAGE_DERIVATION_MISMATCH | 409 | all three appliers | Declared recorded_by, overridden_by, warranty_coverage_id, asset_id, coverage_type, or expiry_date diverges from the locked-row derivation |
+| COVERAGE_DERIVATION_MISMATCH | 409 | all three appliers | Declared recorded_by, overridden_by, warranty_coverage_id, asset_id, coverage_type, or expiry_date diverges from the locked-row derivation; also a declared stage_days that is not yet due for the coverage on the business date (Group B amendment: stage due-ness is re-derived so a forged flag cannot burn the alert grain) |
 | DUPLICATE_COVERAGE_ALERT | 409 | expiry-flag applier and 23505 resolver | Alert grain (coverage_id, stage_days) already fired; the scan skips it |
 | WARRANTY_OVERRIDE_NOT_REQUIRED | 409 | override handler and applier | Work order is not warranty_flagged |
 | WARRANTY_OVERRIDE_ALREADY_RECORDED | 409 | override applier and 23505 resolver | One override per work order; details carry existing_override_id |

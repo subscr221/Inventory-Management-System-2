@@ -131,7 +131,12 @@ const ANCHOR = '2026-06-01';
 /** The date the Story 7.3 accept handler itself derives; the warranty-check suite anchors on it. */
 const TODAY = new Date().toISOString().slice(0, 10);
 
-const REASON_CODE = config.maintenance.warrantyOverrideReasonCodes[0]!;
+const REASON_CODE = config.maintenance.warrantyOverrideReasonCodes[0];
+if (!REASON_CODE) {
+  throw new Error(
+    'MAINTENANCE_WARRANTY_OVERRIDE_REASON_CODES must configure at least one reason code for this suite',
+  );
+}
 
 describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
   let server: Server;
@@ -439,10 +444,10 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
   }
 
   /**
-   * Seeds the maintenance.warranty_override DOA entry once. The APPROVAL_UNRESOLVED test above
-   * asserts the registry is EMPTY before this runs, so the seeding is deliberately lazy rather
-   * than part of before(): both the no-entry and the resolved-approver paths need to be reachable
-   * in one suite run.
+   * Seeds the maintenance.warranty_override DOA entry if absent. Seeding is lazy rather than part
+   * of before() because the APPROVAL_UNRESOLVED test needs an EMPTY registry; that test now
+   * clears the entries itself, so no declaration-order coupling remains - any test needing the
+   * resolved-approver path calls this first.
    */
   async function seedWarrantyOverrideDoa(): Promise<void> {
     const existing = await getAdminPool().query(
@@ -644,9 +649,10 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
       expiry_date: expiry,
     });
 
-    await scan(addDays(expiry, -90), { asset_id: assetId });
-    await scan(addDays(expiry, -60), { asset_id: assetId });
-    await scan(addDays(expiry, -30), { asset_id: assetId });
+    for (const stage of [90, 60, 30]) {
+      const res = await scan(addDays(expiry, -stage), { asset_id: assetId });
+      assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    }
 
     const rows = await alertRowsFor(coverageId);
     const byStage = new Map(rows.map((r) => [r['stage_days'] as number, r['alert_id'] as string]));
@@ -658,9 +664,22 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
       assert.strictEqual(notification['escalation_role'], null, `stage ${stage} must not escalate`);
     }
 
+    // Exactly ONE notification per stage: notificationFor takes LIMIT 1 with a nondeterministic
+    // event_id tiebreak, so without the counts a duplicated emission could hide behind whichever
+    // row surfaced.
+    for (const stage of [90, 60, 30]) {
+      assert.strictEqual(
+        await notificationCountFor(byStage.get(stage)!, 'maintenance_manager'),
+        1,
+        `stage ${stage} must notify exactly once`,
+      );
+    }
+
     const urgent = await notificationFor(byStage.get(30)!, 'maintenance_manager');
     assert.ok(urgent);
     assert.strictEqual(urgent['escalation_role'], 'maintenance_supervisor');
+    // 86400 duplicates COVERAGE_ESCALATION_WINDOW_SECONDS in src/maintenance/coverage-jobs.ts;
+    // the two must be kept equal.
     assert.strictEqual(urgent['escalation_window'], '86400');
     assert.strictEqual(urgent['status_verb'], 'Due');
     assert.strictEqual(urgent['object_type'], 'asset_coverage');
@@ -786,7 +805,8 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
       reference_number_ext: `AMC-ORIG-${randomUUID().slice(0, 6)}`,
       expiry_date: expiry,
     });
-    await scan(addDays(expiry, -90), { asset_id: assetId });
+    const firstScan = await scan(addDays(expiry, -90), { asset_id: assetId });
+    assert.strictEqual(firstScan.status, 200, JSON.stringify(firstScan.body));
     assert.strictEqual((await alertRowsFor(original)).length, 1);
 
     const renewalExpiry = addDays(expiry, 365);
@@ -795,8 +815,8 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
       reference_number_ext: `AMC-RENEW-${randomUUID().slice(0, 6)}`,
       expiry_date: renewalExpiry,
     });
-    const res = await scan(addDays(renewalExpiry, -90), { asset_id: assetId });
-    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    const renewalScan = await scan(addDays(renewalExpiry, -90), { asset_id: assetId });
+    assert.strictEqual(renewalScan.status, 200, JSON.stringify(renewalScan.body));
     // The original is long expired by this date and is never alerted again.
     assert.strictEqual((await alertRowsFor(original)).length, 1);
     assert.deepStrictEqual(
@@ -814,6 +834,61 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body['alerts_raised'], 0);
     assert.strictEqual((await alertRowsFor(coverageId)).length, 0);
+  });
+
+  it('AC1: a scan on the expiry day itself still alerts (last-day boundary)', async () => {
+    // Due-ness is (expiry - bd) <= stage AND expiry >= bd: the expiry day is the last alertable
+    // date, one day before the already-expired test above. All three stages catch up (D5).
+    const expiry = addDays(ANCHOR, 80);
+    const assetId = await createAsset();
+    const { coverageId } = await recordCoverageOk(assetId, { expiry_date: expiry });
+
+    const res = await scan(expiry, { asset_id: assetId });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body['alerts_raised'], 3, 'the last day must still warn');
+    assert.strictEqual(res.body['notifications_delivered'], 1);
+    assert.deepStrictEqual(
+      (await alertRowsFor(coverageId)).map((r) => r['stage_days']),
+      [30, 60, 90],
+    );
+  });
+
+  it('AC1: a partial catch-up fires only the due stages and counts one suppression', async () => {
+    // 45 days remaining: 90 and 60 are due, 30 is not. The ledger records both due stages, the
+    // most urgent (60) notifies, the other is suppressed and COUNTED (D5).
+    const expiry = addDays(ANCHOR, 90);
+    const assetId = await createAsset();
+    const { coverageId } = await recordCoverageOk(assetId, { expiry_date: expiry });
+
+    const res = await scan(addDays(expiry, -45), { asset_id: assetId });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body['alerts_raised'], 2);
+    assert.strictEqual(res.body['notifications_delivered'], 1);
+    assert.strictEqual(res.body['notifications_suppressed'], 1);
+    assert.strictEqual(res.body['coverages_evaluated'], 1);
+    assert.deepStrictEqual(
+      (await alertRowsFor(coverageId)).map((r) => r['stage_days']),
+      [60, 90],
+      'the 30-day stage is not due at 45 days remaining',
+    );
+  });
+
+  it('AC1: an UNFILTERED scan - the shape the nightly job runs - alerts a due coverage', async () => {
+    // Every other successful scan passes asset_id; production cron passes none. Isolation comes
+    // from the window, not the filter: this coverage expires ~8 years out, so no other suite
+    // fixture can be due inside its 90-day window.
+    const expiry = addDays(ANCHOR, 3000);
+    const assetId = await createAsset();
+    const { coverageId } = await recordCoverageOk(assetId, { expiry_date: expiry });
+
+    const res = await scan(addDays(expiry, -90));
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body['alerts_raised'], 1, 'the unfiltered query must find the coverage');
+    assert.strictEqual(res.body['notifications_delivered'], 1);
+    assert.deepStrictEqual(
+      (await alertRowsFor(coverageId)).map((r) => r['stage_days']),
+      [90],
+    );
   });
 
   it('AC1: a forged not-yet-due stage cannot burn the grain the real warning needs', async () => {
@@ -893,6 +968,69 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     );
   });
 
+  it('AC1: every remaining forged coverage_expiry_flagged branch rejects', async () => {
+    const expiry = addDays(ANCHOR, 85);
+    const assetId = await createAsset();
+    const { coverageId } = await recordCoverageOk(assetId, { expiry_date: expiry });
+    const now = new Date().toISOString();
+
+    const forge = (overrides: Record<string, unknown>): Record<string, unknown> => {
+      const alertId = randomUUID();
+      return {
+        stream_type: 'maintenance',
+        stream_id: alertId,
+        event_type: 'maintenance.coverage_expiry_flagged',
+        payload: {
+          alert_id: alertId,
+          coverage_id: coverageId,
+          asset_id: assetId,
+          coverage_type: 'amc',
+          stage_days: 90,
+          expiry_date: expiry,
+          business_date: addDays(expiry, -30),
+          flagged_at: now,
+          ...overrides,
+        },
+        metadata: forgedMetadata(),
+      };
+    };
+    const rejectsWith = (errorCode: string, statusCode: number) => (err: unknown) =>
+      (err as { errorCode?: string }).errorCode === errorCode &&
+      (err as { statusCode?: number }).statusCode === statusCode;
+
+    // An unknown coverage id does not resolve.
+    await assert.rejects(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      persistEvent(forge({ coverage_id: randomUUID() }) as any),
+      rejectsWith('COVERAGE_NOT_FOUND', 404),
+    );
+    // A coverage that lapsed before the business date is never alerted (fail-closed re-read).
+    await assert.rejects(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      persistEvent(forge({ business_date: addDays(expiry, 1) }) as any),
+      rejectsWith('COVERAGE_ALREADY_EXPIRED', 422),
+    );
+    // A declared expiry_date diverging from the locked row is a derivation mismatch.
+    await assert.rejects(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      persistEvent(forge({ expiry_date: addDays(expiry, 1) }) as any),
+      rejectsWith('COVERAGE_DERIVATION_MISMATCH', 409),
+    );
+    // The stream must be the alert's own: an alert cannot be filed onto another aggregate.
+    await assert.rejects(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      persistEvent({ ...forge({}), stream_id: randomUUID() } as any),
+      (err: unknown) => (err as { errorCode?: string }).errorCode === 'INVALID_PAYLOAD',
+    );
+    // A stage outside {90, 60, 30} fails the shape assert before any row is touched.
+    await assert.rejects(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      persistEvent(forge({ stage_days: 45 }) as any),
+      (err: unknown) => (err as { errorCode?: string }).errorCode === 'INVALID_PAYLOAD',
+    );
+    assert.strictEqual((await alertRowsFor(coverageId)).length, 0, 'no forgery may leave a row');
+  });
+
   it('AC1: the scan rejects a missing, malformed or impossible business_date 400', async () => {
     for (const body of [{}, { business_date: 'not-a-date' }, { business_date: '2026-02-30' }]) {
       const res = await makeRequest(
@@ -969,6 +1107,32 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     assert.strictEqual(workOrder['warranty_coverage_id'], null);
   });
 
+  it('AC2: a warranty starting today or expiring today still flags (window boundaries)', async () => {
+    // The active window is start <= d AND expiry >= d, both inclusive; these are also the record
+    // route's own accept boundaries (expiry == business_date and start == business_date are 201).
+    const lastDayAsset = await createAsset();
+    const { coverageId: lastDay } = await recordCoverageOk(lastDayAsset, {
+      coverage_type: 'warranty',
+      start_date: addDays(TODAY, -100),
+      expiry_date: TODAY,
+      business_date: TODAY,
+    });
+    const lastDayOrder = await breakdownWorkOrder(lastDayAsset);
+    assert.strictEqual(lastDayOrder['warranty_flagged'], true, 'expiry day is still covered');
+    assert.strictEqual(lastDayOrder['warranty_coverage_id'], lastDay);
+
+    const firstDayAsset = await createAsset();
+    const { coverageId: firstDay } = await recordCoverageOk(firstDayAsset, {
+      coverage_type: 'warranty',
+      start_date: TODAY,
+      expiry_date: addDays(TODAY, 100),
+      business_date: TODAY,
+    });
+    const firstDayOrder = await breakdownWorkOrder(firstDayAsset);
+    assert.strictEqual(firstDayOrder['warranty_flagged'], true, 'start day is already covered');
+    assert.strictEqual(firstDayOrder['warranty_coverage_id'], firstDay);
+  });
+
   it('AC2: two active warranties flag the one expiring last', async () => {
     const assetId = await createAsset();
     const { coverageId: shorter } = await recordCoverageOk(assetId, {
@@ -991,7 +1155,37 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     assert.notStrictEqual(workOrder['warranty_coverage_id'], shorter);
   });
 
-  it('AC2: a preventive work order is never warranty-checked (Story 7.2 regression)', async () => {
+  it('AC2: two warranties with EQUAL expiries tie-break on the lowest coverage_id', async () => {
+    // Binding Decision 4: ORDER BY expiry_date DESC, coverage_id ASC. Same expiry, so only the
+    // deterministic tiebreak separates them.
+    const assetId = await createAsset();
+    const expiry = addDays(TODAY, 250);
+    const { coverageId: first } = await recordCoverageOk(assetId, {
+      coverage_type: 'warranty',
+      reference_number_ext: `W-TIE-A-${randomUUID().slice(0, 6)}`,
+      start_date: addDays(TODAY, -10),
+      expiry_date: expiry,
+      business_date: TODAY,
+    });
+    const { coverageId: second } = await recordCoverageOk(assetId, {
+      coverage_type: 'warranty',
+      reference_number_ext: `W-TIE-B-${randomUUID().slice(0, 6)}`,
+      start_date: addDays(TODAY, -10),
+      expiry_date: expiry,
+      business_date: TODAY,
+    });
+
+    const workOrder = await breakdownWorkOrder(assetId);
+    const expected = [first, second].sort()[0];
+    assert.strictEqual(workOrder['warranty_coverage_id'], expected);
+  });
+
+  it('AC2: a preventive work-order row is unflagged by default and the AC 3 gate ignores it', async () => {
+    // SCOPE (review decision, Group C): the row is a raw projection fixture, so this proves the
+    // column DEFAULT false and that an unflagged preventive order completes without an override -
+    // NOT that the Story 7.2 PM-generation seam skips the warranty check. That seam-path gap is
+    // recorded in deferred-work alongside the Group B "preventive orders are never
+    // warranty-checked" entry.
     const assetId = await createAsset();
     await recordCoverageOk(assetId, {
       coverage_type: 'warranty',
@@ -1006,6 +1200,21 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     // And it completes with no override, exactly as before this story.
     const completed = await completeWorkOrder(workOrderId);
     assert.strictEqual(completed.status, 200, JSON.stringify(completed.body));
+  });
+
+  it('AC2: a preventive work order completes WITH the Story 7.6 cost fields too', async () => {
+    // The other half of the Task 8.4 matrix: the sibling test completes a preventive order
+    // without costs; this one carries them and the cost arm still derives.
+    const assetId = await createAsset();
+    const workOrderId = await insertPreventiveWorkOrder(assetId);
+    const completed = await completeWorkOrder(workOrderId, {
+      labor_cost: '1.000',
+      parts_cost: '2.000',
+    });
+    assert.strictEqual(completed.status, 200, JSON.stringify(completed.body));
+    const row = await workOrderRow(workOrderId);
+    assert.strictEqual(row?.['status'], 'completed');
+    assert.strictEqual(row?.['total_cost'], '3.000');
   });
 
   it('AC2: a DECLARED warranty_flagged on the direct event path is rejected', async () => {
@@ -1064,7 +1273,10 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
           sla_response_due_at: responseDue,
           sla_resolution_due_at: resolutionDue,
           business_date: TODAY,
-          // The forgery: an active warranty exists, but the caller asserts otherwise.
+          // NOTE: the seam rejects on the PRESENCE of the declared key, whatever its value - both
+          // fields are seam-derived, so a truthful declaration is rejected identically to a lie
+          // (fail-closed). The reconstructed SLA values above only need to be well-formed enough
+          // to pass the shape assert; the seam never compares them for this rejection.
           warranty_flagged: false,
         },
         metadata: forgedMetadata(),
@@ -1081,30 +1293,80 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     );
   });
 
-  it('AC4: an override with no governing DOA entry is rejected 404 APPROVAL_UNRESOLVED', async () => {
-    // ORDER-COUPLED, and asserted rather than left to a comment: this test is only meaningful while
-    // no maintenance.warranty_override DOA entry exists, and the next test creates one permanently.
-    const doaRows = await getAdminPool().query(
-      `SELECT count(*)::int AS n FROM doa_registry_entries
-        WHERE transaction_type = 'maintenance.warranty_override' AND active = true`,
-    );
-    assert.strictEqual(
-      doaRows.rows[0]!['n'],
-      0,
-      'this test must run BEFORE the DOA entry is seeded by the test below',
-    );
-
+  it('AC2: a DECLARED warranty_coverage_id on the direct event path is rejected too', async () => {
+    // The other declared field, whose rejection message Group B specifically corrected to name
+    // warranty_coverage_id rather than warranty_flagged.
     const assetId = await createAsset();
-    await recordCoverageOk(assetId, {
+    const { coverageId } = await recordCoverageOk(assetId, {
       coverage_type: 'warranty',
       start_date: addDays(TODAY, -10),
       expiry_date: addDays(TODAY, 400),
       business_date: TODAY,
     });
-    const workOrder = await breakdownWorkOrder(assetId);
-    const res = await recordOverride(workOrder['work_order_id'] as string);
-    assert.strictEqual(res.status, 404, JSON.stringify(res.body));
-    assert.strictEqual(res.body['error_code'], 'APPROVAL_UNRESOLVED');
+
+    const reported = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/maintenance/fault-reports',
+      { asset_id: assetId, description: 'Declared coverage id path' },
+      supervisorHeaders,
+    );
+    assert.strictEqual(reported.status, 201, JSON.stringify(reported.body));
+    const faultReportId = (reported.body['fault_report'] as Record<string, string>)[
+      'fault_report_id'
+    ]!;
+
+    const policyRow = await getAdminPool().query(
+      `SELECT policy_id, priority, response_minutes, resolution_hours
+         FROM maintenance_sla_policy
+        WHERE criticality_class = 'critical' AND safety_flag = false AND status = 'active'`,
+    );
+    const policy = policyRow.rows[0] as Record<string, unknown>;
+    const reportedAtRow = await getAdminPool().query(
+      `SELECT reported_at FROM maintenance_fault_report WHERE fault_report_id = $1`,
+      [faultReportId],
+    );
+    const reportedAtMs = (reportedAtRow.rows[0]!['reported_at'] as Date).getTime();
+    const responseDue = new Date(
+      reportedAtMs + (policy['response_minutes'] as number) * 60000,
+    ).toISOString();
+    const resolutionDue = new Date(
+      reportedAtMs + (policy['resolution_hours'] as number) * 3600000,
+    ).toISOString();
+    const dueDate = resolutionDue.slice(0, 10);
+
+    await assert.rejects(
+      persistEvent({
+        stream_type: 'maintenance',
+        stream_id: randomUUID(),
+        event_type: 'maintenance.breakdown_work_order_created',
+        payload: {
+          work_order_id: randomUUID(),
+          fault_report_id: faultReportId,
+          asset_id: assetId,
+          downtime_id: randomUUID(),
+          priority: policy['priority'],
+          sla_policy_id: policy['policy_id'],
+          due_date: dueDate,
+          grace_until_date: dueDate,
+          sla_response_due_at: responseDue,
+          sla_resolution_due_at: resolutionDue,
+          business_date: TODAY,
+          // Declared alone, and even TRUTHFULLY: presence is what rejects.
+          warranty_coverage_id: coverageId,
+        },
+        metadata: forgedMetadata(),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any),
+      (err: unknown) => {
+        const e = err as { errorCode?: string; details?: Record<string, unknown> };
+        return (
+          e.errorCode === 'WORK_ORDER_DERIVATION_MISMATCH' &&
+          e.details !== undefined &&
+          'warranty_coverage_id' in e.details
+        );
+      },
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -1182,6 +1444,20 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     assert.strictEqual(row?.['capitalization_flagged'], false);
   });
 
+  it('AC3: an unflagged breakdown work order also completes WITHOUT the cost fields', async () => {
+    // The other half of the Task 8.4 matrix for the breakdown origin.
+    const assetId = await createAsset();
+    const workOrder = await breakdownWorkOrder(assetId);
+    const workOrderId = workOrder['work_order_id'] as string;
+
+    const res = await completeWorkOrder(workOrderId);
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    const row = await workOrderRow(workOrderId);
+    assert.strictEqual(row?.['status'], 'completed');
+    assert.strictEqual(row?.['total_cost'], '0.000');
+    assert.strictEqual(row?.['capitalization_flagged'], false);
+  });
+
   it('AC3: after an override is recorded, completion succeeds and the cost arm still derives', async () => {
     await seedWarrantyOverrideDoa();
     const assetId = await createAsset();
@@ -1210,6 +1486,27 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
   // -------------------------------------------------------------------------
   // AC4: the reason-coded override and its DOA authority
   // -------------------------------------------------------------------------
+
+  it('AC4: an override with no governing DOA entry is rejected 404 APPROVAL_UNRESOLVED', async () => {
+    // Order-independent: the registry is cleared HERE rather than relying on this test running
+    // before any sibling seeds the entry. Every test needing the resolved-approver path calls
+    // seedWarrantyOverrideDoa itself, which re-creates the entry lazily.
+    await getAdminPool().query(
+      `DELETE FROM doa_registry_entries WHERE transaction_type = 'maintenance.warranty_override'`,
+    );
+
+    const assetId = await createAsset();
+    await recordCoverageOk(assetId, {
+      coverage_type: 'warranty',
+      start_date: addDays(TODAY, -10),
+      expiry_date: addDays(TODAY, 400),
+      business_date: TODAY,
+    });
+    const workOrder = await breakdownWorkOrder(assetId);
+    const res = await recordOverride(workOrder['work_order_id'] as string);
+    assert.strictEqual(res.status, 404, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'APPROVAL_UNRESOLVED');
+  });
 
   it('AC4: the resolved approver records an override and the event captures the decision', async () => {
     await seedWarrantyOverrideDoa();
@@ -1282,6 +1579,7 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
       undefined,
       readerHeaders,
     );
+    assert.strictEqual(read.status, 200, JSON.stringify(read.body));
     assert.strictEqual(read.body['override'], null);
     // And the gate still holds.
     assert.strictEqual((await completeWorkOrder(workOrderId)).status, 403);
@@ -1302,6 +1600,57 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     });
     assert.strictEqual(res.status, 422, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'WARRANTY_OVERRIDE_REASON_INVALID');
+
+    // The allow-list is case-exact: a lowercased configured code is an UNKNOWN code, not a match.
+    const lowered = REASON_CODE.toLowerCase();
+    if (lowered !== REASON_CODE) {
+      const cased = await recordOverride(workOrder['work_order_id'] as string, {
+        reason_code: lowered,
+      });
+      assert.strictEqual(cased.status, 422, JSON.stringify(cased.body));
+      assert.strictEqual(cased.body['error_code'], 'WARRANTY_OVERRIDE_REASON_INVALID');
+    }
+  });
+
+  it('AC4: an empty, whitespace-only or over-length reason code is rejected 400', async () => {
+    // Validated before the work-order lookup, so any id serves; the 400 class is INVALID_PARAMS
+    // (shape), distinct from the 422 an in-length but unlisted code earns.
+    for (const reasonCode of ['', '   ', 'X'.repeat(201)]) {
+      const res = await recordOverride(randomUUID(), { reason_code: reasonCode });
+      assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+      assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+    }
+  });
+
+  it('AC4: an override against an unknown or malformed work order is 404 / 400', async () => {
+    await seedWarrantyOverrideDoa();
+    const unknownId = randomUUID();
+    const post = await recordOverride(unknownId);
+    assert.strictEqual(post.status, 404, JSON.stringify(post.body));
+    assert.strictEqual(post.body['error_code'], 'WORK_ORDER_NOT_FOUND');
+
+    // The read surface 404s too (a Group B change from the earlier 200-with-null shape).
+    const read = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/maintenance/work-orders/${unknownId}/warranty-overrides`,
+      undefined,
+      readerHeaders,
+    );
+    assert.strictEqual(read.status, 404, JSON.stringify(read.body));
+    assert.strictEqual(read.body['error_code'], 'WORK_ORDER_NOT_FOUND');
+
+    for (const method of ['POST', 'GET'] as const) {
+      const res = await makeRequest(
+        port,
+        method,
+        '/api/v1/maintenance/work-orders/not-a-uuid/warranty-overrides',
+        method === 'POST' ? { reason_code: REASON_CODE } : undefined,
+        method === 'POST' ? supervisorHeaders : readerHeaders,
+      );
+      assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+      assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+    }
   });
 
   it('AC4: an override on an unflagged work order is rejected 409 WARRANTY_OVERRIDE_NOT_REQUIRED', async () => {
@@ -1351,9 +1700,15 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     ]);
     const statuses = [a!.status, b!.status].sort();
     assert.deepStrictEqual(statuses, [201, 409], `${JSON.stringify(a)} ${JSON.stringify(b)}`);
+    const winner = a!.status === 201 ? a! : b!;
     const loser = a!.status === 409 ? a! : b!;
     assert.strictEqual(loser.body['error_code'], 'WARRANTY_OVERRIDE_ALREADY_RECORDED');
-    assert.ok(detailsOf(loser.body)?.['existing_override_id'], 'the loser must name the winner');
+    // IDENTITY, not mere presence: the loser must name the winner's row, not just some row.
+    assert.strictEqual(
+      detailsOf(loser.body)?.['existing_override_id'],
+      (winner.body['override'] as Record<string, string>)['override_id'],
+      'the loser must name the winner',
+    );
     const rows = await getAdminPool().query(
       `SELECT count(*)::int AS n FROM maintenance_warranty_override WHERE work_order_id = $1`,
       [raceWorkOrderId],
@@ -1375,14 +1730,12 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     assert.strictEqual((await recordOverride(workOrderId)).status, 201);
     assert.strictEqual((await completeWorkOrder(workOrderId)).status, 200);
 
-    // A second work order on the same asset, so the grain is free but the order is closed.
+    // The SAME work order also carries an override, but the seam checks completed status BEFORE
+    // the one-override grain (Task 4.4 ordering), so the closed-order code is the one that must
+    // surface - a disjunction here would stay green with the completed-status check deleted.
     const closed = await recordOverride(workOrderId);
     assert.strictEqual(closed.status, 409, JSON.stringify(closed.body));
-    assert.ok(
-      closed.body['error_code'] === 'WORK_ORDER_ALREADY_COMPLETED' ||
-        closed.body['error_code'] === 'WARRANTY_OVERRIDE_ALREADY_RECORDED',
-      JSON.stringify(closed.body),
-    );
+    assert.strictEqual(closed.body['error_code'], 'WORK_ORDER_ALREADY_COMPLETED');
   });
 
   it('AC4: a forged overridden_by on the direct event path is rejected', async () => {
@@ -1547,6 +1900,14 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     });
     assert.strictEqual(otherType.status, 201, JSON.stringify(otherType.body));
 
+    // And so is the SAME reference and type on a DIFFERENT asset: the grain leads with asset_id.
+    const otherAsset = await createAsset();
+    const otherAssetRes = await recordCoverage(otherAsset, {
+      coverage_type: 'warranty',
+      reference_number_ext: reference,
+    });
+    assert.strictEqual(otherAssetRes.status, 201, JSON.stringify(otherAssetRes.body));
+
     const raceAssetId = await createAsset();
     const raceReference = `W-RACE-${randomUUID().slice(0, 6)}`;
     const [a, b] = await Promise.all([
@@ -1561,9 +1922,15 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     ]);
     const statuses = [a!.status, b!.status].sort();
     assert.deepStrictEqual(statuses, [201, 409], `${JSON.stringify(a)} ${JSON.stringify(b)}`);
+    const winner = a!.status === 201 ? a! : b!;
     const loser = a!.status === 409 ? a! : b!;
     assert.strictEqual(loser.body['error_code'], 'DUPLICATE_COVERAGE');
-    assert.ok(detailsOf(loser.body)?.['existing_coverage_id'], 'the loser must name the winner');
+    // IDENTITY, not mere presence: the loser must name the winner's row, not just some row.
+    assert.strictEqual(
+      detailsOf(loser.body)?.['existing_coverage_id'],
+      (winner.body['coverage'] as Record<string, string>)['coverage_id'],
+      'the loser must name the winner',
+    );
   });
 
   it('rejects an already-expired coverage 422 and a future-start coverage 422', async () => {
@@ -1601,6 +1968,45 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     const badValue = await recordCoverage(assetId, { contract_value: 1000 });
     assert.strictEqual(badValue.status, 400, JSON.stringify(badValue.body));
     assert.strictEqual(badValue.body['error_code'], 'INVALID_PARAMS');
+  });
+
+  it('rejects the remaining input edges 400 and accepts the regex boundary values', async () => {
+    const assetId = await createAsset();
+
+    // A zero-length window: expiry == start fails the strict after-check.
+    const zeroLength = await recordCoverage(assetId, {
+      start_date: ANCHOR,
+      expiry_date: ANCHOR,
+    });
+    assert.strictEqual(zeroLength.status, 400, JSON.stringify(zeroLength.body));
+    assert.strictEqual(zeroLength.body['error_code'], 'INVALID_PARAMS');
+
+    // contract_value regex boundaries: sign, four decimals, twelve integer digits, empty string.
+    for (const contractValue of ['-5.000', '1.2345', '123456789012', '']) {
+      const res = await recordCoverage(assetId, { contract_value: contractValue });
+      assert.strictEqual(res.status, 400, `${contractValue}: ${JSON.stringify(res.body)}`);
+      assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+    }
+    // The largest in-pattern value and zero are both accepted.
+    const maxValue = await recordCoverage(assetId, {
+      reference_number_ext: `AMC-MAX-${randomUUID().slice(0, 6)}`,
+      contract_value: '99999999999.999',
+    });
+    assert.strictEqual(maxValue.status, 201, JSON.stringify(maxValue.body));
+    const zeroValue = await recordCoverage(assetId, {
+      reference_number_ext: `AMC-ZERO-${randomUUID().slice(0, 6)}`,
+      contract_value: '0.000',
+    });
+    assert.strictEqual(zeroValue.status, 201, JSON.stringify(zeroValue.body));
+
+    // Whitespace-only and over-length text fields.
+    const blankProvider = await recordCoverage(assetId, { provider_name: '   ' });
+    assert.strictEqual(blankProvider.status, 400, JSON.stringify(blankProvider.body));
+    const longReference = await recordCoverage(assetId, {
+      reference_number_ext: 'R'.repeat(513),
+    });
+    assert.strictEqual(longReference.status, 400, JSON.stringify(longReference.body));
+    assert.strictEqual(longReference.body['error_code'], 'INVALID_PARAMS');
   });
 
   it('rejects a coverage against an unknown asset 404 ASSET_NOT_FOUND', async () => {
@@ -1667,6 +2073,11 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     assert.strictEqual(reused.status, 409, JSON.stringify(reused.body));
     assert.strictEqual(reused.body['error_code'], 'DUPLICATE_EVENT');
     assert.strictEqual(detailsOf(reused.body)?.['existing_event_id'], first.body['event_id']);
+    // Task 8.6 pins the TYPE too, so the caller can see which write originally consumed the key.
+    assert.strictEqual(
+      detailsOf(reused.body)?.['existing_event_type'],
+      'maintenance.coverage_recorded',
+    );
   });
 
   it('lists coverages by asset, type and status, and lists alerts by coverage', async () => {
@@ -1735,6 +2146,28 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
       readerHeaders,
     );
     assert.strictEqual(badStatus.status, 400, JSON.stringify(badStatus.body));
+
+    // status=future: at a business date before its start, the coverage is future, not active.
+    const future = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/maintenance/coverages?asset_id=${assetId}&status=future&business_date=${addDays(ANCHOR, -10)}`,
+      undefined,
+      readerHeaders,
+    );
+    assert.strictEqual(future.status, 200, JSON.stringify(future.body));
+    assert.strictEqual((future.body['coverages'] as unknown[]).length, 2);
+
+    // A malformed coverage_id on the alerts list is 400, not an empty 200.
+    const badAlertFilter = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/maintenance/coverages/alerts?coverage_id=not-a-uuid',
+      undefined,
+      readerHeaders,
+    );
+    assert.strictEqual(badAlertFilter.status, 400, JSON.stringify(badAlertFilter.body));
+    assert.strictEqual(badAlertFilter.body['error_code'], 'INVALID_PARAMS');
   });
 
   it('enforces RBAC: 401 without a token, 403 without the maintenance module', async () => {
@@ -1758,5 +2191,32 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
       readerHeaders,
     );
     assert.strictEqual(readOnlyWrite.status, 403, JSON.stringify(readOnlyWrite.body));
+
+    // The module guard on EVERY new surface, not just the write route already covered above.
+    // RBAC runs before any handler lookup, so unknown ids never reach a 404.
+    const guardedReads = [
+      `/api/v1/maintenance/coverages/${randomUUID()}`,
+      '/api/v1/maintenance/coverages/alerts',
+      `/api/v1/maintenance/assets/${randomUUID()}/coverages`,
+      `/api/v1/maintenance/work-orders/${randomUUID()}/warranty-overrides`,
+    ];
+    for (const path of guardedReads) {
+      const anonRead = await makeRequest(port, 'GET', path);
+      assert.strictEqual(anonRead.status, 401, `${path}: ${JSON.stringify(anonRead.body)}`);
+      const wrongModuleRead = await makeRequest(port, 'GET', path, undefined, procurementHeaders);
+      assert.strictEqual(
+        wrongModuleRead.status,
+        403,
+        `${path}: ${JSON.stringify(wrongModuleRead.body)}`,
+      );
+    }
+    const wrongModuleOverride = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/maintenance/work-orders/${randomUUID()}/warranty-overrides`,
+      { reason_code: REASON_CODE },
+      procurementHeaders,
+    );
+    assert.strictEqual(wrongModuleOverride.status, 403, JSON.stringify(wrongModuleOverride.body));
   });
 });
