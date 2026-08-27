@@ -63,8 +63,12 @@ function isUuid(value: unknown): value is string {
  * and a plant-scoped production role must not read, release, transition or cancel orders at another
  * plant. The wildcard '*' assignment satisfies any plant. Reads check the 'read' scope; writes
  * (create, release, transition, cancel) check the 'write' scope.
+ *
+ * Exported for Story 6.2: the material routes in src/api/v1/production-material.ts scope every
+ * route against the order's plant_location_id with the same helper, so a plant-scoped operator
+ * cannot stage, issue, confirm or return against another plant's order.
  */
-function assertPlantLocationAccess(
+export function assertPlantLocationAccess(
   req: IncomingMessage,
   plantLocationId: string,
   functionScope: 'read' | 'write',

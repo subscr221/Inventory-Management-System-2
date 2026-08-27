@@ -11,6 +11,8 @@ import {
   insertProductionOrder,
   updateProductionOrderState,
 } from '../read/projections/production_order.js';
+import { applyStockDeallocation } from '../read/projections/stock_balance.js';
+import { listStagesByOrder } from '../read/projections/production_order_stage.js';
 
 /**
  * Story 6.1 compliance seam for the production order lifecycle (FR-MO-01/02/03). Structurally
@@ -807,6 +809,36 @@ async function applyCancelled(envelope: EventEnvelope, client: PoolClient): Prom
       },
       409,
     );
+  }
+
+  // Story 6.2 cancel rollback (code-review decision 2026-08-28): staged-but-unissued stock is
+  // returned to `available` and the stage rows are cleared inside this cancel transaction. The AC4
+  // guard above has already blocked any cancel while WIP postings are open, so every 'allocated'
+  // stage row here carries only its remaining (required - issued) allocated stock; a fully-issued
+  // row never reaches this point and keeps its staging history. Lock order preserved: the order row
+  // is already locked FOR UPDATE, stage rows are read without a lock, and stock_balance rows are
+  // locked only inside the helper - always last (the 7.4 rule).
+  const stageRows = await listStagesByOrder(productionOrderId, client);
+  for (const stage of stageRows) {
+    if (stage.status !== 'allocated') continue;
+    const remainingResult = await client.query(
+      `SELECT (required_quantity - issued_quantity)::text AS remaining
+         FROM production_order_stage WHERE stage_id = $1`,
+      [stage.stage_id],
+    );
+    const remaining = String(remainingResult.rows[0]!['remaining']);
+    if (remaining !== '0') {
+      await applyStockDeallocation(
+        {
+          sku: stage.component_sku,
+          location_id: stage.source_location_id,
+          lot_id: stage.lot_number,
+          quantity: remaining,
+        },
+        client,
+      );
+    }
+    await client.query(`DELETE FROM production_order_stage WHERE stage_id = $1`, [stage.stage_id]);
   }
 
   p['cancelled_by'] = envelope.metadata.actor.user_id;

@@ -349,4 +349,33 @@ export const config = {
   bom: {
     maxDepth: parsePositiveIntEnv('BOM_MAX_DEPTH', 20),
   },
+  production: {
+    // Story 6.2 (FR-MO-06): the reason codes a material return may cite. Commercial policy, not
+    // code: comma-separated, trimmed, unique, at least one entry. Parsed EXACTLY like
+    // maintenance.warrantyOverrideReasonCodes (the 7.7 pattern): only an ABSENT variable takes the
+    // defaults - a variable that is present but blank is an operator statement and fails closed at
+    // load time rather than silently substituting the four permissive defaults.
+    materialReturnReasonCodes: (() => {
+      const raw = process.env['PRODUCTION_MATERIAL_RETURN_REASON_CODES'];
+      const value =
+        raw === undefined
+          ? 'SURPLUS_TO_ORDER,DAMAGED_IN_PROCESS,INCORRECT_MATERIAL,QUALITY_REJECTED'
+          : raw;
+      const codes = value
+        .split(',')
+        .map((c) => c.trim())
+        .filter((c) => c.length > 0);
+      // Bounded to the same ceiling the return route enforces on a cited code. An unbounded entry
+      // loaded happily and was then permanently unreachable, while still being advertised in the
+      // 422 `allowed` detail as if a caller could use it.
+      const MAX_REASON_CODE_LENGTH = 200;
+      const malformed = codes.some((c) => c.length > MAX_REASON_CODE_LENGTH || /[\r\n,]/.test(c));
+      if (codes.length === 0 || new Set(codes).size !== codes.length || malformed) {
+        throw new Error(
+          `Invalid PRODUCTION_MATERIAL_RETURN_REASON_CODES "${raw}": must be a non-empty, duplicate-free, comma-separated list of codes at most ${MAX_REASON_CODE_LENGTH} characters with no line breaks.`,
+        );
+      }
+      return codes;
+    })(),
+  },
 } as const;

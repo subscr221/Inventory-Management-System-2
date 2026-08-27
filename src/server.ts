@@ -300,6 +300,14 @@ import {
   cancelProductionOrderHandler,
 } from './api/v1/production-orders.js';
 import {
+  stageMaterialHandler,
+  listStagingHandler,
+  issueMaterialHandler,
+  recordConfirmationHandler,
+  returnMaterialHandler,
+  getWipHandler,
+} from './api/v1/production-material.js';
+import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
   getSupplierInvoiceHandler,
@@ -770,6 +778,17 @@ export function createAppRouter(): Router {
   router.post('/api/v1/production-orders/:orderId/release', releaseProductionOrderHandler);
   router.post('/api/v1/production-orders/:orderId/transition', transitionProductionOrderHandler);
   router.post('/api/v1/production-orders/:orderId/cancel', cancelProductionOrderHandler);
+
+  // Story 6.2: Material Staging, Issue, and WIP Ledger (FR-MO-04/05/06). ROUTE ORDER MATTERS:
+  // the six routes carry distinct literal tail segments after the shared '/:orderId' parameter, so
+  // none of them shadows the existing '/production-orders/:orderId' siblings or each other. The
+  // two GET routes (staging worklist, wip) stay out of the way of the four POST writes.
+  router.post('/api/v1/production-orders/:orderId/material-staging', stageMaterialHandler);
+  router.get('/api/v1/production-orders/:orderId/material-staging', listStagingHandler);
+  router.post('/api/v1/production-orders/:orderId/material-issues', issueMaterialHandler);
+  router.post('/api/v1/production-orders/:orderId/confirmations', recordConfirmationHandler);
+  router.post('/api/v1/production-orders/:orderId/material-returns', returnMaterialHandler);
+  router.get('/api/v1/production-orders/:orderId/wip', getWipHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

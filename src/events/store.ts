@@ -191,6 +191,11 @@ import {
   applyProductionOrderProjection,
   resolveProductionOrderNumberDuplicateConflict,
 } from '../compliance/production-order.js';
+import {
+  assertProductionMaterialShape,
+  applyProductionMaterialProjection,
+} from '../compliance/production-material.js';
+import { resolveProductionOrderStageLineDuplicateConflict } from '../read/projections/production_order_stage.js';
 import type {
   PickTaskCreatedEnvelope,
   PickLineConfirmedEnvelope,
@@ -642,6 +647,10 @@ export async function persistEvent(
   // consumes an idempotency key. AC1's UNTAGGED_TRANSACTION fires in assertInventoryTagging for
   // production_order.created (requiresBusinessStream true); this assert adds the shape rules.
   assertProductionOrderShape(envelope);
+  // Story 6.2: production material shape validation (staging lines, bounded issue quantity,
+  // confirmation/return contracts, mandatory reason codes) is non-DB and runs with the other
+  // pre-transaction asserts, so a malformed material event never consumes an idempotency key.
+  assertProductionMaterialShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -951,6 +960,12 @@ export async function persistEvent(
     // The gate re-run, the DOA override re-resolution and the order-number allocation all live
     // here, never only in the HTTP handler (AD-12).
     await applyProductionOrderProjection(envelope, client, eventId);
+    // Story 6.2: the production material projections (staging, issue, backflush confirmation,
+    // return) run inside this same transaction, so the stage rows, the WIP ledger postings, the
+    // stock_balance drains/returns and the order's unreversed_transaction_count recompute commit
+    // or roll back together with the domain_events insert. Every material guard lives here, never
+    // only in the HTTP handler (AD-12).
+    await applyProductionMaterialProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -1426,6 +1441,17 @@ export async function persistEvent(
           'A production order with this order number already exists',
           await resolveProductionOrderNumberDuplicateConflict(envelope.payload),
         );
+      } else if (constraint === 'uq_production_order_stage_line') {
+        // Story 6.2: the (production_order_id, bom_line_id) staging grain is the replay/duplicate
+        // guard - a second staging of the same directed-issue line is 409 DUPLICATE_EVENT whether
+        // it arrives sequentially or loses a concurrent race. The race path and the sequential
+        // path return the SAME existing_stage_id detail (the Story 7.2 lesson).
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'This BOM line is already staged for the production order',
+          await resolveProductionOrderStageLineDuplicateConflict(envelope.payload),
+        );
       } else if (
         constraint === 'maintenance_sla_policy_pkey' ||
         constraint === 'maintenance_fault_report_pkey' ||
@@ -1448,6 +1474,10 @@ export async function persistEvent(
         // Story 6.1: server-minted UUIDs make this practically unreachable; mapped for the same
         // completeness reason as the siblings above.
         constraint === 'production_order_pkey' ||
+        // Story 6.2: server-minted UUIDs make these practically unreachable; mapped for the same
+        // completeness reason as the siblings above. Each names its OWN id field below.
+        constraint === 'production_order_stage_pkey' ||
+        constraint === 'production_wip_ledger_pkey' ||
         // Story 7.7: server-minted UUIDs make these practically unreachable; mapped for the same
         // completeness reason as the siblings above. Each names its OWN id field below, so the
         // chain never falls through to a wrong (and always null) field.
@@ -1550,26 +1580,40 @@ export async function persistEvent(
                                                 ? p['production_order_id']
                                                 : null,
                                           }
-                                        : constraint === 'asset_coverage_pkey'
+                                        : constraint === 'production_order_stage_pkey'
                                           ? {
-                                              coverage_id:
-                                                typeof p['coverage_id'] === 'string'
-                                                  ? p['coverage_id']
+                                              stage_id:
+                                                typeof p['stage_id'] === 'string'
+                                                  ? p['stage_id']
                                                   : null,
                                             }
-                                          : constraint === 'maintenance_warranty_override_pkey'
+                                          : constraint === 'production_wip_ledger_pkey'
                                             ? {
-                                                override_id:
-                                                  typeof p['override_id'] === 'string'
-                                                    ? p['override_id']
+                                                posting_id:
+                                                  typeof p['posting_id'] === 'string'
+                                                    ? p['posting_id']
                                                     : null,
                                               }
-                                            : {
-                                                asset_id:
-                                                  typeof p['asset_id'] === 'string'
-                                                    ? p['asset_id']
-                                                    : null,
-                                              };
+                                            : constraint === 'asset_coverage_pkey'
+                                              ? {
+                                                  coverage_id:
+                                                    typeof p['coverage_id'] === 'string'
+                                                      ? p['coverage_id']
+                                                      : null,
+                                                }
+                                              : constraint === 'maintenance_warranty_override_pkey'
+                                                ? {
+                                                    override_id:
+                                                      typeof p['override_id'] === 'string'
+                                                        ? p['override_id']
+                                                        : null,
+                                                  }
+                                                : {
+                                                    asset_id:
+                                                      typeof p['asset_id'] === 'string'
+                                                        ? p['asset_id']
+                                                        : null,
+                                                  };
         throw new AppError(
           409,
           'DUPLICATE_EVENT',

@@ -82,6 +82,19 @@ export interface StockDeallocationInput {
   quantity: string | number;
 }
 
+/**
+ * Story 6.2 (Binding Decision 7): one drained balance row's detail, returned by applyStockIssue /
+ * applyStockIssueUnderSite so the production seam can write ONE WIP posting per drained (location,
+ * lot) grain - the only shape that lets a later return restore the exact lot identity AC5 demands.
+ * quantity is the NUMERIC string the drain actually took from this row.
+ */
+export interface StockDrainRow {
+  balance_id: string;
+  location_id: string;
+  lot_id: string | null;
+  quantity: string;
+}
+
 /** Story 3.6: moves a quantity already in `allocated` into `picked` at a single (sku, location, lot). */
 export interface StockPickInput {
   sku: string;
@@ -326,7 +339,24 @@ export async function applyStockAllocation(
   );
 }
 
-export async function applyStockIssue(input: StockIssueInput, client: PoolClient): Promise<void> {
+/**
+ * Applies a stock.issued event with a transaction-local row lock: the matching balance rows are
+ * locked FOR UPDATE, availability is summed in SQL (NUMERIC precision, not JS float), and the
+ * issue is rejected with 409 INSUFFICIENT_STOCK before any row changes when available stock does
+ * not cover the request. The drain runs in SQL via a windowed cumulative sum so every row update
+ * preserves NUMERIC(18,6) precision. Two transactions racing for the last unit therefore have
+ * exactly one winner.
+ *
+ * Story 6.2: the return type changed from `Promise<void>` to `Promise<StockDrainRow[]>` - the
+ * windowed UPDATE now RETURNs the per-row drained delta (filtered to rows that actually drained),
+ * so the production seam can write one WIP posting per drained (location, lot) grain. All five
+ * existing callers (transfer-request, cross-dock, replenishment, maintenance-spares) await the
+ * result and ignore it; the return value is additive.
+ */
+export async function applyStockIssue(
+  input: StockIssueInput,
+  client: PoolClient,
+): Promise<StockDrainRow[]> {
   const lotId = input.lot_id ?? null;
   // Story 2.8: class-scoped exactly like applyStockAllocation - a classless issue drains owned
   // stock only; an explicit consignment/vmi issue drains that class only.
@@ -362,7 +392,7 @@ export async function applyStockIssue(input: StockIssueInput, client: PoolClient
     );
   }
 
-  await client.query(
+  const drained = await client.query(
     `WITH ranked AS (
         SELECT balance_id, available AS available_qty,
                SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
@@ -374,7 +404,11 @@ export async function applyStockIssue(input: StockIssueInput, client: PoolClient
           updated_at = now()
       FROM ranked
       WHERE stock_balance.balance_id = ranked.balance_id
-        AND ranked.cumulative - ranked.available_qty < $4`,
+        AND ranked.cumulative - ranked.available_qty < $4
+      RETURNING stock_balance.balance_id,
+                stock_balance.location_id,
+                stock_balance.lot_id,
+                LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty)))::text AS drained_quantity`,
     [input.sku, input.location_id, lotId, input.quantity, stockClass],
   );
 
@@ -392,6 +426,160 @@ export async function applyStockIssue(input: StockIssueInput, client: PoolClient
      WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)`,
     [input.sku, input.location_id, lotId, occurredAt, stockClass],
   );
+
+  // Filtered to rows that actually drained: a fully-reserved row inside the window contributes a
+  // zero delta and is not a posting grain.
+  return drained.rows
+    .filter((row) => row['drained_quantity'] !== null && row['drained_quantity'] !== '0')
+    .map((row) => ({
+      balance_id: row['balance_id'] as string,
+      location_id: row['location_id'] as string,
+      lot_id: (row['lot_id'] as string | null) ?? null,
+      quantity: String(row['drained_quantity']),
+    }));
+}
+
+/**
+ * Story 6.2 (FR-MO-04, Binding Decision 6): issues a quantity of a SKU against EVERY owned-class
+ * balance row at or beneath a plant site, draining deterministically. This is the backflush
+ * helper: a production confirmation drains component stock plant-wide in proportion to the
+ * confirmed quantity, and one helper owns the lock/check/drain/return-detail contract so the
+ * seam cannot accidentally split it across statements.
+ *
+ * Structurally the under-site twin of applyStockIssue: same depth-capped recursive descendant
+ * walk as getAvailableBalanceUnderSite (depth < 10, stock_class 'owned' by default), ALL matching
+ * rows locked FOR UPDATE, SUM(available) >= quantity settled in SQL NUMERIC (409
+ * INSUFFICIENT_STOCK with sku/site/requested/available details), the same windowed cumulative-SUM
+ * drain - ordered (location_id, lot_id NULLS FIRST, balance_id) so the drain is deterministic
+ * across bins - and the same last_issue_at stamping. Returns the drained-row detail (one row per
+ * drained balance grain) exactly like applyStockIssue, so the confirmation applier writes one WIP
+ * posting per drained (location, lot). Never touches applyStockIssue / getAvailableBalanceUnderSite
+ * behavior; those helpers keep their exact SQL.
+ *
+ * All-or-nothing holds by construction because the caller runs inside the persistEvent
+ * transaction: a shortfall rejects before any row changes, so the whole confirmation rolls back.
+ */
+export async function applyStockIssueUnderSite(
+  input: {
+    sku: string;
+    site_location_id: string;
+    lot_id?: string | null;
+    stock_class?: string;
+    quantity: string | number;
+    occurred_at?: string | null;
+  },
+  client: PoolClient,
+): Promise<StockDrainRow[]> {
+  const lotId = input.lot_id ?? null;
+  const stockClass = input.stock_class ?? 'owned';
+  const siteLocationId = input.site_location_id;
+
+  await client.query(
+    `WITH RECURSIVE descendants AS (
+       SELECT location_id, 0 AS depth FROM location_register WHERE location_id = $1
+       UNION ALL
+       SELECT lr.location_id, d.depth + 1
+         FROM location_register lr
+         JOIN descendants d ON lr.parent_location_id = d.location_id
+        WHERE d.depth < 10
+     )
+     SELECT balance_id FROM stock_balance
+      WHERE sku = $2 AND stock_class = $4 AND location_id IN (SELECT location_id FROM descendants)
+        AND ($3::text IS NULL OR lot_id = $3)
+      FOR UPDATE`,
+    [siteLocationId, input.sku, lotId, stockClass],
+  );
+
+  const checkResult = await client.query(
+    `WITH RECURSIVE descendants AS (
+       SELECT location_id, 0 AS depth FROM location_register WHERE location_id = $1
+       UNION ALL
+       SELECT lr.location_id, d.depth + 1
+         FROM location_register lr
+         JOIN descendants d ON lr.parent_location_id = d.location_id
+        WHERE d.depth < 10
+     )
+     SELECT COALESCE(SUM(available), 0)::text AS total_available,
+            COALESCE(SUM(available), 0) >= $5::numeric AS sufficient
+       FROM stock_balance
+      WHERE sku = $2 AND stock_class = $4 AND location_id IN (SELECT location_id FROM descendants)
+        AND ($3::text IS NULL OR lot_id = $3)`,
+    [siteLocationId, input.sku, lotId, stockClass, String(input.quantity)],
+  );
+  const totalAvailable = checkResult.rows[0]!['total_available'] as string;
+  if (checkResult.rows[0]!['sufficient'] !== true) {
+    throw new AppError(
+      409,
+      'INSUFFICIENT_STOCK',
+      'Available stock does not cover the requested issue',
+      {
+        sku: input.sku,
+        site_location_id: siteLocationId,
+        stock_class: stockClass,
+        ...(lotId !== null ? { lot_id: lotId } : {}),
+        requested_quantity: input.quantity,
+        available_quantity: totalAvailable,
+      },
+    );
+  }
+
+  const drained = await client.query(
+    `WITH RECURSIVE descendants AS (
+       SELECT location_id, 0 AS depth FROM location_register WHERE location_id = $1
+       UNION ALL
+       SELECT lr.location_id, d.depth + 1
+         FROM location_register lr
+         JOIN descendants d ON lr.parent_location_id = d.location_id
+        WHERE d.depth < 10
+     ),
+      ranked AS (
+       SELECT balance_id, location_id, lot_id, available AS available_qty,
+              SUM(available) OVER (ORDER BY location_id, lot_id NULLS FIRST, balance_id) AS cumulative
+         FROM stock_balance
+        WHERE sku = $2 AND stock_class = $5 AND location_id IN (SELECT location_id FROM descendants)
+          AND ($3::text IS NULL OR lot_id = $3)
+     )
+     UPDATE stock_balance
+        SET on_hand = on_hand - LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
+            updated_at = now()
+       FROM ranked
+      WHERE stock_balance.balance_id = ranked.balance_id
+        AND ranked.cumulative - ranked.available_qty < $4
+      RETURNING stock_balance.balance_id,
+                stock_balance.location_id,
+                stock_balance.lot_id,
+                LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty)))::text AS drained_quantity`,
+    [siteLocationId, input.sku, lotId, input.quantity, stockClass],
+  );
+
+  // Same last_issue_at stamping contract as applyStockIssue (Story 2.7): monotonic GREATEST, scoped
+  // to the issued stock class, touching only last_issue_at/updated_at.
+  const occurredAt = input.occurred_at ?? new Date().toISOString();
+  await client.query(
+    `WITH RECURSIVE descendants AS (
+       SELECT location_id, 0 AS depth FROM location_register WHERE location_id = $1
+       UNION ALL
+       SELECT lr.location_id, d.depth + 1
+         FROM location_register lr
+         JOIN descendants d ON lr.parent_location_id = d.location_id
+        WHERE d.depth < 10
+     )
+     UPDATE stock_balance
+        SET last_issue_at = GREATEST(COALESCE(last_issue_at, $4::timestamptz), $4::timestamptz),
+            updated_at = now()
+      WHERE sku = $2 AND stock_class = $5 AND location_id IN (SELECT location_id FROM descendants)
+        AND ($3::text IS NULL OR lot_id = $3)`,
+    [siteLocationId, input.sku, lotId, occurredAt, stockClass],
+  );
+
+  return drained.rows
+    .filter((row) => row['drained_quantity'] !== null && row['drained_quantity'] !== '0')
+    .map((row) => ({
+      balance_id: row['balance_id'] as string,
+      location_id: row['location_id'] as string,
+      lot_id: (row['lot_id'] as string | null) ?? null,
+      quantity: String(row['drained_quantity']),
+    }));
 }
 
 /**

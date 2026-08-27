@@ -475,6 +475,13 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/production-orders/:orderId/release',
       'POST /api/v1/production-orders/:orderId/transition',
       'POST /api/v1/production-orders/:orderId/cancel',
+      // Story 6.2: Material Staging, Issue, and WIP Ledger
+      'POST /api/v1/production-orders/:orderId/material-staging',
+      'GET /api/v1/production-orders/:orderId/material-staging',
+      'POST /api/v1/production-orders/:orderId/material-issues',
+      'POST /api/v1/production-orders/:orderId/confirmations',
+      'POST /api/v1/production-orders/:orderId/material-returns',
+      'GET /api/v1/production-orders/:orderId/wip',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

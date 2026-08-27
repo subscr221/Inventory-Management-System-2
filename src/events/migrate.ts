@@ -147,6 +147,12 @@ const MIGRATIONS = [
   '../../read/projections/asset_coverage.sql',
   '../../read/projections/asset_coverage_alert.sql',
   '../../read/projections/maintenance_warranty_override.sql',
+  // Story 6.2: the production order staging projection (FR-MO-04) and the append-only WIP ledger
+  // (FR-MO-05/06). Appended at the tail after the Story 7.7 files. Both tables carry no FKs, so
+  // their order is logical rather than dependency-forced; the list as a whole is not, since the
+  // cross-dock files above hold real FOREIGN KEY clauses.
+  '../../read/projections/production_order_stage.sql',
+  '../../read/projections/production_wip_ledger.sql',
 ];
 
 async function migrate(): Promise<void> {

@@ -2870,6 +2870,171 @@ export interface ProductionOrderCancelledEnvelope extends Omit<EventEnvelope, 'p
 }
 
 // ---------------------------------------------------------------------------
+// Story 6.2: material staging, issue, and WIP ledger (FR-MO-04, FR-MO-05, FR-MO-06)
+// ---------------------------------------------------------------------------
+//
+// Four new events on the EXISTING 'production' stream; stream_id is production_order_id for all
+// four. All four are requiresBusinessStream: false - the order row already holds the tag (created
+// with it in 6.1), and re-tagging every material event would make the tag a mutable field, which
+// AD-14 forbids. The stream is NOT added to INVENTORY_MOVEMENT_STREAM_TYPES for the same reason
+// 6.1 gave: widening that set would force a business_stream onto every production event.
+//
+// Every payload field an applier can derive from a locked row or the explosion result is DECLARED
+// here and CHECKED against the derivation in src/compliance/production-material.ts, never trusted
+// (the 6.1 Compliance Seam Contract). Divergence rejects 409
+// PRODUCTION_MATERIAL_DERIVATION_MISMATCH. Fields marked "write-back" are stamped by the applier
+// onto envelope.payload BEFORE the domain_events insert, so the direct-event and handler paths
+// persist byte-identical payloads. Every instant requires an explicit UTC offset bounded to
+// +/-15:59; every quantity is an exact decimal STRING (never a JS number) matching the NUMERIC
+// (18,6) ceiling; business_date is a valid IST YYYY-MM-DD (the 6.1 validators, copied verbatim).
+//
+// These four are the highest-risk appliers in the production stream after release: a forged issue
+// inflates the order's WIP at a fabricated cost, a forged confirmation backflushes stock that was
+// never consumed, a fabricated return posting restores a lot identity no issue ever drained, and a
+// forged staging event allocates stock at a bin outside the order's plant. Every one of those is
+// re-derived inside the transaction, never merely checked in the handler.
+
+/**
+ * One drained balance row's WIP posting (write-back). The issue/confirmation appliers call
+ * applyStockIssue / applyStockIssueUnderSite, which RETURN their drained-row detail; the seam
+ * writes ONE posting per drained row (Binding Decision 7) so a return can restore the exact
+ * (location, lot) grain the drain took. posting_value is computed in SQL NUMERIC, never in JS.
+ */
+export interface ProductionMaterialPosting {
+  posting_id: string;
+  bom_line_id: string;
+  component_item_id: string;
+  component_sku: string;
+  lot_number: string | null;
+  source_location_id: string;
+  quantity: string;
+  unit_cost: string;
+  posting_value: string;
+}
+
+/**
+ * Story 6.2 (FR-MO-04): stages one or more directed-issue requirement lines of a Released order.
+ * stream_id is production_order_id. Staging is THIS story's pick-task generation (Binding Decision
+ * 3): one production_order_stage row per line, holding stock in `allocated` at the operator-named
+ * source bin. revision_id is re-derived from the explosion (must equal the order's
+ * released_revision_id - BOM_REVISION_DRIFT otherwise); component_item_id / component_sku /
+ * required_quantity are re-derived per line; source_location_id must be a plant descendant;
+ * stage_id and business_date are server-written back.
+ */
+export interface ProductionOrderMaterialStagedPayload {
+  production_order_id: string;
+  /** Derivable: explosion revision of the order's released BOM; declared and checked (BOM_REVISION_DRIFT on mismatch). */
+  revision_id: string;
+  /** Write-back: IST calendar date of staged_at. */
+  business_date: string;
+  lines: {
+    /** Write-back: server-minted UUIDv4. */
+    stage_id: string;
+    bom_line_id: string;
+    /** Derivable: the explosion line's component_item_id; declared and checked. */
+    component_item_id: string;
+    /** Derivable: the explosion line's component_sku; declared and checked. */
+    component_sku: string;
+    /** Derivable: the explosion line's required_quantity (exact decimal string); declared and checked. */
+    required_quantity: string;
+    source_location_id: string;
+    lot_number: string | null;
+    /** Write-back: metadata.actor.user_id. */
+    staged_by: string;
+    staged_at: string;
+  }[];
+}
+
+export interface ProductionOrderMaterialStagedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.material_staged';
+  payload: ProductionOrderMaterialStagedPayload;
+}
+
+/**
+ * Story 6.2 (FR-MO-05): issues staged material to the order. stream_id is production_order_id.
+ * The applier locks the stage row FOR UPDATE, deallocates BEFORE issuing (the 7.4 binding order),
+ * and writes one WIP posting per drained balance row (write-back). quantity is bounded by the
+ * stage's remaining quantity; unit_cost is server-derived from the Story 2.4 running average
+ * (WIP_COST_UNRESOLVED fail-closed).
+ */
+export interface ProductionOrderMaterialIssuedPayload {
+  production_order_id: string;
+  stage_id: string;
+  quantity: string;
+  /** Write-back: metadata.actor.user_id. */
+  issued_by: string;
+  issued_at: string;
+  /** Write-back: one entry per drained balance row. */
+  postings: ProductionMaterialPosting[];
+}
+
+export interface ProductionOrderMaterialIssuedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.material_issued';
+  payload: ProductionOrderMaterialIssuedPayload;
+}
+
+/**
+ * Story 6.2 (FR-MO-04): posts a production confirmation; backflush components drain plant-wide in
+ * proportion to the confirmed quantity. stream_id is production_order_id. The applier re-explodes
+ * at confirmed_quantity (proportionality by construction - AC2), pre-checks EVERY backflush line's
+ * availability (AC3 shortfall_lines[] carries every deficient line), then drains through
+ * applyStockIssueUnderSite. revision_id is re-derived; backflush_lines[] (with their postings),
+ * business_date and confirmed_by are written back.
+ */
+export interface ProductionOrderConfirmationRecordedPayload {
+  production_order_id: string;
+  confirmed_quantity: string;
+  /** Derivable: explosion revision of the order's released BOM; declared and checked (BOM_REVISION_DRIFT on mismatch). */
+  revision_id: string;
+  /** Write-back: IST calendar date of confirmed_at. */
+  business_date: string;
+  /** Write-back: metadata.actor.user_id. */
+  confirmed_by: string;
+  confirmed_at: string;
+  /** Write-back: one entry per backflush requirement line. */
+  backflush_lines: {
+    bom_line_id: string;
+    component_sku: string;
+    required_quantity: string;
+    postings: ProductionMaterialPosting[];
+  }[];
+}
+
+export interface ProductionOrderConfirmationRecordedEnvelope extends Omit<
+  EventEnvelope,
+  'payload'
+> {
+  event_type: 'production_order.confirmation_recorded';
+  payload: ProductionOrderConfirmationRecordedPayload;
+}
+
+/**
+ * Story 6.2 (FR-MO-06): returns issued material to stock, reversing WIP at the SOURCE posting's
+ * unit_cost (the issued cost - AC5) and restoring the original location and lot grain. stream_id
+ * is production_order_id. source_posting_id names one issued/backflush posting of THIS order
+ * (RETURN_SOURCE_MISMATCH otherwise); quantity is bounded by the posting's open_quantity in SQL
+ * NUMERIC (RETURN_EXCEEDS_ISSUE - AC6, rejected never clamped); reason_code must be non-blank
+ * (REASON_CODE_REQUIRED - AC5) and a member of config.production.materialReturnReasonCodes
+ * (RETURN_REASON_CODE_INVALID 422 with the allowed list). posting_id is server-minted write-back.
+ */
+export interface ProductionOrderMaterialReturnedPayload {
+  production_order_id: string;
+  source_posting_id: string;
+  quantity: string;
+  reason_code: string;
+  /** Write-back: metadata.actor.user_id. */
+  returned_by: string;
+  returned_at: string;
+  /** Write-back: server-minted UUIDv4. */
+  posting_id: string;
+}
+
+export interface ProductionOrderMaterialReturnedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.material_returned';
+  payload: ProductionOrderMaterialReturnedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Story 7.7: AMC, warranty, and insurance tracking (FR-M-10, FR-M-11)
 // ---------------------------------------------------------------------------
 //
@@ -3642,6 +3807,26 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'production_order.cancelled': {
+    streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  // Story 6.2: production material events (FR-MO-04/05/06). All four ride the same 'production'
+  // stream and all are requiresBusinessStream false: the order row already holds the tag (created
+  // with it in 6.1), and re-tagging material movements would make the tag mutable (AD-14). The
+  // stream stays out of INVENTORY_MOVEMENT_STREAM_TYPES exactly as in 6.1.
+  'production_order.material_staged': {
+    streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  'production_order.material_issued': {
+    streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  'production_order.confirmation_recorded': {
+    streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  'production_order.material_returned': {
     streamType: 'production',
     requiresBusinessStream: false,
   },

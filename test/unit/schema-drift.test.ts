@@ -1155,6 +1155,49 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 6.2: the production order staging projection (FR-MO-04). The UNIQUE
+  // (production_order_id, bom_line_id) grain is a table constraint, not a CREATE UNIQUE INDEX, so
+  // it lives in the index list (string-presence check) while the CHECK bodies ride the guarded DO
+  // blocks like every sibling. The issue-bound CHECK carries real semantics (AC1's issued_quantity
+  // <= required_quantity enforced by the database). app_user carries DELETE for the cancel rollback
+  // (recorded deviation, code-review decision 2026-08-28): the production_order.cancelled applier
+  // deallocates staged-but-unissued stock and clears the stage rows in the same transaction.
+  {
+    canonical: 'read/projections/production_order_stage.sql',
+    table: 'production_order_stage',
+    constraints: [
+      'chk_production_order_stage_supply_method',
+      'chk_production_order_stage_status',
+      'chk_production_order_stage_required_positive',
+      'chk_production_order_stage_issued_non_negative',
+      'chk_production_order_stage_issue_bound',
+    ],
+    indexes: [
+      'uq_production_order_stage_line',
+      'idx_production_order_stage_order',
+      'idx_production_order_stage_status',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
+  // Story 6.2: the production WIP ledger (FR-MO-05/06). Posting rows are append-only (never
+  // deleted, never rewritten), but app_user carries UPDATE because the Counter Contract decrements
+  // open_quantity on the source issue/backflush row inside the return's transaction and the return
+  // applier locks that row FOR UPDATE (PostgreSQL refuses FOR UPDATE without UPDATE privilege) -
+  // the recorded deviation that resolves the Table 2 "INSERT, SELECT only" line against the
+  // Applier Contract (see the canonical file's banner). The pairing CHECK is the structural
+  // backbone of AC5/AC6 (returns reference their source posting and carry a reason code).
+  {
+    canonical: 'read/projections/production_wip_ledger.sql',
+    table: 'production_wip_ledger',
+    constraints: [
+      'chk_production_wip_posting_type',
+      'chk_production_wip_quantity_positive',
+      'chk_production_wip_open_non_negative',
+      'chk_production_wip_posting_pairing',
+    ],
+    indexes: ['idx_production_wip_ledger_order', 'idx_production_wip_ledger_source_posting'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
   // Story 7.7: the asset coverage register (AMC, warranty, insurance), its staged 90/60/30 expiry
   // alerts and the reason-coded warranty override grain (FR-M-10, FR-M-11). The coverage
   // uniqueness grain is an EXPRESSION index (lower(reference_number_ext)) and therefore lives in
