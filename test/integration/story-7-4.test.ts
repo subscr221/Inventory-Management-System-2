@@ -917,7 +917,12 @@ describe('Story 7.4 Spare Parts Cataloguing, Reservation and Critical-Spares Ale
       port,
       'POST',
       `/api/v1/maintenance/work-orders/${workOrderId}/complete`,
-      {},
+      {
+        // Story 7.8 (FR-M-18, Binding Decision 8): a breakdown closure carries the three codes.
+        fault_code: config.maintenance.closureCodes.fault[0],
+        cause_code: config.maintenance.closureCodes.cause[0],
+        remedy_code: config.maintenance.closureCodes.remedy[0],
+      },
       storekeeperHeaders,
     );
     assert.strictEqual(completed.status, 200, JSON.stringify(completed.body));

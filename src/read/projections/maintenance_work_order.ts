@@ -9,7 +9,7 @@ export interface MaintenanceWorkOrderRow {
   origin: 'preventive' | 'breakdown';
   due_date: string;
   grace_until_date: string;
-  status: 'open' | 'overdue' | 'completed';
+  status: MaintenanceWorkOrderStatus;
   generated_for_cycle: string;
   fault_report_id: string | null;
   priority: 'p1' | 'p2' | 'p3' | 'p4' | null;
@@ -32,9 +32,29 @@ export interface MaintenanceWorkOrderRow {
   // the chargeable-work gate in applyWorkOrderCompleted reads warranty_flagged off the locked row.
   warranty_flagged: boolean;
   warranty_coverage_id: string | null;
+  // Story 7.8 (FR-M-17, Binding Decision 7): the latest technician status transition. Written only
+  // by setWorkOrderStatus under the work order's lock; completion and the grace sweep leave them.
+  status_updated_at: string | null;
+  status_updated_by: string | null;
+  status_note: string | null;
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * Story 7.8 (Binding Decision 7): the five-value status vocabulary. in_progress and on_hold are the
+ * technician-facing transitions; the grace sweep still flips only 'open'.
+ */
+export type MaintenanceWorkOrderStatus =
+  'open' | 'overdue' | 'in_progress' | 'on_hold' | 'completed';
+
+export const WORK_ORDER_STATUSES: ReadonlySet<string> = new Set([
+  'open',
+  'overdue',
+  'in_progress',
+  'on_hold',
+  'completed',
+]);
 
 type Queryable = Pick<PoolClient, 'query'>;
 
@@ -58,6 +78,9 @@ const WORK_ORDER_COLUMNS = `work_order_id, plan_id, asset_id, origin,
     capitalization_flagged,
     warranty_flagged,
     warranty_coverage_id,
+    status_updated_at,
+    status_updated_by,
+    status_note,
     created_at, updated_at`;
 
 export async function getWorkOrderById(
@@ -173,15 +196,48 @@ export async function setWorkOrderCompleted(
   completedBy: string,
   client: PoolClient,
 ): Promise<void> {
+  // Story 7.8 (Binding Decision 7): completion is reachable from every non-completed state, so the
+  // predicate names the four source states rather than a blind `status <> 'completed'` - a future
+  // sixth status would then have to opt in explicitly.
   await client.query(
     `UPDATE maintenance_work_order
         SET status = 'completed',
             completed_at = $2,
             completed_by = $3,
             updated_at = now()
-      WHERE work_order_id = $1`,
+      WHERE work_order_id = $1
+        AND status IN ('open', 'overdue', 'in_progress', 'on_hold')`,
     [workOrderId, completedAt, completedBy],
   );
+}
+
+/**
+ * Story 7.8 (FR-M-17, Binding Decision 7): the technician status transition. The UPDATE is guarded
+ * by the EXPECTED previous status the applier read under FOR UPDATE, never a blind write, and
+ * returns the updated row count so a 0-row outcome is rejected (409 INVALID_STATUS_TRANSITION)
+ * rather than silently no-op'd.
+ */
+export async function setWorkOrderStatus(
+  workOrderId: string,
+  expectedPreviousStatus: MaintenanceWorkOrderStatus,
+  newStatus: 'in_progress' | 'on_hold',
+  updatedAt: string,
+  updatedBy: string,
+  note: string | null,
+  client: PoolClient,
+): Promise<number> {
+  const result = await client.query(
+    `UPDATE maintenance_work_order
+        SET status = $3,
+            status_updated_at = $4,
+            status_updated_by = $5,
+            status_note = $6,
+            updated_at = now()
+      WHERE work_order_id = $1
+        AND status = $2`,
+    [workOrderId, expectedPreviousStatus, newStatus, updatedAt, updatedBy, note],
+  );
+  return result.rowCount ?? 0;
 }
 
 export async function setWorkOrderOverdue(
@@ -234,7 +290,7 @@ export interface ListWorkOrdersParams {
   plan_id?: string | undefined;
   origin?: 'preventive' | 'breakdown' | undefined;
   priority?: 'p1' | 'p2' | 'p3' | 'p4' | undefined;
-  status?: 'open' | 'overdue' | 'completed' | undefined;
+  status?: MaintenanceWorkOrderStatus | undefined;
   due_before?: string | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
@@ -270,6 +326,9 @@ export async function listWorkOrders(
     values.push(params.priority);
   }
   if (params.status) {
+    // Story 7.8: validated against the five-value vocabulary like the origin/priority filters, so
+    // an unknown status is an empty list rather than a full scan for a value no row can carry.
+    if (!WORK_ORDER_STATUSES.has(params.status)) return [];
     conditions.push(`status = $${idx++}`);
     values.push(params.status);
   }
@@ -345,6 +404,9 @@ export async function listBreakdownWorkOrdersInPeriod(
             w.capitalization_flagged,
             w.warranty_flagged,
             w.warranty_coverage_id,
+            w.status_updated_at,
+            w.status_updated_by,
+            w.status_note,
             w.created_at, w.updated_at
        FROM maintenance_work_order w
       WHERE w.origin = 'breakdown'
@@ -360,4 +422,63 @@ export async function listBreakdownWorkOrdersInPeriod(
     values,
   );
   return result.rows as MaintenanceWorkOrderRow[];
+}
+
+/**
+ * Story 7.8 (FR-M-17, Binding Decision 11): the technician's offline working set. Every work order
+ * that is not completed, joined to its asset, ordered most-urgent-first (priority ascending, so
+ * 'p1' sorts before 'p4' and a preventive order with NULL priority sorts last), then by due_date
+ * and work_order_id for a stable page. Company-wide (AD-9): work orders and the asset register
+ * carry no location, so no site filter exists to apply. The caller bounds `limit` and pairs the
+ * page with countOpenWorkOrders so a truncated worklist is never silent on the device.
+ */
+export interface WorklistWorkOrderRow extends MaintenanceWorkOrderRow {
+  asset_tag: string;
+  asset_name: string;
+  criticality_class: string;
+}
+
+const WORKLIST_STATUS_PREDICATE = `w.status IN ('open', 'overdue', 'in_progress', 'on_hold')`;
+
+export async function listOpenWorkOrdersForWorklist(
+  limit: number,
+  client?: PoolClient,
+): Promise<WorklistWorkOrderRow[]> {
+  const r = runner(client);
+  const bounded = Number.isFinite(limit) ? Math.min(Math.max(Math.trunc(limit), 1), 500) : 200;
+  const result = await r.query(
+    `SELECT w.work_order_id, w.plan_id, w.asset_id, w.origin,
+            to_char(w.due_date, 'YYYY-MM-DD') AS due_date,
+            to_char(w.grace_until_date, 'YYYY-MM-DD') AS grace_until_date,
+            w.status, w.generated_for_cycle, w.fault_report_id, w.priority, w.sla_policy_id,
+            w.sla_response_due_at, w.sla_resolution_due_at, w.completed_at, w.completed_by,
+            w.overdue_at, w.escalated_at,
+            w.labor_cost::text AS labor_cost,
+            w.parts_cost::text AS parts_cost,
+            w.total_cost::text AS total_cost,
+            w.capitalization_flagged,
+            w.warranty_flagged,
+            w.warranty_coverage_id,
+            w.status_updated_at,
+            w.status_updated_by,
+            w.status_note,
+            w.created_at, w.updated_at,
+            a.asset_tag, a.asset_name, a.criticality_class
+       FROM maintenance_work_order w
+       JOIN asset a ON a.asset_id = w.asset_id
+      WHERE ${WORKLIST_STATUS_PREDICATE}
+      ORDER BY w.priority ASC NULLS LAST, w.due_date ASC, w.work_order_id ASC
+      LIMIT $1`,
+    [bounded],
+  );
+  return result.rows as WorklistWorkOrderRow[];
+}
+
+/** The COUNT(*) twin of listOpenWorkOrdersForWorklist over the SAME status predicate. */
+export async function countOpenWorkOrders(client?: PoolClient): Promise<number> {
+  const r = runner(client);
+  const result = await r.query(
+    `SELECT count(*)::int AS total FROM maintenance_work_order w WHERE ${WORKLIST_STATUS_PREDICATE}`,
+  );
+  return (result.rows[0]?.['total'] as number | undefined) ?? 0;
 }

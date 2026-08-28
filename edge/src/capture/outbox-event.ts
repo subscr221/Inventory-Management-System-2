@@ -14,13 +14,20 @@ export function createOutboxEvent(input: {
   idempotencyKey: string;
   occurredAt: string;
   captureMethod?: 'AUTO' | 'MANUAL';
+  /**
+   * Story 7.8 (Binding Decision 2): the declared stream version. Absent means 1 (every existing
+   * builder targets a fresh stream); a number is the device's local_head_version + 1 for a
+   * capture on an EXISTING stream; null means "server assigns" (meter readings), and the
+   * connector strips the field from the POST body.
+   */
+  eventVersion?: number | null;
 }): EdgeEventRecord {
   return {
     event_id: input.eventId,
     stream_type: input.streamType,
     stream_id: input.streamId,
     event_type: input.eventType,
-    event_version: 1,
+    event_version: input.eventVersion === undefined ? 1 : input.eventVersion,
     payload: input.payload,
     metadata: {
       correlation_id: input.correlationId,

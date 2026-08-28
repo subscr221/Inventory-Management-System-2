@@ -138,6 +138,17 @@ if (!REASON_CODE) {
   );
 }
 
+/**
+ * Story 7.8 (FR-M-18, Binding Decision 8): closure coding became mandatory for BREAKDOWN work
+ * orders, so the breakdown completion fixtures below carry the three codes. Everything each test
+ * asserts (the warranty gate, the cost arm, the completed-status ordering) is unchanged.
+ */
+const BREAKDOWN_CLOSURE_CODES = {
+  fault_code: config.maintenance.closureCodes.fault[0],
+  cause_code: config.maintenance.closureCodes.cause[0],
+  remedy_code: config.maintenance.closureCodes.remedy[0],
+};
+
 describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
   let server: Server;
   let port: number;
@@ -1435,6 +1446,7 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     const res = await completeWorkOrder(workOrderId, {
       labor_cost: '0.100',
       parts_cost: '0.200',
+      ...BREAKDOWN_CLOSURE_CODES,
     });
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     const row = await workOrderRow(workOrderId);
@@ -1450,7 +1462,7 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     const workOrder = await breakdownWorkOrder(assetId);
     const workOrderId = workOrder['work_order_id'] as string;
 
-    const res = await completeWorkOrder(workOrderId);
+    const res = await completeWorkOrder(workOrderId, { ...BREAKDOWN_CLOSURE_CODES });
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     const row = await workOrderRow(workOrderId);
     assert.strictEqual(row?.['status'], 'completed');
@@ -1475,7 +1487,11 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
 
     const threshold = config.maintenance.capitalizationThreshold;
     const above = (Number(threshold) + 1).toFixed(3);
-    const res = await completeWorkOrder(workOrderId, { labor_cost: above, parts_cost: '0.000' });
+    const res = await completeWorkOrder(workOrderId, {
+      labor_cost: above,
+      parts_cost: '0.000',
+      ...BREAKDOWN_CLOSURE_CODES,
+    });
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     const row = await workOrderRow(workOrderId);
     assert.strictEqual(row?.['status'], 'completed');
@@ -1728,7 +1744,10 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     const workOrder = await breakdownWorkOrder(assetId);
     const workOrderId = workOrder['work_order_id'] as string;
     assert.strictEqual((await recordOverride(workOrderId)).status, 201);
-    assert.strictEqual((await completeWorkOrder(workOrderId)).status, 200);
+    assert.strictEqual(
+      (await completeWorkOrder(workOrderId, { ...BREAKDOWN_CLOSURE_CODES })).status,
+      200,
+    );
 
     // The SAME work order also carries an override, but the seam checks completed status BEFORE
     // the one-override grain (Task 4.4 ordering), so the closed-order code is the one that must

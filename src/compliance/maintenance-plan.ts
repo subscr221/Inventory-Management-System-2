@@ -18,10 +18,14 @@ import {
   setWorkOrderCompleted,
   setWorkOrderCosts,
   setWorkOrderOverdue,
+  setWorkOrderStatus,
+  type MaintenanceWorkOrderStatus,
 } from '../read/projections/maintenance_work_order.js';
 import { upsertMaintenanceAssetCost } from '../read/projections/maintenance_asset_cost.js';
 // Story 7.7 (FR-M-11): the chargeable-work gate reads the reason-coded override grain.
 import { getWarrantyOverrideByWorkOrder } from '../read/projections/maintenance_warranty_override.js';
+// Story 7.8 (FR-M-18): the closure ledger the completion applier appends to.
+import { insertWorkOrderClosure } from '../read/projections/maintenance_work_order_closure.js';
 import {
   getExaminationByAssetAndType,
   setStatutoryExaminationStatus,
@@ -37,6 +41,26 @@ import {
  * (FR-M-11, AC 3) added the chargeable-work gate ahead of it: a warranty-flagged work order cannot
  * be completed without a recorded reason-coded override, enforced in the seam so a direct event
  * cannot bypass it (AD-12).
+ *
+ * Story 7.8 (FR-M-17, FR-M-18) added two arms:
+ * - applyWorkOrderStatusUpdated: the technician transition machine (open or overdue to
+ *   in_progress, in_progress to on_hold, on_hold to in_progress), enforced under the work order's
+ *   lock with previous_status written back.
+ * - the closure-code gate in applyWorkOrderCompleted (after the 7.7 warranty gate, before the
+ *   completion write): mandatory three-part coding for breakdown work orders, optional all-or-none
+ *   for preventive ones, catalogue-validated, and one append-only maintenance_work_order_closure
+ *   row when codes are present.
+ *
+ * LOCKING CONTRACT (Story 7.8 additions, verified against every sibling applier):
+ * - applyWorkOrderStatusUpdated: asset FOR UPDATE (step 1), then work order FOR UPDATE (step 6).
+ *   That is the completion order minus the weighbridge examination, so it can never hold a work
+ *   order while waiting for an asset.
+ * - The closure insert rides the completion transaction under the work-order lock already held;
+ *   it takes no additional lock (the primary key on work_order_id is the race backstop).
+ * - applyBreakdownWorkOrderCreated (fault report, asset, SLA policy, then INSERT work order),
+ *   applySpareIssued (reservation, then ledger) and applyFaultReported (no locks) share no
+ *   AB-BA edge with either arm: every path that touches both an asset and a work order takes the
+ *   asset first.
  */
 
 const MAINTENANCE_STREAM_TYPES = new Set(['maintenance']);
@@ -45,7 +69,31 @@ const MAINTENANCE_PLAN_EVENT_TYPES = new Set([
   'maintenance.work_order_generated',
   'maintenance.work_order_overdue',
   'maintenance.work_order_completed',
+  // Story 7.8 (Binding Decision 7): the technician status transition.
+  'maintenance.work_order_status_updated',
 ]);
+
+// Story 7.8 (FR-M-18): closure codes are bounded to the maintenance_work_order_closure column
+// CHECK. Kept equal to the bound in parseClosureCodeCatalogue (src/config/index.ts); config loads
+// before the seams, so the constant is duplicated rather than imported.
+export const MAX_CLOSURE_CODE_LENGTH = 64;
+export const CLOSURE_CODE_FIELDS = ['fault_code', 'cause_code', 'remedy_code'] as const;
+const MAX_STATUS_NOTE_LENGTH = 500;
+const TECHNICIAN_STATUSES = new Set(['in_progress', 'on_hold']);
+// An explicit UTC offset is REQUIRED (the Story 7.2 offset lesson).
+const ISO8601_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+/**
+ * Story 7.8 (Binding Decision 7): the allowed technician transitions. Completion is NOT in this
+ * table: it is its own event (work_order_completed) and accepts every non-completed source state.
+ * `completed` has no entry, so any transition out of it is INVALID_STATUS_TRANSITION after the
+ * explicit WORK_ORDER_ALREADY_COMPLETED check.
+ */
+export const WORK_ORDER_STATUS_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
+  open: ['in_progress'],
+  overdue: ['in_progress'],
+  in_progress: ['on_hold'],
+  on_hold: ['in_progress'],
+};
 
 const PLAN_TYPES = new Set(['calendar', 'meter']);
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -136,6 +184,9 @@ export function assertMaintenancePlanShape(envelope: EventEnvelope): void {
       break;
     case 'maintenance.work_order_completed':
       assertWorkOrderCompletedShape(p);
+      break;
+    case 'maintenance.work_order_status_updated':
+      assertWorkOrderStatusUpdatedShape(envelope);
       break;
   }
 }
@@ -353,6 +404,100 @@ function assertWorkOrderCompletedShape(p: Record<string, unknown>): void {
       });
     }
   }
+  // Story 7.8 (FR-M-18): the three-part closure codes. Each present code is a non-empty trimmed
+  // string of at most MAX_CLOSURE_CODE_LENGTH characters with no line break or comma (the
+  // catalogue separator); all-or-none is a SHAPE rule, so one or two codes never consume an
+  // idempotency key. Presence (breakdown origin) and catalogue membership are row/config checks
+  // that live in the applier.
+  assertClosureCodesShape(p);
+}
+
+/**
+ * Story 7.8 (FR-M-18): the closure-code FORMAT rule, shared by the completion shape assert and the
+ * REST handler (which applies the identical check before minting the event).
+ */
+export function assertClosureCodesShape(p: Record<string, unknown>): void {
+  const present = CLOSURE_CODE_FIELDS.filter(
+    (field) => p[field] !== undefined && p[field] !== null,
+  );
+  if (present.length === 0) return;
+  if (present.length !== CLOSURE_CODE_FIELDS.length) {
+    reject(
+      'INVALID_PAYLOAD',
+      'closure codes are all-or-none: fault_code, cause_code and remedy_code must be supplied together',
+      {
+        present,
+        missing: CLOSURE_CODE_FIELDS.filter((field) => !present.includes(field)),
+      },
+    );
+  }
+  for (const field of CLOSURE_CODE_FIELDS) {
+    const value = p[field];
+    if (
+      typeof value !== 'string' ||
+      value.trim() === '' ||
+      value.trim().length > MAX_CLOSURE_CODE_LENGTH ||
+      /[\r\n,]/.test(value)
+    ) {
+      reject(
+        'INVALID_PAYLOAD',
+        `${field} must be a non-empty string of at most ${MAX_CLOSURE_CODE_LENGTH} characters with no line breaks or commas`,
+        { field, value },
+      );
+    }
+  }
+}
+
+/**
+ * Story 7.8 (Binding Decision 7): the status-transition shape. previous_status is seam-derived,
+ * so a DECLARED value is a forgery attempt and rejects WORK_ORDER_DERIVATION_MISMATCH here, before
+ * any key is consumed.
+ */
+function assertWorkOrderStatusUpdatedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['work_order_id']))
+    reject('INVALID_PARAMS', 'work_order_id is required and must be a UUID');
+  if (!isUuid(p['asset_id'])) reject('INVALID_PARAMS', 'asset_id is required and must be a UUID');
+  if (envelope.stream_id !== p['work_order_id']) {
+    reject('INVALID_PARAMS', 'stream_id must match the payload work_order_id', {
+      stream_id: envelope.stream_id,
+      payload_work_order_id: p['work_order_id'],
+    });
+  }
+  if (typeof p['new_status'] !== 'string' || !TECHNICIAN_STATUSES.has(p['new_status'])) {
+    reject('INVALID_PARAMS', 'new_status must be one of: in_progress, on_hold', {
+      new_status: p['new_status'],
+    });
+  }
+  const note = p['note'];
+  if (
+    note !== null &&
+    note !== undefined &&
+    (typeof note !== 'string' || note.length > MAX_STATUS_NOTE_LENGTH)
+  ) {
+    reject(
+      'INVALID_PARAMS',
+      `note must be null or a string of at most ${MAX_STATUS_NOTE_LENGTH} characters`,
+      {
+        note_length: typeof note === 'string' ? note.length : null,
+      },
+    );
+  }
+  if (typeof p['updated_at'] !== 'string' || !ISO8601_TIMESTAMP_REGEX.test(p['updated_at'])) {
+    reject(
+      'INVALID_PARAMS',
+      'updated_at is required and must be an ISO-8601 timestamp with an explicit UTC offset',
+      { updated_at: p['updated_at'] },
+    );
+  }
+  if (p['previous_status'] !== undefined && p['previous_status'] !== null) {
+    reject(
+      'WORK_ORDER_DERIVATION_MISMATCH',
+      'previous_status is derived from the work order and cannot be declared',
+      { work_order_id: p['work_order_id'], declared_previous_status: p['previous_status'] },
+      409,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +533,92 @@ export async function applyMaintenancePlanProjection(
     case 'maintenance.work_order_completed':
       await applyWorkOrderCompleted(envelope, client);
       break;
+    case 'maintenance.work_order_status_updated':
+      await applyWorkOrderStatusUpdated(envelope, client);
+      break;
+  }
+}
+
+/**
+ * Story 7.8 (FR-M-17, Binding Decision 7): the technician status transition. Locking contract:
+ * asset FOR UPDATE (step 1), then the work order FOR UPDATE (step 6) - the completion order minus
+ * the weighbridge examination. The transition table is the only authority; a 0-row update from
+ * setWorkOrderStatus (the status moved between the read and the write) is rejected, never
+ * silently no-op'd (the 7.2 Group 2 decision).
+ */
+async function applyWorkOrderStatusUpdated(
+  envelope: EventEnvelope,
+  client: PoolClient,
+): Promise<void> {
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as Record<string, unknown>;
+  const workOrderId = p['work_order_id'] as string;
+  const declaredAssetId = p['asset_id'] as string;
+  const newStatus = p['new_status'] as 'in_progress' | 'on_hold';
+  const note = (p['note'] as string | null | undefined) ?? null;
+  const updatedAt = p['updated_at'] as string;
+
+  const assetExists = await lockAssetById(declaredAssetId, client);
+  if (!assetExists) {
+    reject('ASSET_NOT_FOUND', 'Asset not found', { asset_id: declaredAssetId }, 404);
+  }
+
+  const workOrder = await getWorkOrderById(workOrderId, client, true);
+  if (!workOrder) {
+    reject('WORK_ORDER_NOT_FOUND', 'Work order not found', { work_order_id: workOrderId }, 404);
+  }
+  if (workOrder.asset_id !== declaredAssetId) {
+    reject(
+      'WORK_ORDER_DERIVATION_MISMATCH',
+      'Declared asset_id does not match the work order',
+      {
+        work_order_id: workOrderId,
+        declared_asset_id: declaredAssetId,
+        derived_asset_id: workOrder.asset_id,
+      },
+      409,
+    );
+  }
+  if (workOrder.status === 'completed') {
+    reject(
+      'WORK_ORDER_ALREADY_COMPLETED',
+      'This work order is already completed',
+      { work_order_id: workOrderId, completed_at: workOrder.completed_at },
+      409,
+    );
+  }
+  const from: MaintenanceWorkOrderStatus = workOrder.status;
+  const allowed = WORK_ORDER_STATUS_TRANSITIONS[from] ?? [];
+  if (!allowed.includes(newStatus)) {
+    reject(
+      'INVALID_STATUS_TRANSITION',
+      `A work order in status ${from} cannot move to ${newStatus}`,
+      { work_order_id: workOrderId, from, to: newStatus, allowed },
+      409,
+    );
+  }
+
+  // Write the derived previous status back onto the persisted payload.
+  p['previous_status'] = from;
+  p['note'] = note;
+
+  const updated = await setWorkOrderStatus(
+    workOrderId,
+    from,
+    newStatus,
+    updatedAt,
+    envelope.metadata.actor.user_id,
+    note,
+    client,
+  );
+  if (updated !== 1) {
+    reject(
+      'INVALID_STATUS_TRANSITION',
+      'The work order left the expected status before the transition could be applied',
+      { work_order_id: workOrderId, from, to: newStatus, allowed },
+      409,
+    );
   }
 }
 
@@ -677,12 +908,40 @@ async function applyWorkOrderCompleted(envelope: EventEnvelope, client: PoolClie
     }
   }
 
+  // Story 7.8 (FR-M-18, Binding Decision 8): the closure-code gate, after the 7.7 warranty gate
+  // and BEFORE the completion write. Presence: a breakdown work order cannot close without all
+  // three codes (422 CLOSURE_CODES_REQUIRED); a preventive one may close without any (the 7.2
+  // fixtures), or with all three (the shape assert already enforced all-or-none). Validity: every
+  // present code must be in its configured catalogue, case-sensitive and exact (422
+  // CLOSURE_CODE_INVALID). Enforced HERE under the work order's own lock, so the direct-event and
+  // edge upload paths cannot bypass it (AD-12).
+  const closureCodes = resolveClosureCodes(p, workOrderId, workOrder.origin);
+
   await setWorkOrderCompleted(
     workOrderId,
     envelope.metadata.occurred_at ?? new Date().toISOString(),
     envelope.metadata.actor.user_id,
     client,
   );
+
+  // Story 7.8 (Binding Decision 9): one append-only closure row per completed work order that
+  // carried codes, keyed on the work order id so replay mints nothing random. closed_at is the
+  // payload completed_at (the technician's instant), not the server clock.
+  if (closureCodes) {
+    await insertWorkOrderClosure(
+      {
+        work_order_id: workOrderId,
+        asset_id: workOrder.asset_id,
+        origin: workOrder.origin,
+        fault_code: closureCodes.fault_code,
+        cause_code: closureCodes.cause_code,
+        remedy_code: closureCodes.remedy_code,
+        closed_by: envelope.metadata.actor.user_id,
+        closed_at: p['completed_at'] as string,
+      },
+      client,
+    );
+  }
 
   // Story 7.6 (FR-M-15): the additive cost path runs only when cost fields are present. All
   // arithmetic runs in PostgreSQL NUMERIC; costs enter and leave as exact decimal strings, never a
@@ -810,6 +1069,60 @@ async function applyWorkOrderCompleted(envelope: EventEnvelope, client: PoolClie
   if (weighbridgeExamination && weighbridgeExamination.status === 'compliant') {
     await setStatutoryExaminationStatus(weighbridgeExamination.examination_id, 'overdue', client);
   }
+}
+
+/**
+ * Story 7.8 (FR-M-18): presence and catalogue validation of the closure codes on a completion,
+ * evaluated under the work order's lock. Returns the trimmed triad (also written back onto the
+ * payload) or null when the completion carries no codes and the origin permits that.
+ */
+function resolveClosureCodes(
+  p: Record<string, unknown>,
+  workOrderId: string,
+  origin: 'preventive' | 'breakdown',
+): { fault_code: string; cause_code: string; remedy_code: string } | null {
+  const missing = CLOSURE_CODE_FIELDS.filter(
+    (field) => p[field] === undefined || p[field] === null,
+  );
+  if (missing.length === CLOSURE_CODE_FIELDS.length) {
+    if (origin === 'breakdown') {
+      reject(
+        'CLOSURE_CODES_REQUIRED',
+        'A breakdown work order cannot be closed without fault, cause and remedy codes',
+        { work_order_id: workOrderId, missing: [...missing] },
+        422,
+      );
+    }
+    return null;
+  }
+  if (missing.length > 0) {
+    // The shape assert already rejects this pre-transaction; kept so a direct caller that bypasses
+    // the assert still meets the same 422 for a breakdown order and never a half-coded closure.
+    reject(
+      'CLOSURE_CODES_REQUIRED',
+      'Closure codes are all-or-none: fault_code, cause_code and remedy_code must be supplied together',
+      { work_order_id: workOrderId, missing: [...missing] },
+      422,
+    );
+  }
+  const catalogues = config.maintenance.closureCodes;
+  const kinds = { fault_code: 'fault', cause_code: 'cause', remedy_code: 'remedy' } as const;
+  const resolved = { fault_code: '', cause_code: '', remedy_code: '' };
+  for (const field of CLOSURE_CODE_FIELDS) {
+    const value = (p[field] as string).trim();
+    const allowed = catalogues[kinds[field]];
+    if (!allowed.includes(value)) {
+      reject(
+        'CLOSURE_CODE_INVALID',
+        `${field} is not a configured ${kinds[field]} code`,
+        { work_order_id: workOrderId, field, value, allowed },
+        422,
+      );
+    }
+    resolved[field] = value;
+    p[field] = value;
+  }
+  return resolved;
 }
 
 /**

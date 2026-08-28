@@ -144,6 +144,78 @@ const PERMANENT_ERROR_CODES = new Set([
   'INDENT_PENDING_CONFIRMATION',
   'INDENT_LINE_REQUIRED',
   'APPROVAL_UNRESOLVED',
+  // Story 7.8: maintenance technician-flow permanent business rejections (FR-M-17). Every code a
+  // seam behind the five edge flows can raise settles the single event as needs_attention; the
+  // twin set in edge/src/sync/connector.ts carries the identical block (the Story 4.3 rule).
+  'CENTRAL_ONLY_OPERATION',
+  'INVALID_STATUS_TRANSITION',
+  'WORK_ORDER_NOT_FOUND',
+  'WORK_ORDER_ALREADY_COMPLETED',
+  'WORK_ORDER_DERIVATION_MISMATCH',
+  'CLOSURE_CODES_REQUIRED',
+  'CLOSURE_CODE_INVALID',
+  'ASSET_NOT_FOUND',
+  'ASSET_TAG_MISMATCH',
+  'METER_NOT_FOUND',
+  'METER_READING_REGRESSION',
+  'RESERVATION_NOT_FOUND',
+  'RESERVATION_NOT_RESERVED',
+  'SPARE_DERIVATION_MISMATCH',
+  'COST_DERIVATION_MISMATCH',
+  'INVALID_PAYLOAD',
+]);
+
+/** Story 7.8: the server-side twin of the edge connector's permanent set, exported for the edge upload handler's safety-fault queueing decision. */
+export function isPermanentUploadErrorCode(code: string): boolean {
+  return PERMANENT_ERROR_CODES.has(code);
+}
+
+/**
+ * Story 7.8 (Binding Decision 10): every event type the edge may upload on the `maintenance`
+ * stream. Any other `maintenance.*` type on POST /api/v1/edge/events is CENTRAL_ONLY_OPERATION, so
+ * return-to-service (maintenance.asset_status_changed) is central-only by construction and the
+ * seam DOA re-derivation is not the only thing standing between a device and a sign-off.
+ */
+export const EDGE_MAINTENANCE_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'maintenance.fault_reported',
+  'maintenance.work_order_status_updated',
+  'maintenance.meter_reading_recorded',
+  'maintenance.spare_issued',
+  'maintenance.work_order_completed',
+]);
+
+export function assertEdgeMaintenanceEventAllowed(envelope: EventEnvelope): void {
+  if (!envelope.event_type.startsWith('maintenance.')) return;
+  if (EDGE_MAINTENANCE_EVENT_TYPES.has(envelope.event_type)) return;
+  throw new AppError(
+    403,
+    'CENTRAL_ONLY_OPERATION',
+    'This maintenance operation must be performed centrally, not from an edge device',
+    { event_type: envelope.event_type },
+  );
+}
+
+/**
+ * Story 7.8 (Binding Decision 16): the event types a benign rebase may skip over. When a declared
+ * edge event_version fails the head + 1 rule and EVERY event in the gap is one of these, the upload
+ * handler retries ONCE with a declared head + 1; anything else in the gap is a real STREAM_CONFLICT.
+ *
+ * Enumerated 2026-08-28 from every `stream_id:` write in src/maintenance/*-jobs.ts:
+ * - pm-jobs.ts:116 maintenance.work_order_generated on the work-order stream (always version 1 of
+ *   a stream the device cannot yet hold, so never in a gap)
+ * - pm-jobs.ts:221 maintenance.work_order_overdue on the work-order stream (the nightly grace
+ *   sweep: the ONLY job write that can land between a device's worklist fetch and its replay)
+ * - pm-jobs.ts:305 maintenance.meter_silent_flagged on the METER stream (meter readings omit the
+ *   version, so it never enters a head + 1 check)
+ * - spares-jobs.ts:154/270, coverage-jobs.ts:173, calibration-jobs.ts:167/261,
+ *   statutory-jobs.ts:141, reliability-jobs.ts:210: each on its own alert / examination /
+ *   instrument / report stream, never on a work-order or reservation stream
+ * No job writes on the reservation stream at all.
+ *
+ * "If the rebase-safe set ever grows past events no human authored, that is a bug, not a policy."
+ */
+export const REBASE_SAFE_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'maintenance.work_order_overdue',
 ]);
 
 function isAppError(error: unknown): error is AppError {

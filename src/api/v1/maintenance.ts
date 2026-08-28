@@ -24,6 +24,23 @@ import {
 } from '../../read/projections/asset_meter_reading.js';
 import { getPlanById, listPlans } from '../../read/projections/maintenance_plan.js';
 import { getWorkOrderById, listWorkOrders } from '../../read/projections/maintenance_work_order.js';
+// Story 7.8 (FR-M-17, FR-M-18): closure history, the sync-conflict queue, the shared closure-code
+// format rule and the shared fault-report notification helper.
+import {
+  listClosures,
+  listRecentClosuresForAsset,
+} from '../../read/projections/maintenance_work_order_closure.js';
+import {
+  getSyncConflictById,
+  listSyncConflicts,
+  SYNC_CONFLICT_STATUSES,
+} from '../../read/projections/maintenance_sync_conflict.js';
+import { assertClosureCodesShape, CLOSURE_CODE_FIELDS } from '../../compliance/maintenance-plan.js';
+import {
+  SYNC_CONFLICT_RESOLUTION_CODES,
+  MAX_RESOLUTION_NOTE_LENGTH,
+} from '../../compliance/maintenance-sync-conflict.js';
+import { notifyFaultReported } from '../../maintenance/fault-notifications.js';
 import {
   getSlaPolicyById,
   getActiveSlaPolicy,
@@ -32,7 +49,6 @@ import {
 import {
   getFaultReportById,
   listFaultReports,
-  setFaultNotified,
 } from '../../read/projections/maintenance_fault_report.js';
 import { getDowntimeByWorkOrder } from '../../read/projections/maintenance_downtime.js';
 import { listReliabilityMetrics } from '../../read/projections/maintenance_reliability_metric.js';
@@ -152,7 +168,10 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const PLAN_TYPES = new Set(['calendar', 'meter']);
 const PLAN_STATUSES = new Set(['active', 'inactive']);
-const WORK_ORDER_STATUSES = new Set(['open', 'overdue', 'completed']);
+// Story 7.8 (Binding Decision 7): widened to the five-value technician vocabulary.
+const WORK_ORDER_STATUSES = new Set(['open', 'overdue', 'in_progress', 'on_hold', 'completed']);
+const TECHNICIAN_STATUSES = new Set(['in_progress', 'on_hold']);
+const MAX_STATUS_NOTE_LENGTH = 500;
 // Mirrors the seam cap: day-count bounds for the interval fields keep PostgreSQL date arithmetic
 // (and the handler's addDays below) inside their ranges.
 const MAX_INTERVAL_DAYS = 100000;
@@ -889,7 +908,17 @@ const getWorkOrderBase: RouteHandler = async (req, res, params) => {
     });
     return;
   }
-  sendJson(res, 200, { work_order: workOrder });
+  // Story 7.8 (FR-M-18, AC 4, Binding Decision 9): the last five closures for the asset are
+  // presented at work-order open. Breakdown-first by default (a well-maintained asset would
+  // otherwise fill all five slots with PM closures and hide the faults); include_preventive=true
+  // widens the window to every origin.
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const includePreventive = url.searchParams.get('include_preventive') === 'true';
+  const recentClosures = await listRecentClosuresForAsset(workOrder.asset_id, {
+    limit: 5,
+    origin: includePreventive ? null : 'breakdown',
+  });
+  sendJson(res, 200, { work_order: workOrder, recent_closures: recentClosures });
 };
 
 // ---------------------------------------------------------------------------
@@ -960,6 +989,17 @@ const completeWorkOrderBase: RouteHandler = async (req, res, params) => {
       }
     }
 
+    // Story 7.8 (FR-M-18): the closure codes pass through after the SAME format check the shape
+    // assert applies (400 INVALID_PAYLOAD on all-or-none or length violations). No catalogue or
+    // origin pre-check here: the seam owns the 422s under the work order's lock (AD-12), and the
+    // origin read is row state the handler stays thin about.
+    assertClosureCodesShape(body);
+    const closureCodes: Record<string, string> = {};
+    for (const field of CLOSURE_CODE_FIELDS) {
+      const value = body[field];
+      if (typeof value === 'string') closureCodes[field] = value.trim();
+    }
+
     const persisted = await persistEvent(
       {
         stream_type: 'maintenance',
@@ -975,6 +1015,7 @@ const completeWorkOrderBase: RouteHandler = async (req, res, params) => {
           ...(partsCostRaw === undefined || partsCostRaw === null
             ? {}
             : { parts_cost: partsCostRaw }),
+          ...closureCodes,
         },
         metadata: {
           correlation_id: randomUUID(),
@@ -1206,51 +1247,17 @@ const createFaultReportBase: RouteHandler = async (req, res, _params) => {
     );
 
     // The 5-minute AC 1 guarantee is the Story 1.11 escalation window. The emission happens AFTER
-    // the fault event commits, through the non-throwing emitNotification (AD-17): a notification
-    // outage must not block a fault report, so on ok:false the 201 still succeeds and notified_at
-    // stays null (Task 6.3). NEVER emitNotificationInTransaction here.
-    //
-    // A replay of the same idempotency key returns the ORIGINAL event, so the handler would
-    // otherwise emit a second notification; the notification row on the event ledger is the truth
-    // that this report was already notified - skip the re-emission when one exists (the "replay
-    // emits no second notification" acceptance assertion).
-    const existingNotification = await getPool().query(
-      `SELECT 1 FROM domain_events
-        WHERE event_type = 'notification.created'
-          AND payload->>'object_id' = $1
-          AND payload->>'event_type' = 'fault_reported'
-        LIMIT 1`,
-      [persistedFaultReportId],
-    );
-    const asset = await getAssetById(assetId);
-    if (existingNotification.rows.length === 0) {
-      const emission = await emitNotification({
-        target: { role: 'maintenance_supervisor', location_id: actor.eventLocationId },
-        event_type: 'fault_reported',
-        status_verb: 'Reported',
-        object_type: 'fault_report',
-        object_id: persistedFaultReportId,
-        actor_label: `${asset?.asset_name ?? 'asset'} (${assetTag})`,
-        next_step: 'Triage and accept or reject',
-        escalation: { target_role: 'maintenance_manager', acknowledgment_window_seconds: 300 },
-        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
-        correlation_id: randomUUID(),
-        occurred_at: now,
-      });
-      if (emission.ok) {
-        const emittedAt = emission.event.metadata.occurred_at ?? emission.event.created_at;
-        try {
-          await setFaultNotified(persistedFaultReportId, emittedAt);
-        } catch (patchErr: unknown) {
-          // The fault report and the notification both committed; a failed notified_at patch must
-          // not turn the 201 into a 500 (AD-17 - the notification must never block the report).
-          console.warn(
-            `[maintenance] notified_at patch failed for fault report ${persistedFaultReportId}`,
-            patchErr,
-          );
-        }
-      }
-    }
+    // the fault event commits, through the non-throwing emitNotification (AD-17), deduplicated by
+    // the notification row on the event ledger so a replay emits no second notification. Story 7.8
+    // (Binding Decision 14) factored the block into notifyFaultReported so the edge upload handler
+    // emits the SAME notification; behaviour here is byte-for-byte what Story 7.3 shipped.
+    await notifyFaultReported({
+      faultReportId: persistedFaultReportId,
+      assetId,
+      assetTag,
+      actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+      occurredAt: now,
+    });
 
     // Read back the created resource BY ID (the 7.2 lesson): notified_at reflects the emission.
     const faultReport = await getFaultReportById(persistedFaultReportId);
@@ -4342,3 +4349,283 @@ export const getWarrantyOverrideHandler = requireRole({
   module: 'maintenance',
   functionScope: 'read',
 })(getWarrantyOverrideBase);
+
+// ---------------------------------------------------------------------------
+// Story 7.8: Offline Technician Workflow and Closure Codes (FR-M-17, FR-M-18)
+// ---------------------------------------------------------------------------
+//
+// The technician status transition, the closure history reads, the configured closure-code
+// catalogues and the supervisor-facing sync-conflict queue. Every gate lives in the seams
+// (src/compliance/maintenance-plan.ts, src/compliance/maintenance-sync-conflict.ts): these
+// handlers pre-check only IMMUTABLE facts (existence, UUID, enum) per the Story 7.7 Group B
+// decision, so a same-key replay of a request that already succeeded returns its original
+// resource rather than a 403/409 minted from state that legitimately moved on.
+
+// POST /api/v1/maintenance/work-orders/:workOrderId/status
+
+const updateWorkOrderStatusBase: RouteHandler = async (req, res, params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const workOrderId = requireUuidParam(params, 'workOrderId');
+    const newStatus = body['new_status'];
+    if (typeof newStatus !== 'string' || !TECHNICIAN_STATUSES.has(newStatus)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'new_status must be one of: in_progress, on_hold', {
+        new_status: newStatus,
+      });
+    }
+    const noteRaw = body['note'];
+    if (
+      noteRaw !== undefined &&
+      noteRaw !== null &&
+      (typeof noteRaw !== 'string' || noteRaw.length > MAX_STATUS_NOTE_LENGTH)
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `note must be a string of at most ${MAX_STATUS_NOTE_LENGTH} characters`,
+      );
+    }
+    const note = typeof noteRaw === 'string' ? noteRaw : null;
+
+    // Existence only: the transition table and the completed check are row state the seam
+    // re-evaluates under the work order's lock.
+    const existing = await getWorkOrderById(workOrderId);
+    if (!existing) {
+      throw new AppError(404, 'WORK_ORDER_NOT_FOUND', 'Work order not found', {
+        work_order_id: workOrderId,
+      });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: workOrderId,
+        event_type: 'maintenance.work_order_status_updated',
+        payload: {
+          work_order_id: workOrderId,
+          asset_id: existing.asset_id,
+          new_status: newStatus,
+          note,
+          updated_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    const persistedWorkOrderId = replayIdOrReject(
+      persisted,
+      'maintenance.work_order_status_updated',
+      'work_order_id',
+    );
+    const workOrder = await getWorkOrderById(persistedWorkOrderId);
+    sendJson(res, 200, { event_id: persisted.event_id, work_order: workOrder ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/assets/:assetId/closures
+
+const listAssetClosuresBase: RouteHandler = async (req, res, params) => {
+  try {
+    const assetId = requireUuidParam(params, 'assetId');
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const originRaw = url.searchParams.get('origin');
+    if (originRaw !== null && !WORK_ORDER_ORIGINS.has(originRaw)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'origin must be one of: preventive, breakdown');
+    }
+    const paging = parseListPaging(req, res, url);
+    if (!paging) return;
+    const asset = await getAssetById(assetId);
+    if (!asset) {
+      throw new AppError(404, 'ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId });
+    }
+    // The full history, every origin by default (the last-five window on the work-order read is
+    // the breakdown-first surface; this list is the ledger).
+    const closures = await listClosures({
+      asset_id: assetId,
+      origin: originRaw === null ? undefined : (originRaw as 'preventive' | 'breakdown'),
+      limit: paging.limit,
+      offset: paging.offset,
+    });
+    sendJson(res, 200, { closures });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/closure-codes
+
+const getClosureCodesBase: RouteHandler = async (_req, res) => {
+  sendJson(res, 200, {
+    fault: config.maintenance.closureCodes.fault,
+    cause: config.maintenance.closureCodes.cause,
+    remedy: config.maintenance.closureCodes.remedy,
+  });
+};
+
+// GET /api/v1/maintenance/sync-conflicts
+
+const listSyncConflictsBase: RouteHandler = async (req, res) => {
+  try {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const statusRaw = url.searchParams.get('status');
+    if (statusRaw !== null && !SYNC_CONFLICT_STATUSES.has(statusRaw)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'status must be one of: open, resolved');
+    }
+    const locationRaw = url.searchParams.get('location_id');
+    if (locationRaw !== null && !isUuid(locationRaw)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'location_id must be a UUID');
+    }
+    const streamRaw = url.searchParams.get('stream_id');
+    if (streamRaw !== null && !isUuid(streamRaw)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'stream_id must be a UUID');
+    }
+    const paging = parseListPaging(req, res, url);
+    if (!paging) return;
+    const conflicts = await listSyncConflicts({
+      status: statusRaw === null ? undefined : (statusRaw as 'open' | 'resolved'),
+      location_id: locationRaw ?? undefined,
+      stream_id: streamRaw ?? undefined,
+      limit: paging.limit,
+      offset: paging.offset,
+    });
+    sendJson(res, 200, { conflicts });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// GET /api/v1/maintenance/sync-conflicts/:conflictId
+
+const getSyncConflictBase: RouteHandler = async (req, res, params) => {
+  try {
+    const conflictId = requireUuidParam(params, 'conflictId');
+    const conflict = await getSyncConflictById(conflictId);
+    if (!conflict) {
+      throw new AppError(404, 'SYNC_CONFLICT_NOT_FOUND', 'Sync conflict not found', {
+        conflict_id: conflictId,
+      });
+    }
+    sendJson(res, 200, { conflict });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// POST /api/v1/maintenance/sync-conflicts/:conflictId/resolve
+
+const resolveSyncConflictBase: RouteHandler = async (req, res, params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const conflictId = requireUuidParam(params, 'conflictId');
+    const resolutionCode = body['resolution_code'];
+    if (typeof resolutionCode !== 'string' || !SYNC_CONFLICT_RESOLUTION_CODES.has(resolutionCode)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'resolution_code must be one of: discarded, reapplied_centrally',
+        { resolution_code: resolutionCode },
+      );
+    }
+    const noteRaw = body['resolution_note'];
+    if (
+      noteRaw !== undefined &&
+      noteRaw !== null &&
+      (typeof noteRaw !== 'string' || noteRaw.length > MAX_RESOLUTION_NOTE_LENGTH)
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `resolution_note must be a string of at most ${MAX_RESOLUTION_NOTE_LENGTH} characters`,
+      );
+    }
+    const resolutionNote = typeof noteRaw === 'string' ? noteRaw : null;
+
+    // Existence only (Binding Decision 6): NO already-resolved and NO DOA pre-check here. Both
+    // are mutable between a write and its same-key replay, and both live in the seam under the
+    // conflict row's lock.
+    const existing = await getSyncConflictById(conflictId);
+    if (!existing) {
+      throw new AppError(404, 'SYNC_CONFLICT_NOT_FOUND', 'Sync conflict not found', {
+        conflict_id: conflictId,
+      });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        stream_id: conflictId,
+        event_type: 'maintenance.sync_conflict_resolved',
+        payload: {
+          conflict_id: conflictId,
+          resolution_code: resolutionCode,
+          resolution_note: resolutionNote,
+          resolved_by: actor.userId,
+          resolved_at: now,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    const persistedConflictId = replayIdOrReject(
+      persisted,
+      'maintenance.sync_conflict_resolved',
+      'conflict_id',
+    );
+    const conflict = await getSyncConflictById(persistedConflictId);
+    sendJson(res, 200, { event_id: persisted.event_id, conflict: conflict ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+export const updateWorkOrderStatusHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(updateWorkOrderStatusBase);
+
+export const listAssetClosuresHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listAssetClosuresBase);
+
+export const getClosureCodesHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getClosureCodesBase);
+
+export const listSyncConflictsHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(listSyncConflictsBase);
+
+export const getSyncConflictHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(getSyncConflictBase);
+
+export const resolveSyncConflictHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(resolveSyncConflictBase);

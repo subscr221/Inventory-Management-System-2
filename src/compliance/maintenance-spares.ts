@@ -253,7 +253,14 @@ function assertSpareIssuedShape(p: Record<string, unknown>): void {
   if (!isIsoTimestamp(p['issued_at'])) {
     reject('INVALID_PAYLOAD', 'issued_at must be an ISO 8601 timestamp with an explicit offset');
   }
-  if (!isIsoDate(p['return_due_date'])) {
+  // Story 7.8 (Binding Decision 13): return_due_date is OPTIONAL on input. The edge device has no
+  // holiday calendar, so its issue confirmation omits it and the applier derives and writes it
+  // back; a declared value must still be a calendar date and is checked against the derivation.
+  if (
+    p['return_due_date'] !== undefined &&
+    p['return_due_date'] !== null &&
+    !isIsoDate(p['return_due_date'])
+  ) {
     reject('INVALID_PAYLOAD', 'return_due_date must be a YYYY-MM-DD calendar date');
   }
   if (!isIsoDate(p['business_date'])) {
@@ -571,7 +578,7 @@ async function applySpareIssued(envelope: EventEnvelope, client: PoolClient): Pr
   const reservationId = p['reservation_id'] as string;
   const declaredQuantity = p['quantity'] as string;
   const issuedAt = p['issued_at'] as string;
-  const declaredDueDate = p['return_due_date'] as string;
+  const declaredDueDate = (p['return_due_date'] as string | null | undefined) ?? null;
 
   const reservation = await getSpareReservationById(reservationId, client, true);
   if (!reservation) {
@@ -613,8 +620,11 @@ async function applySpareIssued(envelope: EventEnvelope, client: PoolClient): Pr
     );
   }
 
+  // Story 7.8 (Binding Decision 13): derive first; compare only when the client declared a value;
+  // write the derivation back when it was absent so the persisted event always carries the date
+  // the row was frozen at (the Story 7.7 recorded_by write-back pattern).
   const derivedDueDate = deriveReturnDueDate(issuedAt);
-  if (declaredDueDate !== derivedDueDate) {
+  if (declaredDueDate !== null && declaredDueDate !== derivedDueDate) {
     reject(
       'SPARE_DERIVATION_MISMATCH',
       'Declared return_due_date does not match the derived three-working-day clock',
@@ -626,6 +636,7 @@ async function applySpareIssued(envelope: EventEnvelope, client: PoolClient): Pr
       409,
     );
   }
+  p['return_due_date'] = derivedDueDate;
 
   const updated = await markSpareReservationIssued(reservationId, issuedAt, derivedDueDate, client);
   if (updated !== 1) {

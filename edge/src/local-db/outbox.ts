@@ -5,6 +5,7 @@ import type { EdgeLocalStatus } from './schema';
 export interface QueryExecutor {
   execute(sql: string, params?: unknown[]): Promise<unknown>;
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>;
+  writeTransaction?: <T>(callback: (tx: QueryExecutor) => Promise<T>) => Promise<T>;
 }
 
 export interface CachedUser {
@@ -86,6 +87,35 @@ export async function hasAuthRequired(db: QueryExecutor): Promise<boolean> {
     ['auth_required'],
   );
   return (rows[0]?.count ?? 0) > 0;
+}
+
+/**
+ * Story 7.8 (Binding Decision 3): the parking predicate. True when ANOTHER outbox row on the same
+ * stream has already settled STREAM_CONFLICT and was captured at or before this row (the device
+ * clock is the ordering authority: two captures in the same millisecond must both park). Decided
+ * from the outbox TABLE at upload time, never from in-memory state, so it survives app restarts
+ * and PowerSync transaction boundaries. The connector parks the dependent locally without a
+ * network call, so the server never sees the tail of a sequence whose head the supervisor has not
+ * yet judged.
+ */
+export async function hasUpstreamStreamConflict(
+  db: QueryExecutor,
+  eventId: string,
+  streamId: string,
+  createdAt: string,
+): Promise<{ parked_behind_event_id: string } | null> {
+  const rows = await db.getAll<{ id: string }>(
+    `SELECT id FROM edge_outbox
+      WHERE stream_id = ? AND id <> ?
+        AND local_status = 'needs_attention'
+        AND server_error_code = 'STREAM_CONFLICT'
+        AND created_at <= ?
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1`,
+    [streamId, eventId, createdAt],
+  );
+  const head = rows[0];
+  return head ? { parked_behind_event_id: head.id } : null;
 }
 
 export async function readFailures(db: QueryExecutor): Promise<FailureRow[]> {

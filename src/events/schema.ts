@@ -2197,6 +2197,16 @@ export interface MaintenanceWorkOrderCompletedPayload {
   total_cost?: string;
   /** Derived by the applier (strictly greater than the configured threshold); persisted write-back. */
   capitalization_flagged?: boolean;
+  /**
+   * Story 7.8 (FR-M-18, Binding Decision 8): three-part closure coding. Client-declared, validated
+   * against config.maintenance.closureCodes.{fault,cause,remedy} in the applier. All-or-none at the
+   * shape level; mandatory for a breakdown work order (422 CLOSURE_CODES_REQUIRED), optional for a
+   * preventive one. Present codes write one maintenance_work_order_closure row keyed on the
+   * work_order_id.
+   */
+  fault_code?: string;
+  cause_code?: string;
+  remedy_code?: string;
 }
 
 export interface MaintenanceWorkOrderCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -2233,6 +2243,12 @@ export interface SlaPolicyDefinedEnvelope extends Omit<EventEnvelope, 'payload'>
  * and location_id are derived server-side from metadata.actor (never read from the payload); the
  * reporter's location is the asset's location for notification purposes. The supervisor
  * notification is emitted AFTER commit by the handler, never inside the applier (AD-17).
+ *
+ * Story 7.8 (Binding Decision 12): on the edge upload path the device carries asset_tag ONLY. The
+ * shape assert accepts an absent asset_id when asset_tag is a non-empty string, and the applier
+ * resolves the asset by tag (404 ASSET_NOT_FOUND) and writes the derived asset_id back onto the
+ * persisted payload, so the stored event always carries both. A declared asset_id keeps the
+ * existing ASSET_TAG_MISMATCH check.
  */
 export interface FaultReportedPayload {
   fault_report_id: string;
@@ -2419,7 +2435,13 @@ export interface SpareIssuedPayload {
   reservation_id: string;
   quantity: string;
   issued_at: string;
-  return_due_date: string;
+  /**
+   * Story 7.8 (Binding Decision 13): optional on input. The device has no holiday calendar, so an
+   * edge issue confirmation omits it and the applier derives it from issued_at (deriveReturnDueDate)
+   * and writes it back onto the persisted payload. A DECLARED value is still checked against the
+   * derivation and rejected SPARE_DERIVATION_MISMATCH on divergence.
+   */
+  return_due_date?: string;
   business_date: string;
 }
 
@@ -3137,6 +3159,88 @@ export interface WarrantyOverrideRecordedEnvelope extends Omit<EventEnvelope, 'p
 }
 
 // ---------------------------------------------------------------------------
+// Story 7.8: Offline Technician Workflow and Closure Codes
+// ---------------------------------------------------------------------------
+
+/**
+ * A technician-facing work-order status transition (FR-M-17, Binding Decision 7). stream_id is
+ * work_order_id. Allowed transitions: open or overdue to in_progress, in_progress to on_hold,
+ * on_hold to in_progress; anything else rejects 409 INVALID_STATUS_TRANSITION under the work
+ * order's lock. previous_status is SEAM-DERIVED from the locked row and written back onto the
+ * persisted payload; a declared value rejects WORK_ORDER_DERIVATION_MISMATCH. The updater is
+ * metadata.actor.user_id, never read from the payload.
+ */
+export interface WorkOrderStatusUpdatedPayload {
+  work_order_id: string;
+  asset_id: string;
+  new_status: 'in_progress' | 'on_hold';
+  note: string | null;
+  updated_at: string;
+  /** Derived under lock from the work-order row; persisted write-back only. */
+  previous_status?: 'open' | 'overdue' | 'in_progress' | 'on_hold';
+}
+
+export interface WorkOrderStatusUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.work_order_status_updated';
+  payload: WorkOrderStatusUpdatedPayload;
+}
+
+/**
+ * A sync conflict raised by the edge upload handler (FR-M-17, Binding Decision 4) AFTER the
+ * conflicting persist has rolled back, on a fresh stream whose stream_id is conflict_id. The
+ * raise envelope's metadata.actor is the DEVICE actor (the technician), so captured_by is checked
+ * against it in the applier (409 SYNC_CONFLICT_DERIVATION_MISMATCH). One row per
+ * conflicting_event_id: the raise is idempotent on idempotency_key sync-conflict-<event_id> and
+ * uq_maintenance_sync_conflict_event is the race backstop (409 DUPLICATE_SYNC_CONFLICT). reason
+ * version_conflict carries expected_version and head_version; safety_fault_rejected carries
+ * rejection_code instead.
+ */
+export interface SyncConflictRaisedPayload {
+  conflict_id: string;
+  stream_id: string;
+  stream_type: 'maintenance';
+  conflicting_event_id: string;
+  conflicting_event_type: string;
+  idempotency_key: string;
+  device_id: string;
+  captured_by: string;
+  location_id: string | null;
+  reason: 'version_conflict' | 'safety_fault_rejected';
+  expected_version: number | null;
+  head_version: number | null;
+  rejection_code: string | null;
+  conflicting_payload: Record<string, unknown>;
+  occurred_at: string;
+  raised_at: string;
+}
+
+export interface SyncConflictRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.sync_conflict_raised';
+  payload: SyncConflictRaisedPayload;
+}
+
+/**
+ * The supervisor's resolution of a sync conflict (Binding Decision 6). stream_id is conflict_id.
+ * A decision record only: the platform never re-applies the conflicting payload. Authority is
+ * re-derived in the applier through the DOA registry (maintenance.sync_conflict_resolution, value
+ * 0) under the conflict row's lock; resolved_by must equal metadata.actor.user_id AND the resolved
+ * approver (409 SYNC_CONFLICT_DERIVATION_MISMATCH / 403 APPROVAL_REQUIRED / 404
+ * APPROVAL_UNRESOLVED).
+ */
+export interface SyncConflictResolvedPayload {
+  conflict_id: string;
+  resolution_code: 'discarded' | 'reapplied_centrally';
+  resolution_note: string | null;
+  resolved_by: string;
+  resolved_at: string;
+}
+
+export interface SyncConflictResolvedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.sync_conflict_resolved';
+  payload: SyncConflictResolvedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -3785,6 +3889,22 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'maintenance.warranty_override_recorded': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 7.8: the technician status transition, and the sync-conflict queue's raise and
+  // resolve (FR-M-17). All three ride the same 'maintenance' stream; none moves stock or carries a
+  // business stream, so requiresBusinessStream stays false (the 7.7 coverage precedent). The
+  // closure codes of FR-M-18 ride the existing maintenance.work_order_completed entry, unchanged.
+  'maintenance.work_order_status_updated': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.sync_conflict_raised': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  'maintenance.sync_conflict_resolved': {
     streamType: 'maintenance',
     requiresBusinessStream: false,
   },

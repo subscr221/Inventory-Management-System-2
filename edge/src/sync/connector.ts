@@ -5,6 +5,7 @@ import {
   type PowerSyncCredentials,
 } from '@powersync/web';
 import type { EdgeLocalStatus } from '../local-db/schema';
+import { hasUpstreamStreamConflict } from '../local-db/outbox';
 
 export interface UploadFailureClassification {
   action: 'complete' | 'retry' | 'halt';
@@ -147,6 +148,25 @@ const PERMANENT_ERROR_CODES = new Set([
   'INDENT_PENDING_CONFIRMATION',
   'INDENT_LINE_REQUIRED',
   'APPROVAL_UNRESOLVED',
+  // Story 7.8: maintenance technician-flow permanent business rejections (FR-M-17). Every code a
+  // seam behind the five edge flows can raise settles the single event as needs_attention; the
+  // twin set in src/sync/upload.ts carries the identical block (the Story 4.3 rule).
+  'CENTRAL_ONLY_OPERATION',
+  'INVALID_STATUS_TRANSITION',
+  'WORK_ORDER_NOT_FOUND',
+  'WORK_ORDER_ALREADY_COMPLETED',
+  'WORK_ORDER_DERIVATION_MISMATCH',
+  'CLOSURE_CODES_REQUIRED',
+  'CLOSURE_CODE_INVALID',
+  'ASSET_NOT_FOUND',
+  'ASSET_TAG_MISMATCH',
+  'METER_NOT_FOUND',
+  'METER_READING_REGRESSION',
+  'RESERVATION_NOT_FOUND',
+  'RESERVATION_NOT_RESERVED',
+  'SPARE_DERIVATION_MISMATCH',
+  'COST_DERIVATION_MISMATCH',
+  'INVALID_PAYLOAD',
 ]);
 
 const TRANSIENT_STATUS_CODES = new Set([408, 425, 429]);
@@ -295,11 +315,40 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
       if (localStatus === 'auth_required') return;
       if (localStatus && SETTLED_STATUSES.has(localStatus)) continue;
 
+      // Story 7.8 (Binding Decision 3): replay "in sequence". When an EARLIER row on the same
+      // stream settled STREAM_CONFLICT, this dependent is parked locally without a network call,
+      // so the server never applies the tail of a sequence whose head the supervisor has not yet
+      // judged. Decided from the outbox table, never from in-memory state.
+      const streamId = op.opData?.['stream_id'];
+      const createdAt = op.opData?.['created_at'];
+      if (typeof streamId === 'string' && typeof createdAt === 'string') {
+        const upstream = await hasUpstreamStreamConflict(database, op.id, streamId, createdAt);
+        if (upstream) {
+          await recordUploadOutcome(
+            database,
+            op.id,
+            {
+              action: 'complete',
+              localStatus: 'needs_attention',
+              retryable: false,
+              serverErrorCode: 'STREAM_CONFLICT',
+            },
+            { error_code: 'STREAM_CONFLICT', details: upstream },
+          );
+          continue;
+        }
+      }
+
+      // Story 7.8 (Binding Decision 2): a null event_version means "server assigns" (meter
+      // readings); the field is stripped so the server's envelope validation sees it as absent.
+      const envelope: Record<string, unknown> = { ...op.opData, event_id: op.id };
+      if (envelope['event_version'] === null) delete envelope['event_version'];
+
       const response = await fetch(`${this.apiBaseUrl}/api/v1/edge/events`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...op.opData, event_id: op.id }),
+        body: JSON.stringify(envelope),
       });
       if (response.ok) {
         await markOutboxSynced(database, op.id);

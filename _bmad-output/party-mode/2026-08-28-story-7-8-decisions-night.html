@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Story 7.8 Decisions Night</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --ink:#e8e6df; --dim:#9a9890; --line:#2a2e38; --amber:#f59e0b; --red:#ef4444; --green:#10b981; --blue:#3b82f6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 "Noto Sans", system-ui, sans-serif; }
+  header { padding:48px 24px 24px; text-align:center; border-bottom:1px solid var(--line); }
+  header h1 { margin:0 0 6px; font-size:28px; letter-spacing:.5px; }
+  header p { margin:0; color:var(--dim); }
+  .stream { max-width:900px; margin:32px auto; padding:0 24px; }
+  .stream svg { width:100%; height:120px; display:block; }
+  .grid { max-width:1100px; margin:0 auto 48px; padding:0 24px; display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 18px 14px; position:relative; }
+  .card .who { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .card .icon { font-size:26px; }
+  .card .name { font-weight:700; }
+  .card .role { color:var(--dim); font-size:13px; }
+  .card blockquote { margin:0 0 10px; padding-left:12px; border-left:3px solid var(--amber); color:var(--ink); font-style:italic; }
+  .card .beat { color:var(--dim); font-size:14px; }
+  .grumbal { border-color:var(--red); }
+  .grumbal blockquote { border-left-color:var(--red); }
+  .outcomes { max-width:900px; margin:0 auto 64px; padding:0 24px; }
+  .outcomes h2 { font-size:18px; color:var(--amber); margin:0 0 10px; }
+  .outcomes ol { margin:0; padding-left:22px; }
+  .outcomes li { margin:6px 0; }
+  .tag { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); color:var(--dim); margin-left:6px; vertical-align:middle; }
+  .tag.kept { border-color:var(--green); color:var(--green); }
+  .tag.new { border-color:var(--blue); color:var(--blue); }
+  footer { text-align:center; color:var(--dim); font-size:13px; padding:0 24px 40px; }
+  @keyframes flow { to { stroke-dashoffset:-60; } }
+  .pulse { stroke-dasharray:6 6; animation:flow 2.4s linear infinite; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Story 7.8 Decisions Night</h1>
+  <p>2026-08-28 · Offline Technician Workflow and Closure Codes · the room that found the version gap</p>
+</header>
+
+<div class="stream" aria-label="Stream version diagram">
+  <svg viewBox="0 0 900 120" role="img">
+    <line x1="40" y1="60" x2="860" y2="60" stroke="#2a2e38" stroke-width="2"/>
+    <line class="pulse" x1="40" y1="60" x2="860" y2="60" stroke="#f59e0b" stroke-width="2"/>
+    <g font-family="monospace" font-size="12" fill="#e8e6df" text-anchor="middle">
+      <circle cx="120" cy="60" r="9" fill="#10b981"/><text x="120" y="92">N</text>
+      <circle cx="300" cy="60" r="9" fill="#f59e0b"/><text x="300" y="92">N+1 overdue (sweep)</text>
+      <circle cx="480" cy="60" r="9" fill="#3b82f6"/><text x="480" y="92">N+2 rebase: closure</text>
+      <circle cx="660" cy="60" r="9" fill="#2a2e38" stroke="#ef4444" stroke-width="2"/><text x="660" y="92" fill="#ef4444">N+3 gap? rejected</text>
+      <circle cx="820" cy="60" r="9" fill="#ef4444"/><text x="820" y="92" fill="#ef4444">on_hold vs closure: queue</text>
+    </g>
+  </svg>
+</div>
+
+<section class="grid">
+  <article class="card">
+    <div class="who"><span class="icon">🏗️</span><div><div class="name">Winston</div><div class="role">System Architect</div></div></div>
+    <blockquote>The grace sweep persists work_order_overdue on the work-order stream. Every night. Nobody changed anything. A cron job did.</blockquote>
+    <div class="beat">Pointed at pm-jobs.ts:221 and let the line argue for him.</div>
+  </article>
+  <article class="card grumbal">
+    <div class="who"><span class="icon">😤</span><div><div class="name">Grumbal</div><div class="role">The Adversary (walk-on, Code Review Crew)</div></div></div>
+    <blockquote>Your entire conflict model is a unique index that only knows the word "equal."</blockquote>
+    <div class="beat">Five pages at 3am. All five taken. His sentence now lives in src/sync/upload.ts by spec.</div>
+  </article>
+  <article class="card">
+    <div class="who"><span class="icon">📊</span><div><div class="name">Mary</div><div class="role">Business Analyst</div></div></div>
+    <blockquote>Round one we optimised the queue's ergonomics. Round two we discovered the queue shouldn't have most of its traffic.</blockquote>
+    <div class="beat">Reversed herself on the synthetic PM triad: "absent is honest."</div>
+  </article>
+  <article class="card">
+    <div class="who"><span class="icon">🎨</span><div><div class="name">Sally</div><div class="role">UX Designer</div></div></div>
+    <blockquote>Gloves on, 44px targets, three dropdowns for a grease job. They will pick the first option to get out of the screen.</blockquote>
+    <div class="beat">Kept the technician in the frame every round.</div>
+  </article>
+  <article class="card">
+    <div class="who"><span class="icon">🔬</span><div><div class="name">Dr. Quinn</div><div class="role">Master Problem Solver</div></div></div>
+    <blockquote>AHA. We spent round one designing the conflict queue and never asked what a conflict IS.</blockquote>
+    <div class="beat">Separated "a version collision" from "a change a human made."</div>
+  </article>
+  <article class="card">
+    <div class="who"><span class="icon">💻</span><div><div class="name">Amelia</div><div class="role">Senior Software Engineer</div></div></div>
+    <blockquote>Fix: edge handler requires declared === head + 1. Store untouched.</blockquote>
+    <div class="beat">Every answer came with a file and a line.</div>
+  </article>
+  <article class="card">
+    <div class="who"><span class="icon">🧪</span><div><div class="name">Murat</div><div class="role">Test Architect</div></div></div>
+    <blockquote>I like it and I distrust it. Overdue in the gap: 201 at N+2. Override in the gap: 409 and a queue row. Both: 409.</blockquote>
+    <div class="beat">Turned every decision into a test triple.</div>
+  </article>
+  <article class="card">
+    <div class="who"><span class="icon">📋</span><div><div class="name">John</div><div class="role">Product Manager</div></div></div>
+    <blockquote>That's a cost argument, not a user argument.</blockquote>
+    <div class="beat">Opened on Decision 8, conceded it on evidence, never conceded the user.</div>
+  </article>
+</section>
+
+<section class="outcomes">
+  <h2>What left the room</h2>
+  <ol>
+    <li>Decision 1, edge route returns 409 DUPLICATE_EVENT on replay <span class="tag kept">kept</span></li>
+    <li>Decision 6, DOA-gated conflict resolution, record only <span class="tag kept">kept</span></li>
+    <li>Decision 8, closure codes mandatory for breakdown, optional for PM <span class="tag kept">kept</span></li>
+    <li>Decision 16, benign rebase over work_order_overdue with a declared head + 1 retry <span class="tag new">new</span></li>
+    <li>Head + 1 gap guard on the edge route (store.ts:978 inserts any declared version) <span class="tag new">new</span></li>
+    <li>Equal-timestamp parking; device clock is the ordering authority <span class="tag new">new</span></li>
+    <li>Queue reason column; safety-flagged faults that fail permanently are queued <span class="tag new">new</span></li>
+    <li>Worklist total and truncated; last-five closures breakdown-first <span class="tag new">new</span></li>
+  </ol>
+</section>
+
+<footer>Open thread nobody closed: REST replay 2xx versus 409 is still the platform decision it has been since Story 2.</footer>
+</body>
+</html>

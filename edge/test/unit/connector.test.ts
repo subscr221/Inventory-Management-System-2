@@ -238,6 +238,167 @@ describe('edge upload connector', () => {
     assert.deepEqual(activity, ['complete']);
   });
 
+  // Story 7.8 (Binding Decision 3): parking. The fake below answers the outbox parking query from
+  // an in-memory row set, so the connector's decision is made from the TABLE, not from memory.
+  interface ParkRow {
+    id: string;
+    stream_id: string;
+    created_at: string;
+    local_status: EdgeLocalStatus;
+    server_error_code: string | null;
+  }
+
+  function createParkingDatabase(
+    crud: CrudEntry[],
+    rows: ParkRow[],
+    activity: string[],
+  ): AbstractPowerSyncDatabase {
+    const transaction = {
+      crud,
+      complete: async () => {
+        activity.push('complete');
+      },
+      transactionId: 1,
+    } as CrudTransaction;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return {
+      getNextCrudTransaction: async () => transaction,
+      getOptional: async (_sql: string, parameters: unknown[]) => {
+        const row = byId.get(parameters[0] as string);
+        return row ? { local_status: row.local_status } : null;
+      },
+      getAll: async (_sql: string, parameters: unknown[]) => {
+        const [streamId, eventId, createdAt] = parameters as [string, string, string];
+        activity.push(`park-check:${eventId}`);
+        return rows
+          .filter(
+            (row) =>
+              row.stream_id === streamId &&
+              row.id !== eventId &&
+              row.local_status === 'needs_attention' &&
+              row.server_error_code === 'STREAM_CONFLICT' &&
+              row.created_at <= createdAt,
+          )
+          .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+          .slice(0, 1)
+          .map((row) => ({ id: row.id }));
+      },
+      execute: async (_sql: string, parameters: unknown[]) => {
+        const row = byId.get(parameters[4] as string);
+        if (row) {
+          row.local_status = parameters[0] as EdgeLocalStatus;
+          row.server_error_code = (parameters[1] as string | null) ?? null;
+          activity.push(`write:${row.id}:${row.local_status}:${String(parameters[2])}`);
+        }
+        return { rowsAffected: 1 };
+      },
+    } as unknown as AbstractPowerSyncDatabase;
+  }
+
+  function streamPut(row: ParkRow, clientId: number, eventVersion: number | null = 2): CrudEntry {
+    return new CrudEntry(clientId, UpdateType.PUT, 'edge_outbox', row.id, 1, {
+      stream_type: 'maintenance',
+      stream_id: row.stream_id,
+      event_version: eventVersion,
+      created_at: row.created_at,
+      local_status: row.local_status,
+    });
+  }
+
+  it('parks every later row on a conflicted stream without a network call and still uploads other streams', async (t) => {
+    const activity: string[] = [];
+    const rows: ParkRow[] = [
+      { id: 'head', stream_id: 'wo-1', created_at: '2026-08-28T09:00:00.000Z', local_status: 'pending_sync', server_error_code: null },
+      { id: 'dep1', stream_id: 'wo-1', created_at: '2026-08-28T09:05:00.000Z', local_status: 'pending_sync', server_error_code: null },
+      { id: 'dep2', stream_id: 'wo-1', created_at: '2026-08-28T09:10:00.000Z', local_status: 'pending_sync', server_error_code: null },
+      { id: 'other', stream_id: 'wo-2', created_at: '2026-08-28T09:11:00.000Z', local_status: 'pending_sync', server_error_code: null },
+    ];
+    const database = createParkingDatabase(
+      rows.map((row, index) => streamPut(row, index + 1)),
+      rows,
+      activity,
+    );
+    const posted: string[] = [];
+    t.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { event_id: string };
+      posted.push(body.event_id);
+      if (body.event_id === 'head') {
+        return Response.json(
+          { error_code: 'STREAM_CONFLICT', details: { stream_id: 'wo-1', event_version: 2, head_version: 3 } },
+          { status: 409 },
+        );
+      }
+      return new Response(null, { status: 201 });
+    });
+
+    await new EdgePowerSyncConnector().uploadData(database);
+
+    assert.deepEqual(posted, ['head', 'other']);
+    assert.equal(rows[0]!.local_status, 'needs_attention');
+    assert.equal(rows[1]!.local_status, 'needs_attention');
+    assert.equal(rows[1]!.server_error_code, 'STREAM_CONFLICT');
+    assert.equal(rows[2]!.local_status, 'needs_attention');
+    assert.equal(rows[3]!.local_status, 'synced');
+    assert.ok(
+      activity.includes('write:dep1:needs_attention:{"parked_behind_event_id":"head"}'),
+      activity.join('\n'),
+    );
+    assert.ok(activity.includes('write:dep2:needs_attention:{"parked_behind_event_id":"head"}'));
+    assert.equal(activity.at(-1), 'complete');
+  });
+
+  it('parks dependents that share the head created_at to the millisecond', async (t) => {
+    const activity: string[] = [];
+    const sameInstant = '2026-08-28T09:00:00.000Z';
+    const rows: ParkRow[] = [
+      { id: 'head', stream_id: 'wo-1', created_at: sameInstant, local_status: 'pending_sync', server_error_code: null },
+      { id: 'dep1', stream_id: 'wo-1', created_at: sameInstant, local_status: 'pending_sync', server_error_code: null },
+      { id: 'dep2', stream_id: 'wo-1', created_at: sameInstant, local_status: 'pending_sync', server_error_code: null },
+    ];
+    const database = createParkingDatabase(
+      rows.map((row, index) => streamPut(row, index + 1)),
+      rows,
+      activity,
+    );
+    const posted: string[] = [];
+    t.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { event_id: string };
+      posted.push(body.event_id);
+      return Response.json({ error_code: 'STREAM_CONFLICT' }, { status: 409 });
+    });
+
+    await new EdgePowerSyncConnector().uploadData(database);
+
+    assert.deepEqual(posted, ['head']);
+    assert.ok(rows.every((row) => row.local_status === 'needs_attention'));
+    assert.equal(rows[2]!.server_error_code, 'STREAM_CONFLICT');
+  });
+
+  it('strips a null event_version from the POST body and keeps a numeric one', async (t) => {
+    const activity: string[] = [];
+    const rows: ParkRow[] = [
+      { id: 'meter', stream_id: 'm-1', created_at: '2026-08-28T09:00:00.000Z', local_status: 'pending_sync', server_error_code: null },
+      { id: 'status', stream_id: 'wo-1', created_at: '2026-08-28T09:01:00.000Z', local_status: 'pending_sync', server_error_code: null },
+    ];
+    const database = createParkingDatabase(
+      [streamPut(rows[0]!, 1, null), streamPut(rows[1]!, 2, 5)],
+      rows,
+      activity,
+    );
+    const bodies: Record<string, unknown>[] = [];
+    t.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(null, { status: 201 });
+    });
+
+    await new EdgePowerSyncConnector().uploadData(database);
+
+    assert.equal(bodies.length, 2);
+    assert.equal('event_version' in bodies[0]!, false);
+    assert.equal(bodies[0]!['event_id'], 'meter');
+    assert.equal(bodies[1]!['event_version'], 5);
+  });
+
   it('preserves a settled permanent outcome when a later operation retries', async (t) => {
     const activity: string[] = [];
     const statuses: Record<string, EdgeLocalStatus> = {

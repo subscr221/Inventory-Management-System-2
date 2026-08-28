@@ -153,6 +153,14 @@ const MIGRATIONS = [
   // cross-dock files above hold real FOREIGN KEY clauses.
   '../../read/projections/production_order_stage.sql',
   '../../read/projections/production_wip_ledger.sql',
+  // Story 7.8: the three-part closure coding ledger (FR-M-18) and the maintenance sync-conflict
+  // queue (FR-M-17). Appended at the tail after the Story 6.2 files; the edited
+  // maintenance_work_order.sql keeps its position above and its new guarded status-widening and
+  // status-column blocks re-apply harmlessly. Neither table carries an FK, so their order is
+  // logical rather than dependency-forced; the list as a whole is not, since the cross-dock files
+  // above hold real FOREIGN KEY clauses.
+  '../../read/projections/maintenance_work_order_closure.sql',
+  '../../read/projections/maintenance_sync_conflict.sql',
 ];
 
 async function migrate(): Promise<void> {

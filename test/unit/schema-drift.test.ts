@@ -1247,6 +1247,39 @@ const EXPECTED = [
     indexes: ['idx_maintenance_warranty_override_coverage'],
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 7.8 (FR-M-18): the append-only closure ledger, keyed on work_order_id (Binding
+  // Decision 9). app_user never UPDATEs it (the maintenance_warranty_override precedent).
+  {
+    canonical: 'read/projections/maintenance_work_order_closure.sql',
+    table: 'maintenance_work_order_closure',
+    constraints: [
+      'chk_maintenance_work_order_closure_origin',
+      'chk_maintenance_work_order_closure_codes',
+    ],
+    indexes: ['idx_maintenance_work_order_closure_asset'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 7.8 (FR-M-17): the supervisor-facing sync-conflict queue (Binding Decision 4).
+  // Resolution mutates status, so app_user holds UPDATE (the integration_exception shape).
+  {
+    canonical: 'read/projections/maintenance_sync_conflict.sql',
+    table: 'maintenance_sync_conflict',
+    constraints: [
+      'uq_maintenance_sync_conflict_event',
+      'chk_maintenance_sync_conflict_reason',
+      'chk_maintenance_sync_conflict_reason_pairing',
+      'chk_maintenance_sync_conflict_status',
+      'chk_maintenance_sync_conflict_resolution',
+      'chk_maintenance_sync_conflict_resolution_note',
+      'chk_maintenance_sync_conflict_resolution_pairing',
+    ],
+    indexes: [
+      'idx_maintenance_sync_conflict_status',
+      'idx_maintenance_sync_conflict_stream',
+      'idx_maintenance_sync_conflict_location',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -1606,6 +1639,76 @@ describe('Story 2.1 schema drift guard', () => {
         'CHECK ((warranty_flagged = false AND warranty_coverage_id IS NULL) OR (warranty_flagged = true AND warranty_coverage_id IS NOT NULL))',
       ),
       'the warranty pairing CHECK body must pin both directions of the pair',
+    );
+  });
+
+  it('Story 7.8 mirrors the additive maintenance_work_order status columns and the widened status CHECK into init-db.sql', () => {
+    const workOrderSql = read('read/projections/maintenance_work_order.sql');
+    for (const column of ['status_updated_at', 'status_updated_by', 'status_note']) {
+      const key = `column_name = '${column}'`;
+      assert.strictEqual(
+        extractDoBlock(initDb, key),
+        extractDoBlock(workOrderSql, key),
+        `maintenance_work_order.${column} ADD COLUMN guard drifted from init-db.sql`,
+      );
+      assert.ok(
+        extractDoBlock(workOrderSql, key).includes('table_schema = current_schema()'),
+        `maintenance_work_order.${column} guard must be schema-qualified`,
+      );
+    }
+    for (const fragment of [
+      'ADD COLUMN status_updated_at TIMESTAMPTZ;',
+      'ADD COLUMN status_updated_by UUID;',
+      'ADD COLUMN status_note TEXT;',
+    ]) {
+      assert.ok(workOrderSql.includes(fragment), `maintenance_work_order.sql missing ${fragment}`);
+      assert.ok(
+        initDb.includes(fragment),
+        `init-db.sql missing ${fragment} (from maintenance_work_order.sql)`,
+      );
+    }
+    assert.strictEqual(
+      extractDoBlock(initDb, 'chk_maintenance_work_order_status_note'),
+      extractDoBlock(workOrderSql, 'chk_maintenance_work_order_status_note'),
+      'chk_maintenance_work_order_status_note drifted from init-db.sql',
+    );
+    // Binding Decision 7: the five-value status vocabulary. The inline CHECK (fresh install), the
+    // re-guard block (missing constraint) and the upgrade block (three-value constraint still in
+    // place) must all carry the same widened body, in both files.
+    const widened = "CHECK (status IN ('open', 'overdue', 'in_progress', 'on_hold', 'completed'))";
+    for (const [label, sql] of [
+      ['maintenance_work_order.sql', workOrderSql],
+      ['init-db.sql', initDb],
+    ] as const) {
+      assert.ok(
+        !sql.includes(
+          "chk_maintenance_work_order_status CHECK (status IN ('open', 'overdue', 'completed'))",
+        ),
+        `${label} still carries the three-value status CHECK`,
+      );
+      assert.ok(
+        sql.includes(`CONSTRAINT chk_maintenance_work_order_status ${widened},`),
+        `${label} inline status CHECK is not the widened vocabulary`,
+      );
+      assert.ok(
+        sql.includes("pg_get_constraintdef(oid) NOT LIKE '%in_progress%'"),
+        `${label} is missing the status CHECK upgrade guard`,
+      );
+    }
+    const upgradeBlock = (workOrderSql.match(/DO \$\$.*?END \$\$;/gis) ?? []).find((block) =>
+      block.includes('pg_get_constraintdef'),
+    );
+    assert.ok(upgradeBlock, 'maintenance_work_order.sql is missing the status upgrade block');
+    assert.ok(
+      upgradeBlock.includes('DROP CONSTRAINT chk_maintenance_work_order_status') &&
+        upgradeBlock.includes(widened),
+      'the upgrade block must drop the narrow CHECK and re-add the widened one',
+    );
+    assert.ok(
+      (initDb.match(/DO \$\$.*?END \$\$;/gis) ?? []).some(
+        (block) => normalizeSql(block) === normalizeSql(upgradeBlock),
+      ),
+      'init-db.sql is missing the status upgrade block',
     );
   });
 

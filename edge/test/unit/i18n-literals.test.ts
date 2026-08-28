@@ -11,6 +11,8 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^errors\./,
   /^nav\./,
   /^crossDock\./,
+  // Story 7.8: the maintenance worklist and the five technician capture forms.
+  /^maintenance\./,
   /^Promise$/,
   /^Dashboard$/,
   /^Frontline$/,

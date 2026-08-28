@@ -187,6 +187,11 @@ import {
   resolveWarrantyOverrideDuplicateConflict,
 } from '../compliance/maintenance-coverage.js';
 import {
+  assertMaintenanceSyncConflictShape,
+  applyMaintenanceSyncConflictProjection,
+  resolveSyncConflictDuplicateConflict,
+} from '../compliance/maintenance-sync-conflict.js';
+import {
   assertProductionOrderShape,
   applyProductionOrderProjection,
   resolveProductionOrderNumberDuplicateConflict,
@@ -441,6 +446,7 @@ export async function persistEvent(
   envelope: EventEnvelope,
   auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
   externalClient?: PoolClient,
+  opts?: { strictDuplicate?: boolean },
 ): Promise<PersistedEvent> {
   // FR-AC-01 (Story 1.5): business-stream tagging is enforced HERE, on the central write path,
   // not in the HTTP handler - so the public POST /api/v1/events, the Story 1.8 edge sync
@@ -641,6 +647,11 @@ export async function persistEvent(
   // exact-decimal contract_value) is non-DB and runs with the other pre-transaction asserts, so a
   // malformed coverage event never consumes an idempotency key.
   assertMaintenanceCoverageShape(envelope);
+  // Story 7.8: sync-conflict raise / resolve shape validation (strict UUIDs, the reason and
+  // resolution enums with their pairing rules, explicit-offset timestamps) is non-DB and runs with
+  // the other pre-transaction asserts, so a malformed conflict event never consumes an idempotency
+  // key. The Story 7.8 work_order_status_updated shape rides assertMaintenancePlanShape above.
+  assertMaintenanceSyncConflictShape(envelope);
   // Story 6.1: production order lifecycle shape validation (strict UUIDs, exact decimal order
   // quantity, the source-reference enum, the state vocabulary, the expediting pairing) is non-DB
   // and runs with the other pre-transaction asserts, so a malformed production event never
@@ -695,6 +706,13 @@ export async function persistEvent(
         [envelope.idempotency_key ?? null, eventId],
       );
       if (existing.rows.length > 0) {
+        if (opts?.strictDuplicate === true) {
+          const row = existing.rows[0]!;
+          throw new AppError(409, 'DUPLICATE_EVENT', 'Event already exists', {
+            existing_event_id: row.event_id,
+            existing_event_type: row.event_type,
+          });
+        }
         if (ownsTransaction) await client.query('COMMIT');
         return mapRowToEvent(existing.rows[0]!);
       }
@@ -954,6 +972,12 @@ export async function persistEvent(
     // insert commit or roll back together. The DOA re-resolution behind the override lives here,
     // never only in the HTTP handler (AD-12).
     await applyMaintenanceCoverageProjection(envelope, client);
+    // Story 7.8: the sync-conflict queue row (raise) and its resolution run inside this same
+    // transaction, so the queue row and the domain_events insert commit or roll back together.
+    // The DOA re-resolution behind the resolution lives here, never only in the HTTP handler
+    // (AD-12). The Story 7.8 status transition and closure ledger ride
+    // applyMaintenancePlanProjection above.
+    await applyMaintenanceSyncConflictProjection(envelope, client);
     // Story 6.1: the production order projection runs inside this same transaction, so the order
     // row (create, release with its re-run release gate, state transitions, cancel with the
     // unreversed-transactions guard) and the domain_events insert commit or roll back together.
@@ -1060,6 +1084,13 @@ export async function persistEvent(
             [envelope.idempotency_key, eventId],
           );
           if (existing.rows.length > 0) {
+            if (opts?.strictDuplicate === true) {
+              const row = existing.rows[0]!;
+              throw new AppError(409, 'DUPLICATE_EVENT', 'Event already exists', {
+                existing_event_id: row.event_id,
+                existing_event_type: row.event_type,
+              });
+            }
             await client.query('COMMIT');
             return mapRowToEvent(existing.rows[0]!);
           }
@@ -1430,6 +1461,31 @@ export async function persistEvent(
           'A warranty override has already been recorded for this work order',
           await resolveWarrantyOverrideDuplicateConflict(envelope.payload),
         );
+      } else if (constraint === 'uq_maintenance_sync_conflict_event') {
+        // Story 7.8: one queue row per conflicting edge event (Binding Decision 4). The race path
+        // returns the same code and the same existing_conflict_id as the sequential pre-check.
+        throw new AppError(
+          409,
+          'DUPLICATE_SYNC_CONFLICT',
+          'A sync conflict has already been raised for this event',
+          await resolveSyncConflictDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'maintenance_work_order_closure_pkey') {
+        // Story 7.8: the closure id IS the work order id (Binding Decision 9), so a second closure
+        // row for one work order can only come from a concurrent completion that lost the
+        // work-order lock race. Surface it as the completion contract's own code, never a raw
+        // 23505 500.
+        throw new AppError(
+          409,
+          'WORK_ORDER_ALREADY_COMPLETED',
+          'A closure has already been recorded for this work order',
+          {
+            work_order_id:
+              typeof envelope.payload['work_order_id'] === 'string'
+                ? envelope.payload['work_order_id']
+                : null,
+          },
+        );
       } else if (constraint === 'uq_production_order_number_ext') {
         // Story 6.1: the server-allocated order number is unique. The sequential pre-check (the
         // applier's allocation) makes this practically unreachable, but a concurrent race on the
@@ -1483,7 +1539,10 @@ export async function persistEvent(
         // chain never falls through to a wrong (and always null) field.
         constraint === 'asset_coverage_pkey' ||
         constraint === 'asset_coverage_alert_pkey' ||
-        constraint === 'maintenance_warranty_override_pkey'
+        constraint === 'maintenance_warranty_override_pkey' ||
+        // Story 7.8: server-minted conflict_id makes this practically unreachable; mapped for the
+        // same completeness reason, naming its OWN id field below.
+        constraint === 'maintenance_sync_conflict_pkey'
       ) {
         // Story 7.3: server-minted UUIDs make these practically unreachable; mapped for
         // completeness per the maintenance_plan_pkey precedent, so a direct-event duplicate id
@@ -1608,12 +1667,19 @@ export async function persistEvent(
                                                         ? p['override_id']
                                                         : null,
                                                   }
-                                                : {
-                                                    asset_id:
-                                                      typeof p['asset_id'] === 'string'
-                                                        ? p['asset_id']
-                                                        : null,
-                                                  };
+                                                : constraint === 'maintenance_sync_conflict_pkey'
+                                                  ? {
+                                                      conflict_id:
+                                                        typeof p['conflict_id'] === 'string'
+                                                          ? p['conflict_id']
+                                                          : null,
+                                                    }
+                                                  : {
+                                                      asset_id:
+                                                        typeof p['asset_id'] === 'string'
+                                                          ? p['asset_id']
+                                                          : null,
+                                                    };
         throw new AppError(
           409,
           'DUPLICATE_EVENT',

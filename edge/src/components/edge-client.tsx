@@ -5,9 +5,21 @@ import type { PowerSyncDatabase } from '@powersync/web';
 import { createTestCaptureEvent } from '../capture/test-capture';
 import { createCrossDockCompletionEvent } from '../capture/cross-dock';
 import { createIndentRaisedEvent } from '../capture/indent';
+import {
+  createFaultReportedEvent,
+  createMeterReadingRecordedEvent,
+  createSpareIssuedEvent,
+  createWorkOrderCompletedEvent,
+  createWorkOrderStatusUpdatedEvent,
+} from '../capture/maintenance';
 import { AppShell } from './app-shell';
 import type { CrossDockTaskContext } from './cross-dock-capture';
 import type { IndentSubmitInput } from './indent-capture';
+import type { FaultReportSubmitInput } from './fault-report-capture';
+import type { WorkOrderStatusSubmitInput } from './work-order-status-capture';
+import type { MeterReadingSubmitInput } from './meter-reading-capture';
+import type { SpareIssueSubmitInput } from './spare-issue-capture';
+import type { WorkOrderClosureSubmitInput } from './work-order-closure-capture';
 import { t } from '../i18n/locale';
 import { createEdgeDatabase } from '../local-db/database';
 import {
@@ -18,8 +30,19 @@ import {
   readFailures,
   readOutboxCounts,
 } from '../local-db/outbox';
+import {
+  applyWorklistSnapshot,
+  nextStreamVersion,
+  readCachedReservations,
+  readCachedWorkOrders,
+  readClosureCatalogue,
+  type CachedReservationRow,
+  type CachedWorkOrderRow,
+  type WorklistMeter,
+} from '../local-db/worklist';
 import { EdgePowerSyncConnector } from '../sync/connector';
 import { deriveSyncUiState, type SyncUiState } from '../sync/sync-status';
+import { refreshWorklist } from '../sync/worklist-refresh';
 
 interface BootstrapResponse {
   user_id: string;
@@ -28,6 +51,12 @@ interface BootstrapResponse {
   site_name: string;
   role: string;
   navigation: string[];
+}
+
+interface WorklistMeta {
+  total: number;
+  truncated: boolean;
+  fetchedAt: string | null;
 }
 
 interface RuntimeState {
@@ -44,6 +73,12 @@ interface RuntimeState {
   firstSyncRequired: boolean;
   setupError: boolean;
   syncState: SyncUiState;
+  // Story 7.8: the cached technician worklist.
+  workOrders: CachedWorkOrderRow[];
+  worklistMeta: WorklistMeta;
+  closureCatalogue: { fault: string[]; cause: string[]; remedy: string[] };
+  selectedWorkOrderId: string | null;
+  selectedReservations: CachedReservationRow[];
 }
 
 const initialState: RuntimeState = {
@@ -60,7 +95,14 @@ const initialState: RuntimeState = {
   firstSyncRequired: false,
   setupError: false,
   syncState: 'offline',
+  workOrders: [],
+  worklistMeta: { total: 0, truncated: false, fetchedAt: null },
+  closureCatalogue: { fault: [], cause: [], remedy: [] },
+  selectedWorkOrderId: null,
+  selectedReservations: [],
 };
+
+const WORKLIST_META_KEY = 'inventory-edge-worklist-meta';
 
 function deviceId(): string {
   const key = 'inventory-edge-device-id';
@@ -71,7 +113,32 @@ function deviceId(): string {
   return created;
 }
 
-export function EdgeClient() {
+function readWorklistMeta(): WorklistMeta {
+  try {
+    const raw = localStorage.getItem(WORKLIST_META_KEY);
+    if (!raw) return { total: 0, truncated: false, fetchedAt: null };
+    const parsed = JSON.parse(raw) as Partial<WorklistMeta>;
+    return {
+      total: typeof parsed.total === 'number' ? parsed.total : 0,
+      truncated: parsed.truncated === true,
+      fetchedAt: typeof parsed.fetchedAt === 'string' ? parsed.fetchedAt : null,
+    };
+  } catch {
+    return { total: 0, truncated: false, fetchedAt: null };
+  }
+}
+
+function parseMeters(raw: string | undefined): WorklistMeter[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as WorklistMeter[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maintenance' }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   const [state, setState] = useState(initialState);
 
@@ -99,6 +166,48 @@ export function EdgeClient() {
     }));
   }, []);
 
+  // Story 7.8: read the cached worklist (survives restarts; the snapshot meta lives in localStorage).
+  const loadWorklistFromCache = useCallback(async (db: PowerSyncDatabase) => {
+    const [workOrders, closureCatalogue] = await Promise.all([
+      readCachedWorkOrders(db),
+      readClosureCatalogue(db),
+    ]);
+    const meta = readWorklistMeta();
+    setState((current) => {
+      const selectedStillCached =
+        current.selectedWorkOrderId !== null &&
+        workOrders.some((row) => row.work_order_id === current.selectedWorkOrderId);
+      return {
+        ...current,
+        workOrders,
+        closureCatalogue,
+        worklistMeta: meta,
+        selectedWorkOrderId: selectedStillCached ? current.selectedWorkOrderId : null,
+        selectedReservations: selectedStillCached ? current.selectedReservations : [],
+      };
+    });
+  }, []);
+
+  // Story 7.8 (Binding Decision 11): fetch on app start when online and on the `online` event,
+  // never on a timer. A failed fetch leaves the cached snapshot in place.
+  const refreshWorklistNow = useCallback(
+    async (db: PowerSyncDatabase) => {
+      const snapshot = await refreshWorklist();
+      if (!snapshot) return;
+      await applyWorklistSnapshot(db, snapshot);
+      localStorage.setItem(
+        WORKLIST_META_KEY,
+        JSON.stringify({
+          total: snapshot.total,
+          truncated: snapshot.truncated,
+          fetchedAt: snapshot.fetched_at,
+        }),
+      );
+      await loadWorklistFromCache(db);
+    },
+    [loadWorklistFromCache],
+  );
+
   useEffect(() => {
     let cancelled = false;
     let stopWatching: (() => void) | undefined;
@@ -122,6 +231,7 @@ export function EdgeClient() {
             navigation: ['Dashboard', 'Frontline'],
           }));
         }
+        await loadWorklistFromCache(db);
 
         try {
           const response = await fetch('/api/v1/edge/bootstrap', { credentials: 'include' });
@@ -147,6 +257,7 @@ export function EdgeClient() {
             firstSyncRequired: false,
           }));
           void db.connect(new EdgePowerSyncConnector()).catch(() => undefined);
+          if (navigator.onLine) void refreshWorklistNow(db).catch(() => undefined);
         } catch {
           if (!cached) setState((current) => ({ ...current, firstSyncRequired: true }));
         }
@@ -168,16 +279,22 @@ export function EdgeClient() {
       if (db) void refreshLocalState(db);
     }
 
-    window.addEventListener('online', refreshConnectivity);
+    function onOnline() {
+      refreshConnectivity();
+      const db = database.current;
+      if (db) void refreshWorklistNow(db).catch(() => undefined);
+    }
+
+    window.addEventListener('online', onOnline);
     window.addEventListener('offline', refreshConnectivity);
     void start();
     return () => {
       cancelled = true;
-      window.removeEventListener('online', refreshConnectivity);
+      window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', refreshConnectivity);
       stopWatching?.();
     };
-  }, [refreshLocalState]);
+  }, [loadWorklistFromCache, refreshLocalState, refreshWorklistNow]);
 
   const capture = useCallback(async () => {
     const db = database.current;
@@ -237,6 +354,112 @@ export function EdgeClient() {
     return event.event_id;
   }, [refreshLocalState, state.role, state.siteId, state.userId]);
 
+  // --- Story 7.8: the five technician flows (the submitIndent pattern) ---------------------------
+
+  const requireReady = useCallback((): PowerSyncDatabase => {
+    const db = database.current;
+    if (!db || !state.userId || !state.siteId) {
+      throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
+    }
+    return db;
+  }, [state.siteId, state.userId]);
+
+  const actor = useCallback(
+    () => ({ userId: state.userId, role: state.role, siteId: state.siteId, deviceId: deviceId() }),
+    [state.role, state.siteId, state.userId],
+  );
+
+  const selectWorkOrder = useCallback(async (workOrderId: string) => {
+    const db = database.current;
+    const reservations = db ? await readCachedReservations(db, workOrderId) : [];
+    setState((current) => ({
+      ...current,
+      selectedWorkOrderId: workOrderId,
+      selectedReservations: reservations,
+    }));
+  }, []);
+
+  const submitFaultReport = useCallback(async (input: FaultReportSubmitInput): Promise<string> => {
+    const db = requireReady();
+    const event = createFaultReportedEvent({ ...input, ...actor() });
+    await insertCaptureEvent(db, event);
+    await refreshLocalState(db);
+    return event.event_id;
+  }, [actor, refreshLocalState, requireReady]);
+
+  const submitStatusUpdate = useCallback(async (input: WorkOrderStatusSubmitInput): Promise<string> => {
+    const db = requireReady();
+    const workOrder = state.workOrders.find((row) => row.work_order_id === input.workOrderId);
+    if (!workOrder) throw new Error('Work order is not cached on this device');
+    const eventVersion = await nextStreamVersion(db, 'cached_work_order', input.workOrderId);
+    const event = createWorkOrderStatusUpdatedEvent({
+      workOrderId: input.workOrderId,
+      assetId: workOrder.asset_id,
+      newStatus: input.newStatus,
+      note: input.note,
+      eventVersion,
+      ...actor(),
+    });
+    await insertCaptureEvent(db, event);
+    await refreshLocalState(db);
+    return event.event_id;
+  }, [actor, refreshLocalState, requireReady, state.workOrders]);
+
+  const submitMeterReading = useCallback(async (input: MeterReadingSubmitInput): Promise<string> => {
+    const db = requireReady();
+    const workOrder = state.workOrders.find((row) => row.work_order_id === state.selectedWorkOrderId);
+    if (!workOrder) throw new Error('Work order is not cached on this device');
+    const event = createMeterReadingRecordedEvent({
+      meterId: input.meterId,
+      assetId: workOrder.asset_id,
+      readingValue: input.readingValue,
+      ...actor(),
+    });
+    await insertCaptureEvent(db, event);
+    await refreshLocalState(db);
+    return event.event_id;
+  }, [actor, refreshLocalState, requireReady, state.selectedWorkOrderId, state.workOrders]);
+
+  const submitSpareIssue = useCallback(async (input: SpareIssueSubmitInput): Promise<string> => {
+    const db = requireReady();
+    const reservation = state.selectedReservations.find(
+      (row) => row.reservation_id === input.reservationId,
+    );
+    if (!reservation) throw new Error('Reservation is not cached on this device');
+    const eventVersion = await nextStreamVersion(db, 'cached_spare_reservation', input.reservationId);
+    const event = createSpareIssuedEvent({
+      reservationId: input.reservationId,
+      quantity: reservation.quantity,
+      eventVersion,
+      ...actor(),
+    });
+    await insertCaptureEvent(db, event);
+    await refreshLocalState(db);
+    return event.event_id;
+  }, [actor, refreshLocalState, requireReady, state.selectedReservations]);
+
+  const submitClosure = useCallback(async (input: WorkOrderClosureSubmitInput): Promise<string> => {
+    const db = requireReady();
+    const workOrder = state.workOrders.find((row) => row.work_order_id === input.workOrderId);
+    if (!workOrder) throw new Error('Work order is not cached on this device');
+    const eventVersion = await nextStreamVersion(db, 'cached_work_order', input.workOrderId);
+    const event = createWorkOrderCompletedEvent({
+      workOrderId: input.workOrderId,
+      assetId: workOrder.asset_id,
+      faultCode: input.faultCode,
+      causeCode: input.causeCode,
+      remedyCode: input.remedyCode,
+      eventVersion,
+      ...actor(),
+    });
+    await insertCaptureEvent(db, event);
+    await refreshLocalState(db);
+    return event.event_id;
+  }, [actor, refreshLocalState, requireReady, state.workOrders]);
+
+  const selectedWorkOrder =
+    state.workOrders.find((row) => row.work_order_id === state.selectedWorkOrderId) ?? null;
+
   return (
     <AppShell
       userName={state.userName || t('app.defaultUserName')}
@@ -256,6 +479,27 @@ export function EdgeClient() {
       onRetry={() => {
         const db = database.current;
         if (db) void refreshLocalState(db);
+      }}
+      view={view}
+      maintenance={{
+        workOrders: state.workOrders,
+        total: state.worklistMeta.total,
+        truncated: state.worklistMeta.truncated,
+        fetchedAt: state.worklistMeta.fetchedAt,
+        selectedWorkOrderId: state.selectedWorkOrderId,
+        selectedMeters: parseMeters(selectedWorkOrder?.meters),
+        selectedReservations: state.selectedReservations,
+        closureCatalogue: state.closureCatalogue,
+        onSelectWorkOrder: (workOrderId) => void selectWorkOrder(workOrderId),
+        onRefreshWorklist: () => {
+          const db = database.current;
+          if (db) void refreshWorklistNow(db).catch(() => undefined);
+        },
+        onSubmitFaultReport: submitFaultReport,
+        onSubmitStatusUpdate: submitStatusUpdate,
+        onSubmitMeterReading: submitMeterReading,
+        onSubmitSpareIssue: submitSpareIssue,
+        onSubmitClosure: submitClosure,
       }}
     />
   );

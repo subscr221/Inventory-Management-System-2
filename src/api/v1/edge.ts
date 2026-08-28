@@ -10,7 +10,20 @@ import {
 } from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
 import { validateEnvelope, persistEvent } from '../../events/store.js';
-import { validateEdgeEnvelope } from '../../sync/upload.js';
+import {
+  validateEdgeEnvelope,
+  assertEdgeMaintenanceEventAllowed,
+  isPermanentUploadErrorCode,
+  REBASE_SAFE_EVENT_TYPES,
+} from '../../sync/upload.js';
+import {
+  findExistingEdgeEvent,
+  getStreamHeadVersions,
+  listStreamEventTypesAfter,
+} from '../../sync/stream-heads.js';
+import { raiseMaintenanceSyncConflict } from '../../maintenance/sync-conflicts.js';
+import type { SyncConflictCause } from '../../maintenance/sync-conflicts.js';
+import { notifyFaultReported } from '../../maintenance/fault-notifications.js';
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 import { config } from '../../config/index.js';
@@ -18,6 +31,13 @@ import type { AuthContext } from '../../middleware/context.js';
 import { getCrossDockTaskById } from '../../read/projections/cross_dock_task.js';
 import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
 import { resolveApprover, INDENT_DOA_TYPE } from './indents.js';
+import {
+  countOpenWorkOrders,
+  listOpenWorkOrdersForWorklist,
+} from '../../read/projections/maintenance_work_order.js';
+import { listRecentClosuresForAsset } from '../../read/projections/maintenance_work_order_closure.js';
+import { listSpareReservations } from '../../read/projections/maintenance_spare_reservation.js';
+import { listMeters } from '../../read/projections/asset_meter.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const PLANNING_EVENT_TYPES = new Set([
@@ -208,6 +228,26 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   assertPlanningPayloadWriteLocation(authContext, body);
 
+  // Story 7.8 (Binding Decision 10): an explicit event-type allowlist for the maintenance stream.
+  // Return-to-service and every other central-only maintenance operation reject 403
+  // CENTRAL_ONLY_OPERATION here, before any identity or version work.
+  assertEdgeMaintenanceEventAllowed(body);
+
+  // Story 7.8 (Binding Decision 1, AD-16, Story 1.8 AC): a replayed edge submission is HTTP 409
+  // DUPLICATE_EVENT with the existing event identity, on BOTH the sequential path (this SELECT)
+  // and the race path (the uq_idempotency / domain_events_pkey 23505 mapper in persistEvent, which
+  // throws 409 instead of returning the existing row because the persist below is strict). The
+  // device connector already maps this to `synced`, so the device outcome is unchanged; the change
+  // restores the route's own contract. The REST handlers keep their replayIdOrReject 2xx replay
+  // contract untouched.
+  const existing = await findExistingEdgeEvent(body);
+  if (existing) {
+    throw new AppError(409, 'DUPLICATE_EVENT', 'Event already exists', {
+      existing_event_id: existing.event_id,
+      existing_event_type: existing.event_type,
+    });
+  }
+
   body.metadata.actor.user_id = authContext.userId;
   body.metadata.actor.role = assignment.role;
   let auditRole = assignment.role;
@@ -353,6 +393,14 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     if (approval.approverActorId) body.payload['approver_actor_id'] = approval.approverActorId;
     if (approval.doaEntryId) body.payload['doa_entry_id'] = approval.doaEntryId;
   }
+  // Story 7.8: the maintenance identity block. Nothing in any of the five technician payloads
+  // names the actor (fault reporter, status updater, meter reader, spares issuer and work-order
+  // closer are all derived by their seams from metadata.actor.user_id, already overwritten from
+  // auth above), so there is no payload field to stamp here - unlike every block above. The only
+  // normalisation is the capture method: a device capture is MANUAL unless it says otherwise.
+  if (body.stream_type === 'maintenance' && !body.metadata.capture_method) {
+    body.metadata.capture_method = 'MANUAL';
+  }
   if (authoritativeSiteId !== null) {
     body.metadata.actor.location_id = authoritativeSiteId;
   } else if (assignment.locationId !== '*') {
@@ -368,24 +416,273 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     body.payload['placement_confirmed'] = true;
   }
 
+  // Story 7.8 (Binding Decisions 2 and 16): the head + 1 rule for a declared maintenance-stream
+  // version. The store inserts ANY declared version (uq_stream_version only rejects a TAKEN one),
+  // so a device whose local head ran ahead would otherwise land past the server head with a
+  // silent gap; the handler is the gap guard. When the declared version is at or below the head
+  // and EVERY event in the gap is rebase-safe (today: only the nightly work_order_overdue sweep),
+  // the persist is retried ONCE with a DECLARED head + 1 - a collision on that retry (a human
+  // change landing between the gap read and the insert) is a real STREAM_CONFLICT. Meter readings
+  // omit the version and never enter this check.
+  const declaredVersion = body.event_version;
+  if (body.stream_type === 'maintenance' && declaredVersion !== undefined) {
+    const heads = await getStreamHeadVersions([body.stream_id]);
+    const head = heads.get(body.stream_id.toLowerCase()) ?? 0;
+    if (declaredVersion !== head + 1) {
+      let rebased = false;
+      if (declaredVersion <= head) {
+        const gap = await listStreamEventTypesAfter(body.stream_id, declaredVersion - 1);
+        if (gap.length > 0 && gap.every((type) => REBASE_SAFE_EVENT_TYPES.has(type))) {
+          body.event_version = head + 1;
+          rebased = true;
+        }
+      }
+      if (!rebased) {
+        const conflict = new AppError(409, 'STREAM_CONFLICT', 'Event version conflict in stream', {
+          stream_id: body.stream_id,
+          event_version: declaredVersion,
+          head_version: head,
+        });
+        throw await withMaintenanceSyncConflict(req, body, conflict, {
+          reason: 'version_conflict',
+          expected_version: declaredVersion,
+          head_version: head,
+        });
+      }
+    }
+  }
+
   try {
-    const persisted = await persistEvent(body, {
-      trace_id: getTraceId(req) ?? '',
-      user_id: authContext.userId,
-      role: auditRole,
-      location_id: auditLocationId,
-      endpoint: req.url ?? '',
-      method: req.method ?? 'POST',
-      http_status: 201,
-    });
+    const persisted = await persistEvent(
+      body,
+      {
+        trace_id: getTraceId(req) ?? '',
+        user_id: authContext.userId,
+        role: auditRole,
+        location_id: auditLocationId,
+        endpoint: req.url ?? '',
+        method: req.method ?? 'POST',
+        http_status: 201,
+      },
+      undefined,
+      { strictDuplicate: true },
+    );
+    // Story 7.8 (Binding Decision 14): an edge-captured fault still reaches the supervisor
+    // (FR-M-04) through the SAME post-persist helper the REST handler calls. The seam wrote the
+    // derived asset_id back onto the persisted payload, so it is read from there.
+    if (body.stream_type === 'maintenance' && body.event_type === 'maintenance.fault_reported') {
+      const persistedPayload = persisted.payload as Record<string, unknown>;
+      await notifyFaultReported({
+        faultReportId: String(persistedPayload['fault_report_id']),
+        assetId: String(persistedPayload['asset_id']),
+        assetTag: String(persistedPayload['asset_tag']),
+        actor: {
+          user_id: body.metadata.actor.user_id,
+          role: body.metadata.actor.role,
+          location_id: body.metadata.actor.location_id,
+        },
+        occurredAt: body.metadata.occurred_at ?? new Date().toISOString(),
+      });
+    }
     sendJson(res, 201, persisted);
   } catch (err) {
     if (err instanceof ZoneIncompatibleWarning) {
       sendJson(res, 200, zoneWarningEnvelope(err, getTraceId(req) ?? ''));
       return;
     }
+    if (err instanceof AppError && body.stream_type === 'maintenance') {
+      if (err.errorCode === 'STREAM_CONFLICT') {
+        // Decision 2: a version-less maintenance envelope (a meter reading) never raises a conflict
+        // row; a STREAM_CONFLICT here is a transient server-side MAX+1 collision and is re-thrown
+        // as-is without queueing.
+        if (declaredVersion === undefined) {
+          throw err;
+        }
+        // The retry (or a plain declared version) collided on uq_stream_version: a real conflict.
+        // Report the version actually attempted (body.event_version, which is head + 1 after a
+        // benign rebase), not declaredVersion (the stale pre-rebase value).
+        const heads = await getStreamHeadVersions([body.stream_id]);
+        const head = heads.get(body.stream_id.toLowerCase()) ?? 0;
+        const attemptedVersion = body.event_version ?? declaredVersion ?? err.details['event_version'] ?? null;
+        const conflict = new AppError(err.statusCode, err.errorCode, err.message, {
+          ...err.details,
+          event_version: attemptedVersion,
+          head_version: head,
+        });
+        throw await withMaintenanceSyncConflict(req, body, conflict, {
+          reason: 'version_conflict',
+          expected_version: attemptedVersion ?? head + 1,
+          head_version: head,
+        });
+      }
+      // Binding Decision 4: a safety-flagged fault that met a PERMANENT rejection on replay (a
+      // mistyped tag, ASSET_NOT_FOUND) would otherwise sit invisible on one tablet; queue it so the
+      // FR-M-04 five-minute reach degrades to a supervisor nudge rather than to never.
+      if (
+        body.event_type === 'maintenance.fault_reported' &&
+        body.payload['safety_flag'] === true &&
+        isPermanentUploadErrorCode(err.errorCode)
+      ) {
+        throw await withMaintenanceSyncConflict(req, body, err, {
+          reason: 'safety_fault_rejected',
+          rejection_code: err.errorCode,
+        });
+      }
+    }
     throw err;
   }
+};
+
+/**
+ * Story 7.8: raises the sync-conflict queue row for a rejected maintenance upload and returns the
+ * SAME error with details.conflict_id merged in. The raise runs after the failed persist has
+ * rolled back; a failure to raise is logged and never masks the original rejection, which the
+ * device must always receive unchanged.
+ */
+async function withMaintenanceSyncConflict(
+  req: Parameters<RouteHandler>[0],
+  body: Parameters<typeof raiseMaintenanceSyncConflict>[0],
+  original: AppError,
+  cause: SyncConflictCause,
+): Promise<AppError> {
+  try {
+    const { conflict_id } = await raiseMaintenanceSyncConflict(body, cause, {
+      trace_id: getTraceId(req) ?? '',
+      endpoint: req.url ?? '',
+      method: req.method ?? 'POST',
+    });
+    return new AppError(original.statusCode, original.errorCode, original.message, {
+      ...original.details,
+      conflict_id,
+    });
+  } catch (raiseErr: unknown) {
+    console.warn(
+      `[edge] sync-conflict raise failed for event ${String(body.event_id)} (trace ${getTraceId(req) ?? ''})`,
+      raiseErr,
+    );
+    return original;
+  }
+}
+
+/**
+ * Story 7.8 (Binding Decision 11): the technician's offline working set. COMPANY-WIDE by
+ * construction: work orders and the asset register carry no location (AD-9), so no site filter
+ * exists to apply, and no PowerSync sync rule can express this read (sync-rules.yaml buckets by
+ * actor location only). It is the Story 1.8 edge/bootstrap shape - a bounded read-model fetch the
+ * device caches in localOnly tables. `total` and `truncated` are always present so a device that
+ * did not receive every open work order can say so ("N more not loaded") instead of silently
+ * refusing a capture against a work order it never saw.
+ */
+const edgeMaintenanceWorklistBase: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const limitRaw = url.searchParams.get('limit');
+  let limit = 200;
+  if (limitRaw !== null) {
+    if (!/^\d+$/.test(limitRaw) || Number(limitRaw) < 1 || Number(limitRaw) > 500) {
+      throw new AppError(400, 'INVALID_PARAMS', 'limit must be an integer between 1 and 500', {
+        limit: limitRaw,
+      });
+    }
+    limit = Number(limitRaw);
+  }
+
+  const fetchedAt = new Date().toISOString();
+  const [workOrders, total] = await Promise.all([
+    listOpenWorkOrdersForWorklist(limit),
+    countOpenWorkOrders(),
+  ]);
+
+  const assetIds = [...new Set(workOrders.map((row) => row.asset_id))];
+  const closuresByAsset = new Map<string, unknown[]>();
+  const metersByAsset = new Map<string, unknown[]>();
+  for (const assetId of assetIds) {
+    const [closures, meters] = await Promise.all([
+      listRecentClosuresForAsset(assetId, { limit: 5, origin: 'breakdown' }),
+      listMeters({ asset_id: assetId, limit: 500 }),
+    ]);
+    closuresByAsset.set(
+      assetId,
+      closures.map((closure) => ({
+        work_order_id: closure.work_order_id,
+        origin: closure.origin,
+        fault_code: closure.fault_code,
+        cause_code: closure.cause_code,
+        remedy_code: closure.remedy_code,
+        closed_at: closure.closed_at,
+      })),
+    );
+    metersByAsset.set(
+      assetId,
+      meters.map((meter) => ({
+        meter_id: meter.meter_id,
+        meter_code: meter.meter_code,
+        unit: meter.unit,
+        current_reading: meter.current_reading,
+      })),
+    );
+  }
+
+  const reservationsByWorkOrder = new Map<
+    string,
+    Array<{ reservation_id: string; sku: string; quantity: string; location_id: string }>
+  >();
+  for (const workOrder of workOrders) {
+    const reservations = await listSpareReservations({
+      work_order_id: workOrder.work_order_id,
+      status: 'reserved',
+      limit: 500,
+    });
+    reservationsByWorkOrder.set(
+      workOrder.work_order_id,
+      reservations.map((reservation) => ({
+        reservation_id: reservation.reservation_id,
+        sku: reservation.sku,
+        quantity: reservation.quantity,
+        location_id: reservation.location_id,
+      })),
+    );
+  }
+
+  // ONE head read for every work-order and reservation stream on the page.
+  const streamIds = [
+    ...workOrders.map((row) => row.work_order_id),
+    ...[...reservationsByWorkOrder.values()].flat().map((r) => r.reservation_id),
+  ];
+  const heads = await getStreamHeadVersions(streamIds);
+  const headOf = (id: string): number => heads.get(id.toLowerCase()) ?? 0;
+
+  sendJson(res, 200, {
+    fetched_at: fetchedAt,
+    total,
+    truncated: total > workOrders.length,
+    closure_codes: {
+      fault: config.maintenance.closureCodes.fault,
+      cause: config.maintenance.closureCodes.cause,
+      remedy: config.maintenance.closureCodes.remedy,
+    },
+    work_orders: workOrders.map((row) => ({
+      work_order_id: row.work_order_id,
+      origin: row.origin,
+      status: row.status,
+      priority: row.priority,
+      due_date: row.due_date,
+      sla_resolution_due_at: row.sla_resolution_due_at,
+      warranty_flagged: row.warranty_flagged,
+      stream_version: headOf(row.work_order_id),
+      asset: {
+        asset_id: row.asset_id,
+        asset_tag: row.asset_tag,
+        name: row.asset_name,
+        criticality: row.criticality_class,
+      },
+      recent_closures: closuresByAsset.get(row.asset_id) ?? [],
+      reservations: (reservationsByWorkOrder.get(row.work_order_id) ?? []).map((reservation) => ({
+        ...reservation,
+        stream_version: headOf(reservation.reservation_id),
+      })),
+      meters: metersByAsset.get(row.asset_id) ?? [],
+    })),
+  });
 };
 
 export const edgeBootstrapHandler: RouteHandler = edgeBootstrapBase;
@@ -396,3 +693,8 @@ export const edgeEventUploadHandler: RouteHandler = requireRole({
   functionScope: 'write',
   locationId: resolveLocationFromBody,
 })(edgeEventUploadBase);
+
+export const edgeMaintenanceWorklistHandler: RouteHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'read',
+})(edgeMaintenanceWorklistBase);

@@ -467,6 +467,14 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/maintenance/coverages/:coverageId',
       'POST /api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
       'GET /api/v1/maintenance/work-orders/:workOrderId/warranty-overrides',
+      // Story 7.8: Offline Technician Workflow and Closure Codes
+      'GET /api/v1/maintenance/closure-codes',
+      'GET /api/v1/maintenance/sync-conflicts',
+      'GET /api/v1/maintenance/sync-conflicts/:conflictId',
+      'POST /api/v1/maintenance/sync-conflicts/:conflictId/resolve',
+      'POST /api/v1/maintenance/work-orders/:workOrderId/status',
+      'GET /api/v1/maintenance/assets/:assetId/closures',
+      'GET /api/v1/edge/maintenance/worklist',
       // Story 6.1: Production Order Creation and Release Gate
       'POST /api/v1/production-orders',
       'GET /api/v1/production-orders',

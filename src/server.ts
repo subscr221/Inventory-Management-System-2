@@ -45,6 +45,7 @@ import {
   edgeBootstrapHandler,
   powerSyncCredentialsHandler,
   edgeEventUploadHandler,
+  edgeMaintenanceWorklistHandler,
 } from './api/v1/edge.js';
 import {
   listNotificationsHandler,
@@ -289,6 +290,12 @@ import {
   getCoverageHandler,
   recordWarrantyOverrideHandler,
   getWarrantyOverrideHandler,
+  updateWorkOrderStatusHandler,
+  listAssetClosuresHandler,
+  getClosureCodesHandler,
+  listSyncConflictsHandler,
+  getSyncConflictHandler,
+  resolveSyncConflictHandler,
 } from './api/v1/maintenance.js';
 import {
   createProductionOrderHandler,
@@ -765,6 +772,17 @@ export function createAppRouter(): Router {
     getWarrantyOverrideHandler,
   );
 
+  // Story 7.8: Offline Technician Workflow and Closure Codes (FR-M-17, FR-M-18). ROUTE ORDER
+  // MATTERS: the static '/closure-codes' and the bare '/sync-conflicts' list are registered BEFORE
+  // '/sync-conflicts/:conflictId', so no parameter segment can swallow them. The edge worklist is
+  // registered next to the Story 1.8 edge routes below.
+  router.get('/api/v1/maintenance/closure-codes', getClosureCodesHandler);
+  router.get('/api/v1/maintenance/sync-conflicts', listSyncConflictsHandler);
+  router.get('/api/v1/maintenance/sync-conflicts/:conflictId', getSyncConflictHandler);
+  router.post('/api/v1/maintenance/sync-conflicts/:conflictId/resolve', resolveSyncConflictHandler);
+  router.post('/api/v1/maintenance/work-orders/:workOrderId/status', updateWorkOrderStatusHandler);
+  router.get('/api/v1/maintenance/assets/:assetId/closures', listAssetClosuresHandler);
+
   // Story 6.1: Production Order Creation and Release Gate (FR-MO-01/02/03). ROUTE ORDER MATTERS:
   // '/production-orders' (both verbs) is registered BEFORE any '/production-orders/:orderId' route,
   // and the three sub-resource routes after the bare '/:orderId' route, so no parameter segment
@@ -875,6 +893,8 @@ export function createAppRouter(): Router {
   router.get('/api/v1/edge/bootstrap', edgeBootstrapHandler);
   router.get('/api/v1/edge/powersync-credentials', powerSyncCredentialsHandler);
   router.post('/api/v1/edge/events', edgeEventUploadHandler);
+  // Story 7.8: the technician's offline working set (FR-M-17, Binding Decision 11).
+  router.get('/api/v1/edge/maintenance/worklist', edgeMaintenanceWorklistHandler);
   router.get('/api/v1/notifications', listNotificationsHandler);
   router.get('/api/v1/notifications/unread-count', getUnreadCountHandler);
   router.patch('/api/v1/notifications/:id', updateNotificationHandler);

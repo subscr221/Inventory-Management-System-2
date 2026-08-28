@@ -145,6 +145,32 @@ if (!process.env['POWERSYNC_TOKEN_SECRET']) {
 const powerSyncTokenTtl = process.env['POWERSYNC_TOKEN_TTL'] ?? '15m';
 const powerSyncTokenTtlSeconds = parsePowerSyncTokenTtlSeconds(powerSyncTokenTtl);
 
+/**
+ * Story 7.8 (FR-M-18): one fail-closed closure-code catalogue (fault, cause or remedy). Cloned
+ * from the warrantyOverrideReasonCodes IIFE: only an ABSENT variable takes the defaults; a
+ * present-but-blank value is an operator statement and fails closed rather than silently
+ * substituting the permissive defaults. Bounded to 64 characters, the maintenance_work_order_
+ * closure column CHECK and the seam constant MAX_CLOSURE_CODE_LENGTH in
+ * src/compliance/maintenance-plan.ts. Not imported from the seam: config loads before the seams
+ * and must not depend on them (the Story 7.7 MAX_REASON_CODE_LENGTH note).
+ */
+function parseClosureCodeCatalogue(name: string, defaults: string): string[] {
+  const raw = process.env[name];
+  const value = raw === undefined ? defaults : raw;
+  const codes = value
+    .split(',')
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+  const MAX_CLOSURE_CODE_LENGTH = 64;
+  const malformed = codes.some((c) => c.length > MAX_CLOSURE_CODE_LENGTH || /[\r\n,]/.test(c));
+  if (codes.length === 0 || new Set(codes).size !== codes.length || malformed) {
+    throw new Error(
+      `Invalid ${name} "${raw}": must be a non-empty, duplicate-free, comma-separated list of codes at most ${MAX_CLOSURE_CODE_LENGTH} characters with no line breaks.`,
+    );
+  }
+  return codes;
+}
+
 export const config = {
   port: Number.isNaN(parsedPort) ? 3000 : parsedPort,
   hostname: process.env['HOSTNAME'] ?? '0.0.0.0',
@@ -345,6 +371,24 @@ export const config = {
       }
       return codes;
     })(),
+    // Story 7.8 (FR-M-18, Binding Decision 8): the three fail-closed closure-code catalogues
+    // (fault, cause, remedy). Each is parsed EXACTLY like warrantyOverrideReasonCodes: only an
+    // ABSENT variable takes the defaults; a present-but-blank value, a duplicate, an entry over 64
+    // characters or one carrying a line break or comma fails closed at load time.
+    closureCodes: {
+      fault: parseClosureCodeCatalogue(
+        'MAINTENANCE_FAULT_CODES',
+        'MECHANICAL,ELECTRICAL,HYDRAULIC,PNEUMATIC,INSTRUMENTATION,STRUCTURAL,NO_FAULT_FOUND',
+      ),
+      cause: parseClosureCodeCatalogue(
+        'MAINTENANCE_CAUSE_CODES',
+        'WEAR,OVERLOAD,CONTAMINATION,LUBRICATION,OPERATOR_ERROR,DESIGN,UNKNOWN',
+      ),
+      remedy: parseClosureCodeCatalogue(
+        'MAINTENANCE_REMEDY_CODES',
+        'REPLACED,REPAIRED,ADJUSTED,CLEANED,LUBRICATED,CALIBRATED,NO_ACTION',
+      ),
+    },
   },
   bom: {
     maxDepth: parsePositiveIntEnv('BOM_MAX_DEPTH', 20),

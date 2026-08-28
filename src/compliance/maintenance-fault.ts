@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
-import { getAssetById } from '../read/projections/asset.js';
+import { getAssetById, getAssetByTag } from '../read/projections/asset.js';
 // Story 7.7 (FR-M-11): the AC 2 warranty check at work-order creation.
 import { getActiveWarrantyForAsset } from '../read/projections/asset_coverage.js';
 import { getActiveSlaPolicy, insertSlaPolicy } from '../read/projections/maintenance_sla_policy.js';
@@ -166,7 +166,13 @@ function assertSlaPolicyDefinedShape(p: Record<string, unknown>): void {
 function assertFaultReportedShape(p: Record<string, unknown>): void {
   if (!isUuid(p['fault_report_id']))
     reject('INVALID_PARAMS', 'fault_report_id is required and must be a UUID');
-  if (!isUuid(p['asset_id'])) reject('INVALID_PARAMS', 'asset_id is required and must be a UUID');
+  // Story 7.8 (Binding Decision 12): the edge fault report carries asset_tag ONLY; asset_id may be
+  // absent when asset_tag is a non-empty string, and the applier derives it by tag. A DECLARED
+  // asset_id must still be a UUID (never a malformed id silently ignored while a tag resolves).
+  const assetIdDeclared = p['asset_id'] !== undefined && p['asset_id'] !== null;
+  if (assetIdDeclared && !isUuid(p['asset_id'])) {
+    reject('INVALID_PARAMS', 'asset_id is required and must be a UUID');
+  }
   if (!isNonEmptyString(p['asset_tag']))
     reject('INVALID_PARAMS', 'asset_tag is required and must be a non-empty string');
   if (!isNonEmptyString(p['description']))
@@ -382,17 +388,34 @@ async function applyFaultReported(envelope: EventEnvelope, client: PoolClient): 
 
   const p = envelope.payload as Record<string, unknown>;
   const now = new Date().toISOString();
-  const assetId = p['asset_id'] as string;
+  const submittedTag = (p['asset_tag'] as string).trim();
 
-  const asset = await getAssetById(assetId, client);
-  if (!asset) {
-    reject('ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId }, 404);
+  // Story 7.8 (Binding Decision 12): the edge device has no asset register offline, so an edge
+  // fault report carries the scanned tag only. When asset_id is absent the asset is resolved by
+  // tag (case-insensitively, the uq_asset_tag lower() index) and the derived id is written back
+  // onto the persisted payload. A declared asset_id keeps the existing mismatch check below.
+  let assetId = p['asset_id'] as string | undefined;
+  let asset = null;
+  if (assetId === undefined || assetId === null) {
+    asset = await getAssetByTag(submittedTag, client);
+    if (!asset) {
+      reject('ASSET_NOT_FOUND', 'No asset matches this tag', { asset_tag: submittedTag }, 404);
+    }
+    assetId = asset.asset_id;
+    p['asset_id'] = assetId;
+    // The persisted payload carries the CANONICAL tag from the asset row (the REST handler
+    // resolves it the same way before minting the event), never the case-variant the scan typed.
+    p['asset_tag'] = asset.asset_tag;
+  } else {
+    asset = await getAssetById(assetId, client);
+    if (!asset) {
+      reject('ASSET_NOT_FOUND', 'Asset not found', { asset_id: assetId }, 404);
+    }
   }
 
   // The tag is the scan path's human-entered key; a case-variant scan is the SAME asset (the
   // Story 7.1 canonicalization lesson), but a tag that belongs to a different asset is a
   // data-entry error and must not be silently accepted.
-  const submittedTag = (p['asset_tag'] as string).trim();
   if (submittedTag.toLowerCase() !== asset.asset_tag.toLowerCase()) {
     reject('ASSET_TAG_MISMATCH', 'The submitted asset tag does not match the asset row', {
       asset_id: assetId,

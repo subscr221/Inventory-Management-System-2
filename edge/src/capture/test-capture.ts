@@ -9,7 +9,8 @@ export interface EdgeEventRecord {
   stream_type: string;
   stream_id: string;
   event_type: string;
-  event_version: number;
+  /** Story 7.8: null means "server assigns" (meter readings); the connector omits it from the POST. */
+  event_version: number | null;
   payload: Record<string, unknown>;
   metadata: {
     correlation_id: string;

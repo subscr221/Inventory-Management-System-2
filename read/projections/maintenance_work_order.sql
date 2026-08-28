@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS maintenance_work_order (
   escalated_at        TIMESTAMPTZ,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_maintenance_work_order_status CHECK (status IN ('open', 'overdue', 'completed')),
+  CONSTRAINT chk_maintenance_work_order_status CHECK (status IN ('open', 'overdue', 'in_progress', 'on_hold', 'completed')),
   CONSTRAINT chk_maintenance_work_order_origin CHECK (origin IN ('preventive', 'breakdown')),
   CONSTRAINT chk_maintenance_work_order_plan_link CHECK (origin <> 'preventive' OR plan_id IS NOT NULL),
   CONSTRAINT chk_maintenance_work_order_grace CHECK (grace_until_date >= due_date)
@@ -71,7 +71,7 @@ BEGIN
       AND conrelid = 'maintenance_work_order'::regclass
   ) THEN
     ALTER TABLE maintenance_work_order
-      ADD CONSTRAINT chk_maintenance_work_order_status CHECK (status IN ('open', 'overdue', 'completed'));
+      ADD CONSTRAINT chk_maintenance_work_order_status CHECK (status IN ('open', 'overdue', 'in_progress', 'on_hold', 'completed'));
   END IF;
 END $$;
 
@@ -279,5 +279,72 @@ BEGIN
   ) THEN
     ALTER TABLE maintenance_work_order
       ADD CONSTRAINT chk_maintenance_work_order_warranty_pairing CHECK ((warranty_flagged = false AND warranty_coverage_id IS NULL) OR (warranty_flagged = true AND warranty_coverage_id IS NOT NULL));
+  END IF;
+END $$;
+
+-- Story 7.8 offline technician arm (FR-M-17, Binding Decision 7): the technician-facing status
+-- machine gains in_progress and on_hold, driven by maintenance.work_order_status_updated. The
+-- inline CHECK above is already the five-value vocabulary for a fresh install; the guarded block
+-- below UPGRADES a database that still carries the three-value Story 7.2 constraint by inspecting
+-- pg_get_constraintdef, dropping the narrow definition and re-adding the widened one. It is
+-- idempotent: once the definition names in_progress the block is a no-op on every re-run. The
+-- three additive columns record the latest technician transition (who, when, an optional note of
+-- at most 500 characters); the grace sweep and every other 7.2-7.7 accessor are untouched.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_status'
+      AND conrelid = 'maintenance_work_order'::regclass
+      AND pg_get_constraintdef(oid) NOT LIKE '%in_progress%'
+  ) THEN
+    ALTER TABLE maintenance_work_order DROP CONSTRAINT chk_maintenance_work_order_status;
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_status CHECK (status IN ('open', 'overdue', 'in_progress', 'on_hold', 'completed'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'status_updated_at'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN status_updated_at TIMESTAMPTZ;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'status_updated_by'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN status_updated_by UUID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'maintenance_work_order' AND column_name = 'status_note'
+  ) THEN
+    ALTER TABLE maintenance_work_order ADD COLUMN status_note TEXT;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_maintenance_work_order_status_note'
+      AND conrelid = 'maintenance_work_order'::regclass
+  ) THEN
+    ALTER TABLE maintenance_work_order
+      ADD CONSTRAINT chk_maintenance_work_order_status_note CHECK (status_note IS NULL OR char_length(status_note) <= 500);
   END IF;
 END $$;

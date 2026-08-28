@@ -4,13 +4,50 @@ import { SyncFailureList, type SyncFailureItem } from './sync-failure-list';
 import { ServiceWorkerRegistration } from './service-worker-registration';
 import { CrossDockCapture, type CrossDockTaskContext } from './cross-dock-capture';
 import { IndentCapture, type IndentSubmitInput } from './indent-capture';
+import { MaintenanceWorklist } from './maintenance-worklist';
+import { FaultReportCapture, type FaultReportSubmitInput } from './fault-report-capture';
+import {
+  WorkOrderStatusCapture,
+  type WorkOrderStatusSubmitInput,
+} from './work-order-status-capture';
+import { MeterReadingCapture, type MeterReadingSubmitInput } from './meter-reading-capture';
+import { SpareIssueCapture, type SpareIssueSubmitInput } from './spare-issue-capture';
+import {
+  WorkOrderClosureCapture,
+  type ClosureCatalogue,
+  type WorkOrderClosureSubmitInput,
+} from './work-order-closure-capture';
 import { t, type MessageKey } from '../i18n/locale';
 import type { SyncUiState } from '../sync/sync-status';
+import type { CachedReservationRow, CachedWorkOrderRow, WorklistMeter } from '../local-db/worklist';
 
 const NAVIGATION: Record<string, { href: string; label: MessageKey }> = {
   Dashboard: { href: '#dashboard', label: 'nav.dashboard' },
   Frontline: { href: '#frontline', label: 'nav.frontline' },
 };
+
+/**
+ * Story 7.8: everything the maintenance view needs, injected by the edge client. The bootstrap
+ * `navigation` array is NOT extended; the /maintenance page is reached from a link in the
+ * frontline section instead.
+ */
+export interface MaintenanceShellProps {
+  workOrders: CachedWorkOrderRow[];
+  total: number;
+  truncated: boolean;
+  fetchedAt: string | null;
+  selectedWorkOrderId: string | null;
+  selectedMeters: WorklistMeter[];
+  selectedReservations: CachedReservationRow[];
+  closureCatalogue: ClosureCatalogue;
+  onSelectWorkOrder?: (workOrderId: string) => void;
+  onRefreshWorklist?: () => void;
+  onSubmitFaultReport?: (input: FaultReportSubmitInput) => Promise<string>;
+  onSubmitStatusUpdate?: (input: WorkOrderStatusSubmitInput) => Promise<string>;
+  onSubmitMeterReading?: (input: MeterReadingSubmitInput) => Promise<string>;
+  onSubmitSpareIssue?: (input: SpareIssueSubmitInput) => Promise<string>;
+  onSubmitClosure?: (input: WorkOrderClosureSubmitInput) => Promise<string>;
+}
 
 export interface AppShellProps {
   userName: string;
@@ -28,6 +65,9 @@ export interface AppShellProps {
   onLoadCrossDockTask?: (taskId: string) => Promise<CrossDockTaskContext | null>;
   onConfirmCrossDock?: (task: CrossDockTaskContext, stagingBinCode: string) => Promise<string>;
   onSubmitIndent?: (input: IndentSubmitInput) => Promise<string>;
+  /** Story 7.8: 'frontline' (default, the Story 1.8 shell) or 'maintenance' (the technician page). */
+  view?: 'frontline' | 'maintenance';
+  maintenance?: MaintenanceShellProps;
 }
 
 export function AppShell({
@@ -46,6 +86,8 @@ export function AppShell({
   onLoadCrossDockTask,
   onConfirmCrossDock,
   onSubmitIndent,
+  view = 'frontline',
+  maintenance,
 }: AppShellProps) {
   const links = navigation.flatMap((item) => (NAVIGATION[item] ? [NAVIGATION[item]] : []));
   return (
@@ -91,6 +133,62 @@ export function AppShell({
               {t('bootstrap.checkConnection')}
             </button>
           </section>
+        ) : view === 'maintenance' ? (
+          <div className="card-grid" id="maintenance">
+            {maintenance ? (
+              <>
+                <MaintenanceWorklist
+                  syncState={syncState}
+                  workOrders={maintenance.workOrders}
+                  total={maintenance.total}
+                  truncated={maintenance.truncated}
+                  fetchedAt={maintenance.fetchedAt}
+                  selectedWorkOrderId={maintenance.selectedWorkOrderId}
+                  {...(maintenance.onSelectWorkOrder ? { onSelect: maintenance.onSelectWorkOrder } : {})}
+                  {...(maintenance.onRefreshWorklist ? { onRefresh: maintenance.onRefreshWorklist } : {})}
+                />
+                <FaultReportCapture
+                  {...(maintenance.onSubmitFaultReport ? { onSubmit: maintenance.onSubmitFaultReport } : {})}
+                />
+                <WorkOrderStatusCapture
+                  key={maintenance.selectedWorkOrderId ?? 'none'}
+                  workOrderId={maintenance.selectedWorkOrderId}
+                  currentStatus={
+                    maintenance.workOrders.find(
+                      (row) => row.work_order_id === maintenance.selectedWorkOrderId,
+                    )?.status ?? null
+                  }
+                  {...(maintenance.onSubmitStatusUpdate ? { onSubmit: maintenance.onSubmitStatusUpdate } : {})}
+                />
+                <MeterReadingCapture
+                  key={maintenance.selectedWorkOrderId ?? 'none'}
+                  meters={maintenance.selectedMeters}
+                  {...(maintenance.onSubmitMeterReading ? { onSubmit: maintenance.onSubmitMeterReading } : {})}
+                />
+                <SpareIssueCapture
+                  key={maintenance.selectedWorkOrderId ?? 'none'}
+                  reservations={maintenance.selectedReservations}
+                  {...(maintenance.onSubmitSpareIssue ? { onSubmit: maintenance.onSubmitSpareIssue } : {})}
+                />
+                <WorkOrderClosureCapture
+                  key={maintenance.selectedWorkOrderId ?? 'none'}
+                  workOrderId={maintenance.selectedWorkOrderId}
+                  origin={
+                    maintenance.workOrders.find(
+                      (row) => row.work_order_id === maintenance.selectedWorkOrderId,
+                    )?.origin ?? null
+                  }
+                  catalogue={maintenance.closureCatalogue}
+                  {...(maintenance.onSubmitClosure ? { onSubmit: maintenance.onSubmitClosure } : {})}
+                />
+              </>
+            ) : (
+              <section className="edge-card" aria-labelledby="maintenance-unavailable-heading">
+                <h2 id="maintenance-unavailable-heading">{t('maintenance.title')}</h2>
+                <p>{t('maintenance.unavailable')}</p>
+              </section>
+            )}
+          </div>
         ) : (
           <div className="card-grid">
             <section className="edge-card" id="dashboard" aria-labelledby="ready-heading">
@@ -118,6 +216,9 @@ export function AppShell({
                 {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
               />
               <TestCaptureButton {...(onCapture ? { onCapture } : {})} />
+              <a className="secondary-action" href="/maintenance">
+                {t('maintenance.nav')}
+              </a>
             </section>
           </div>
         )}
