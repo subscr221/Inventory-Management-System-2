@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS inspection_plan_version (
   CONSTRAINT chk_inspection_plan_version_sampling_pairing CHECK (
     (aql IS NULL AND inspection_level IS NULL)
     OR (aql IS NOT NULL AND inspection_level IS NOT NULL AND btrim(inspection_level) <> '' AND char_length(inspection_level) <= 16)
-  )
+  ),
+  CONSTRAINT chk_inspection_plan_version_level_vocab CHECK (inspection_level IS NULL OR inspection_level IN ('I', 'II', 'III', 'S-1', 'S-2', 'S-3', 'S-4'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_inspection_plan_version_plan_effective ON inspection_plan_version (plan_id, effective_from DESC, version_no DESC);
@@ -92,6 +93,22 @@ BEGIN
         (aql IS NULL AND inspection_level IS NULL)
         OR (aql IS NOT NULL AND inspection_level IS NOT NULL AND btrim(inspection_level) <> '' AND char_length(inspection_level) <= 16)
       );
+  END IF;
+END $$;
+
+-- Story 8.2 (Annex requirement 3): the inspection-level vocabulary of IS 2500 (Part 1) Table I,
+-- guarded separately so a Story 8.1 database gains it on re-apply.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_version_level_vocab'
+      AND conrelid = 'inspection_plan_version'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_version
+      ADD CONSTRAINT chk_inspection_plan_version_level_vocab CHECK (inspection_level IS NULL OR inspection_level IN ('I', 'II', 'III', 'S-1', 'S-2', 'S-3', 'S-4')) NOT VALID;
+    ALTER TABLE inspection_plan_version
+      VALIDATE CONSTRAINT chk_inspection_plan_version_level_vocab;
   END IF;
 END $$;
 

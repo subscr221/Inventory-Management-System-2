@@ -1,5 +1,17 @@
 # generated: 2026-07-12
 # last_updated: '2026-08-29'
+# story 8-2 created 2026-08-29 via create-story workflow: AQL Sampling and Result
+#   Capture (FR-Q-03, FR-Q-04). IS 2500 (Part 1):2000 / ISO 2859-1:1999 Tables I and
+#   II-A/B/C encoded as data with arrow resolution and normal/tightened/reduced switching
+#   per clause 9.3 (switching score, QC Head-authorized reduced, discontinuation and
+#   resume); per-(plan, site) switching-state projection; frozen per-task sampling plan;
+#   append-only qc_inspection_result bound to instrument asset ID with derived instrument_id
+#   so the untouched Story 1.7 assertCalibrationLockout fires on qc.result_recorded, plus
+#   in-transaction recheck; instrument-less attribute observations via qc.observation_recorded;
+#   critical characteristics 100 percent, major/minor on the AQL sample; inspection completion
+#   derives sampling_outcome without disposition (8.3); task_status widened open ->
+#   sampling_determined -> inspected; 8 new qc routes, site-scoped reads (closes 8.1 deferral),
+#   SOD repointed to the result projection; ready-for-dev
 # story 8-1 created 2026-08-28 via create-story workflow: Inspection Plans and QC
 #   Gate (FR-Q-01, FR-Q-02, FR-Q-05). Opens Epic 8. Immutable, effective-dated
 #   plan versions bind to released BOM specification revisions; append-only DOA-resolved
@@ -337,7 +349,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: 2026-08-28
+last_updated: 2026-08-30
 # story 6-1 dev-story 2026-08-26: implemented all 9 tasks (67 subtasks) from baseline e93014f; moved to review
 # story 6-1 dev-story 2026-08-26: implementation started from baseline e93014f; moved to in-progress
 # story 7-6 dev-story 2026-08-25: implementation started from baseline e93014f; moved to in-progress
@@ -1017,7 +1029,7 @@ development_status:
   # --- Epic 8: Quality Control and Batch Release  [PILOT] ---
   epic-8: in-progress
   8-1-inspection-plans-and-qc-gate: done   # PILOT  # dev-story 2026-08-28: all 9 tasks implemented from baseline 9abe8d3 (7 QC projections, 4 qc.* contracts, central seam src/compliance/quality.ts, producer-neutral hand-off src/quality/completion.ts, no-bypass gate across inventory/transfer/production/spares/pick/cross-dock/dispatch plus the drain-window predicate in the Epic 2 helpers, 10 qc routes, edge CENTRAL_ONLY_OPERATION for qc.*); story-8-1 31/31, spine 6/6, targeted 3-4/3-7/4-2/4-5/6-1/6-2/7-5 green, edge 45/45 + build/typecheck/lint clean, migrate x2 clean; full suite 1316/1329 with the 13 failures verified pre-existing at pristine 9abe8d3 (worktree check: story-2-3 same 5, story-1-7 same 1; remainder the known idempotency/DUPLICATE_EVENT family, the 7-8 edge race and the CRLF gate_dwell_metric drift); moved to review. Code review 2026-08-29 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance Auditor, 6 groups): 16 patches applied (1 HIGH source_event_id threading, uom verification, timestamp/AQL validation, actor validation, draft-override fail-closed, deterministic inspector ordering, gate-status write-back, schema type, projection fixes, route validation, fail-closed hardening), 2 decisions resolved (draft override fails closed; expiry keeps client occurred_at with documented risk), 18 deferred (2 HIGH pre-existing: transfer UUID/number mismatch from Story 2.5 FIXED, task-read location-scope gap), 9 dismissed; all lint/tsc/schema-drift clean; status done
-  8-2-aql-sampling-and-result-capture: backlog   # PILOT
+  8-2-aql-sampling-and-result-capture: done   # PILOT  # created 2026-08-29 via create-story workflow from baseline 462668d; dev-story 2026-08-29: all 10 tasks implemented (aql-tables data module, 3 projections, 5 qc.* contracts incl. registered qc.result_recorded, seam appliers for sampling/results/observations/completion/switching, 8 routes, edge permanent codes, SOD repointed to qc_inspection_result); story-8-2 12/12, unit 23/23, story-8-1 31/31, spine 6/6, 7-5 36/36, edge 45/45 + typecheck/lint/build clean, build/lint clean, migrate x2 clean; status review. Code review 2026-08-30 (chunked adversarial pass, 5 groups: Blind Hunter + Edge Case Hunter + Acceptance Auditor over schema/projections, sampling/switching domain logic, AQL table data module, API/read layer + edge/sync, integration tests): 1 decision-needed resolved (deferred), 11 patches applied, 23 deferred, ~50 dismissed; full suite 1332/1360 (28 pre-existing, 0 new), story-8-2 12/12, story-8-1 31/31, build/tsc clean, migrate x2 idempotent; status done
   8-3-lot-disposition-accept-reject-conditional-release: backlog   # PILOT
   8-4-coa-coc-retention-samples-and-batch-release-records: backlog   # PILOT
   8-5-quality-holds-and-recall-trace: backlog   # PILOT

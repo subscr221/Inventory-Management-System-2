@@ -176,6 +176,13 @@ const MIGRATIONS = [
   '../../read/projections/qc_inspection_task.sql',
   '../../read/projections/qc_deviation.sql',
   '../../read/projections/qc_lot_disposition.sql',
+  // Story 8.2: the frozen sampling plan, the append-only inspection results and the per-(plan,
+  // site) switching state for FR-Q-03 and FR-Q-04. Appended at the tail after the Story 8.1
+  // files; the Story 8.2 widening of qc_inspection_task and inspection_plan_version rides those
+  // files' guarded blocks above. None of the three carries an FK, so the order is logical.
+  '../../read/projections/qc_sampling_plan.sql',
+  '../../read/projections/qc_inspection_result.sql',
+  '../../read/projections/qc_sampling_switching_state.sql',
 ];
 
 async function migrate(): Promise<void> {

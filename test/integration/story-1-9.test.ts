@@ -486,6 +486,15 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/qc/tasks',
       'GET /api/v1/qc/tasks/:taskId',
       'POST /api/v1/qc/tasks/:taskId/conditional-release',
+      // Story 8.2: AQL Sampling and Result Capture
+      'POST /api/v1/qc/tasks/:taskId/sampling',
+      'GET /api/v1/qc/tasks/:taskId/sampling',
+      'POST /api/v1/qc/tasks/:taskId/results',
+      'POST /api/v1/qc/tasks/:taskId/observations',
+      'GET /api/v1/qc/tasks/:taskId/results',
+      'POST /api/v1/qc/tasks/:taskId/inspection-completion',
+      'GET /api/v1/qc/sampling-states',
+      'POST /api/v1/qc/sampling-states/:planId/sites/:siteId/actions',
       // Story 6.1: Production Order Creation and Release Gate
       'POST /api/v1/production-orders',
       'GET /api/v1/production-orders',

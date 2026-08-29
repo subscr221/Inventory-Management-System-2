@@ -167,6 +167,20 @@ const PERMANENT_ERROR_CODES = new Set([
   'SPARE_DERIVATION_MISMATCH',
   'COST_DERIVATION_MISMATCH',
   'INVALID_PAYLOAD',
+  // Story 8.2: every permanent code a qc.result_recorded upload can surface from the sampling and
+  // result-capture seam (FR-Q-03, FR-Q-04). The twin set in src/sync/upload.ts carries the
+  // identical block (the Story 4.3 rule); CALIBRATION_LOCKOUT is already present above.
+  'QC_TASK_NOT_FOUND',
+  'QC_SAMPLING_REQUIRED',
+  'QC_TASK_NOT_OPEN_FOR_RESULTS',
+  'QC_CHARACTERISTIC_NOT_IN_PLAN',
+  'QC_SAMPLE_UNIT_OUT_OF_RANGE',
+  'QC_RESULT_KIND_MISMATCH',
+  'QC_RESULT_UOM_MISMATCH',
+  'QC_RESULT_EXISTS',
+  'INSTRUMENT_NOT_FOUND',
+  'INSTRUMENT_NOT_PERMITTED',
+  'QC_DERIVATION_MISMATCH',
 ]);
 
 const TRANSIENT_STATUS_CODES = new Set([408, 425, 429]);

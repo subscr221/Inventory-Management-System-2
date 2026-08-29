@@ -1307,6 +1307,8 @@ const EXPECTED = [
       'chk_inspection_plan_version_no_positive',
       'chk_inspection_plan_version_aql',
       'chk_inspection_plan_version_sampling_pairing',
+      // Story 8.2 (Annex requirement 3): the Table I level vocabulary.
+      'chk_inspection_plan_version_level_vocab',
     ],
     indexes: ['idx_inspection_plan_version_plan_effective'],
     indexBodies: ['ON inspection_plan_version (plan_id, effective_from DESC, version_no DESC)'],
@@ -1352,6 +1354,8 @@ const EXPECTED = [
       'chk_qc_inspection_task_gate_status',
       'chk_qc_inspection_task_plan_scope',
       'chk_qc_inspection_task_scope_pairing',
+      // Story 8.2 (Binding Scope Decision 6): the stored sampling outcome vocabulary.
+      'chk_qc_inspection_task_sampling_outcome',
     ],
     indexes: ['idx_qc_inspection_task_gate', 'idx_qc_inspection_task_lot_number'],
     indexBodies: ['ON qc_inspection_task (gate_status, business_date, task_id)'],
@@ -1383,6 +1387,56 @@ const EXPECTED = [
     ],
     indexes: ['idx_qc_lot_disposition_task'],
     appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 8.2 (FR-Q-03, AC 1): the sampling plan frozen on a task (one per task, append-only).
+  {
+    canonical: 'read/projections/qc_sampling_plan.sql',
+    table: 'qc_sampling_plan',
+    constraints: [
+      'uq_qc_sampling_plan_task',
+      'chk_qc_sampling_plan_severity',
+      'chk_qc_sampling_plan_basis',
+      'chk_qc_sampling_plan_level',
+      'chk_qc_sampling_plan_sizes',
+      'chk_qc_sampling_plan_ac_re',
+      'chk_qc_sampling_plan_basis_pairing',
+    ],
+    indexes: ['idx_qc_sampling_plan_plan_site'],
+    indexBodies: ['ON qc_sampling_plan (plan_id, site_id, determined_at)'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 8.2 (FR-Q-03, FR-Q-04): immutable per-unit results; one per (task, characteristic, unit).
+  {
+    canonical: 'read/projections/qc_inspection_result.sql',
+    table: 'qc_inspection_result',
+    constraints: [
+      'uq_qc_inspection_result_unit',
+      'chk_qc_inspection_result_class',
+      'chk_qc_inspection_result_unit_no',
+      'chk_qc_inspection_result_kind_pairing',
+      'chk_qc_inspection_result_instrument_pairing',
+    ],
+    indexes: [
+      'idx_qc_inspection_result_task_characteristic',
+      'idx_qc_inspection_result_task_recorder',
+    ],
+    indexBodies: [
+      'ON qc_inspection_result (task_id, characteristic_id)',
+      'ON qc_inspection_result (task_id, recorded_by)',
+    ],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 8.2 (FR-Q-03, AC 3): the per-(plan, site) switching state; advanced under lock (UPDATE).
+  {
+    canonical: 'read/projections/qc_sampling_switching_state.sql',
+    table: 'qc_sampling_switching_state',
+    constraints: [
+      'chk_qc_sampling_switching_state_severity',
+      'chk_qc_sampling_switching_state_counters',
+      'chk_qc_sampling_switching_state_window',
+    ],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
   },
 ];
 
@@ -1779,6 +1833,54 @@ describe('Story 2.1 schema drift guard', () => {
       assert.ok(!/GRANT[^;]*UPDATE/i.test(sql), `${table} must not grant UPDATE`);
     }
     assert.ok(!/GRANT[^;]*DELETE/i.test(read('read/projections/qc_inspection_task.sql')));
+  });
+
+  it('Story 8.2 registers the three sampling projections after qc_lot_disposition.sql, mirrors the task widening into init-db.sql, and pins the grants', () => {
+    const files = [
+      'qc_sampling_plan.sql',
+      'qc_inspection_result.sql',
+      'qc_sampling_switching_state.sql',
+    ].map((f) => `'../../read/projections/${f}'`);
+    const tail = "'../../read/projections/qc_lot_disposition.sql'";
+    let previous = migrateSource.lastIndexOf(tail);
+    assert.ok(previous >= 0, 'the Story 8.1 tail entry must still be registered');
+    for (const file of files) {
+      const index = migrateSource.indexOf(file);
+      assert.ok(index >= 0, `src/events/migrate.ts must apply ${file}`);
+      assert.ok(index > previous, `${file} must be registered after the preceding QC file`);
+      previous = index;
+    }
+    // The widened task-status vocabulary and the six additive columns are guarded blocks the
+    // EXPECTED loop cannot see; pin each one against init-db.sql.
+    const taskSql = read('read/projections/qc_inspection_task.sql');
+    assert.ok(
+      taskSql.includes("pg_get_constraintdef(oid) NOT LIKE '%sampling_determined%'"),
+      'the task-status widening must be guarded on pg_get_constraintdef',
+    );
+    for (const column of [
+      'sampling_id',
+      'sampling_outcome',
+      'nonconforming_sample_units',
+      'critical_nonconformities',
+      'inspected_by',
+      'inspected_at',
+    ]) {
+      const key = `column_name = '${column}'`;
+      assert.strictEqual(extractDoBlock(initDb, key), extractDoBlock(taskSql, key));
+    }
+    const widen = "NOT LIKE '%sampling_determined%'";
+    assert.strictEqual(extractDoBlock(initDb, widen), extractDoBlock(taskSql, widen));
+    const versionSql = read('read/projections/inspection_plan_version.sql');
+    assert.ok(versionSql.includes("IN ('I', 'II', 'III', 'S-1', 'S-2', 'S-3', 'S-4')"));
+    // Grants are pinned: no DELETE anywhere; UPDATE only on the task and the switching state.
+    for (const table of ['qc_sampling_plan', 'qc_inspection_result']) {
+      const sql = read(`read/projections/${table}.sql`);
+      assert.ok(!/GRANT[^;]*DELETE/i.test(sql), `${table} must not grant DELETE`);
+      assert.ok(!/GRANT[^;]*UPDATE/i.test(sql), `${table} must not grant UPDATE`);
+    }
+    const stateSql = read('read/projections/qc_sampling_switching_state.sql');
+    assert.ok(!/GRANT[^;]*DELETE/i.test(stateSql));
+    assert.ok(stateSql.includes('GRANT INSERT, SELECT, UPDATE ON qc_sampling_switching_state'));
   });
 
   it('Story 7.8 mirrors the additive maintenance_work_order status columns and the widened status CHECK into init-db.sql', () => {

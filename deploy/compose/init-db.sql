@@ -8907,7 +8907,8 @@ CREATE TABLE IF NOT EXISTS inspection_plan_version (
   CONSTRAINT chk_inspection_plan_version_sampling_pairing CHECK (
     (aql IS NULL AND inspection_level IS NULL)
     OR (aql IS NOT NULL AND inspection_level IS NOT NULL AND btrim(inspection_level) <> '' AND char_length(inspection_level) <= 16)
-  )
+  ),
+  CONSTRAINT chk_inspection_plan_version_level_vocab CHECK (inspection_level IS NULL OR inspection_level IN ('I', 'II', 'III', 'S-1', 'S-2', 'S-3', 'S-4'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_inspection_plan_version_plan_effective ON inspection_plan_version (plan_id, effective_from DESC, version_no DESC);
@@ -8956,6 +8957,22 @@ BEGIN
         (aql IS NULL AND inspection_level IS NULL)
         OR (aql IS NOT NULL AND inspection_level IS NOT NULL AND btrim(inspection_level) <> '' AND char_length(inspection_level) <= 16)
       );
+  END IF;
+END $$;
+
+-- Story 8.2 (Annex requirement 3): the inspection-level vocabulary of IS 2500 (Part 1) Table I,
+-- guarded separately so a Story 8.1 database gains it on re-apply.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_version_level_vocab'
+      AND conrelid = 'inspection_plan_version'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_version
+      ADD CONSTRAINT chk_inspection_plan_version_level_vocab CHECK (inspection_level IS NULL OR inspection_level IN ('I', 'II', 'III', 'S-1', 'S-2', 'S-3', 'S-4')) NOT VALID;
+    ALTER TABLE inspection_plan_version
+      VALIDATE CONSTRAINT chk_inspection_plan_version_level_vocab;
   END IF;
 END $$;
 
@@ -9200,9 +9217,12 @@ END $$;
 --
 -- gate_status vocabulary in this story: qc_hold (the entry state every completion posts into, no
 -- bypass) and conditionally_released (the FR-Q-05 disposition state, distinct from a bypass).
--- Story 8.3 widens it for accept and reject. task_status is 'open' until Story 8.2 adds sampling
--- and result capture. The frozen plan_version_id never changes after creation (Annex requirement
--- 6): later plan approvals must never alter the plan a held lot is inspected against.
+-- Story 8.3 widens it for accept and reject. task_status is the INSPECTION axis, independent of
+-- the gate: 'open' at creation, 'sampling_determined' once Story 8.2 freezes the sampling plan
+-- (results are accepted only in this state), 'inspected' once inspection completes with its
+-- sampling_outcome and counts (the Story 8.2 additive columns below; sampling_id references the
+-- frozen qc_sampling_plan row). The frozen plan_version_id never changes after creation (Annex
+-- requirement 6): later plan approvals must never alter the plan a held lot is inspected against.
 --
 -- uq_qc_inspection_task_lot and uq_qc_inspection_task_source make replay and concurrent delivery of
 -- the same completion a single effect (a 23505 on either resolves to 409 DUPLICATE_QC_COMPLETION
@@ -9235,16 +9255,32 @@ CREATE TABLE IF NOT EXISTS qc_inspection_task (
   source_event_id         UUID NOT NULL,
   created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sampling_id             UUID,
+  sampling_outcome        TEXT,
+  nonconforming_sample_units INTEGER,
+  critical_nonconformities   INTEGER,
+  inspected_by            UUID,
+  inspected_at            TIMESTAMPTZ,
   CONSTRAINT uq_qc_inspection_task_lot UNIQUE (lot_id),
   CONSTRAINT uq_qc_inspection_task_source UNIQUE (source_completion_type, source_completion_id),
   CONSTRAINT chk_qc_inspection_task_quantity CHECK (quantity > 0),
   CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order')),
-  CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open')),
+  CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected')),
   CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released')),
   CONSTRAINT chk_qc_inspection_task_plan_scope CHECK (plan_scope IN ('standard', 'customer_override')),
   CONSTRAINT chk_qc_inspection_task_scope_pairing CHECK (
     (plan_scope = 'standard' AND source_order_type IS NULL AND source_order_ref IS NULL)
     OR (plan_scope = 'customer_override' AND source_order_type = 'job_work_order' AND source_order_ref IS NOT NULL AND btrim(source_order_ref) <> '')
+  ),
+  CONSTRAINT chk_qc_inspection_task_sampling_outcome CHECK (sampling_outcome IS NULL OR sampling_outcome IN ('accepted', 'not_accepted')),
+  CONSTRAINT chk_qc_inspection_task_status_pairing CHECK (
+    (task_status = 'open' AND sampling_id IS NULL AND sampling_outcome IS NULL AND inspected_by IS NULL AND inspected_at IS NULL)
+    OR (task_status = 'sampling_determined' AND sampling_id IS NOT NULL AND sampling_outcome IS NULL AND inspected_by IS NULL AND inspected_at IS NULL)
+    OR (task_status = 'inspected' AND sampling_id IS NOT NULL AND sampling_outcome IS NOT NULL AND inspected_by IS NOT NULL AND inspected_at IS NOT NULL)
+  ),
+  CONSTRAINT chk_qc_inspection_task_counts CHECK (
+    (nonconforming_sample_units IS NULL OR nonconforming_sample_units >= 0)
+    AND (critical_nonconformities IS NULL OR critical_nonconformities >= 0)
   )
 );
 
@@ -9291,7 +9327,7 @@ BEGIN
       AND conrelid = 'qc_inspection_task'::regclass
   ) THEN
     ALTER TABLE qc_inspection_task
-      ADD CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open'));
+      ADD CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected'));
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -9318,6 +9354,125 @@ BEGIN
       ADD CONSTRAINT chk_qc_inspection_task_scope_pairing CHECK (
         (plan_scope = 'standard' AND source_order_type IS NULL AND source_order_ref IS NULL)
         OR (plan_scope = 'customer_override' AND source_order_type = 'job_work_order' AND source_order_ref IS NOT NULL AND btrim(source_order_ref) <> '')
+      );
+  END IF;
+END $$;
+
+-- Story 8.2 (Binding Scope Decision 5): widen the task-status vocabulary on a database created by
+-- Story 8.1, where chk_qc_inspection_task_status admits only 'open'. Guarded on
+-- pg_get_constraintdef, dropping the narrow definition and re-adding the widened one; once the
+-- definition names sampling_determined the block is a no-op on every re-run.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_status'
+      AND conrelid = 'qc_inspection_task'::regclass
+      AND pg_get_constraintdef(oid) NOT LIKE '%sampling_determined%'
+  ) THEN
+    ALTER TABLE qc_inspection_task DROP CONSTRAINT chk_qc_inspection_task_status;
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'sampling_id'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN sampling_id UUID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'sampling_outcome'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN sampling_outcome TEXT;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'nonconforming_sample_units'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN nonconforming_sample_units INTEGER;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'critical_nonconformities'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN critical_nonconformities INTEGER;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'inspected_by'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN inspected_by UUID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'inspected_at'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN inspected_at TIMESTAMPTZ;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_sampling_outcome'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_sampling_outcome CHECK (sampling_outcome IS NULL OR sampling_outcome IN ('accepted', 'not_accepted'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_status_pairing'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_status_pairing CHECK (
+        (task_status = 'open' AND sampling_id IS NULL AND sampling_outcome IS NULL AND inspected_by IS NULL AND inspected_at IS NULL)
+        OR (task_status = 'sampling_determined' AND sampling_id IS NOT NULL AND sampling_outcome IS NULL AND inspected_by IS NULL AND inspected_at IS NULL)
+        OR (task_status = 'inspected' AND sampling_id IS NOT NULL AND sampling_outcome IS NOT NULL AND inspected_by IS NOT NULL AND inspected_at IS NOT NULL)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_counts'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_counts CHECK (
+        (nonconforming_sample_units IS NULL OR nonconforming_sample_units >= 0)
+        AND (critical_nonconformities IS NULL OR critical_nonconformities >= 0)
       );
   END IF;
 END $$;
@@ -9538,5 +9693,339 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON qc_lot_disposition TO readonly_user;
+  END IF;
+END $$;
+
+-- QC sampling plan (Story 8.2, FR-Q-03, AC 1). This file is the CANONICAL definition, applied by
+-- src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It carries its OWN
+-- grants (guarded DO blocks) so a migrate-provisioned database can serve reads/writes as app_user
+-- without depending on deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates this
+-- content for first-boot container init - change both files together. Every statement is
+-- idempotent (IF NOT EXISTS / guarded DO blocks) so the file can be re-applied to a live database
+-- safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.sampling_determined domain events;
+-- mutation happens exclusively through persistEvent inside the SAME transaction as the
+-- domain_events insert.
+--
+-- The plan FROZEN on a task: the IS 2500 (Part 1) / ISO 2859-1 single-sampling plan derived on the
+-- server from the frozen plan version's AQL and inspection level, the lot size and the switching
+-- state's severity at the moment of determination. Every later determination attempt for the same
+-- task replays this row (uq_qc_sampling_plan_task is the concurrency backstop; a 23505 resolves to
+-- 409 QC_SAMPLING_EXISTS in the store's constraint chain). A version with no AQL freezes a
+-- full_inspection plan (sample_size = lot_size, no Ac/Re, no code letter).
+--
+-- Append-only: app_user holds INSERT and SELECT only, never UPDATE or DELETE.
+
+CREATE TABLE IF NOT EXISTS qc_sampling_plan (
+  sampling_id                    UUID PRIMARY KEY,
+  task_id                        UUID NOT NULL,
+  lot_id                         UUID NOT NULL,
+  lot_number                     TEXT NOT NULL,
+  plan_version_id                UUID NOT NULL,
+  plan_id                        UUID NOT NULL,
+  site_id                        UUID NOT NULL,
+  lot_size                       INTEGER NOT NULL,
+  aql                            NUMERIC(7, 3),
+  inspection_level               TEXT,
+  severity                       TEXT NOT NULL,
+  code_letter                    TEXT,
+  resolved_code_letter           TEXT,
+  sample_size                    INTEGER NOT NULL,
+  acceptance_number              INTEGER,
+  rejection_number               INTEGER,
+  sampling_basis                 TEXT NOT NULL,
+  standard_ref                   TEXT NOT NULL,
+  critical_characteristic_count  INTEGER NOT NULL,
+  determined_by                  UUID NOT NULL,
+  determined_at                  TIMESTAMPTZ NOT NULL,
+  source_event_id                UUID NOT NULL,
+  created_at                     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_qc_sampling_plan_task UNIQUE (task_id),
+  CONSTRAINT chk_qc_sampling_plan_severity CHECK (severity IN ('normal', 'tightened', 'reduced')),
+  CONSTRAINT chk_qc_sampling_plan_basis CHECK (sampling_basis IN ('aql_table', 'full_inspection')),
+  CONSTRAINT chk_qc_sampling_plan_level CHECK (inspection_level IS NULL OR inspection_level IN ('I', 'II', 'III', 'S-1', 'S-2', 'S-3', 'S-4')),
+  CONSTRAINT chk_qc_sampling_plan_sizes CHECK (lot_size > 0 AND sample_size > 0 AND sample_size <= lot_size AND critical_characteristic_count >= 0 AND (sampling_basis <> 'full_inspection' OR sample_size = lot_size)),
+  CONSTRAINT chk_qc_sampling_plan_ac_re CHECK (
+    (acceptance_number IS NULL AND rejection_number IS NULL)
+    OR (acceptance_number IS NOT NULL AND rejection_number IS NOT NULL AND acceptance_number >= 0 AND rejection_number > acceptance_number)
+  ),
+  CONSTRAINT chk_qc_sampling_plan_basis_pairing CHECK (
+    (sampling_basis = 'full_inspection' AND aql IS NULL AND inspection_level IS NULL AND code_letter IS NULL AND resolved_code_letter IS NULL AND acceptance_number IS NULL)
+    OR (sampling_basis = 'aql_table' AND aql IS NOT NULL AND inspection_level IS NOT NULL AND code_letter IS NOT NULL AND resolved_code_letter IS NOT NULL AND acceptance_number IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_qc_sampling_plan_plan_site ON qc_sampling_plan (plan_id, site_id, determined_at);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_qc_sampling_plan_task'
+      AND conrelid = 'qc_sampling_plan'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_plan
+      ADD CONSTRAINT uq_qc_sampling_plan_task UNIQUE (task_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_sampling_plan_severity'
+      AND conrelid = 'qc_sampling_plan'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_plan
+      ADD CONSTRAINT chk_qc_sampling_plan_severity CHECK (severity IN ('normal', 'tightened', 'reduced'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_sampling_plan_basis'
+      AND conrelid = 'qc_sampling_plan'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_plan
+      ADD CONSTRAINT chk_qc_sampling_plan_basis CHECK (sampling_basis IN ('aql_table', 'full_inspection'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_sampling_plan_level'
+      AND conrelid = 'qc_sampling_plan'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_plan
+      ADD CONSTRAINT chk_qc_sampling_plan_level CHECK (inspection_level IS NULL OR inspection_level IN ('I', 'II', 'III', 'S-1', 'S-2', 'S-3', 'S-4'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_sampling_plan_sizes'
+      AND conrelid = 'qc_sampling_plan'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_plan
+      ADD CONSTRAINT chk_qc_sampling_plan_sizes CHECK (lot_size > 0 AND sample_size > 0 AND sample_size <= lot_size AND critical_characteristic_count >= 0 AND (sampling_basis <> 'full_inspection' OR sample_size = lot_size));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_sampling_plan_ac_re'
+      AND conrelid = 'qc_sampling_plan'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_plan
+      ADD CONSTRAINT chk_qc_sampling_plan_ac_re CHECK (
+        (acceptance_number IS NULL AND rejection_number IS NULL)
+        OR (acceptance_number IS NOT NULL AND rejection_number IS NOT NULL AND acceptance_number >= 0 AND rejection_number > acceptance_number)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_sampling_plan_basis_pairing'
+      AND conrelid = 'qc_sampling_plan'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_plan
+      ADD CONSTRAINT chk_qc_sampling_plan_basis_pairing CHECK (
+        (sampling_basis = 'full_inspection' AND aql IS NULL AND inspection_level IS NULL AND code_letter IS NULL AND resolved_code_letter IS NULL AND acceptance_number IS NULL)
+        OR (sampling_basis = 'aql_table' AND aql IS NOT NULL AND inspection_level IS NOT NULL AND code_letter IS NOT NULL AND resolved_code_letter IS NOT NULL AND acceptance_number IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON qc_sampling_plan TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON qc_sampling_plan TO readonly_user;
+  END IF;
+END $$;
+
+-- QC inspection result (Story 8.2, FR-Q-03, FR-Q-04, AC 2, AC 4, AC 5). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.result_recorded (instrument-bound) and
+-- qc.observation_recorded (instrument-less attribute) domain events; mutation happens exclusively
+-- through persistEvent inside the SAME transaction as the domain_events insert.
+--
+-- One authoritative, immutable result per (task, characteristic, sample unit) (Annex requirement
+-- 6): uq_qc_inspection_result_unit is the concurrency backstop and a 23505 resolves to 409
+-- QC_RESULT_EXISTS in the store's constraint chain. conforms is derived on the server and stored
+-- (Annex requirement 7). An instrument-bound result carries BOTH the register asset and the QC
+-- instrument key the calibration gate reads; an observation carries neither
+-- (chk_qc_inspection_result_instrument_pairing). recorded_by is the segregation-of-duties
+-- substrate the conditional-release seam reads (Binding Scope Decision 12).
+--
+-- Append-only: app_user holds INSERT and SELECT only, never UPDATE or DELETE.
+
+CREATE TABLE IF NOT EXISTS qc_inspection_result (
+  result_id             UUID PRIMARY KEY,
+  task_id               UUID NOT NULL,
+  lot_id                UUID NOT NULL,
+  characteristic_id     UUID NOT NULL,
+  characteristic_class  TEXT NOT NULL,
+  sample_unit_no        INTEGER NOT NULL,
+  result_kind           TEXT NOT NULL,
+  measured_value        NUMERIC(18, 6),
+  measured_uom          TEXT,
+  attribute_conforms    BOOLEAN,
+  conforms              BOOLEAN NOT NULL,
+  instrument_asset_id   UUID,
+  instrument_id         TEXT,
+  recorded_by           UUID NOT NULL,
+  recorded_at           TIMESTAMPTZ NOT NULL,
+  source_event_id       UUID NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_qc_inspection_result_unit UNIQUE (task_id, characteristic_id, sample_unit_no),
+  CONSTRAINT chk_qc_inspection_result_class CHECK (characteristic_class IN ('critical', 'major', 'minor')),
+  CONSTRAINT chk_qc_inspection_result_unit_no CHECK (sample_unit_no > 0),
+  CONSTRAINT chk_qc_inspection_result_kind_pairing CHECK (
+    (result_kind = 'numeric' AND measured_value IS NOT NULL AND measured_uom IS NOT NULL AND attribute_conforms IS NULL)
+    OR (result_kind = 'attribute' AND measured_value IS NULL AND measured_uom IS NULL AND attribute_conforms IS NOT NULL)
+  ),
+  CONSTRAINT chk_qc_inspection_result_instrument_pairing CHECK (
+    (instrument_asset_id IS NULL AND instrument_id IS NULL)
+    OR (instrument_asset_id IS NOT NULL AND instrument_id IS NOT NULL AND btrim(instrument_id) <> '')
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_qc_inspection_result_task_characteristic ON qc_inspection_result (task_id, characteristic_id);
+CREATE INDEX IF NOT EXISTS idx_qc_inspection_result_task_recorder ON qc_inspection_result (task_id, recorded_by);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_qc_inspection_result_unit'
+      AND conrelid = 'qc_inspection_result'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_result
+      ADD CONSTRAINT uq_qc_inspection_result_unit UNIQUE (task_id, characteristic_id, sample_unit_no);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_result_class'
+      AND conrelid = 'qc_inspection_result'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_result
+      ADD CONSTRAINT chk_qc_inspection_result_class CHECK (characteristic_class IN ('critical', 'major', 'minor'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_result_unit_no'
+      AND conrelid = 'qc_inspection_result'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_result
+      ADD CONSTRAINT chk_qc_inspection_result_unit_no CHECK (sample_unit_no > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_result_kind_pairing'
+      AND conrelid = 'qc_inspection_result'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_result
+      ADD CONSTRAINT chk_qc_inspection_result_kind_pairing CHECK (
+        (result_kind = 'numeric' AND measured_value IS NOT NULL AND measured_uom IS NOT NULL AND attribute_conforms IS NULL)
+        OR (result_kind = 'attribute' AND measured_value IS NULL AND measured_uom IS NULL AND attribute_conforms IS NOT NULL)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_result_instrument_pairing'
+      AND conrelid = 'qc_inspection_result'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_result
+      ADD CONSTRAINT chk_qc_inspection_result_instrument_pairing CHECK (
+        (instrument_asset_id IS NULL AND instrument_id IS NULL)
+        OR (instrument_asset_id IS NOT NULL AND instrument_id IS NOT NULL AND btrim(instrument_id) <> '')
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON qc_inspection_result TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON qc_inspection_result TO readonly_user;
+  END IF;
+END $$;
+
+-- QC sampling switching state (Story 8.2, FR-Q-03, AC 3). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.inspection_completed and
+-- qc.sampling_state_adjusted domain events in stream order; mutation happens exclusively through
+-- persistEvent inside the SAME transaction as the domain_events insert.
+--
+-- The ISO 2859-1 clause 9.3 switching state kept per (plan, site) (Binding Scope Decision 7): the
+-- current severity, the clause 9.3.3.2 switching score, the window of at most five most recent
+-- original-inspection outcomes (newest last), the tightened-inspection counters, the
+-- reduced-eligibility flag that a QC Head-level command turns into reduced inspection, and the
+-- discontinuation flag that a QC Head-level command resumes on tightened. The row is read under
+-- lock at sampling determination and advanced under lock at inspection completion.
+--
+-- app_user holds INSERT, SELECT, UPDATE (the advance) and never DELETE.
+
+CREATE TABLE IF NOT EXISTS qc_sampling_switching_state (
+  plan_id                            UUID NOT NULL,
+  site_id                            UUID NOT NULL,
+  severity                           TEXT NOT NULL DEFAULT 'normal',
+  switching_score                    INTEGER NOT NULL DEFAULT 0,
+  recent_original_outcomes           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  consecutive_accepted_on_tightened  INTEGER NOT NULL DEFAULT 0,
+  not_accepted_on_tightened          INTEGER NOT NULL DEFAULT 0,
+  reduced_eligible                   BOOLEAN NOT NULL DEFAULT false,
+  inspection_discontinued            BOOLEAN NOT NULL DEFAULT false,
+  last_task_id                       UUID,
+  lots_counted                       INTEGER NOT NULL DEFAULT 0,
+  source_event_id                    UUID NOT NULL,
+  created_at                         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT pk_qc_sampling_switching_state PRIMARY KEY (plan_id, site_id),
+  CONSTRAINT chk_qc_sampling_switching_state_severity CHECK (severity IN ('normal', 'tightened', 'reduced')),
+  CONSTRAINT chk_qc_sampling_switching_state_counters CHECK (switching_score >= 0 AND consecutive_accepted_on_tightened >= 0 AND not_accepted_on_tightened >= 0 AND lots_counted >= 0),
+  CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(recent_original_outcomes) e WHERE jsonb_typeof(e) <> 'boolean'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_sampling_switching_state_severity'
+      AND conrelid = 'qc_sampling_switching_state'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_switching_state
+      ADD CONSTRAINT chk_qc_sampling_switching_state_severity CHECK (severity IN ('normal', 'tightened', 'reduced'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_sampling_switching_state_counters'
+      AND conrelid = 'qc_sampling_switching_state'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_switching_state
+      ADD CONSTRAINT chk_qc_sampling_switching_state_counters CHECK (switching_score >= 0 AND consecutive_accepted_on_tightened >= 0 AND not_accepted_on_tightened >= 0 AND lots_counted >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_sampling_switching_state_window'
+      AND conrelid = 'qc_sampling_switching_state'::regclass
+  ) THEN
+    ALTER TABLE qc_sampling_switching_state
+      ADD CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(recent_original_outcomes) e WHERE jsonb_typeof(e) <> 'boolean'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON qc_sampling_switching_state TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON qc_sampling_switching_state TO readonly_user;
   END IF;
 END $$;

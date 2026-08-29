@@ -204,6 +204,8 @@ import {
   resolveInspectionPlanEffectivityDuplicateConflict,
   resolveQcCompletionDuplicateConflict,
   resolveQcDispositionDuplicateConflict,
+  resolveQcSamplingDuplicateConflict,
+  resolveQcResultDuplicateConflict,
 } from '../compliance/quality.js';
 import {
   assertProductionMaterialShape,
@@ -1595,6 +1597,31 @@ export async function persistEvent(
           'DISPOSITION_EXISTS',
           'A disposition has already been recorded for this lot',
           { constraint, ...(await resolveQcDispositionDuplicateConflict(envelope.payload)) },
+        );
+      } else if (
+        constraint === 'uq_qc_sampling_plan_task' ||
+        constraint === 'qc_sampling_plan_pkey'
+      ) {
+        // Story 8.2 (AC 1): one frozen sampling plan per task. Two simultaneous determinations
+        // produce one plan; the loser gets the same code and existing_sampling_id as the
+        // sequential pre-check.
+        throw new AppError(
+          409,
+          'QC_SAMPLING_EXISTS',
+          'A sampling plan is already frozen on this task',
+          { constraint, ...(await resolveQcSamplingDuplicateConflict(envelope.payload)) },
+        );
+      } else if (
+        constraint === 'uq_qc_inspection_result_unit' ||
+        constraint === 'qc_inspection_result_pkey'
+      ) {
+        // Story 8.2 (Annex requirement 6): exactly one authoritative result per (task,
+        // characteristic, sample unit). Two simultaneous batches for the same unit produce one row.
+        throw new AppError(
+          409,
+          'QC_RESULT_EXISTS',
+          'A result already exists for this task, characteristic and sample unit',
+          { constraint, ...resolveQcResultDuplicateConflict(envelope.payload) },
         );
       } else if (constraint === 'uq_production_order_number_ext') {
         // Story 6.1: the server-allocated order number is unique. The sequential pre-check (the

@@ -1,5 +1,6 @@
 import { AppError } from '../middleware/error.js';
 import type { EventEnvelope } from '../events/store.js';
+import { QC_CENTRAL_ONLY_EVENT_TYPES } from '../compliance/quality.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -163,6 +164,20 @@ const PERMANENT_ERROR_CODES = new Set([
   'SPARE_DERIVATION_MISMATCH',
   'COST_DERIVATION_MISMATCH',
   'INVALID_PAYLOAD',
+  // Story 8.2: every permanent code a qc.result_recorded upload can surface from the sampling and
+  // result-capture seam (FR-Q-03, FR-Q-04). The twin set in edge/src/sync/connector.ts carries the
+  // identical block (the Story 4.3 rule); CALIBRATION_LOCKOUT is already present above.
+  'QC_TASK_NOT_FOUND',
+  'QC_SAMPLING_REQUIRED',
+  'QC_TASK_NOT_OPEN_FOR_RESULTS',
+  'QC_CHARACTERISTIC_NOT_IN_PLAN',
+  'QC_SAMPLE_UNIT_OUT_OF_RANGE',
+  'QC_RESULT_KIND_MISMATCH',
+  'QC_RESULT_UOM_MISMATCH',
+  'QC_RESULT_EXISTS',
+  'INSTRUMENT_NOT_FOUND',
+  'INSTRUMENT_NOT_PERMITTED',
+  'QC_DERIVATION_MISMATCH',
 ]);
 
 /** Story 7.8: the server-side twin of the edge connector's permanent set, exported for the edge upload handler's safety-fault queueing decision. */
@@ -185,17 +200,25 @@ export const EDGE_MAINTENANCE_EVENT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Story 8.1 (Binding Scope Decision 9): plan creation, plan approval, the completion hand-off and
- * conditional release are central-control operations. EVERY `qc.*` event type other than the
- * Story 1.7 synthetic qc.result_recorded rejects 403 CENTRAL_ONLY_OPERATION on
- * POST /api/v1/edge/events, so the seam DOA re-derivation is not the only thing between a device
- * and an approval. This story adds no QC edge UI or PowerSync bucket.
+ * Story 8.1 (Binding Scope Decision 9) / Story 8.2 (Binding Scope Decision 8): plan creation, plan
+ * approval, the completion hand-off, conditional release, sampling determination, observations,
+ * inspection completion and the switching-state commands are central-control operations. EVERY
+ * `qc.*` event type other than qc.result_recorded (the Story 1.7 synthetic shape and the Story 8.2
+ * instrument-bound result batch) rejects 403 CENTRAL_ONLY_OPERATION on POST /api/v1/edge/events,
+ * so the seam DOA re-derivation is not the only thing between a device and an approval. The
+ * explicit QC_CENTRAL_ONLY_EVENT_TYPES set is checked first so a registered central-only type can
+ * never be admitted by a widening of this allowlist alone. No QC edge UI or PowerSync bucket.
  */
 export const EDGE_QC_EVENT_TYPES: ReadonlySet<string> = new Set(['qc.result_recorded']);
 
 export function assertEdgeQcEventAllowed(envelope: EventEnvelope): void {
   if (!envelope.event_type.startsWith('qc.')) return;
-  if (EDGE_QC_EVENT_TYPES.has(envelope.event_type)) return;
+  if (
+    !QC_CENTRAL_ONLY_EVENT_TYPES.has(envelope.event_type) &&
+    EDGE_QC_EVENT_TYPES.has(envelope.event_type)
+  ) {
+    return;
+  }
   throw new AppError(
     403,
     'CENTRAL_ONLY_OPERATION',

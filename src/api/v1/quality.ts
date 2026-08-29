@@ -20,11 +20,26 @@ import {
   INSPECTION_PLAN_APPROVAL_DOA_TYPE,
   INSPECTION_PLAN_APPROVED,
   INSPECTION_PLAN_CREATED,
+  MAX_READINGS_PER_RESULT,
   QC_CONDITIONAL_RELEASE_RECORDED,
+  QC_INSPECTION_COMPLETED,
+  QC_OBSERVATION_RECORDED,
+  QC_RESULT_RECORDED,
+  QC_SAMPLING_DETERMINED,
+  QC_SAMPLING_STATE_ADJUSTED,
+  SWITCHING_ACTIONS,
   resolveInspectionPlanForLot,
   resolveQcAuthority,
 } from '../../compliance/quality.js';
+import { config } from '../../config/index.js';
 import { receiveQcCompletion } from '../../quality/completion.js';
+import { getQcSamplingPlanByTaskId } from '../../read/projections/qc_sampling_plan.js';
+import { listQcInspectionResults } from '../../read/projections/qc_inspection_result.js';
+import {
+  getSwitchingState,
+  listSwitchingStates,
+} from '../../read/projections/qc_sampling_switching_state.js';
+import { getInstrumentRecordByAssetId } from '../../read/projections/instrument_register.js';
 import {
   getInspectionPlanByGrain,
   getInspectionPlanById,
@@ -39,7 +54,7 @@ import {
   getQcInspectionTaskById,
   listQcInspectionTasks,
 } from '../../read/projections/qc_inspection_task.js';
-import type { QcGateStatus } from '../../read/projections/qc_inspection_task.js';
+import type { QcGateStatus, QcTaskStatus } from '../../read/projections/qc_inspection_task.js';
 import { getConditionalReleaseForLot } from '../../read/projections/qc_lot_disposition.js';
 
 /**
@@ -58,6 +73,7 @@ const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO8601_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const GATE_STATUSES = new Set(['qc_hold', 'conditionally_released']);
+const TASK_STATUSES = new Set(['open', 'sampling_determined', 'inspected']);
 const PLAN_SCOPES = new Set(['standard', 'customer_override']);
 
 function isUuid(value: unknown): value is string {
@@ -146,11 +162,14 @@ async function auditRejectedAttempt(
   actor: ActorContext,
   err: AppError,
   details: Record<string, unknown>,
+  /** Story 8.2 (Binding Scope Decision 11): the task's site, not an arbitrary role assignment. */
+  locationId?: string,
 ): Promise<void> {
   const auditClient = await getPool().connect();
   try {
     await logAuditEntry(auditClient, {
       ...auditCtxFor(req, actor, err.statusCode),
+      ...(locationId ? { location_id: locationId } : {}),
       event_id: null,
       error_code: err.errorCode,
       details: { ...details, ...err.details },
@@ -160,7 +179,17 @@ async function auditRejectedAttempt(
   }
 }
 
-const AUDITED_REJECTIONS = new Set(['APPROVAL_REQUIRED', 'APPROVAL_UNRESOLVED', 'SOD_VIOLATION']);
+/**
+ * Story 8.2 (AC 5, FR-Q-13) adds CALIBRATION_LOCKOUT: a rejected attempt to record a result with a
+ * non-calibrated instrument is written to the statutory audit log with actor, task, lot,
+ * instrument, endpoint, trace id and code.
+ */
+const AUDITED_REJECTIONS = new Set([
+  'APPROVAL_REQUIRED',
+  'APPROVAL_UNRESOLVED',
+  'SOD_VIOLATION',
+  'CALIBRATION_LOCKOUT',
+]);
 
 function requireBody(
   req: IncomingMessage,
@@ -361,7 +390,13 @@ const listInspectionPlansBase: RouteHandler = async (req, res, _params) => {
     (limitRaw !== null && !/^\d+$/.test(limitRaw)) ||
     (offsetRaw !== null && !/^\d+$/.test(offsetRaw))
   ) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'limit and offset must be non-negative integers');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'limit and offset must be non-negative integers',
+    );
     return;
   }
   const plans = await listInspectionPlans({
@@ -397,7 +432,10 @@ const resolveInspectionPlanBase: RouteHandler = async (req, res, _params) => {
         'source_order_type must be job_work_order when supplied',
       );
     }
-    if (sourceOrderType === 'job_work_order' && (sourceOrderRef === null || sourceOrderRef.trim() === '')) {
+    if (
+      sourceOrderType === 'job_work_order' &&
+      (sourceOrderRef === null || sourceOrderRef.trim() === '')
+    ) {
       throw new AppError(
         400,
         'INVALID_PARAMS',
@@ -629,9 +667,55 @@ const submitSyntheticCompletionBase: RouteHandler = async (req, res, _params) =>
 // Tasks and conditional release (FR-Q-02, FR-Q-05)
 // ---------------------------------------------------------------------------
 
+/**
+ * Story 8.2 (Binding Scope Decision 10): every task-scoped read is location-scoped through the
+ * caller's `qc` read assignments against the task's site; list routes are narrowed to the permitted
+ * sites when the caller holds no wildcard read.
+ */
+function readSiteScope(req: IncomingMessage): { wildcard: boolean; locations: Set<string> } {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  return permittedLocationsForModuleScope(authContext.roles, 'qc', 'read');
+}
+
+function assertReadSiteAccess(req: IncomingMessage, siteId: string): void {
+  const scope = readSiteScope(req);
+  if (!scope.wildcard && !scope.locations.has(siteId)) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No read assignment grants access to site "${siteId}"`,
+      { site_id: siteId },
+    );
+  }
+}
+
+/** Narrows a list query to the caller's read scope; returns null when the caller can see nothing. */
+function scopedSiteIds(
+  req: IncomingMessage,
+  requestedSiteId: string | null,
+): { site_id?: string; site_ids?: string[] } | null {
+  const scope = readSiteScope(req);
+  if (scope.wildcard) return requestedSiteId ? { site_id: requestedSiteId } : {};
+  if (requestedSiteId) {
+    if (!scope.locations.has(requestedSiteId)) {
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `No read assignment grants access to site "${requestedSiteId}"`,
+        { site_id: requestedSiteId },
+      );
+    }
+    return { site_id: requestedSiteId };
+  }
+  if (scope.locations.size === 0) return null;
+  return { site_ids: [...scope.locations] };
+}
+
 const listTasksBase: RouteHandler = async (req, res, _params) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const gateStatus = url.searchParams.get('gate_status');
+  const taskStatus = url.searchParams.get('task_status');
   const siteId = url.searchParams.get('site_id');
   const sku = url.searchParams.get('sku');
   const limitRaw = url.searchParams.get('limit');
@@ -646,6 +730,16 @@ const listTasksBase: RouteHandler = async (req, res, _params) => {
     );
     return;
   }
+  if (taskStatus !== null && !TASK_STATUSES.has(taskStatus)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'task_status must be one of: open, sampling_determined, inspected',
+    );
+    return;
+  }
   if (siteId !== null && !isUuid(siteId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'site_id must be a UUID');
     return;
@@ -654,17 +748,33 @@ const listTasksBase: RouteHandler = async (req, res, _params) => {
     (limitRaw !== null && !/^\d+$/.test(limitRaw)) ||
     (offsetRaw !== null && !/^\d+$/.test(offsetRaw))
   ) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'limit and offset must be non-negative integers');
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'limit and offset must be non-negative integers',
+    );
     return;
   }
-  const tasks = await listQcInspectionTasks({
-    gate_status: (gateStatus as QcGateStatus | null) ?? undefined,
-    site_id: siteId ?? undefined,
-    sku: sku ?? undefined,
-    limit: limitRaw === null ? undefined : Number(limitRaw),
-    offset: offsetRaw === null ? undefined : Number(offsetRaw),
-  });
-  sendJson(res, 200, { tasks });
+  try {
+    const scoped = scopedSiteIds(req, siteId);
+    if (scoped === null) {
+      sendJson(res, 200, { tasks: [] });
+      return;
+    }
+    const tasks = await listQcInspectionTasks({
+      gate_status: (gateStatus as QcGateStatus | null) ?? undefined,
+      task_status: (taskStatus as QcTaskStatus | null) ?? undefined,
+      ...scoped,
+      sku: sku ?? undefined,
+      limit: limitRaw === null ? undefined : Number(limitRaw),
+      offset: offsetRaw === null ? undefined : Number(offsetRaw),
+    });
+    sendJson(res, 200, { tasks });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
 };
 
 const getTaskBase: RouteHandler = async (req, res, params) => {
@@ -676,9 +786,12 @@ const getTaskBase: RouteHandler = async (req, res, params) => {
         task_id: taskId,
       });
     }
+    assertReadSiteAccess(req, task.site_id);
     const release = await getConditionalReleaseForLot(task.lot_id);
+    const sampling = await getQcSamplingPlanByTaskId(taskId);
     sendJson(res, 200, {
       task,
+      sampling,
       disposition: release?.disposition ?? null,
       deviation: release?.deviation ?? null,
     });
@@ -796,6 +909,445 @@ const recordConditionalReleaseBase: RouteHandler = async (req, res, params) => {
 };
 
 // ---------------------------------------------------------------------------
+// Story 8.2: sampling, results, observations, completion, switching state (FR-Q-03, FR-Q-04)
+// ---------------------------------------------------------------------------
+
+async function requireTask(
+  taskId: string,
+): Promise<NonNullable<Awaited<ReturnType<typeof getQcInspectionTaskById>>>> {
+  const task = await getQcInspectionTaskById(taskId);
+  if (!task) {
+    throw new AppError(404, 'QC_TASK_NOT_FOUND', 'QC inspection task not found', {
+      task_id: taskId,
+    });
+  }
+  return task;
+}
+
+function qcMetadata(actor: ActorContext, now: string): Record<string, unknown> {
+  return {
+    correlation_id: randomUUID(),
+    actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+    occurred_at: now,
+  };
+}
+
+/** A same-key replay must be the same event type for the same task; anything else is a reused key. */
+function assertTaskReplay(persisted: PersistedEvent, eventType: string, taskId: string): void {
+  const payloadTask = (persisted.payload as Record<string, unknown> | undefined)?.['task_id'];
+  if (persisted.event_type !== eventType || payloadTask !== taskId) {
+    throw new AppError(
+      409,
+      'DUPLICATE_EVENT',
+      'This idempotency key is already in use by a different event',
+      { existing_event_id: persisted.event_id, existing_event_type: persisted.event_type },
+    );
+  }
+}
+
+function optionalTimestamp(body: Record<string, unknown>, field: string, fallback: string): string {
+  const value = body[field];
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== 'string' || !ISO8601_TIMESTAMP_REGEX.test(value)) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `${field} must be an ISO 8601 timestamp with an explicit offset`,
+      { [field]: value },
+    );
+  }
+  return value;
+}
+
+/** Mints result ids for readings; every other reading field is validated by the seam. */
+function readingsFrom(body: Record<string, unknown>): Record<string, unknown>[] {
+  const readings = body['readings'];
+  if (!Array.isArray(readings) || readings.length === 0) {
+    throw new AppError(400, 'INVALID_PARAMS', 'readings must be a non-empty array');
+  }
+  if (readings.length > MAX_READINGS_PER_RESULT) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `readings must carry at most ${MAX_READINGS_PER_RESULT} entries`,
+      {
+        readings: readings.length,
+        max: MAX_READINGS_PER_RESULT,
+      },
+    );
+  }
+  return readings.map((raw) => {
+    const r =
+      typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : {};
+    // Task 8: result_id is always server-minted, never taken from the client, so the 200-vs-201
+    // replay comparison below has a value that is guaranteed fresh on every genuine new request.
+    const out: Record<string, unknown> = {
+      result_id: randomUUID(),
+      sample_unit_no: r['sample_unit_no'],
+    };
+    if (r['measured_value'] !== undefined) out['measured_value'] = r['measured_value'];
+    if (r['measured_uom'] !== undefined) out['measured_uom'] = r['measured_uom'];
+    if (r['attribute_conforms'] !== undefined) out['attribute_conforms'] = r['attribute_conforms'];
+    return out;
+  });
+}
+
+const determineSamplingBase: RouteHandler = async (req, res, params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    assertWriteSiteAccess(req, task.site_id);
+    // AC 1: every later determination attempt for the same task replays the frozen plan.
+    const frozen = await getQcSamplingPlanByTaskId(taskId);
+    if (frozen && task.task_status !== 'open') {
+      sendJson(res, 200, {
+        event_id: frozen.source_event_id,
+        sampling: frozen,
+        task,
+        replayed: true,
+      });
+      return;
+    }
+    const samplingId = randomUUID();
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: taskId,
+        event_type: QC_SAMPLING_DETERMINED,
+        payload: {
+          task_id: taskId,
+          sampling_id: samplingId,
+          determined_at: optionalTimestamp(body, 'determined_at', now),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedSamplingId = replayIdOrReject(persisted, QC_SAMPLING_DETERMINED, 'sampling_id');
+    assertTaskReplay(persisted, QC_SAMPLING_DETERMINED, taskId);
+    const sampling = await getQcSamplingPlanByTaskId(taskId);
+    const refreshed = await getQcInspectionTaskById(taskId);
+    sendJson(res, persistedSamplingId === samplingId ? 201 : 200, {
+      event_id: persisted.event_id,
+      sampling,
+      task: refreshed,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const getSamplingBase: RouteHandler = async (req, res, params) => {
+  try {
+    const taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    assertReadSiteAccess(req, task.site_id);
+    const sampling = await getQcSamplingPlanByTaskId(taskId);
+    const switchingState = sampling
+      ? await getSwitchingState(sampling.plan_id, sampling.site_id)
+      : await getSwitchingState(task.plan_id, task.site_id);
+    sendJson(res, 200, { task, sampling, switching_state: switchingState });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+async function recordBatch(
+  req: Parameters<RouteHandler>[0],
+  res: Parameters<RouteHandler>[1],
+  params: Parameters<RouteHandler>[2],
+  kind: 'result' | 'observation',
+): Promise<void> {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let taskId = '';
+  let lotId: string | null = null;
+  let siteId: string | undefined;
+  let instrumentAssetId: string | null = null;
+  let instrumentId: string | null = null;
+  try {
+    taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    lotId = task.lot_id;
+    siteId = task.site_id;
+    assertWriteSiteAccess(req, task.site_id);
+    if (!isUuid(body['characteristic_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'characteristic_id must be a UUID');
+    }
+    const readings = readingsFrom(body);
+    const recordedAt = optionalTimestamp(body, 'recorded_at', now);
+    const payload: Record<string, unknown> = {
+      task_id: taskId,
+      lot_id: task.lot_id,
+      characteristic_id: body['characteristic_id'],
+      readings,
+      recorded_at: recordedAt,
+    };
+    if (kind === 'result') {
+      if (!isUuid(body['instrument_asset_id'])) {
+        throw new AppError(400, 'INVALID_PARAMS', 'instrument_asset_id must be a UUID');
+      }
+      instrumentAssetId = body['instrument_asset_id'];
+      // Binding Scope Decision 3: the asset is the client contract; the register key is what the
+      // pre-transaction calibration gate reads, so it is resolved BEFORE persistEvent.
+      const register = await getInstrumentRecordByAssetId(instrumentAssetId);
+      if (!register) {
+        throw new AppError(
+          404,
+          'INSTRUMENT_NOT_FOUND',
+          'The asset is not a registered measuring instrument',
+          { instrument_asset_id: instrumentAssetId },
+        );
+      }
+      instrumentId = register.instrument_id;
+      payload['instrument_asset_id'] = instrumentAssetId;
+      payload['instrument_id'] = register.instrument_id;
+    }
+    const eventType = kind === 'result' ? QC_RESULT_RECORDED : QC_OBSERVATION_RECORDED;
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: taskId,
+        event_type: eventType,
+        payload,
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    assertTaskReplay(persisted, eventType, taskId);
+    const results = await listQcInspectionResults(taskId, {
+      source_event_id: persisted.event_id,
+      limit: MAX_READINGS_PER_RESULT,
+    });
+    const firstMinted = (readings[0] as Record<string, unknown>)['result_id'];
+    const replayed = !results.some((r) => r.result_id === firstMinted);
+    sendJson(res, replayed ? 200 : 201, { event_id: persisted.event_id, results });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(
+        req,
+        actor,
+        err,
+        {
+          task_id: taskId,
+          lot_id: lotId,
+          instrument_asset_id: instrumentAssetId,
+          instrument_id: instrumentId,
+        },
+        siteId,
+      );
+    }
+    sendAppError(req, res, err);
+  }
+}
+
+const recordResultsBase: RouteHandler = (req, res, params) =>
+  recordBatch(req, res, params, 'result');
+const recordObservationsBase: RouteHandler = (req, res, params) =>
+  recordBatch(req, res, params, 'observation');
+
+const listResultsBase: RouteHandler = async (req, res, params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const characteristicId = url.searchParams.get('characteristic_id');
+  const unitRaw = url.searchParams.get('sample_unit_no');
+  const conformsRaw = url.searchParams.get('conforms');
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+  try {
+    const taskId = requireUuidParam(params, 'taskId');
+    if (characteristicId !== null && !isUuid(characteristicId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'characteristic_id must be a UUID');
+    }
+    if (unitRaw !== null && !/^[1-9]\d*$/.test(unitRaw)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'sample_unit_no must be a positive integer');
+    }
+    if (conformsRaw !== null && conformsRaw !== 'true' && conformsRaw !== 'false') {
+      throw new AppError(400, 'INVALID_PARAMS', 'conforms must be true or false');
+    }
+    if (
+      (limitRaw !== null && !/^\d+$/.test(limitRaw)) ||
+      (offsetRaw !== null && !/^\d+$/.test(offsetRaw))
+    ) {
+      throw new AppError(400, 'INVALID_PARAMS', 'limit and offset must be non-negative integers');
+    }
+    const task = await requireTask(taskId);
+    assertReadSiteAccess(req, task.site_id);
+    const results = await listQcInspectionResults(taskId, {
+      characteristic_id: characteristicId ?? undefined,
+      sample_unit_no: unitRaw === null ? undefined : Number(unitRaw),
+      conforms: conformsRaw === null ? undefined : conformsRaw === 'true',
+      limit: limitRaw === null ? undefined : Number(limitRaw),
+      offset: offsetRaw === null ? undefined : Number(offsetRaw),
+    });
+    sendJson(res, 200, { results });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const completeInspectionBase: RouteHandler = async (req, res, params) => {
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    assertWriteSiteAccess(req, task.site_id);
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: taskId,
+        event_type: QC_INSPECTION_COMPLETED,
+        payload: { task_id: taskId, completed_at: optionalTimestamp(body, 'completed_at', now) },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    assertTaskReplay(persisted, QC_INSPECTION_COMPLETED, taskId);
+    const refreshed = await getQcInspectionTaskById(taskId);
+    const switchingState = await getSwitchingState(task.plan_id, task.site_id);
+    // The task was already inspected before this request: persistEvent returned the same-key
+    // original (a different key would have been rejected by the seam).
+    const replayed = task.task_status === 'inspected';
+    sendJson(res, replayed ? 200 : 201, {
+      event_id: persisted.event_id,
+      task: refreshed,
+      switching_state: switchingState,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const listSamplingStatesBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const planId = url.searchParams.get('plan_id');
+  const siteId = url.searchParams.get('site_id');
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+  try {
+    if (planId !== null && !isUuid(planId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'plan_id must be a UUID');
+    }
+    if (siteId !== null && !isUuid(siteId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'site_id must be a UUID');
+    }
+    if (
+      (limitRaw !== null && !/^\d+$/.test(limitRaw)) ||
+      (offsetRaw !== null && !/^\d+$/.test(offsetRaw))
+    ) {
+      throw new AppError(400, 'INVALID_PARAMS', 'limit and offset must be non-negative integers');
+    }
+    const scoped = scopedSiteIds(req, siteId);
+    if (scoped === null) {
+      sendJson(res, 200, { states: [] });
+      return;
+    }
+    const states = await listSwitchingStates({
+      plan_id: planId ?? undefined,
+      ...scoped,
+      limit: limitRaw === null ? undefined : Number(limitRaw),
+      offset: offsetRaw === null ? undefined : Number(offsetRaw),
+    });
+    sendJson(res, 200, { states });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const adjustSamplingStateBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let planId = '';
+  let siteId: string | undefined;
+  try {
+    planId = requireUuidParam(params, 'planId');
+    siteId = requireUuidParam(params, 'siteId');
+    assertWriteSiteAccess(req, siteId);
+    if (typeof body['action'] !== 'string' || !SWITCHING_ACTIONS.has(body['action'])) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'action must be one of: authorize_reduced, resume_inspection',
+      );
+    }
+    if (typeof body['reason'] !== 'string' || body['reason'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'reason must be a non-empty string');
+    }
+    // Authority pre-check (Binding Scope Decision 9): QC Head-level roles from configuration; the
+    // seam re-derives the same check inside the transaction.
+    const qcHeadRoles: readonly string[] = config.quality.qcHeadRoles;
+    if (!qcHeadRoles.includes(actor.role)) {
+      throw new AppError(
+        403,
+        'APPROVAL_REQUIRED',
+        'Adjusting the sampling switching state requires QC Head-level authority',
+        { plan_id: planId, site_id: siteId, action: body['action'] },
+      );
+    }
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: planId,
+        event_type: QC_SAMPLING_STATE_ADJUSTED,
+        payload: {
+          plan_id: planId,
+          site_id: siteId,
+          action: body['action'],
+          reason: body['reason'].trim(),
+          adjusted_at: optionalTimestamp(body, 'adjusted_at', now),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const payload = persisted.payload as Record<string, unknown> | undefined;
+    if (
+      persisted.event_type !== QC_SAMPLING_STATE_ADJUSTED ||
+      payload?.['plan_id'] !== planId ||
+      payload?.['site_id'] !== siteId
+    ) {
+      throw new AppError(
+        409,
+        'DUPLICATE_EVENT',
+        'This idempotency key is already in use by a different event',
+        { existing_event_id: persisted.event_id, existing_event_type: persisted.event_type },
+      );
+    }
+    const switchingState = await getSwitchingState(planId, siteId);
+    sendJson(res, 201, { event_id: persisted.event_id, switching_state: switchingState });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(
+        req,
+        actor,
+        err,
+        { plan_id: planId, site_id: siteId ?? null, action: body['action'] ?? null },
+        siteId,
+      );
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Exports (module `qc`)
 // ---------------------------------------------------------------------------
 
@@ -833,3 +1385,28 @@ export const recordConditionalReleaseHandler = requireRole({
   module: 'qc',
   functionScope: 'write',
 })(recordConditionalReleaseBase);
+// Story 8.2
+export const determineSamplingHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  determineSamplingBase,
+);
+export const getSamplingHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  getSamplingBase,
+);
+export const recordQcResultsHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  recordResultsBase,
+);
+export const recordQcObservationsHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  recordObservationsBase,
+);
+export const listQcResultsHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  listResultsBase,
+);
+export const completeInspectionHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  completeInspectionBase,
+);
+export const listSamplingStatesHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  listSamplingStatesBase,
+);
+export const adjustSamplingStateHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  adjustSamplingStateBase,
+);

@@ -18,7 +18,9 @@ import { getPool } from '../../config/db.js';
  */
 
 export type QcGateStatus = 'qc_hold' | 'conditionally_released';
-export type QcTaskStatus = 'open';
+/** Story 8.2 (Binding Scope Decision 5): the inspection axis, independent of the gate axis. */
+export type QcTaskStatus = 'open' | 'sampling_determined' | 'inspected';
+export type QcSamplingOutcome = 'accepted' | 'not_accepted';
 export type QcSourceCompletionType = 'synthetic_completion' | 'production_order' | 'job_work_order';
 
 export const QC_GATE_BLOCKED_STATUSES: readonly QcGateStatus[] = [
@@ -51,6 +53,13 @@ export interface QcInspectionTaskRow {
   source_event_id: string;
   created_at: string;
   updated_at: string;
+  /** Story 8.2 additive columns: null until sampling is determined / inspection completes. */
+  sampling_id: string | null;
+  sampling_outcome: QcSamplingOutcome | null;
+  nonconforming_sample_units: number | null;
+  critical_nonconformities: number | null;
+  inspected_by: string | null;
+  inspected_at: string | null;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -64,10 +73,15 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const TASK_COLUMNS = `task_id, lot_id, lot_number, source_completion_type, source_completion_id, item_id, sku,
     quantity::text AS quantity, uom, site_id, bom_revision_id, plan_id, plan_version_id, plan_scope,
     source_order_type, source_order_ref, completed_at, business_date::text AS business_date, task_status,
-    gate_status, gate_changed_at, source_event_id, created_at, updated_at`;
+    gate_status, gate_changed_at, source_event_id, created_at, updated_at, sampling_id, sampling_outcome,
+    nonconforming_sample_units, critical_nonconformities, inspected_by, inspected_at`;
 
 function mapTask(row: Record<string, unknown>): QcInspectionTaskRow {
   const toIso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
+  const toNullableIso = (v: unknown): string | null =>
+    v === null || v === undefined ? null : toIso(v);
+  const toNullableInt = (v: unknown): number | null =>
+    v === null || v === undefined ? null : Number(v);
   return {
     task_id: row['task_id'] as string,
     lot_id: row['lot_id'] as string,
@@ -93,6 +107,12 @@ function mapTask(row: Record<string, unknown>): QcInspectionTaskRow {
     source_event_id: row['source_event_id'] as string,
     created_at: toIso(row['created_at']),
     updated_at: toIso(row['updated_at']),
+    sampling_id: (row['sampling_id'] as string | null) ?? null,
+    sampling_outcome: (row['sampling_outcome'] as QcSamplingOutcome | null) ?? null,
+    nonconforming_sample_units: toNullableInt(row['nonconforming_sample_units']),
+    critical_nonconformities: toNullableInt(row['critical_nonconformities']),
+    inspected_by: (row['inspected_by'] as string | null) ?? null,
+    inspected_at: toNullableIso(row['inspected_at']),
   };
 }
 
@@ -140,7 +160,10 @@ export async function getQcInspectionTaskBySource(
 
 export interface ListQcInspectionTasksParams {
   gate_status?: QcGateStatus | undefined;
+  task_status?: QcTaskStatus | undefined;
   site_id?: string | undefined;
+  /** Story 8.2 (Binding Scope Decision 10): the caller's permitted sites when not wildcard-scoped. */
+  site_ids?: string[] | undefined;
   sku?: string | undefined;
   limit?: number | undefined;
   offset?: number | undefined;
@@ -157,7 +180,9 @@ export async function listQcInspectionTasks(
     where.push(clause.replace('?', `$${values.length}`));
   };
   if (params.gate_status) push('gate_status = ?', params.gate_status);
+  if (params.task_status) push('task_status = ?', params.task_status);
   if (params.site_id) push('site_id = ?', params.site_id);
+  if (params.site_ids) push('site_id = ANY(?::uuid[])', params.site_ids);
   if (params.sku) push('sku = ?', params.sku);
   const limit = Math.min(Math.max(params.limit ?? 50, 1), 500);
   const offset = Math.max(params.offset ?? 0, 0);
@@ -174,7 +199,16 @@ export async function listQcInspectionTasks(
 
 export type InsertQcInspectionTaskRow = Omit<
   QcInspectionTaskRow,
-  'task_status' | 'gate_status' | 'created_at' | 'updated_at'
+  | 'task_status'
+  | 'gate_status'
+  | 'created_at'
+  | 'updated_at'
+  | 'sampling_id'
+  | 'sampling_outcome'
+  | 'nonconforming_sample_units'
+  | 'critical_nonconformities'
+  | 'inspected_by'
+  | 'inspected_at'
 >;
 
 export async function insertQcInspectionTask(
@@ -229,6 +263,50 @@ export async function transitionQcGate(
         SET gate_status = $3, gate_changed_at = $4, updated_at = now()
       WHERE task_id = $1 AND gate_status = $2`,
     [taskId, fromStatus, toStatus, changedAt],
+  );
+  return result.rowCount ?? 0;
+}
+
+export interface QcTaskStatusPatch {
+  sampling_id?: string;
+  sampling_outcome?: QcSamplingOutcome;
+  nonconforming_sample_units?: number;
+  critical_nonconformities?: number;
+  inspected_by?: string;
+  inspected_at?: string;
+}
+
+/**
+ * Story 8.2: the inspection-axis transition, a compare-and-set on the expected current
+ * task_status (modeled on transitionQcGate) so a lost race is a 0-row update the applier rejects.
+ * `patch` writes the Story 8.2 additive columns in the same statement. Returns the row count.
+ */
+export async function transitionQcTaskStatus(
+  taskId: string,
+  fromStatus: QcTaskStatus,
+  toStatus: QcTaskStatus,
+  patch: QcTaskStatusPatch,
+  client: PoolClient,
+): Promise<number> {
+  const sets: string[] = ['task_status = $3', 'updated_at = now()'];
+  const values: unknown[] = [taskId, fromStatus, toStatus];
+  const set = (column: string, value: unknown): void => {
+    values.push(value);
+    sets.push(`${column} = $${values.length}`);
+  };
+  if (patch.sampling_id !== undefined) set('sampling_id', patch.sampling_id);
+  if (patch.sampling_outcome !== undefined) set('sampling_outcome', patch.sampling_outcome);
+  if (patch.nonconforming_sample_units !== undefined) {
+    set('nonconforming_sample_units', patch.nonconforming_sample_units);
+  }
+  if (patch.critical_nonconformities !== undefined) {
+    set('critical_nonconformities', patch.critical_nonconformities);
+  }
+  if (patch.inspected_by !== undefined) set('inspected_by', patch.inspected_by);
+  if (patch.inspected_at !== undefined) set('inspected_at', patch.inspected_at);
+  const result = await client.query(
+    `UPDATE qc_inspection_task SET ${sets.join(', ')} WHERE task_id = $1 AND task_status = $2`,
+    values,
   );
   return result.rowCount ?? 0;
 }

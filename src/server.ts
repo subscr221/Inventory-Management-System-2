@@ -308,6 +308,14 @@ import {
   listQcTasksHandler,
   getQcTaskHandler,
   recordConditionalReleaseHandler,
+  determineSamplingHandler,
+  getSamplingHandler,
+  recordQcResultsHandler,
+  recordQcObservationsHandler,
+  listQcResultsHandler,
+  completeInspectionHandler,
+  listSamplingStatesHandler,
+  adjustSamplingStateHandler,
 } from './api/v1/quality.js';
 import {
   createProductionOrderHandler,
@@ -813,9 +821,24 @@ export function createAppRouter(): Router {
     approveInspectionPlanHandler,
   );
   router.post('/api/v1/qc/completions', submitSyntheticCompletionHandler);
+  // Story 8.2: the static '/sampling-states' list is registered BEFORE any '/qc/tasks/:taskId'
+  // sibling and before its own ':planId' action route (same ordering rule as above).
+  router.get('/api/v1/qc/sampling-states', listSamplingStatesHandler);
+  router.post(
+    '/api/v1/qc/sampling-states/:planId/sites/:siteId/actions',
+    adjustSamplingStateHandler,
+  );
   router.get('/api/v1/qc/tasks', listQcTasksHandler);
   router.get('/api/v1/qc/tasks/:taskId', getQcTaskHandler);
   router.post('/api/v1/qc/tasks/:taskId/conditional-release', recordConditionalReleaseHandler);
+  // Story 8.2: AQL Sampling and Result Capture (FR-Q-03, FR-Q-04). The Story 1.7
+  // '/api/v1/qc/results' synthetic route below stays unchanged.
+  router.post('/api/v1/qc/tasks/:taskId/sampling', determineSamplingHandler);
+  router.get('/api/v1/qc/tasks/:taskId/sampling', getSamplingHandler);
+  router.post('/api/v1/qc/tasks/:taskId/results', recordQcResultsHandler);
+  router.post('/api/v1/qc/tasks/:taskId/observations', recordQcObservationsHandler);
+  router.get('/api/v1/qc/tasks/:taskId/results', listQcResultsHandler);
+  router.post('/api/v1/qc/tasks/:taskId/inspection-completion', completeInspectionHandler);
 
   // Story 6.1: Production Order Creation and Release Gate (FR-MO-01/02/03). ROUTE ORDER MATTERS:
   // '/production-orders' (both verbs) is registered BEFORE any '/production-orders/:orderId' route,

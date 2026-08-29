@@ -3,7 +3,8 @@
     "allow": [
       "Bash(grep -n \"^#\\\\{1,3\\\\} \" _bmad-output/implementation-artifacts/5-5-approved-alternates-and-bom-explosion.md)",
       "PowerShell(python3 \"c:\\\\Users\\\\admin\\\\Documents\\\\GitHub\\\\Inventory-Management-System-2\\\\_bmad\\\\scripts\\\\resolve_customization.py\" --skill \"c:\\\\Users\\\\admin\\\\Documents\\\\GitHub\\\\Inventory-Management-System-2\\\\.claude\\\\skills\\\\bmad-dev-story\" --key workflow)",
-      "Bash(docker version *)"
+      "Bash(docker version *)",
+      "Bash(git status *)"
     ]
   },
   "hooks": {

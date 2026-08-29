@@ -20,9 +20,12 @@
 --
 -- gate_status vocabulary in this story: qc_hold (the entry state every completion posts into, no
 -- bypass) and conditionally_released (the FR-Q-05 disposition state, distinct from a bypass).
--- Story 8.3 widens it for accept and reject. task_status is 'open' until Story 8.2 adds sampling
--- and result capture. The frozen plan_version_id never changes after creation (Annex requirement
--- 6): later plan approvals must never alter the plan a held lot is inspected against.
+-- Story 8.3 widens it for accept and reject. task_status is the INSPECTION axis, independent of
+-- the gate: 'open' at creation, 'sampling_determined' once Story 8.2 freezes the sampling plan
+-- (results are accepted only in this state), 'inspected' once inspection completes with its
+-- sampling_outcome and counts (the Story 8.2 additive columns below; sampling_id references the
+-- frozen qc_sampling_plan row). The frozen plan_version_id never changes after creation (Annex
+-- requirement 6): later plan approvals must never alter the plan a held lot is inspected against.
 --
 -- uq_qc_inspection_task_lot and uq_qc_inspection_task_source make replay and concurrent delivery of
 -- the same completion a single effect (a 23505 on either resolves to 409 DUPLICATE_QC_COMPLETION
@@ -55,16 +58,32 @@ CREATE TABLE IF NOT EXISTS qc_inspection_task (
   source_event_id         UUID NOT NULL,
   created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sampling_id             UUID,
+  sampling_outcome        TEXT,
+  nonconforming_sample_units INTEGER,
+  critical_nonconformities   INTEGER,
+  inspected_by            UUID,
+  inspected_at            TIMESTAMPTZ,
   CONSTRAINT uq_qc_inspection_task_lot UNIQUE (lot_id),
   CONSTRAINT uq_qc_inspection_task_source UNIQUE (source_completion_type, source_completion_id),
   CONSTRAINT chk_qc_inspection_task_quantity CHECK (quantity > 0),
   CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order')),
-  CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open')),
+  CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected')),
   CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released')),
   CONSTRAINT chk_qc_inspection_task_plan_scope CHECK (plan_scope IN ('standard', 'customer_override')),
   CONSTRAINT chk_qc_inspection_task_scope_pairing CHECK (
     (plan_scope = 'standard' AND source_order_type IS NULL AND source_order_ref IS NULL)
     OR (plan_scope = 'customer_override' AND source_order_type = 'job_work_order' AND source_order_ref IS NOT NULL AND btrim(source_order_ref) <> '')
+  ),
+  CONSTRAINT chk_qc_inspection_task_sampling_outcome CHECK (sampling_outcome IS NULL OR sampling_outcome IN ('accepted', 'not_accepted')),
+  CONSTRAINT chk_qc_inspection_task_status_pairing CHECK (
+    (task_status = 'open' AND sampling_id IS NULL AND sampling_outcome IS NULL AND inspected_by IS NULL AND inspected_at IS NULL)
+    OR (task_status = 'sampling_determined' AND sampling_id IS NOT NULL AND sampling_outcome IS NULL AND inspected_by IS NULL AND inspected_at IS NULL)
+    OR (task_status = 'inspected' AND sampling_id IS NOT NULL AND sampling_outcome IS NOT NULL AND inspected_by IS NOT NULL AND inspected_at IS NOT NULL)
+  ),
+  CONSTRAINT chk_qc_inspection_task_counts CHECK (
+    (nonconforming_sample_units IS NULL OR nonconforming_sample_units >= 0)
+    AND (critical_nonconformities IS NULL OR critical_nonconformities >= 0)
   )
 );
 
@@ -111,7 +130,7 @@ BEGIN
       AND conrelid = 'qc_inspection_task'::regclass
   ) THEN
     ALTER TABLE qc_inspection_task
-      ADD CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open'));
+      ADD CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected'));
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -138,6 +157,125 @@ BEGIN
       ADD CONSTRAINT chk_qc_inspection_task_scope_pairing CHECK (
         (plan_scope = 'standard' AND source_order_type IS NULL AND source_order_ref IS NULL)
         OR (plan_scope = 'customer_override' AND source_order_type = 'job_work_order' AND source_order_ref IS NOT NULL AND btrim(source_order_ref) <> '')
+      );
+  END IF;
+END $$;
+
+-- Story 8.2 (Binding Scope Decision 5): widen the task-status vocabulary on a database created by
+-- Story 8.1, where chk_qc_inspection_task_status admits only 'open'. Guarded on
+-- pg_get_constraintdef, dropping the narrow definition and re-adding the widened one; once the
+-- definition names sampling_determined the block is a no-op on every re-run.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_status'
+      AND conrelid = 'qc_inspection_task'::regclass
+      AND pg_get_constraintdef(oid) NOT LIKE '%sampling_determined%'
+  ) THEN
+    ALTER TABLE qc_inspection_task DROP CONSTRAINT chk_qc_inspection_task_status;
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'sampling_id'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN sampling_id UUID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'sampling_outcome'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN sampling_outcome TEXT;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'nonconforming_sample_units'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN nonconforming_sample_units INTEGER;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'critical_nonconformities'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN critical_nonconformities INTEGER;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'inspected_by'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN inspected_by UUID;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'qc_inspection_task' AND column_name = 'inspected_at'
+  ) THEN
+    ALTER TABLE qc_inspection_task ADD COLUMN inspected_at TIMESTAMPTZ;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_sampling_outcome'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_sampling_outcome CHECK (sampling_outcome IS NULL OR sampling_outcome IN ('accepted', 'not_accepted'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_status_pairing'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_status_pairing CHECK (
+        (task_status = 'open' AND sampling_id IS NULL AND sampling_outcome IS NULL AND inspected_by IS NULL AND inspected_at IS NULL)
+        OR (task_status = 'sampling_determined' AND sampling_id IS NOT NULL AND sampling_outcome IS NULL AND inspected_by IS NULL AND inspected_at IS NULL)
+        OR (task_status = 'inspected' AND sampling_id IS NOT NULL AND sampling_outcome IS NOT NULL AND inspected_by IS NOT NULL AND inspected_at IS NOT NULL)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_counts'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_counts CHECK (
+        (nonconforming_sample_units IS NULL OR nonconforming_sample_units >= 0)
+        AND (critical_nonconformities IS NULL OR critical_nonconformities >= 0)
       );
   END IF;
 END $$;

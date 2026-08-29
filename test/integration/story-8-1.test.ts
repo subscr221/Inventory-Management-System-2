@@ -135,6 +135,7 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
   let engineerHeaders: Record<string, string>;
   let readerHeaders: Record<string, string>;
   let procurementHeaders: Record<string, string>;
+  let schedulerHeaders: Record<string, string>;
 
   let siteAId: string;
   let binA1Id: string;
@@ -426,6 +427,88 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
     );
   }
 
+  /**
+   * Story 8.2: a registered, calibrated instrument (asset, register row, certificate) and a real
+   * instrument-bound result on the held task's first (critical, numeric) characteristic, recorded
+   * through the dedicated routes after sampling is determined. This is the segregation-of-duties
+   * substrate the conditional-release seam reads (qc_inspection_result.recorded_by).
+   */
+  async function calibratedInstrumentAsset(): Promise<string> {
+    const asset = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/assets',
+      {
+        asset_tag: `TAG-8-1-${randomUUID().slice(0, 12)}`,
+        asset_name: `UTM ${run} ${randomUUID().slice(0, 4)}`,
+        criticality_class: 'critical',
+      },
+      schedulerHeaders,
+    );
+    assert.strictEqual(asset.status, 201, JSON.stringify(asset.body));
+    const assetId = (asset.body['asset'] as Record<string, string>)['asset_id']!;
+    const register = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/maintenance/instruments',
+      {
+        asset_id: assetId,
+        instrument_id: `INS-8-1-${randomUUID().slice(0, 8)}`,
+        location_id: siteAId,
+        calibration_interval_days: 365,
+      },
+      schedulerHeaders,
+    );
+    assert.strictEqual(register.status, 201, JSON.stringify(register.body));
+    const recordId = (register.body['instrument'] as Record<string, string>)[
+      'instrument_record_id'
+    ]!;
+    const certificate = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/maintenance/instruments/${recordId}/certificates`,
+      {
+        calibration_type: 'in_house',
+        certificate_number: `CERT-${randomUUID().slice(0, 8)}`,
+        issuing_lab: null,
+        calibrated_on: '2026-06-01',
+        valid_until: '2027-06-01',
+        business_date: '2026-06-01',
+      },
+      schedulerHeaders,
+    );
+    assert.strictEqual(certificate.status, 201, JSON.stringify(certificate.body));
+    return assetId;
+  }
+
+  async function recordRealResult(taskId: string, headers: Record<string, string>): Promise<void> {
+    const sampling = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/qc/tasks/${taskId}/sampling`,
+      {},
+      inspectorHeaders,
+    );
+    assert.strictEqual(sampling.status, 201, JSON.stringify(sampling.body));
+    const task = (await taskRow(taskId))!;
+    const lines = await getAdminPool().query(
+      `SELECT characteristic_id FROM inspection_plan_characteristic WHERE plan_version_id = $1 ORDER BY line_no ASC`,
+      [task['plan_version_id']],
+    );
+    const result = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/qc/tasks/${taskId}/results`,
+      {
+        characteristic_id: lines.rows[0]!['characteristic_id'],
+        instrument_asset_id: await calibratedInstrumentAsset(),
+        readings: [{ sample_unit_no: 1, measured_value: '500.000000', measured_uom: 'MPa' }],
+      },
+      headers,
+    );
+    assert.strictEqual(result.status, 201, JSON.stringify(result.body));
+  }
+
   function inventoryEnvelope(
     eventType: string,
     payload: Record<string, unknown>,
@@ -550,6 +633,16 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
       '../../read/projections/qc_inspection_task.sql',
       '../../read/projections/qc_deviation.sql',
       '../../read/projections/qc_lot_disposition.sql',
+      // Story 8.2: the SOD fixture records a REAL result through the sampling and result routes,
+      // which need the instrument register family and the Story 8.2 projections.
+      '../../read/projections/asset.sql',
+      '../../read/projections/instrument_register.sql',
+      '../../read/projections/instrument_calibration_certificate.sql',
+      '../../read/projections/instrument_calibration_alert.sql',
+      '../../read/projections/instrument_calibration_escalation.sql',
+      '../../read/projections/qc_sampling_plan.sql',
+      '../../read/projections/qc_inspection_result.sql',
+      '../../read/projections/qc_sampling_switching_state.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
@@ -558,7 +651,7 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE qc_lot_disposition, qc_deviation, qc_inspection_task, inspection_plan_approval, inspection_plan_characteristic, inspection_plan_version, inspection_plan, dispatch_document, packing_record, dispatch_order_status, pick_line, pick_task, in_transit, transfer_request, bom_alternate, bom_explosion, bom_explosion_line, bom_cost_rollup_line, bom_cost_rollup, bom_outbound_message, bom_structure, bom_line, bom_revision, bom, inventory_valuation, lot_trace, serial_master, lot_master, stock_balance, integration_exception, item_master, location_register, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE qc_sampling_switching_state, qc_inspection_result, qc_sampling_plan, instrument_calibration_escalation, instrument_calibration_alert, instrument_calibration_certificate, instrument_register, instrument_calibration_statuses, asset, qc_lot_disposition, qc_deviation, qc_inspection_task, inspection_plan_approval, inspection_plan_characteristic, inspection_plan_version, inspection_plan, dispatch_document, packing_record, dispatch_order_status, pick_line, pick_task, in_transit, transfer_request, bom_alternate, bom_explosion, bom_explosion_line, bom_cost_rollup_line, bom_cost_rollup, bom_outbound_message, bom_structure, bom_line, bom_revision, bom, inventory_valuation, lot_trace, serial_master, lot_master, stock_balance, integration_exception, item_master, location_register, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');
@@ -621,6 +714,23 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
       { role: 'buyer', module: 'procurement', functionScope: 'write', locationId: '*' },
     ]);
     procurementHeaders = await authFor(port, `proc-8-1-${run}@example.com`);
+
+    // Story 8.2: the instrument-register fixture actor (asset, register row, certificate).
+    await provisionUser(port, `cal-scheduler-8-1-${run}@example.com`, [
+      {
+        role: 'calibration_scheduler',
+        module: 'maintenance',
+        functionScope: 'write',
+        locationId: '*',
+      },
+      {
+        role: 'calibration_scheduler',
+        module: 'maintenance',
+        functionScope: 'read',
+        locationId: '*',
+      },
+    ]);
+    schedulerHeaders = await authFor(port, `cal-scheduler-8-1-${run}@example.com`);
 
     componentItemId = await createItem(`CMP-8-1-${run}`, { lot_controlled: false });
     fgSku = `FG-8-1-${run}`;
@@ -1825,51 +1935,18 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
 
   it('AC4: segregation of duties - a known result recorder cannot approve the same lot, and a known recorder is attributed as inspector', async () => {
     const held = await heldLot();
-    // The synthetic Story 1.7 result event names the lot by number; the approver recorded it.
-    await getAdminPool().query(
-      `INSERT INTO domain_events (event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version)
-       VALUES ($1, 'qc', $2, 'qc.result_recorded', 1, $3::jsonb, $4::jsonb, 1)`,
-      [
-        randomUUID(),
-        randomUUID(),
-        JSON.stringify({
-          instrument_id: `INS-${run}`,
-          lot_id: held.lotNumber,
-          parameter: 'weight',
-          value: 1,
-        }),
-        JSON.stringify({
-          correlation_id: randomUUID(),
-          actor: { user_id: qcHeadUserId, role: 'qc_head', location_id: siteAId },
-          occurred_at: new Date().toISOString(),
-        }),
-      ],
-    );
+    // Story 8.2: the approver recorded a REAL instrument-bound result on this task (a
+    // qc_inspection_result row, the SOD substrate); the conditional release still works in the
+    // sampling_determined task state because the gate axis is independent.
+    await recordRealResult(held.taskId, qcHeadHeaders);
+    assert.strictEqual((await taskRow(held.taskId))!['task_status'], 'sampling_determined');
     const sod = await conditionalRelease(held.taskId, qcHeadHeaders);
     assert.strictEqual(sod.status, 409, JSON.stringify(sod.body));
     assert.strictEqual(sod.body['error_code'], 'SOD_VIOLATION');
     assert.strictEqual(await countRows('qc_lot_disposition', 'lot_id = $1', [held.lotId]), 0);
 
     const other = await heldLot();
-    await getAdminPool().query(
-      `INSERT INTO domain_events (event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version)
-       VALUES ($1, 'qc', $2, 'qc.result_recorded', 1, $3::jsonb, $4::jsonb, 1)`,
-      [
-        randomUUID(),
-        randomUUID(),
-        JSON.stringify({
-          instrument_id: `INS-${run}`,
-          lot_id: other.lotId,
-          parameter: 'weight',
-          value: 1,
-        }),
-        JSON.stringify({
-          correlation_id: randomUUID(),
-          actor: { user_id: inspectorUserId, role: 'qc_inspector', location_id: siteAId },
-          occurred_at: new Date().toISOString(),
-        }),
-      ],
-    );
+    await recordRealResult(other.taskId, inspectorHeaders);
     const ok = await conditionalRelease(other.taskId, qcHeadHeaders);
     assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
     assert.strictEqual(

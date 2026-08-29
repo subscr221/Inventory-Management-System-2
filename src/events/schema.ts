@@ -3402,6 +3402,171 @@ export interface QcConditionalReleaseRecordedEnvelope extends Omit<EventEnvelope
   payload: QcConditionalReleaseRecordedPayload;
 }
 
+/**
+ * Story 8.2 (FR-Q-03, AC 1): freezes the IS 2500 (Part 1) / ISO 2859-1 single-sampling plan on a
+ * task. stream_id is the task_id. Only task_id, sampling_id and determined_at are client fields;
+ * every other field is SEAM-DERIVED under the lot, task and switching-state locks (lot size from
+ * the task quantity, AQL and level from the frozen plan version, severity from the (plan, site)
+ * switching state, code letter / sample size / Ac / Re from the tables) and written back. A
+ * declared derived value rejects 409 QC_DERIVATION_MISMATCH; a task that is not `open` rejects 409
+ * QC_TASK_NOT_OPEN; a second plan for the task rejects 409 QC_SAMPLING_EXISTS; discontinued
+ * inspection rejects 409 SAMPLING_INSPECTION_DISCONTINUED.
+ */
+export interface QcSamplingDeterminedPayload {
+  task_id: string;
+  sampling_id: string;
+  determined_at: string;
+  /** Derived under lock; persisted write-back only. */
+  lot_id?: string;
+  lot_number?: string;
+  plan_version_id?: string;
+  plan_id?: string;
+  site_id?: string;
+  lot_size?: number;
+  aql?: string | null;
+  inspection_level?: string | null;
+  severity?: 'normal' | 'tightened' | 'reduced';
+  code_letter?: string | null;
+  resolved_code_letter?: string | null;
+  sample_size?: number;
+  acceptance_number?: number | null;
+  rejection_number?: number | null;
+  sampling_basis?: 'aql_table' | 'full_inspection';
+  standard_ref?: string;
+  critical_characteristic_ids?: string[];
+  determined_by?: string;
+  previous_task_status?: 'open';
+  task_status?: 'sampling_determined';
+}
+
+export interface QcSamplingDeterminedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.sampling_determined';
+  payload: QcSamplingDeterminedPayload;
+}
+
+export interface QcResultReadingInput {
+  result_id: string;
+  sample_unit_no: number;
+  measured_value?: string;
+  measured_uom?: string;
+  attribute_conforms?: boolean;
+}
+
+/**
+ * Story 8.2 (FR-Q-04, AC 4 and AC 5): an instrument-bound result batch for ONE characteristic and
+ * ONE instrument, up to 500 unit readings (Binding Scope Decision 4). stream_id is the task_id.
+ * Clients send instrument_asset_id (the register asset); the handler resolves instrument_id (the
+ * calibration-gate key) before persistEvent so the Story 1.7 assertCalibrationLockout fires
+ * pre-transaction (423 CALIBRATION_LOCKOUT), and the seam re-derives the pairing under lock (409
+ * QC_DERIVATION_MISMATCH on a mismatch, 423 on a non-calibrated status). characteristic_class,
+ * result_kind and conforms_by_result_id are SEAM-DERIVED write-backs; recorded_by is never declared.
+ *
+ * The Story 1.7 SYNTHETIC shape (instrument_id, lot_id, parameter, value, no task_id) stays valid
+ * on this same event type and is not projected (Binding Scope Decision 1).
+ */
+export interface QcResultRecordedPayload {
+  task_id: string;
+  lot_id: string;
+  characteristic_id: string;
+  instrument_asset_id: string;
+  instrument_id: string;
+  readings: QcResultReadingInput[];
+  recorded_at: string;
+  /** Derived under lock; persisted write-back only. */
+  characteristic_class?: 'critical' | 'major' | 'minor';
+  result_kind?: 'numeric' | 'attribute';
+  conforms_by_result_id?: Record<string, boolean>;
+}
+
+export interface QcResultRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.result_recorded';
+  payload: QcResultRecordedPayload;
+}
+
+/**
+ * Story 8.2 (Binding Scope Decision 2): an instrument-less attribute observation batch for ONE
+ * characteristic whose frozen plan line has result_kind attribute and no instrument_type. Any other
+ * characteristic rejects 400 INSTRUMENT_REQUIRED. Same reading shape as the result, with
+ * attribute_conforms required per reading and no instrument fields.
+ */
+export interface QcObservationRecordedPayload {
+  task_id: string;
+  lot_id: string;
+  characteristic_id: string;
+  readings: Array<
+    Omit<QcResultReadingInput, 'measured_value' | 'measured_uom'> & {
+      attribute_conforms: boolean;
+    }
+  >;
+  recorded_at: string;
+  /** Derived under lock; persisted write-back only. */
+  characteristic_class?: 'critical' | 'major' | 'minor';
+  result_kind?: 'attribute';
+  conforms_by_result_id?: Record<string, boolean>;
+}
+
+export interface QcObservationRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.observation_recorded';
+  payload: QcObservationRecordedPayload;
+}
+
+/**
+ * Story 8.2 (FR-Q-03, AC 2 and AC 3): completes inspection of a task. stream_id is the task_id.
+ * The seam verifies completeness (every critical characteristic on every lot unit, every other
+ * characteristic on every AQL sample unit; 409 QC_INSPECTION_INCOMPLETE listing each gap), derives
+ * the sampling outcome and counts, advances the (plan, site) switching state under lock and moves
+ * the task to `inspected`. Every field after completed_at is SEAM-DERIVED. The QC gate is untouched
+ * (Story 8.3 dispositions the lot).
+ */
+export interface QcInspectionCompletedPayload {
+  task_id: string;
+  completed_at: string;
+  /** Derived under lock; persisted write-back only. */
+  sampling_id?: string;
+  sampling_outcome?: 'accepted' | 'not_accepted';
+  nonconforming_sample_units?: number;
+  critical_nonconformities?: number;
+  severity_used?: 'normal' | 'tightened' | 'reduced';
+  previous_severity?: 'normal' | 'tightened' | 'reduced';
+  new_severity?: 'normal' | 'tightened' | 'reduced';
+  switching_score?: number;
+  reduced_eligible?: boolean;
+  inspection_discontinued?: boolean;
+  previous_task_status?: 'sampling_determined';
+  task_status?: 'inspected';
+}
+
+export interface QcInspectionCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.inspection_completed';
+  payload: QcInspectionCompletedPayload;
+}
+
+/**
+ * Story 8.2 (Annex requirement 11): the QC Head-level switching-state commands. stream_id is the
+ * plan_id. authorize_reduced requires normal inspection with reduced_eligible (409
+ * REDUCED_INSPECTION_NOT_ELIGIBLE); resume_inspection requires a discontinued state (409
+ * SAMPLING_INSPECTION_NOT_DISCONTINUED) and resumes on tightened. The actor's role must be in
+ * config.quality.qcHeadRoles (403 APPROVAL_REQUIRED, audited). previous_severity, new_severity,
+ * authorized_by and authorizing_role are SEAM-DERIVED.
+ */
+export interface QcSamplingStateAdjustedPayload {
+  plan_id: string;
+  site_id: string;
+  action: 'authorize_reduced' | 'resume_inspection';
+  reason: string;
+  adjusted_at: string;
+  /** Derived under lock; persisted write-back only. */
+  previous_severity?: 'normal' | 'tightened' | 'reduced';
+  new_severity?: 'normal' | 'tightened' | 'reduced';
+  authorized_by?: string;
+  authorizing_role?: string;
+}
+
+export interface QcSamplingStateAdjustedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.sampling_state_adjusted';
+  payload: QcSamplingStateAdjustedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
@@ -4113,8 +4278,9 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   // Story 8.1: the inspection-plan family and the QC gate (FR-Q-01, FR-Q-02, FR-Q-05). All four
-  // ride the 'qc' stream (the stream the existing, unregistered qc.result_recorded already uses;
-  // its calibration lockout narrows on that exact event type and is untouched here). Plan events
+  // ride the 'qc' stream (the stream the Story 1.7 qc.result_recorded already used before Story
+  // 8.2 registered it below; its calibration lockout narrows on that exact event type and is
+  // untouched). Plan events
   // carry no business stream: a plan is master data bound to an item and a specification revision.
   // The completion hand-off DOES carry the item's business_stream, server-verified against
   // item_master in the seam, so a finished lot's QC task is traceable to its stream (Task 2).
@@ -4132,6 +4298,32 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: true,
   },
   'qc.conditional_release_recorded': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  // Story 8.2: AQL sampling and result capture (FR-Q-03, FR-Q-04). All five ride the 'qc' stream
+  // and none carries a business stream: sampling, results, completion and the switching-state
+  // commands are decisions on an already-tagged task or on plan master data (AD-14).
+  // qc.result_recorded is registered HERE for the first time with the full (task-bound) shape; the
+  // Story 1.7 synthetic shape stays valid on the same type and the Story 1.7 assertCalibrationLockout
+  // keeps narrowing on it (Binding Scope Decision 1). qc.lot_dispositioned stays reserved for 8.3.
+  'qc.sampling_determined': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.result_recorded': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.observation_recorded': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.inspection_completed': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.sampling_state_adjusted': {
     streamType: 'qc',
     requiresBusinessStream: false,
   },

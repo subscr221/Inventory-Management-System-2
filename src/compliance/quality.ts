@@ -22,6 +22,7 @@ import {
   insertInspectionPlan,
   insertInspectionPlanCharacteristic,
   insertInspectionPlanVersion,
+  listInspectionPlanCharacteristics,
   listInspectionPlanVersions,
   resolveApprovedInspectionPlanVersion,
 } from '../read/projections/inspection_plan.js';
@@ -32,10 +33,12 @@ import type {
 } from '../read/projections/inspection_plan.js';
 import { insertInspectionPlanApproval } from '../read/projections/inspection_plan_approval.js';
 import {
+  getQcInspectionTaskById,
   getQcInspectionTaskByLotId,
   getQcInspectionTaskBySource,
   insertQcInspectionTask,
   transitionQcGate,
+  transitionQcTaskStatus,
 } from '../read/projections/qc_inspection_task.js';
 import type { QcInspectionTaskRow } from '../read/projections/qc_inspection_task.js';
 import {
@@ -44,6 +47,41 @@ import {
   insertQcDeviation,
   insertQcLotDisposition,
 } from '../read/projections/qc_lot_disposition.js';
+import {
+  getQcSamplingPlanByTaskId,
+  insertQcSamplingPlan,
+} from '../read/projections/qc_sampling_plan.js';
+import type { QcSamplingPlanRow } from '../read/projections/qc_sampling_plan.js';
+import {
+  countResultsByCharacteristic,
+  insertQcInspectionResults,
+  listNonconformingUnits,
+  listResultRecorderUserIds,
+} from '../read/projections/qc_inspection_result.js';
+import type { InsertQcInspectionResultRow } from '../read/projections/qc_inspection_result.js';
+import {
+  getSwitchingState,
+  initialSwitchingState,
+  upsertSwitchingState,
+} from '../read/projections/qc_sampling_switching_state.js';
+import { getInstrumentRecordByAssetId } from '../read/projections/instrument_register.js';
+import { getCalibrationStatus } from '../read/projections/instrument_calibration.js';
+import { determineSampling } from '../quality/sampling.js';
+import {
+  advanceSwitchingState,
+  applyAuthorizeReduced,
+  applyResumeInspection,
+  evaluateOutcome,
+} from '../quality/switching.js';
+import type { SwitchingSnapshot } from '../quality/switching.js';
+import {
+  PREFERRED_AQLS,
+  TABLES_BY_SEVERITY,
+  canonicalAql,
+  isCodeLetter,
+  isInspectionLevel,
+  tighterAql,
+} from '../quality/aql-tables.js';
 
 /**
  * Story 8.1 compliance seam for the inspection-plan family and the QC gate (FR-Q-01, FR-Q-02,
@@ -77,14 +115,39 @@ export const INSPECTION_PLAN_CREATED = 'qc.inspection_plan_created';
 export const INSPECTION_PLAN_APPROVED = 'qc.inspection_plan_approved';
 export const QC_COMPLETION_RECEIVED = 'qc.completion_received';
 export const QC_CONDITIONAL_RELEASE_RECORDED = 'qc.conditional_release_recorded';
+// Story 8.2 (FR-Q-03, FR-Q-04): sampling determination, instrument-bound results (the Story 1.7
+// event type, now registered with its full shape), instrument-less observations, inspection
+// completion and the QC Head-level switching-state commands.
+export const QC_SAMPLING_DETERMINED = 'qc.sampling_determined';
+export const QC_RESULT_RECORDED = 'qc.result_recorded';
+export const QC_OBSERVATION_RECORDED = 'qc.observation_recorded';
+export const QC_INSPECTION_COMPLETED = 'qc.inspection_completed';
+export const QC_SAMPLING_STATE_ADJUSTED = 'qc.sampling_state_adjusted';
 export const QUALITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   INSPECTION_PLAN_CREATED,
   INSPECTION_PLAN_APPROVED,
   QC_COMPLETION_RECEIVED,
   QC_CONDITIONAL_RELEASE_RECORDED,
+  QC_SAMPLING_DETERMINED,
+  QC_RESULT_RECORDED,
+  QC_OBSERVATION_RECORDED,
+  QC_INSPECTION_COMPLETED,
+  QC_SAMPLING_STATE_ADJUSTED,
 ]);
-/** Story 8.1 Binding Scope Decision 9: every Story 8.1 command is central-only on the edge route. */
-export const QC_CENTRAL_ONLY_EVENT_TYPES: ReadonlySet<string> = QUALITY_EVENT_TYPES;
+/**
+ * Story 8.1 Binding Scope Decision 9 / Story 8.2 Binding Scope Decision 8: every QC command is
+ * central-only on the edge route EXCEPT qc.result_recorded, which keeps its Story 1.7 edge
+ * allowance (an explicit set, never the whole family, so the exclusion is visible here).
+ */
+export const QC_CENTRAL_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(
+  [...QUALITY_EVENT_TYPES].filter((type) => type !== QC_RESULT_RECORDED),
+);
+export const SWITCHING_ACTIONS: ReadonlySet<string> = new Set([
+  'authorize_reduced',
+  'resume_inspection',
+]);
+export const MAX_READINGS_PER_RESULT = 500;
+const MAX_INSTRUMENT_ID_LENGTH = 128;
 
 export const INSPECTION_PLAN_APPROVAL_DOA_TYPE = 'qc.inspection_plan_approval';
 export const CONDITIONAL_RELEASE_DOA_TYPE = 'qc.conditional_release';
@@ -135,7 +198,7 @@ function isPositiveQuantity(value: unknown): value is string {
 }
 
 /** Exact decimal-string comparison (sign, integer part, fraction), no float conversion. */
-function compareDecimalStrings(a: string, b: string): number {
+export function compareDecimalStrings(a: string, b: string): number {
   const parse = (v: string): { neg: boolean; int: string; frac: string } => {
     const neg = v.startsWith('-');
     const body = neg ? v.slice(1) : v;
@@ -389,6 +452,22 @@ function assertInspectionPlanCreatedShape(envelope: EventEnvelope): void {
   if ((aql === null) !== (level === null)) {
     reject('INVALID_PAYLOAD', 'aql and inspection_level must be supplied together or both be null');
   }
+  // Story 8.2 (Annex requirements 2 and 3): the semantic gates behind the shape gates above, so a
+  // version cannot carry an AQL or a level that sampling determination would reject later.
+  if (typeof aql === 'string' && canonicalAql(aql) === null) {
+    reject(
+      'AQL_NOT_IN_STANDARD',
+      'aql must be one of the preferred AQL values of IS 2500 (Part 1) / ISO 2859-1',
+      { aql, preferred_aqls: [...PREFERRED_AQLS] },
+    );
+  }
+  if (level !== null && !isInspectionLevel(level)) {
+    reject(
+      'INSPECTION_LEVEL_INVALID',
+      'inspection_level must be one of: I, II, III, S-1, S-2, S-3, S-4',
+      { inspection_level: level },
+    );
+  }
   const characteristics = p['characteristics'];
   if (!Array.isArray(characteristics) || characteristics.length === 0) {
     reject('INVALID_PAYLOAD', 'characteristics must be a non-empty array');
@@ -569,6 +648,255 @@ function assertConditionalReleaseRecordedShape(envelope: EventEnvelope): void {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Story 8.2 shape validation (pre-transaction, no DB access)
+// ---------------------------------------------------------------------------
+
+const SAMPLING_DERIVED_FIELDS = [
+  'lot_id',
+  'lot_number',
+  'plan_version_id',
+  'plan_id',
+  'site_id',
+  'lot_size',
+  'aql',
+  'inspection_level',
+  'severity',
+  'code_letter',
+  'resolved_code_letter',
+  'sample_size',
+  'acceptance_number',
+  'rejection_number',
+  'sampling_basis',
+  'standard_ref',
+  'critical_characteristic_ids',
+  'determined_by',
+  'previous_task_status',
+  'task_status',
+];
+
+function assertTaskStream(envelope: EventEnvelope, p: Record<string, unknown>): void {
+  if (!isUuid(p['task_id'])) reject('INVALID_PAYLOAD', 'task_id must be a UUID');
+  if (envelope.stream_id !== p['task_id']) {
+    reject('INVALID_PAYLOAD', `stream_id must be the task_id for ${envelope.event_type}`, {
+      stream_id: envelope.stream_id,
+      payload_task_id: p['task_id'],
+    });
+  }
+}
+
+function assertSamplingDeterminedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  assertTaskStream(envelope, p);
+  if (!isUuid(p['sampling_id'])) reject('INVALID_PAYLOAD', 'sampling_id must be a UUID');
+  if (!isIsoTimestamp(p['determined_at'])) {
+    reject(
+      'INVALID_PAYLOAD',
+      'determined_at must be an ISO 8601 timestamp with an explicit offset',
+    );
+  }
+  rejectDeclaredDerived(p, SAMPLING_DERIVED_FIELDS, QC_SAMPLING_DETERMINED);
+}
+
+/**
+ * Binding Scope Decision 4: 1 to 500 readings for ONE characteristic; unique result ids and unit
+ * numbers within the event; decimal strings for measured values; a bounded uom; booleans for
+ * attribute conformance. The kind pairing itself is verified in the transaction against the
+ * frozen plan line.
+ */
+function assertReadingsShape(
+  p: Record<string, unknown>,
+  context: string,
+  attributeOnly: boolean,
+): void {
+  const readings = p['readings'];
+  if (!Array.isArray(readings) || readings.length === 0) {
+    reject('INVALID_PAYLOAD', `${context}.readings must be a non-empty array`);
+  }
+  if (readings.length > MAX_READINGS_PER_RESULT) {
+    reject(
+      'INVALID_PAYLOAD',
+      `${context}.readings must carry at most ${MAX_READINGS_PER_RESULT} entries`,
+      {
+        readings: readings.length,
+        max: MAX_READINGS_PER_RESULT,
+      },
+    );
+  }
+  const ids = new Set<string>();
+  const units = new Set<number>();
+  readings.forEach((raw, index) => {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      reject('INVALID_PAYLOAD', `readings[${index}] must be an object`);
+    }
+    const r = raw as Record<string, unknown>;
+    if (!isUuid(r['result_id']))
+      reject('INVALID_PAYLOAD', `readings[${index}].result_id must be a UUID`);
+    if (ids.has(r['result_id'] as string)) {
+      reject('INVALID_PAYLOAD', `readings[${index}].result_id is duplicated within the event`);
+    }
+    ids.add(r['result_id'] as string);
+    const unit = r['sample_unit_no'];
+    if (typeof unit !== 'number' || !Number.isSafeInteger(unit) || unit <= 0) {
+      reject('INVALID_PAYLOAD', `readings[${index}].sample_unit_no must be a positive integer`);
+    }
+    if (units.has(unit as number)) {
+      reject(
+        'INVALID_PAYLOAD',
+        `readings[${index}].sample_unit_no ${unit} is duplicated within the event`,
+      );
+    }
+    units.add(unit as number);
+    const value = r['measured_value'];
+    if (value !== undefined && (typeof value !== 'string' || !SIGNED_LIMIT_REGEX.test(value))) {
+      reject('INVALID_PAYLOAD', `readings[${index}].measured_value must be a decimal string`);
+    }
+    const uom = r['measured_uom'];
+    if (uom !== undefined && !isBoundedText(uom, 32)) {
+      reject(
+        'INVALID_PAYLOAD',
+        `readings[${index}].measured_uom must be a non-empty string of at most 32 characters`,
+      );
+    }
+    const conforms = r['attribute_conforms'];
+    if (conforms !== undefined && typeof conforms !== 'boolean') {
+      reject('INVALID_PAYLOAD', `readings[${index}].attribute_conforms must be a boolean`);
+    }
+    if (attributeOnly) {
+      if (typeof conforms !== 'boolean') {
+        reject(
+          'INVALID_PAYLOAD',
+          `readings[${index}].attribute_conforms is required for an observation`,
+        );
+      }
+      if (value !== undefined || uom !== undefined) {
+        reject(
+          'INVALID_PAYLOAD',
+          `readings[${index}] of an observation must not carry a measured value`,
+        );
+      }
+    }
+  });
+}
+
+/**
+ * Binding Scope Decision 1: a payload WITHOUT task_id is the Story 1.7 synthetic shape and is
+ * validated only for the nonblank fields that route already requires; a payload WITH task_id is
+ * the full, projected result shape.
+ */
+function assertResultRecordedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (p['task_id'] === undefined) {
+    for (const field of ['instrument_id', 'lot_id', 'parameter']) {
+      if (typeof p[field] !== 'string' || (p[field] as string).trim() === '') {
+        reject('INVALID_PAYLOAD', `${field} must be a non-empty string`, { field });
+      }
+    }
+    if (p['value'] === undefined || p['value'] === null) {
+      reject('INVALID_PAYLOAD', 'value is required');
+    }
+    return;
+  }
+  assertTaskStream(envelope, p);
+  if (!isUuid(p['lot_id'])) reject('INVALID_PAYLOAD', 'lot_id must be a UUID');
+  if (!isUuid(p['characteristic_id']))
+    reject('INVALID_PAYLOAD', 'characteristic_id must be a UUID');
+  if (!isUuid(p['instrument_asset_id'])) {
+    reject('INVALID_PAYLOAD', 'instrument_asset_id must be a UUID');
+  }
+  if (!isBoundedText(p['instrument_id'], MAX_INSTRUMENT_ID_LENGTH)) {
+    reject('INVALID_PAYLOAD', 'instrument_id must be a non-empty string of at most 128 characters');
+  }
+  assertReadingsShape(p, QC_RESULT_RECORDED, false);
+  if (!isIsoTimestamp(p['recorded_at'])) {
+    reject('INVALID_PAYLOAD', 'recorded_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  rejectDeclaredDerived(
+    p,
+    ['characteristic_class', 'result_kind', 'conforms_by_result_id', 'recorded_by'],
+    QC_RESULT_RECORDED,
+  );
+}
+
+function assertObservationRecordedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  assertTaskStream(envelope, p);
+  if (!isUuid(p['lot_id'])) reject('INVALID_PAYLOAD', 'lot_id must be a UUID');
+  if (!isUuid(p['characteristic_id']))
+    reject('INVALID_PAYLOAD', 'characteristic_id must be a UUID');
+  if (p['instrument_asset_id'] !== undefined || p['instrument_id'] !== undefined) {
+    reject(
+      'INVALID_PAYLOAD',
+      'An observation must not carry an instrument; use qc.result_recorded',
+    );
+  }
+  assertReadingsShape(p, QC_OBSERVATION_RECORDED, true);
+  if (!isIsoTimestamp(p['recorded_at'])) {
+    reject('INVALID_PAYLOAD', 'recorded_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  rejectDeclaredDerived(
+    p,
+    ['characteristic_class', 'result_kind', 'conforms_by_result_id', 'recorded_by'],
+    QC_OBSERVATION_RECORDED,
+  );
+}
+
+function assertInspectionCompletedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  assertTaskStream(envelope, p);
+  if (!isIsoTimestamp(p['completed_at'])) {
+    reject('INVALID_PAYLOAD', 'completed_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  rejectDeclaredDerived(
+    p,
+    [
+      'sampling_id',
+      'sampling_outcome',
+      'nonconforming_sample_units',
+      'critical_nonconformities',
+      'severity_used',
+      'previous_severity',
+      'new_severity',
+      'switching_score',
+      'reduced_eligible',
+      'inspection_discontinued',
+      'previous_task_status',
+      'task_status',
+      'inspected_by',
+    ],
+    QC_INSPECTION_COMPLETED,
+  );
+}
+
+function assertSamplingStateAdjustedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['plan_id'])) reject('INVALID_PAYLOAD', 'plan_id must be a UUID');
+  if (envelope.stream_id !== p['plan_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the plan_id for qc.sampling_state_adjusted', {
+      stream_id: envelope.stream_id,
+      payload_plan_id: p['plan_id'],
+    });
+  }
+  if (!isUuid(p['site_id'])) reject('INVALID_PAYLOAD', 'site_id must be a UUID');
+  if (typeof p['action'] !== 'string' || !SWITCHING_ACTIONS.has(p['action'])) {
+    reject('INVALID_PAYLOAD', 'action must be one of: authorize_reduced, resume_inspection');
+  }
+  if (!isBoundedText(p['reason'], MAX_TEXT_2000)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `reason must be a non-empty string of at most ${MAX_TEXT_2000} characters`,
+    );
+  }
+  if (!isIsoTimestamp(p['adjusted_at'])) {
+    reject('INVALID_PAYLOAD', 'adjusted_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  rejectDeclaredDerived(
+    p,
+    ['previous_severity', 'new_severity', 'authorized_by', 'authorizing_role'],
+    QC_SAMPLING_STATE_ADJUSTED,
+  );
+}
+
 export function assertQualityShape(envelope: EventEnvelope): void {
   assertQualityForeignStreamRejected(envelope);
   switch (qualityEventType(envelope)) {
@@ -583,6 +911,21 @@ export function assertQualityShape(envelope: EventEnvelope): void {
       return;
     case QC_CONDITIONAL_RELEASE_RECORDED:
       assertConditionalReleaseRecordedShape(envelope);
+      return;
+    case QC_SAMPLING_DETERMINED:
+      assertSamplingDeterminedShape(envelope);
+      return;
+    case QC_RESULT_RECORDED:
+      assertResultRecordedShape(envelope);
+      return;
+    case QC_OBSERVATION_RECORDED:
+      assertObservationRecordedShape(envelope);
+      return;
+    case QC_INSPECTION_COMPLETED:
+      assertInspectionCompletedShape(envelope);
+      return;
+    case QC_SAMPLING_STATE_ADJUSTED:
+      assertSamplingStateAdjustedShape(envelope);
       return;
     default:
       return;
@@ -1330,30 +1673,14 @@ async function applyCompletionReceived(
 }
 
 /**
- * Known result recorders for a lot: the actors of every qc.result_recorded event whose lot_id
- * names this lot by number or UUID (the synthetic Story 1.7 route stores whichever the caller
- * sent). Ordered by earliest first record, so `recorders[0]` is the earliest known recorder
- * (stored as `inspector_user_id`). Story 8.2 result rows will join this set; the attribution
- * stored now is what Story 8.2 and 8.3 enforce against.
+ * Known result recorders for a task (Story 8.2 Binding Scope Decision 12): the recorded_by of
+ * every qc_inspection_result row of the task, earliest first (first recorded_at, then result_id),
+ * so `recorders[0]` is the deterministic inspector attribution stored as `inspector_user_id`.
+ * The Story 8.1 domain_events scan of synthetic results is retired; the projection is the SOD
+ * substrate Story 8.3 enforces against too.
  */
-async function knownResultRecorders(
-  lotId: string,
-  lotNumber: string,
-  client: PoolClient,
-): Promise<string[]> {
-  const result = await client.query(
-    `SELECT metadata->'actor'->>'user_id' AS user_id,
-            MIN(created_at) AS first_at
-       FROM domain_events
-      WHERE stream_type = 'qc' AND event_type = 'qc.result_recorded'
-        AND (payload->>'lot_id' = $1 OR payload->>'lot_id' = $2)
-      GROUP BY metadata->'actor'->>'user_id'
-      ORDER BY first_at ASC, user_id ASC`,
-    [lotNumber, lotId],
-  );
-  return result.rows
-    .map((row) => row['user_id'] as string | null)
-    .filter((id): id is string => typeof id === 'string' && UUID_REGEX.test(id));
+async function knownResultRecorders(taskId: string, client: PoolClient): Promise<string[]> {
+  return (await listResultRecorderUserIds(taskId, client)).filter((id) => UUID_REGEX.test(id));
 }
 
 async function applyConditionalReleaseRecorded(
@@ -1429,7 +1756,7 @@ async function applyConditionalReleaseRecorded(
 
   // Segregation of duties (Binding Scope Decision 11): a known result recorder cannot approve the
   // release of the same lot.
-  const recorders = await knownResultRecorders(lotId, lotNumber, client);
+  const recorders = await knownResultRecorders(task.task_id, client);
   if (recorders.includes(actorId)) {
     reject(
       'SOD_VIOLATION',
@@ -1526,6 +1853,671 @@ async function applyConditionalReleaseRecorded(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Story 8.2 appliers (sampling, results, completion, switching-state commands)
+// ---------------------------------------------------------------------------
+
+/**
+ * LOCKING CONTRACT (Story 8.2): every task-scoped applier reads the task WITHOUT a lock to learn
+ * its lot, locks the lot row FOR UPDATE, then re-reads the task FOR UPDATE (the fixed Story 8.1
+ * lot-then-gate prefix, so a result, a completion, a conditional release and a consumption on one
+ * lot cannot deadlock), then takes the (plan, site) switching-state advisory lock and, when a row
+ * exists, its FOR UPDATE. Results and completion both hold the task row, so a completion racing a
+ * result insert for the same task cannot lose the result.
+ */
+async function lockTaskForInspection(
+  taskId: string,
+  client: PoolClient,
+): Promise<QcInspectionTaskRow> {
+  const unlocked = await getQcInspectionTaskById(taskId, client);
+  if (!unlocked) {
+    reject('QC_TASK_NOT_FOUND', 'QC inspection task not found', { task_id: taskId }, 404);
+  }
+  const lot = await client.query(`SELECT lot_id FROM lot_master WHERE lot_id = $1 FOR UPDATE`, [
+    unlocked.lot_id,
+  ]);
+  if (lot.rows.length === 0) {
+    reject(
+      'LOT_NOT_FOUND',
+      'The lot of this task does not resolve',
+      { lot_id: unlocked.lot_id },
+      404,
+    );
+  }
+  const task = await getQcInspectionTaskById(taskId, client, true);
+  if (!task) {
+    reject('QC_TASK_NOT_FOUND', 'QC inspection task not found', { task_id: taskId }, 404);
+  }
+  return task;
+}
+
+function switchingLockKey(planId: string, siteId: string): string {
+  return `qc_switching|${planId}|${siteId}`;
+}
+
+function snapshotOf(state: Awaited<ReturnType<typeof getSwitchingState>>): SwitchingSnapshot {
+  if (!state) {
+    return {
+      severity: 'normal',
+      switching_score: 0,
+      recent_original_outcomes: [],
+      consecutive_accepted_on_tightened: 0,
+      not_accepted_on_tightened: 0,
+      reduced_eligible: false,
+      inspection_discontinued: false,
+      lots_counted: 0,
+    };
+  }
+  return {
+    severity: state.severity,
+    switching_score: state.switching_score,
+    recent_original_outcomes: state.recent_original_outcomes,
+    consecutive_accepted_on_tightened: state.consecutive_accepted_on_tightened,
+    not_accepted_on_tightened: state.not_accepted_on_tightened,
+    reduced_eligible: state.reduced_eligible,
+    inspection_discontinued: state.inspection_discontinued,
+    lots_counted: state.lots_counted,
+  };
+}
+
+async function applySamplingDetermined(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const taskId = p['task_id'] as string;
+  const samplingId = p['sampling_id'] as string;
+  const determinedAt = p['determined_at'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+
+  const task = await lockTaskForInspection(taskId, client);
+  if (task.task_status !== 'open') {
+    reject(
+      'QC_TASK_NOT_OPEN',
+      'Sampling can only be determined for an open inspection task',
+      { task_id: taskId, task_status: task.task_status, sampling_id: task.sampling_id },
+      409,
+    );
+  }
+  const existing = await getQcSamplingPlanByTaskId(taskId, client);
+  if (existing) {
+    reject(
+      'QC_SAMPLING_EXISTS',
+      'A sampling plan is already frozen on this task',
+      { task_id: taskId, existing_sampling_id: existing.sampling_id },
+      409,
+    );
+  }
+  const version = await getInspectionPlanVersionById(task.plan_version_id, client);
+  if (!version) {
+    reject(
+      'INSPECTION_PLAN_NOT_FOUND',
+      'The frozen plan version of this task does not resolve',
+      { task_id: taskId, plan_version_id: task.plan_version_id },
+      404,
+    );
+  }
+  const characteristics = await listInspectionPlanCharacteristics(task.plan_version_id, client);
+
+  await advisoryLock(switchingLockKey(task.plan_id, task.site_id), client);
+  const state = await getSwitchingState(task.plan_id, task.site_id, client, true);
+  if (state?.inspection_discontinued) {
+    reject(
+      'SAMPLING_INSPECTION_DISCONTINUED',
+      'Inspection under this plan is discontinued at this site until a QC Head resumes it',
+      { plan_id: task.plan_id, site_id: task.site_id },
+      409,
+    );
+  }
+  const severity = state?.severity ?? 'normal';
+  const determined = determineSampling({
+    quantity: task.quantity,
+    aql: version.aql,
+    inspection_level: version.inspection_level,
+    characteristics,
+    severity,
+  });
+
+  await insertQcSamplingPlan(
+    {
+      sampling_id: samplingId,
+      task_id: taskId,
+      lot_id: task.lot_id,
+      lot_number: task.lot_number,
+      plan_version_id: task.plan_version_id,
+      plan_id: task.plan_id,
+      site_id: task.site_id,
+      lot_size: determined.lot_size,
+      aql: determined.aql,
+      inspection_level: determined.inspection_level,
+      severity: determined.severity,
+      code_letter: determined.code_letter,
+      resolved_code_letter: determined.resolved_code_letter,
+      sample_size: determined.sample_size,
+      acceptance_number: determined.acceptance_number,
+      rejection_number: determined.rejection_number,
+      sampling_basis: determined.sampling_basis,
+      standard_ref: determined.standard_ref,
+      critical_characteristic_count: determined.critical_characteristic_ids.length,
+      determined_by: actorId,
+      determined_at: determinedAt,
+      source_event_id: eventId,
+    },
+    client,
+  );
+  const moved = await transitionQcTaskStatus(
+    taskId,
+    'open',
+    'sampling_determined',
+    { sampling_id: samplingId },
+    client,
+  );
+  if (moved !== 1) {
+    reject(
+      'QC_TASK_NOT_OPEN',
+      'The task left the open state before sampling could be frozen',
+      { task_id: taskId },
+      409,
+    );
+  }
+
+  p['lot_id'] = task.lot_id;
+  p['lot_number'] = task.lot_number;
+  p['plan_version_id'] = task.plan_version_id;
+  p['plan_id'] = task.plan_id;
+  p['site_id'] = task.site_id;
+  p['lot_size'] = determined.lot_size;
+  p['aql'] = determined.aql;
+  p['inspection_level'] = determined.inspection_level;
+  p['severity'] = determined.severity;
+  p['code_letter'] = determined.code_letter;
+  p['resolved_code_letter'] = determined.resolved_code_letter;
+  p['sample_size'] = determined.sample_size;
+  p['acceptance_number'] = determined.acceptance_number;
+  p['rejection_number'] = determined.rejection_number;
+  p['sampling_basis'] = determined.sampling_basis;
+  p['standard_ref'] = determined.standard_ref;
+  p['critical_characteristic_ids'] = determined.critical_characteristic_ids;
+  p['determined_by'] = actorId;
+  p['previous_task_status'] = 'open';
+  p['task_status'] = 'sampling_determined';
+}
+
+interface ReadingInput {
+  result_id: string;
+  sample_unit_no: number;
+  measured_value?: string;
+  measured_uom?: string;
+  attribute_conforms?: boolean;
+}
+
+/** The unit range a characteristic requires under the frozen plan (Binding Scope Decision on AC 2). */
+function requiredUnitCount(
+  plan: Pick<QcSamplingPlanRow, 'sampling_basis' | 'lot_size' | 'sample_size'>,
+  characteristicClass: string,
+): number {
+  return plan.sampling_basis === 'full_inspection' || characteristicClass === 'critical'
+    ? plan.lot_size
+    : plan.sample_size;
+}
+
+/**
+ * Shared by qc.result_recorded (instrument-bound) and qc.observation_recorded (instrument-less):
+ * the task must be in sampling_determined, the characteristic must be a line of the frozen plan
+ * version, every unit must be inside the characteristic's required range, the reading kind must
+ * pair with the line, and the instrument binding (AC 4 and AC 5) or its absence (Binding Scope
+ * Decision 2) must match the line. conforms is derived here and stored (Annex requirement 7).
+ */
+async function applyResultBatch(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+  kind: 'result' | 'observation',
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  if (kind === 'result' && p['task_id'] === undefined) return; // Story 1.7 synthetic shape
+  const taskId = p['task_id'] as string;
+  const lotId = p['lot_id'] as string;
+  const characteristicId = p['characteristic_id'] as string;
+  const readings = p['readings'] as ReadingInput[];
+  const recordedAt = p['recorded_at'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+  if (!isUuid(actorId)) {
+    reject('INVALID_PAYLOAD', 'The recording actor must be an authenticated user', {
+      actor_user_id: actorId,
+    });
+  }
+
+  const task = await lockTaskForInspection(taskId, client);
+  if (task.lot_id !== lotId) {
+    reject(
+      'QC_DERIVATION_MISMATCH',
+      'The declared lot_id is not the lot of this inspection task',
+      { task_id: taskId, declared_lot_id: lotId, lot_id: task.lot_id },
+      409,
+    );
+  }
+  if (task.task_status === 'open') {
+    reject(
+      'QC_SAMPLING_REQUIRED',
+      'Sampling must be determined before results are recorded',
+      { task_id: taskId, task_status: task.task_status },
+      409,
+    );
+  }
+  if (task.task_status !== 'sampling_determined') {
+    reject(
+      'QC_TASK_NOT_OPEN_FOR_RESULTS',
+      'Inspection of this task is complete; no further results are accepted',
+      { task_id: taskId, task_status: task.task_status },
+      409,
+    );
+  }
+  const plan = await getQcSamplingPlanByTaskId(taskId, client);
+  if (!plan) {
+    reject(
+      'QC_SAMPLING_REQUIRED',
+      'No sampling plan is frozen on this task',
+      { task_id: taskId },
+      409,
+    );
+  }
+  const characteristics = await listInspectionPlanCharacteristics(task.plan_version_id, client);
+  const line = characteristics.find((c) => c.characteristic_id === characteristicId);
+  if (!line) {
+    reject(
+      'QC_CHARACTERISTIC_NOT_IN_PLAN',
+      'The characteristic is not a line of the plan version frozen on this task',
+      {
+        task_id: taskId,
+        plan_version_id: task.plan_version_id,
+        characteristic_id: characteristicId,
+      },
+    );
+  }
+  const maxUnit = requiredUnitCount(plan, line.characteristic_class);
+  for (const r of readings) {
+    if (r.sample_unit_no > maxUnit) {
+      reject(
+        'QC_SAMPLE_UNIT_OUT_OF_RANGE',
+        'The sample unit is outside the range this characteristic requires',
+        {
+          characteristic_id: characteristicId,
+          characteristic_class: line.characteristic_class,
+          sample_unit_no: r.sample_unit_no,
+          max_sample_unit_no: maxUnit,
+          sampling_basis: plan.sampling_basis,
+        },
+      );
+    }
+  }
+
+  let instrumentAssetId: string | null = null;
+  let instrumentId: string | null = null;
+  if (kind === 'result') {
+    if (line.result_kind !== 'numeric' && line.instrument_type === null) {
+      reject(
+        'INSTRUMENT_NOT_PERMITTED',
+        'This characteristic is an instrument-less attribute line; record an observation instead',
+        { characteristic_id: characteristicId, result_kind: line.result_kind },
+      );
+    }
+    instrumentAssetId = p['instrument_asset_id'] as string;
+    const declaredInstrumentId = p['instrument_id'] as string;
+    const register = await getInstrumentRecordByAssetId(instrumentAssetId, client);
+    if (!register) {
+      reject(
+        'INSTRUMENT_NOT_FOUND',
+        'The asset is not a registered measuring instrument',
+        { instrument_asset_id: instrumentAssetId },
+        404,
+      );
+    }
+    if (register.instrument_id.toLowerCase() !== declaredInstrumentId.trim().toLowerCase()) {
+      reject(
+        'QC_DERIVATION_MISMATCH',
+        'The declared instrument_id is not the register key of the instrument asset',
+        {
+          instrument_asset_id: instrumentAssetId,
+          declared_instrument_id: declaredInstrumentId,
+          instrument_id: register.instrument_id,
+        },
+        409,
+      );
+    }
+    instrumentId = register.instrument_id;
+    // AD-8: re-checked INSIDE the transaction; no role overrides and the pre-transaction gate in
+    // src/compliance/calibration.ts is untouched.
+    const status = await getCalibrationStatus(register.instrument_id, client);
+    if (status !== 'calibrated') {
+      reject(
+        'CALIBRATION_LOCKOUT',
+        'Instrument calibration status blocks QC result persistence',
+        {
+          instrument_id: register.instrument_id,
+          instrument_asset_id: instrumentAssetId,
+          calibration_status: status,
+        },
+        423,
+      );
+    }
+  } else if (line.result_kind !== 'attribute' || line.instrument_type !== null) {
+    reject(
+      'INSTRUMENT_REQUIRED',
+      'This characteristic requires a measuring instrument; record a result with instrument_asset_id',
+      {
+        characteristic_id: characteristicId,
+        result_kind: line.result_kind,
+        instrument_type: line.instrument_type,
+      },
+    );
+  }
+
+  // Existing units for this characteristic: the sequential path returns the same code as the
+  // uq_qc_inspection_result_unit race path.
+  const existing = (await countResultsByCharacteristic(taskId, client)).get(characteristicId);
+  const existingUnits = new Set(existing?.units ?? []);
+  const rows: InsertQcInspectionResultRow[] = [];
+  const conformsByResultId: Record<string, boolean> = {};
+  for (const r of readings) {
+    if (existingUnits.has(r.sample_unit_no)) {
+      reject(
+        'QC_RESULT_EXISTS',
+        'A result already exists for this task, characteristic and sample unit',
+        { task_id: taskId, characteristic_id: characteristicId, sample_unit_no: r.sample_unit_no },
+        409,
+      );
+    }
+    let conforms: boolean;
+    if (line.result_kind === 'numeric') {
+      if (typeof r.measured_value !== 'string' || r.attribute_conforms !== undefined) {
+        reject(
+          'QC_RESULT_KIND_MISMATCH',
+          'A numeric characteristic needs measured_value and measured_uom, not attribute_conforms',
+          { characteristic_id: characteristicId, sample_unit_no: r.sample_unit_no },
+        );
+      }
+      if ((r.measured_uom ?? null) !== line.limit_uom) {
+        reject('QC_RESULT_UOM_MISMATCH', 'measured_uom must equal the characteristic limit_uom', {
+          characteristic_id: characteristicId,
+          sample_unit_no: r.sample_unit_no,
+          measured_uom: r.measured_uom ?? null,
+          limit_uom: line.limit_uom,
+        });
+      }
+      conforms =
+        (line.lower_limit === null ||
+          compareDecimalStrings(r.measured_value, line.lower_limit) >= 0) &&
+        (line.upper_limit === null ||
+          compareDecimalStrings(r.measured_value, line.upper_limit) <= 0);
+    } else {
+      if (
+        typeof r.attribute_conforms !== 'boolean' ||
+        r.measured_value !== undefined ||
+        r.measured_uom !== undefined
+      ) {
+        reject(
+          'QC_RESULT_KIND_MISMATCH',
+          'An attribute characteristic needs attribute_conforms and no measured value',
+          { characteristic_id: characteristicId, sample_unit_no: r.sample_unit_no },
+        );
+      }
+      conforms = r.attribute_conforms;
+    }
+    conformsByResultId[r.result_id] = conforms;
+    rows.push({
+      result_id: r.result_id,
+      task_id: taskId,
+      lot_id: task.lot_id,
+      characteristic_id: characteristicId,
+      characteristic_class: line.characteristic_class,
+      sample_unit_no: r.sample_unit_no,
+      result_kind: line.result_kind,
+      measured_value: line.result_kind === 'numeric' ? (r.measured_value as string) : null,
+      measured_uom: line.result_kind === 'numeric' ? (r.measured_uom ?? null) : null,
+      attribute_conforms:
+        line.result_kind === 'attribute' ? (r.attribute_conforms as boolean) : null,
+      conforms,
+      instrument_asset_id: instrumentAssetId,
+      instrument_id: instrumentId,
+      recorded_by: actorId,
+      recorded_at: recordedAt,
+      source_event_id: eventId,
+    });
+  }
+  await insertQcInspectionResults(rows, client);
+
+  p['characteristic_class'] = line.characteristic_class;
+  p['result_kind'] = line.result_kind;
+  p['conforms_by_result_id'] = conformsByResultId;
+  if (kind === 'result') p['instrument_id'] = instrumentId;
+}
+
+/** Whether the lot would have been accepted one preferred AQL step tighter at the same code letter (clause 9.3.3.2). */
+function tighterAqlAcceptableFor(plan: QcSamplingPlanRow, nonconforming: number): boolean {
+  if (plan.sampling_basis !== 'aql_table' || plan.aql === null || !isCodeLetter(plan.code_letter)) {
+    return false;
+  }
+  const aql = canonicalAql(plan.aql);
+  const tighter = aql === null ? null : tighterAql(aql);
+  if (tighter === null) return false;
+  const cell = TABLES_BY_SEVERITY[plan.severity][plan.code_letter][PREFERRED_AQLS.indexOf(tighter)];
+  if (cell === undefined || typeof cell === 'string') return false; // arrow: conservative
+  return nonconforming <= cell.ac;
+}
+
+async function applyInspectionCompleted(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const taskId = p['task_id'] as string;
+  const completedAt = p['completed_at'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+
+  const task = await lockTaskForInspection(taskId, client);
+  if (task.task_status === 'open') {
+    reject(
+      'QC_SAMPLING_REQUIRED',
+      'Sampling must be determined before inspection can complete',
+      { task_id: taskId, task_status: task.task_status },
+      409,
+    );
+  }
+  if (task.task_status !== 'sampling_determined') {
+    reject(
+      'QC_TASK_NOT_OPEN_FOR_RESULTS',
+      'Inspection of this task is already complete',
+      { task_id: taskId, task_status: task.task_status, sampling_outcome: task.sampling_outcome },
+      409,
+    );
+  }
+  const plan = await getQcSamplingPlanByTaskId(taskId, client);
+  if (!plan) {
+    reject(
+      'QC_SAMPLING_REQUIRED',
+      'No sampling plan is frozen on this task',
+      { task_id: taskId },
+      409,
+    );
+  }
+  const characteristics = await listInspectionPlanCharacteristics(task.plan_version_id, client);
+  const counts = await countResultsByCharacteristic(taskId, client);
+  const gaps: Array<{ characteristic_id: string; required: number; recorded: number }> = [];
+  for (const line of characteristics) {
+    const required = requiredUnitCount(plan, line.characteristic_class);
+    const units = counts.get(line.characteristic_id)?.units ?? [];
+    const recorded = new Set(units.filter((u) => u >= 1 && u <= required)).size;
+    if (recorded < required) {
+      gaps.push({ characteristic_id: line.characteristic_id, required, recorded });
+    }
+  }
+  if (gaps.length > 0) {
+    reject(
+      'QC_INSPECTION_INCOMPLETE',
+      'Inspection cannot complete while required results are missing',
+      { task_id: taskId, sampling_id: plan.sampling_id, missing: gaps },
+      409,
+    );
+  }
+
+  const units = await listNonconformingUnits(taskId, client);
+  const outcome = evaluateOutcome(plan, units);
+
+  await advisoryLock(switchingLockKey(task.plan_id, task.site_id), client);
+  const stateRow = await getSwitchingState(task.plan_id, task.site_id, client, true);
+  const before = snapshotOf(stateRow);
+  const after = advanceSwitchingState(
+    before,
+    outcome,
+    plan,
+    tighterAqlAcceptableFor(plan, outcome.nonconforming_sample_units),
+  );
+  if (plan.sampling_basis === 'aql_table') {
+    await upsertSwitchingState(
+      {
+        ...(stateRow ?? initialSwitchingState(task.plan_id, task.site_id, eventId)),
+        ...after,
+        plan_id: task.plan_id,
+        site_id: task.site_id,
+        last_task_id: taskId,
+        source_event_id: eventId,
+      },
+      client,
+    );
+  }
+
+  const moved = await transitionQcTaskStatus(
+    taskId,
+    'sampling_determined',
+    'inspected',
+    {
+      sampling_outcome: outcome.sampling_outcome,
+      nonconforming_sample_units: outcome.nonconforming_sample_units,
+      critical_nonconformities: outcome.critical_nonconformities,
+      inspected_by: actorId,
+      inspected_at: completedAt,
+    },
+    client,
+  );
+  if (moved !== 1) {
+    reject(
+      'QC_TASK_NOT_OPEN_FOR_RESULTS',
+      'The task left the sampling_determined state before inspection could complete',
+      { task_id: taskId },
+      409,
+    );
+  }
+
+  p['sampling_id'] = plan.sampling_id;
+  p['sampling_outcome'] = outcome.sampling_outcome;
+  p['nonconforming_sample_units'] = outcome.nonconforming_sample_units;
+  p['critical_nonconformities'] = outcome.critical_nonconformities;
+  p['severity_used'] = plan.severity;
+  p['previous_severity'] = before.severity;
+  p['new_severity'] = after.severity;
+  p['switching_score'] = after.switching_score;
+  p['reduced_eligible'] = after.reduced_eligible;
+  p['inspection_discontinued'] = after.inspection_discontinued;
+  p['inspected_by'] = actorId;
+  p['previous_task_status'] = 'sampling_determined';
+  p['task_status'] = 'inspected';
+
+  if (outcome.sampling_outcome === 'not_accepted') {
+    // The task remains the authoritative queue; this is a transactional convenience notification.
+    await emitNotificationInTransaction(
+      {
+        target: { role: config.quality.inspectionTaskNotificationRole, location_id: task.site_id },
+        event_type: 'qc_inspection_not_accepted',
+        status_verb: 'Not accepted',
+        object_type: 'qc_inspection_task',
+        object_id: taskId,
+        actor_label: `Lot ${task.lot_number} (${task.sku})`,
+        next_step: `Disposition the lot: ${outcome.nonconforming_sample_units} nonconforming sample unit(s), ${outcome.critical_nonconformities} critical`,
+        actor: envelope.metadata.actor,
+        correlation_id: envelope.metadata.correlation_id,
+        causation_id: eventId,
+        occurred_at: envelope.metadata.occurred_at,
+      },
+      client,
+    );
+  }
+}
+
+async function applySamplingStateAdjusted(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const planId = p['plan_id'] as string;
+  const siteId = p['site_id'] as string;
+  const action = p['action'] as 'authorize_reduced' | 'resume_inspection';
+  const actor = envelope.metadata.actor;
+  const qcHeadRoles: readonly string[] = config.quality.qcHeadRoles;
+  // Binding Scope Decision 9: QC Head-level authority from configuration, never a hard-coded role.
+  if (!qcHeadRoles.includes(actor.role)) {
+    reject(
+      'APPROVAL_REQUIRED',
+      'Adjusting the sampling switching state requires QC Head-level authority',
+      { plan_id: planId, site_id: siteId, action, qc_head_roles: [...qcHeadRoles] },
+      403,
+    );
+  }
+  const plan = await getInspectionPlanById(planId, client);
+  if (!plan) {
+    reject('INSPECTION_PLAN_NOT_FOUND', 'Inspection plan not found', { plan_id: planId }, 404);
+  }
+
+  await advisoryLock(switchingLockKey(planId, siteId), client);
+  const stateRow = await getSwitchingState(planId, siteId, client, true);
+  const before = snapshotOf(stateRow);
+  let after: SwitchingSnapshot;
+  if (action === 'authorize_reduced') {
+    if (before.severity !== 'normal' || !before.reduced_eligible) {
+      reject(
+        'REDUCED_INSPECTION_NOT_ELIGIBLE',
+        'Reduced inspection requires normal inspection with a switching score of at least 30',
+        {
+          plan_id: planId,
+          site_id: siteId,
+          severity: before.severity,
+          switching_score: before.switching_score,
+          reduced_eligible: before.reduced_eligible,
+        },
+        409,
+      );
+    }
+    after = applyAuthorizeReduced(before);
+  } else {
+    if (!before.inspection_discontinued) {
+      reject(
+        'SAMPLING_INSPECTION_NOT_DISCONTINUED',
+        'Inspection under this plan is not discontinued at this site',
+        { plan_id: planId, site_id: siteId, severity: before.severity },
+        409,
+      );
+    }
+    after = applyResumeInspection(before);
+  }
+  await upsertSwitchingState(
+    {
+      ...(stateRow ?? initialSwitchingState(planId, siteId, eventId)),
+      ...after,
+      plan_id: planId,
+      site_id: siteId,
+      source_event_id: eventId,
+    },
+    client,
+  );
+  p['previous_severity'] = before.severity;
+  p['new_severity'] = after.severity;
+  p['authorized_by'] = actor.user_id;
+  p['authorizing_role'] = actor.role;
+}
+
 export async function applyQualityProjection(
   envelope: EventEnvelope,
   client: PoolClient,
@@ -1547,6 +2539,21 @@ export async function applyQualityProjection(
       return;
     case QC_CONDITIONAL_RELEASE_RECORDED:
       await applyConditionalReleaseRecorded(envelope, client, eventId);
+      return;
+    case QC_SAMPLING_DETERMINED:
+      await applySamplingDetermined(envelope, client, eventId);
+      return;
+    case QC_RESULT_RECORDED:
+      await applyResultBatch(envelope, client, eventId, 'result');
+      return;
+    case QC_OBSERVATION_RECORDED:
+      await applyResultBatch(envelope, client, eventId, 'observation');
+      return;
+    case QC_INSPECTION_COMPLETED:
+      await applyInspectionCompleted(envelope, client, eventId);
+      return;
+    case QC_SAMPLING_STATE_ADJUSTED:
+      await applySamplingStateAdjusted(envelope, client, eventId);
       return;
     default:
       return;
@@ -1815,4 +2822,35 @@ export async function resolveQcDispositionDuplicateConflict(
     if (existing) return { ...attempted, existing_disposition_id: existing.disposition_id };
   }
   return attempted;
+}
+
+/** Story 8.2: uq_qc_sampling_plan_task race path returns the same detail as the sequential pre-check. */
+export async function resolveQcSamplingDuplicateConflict(
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const attempted: Record<string, unknown> = {
+    task_id: isUuid(payload['task_id']) ? payload['task_id'] : null,
+    sampling_id: isUuid(payload['sampling_id']) ? payload['sampling_id'] : null,
+  };
+  if (isUuid(payload['task_id'])) {
+    const existing = await getQcSamplingPlanByTaskId(payload['task_id']);
+    if (existing) return { ...attempted, existing_sampling_id: existing.sampling_id };
+  }
+  return attempted;
+}
+
+/** Story 8.2: uq_qc_inspection_result_unit race path names the task and characteristic. */
+export function resolveQcResultDuplicateConflict(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const readings = Array.isArray(payload['readings'])
+    ? (payload['readings'] as Array<Record<string, unknown>>)
+    : [];
+  return {
+    task_id: isUuid(payload['task_id']) ? payload['task_id'] : null,
+    characteristic_id: isUuid(payload['characteristic_id']) ? payload['characteristic_id'] : null,
+    sample_unit_nos: readings
+      .map((r) => r['sample_unit_no'])
+      .filter((u): u is number => typeof u === 'number'),
+  };
 }
