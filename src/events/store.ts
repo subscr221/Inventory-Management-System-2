@@ -197,6 +197,15 @@ import {
   resolveProductionOrderNumberDuplicateConflict,
 } from '../compliance/production-order.js';
 import {
+  assertQualityForeignStreamRejected,
+  assertQualityShape,
+  applyQualityProjection,
+  resolveInspectionPlanGrainDuplicateConflict,
+  resolveInspectionPlanEffectivityDuplicateConflict,
+  resolveQcCompletionDuplicateConflict,
+  resolveQcDispositionDuplicateConflict,
+} from '../compliance/quality.js';
+import {
   assertProductionMaterialShape,
   applyProductionMaterialProjection,
 } from '../compliance/production-material.js';
@@ -455,6 +464,10 @@ export async function persistEvent(
   // rejected without consuming an idempotency key or touching domain_events. Non-inventory
   // stream types (DOA registry, SCIM users, audit, tagging config itself) return immediately
   // inside assertInventoryTagging - byte-for-byte unaffected.
+  // Story 8.1 (Task 3): a Story 8.1 event NAME on any stream other than 'qc' is rejected before
+  // any other assert can give it a different, misleading rejection (or, for a non-inventory
+  // stream, let it through to be silently ignored by every applier).
+  assertQualityForeignStreamRejected(envelope);
   await assertInventoryTagging(envelope);
   await assertCalibrationLockout(envelope);
   // Story 7.6 (FR-M-14, AC 2): the weighbridge trade-weighment lockout runs with the other
@@ -662,6 +675,13 @@ export async function persistEvent(
   // confirmation/return contracts, mandatory reason codes) is non-DB and runs with the other
   // pre-transaction asserts, so a malformed material event never consumes an idempotency key.
   assertProductionMaterialShape(envelope);
+  // Story 8.1: inspection-plan and QC-gate shape validation (strict UUIDs, decimal-string
+  // quantities, characteristic kind/limit pairing, calendar dates, explicit-offset timestamps, the
+  // declared-derived-field rejections) is non-DB and runs with the other pre-transaction asserts,
+  // so a malformed QC event never consumes an idempotency key. It also rejects a Story 8.1 event
+  // name on any stream other than 'qc' (the stream-mismatch bypass closure, Task 3). The Story 1.7
+  // qc.result_recorded calibration lockout above is untouched.
+  assertQualityShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -990,6 +1010,14 @@ export async function persistEvent(
     // or roll back together with the domain_events insert. Every material guard lives here, never
     // only in the HTTP handler (AD-12).
     await applyProductionMaterialProjection(envelope, client, eventId);
+    // Story 8.1: the inspection-plan family (header, immutable versions, characteristics, the
+    // append-only approval with its in-transaction DOA re-derivation), the completion hand-off
+    // (frozen plan version, task, qc_hold gate, transactional inspection notification - on the
+    // PRODUCER's transaction when the hand-off supplies its client) and the DOA-gated conditional
+    // release (deviation, shared disposition, gate transition) run inside this same transaction,
+    // so every QC-gate write commits or rolls back with the domain_events insert. Every guard lives
+    // here, never only in the HTTP handler (AD-12).
+    await applyQualityProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -1486,6 +1514,88 @@ export async function persistEvent(
                 : null,
           },
         );
+      } else if (constraint === 'uq_inspection_plan_grain') {
+        // Story 8.1: one plan header per scope grain. The race path returns the same code and the
+        // same existing_plan_id as the sequential pre-check (INSPECTION_PLAN_SCOPE_MISMATCH).
+        throw new AppError(
+          409,
+          'INSPECTION_PLAN_SCOPE_MISMATCH',
+          'A plan already exists for this scope grain under a different plan_id',
+          await resolveInspectionPlanGrainDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_inspection_plan_version_effective') {
+        // Story 8.1 (Task 4): one version per (plan, effective_from); same detail as the pre-check.
+        throw new AppError(
+          409,
+          'INSPECTION_PLAN_EFFECTIVITY_CONFLICT',
+          'A version of this plan already carries this effective_from date',
+          await resolveInspectionPlanEffectivityDuplicateConflict(envelope.payload),
+        );
+      } else if (
+        constraint === 'uq_inspection_plan_version_no' ||
+        constraint === 'inspection_plan_version_pkey' ||
+        constraint === 'inspection_plan_pkey' ||
+        constraint === 'inspection_plan_characteristic_pkey' ||
+        constraint === 'uq_inspection_plan_characteristic_line'
+      ) {
+        // Story 8.1: version numbers are allocated under the plan advisory lock, so a 23505 here is
+        // a concurrent create that lost the lock race or a re-used minted id - the stable
+        // DUPLICATE_INSPECTION_PLAN_VERSION, never a raw 500.
+        throw new AppError(
+          409,
+          'DUPLICATE_INSPECTION_PLAN_VERSION',
+          'This plan version has already been created',
+          {
+            constraint,
+            plan_id:
+              typeof envelope.payload['plan_id'] === 'string' ? envelope.payload['plan_id'] : null,
+            plan_version_id:
+              typeof envelope.payload['plan_version_id'] === 'string'
+                ? envelope.payload['plan_version_id']
+                : null,
+          },
+        );
+      } else if (constraint === 'inspection_plan_approval_pkey') {
+        // Story 8.1 (Task 4): concurrent approval attempts resolve to ONE record; the loser gets the
+        // same code as a sequential second approval.
+        throw new AppError(
+          409,
+          'INSPECTION_PLAN_ALREADY_APPROVED',
+          'This plan version is already approved',
+          {
+            plan_version_id:
+              typeof envelope.payload['plan_version_id'] === 'string'
+                ? envelope.payload['plan_version_id']
+                : null,
+          },
+        );
+      } else if (
+        constraint === 'uq_qc_inspection_task_lot' ||
+        constraint === 'uq_qc_inspection_task_source' ||
+        constraint === 'qc_inspection_task_pkey'
+      ) {
+        // Story 8.1 (Task 5): unique source completion and unique lot task make replay and
+        // concurrent delivery one effect; the race path returns the same existing_task_id.
+        throw new AppError(
+          409,
+          'DUPLICATE_QC_COMPLETION',
+          'A QC inspection task already exists for this lot or source completion',
+          { constraint, ...(await resolveQcCompletionDuplicateConflict(envelope.payload)) },
+        );
+      } else if (
+        constraint === 'uq_qc_lot_disposition_lot' ||
+        constraint === 'qc_lot_disposition_pkey' ||
+        constraint === 'uq_qc_deviation_task_type' ||
+        constraint === 'qc_deviation_pkey'
+      ) {
+        // Story 8.1 (Binding Scope Decision 4): one disposition per unsplit lot. A sequential or
+        // concurrent second disposition is DISPOSITION_EXISTS with the existing_disposition_id.
+        throw new AppError(
+          409,
+          'DISPOSITION_EXISTS',
+          'A disposition has already been recorded for this lot',
+          { constraint, ...(await resolveQcDispositionDuplicateConflict(envelope.payload)) },
+        );
       } else if (constraint === 'uq_production_order_number_ext') {
         // Story 6.1: the server-allocated order number is unique. The sequential pre-check (the
         // applier's allocation) makes this practically unreachable, but a concurrent race on the
@@ -1742,6 +1852,18 @@ export async function persistEvent(
       'constraint' in err
     ) {
       const constraint = (err as { constraint?: string }).constraint;
+      // Story 8.1: every QC CHECK (scope pairing, characteristic kind/limit pairing, sampling
+      // pairing, positive quantity, deviation expiry, gate vocabulary) is enforced in the shape
+      // assert or the applier first; reaching one here is an unmapped path, surfaced as a stable
+      // 400 INVALID_PAYLOAD naming the constraint rather than a raw PG 500.
+      if (
+        typeof constraint === 'string' &&
+        (constraint.startsWith('chk_inspection_plan') || constraint.startsWith('chk_qc_'))
+      ) {
+        throw new AppError(400, 'INVALID_PAYLOAD', 'The QC payload violates a named constraint', {
+          constraint,
+        });
+      }
       if (
         constraint === 'chk_three_way_match_status' ||
         constraint === 'chk_three_way_match_note_type' ||

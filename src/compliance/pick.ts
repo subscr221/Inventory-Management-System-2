@@ -19,6 +19,7 @@ import {
   getPickLineByIdForUpdate,
 } from '../read/projections/pick_line.js';
 import { applyStockPick } from '../read/projections/stock_balance.js';
+import { assertQcGateAllows, gateBusinessDateOf } from './quality.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STRATEGIES = ['single', 'batch', 'wave', 'zone'];
@@ -348,6 +349,14 @@ export async function applyPickTaskCreatedProjection(
       client,
     );
     const lotNumber = await lotNumberForUuid(line.directed_lot_id, line.sku, client);
+    // Story 8.1 (Task 6): picking is a sales path - blocked for qc_hold AND conditionally released
+    // lots until the Story 8.4 batch release record exists. Lot lock, gate lock, then the stock row.
+    await assertQcGateAllows({
+      lot_id: line.directed_lot_id,
+      operation: 'pick',
+      business_date: gateBusinessDateOf(envelope),
+      client,
+    });
     await allocateStock(
       line.sku,
       line.location_id,
@@ -487,6 +496,13 @@ export async function applyPickLineConfirmedProjection(
     // satisfies spec Task 5.4 step 5's "current bin" intent with the authoritative source).
     // Constrained to the same site as the original pick line and an active, writable bin.
     const confirmedLotNumber = await lotNumberForUuid(p.confirmed_lot_id, line.sku, client);
+    // Story 8.1 (Task 6): a substituted lot is re-validated against the QC gate before allocation.
+    await assertQcGateAllows({
+      lot_id: p.confirmed_lot_id,
+      operation: 'pick',
+      business_date: gateBusinessDateOf(envelope),
+      client,
+    });
     const resolved = await client.query(
       `SELECT sb.location_id
          FROM stock_balance sb
@@ -563,7 +579,13 @@ export async function applyPickLineConfirmedProjection(
     [p.pick_task_id],
   );
   if (Number(outstanding.rows[0]!['pending_count']) === 0) {
-    await finalizePickTaskCompletion(p.pick_task_id, envelope.metadata.actor, client, _eventId);
+    await finalizePickTaskCompletion(
+      p.pick_task_id,
+      envelope.metadata.actor,
+      client,
+      _eventId,
+      gateBusinessDateOf(envelope),
+    );
   }
 }
 
@@ -578,6 +600,7 @@ async function finalizePickTaskCompletion(
   actor: { user_id: string; role: string; location_id: string },
   client: PoolClient,
   eventId: string,
+  businessDate: string,
 ): Promise<boolean> {
   const task = await getPickTaskByIdForUpdate(pickTaskId, client);
   if (!task || task.status === 'completed') return false;
@@ -605,6 +628,13 @@ async function finalizePickTaskCompletion(
       sku,
       client,
     );
+    // Story 8.1 (Task 6): the allocated-to-picked move re-runs the QC gate under the lot lock.
+    await assertQcGateAllows({
+      lot_id: row['confirmed_lot_id'] as string,
+      operation: 'pick',
+      business_date: businessDate,
+      client,
+    });
     await applyStockPick(
       {
         sku,
@@ -753,5 +783,11 @@ export async function applyPickTaskCompletedProjection(
     );
   }
 
-  await finalizePickTaskCompletion(p.pick_task_id, envelope.metadata.actor, client, eventId);
+  await finalizePickTaskCompletion(
+    p.pick_task_id,
+    envelope.metadata.actor,
+    client,
+    eventId,
+    gateBusinessDateOf(envelope),
+  );
 }

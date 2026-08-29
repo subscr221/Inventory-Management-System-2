@@ -16,6 +16,7 @@ import {
   clearDocumentsByDispatchOrder,
 } from '../read/projections/dispatch_document.js';
 import { getSalesOrderLineById } from '../read/projections/erp_sales_order.js';
+import { QC_GATE_BLOCKED_STATUSES } from '../read/projections/qc_inspection_task.js';
 import {
   renderBOL,
   renderPackingSlip,
@@ -25,6 +26,22 @@ import {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DOCUMENT_TYPES = ['bol', 'packing_slip', 'commercial_invoice', 'label'];
+
+/**
+ * Story 8.1 (Task 6): the QC-gate half of the LOT_ON_HOLD check, taken AFTER the lot rows are
+ * locked (lot, then gate, then stock - the fixed order). Every lot under a blocked gate (qc_hold,
+ * or conditionally released without the Story 8.4 batch release record) blocks shipping-document
+ * generation and final dispatch, independently of the manual or recall hold.
+ */
+async function qcGatedLotIds(lotIds: string[], client: PoolClient): Promise<string[]> {
+  if (lotIds.length === 0) return [];
+  const result = await client.query(
+    `SELECT lot_id FROM qc_inspection_task WHERE lot_id = ANY($1::uuid[]) AND gate_status = ANY($2::text[])
+      ORDER BY lot_id FOR UPDATE`,
+    [lotIds, [...QC_GATE_BLOCKED_STATUSES]],
+  );
+  return result.rows.map((r: Record<string, unknown>) => r['lot_id'] as string);
+}
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
@@ -254,7 +271,7 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
     [p.dispatch_order_id],
   );
   const heldLots = holdResult.rows
-    .filter((r: Record<string, unknown>) => r['quality_hold_status'] === 'held')
+    .filter((r: Record<string, unknown>) => r['quality_hold_status'] !== 'none')
     .map((r: Record<string, unknown>) => r['lot_id'] as string);
   if (heldLots.length > 0) {
     throw new AppError(
@@ -262,6 +279,20 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
       'LOT_ON_HOLD',
       'Cannot generate documents: one or more lots are on quality hold',
       { held_lot_ids: heldLots },
+    );
+  }
+  // Story 8.1 (Task 6): the QC gate blocks shipping-document generation until Story 8.4 supplies
+  // the batch release record; a conditional release alone never enables it.
+  const qcGatedLots = await qcGatedLotIds(
+    holdResult.rows.map((r: Record<string, unknown>) => r['lot_id'] as string),
+    client,
+  );
+  if (qcGatedLots.length > 0) {
+    throw new AppError(
+      400,
+      'LOT_ON_HOLD',
+      'Cannot generate documents: one or more lots have not been released by QC',
+      { held_lot_ids: qcGatedLots, reason: 'qc_gate' },
     );
   }
 
@@ -397,8 +428,21 @@ export async function applyDispatchDispatchedProjection(
      FOR UPDATE OF lm`,
     [p.dispatch_order_id],
   );
-  if (holdResult.rows.some((r: Record<string, unknown>) => r['quality_hold_status'] === 'held')) {
+  if (holdResult.rows.some((r: Record<string, unknown>) => r['quality_hold_status'] !== 'none')) {
     throw new AppError(400, 'LOT_ON_HOLD', 'Cannot dispatch: one or more lots are on quality hold');
+  }
+  // Story 8.1 (Task 6): the final recheck also re-runs the QC gate under the same locks.
+  const qcGatedAtDispatch = await qcGatedLotIds(
+    holdResult.rows.map((r: Record<string, unknown>) => r['lot_id'] as string),
+    client,
+  );
+  if (qcGatedAtDispatch.length > 0) {
+    throw new AppError(
+      400,
+      'LOT_ON_HOLD',
+      'Cannot dispatch: one or more lots have not been released by QC',
+      { held_lot_ids: qcGatedAtDispatch, reason: 'qc_gate' },
+    );
   }
 
   // Count how many packing records this dispatch order has, so the decrement below can be

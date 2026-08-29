@@ -1280,6 +1280,110 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 8.1 (FR-Q-01): the inspection-plan scope-grain header. Append-only (INSERT, SELECT).
+  {
+    canonical: 'read/projections/inspection_plan.sql',
+    table: 'inspection_plan',
+    constraints: [
+      'uq_inspection_plan_grain',
+      'chk_inspection_plan_scope',
+      'chk_inspection_plan_source_order_type',
+      'chk_inspection_plan_scope_pairing',
+    ],
+    indexes: ['idx_inspection_plan_item_revision'],
+    indexBodies: [
+      'UNIQUE NULLS NOT DISTINCT (item_id, bom_revision_id, scope, source_order_type, source_order_ref)',
+    ],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 8.1 (FR-Q-01): immutable, effective-dated plan versions carrying the Story 8.2 sampling
+  // inputs. Append-only; version allocation is serialized on an advisory lock, never MAX+1.
+  {
+    canonical: 'read/projections/inspection_plan_version.sql',
+    table: 'inspection_plan_version',
+    constraints: [
+      'uq_inspection_plan_version_no',
+      'uq_inspection_plan_version_effective',
+      'chk_inspection_plan_version_no_positive',
+      'chk_inspection_plan_version_aql',
+      'chk_inspection_plan_version_sampling_pairing',
+    ],
+    indexes: ['idx_inspection_plan_version_plan_effective'],
+    indexBodies: ['ON inspection_plan_version (plan_id, effective_from DESC, version_no DESC)'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 8.1 (Annex requirement 4): per-line characteristic definitions with the kind/limit pairing.
+  {
+    canonical: 'read/projections/inspection_plan_characteristic.sql',
+    table: 'inspection_plan_characteristic',
+    constraints: [
+      'uq_inspection_plan_characteristic_line',
+      'chk_inspection_plan_characteristic_line_no',
+      'chk_inspection_plan_characteristic_class',
+      'chk_inspection_plan_characteristic_result_kind',
+      'chk_inspection_plan_characteristic_text',
+      'chk_inspection_plan_characteristic_kind_pairing',
+    ],
+    indexes: ['idx_inspection_plan_characteristic_version'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 8.1 (Binding Scope Decision 10): one append-only approval per plan version (the PK).
+  {
+    canonical: 'read/projections/inspection_plan_approval.sql',
+    table: 'inspection_plan_approval',
+    constraints: [
+      'chk_inspection_plan_approval_actor_pairing',
+      'chk_inspection_plan_approval_role',
+    ],
+    indexes: ['idx_inspection_plan_approval_plan'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 8.1 (FR-Q-02, Binding Scope Decision 2): the durable inspection task that IS the QC-gate
+  // projection keyed by lot. The gate transition is the only UPDATE.
+  {
+    canonical: 'read/projections/qc_inspection_task.sql',
+    table: 'qc_inspection_task',
+    constraints: [
+      'uq_qc_inspection_task_lot',
+      'uq_qc_inspection_task_source',
+      'chk_qc_inspection_task_quantity',
+      'chk_qc_inspection_task_source_type',
+      'chk_qc_inspection_task_status',
+      'chk_qc_inspection_task_gate_status',
+      'chk_qc_inspection_task_plan_scope',
+      'chk_qc_inspection_task_scope_pairing',
+    ],
+    indexes: ['idx_qc_inspection_task_gate', 'idx_qc_inspection_task_lot_number'],
+    indexBodies: ['ON qc_inspection_task (gate_status, business_date, task_id)'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 8.1 (FR-Q-05, AC 4): immutable deviation evidence with a database-enforced future expiry.
+  {
+    canonical: 'read/projections/qc_deviation.sql',
+    table: 'qc_deviation',
+    constraints: [
+      'uq_qc_deviation_task_type',
+      'chk_qc_deviation_type',
+      'chk_qc_deviation_scope_kind',
+      'chk_qc_deviation_text',
+      'chk_qc_deviation_expiry',
+    ],
+    indexes: ['idx_qc_deviation_lot'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 8.1 (Binding Scope Decision 4): the shared one-row-per-lot disposition grain.
+  {
+    canonical: 'read/projections/qc_lot_disposition.sql',
+    table: 'qc_lot_disposition',
+    constraints: [
+      'uq_qc_lot_disposition_lot',
+      'chk_qc_lot_disposition_disposition',
+      'chk_qc_lot_disposition_quantity',
+      'chk_qc_lot_disposition_deviation_pairing',
+    ],
+    indexes: ['idx_qc_lot_disposition_task'],
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -1640,6 +1744,41 @@ describe('Story 2.1 schema drift guard', () => {
       ),
       'the warranty pairing CHECK body must pin both directions of the pair',
     );
+  });
+
+  it('Story 8.1 registers the seven QC projections at the migration tail in dependency order', () => {
+    const files = [
+      'inspection_plan.sql',
+      'inspection_plan_version.sql',
+      'inspection_plan_characteristic.sql',
+      'inspection_plan_approval.sql',
+      'qc_inspection_task.sql',
+      'qc_deviation.sql',
+      'qc_lot_disposition.sql',
+    ].map((f) => `'../../read/projections/${f}'`);
+    const tail = "'../../read/projections/maintenance_sync_conflict.sql'";
+    let previous = migrateSource.lastIndexOf(tail);
+    assert.ok(previous >= 0, 'the Story 7.8 tail entry must still be registered');
+    for (const file of files) {
+      const index = migrateSource.indexOf(file);
+      assert.ok(index >= 0, `src/events/migrate.ts must apply ${file}`);
+      assert.ok(index > previous, `${file} must be registered after the preceding QC file`);
+      previous = index;
+    }
+    // Grants are pinned: no DELETE anywhere in the family, UPDATE only on the gate projection.
+    for (const table of [
+      'inspection_plan',
+      'inspection_plan_version',
+      'inspection_plan_characteristic',
+      'inspection_plan_approval',
+      'qc_deviation',
+      'qc_lot_disposition',
+    ]) {
+      const sql = read(`read/projections/${table}.sql`);
+      assert.ok(!/GRANT[^;]*DELETE/i.test(sql), `${table} must not grant DELETE`);
+      assert.ok(!/GRANT[^;]*UPDATE/i.test(sql), `${table} must not grant UPDATE`);
+    }
+    assert.ok(!/GRANT[^;]*DELETE/i.test(read('read/projections/qc_inspection_task.sql')));
   });
 
   it('Story 7.8 mirrors the additive maintenance_work_order status columns and the widened status CHECK into init-db.sql', () => {

@@ -17,6 +17,7 @@ import {
   type StockDrainRow,
 } from '../read/projections/stock_balance.js';
 import { getInventoryValuation } from '../read/projections/inventory_valuation.js';
+import { assertQcGateAllows, gateBusinessDateOf } from './quality.js';
 import {
   insertProductionOrderStage,
   getStageByIdForUpdate,
@@ -655,12 +656,26 @@ async function applyMaterialStaged(
     // Binding Decision 4: staging allocates at the named source bin. A 409 INSUFFICIENT_STOCK from
     // the helper propagates UNCHANGED - never caught and re-wrapped; the Epic 2 detail payload is
     // the useful one (the 7.4 rule).
+    // Story 8.1 (Task 6): a sub-assembly or finished-goods component lot is checked against the
+    // QC gate before it is staged; a conditionally released lot may be issued to THIS production
+    // order only when its deviation names the order. Lot lock, gate lock, then the ledger.
+    if (lotNumber !== null) {
+      await assertQcGateAllows({
+        lot_number: lotNumber,
+        sku: requirement.component_sku,
+        operation: 'production_issue',
+        scope_ref: productionOrderId,
+        business_date: gateBusinessDateOf(envelope),
+        client,
+      });
+    }
     await applyStockAllocation(
       {
         sku: requirement.component_sku,
         location_id: sourceLocationId,
         lot_id: lotNumber,
         quantity: requirement.required_quantity,
+        qc_gate_cleared: lotNumber !== null,
       },
       client,
     );
@@ -782,6 +797,17 @@ async function applyMaterialIssued(
   // Binding Decision 5: DEALLOCATE FIRST, THEN ISSUE - applyStockIssue gates on SUM(available),
   // which is net of the staging allocation, so issuing before deallocating would fail with a
   // spurious INSUFFICIENT_STOCK whenever the staged quantity is the only free stock.
+  // Story 8.1 (Task 6): the QC gate is re-run at issue time against this production order.
+  if (stage.lot_number !== null) {
+    await assertQcGateAllows({
+      lot_number: stage.lot_number,
+      sku: stage.component_sku,
+      operation: 'production_issue',
+      scope_ref: productionOrderId,
+      business_date: gateBusinessDateOf(envelope),
+      client,
+    });
+  }
   const ledgerInput = {
     sku: stage.component_sku,
     location_id: stage.source_location_id,
@@ -790,7 +816,11 @@ async function applyMaterialIssued(
   };
   await applyStockDeallocation(ledgerInput, client);
   const drained = await applyStockIssue(
-    { ...ledgerInput, occurred_at: p['issued_at'] as string },
+    {
+      ...ledgerInput,
+      occurred_at: p['issued_at'] as string,
+      qc_gate_cleared: stage.lot_number !== null,
+    },
     client,
   );
 

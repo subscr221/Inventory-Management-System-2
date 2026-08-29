@@ -13,6 +13,7 @@ import { validateEnvelope, persistEvent } from '../../events/store.js';
 import {
   validateEdgeEnvelope,
   assertEdgeMaintenanceEventAllowed,
+  assertEdgeQcEventAllowed,
   isPermanentUploadErrorCode,
   REBASE_SAFE_EVENT_TYPES,
 } from '../../sync/upload.js';
@@ -232,6 +233,9 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   // Return-to-service and every other central-only maintenance operation reject 403
   // CENTRAL_ONLY_OPERATION here, before any identity or version work.
   assertEdgeMaintenanceEventAllowed(body);
+  // Story 8.1 (Binding Scope Decision 9): the same allowlist shape for the qc stream - plan
+  // creation, approval, completion hand-off and conditional release are central-only.
+  assertEdgeQcEventAllowed(body);
 
   // Story 7.8 (Binding Decision 1, AD-16, Story 1.8 AC): a replayed edge submission is HTTP 409
   // DUPLICATE_EVENT with the existing event identity, on BOTH the sequential path (this SELECT)
@@ -503,7 +507,8 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
         // benign rebase), not declaredVersion (the stale pre-rebase value).
         const heads = await getStreamHeadVersions([body.stream_id]);
         const head = heads.get(body.stream_id.toLowerCase()) ?? 0;
-        const attemptedVersion = body.event_version ?? declaredVersion ?? err.details['event_version'] ?? null;
+        const attemptedVersion =
+          body.event_version ?? declaredVersion ?? err.details['event_version'] ?? null;
         const conflict = new AppError(err.statusCode, err.errorCode, err.message, {
           ...err.details,
           event_version: attemptedVersion,

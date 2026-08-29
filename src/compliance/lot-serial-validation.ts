@@ -19,6 +19,8 @@ import { getItemBySku } from '../read/projections/item_master.js';
 import type { ItemMaster } from '../read/projections/item_master.js';
 import { getLocationById, getLocationByCode } from '../read/projections/location_register.js';
 import { appendTraceEntry } from '../read/projections/lot_trace.js';
+import { assertQcGateAllows, gateBusinessDateOf } from './quality.js';
+import { getQcInspectionTaskByLotId } from '../read/projections/qc_inspection_task.js';
 
 export const ERROR_CODES = {
   LOT_EXPIRED: 'LOT_EXPIRED',
@@ -201,7 +203,12 @@ async function selectLotForIssue(
     if (lot.quality_hold_status !== 'none') continue;
     if (lot.expiry_date && lot.expiry_date < today) continue;
     const available = lotBalances.get(lot.lot_number) ?? 0;
-    if (available >= quantity) return lot.lot_number;
+    if (available < quantity) continue;
+    // Story 8.1 (Task 6): automatic lot selection never lands on a QC-gated finished-goods lot
+    // (qc_hold or conditionally released - neither is sellable before Story 8.4).
+    const gate = await getQcInspectionTaskByLotId(lot.lot_id, client);
+    if (gate) continue;
+    return lot.lot_number;
   }
   throw new AppError(
     409,
@@ -588,6 +595,17 @@ export async function applyLotSerialValidation(
       );
       if (!validationResult.valid)
         throw toAppError(400, validationResult, 'LOT_VALIDATION_ERROR', 'Lot validation failed');
+      // Story 8.1 (Task 6): the QC gate, after the lot lock validateLotForIssueAllocate took and
+      // before applyStockBalanceProjection takes the stock rows (lot, gate, stock order). A generic
+      // inventory issue is never an authorized internal movement, so a conditionally released lot
+      // is blocked here exactly like qc_hold.
+      await assertQcGateAllows({
+        lot_number: lotId,
+        sku,
+        operation: 'issue',
+        business_date: gateBusinessDateOf(envelope),
+        client,
+      });
       lot = await getLotByNumberAndSku(lotId, sku, client);
     }
     if (serials && serials.length > 0) {
@@ -760,6 +778,14 @@ export async function applyLotSerialValidation(
       );
       if (!validationResult.valid)
         throw toAppError(400, validationResult, 'LOT_VALIDATION_ERROR', 'Lot validation failed');
+      // Story 8.1 (Task 6): the QC gate on allocation, same lock order as the issue branch above.
+      await assertQcGateAllows({
+        lot_number: lotId,
+        sku,
+        operation: 'allocation',
+        business_date: gateBusinessDateOf(envelope),
+        client,
+      });
       lot = await getLotByNumberAndSku(lotId, sku, client);
     }
     if (serials && serials.length > 0) {

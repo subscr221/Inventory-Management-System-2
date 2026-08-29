@@ -1,5 +1,16 @@
 # generated: 2026-07-12
-# last_updated: '2026-08-28'
+# last_updated: '2026-08-29'
+# story 8-1 created 2026-08-28 via create-story workflow: Inspection Plans and QC
+#   Gate (FR-Q-01, FR-Q-02, FR-Q-05). Opens Epic 8. Immutable, effective-dated
+#   plan versions bind to released BOM specification revisions; append-only DOA-resolved
+#   approval evidence makes versions usable, with job-work-order-scoped customer overrides
+#   taking precedence. A producer-neutral transactional QC hand-off freezes the approved plan
+#   and creates the durable qc_hold task without owning producer lot, stock, WIP, valuation,
+#   or genealogy effects. Conditional release writes an immutable deviation plus the shared
+#   one-disposition-per-lot projection, but remains outbound-blocked until Story 8.4 creates
+#   the mandatory batch release record. Separate manual/recall hold and QC-gate axes, direct
+#   stock-helper audits, central-only privileged events, exact NUMERIC/date contracts, and
+#   direct-event/replay/concurrency/regression guards are binding. 9 tasks; ready-for-dev
 # story 6-2 created 2026-08-28 via create-story workflow: Material Staging, Issue, and WIP
 #   Ledger (FR-MO-04, FR-MO-05, FR-MO-06). Four events on the existing production stream
 #   (material_staged, material_issued, confirmation_recorded, material_returned; all
@@ -1004,8 +1015,8 @@ development_status:
   epic-7-retrospective: optional
 
   # --- Epic 8: Quality Control and Batch Release  [PILOT] ---
-  epic-8: backlog
-  8-1-inspection-plans-and-qc-gate: backlog   # PILOT
+  epic-8: in-progress
+  8-1-inspection-plans-and-qc-gate: done   # PILOT  # dev-story 2026-08-28: all 9 tasks implemented from baseline 9abe8d3 (7 QC projections, 4 qc.* contracts, central seam src/compliance/quality.ts, producer-neutral hand-off src/quality/completion.ts, no-bypass gate across inventory/transfer/production/spares/pick/cross-dock/dispatch plus the drain-window predicate in the Epic 2 helpers, 10 qc routes, edge CENTRAL_ONLY_OPERATION for qc.*); story-8-1 31/31, spine 6/6, targeted 3-4/3-7/4-2/4-5/6-1/6-2/7-5 green, edge 45/45 + build/typecheck/lint clean, migrate x2 clean; full suite 1316/1329 with the 13 failures verified pre-existing at pristine 9abe8d3 (worktree check: story-2-3 same 5, story-1-7 same 1; remainder the known idempotency/DUPLICATE_EVENT family, the 7-8 edge race and the CRLF gate_dwell_metric drift); moved to review. Code review 2026-08-29 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance Auditor, 6 groups): 16 patches applied (1 HIGH source_event_id threading, uom verification, timestamp/AQL validation, actor validation, draft-override fail-closed, deterministic inspector ordering, gate-status write-back, schema type, projection fixes, route validation, fail-closed hardening), 2 decisions resolved (draft override fails closed; expiry keeps client occurred_at with documented risk), 18 deferred (2 HIGH pre-existing: transfer UUID/number mismatch from Story 2.5 FIXED, task-read location-scope gap), 9 dismissed; all lint/tsc/schema-drift clean; status done
   8-2-aql-sampling-and-result-capture: backlog   # PILOT
   8-3-lot-disposition-accept-reject-conditional-release: backlog   # PILOT
   8-4-coa-coc-retention-samples-and-batch-release-records: backlog   # PILOT

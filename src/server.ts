@@ -298,6 +298,18 @@ import {
   resolveSyncConflictHandler,
 } from './api/v1/maintenance.js';
 import {
+  createInspectionPlanHandler,
+  listInspectionPlansHandler,
+  resolveInspectionPlanHandler,
+  getInspectionPlanHandler,
+  getInspectionPlanVersionHandler,
+  approveInspectionPlanHandler,
+  submitSyntheticCompletionHandler,
+  listQcTasksHandler,
+  getQcTaskHandler,
+  recordConditionalReleaseHandler,
+} from './api/v1/quality.js';
+import {
   createProductionOrderHandler,
   listProductionOrdersHandler,
   getProductionOrderHandler,
@@ -782,6 +794,28 @@ export function createAppRouter(): Router {
   router.post('/api/v1/maintenance/sync-conflicts/:conflictId/resolve', resolveSyncConflictHandler);
   router.post('/api/v1/maintenance/work-orders/:workOrderId/status', updateWorkOrderStatusHandler);
   router.get('/api/v1/maintenance/assets/:assetId/closures', listAssetClosuresHandler);
+
+  // Story 8.1: Inspection Plans and QC Gate (FR-Q-01, FR-Q-02, FR-Q-05). Module `qc`; the Story
+  // 1.7 '/api/v1/qc/results' synthetic route below is retained unchanged. ROUTE ORDER MATTERS: the
+  // static '/inspection-plans/resolve' is registered BEFORE '/inspection-plans/:planId', and the
+  // bare list routes before their :id siblings, so no parameter segment can swallow them (the
+  // router returns the first match in registration order and :id compiles to ([^/]+)).
+  router.post('/api/v1/qc/inspection-plans', createInspectionPlanHandler);
+  router.get('/api/v1/qc/inspection-plans', listInspectionPlansHandler);
+  router.get('/api/v1/qc/inspection-plans/resolve', resolveInspectionPlanHandler);
+  router.get('/api/v1/qc/inspection-plans/:planId', getInspectionPlanHandler);
+  router.get(
+    '/api/v1/qc/inspection-plans/:planId/versions/:planVersionId',
+    getInspectionPlanVersionHandler,
+  );
+  router.post(
+    '/api/v1/qc/inspection-plans/:planId/versions/:planVersionId/approve',
+    approveInspectionPlanHandler,
+  );
+  router.post('/api/v1/qc/completions', submitSyntheticCompletionHandler);
+  router.get('/api/v1/qc/tasks', listQcTasksHandler);
+  router.get('/api/v1/qc/tasks/:taskId', getQcTaskHandler);
+  router.post('/api/v1/qc/tasks/:taskId/conditional-release', recordConditionalReleaseHandler);
 
   // Story 6.1: Production Order Creation and Release Gate (FR-MO-01/02/03). ROUTE ORDER MATTERS:
   // '/production-orders' (both verbs) is registered BEFORE any '/production-orders/:orderId' route,

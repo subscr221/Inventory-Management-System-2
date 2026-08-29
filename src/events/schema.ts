@@ -3241,6 +3241,168 @@ export interface SyncConflictResolvedEnvelope extends Omit<EventEnvelope, 'paylo
 }
 
 // ---------------------------------------------------------------------------
+// Story 8.1: Inspection Plans and QC Gate
+// ---------------------------------------------------------------------------
+
+/**
+ * One characteristic line of an immutable plan version (Annex requirement 4). result_kind pairs
+ * with its limits: numeric carries at least one bounded NUMERIC-string limit and no criteria;
+ * attribute carries textual criteria and no limits. Every value is a decimal STRING, never a JS
+ * float.
+ */
+export interface InspectionPlanCharacteristicInput {
+  characteristic_id: string;
+  line_no: number;
+  characteristic_name: string;
+  characteristic_class: 'critical' | 'major' | 'minor';
+  test_method_ref: string;
+  instrument_type: string | null;
+  result_kind: 'numeric' | 'attribute';
+  lower_limit: string | null;
+  upper_limit: string | null;
+  limit_uom: string | null;
+  acceptance_criteria: string | null;
+  sample_handling: string;
+}
+
+/**
+ * Creates one IMMUTABLE inspection-plan version (FR-Q-01, AC 1). stream_id is the plan_id (the
+ * scope-grain header, created by the first version's event). plan_id, plan_version_id and every
+ * characteristic_id are minted BEFORE persistence so replay creates nothing random. The seam
+ * re-derives the item (active), the BOM revision (released, production or job_work_kit, owned by
+ * the item) and the header grain under pg_advisory_xact_lock(plan_id); version_no and sku are
+ * SEAM-DERIVED and written back (a declared value rejects QC_DERIVATION_MISMATCH). Same-date
+ * conflicts reject 409 INSPECTION_PLAN_EFFECTIVITY_CONFLICT; a foreign-grain plan_id rejects
+ * 409 INSPECTION_PLAN_SCOPE_MISMATCH.
+ */
+export interface InspectionPlanCreatedPayload {
+  plan_id: string;
+  plan_version_id: string;
+  scope: 'standard' | 'customer_override';
+  item_id: string;
+  bom_revision_id: string;
+  source_order_type: 'job_work_order' | null;
+  source_order_ref: string | null;
+  effective_from: string;
+  aql: string | null;
+  inspection_level: string | null;
+  characteristics: InspectionPlanCharacteristicInput[];
+  created_at: string;
+  /** Derived under lock; persisted write-back only. */
+  version_no?: number;
+  /** Derived from item_master; persisted write-back only. */
+  sku?: string;
+}
+
+export interface InspectionPlanCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.inspection_plan_created';
+  payload: InspectionPlanCreatedPayload;
+}
+
+/**
+ * Appends exactly one approval record to an unapproved version (FR-Q-01, AC 1, Binding Scope
+ * Decision 10). Authority resolves through the DOA registry (qc.inspection_plan_approval, value
+ * 0) INSIDE the transaction; the governing role must be QC Head-level (config.quality.qcHeadRoles),
+ * an active holder or delegate must exist, and the acting user must BE the resolved approver
+ * (404 APPROVAL_UNRESOLVED / 403 APPROVAL_REQUIRED). approved_by, resolved_approver_user_id,
+ * doa_entry_id and governing_role are SEAM-DERIVED write-backs; a declared value rejects
+ * QC_DERIVATION_MISMATCH. A second approval rejects 409 INSPECTION_PLAN_ALREADY_APPROVED.
+ */
+export interface InspectionPlanApprovedPayload {
+  plan_id: string;
+  plan_version_id: string;
+  approved_at: string;
+  /** Derived under lock; persisted write-back only. */
+  approved_by?: string;
+  resolved_approver_user_id?: string;
+  doa_entry_id?: string;
+  governing_role?: string;
+}
+
+export interface InspectionPlanApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.inspection_plan_approved';
+  payload: InspectionPlanApprovedPayload;
+}
+
+/**
+ * The producer-neutral completion hand-off (FR-Q-02, AC 3, Binding Scope Decision 7). stream_id is
+ * the task_id (a fresh qc stream per finished lot). The producer has ALREADY created the lot and
+ * posted its finished stock in the same transaction; this event resolves and freezes the approved
+ * plan version, creates the durable task and records the gate as qc_hold. business_stream is the
+ * item's tag, server-verified against item_master (requiresBusinessStream true). business_date,
+ * sku, plan_id, plan_version_id, plan_scope and gate_status are SEAM-DERIVED write-backs; a
+ * declared value rejects QC_DERIVATION_MISMATCH. A missing lot, a lot whose finished stock is
+ * absent or already sellable, or a mismatched lot number rejects 409 QC_HOLD_REQUIRED; a missing,
+ * draft, future-effective, ambiguous or mismatched plan fails closed (404 INSPECTION_PLAN_NOT_FOUND
+ * / 409 INSPECTION_PLAN_NOT_APPROVED / 409 INSPECTION_PLAN_SCOPE_MISMATCH).
+ */
+export interface QcCompletionReceivedPayload {
+  task_id: string;
+  source_completion_type: 'synthetic_completion' | 'production_order' | 'job_work_order';
+  source_completion_id: string;
+  lot_id: string;
+  lot_number: string;
+  item_id: string;
+  quantity: string;
+  uom: string;
+  site_id: string;
+  bom_revision_id: string;
+  source_order_type: 'job_work_order' | null;
+  source_order_ref: string | null;
+  completed_at: string;
+  business_stream: string;
+  /** Derived under lock; persisted write-back only. */
+  business_date?: string;
+  sku?: string;
+  plan_id?: string;
+  plan_version_id?: string;
+  plan_scope?: 'standard' | 'customer_override';
+  gate_status?: 'qc_hold';
+}
+
+export interface QcCompletionReceivedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.completion_received';
+  payload: QcCompletionReceivedPayload;
+}
+
+/**
+ * Records a DOA-gated conditional release (FR-Q-02, FR-Q-05, AC 4 and AC 5). stream_id is the
+ * task_id. deviation_id and disposition_id are minted before persistence. The seam locks the lot
+ * row, then the task row (the fixed lot, gate, stock lock order), verifies the gate is qc_hold,
+ * re-resolves qc.conditional_release under the transaction (404 APPROVAL_UNRESOLVED / 403
+ * APPROVAL_REQUIRED), enforces segregation of duties against any known result recorder (409
+ * SOD_VIOLATION) and writes one immutable deviation, one shared disposition and the gate
+ * transition. requested_by, approved_by, doa_entry_id, inspector_user_id, decided_on,
+ * previous_gate_status and gate_status are SEAM-DERIVED write-backs; a declared value rejects
+ * QC_DERIVATION_MISMATCH. A second disposition rejects 409 DISPOSITION_EXISTS.
+ */
+export interface QcConditionalReleaseRecordedPayload {
+  task_id: string;
+  lot_id: string;
+  deviation_id: string;
+  disposition_id: string;
+  justification: string;
+  conditions: string;
+  scope_kind: 'internal_movement' | 'order_allocation' | 'dispatch';
+  scope_ref: string;
+  expires_on: string;
+  decided_at: string;
+  /** Derived under lock; persisted write-back only. */
+  requested_by?: string;
+  approved_by?: string;
+  doa_entry_id?: string;
+  inspector_user_id?: string | null;
+  decided_on?: string;
+  previous_gate_status?: 'qc_hold';
+  gate_status?: 'conditionally_released';
+}
+
+export interface QcConditionalReleaseRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.conditional_release_recorded';
+  payload: QcConditionalReleaseRecordedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -3948,6 +4110,29 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'production_order.material_returned': {
     streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  // Story 8.1: the inspection-plan family and the QC gate (FR-Q-01, FR-Q-02, FR-Q-05). All four
+  // ride the 'qc' stream (the stream the existing, unregistered qc.result_recorded already uses;
+  // its calibration lockout narrows on that exact event type and is untouched here). Plan events
+  // carry no business stream: a plan is master data bound to an item and a specification revision.
+  // The completion hand-off DOES carry the item's business_stream, server-verified against
+  // item_master in the seam, so a finished lot's QC task is traceable to its stream (Task 2).
+  // Conditional release is a decision on an already-tagged task and is not re-tagged (AD-14).
+  'qc.inspection_plan_created': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.inspection_plan_approved': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.completion_received': {
+    streamType: 'qc',
+    requiresBusinessStream: true,
+  },
+  'qc.conditional_release_recorded': {
+    streamType: 'qc',
     requiresBusinessStream: false,
   },
 } as const;

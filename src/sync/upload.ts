@@ -184,6 +184,26 @@ export const EDGE_MAINTENANCE_EVENT_TYPES: ReadonlySet<string> = new Set([
   'maintenance.work_order_completed',
 ]);
 
+/**
+ * Story 8.1 (Binding Scope Decision 9): plan creation, plan approval, the completion hand-off and
+ * conditional release are central-control operations. EVERY `qc.*` event type other than the
+ * Story 1.7 synthetic qc.result_recorded rejects 403 CENTRAL_ONLY_OPERATION on
+ * POST /api/v1/edge/events, so the seam DOA re-derivation is not the only thing between a device
+ * and an approval. This story adds no QC edge UI or PowerSync bucket.
+ */
+export const EDGE_QC_EVENT_TYPES: ReadonlySet<string> = new Set(['qc.result_recorded']);
+
+export function assertEdgeQcEventAllowed(envelope: EventEnvelope): void {
+  if (!envelope.event_type.startsWith('qc.')) return;
+  if (EDGE_QC_EVENT_TYPES.has(envelope.event_type)) return;
+  throw new AppError(
+    403,
+    'CENTRAL_ONLY_OPERATION',
+    'This quality operation must be performed centrally, not from an edge device',
+    { event_type: envelope.event_type },
+  );
+}
+
 export function assertEdgeMaintenanceEventAllowed(envelope: EventEnvelope): void {
   if (!envelope.event_type.startsWith('maintenance.')) return;
   if (EDGE_MAINTENANCE_EVENT_TYPES.has(envelope.event_type)) return;

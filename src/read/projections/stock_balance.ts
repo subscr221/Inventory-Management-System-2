@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
+import { qcGateExclusionSql } from './qc_inspection_task.js';
 import { AppError } from '../../middleware/error.js';
 
 /**
@@ -55,6 +56,12 @@ export interface StockAllocationInput {
    */
   stock_class?: string;
   quantity: string | number;
+  /**
+   * Story 8.1 (Task 6): set ONLY by a caller that has already run assertQcGateAllows on the
+   * specific lot named in lot_id, so a permitted conditionally-released internal movement is not
+   * re-excluded by the drain-window QC predicate. Never set for a lot-less command.
+   */
+  qc_gate_cleared?: boolean;
 }
 
 export interface StockIssueInput {
@@ -71,6 +78,8 @@ export interface StockIssueInput {
    * not pass through here.
    */
   occurred_at?: string | null;
+  /** Story 8.1 (Task 6): see StockAllocationInput.qc_gate_cleared. */
+  qc_gate_cleared?: boolean;
 }
 
 export interface StockDeallocationInput {
@@ -291,9 +300,14 @@ export async function applyStockAllocation(
   // explicit stock_class draws from owned stock only - consignment/vmi/job_work rows are invisible
   // to it, so INSUFFICIENT_STOCK is per class and owned stock never covers a non-owned shortfall.
   const stockClass = input.stock_class ?? 'owned';
+  // Story 8.1 (Task 6): rows whose lot is under a blocked QC gate are invisible to the lock, the
+  // availability check and the drain, so a lot-less allocation can never reserve held finished
+  // goods. Callers that ran assertQcGateAllows on a specific lot pass qc_gate_cleared.
+  const qcGate = qcGateExclusionSql('stock_balance', input.qc_gate_cleared === true);
   await client.query(
     `SELECT balance_id FROM stock_balance
      WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)
+       AND ${qcGate}
      FOR UPDATE`,
     [input.sku, input.location_id, lotId, stockClass],
   );
@@ -302,7 +316,8 @@ export async function applyStockAllocation(
     `SELECT COALESCE(SUM(available), 0)::text AS total_available,
             COALESCE(SUM(available), 0) >= $5::numeric AS sufficient
      FROM stock_balance
-     WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)`,
+     WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)
+       AND ${qcGate}`,
     [input.sku, input.location_id, lotId, stockClass, String(input.quantity)],
   );
   const totalAvailable = Number(checkResult.rows[0]!['total_available'] as string);
@@ -328,6 +343,7 @@ export async function applyStockAllocation(
               SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
        FROM stock_balance
        WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)
+         AND ${qcGate}
      )
      UPDATE stock_balance
      SET allocated = allocated + LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
@@ -361,9 +377,12 @@ export async function applyStockIssue(
   // Story 2.8: class-scoped exactly like applyStockAllocation - a classless issue drains owned
   // stock only; an explicit consignment/vmi issue drains that class only.
   const stockClass = input.stock_class ?? 'owned';
+  // Story 8.1 (Task 6): see applyStockAllocation - QC-gated lots are invisible to the drain.
+  const qcGate = qcGateExclusionSql('stock_balance', input.qc_gate_cleared === true);
   await client.query(
     `SELECT balance_id FROM stock_balance
      WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)
+       AND ${qcGate}
      FOR UPDATE`,
     [input.sku, input.location_id, lotId, stockClass],
   );
@@ -372,7 +391,8 @@ export async function applyStockIssue(
     `SELECT COALESCE(SUM(available), 0)::text AS total_available,
             COALESCE(SUM(available), 0) >= $5::numeric AS sufficient
      FROM stock_balance
-     WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)`,
+     WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)
+       AND ${qcGate}`,
     [input.sku, input.location_id, lotId, stockClass, String(input.quantity)],
   );
   const totalAvailable = Number(checkResult.rows[0]!['total_available'] as string);
@@ -398,6 +418,7 @@ export async function applyStockIssue(
                SUM(available) OVER (ORDER BY lot_id NULLS FIRST, balance_id) AS cumulative
         FROM stock_balance
         WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)
+          AND ${qcGate}
       )
       UPDATE stock_balance
       SET on_hand = on_hand - LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),
@@ -467,12 +488,17 @@ export async function applyStockIssueUnderSite(
     stock_class?: string;
     quantity: string | number;
     occurred_at?: string | null;
+    /** Story 8.1 (Task 6): see StockAllocationInput.qc_gate_cleared. */
+    qc_gate_cleared?: boolean;
   },
   client: PoolClient,
 ): Promise<StockDrainRow[]> {
   const lotId = input.lot_id ?? null;
   const stockClass = input.stock_class ?? 'owned';
   const siteLocationId = input.site_location_id;
+  // Story 8.1 (Task 6): the backflush never names a lot, so this predicate is what keeps a held
+  // finished-goods lot out of a plant-wide drain.
+  const qcGate = qcGateExclusionSql('stock_balance', input.qc_gate_cleared === true);
 
   await client.query(
     `WITH RECURSIVE descendants AS (
@@ -486,6 +512,7 @@ export async function applyStockIssueUnderSite(
      SELECT balance_id FROM stock_balance
       WHERE sku = $2 AND stock_class = $4 AND location_id IN (SELECT location_id FROM descendants)
         AND ($3::text IS NULL OR lot_id = $3)
+        AND ${qcGate}
       FOR UPDATE`,
     [siteLocationId, input.sku, lotId, stockClass],
   );
@@ -503,7 +530,8 @@ export async function applyStockIssueUnderSite(
             COALESCE(SUM(available), 0) >= $5::numeric AS sufficient
        FROM stock_balance
       WHERE sku = $2 AND stock_class = $4 AND location_id IN (SELECT location_id FROM descendants)
-        AND ($3::text IS NULL OR lot_id = $3)`,
+        AND ($3::text IS NULL OR lot_id = $3)
+        AND ${qcGate}`,
     [siteLocationId, input.sku, lotId, stockClass, String(input.quantity)],
   );
   const totalAvailable = checkResult.rows[0]!['total_available'] as string;
@@ -538,6 +566,7 @@ export async function applyStockIssueUnderSite(
          FROM stock_balance
         WHERE sku = $2 AND stock_class = $5 AND location_id IN (SELECT location_id FROM descendants)
           AND ($3::text IS NULL OR lot_id = $3)
+          AND ${qcGate}
      )
      UPDATE stock_balance
         SET on_hand = on_hand - LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty))),

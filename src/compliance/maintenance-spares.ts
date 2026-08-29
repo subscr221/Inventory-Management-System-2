@@ -6,6 +6,7 @@ import { addBusinessDays, toIstCalendarDate } from '../lib/business-days.js';
 import { getAssetById } from '../read/projections/asset.js';
 import { getItemBySku } from '../read/projections/item_master.js';
 import { getLocationById } from '../read/projections/location_register.js';
+import { assertQcGateAllows, gateBusinessDateOf } from './quality.js';
 import { getWorkOrderById } from '../read/projections/maintenance_work_order.js';
 import {
   getSpareCatalogueByGrain,
@@ -565,6 +566,19 @@ async function applySpareReserved(envelope: EventEnvelope, client: PoolClient): 
     client,
   );
 
+  // Story 8.1 (Task 6): a spare drawn from a QC-gated finished-goods lot is blocked (spares are
+  // never an authorized internal movement of a conditionally released lot). Lot lock, gate lock,
+  // then the ledger below - the gate row sits between step 4 and step 5 of the lock order.
+  if (lotId !== null) {
+    await assertQcGateAllows({
+      lot_number: lotId,
+      sku,
+      operation: 'maintenance_issue',
+      business_date: gateBusinessDateOf(envelope),
+      client,
+    });
+  }
+
   // Lock order step 5, LAST: the Epic 2 ledger. Reservation IS stock_balance.allocated; an
   // INSUFFICIENT_STOCK 409 raised here propagates unchanged because the Epic 2 detail payload
   // (requested versus available, per stock class) is the useful one.
@@ -653,6 +667,16 @@ async function applySpareIssued(envelope: EventEnvelope, client: PoolClient): Pr
   // DEALLOCATE BEFORE ISSUE. applyStockIssue gates on SUM(available), and `available` is already
   // net of this reservation's own allocation, so issuing first would fail with a spurious
   // INSUFFICIENT_STOCK whenever the reserved quantity is the only free stock at the location.
+  // Story 8.1 (Task 6): the QC gate is re-run at issue time.
+  if (reservation.lot_id !== null) {
+    await assertQcGateAllows({
+      lot_number: reservation.lot_id,
+      sku: reservation.sku,
+      operation: 'maintenance_issue',
+      business_date: gateBusinessDateOf(envelope),
+      client,
+    });
+  }
   const ledgerInput = {
     sku: reservation.sku,
     location_id: reservation.location_id,

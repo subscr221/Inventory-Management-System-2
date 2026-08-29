@@ -422,4 +422,26 @@ export const config = {
       return codes;
     })(),
   },
+  quality: {
+    // Story 8.1 (FR-Q-01, Binding Scope Decision 10): the roles that count as QC Head-level
+    // authority for qc.inspection_plan_approval. The DOA registry still names WHICH role governs
+    // the transaction type (AD-3); this list only fails the approval closed when the registry names
+    // a role that does not represent QC Head authority (a misconfigured registry is a fail-closed
+    // condition, not an escalation). Parsed exactly like the closure-code catalogues: only an
+    // ABSENT variable takes the default; a present-but-blank value fails closed at load time.
+    qcHeadRoles: parseClosureCodeCatalogue('QC_HEAD_APPROVAL_ROLES', 'qc_head'),
+    // Story 8.1 (Binding Scope Decision 12): the role the transactional inspection-task
+    // notification fans out to, scoped to the completion site. The task row is created whether or
+    // not any holder exists; the notification is a convenience, the task list is the inbox.
+    inspectionTaskNotificationRole: (() => {
+      const raw = process.env['QC_INSPECTION_TASK_NOTIFICATION_ROLE'];
+      const value = raw === undefined ? 'qc_inspector' : raw.trim();
+      if (value.length === 0 || value.length > 100 || /[\r\n,]/.test(value)) {
+        throw new Error(
+          `Invalid QC_INSPECTION_TASK_NOTIFICATION_ROLE "${raw}": must be a single non-empty role name of at most 100 characters with no line breaks or commas.`,
+        );
+      }
+      return value;
+    })(),
+  },
 } as const;

@@ -161,6 +161,21 @@ const MIGRATIONS = [
   // above hold real FOREIGN KEY clauses.
   '../../read/projections/maintenance_work_order_closure.sql',
   '../../read/projections/maintenance_sync_conflict.sql',
+  // Story 8.1: the versioned inspection-plan family (header, immutable versions, characteristic
+  // lines, append-only approval evidence) and the QC gate (inspection task and gate projection,
+  // immutable deviation evidence, the shared one-row-per-lot disposition) for FR-Q-01, FR-Q-02 and
+  // FR-Q-05. Appended at the tail after the Story 7.8 files. None of these seven tables carries an
+  // FK (plan versions reference their header, characteristics their version, tasks their lot, and
+  // dispositions their deviation by plain UUID, the projection convention), so the order below is
+  // logical rather than dependency-forced; the list as a whole is not, since the cross-dock files
+  // above hold real FOREIGN KEY clauses.
+  '../../read/projections/inspection_plan.sql',
+  '../../read/projections/inspection_plan_version.sql',
+  '../../read/projections/inspection_plan_characteristic.sql',
+  '../../read/projections/inspection_plan_approval.sql',
+  '../../read/projections/qc_inspection_task.sql',
+  '../../read/projections/qc_deviation.sql',
+  '../../read/projections/qc_lot_disposition.sql',
 ];
 
 async function migrate(): Promise<void> {

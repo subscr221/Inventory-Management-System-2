@@ -475,6 +475,17 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/maintenance/work-orders/:workOrderId/status',
       'GET /api/v1/maintenance/assets/:assetId/closures',
       'GET /api/v1/edge/maintenance/worklist',
+      // Story 8.1: Inspection Plans and QC Gate
+      'POST /api/v1/qc/inspection-plans',
+      'GET /api/v1/qc/inspection-plans',
+      'GET /api/v1/qc/inspection-plans/resolve',
+      'GET /api/v1/qc/inspection-plans/:planId',
+      'GET /api/v1/qc/inspection-plans/:planId/versions/:planVersionId',
+      'POST /api/v1/qc/inspection-plans/:planId/versions/:planVersionId/approve',
+      'POST /api/v1/qc/completions',
+      'GET /api/v1/qc/tasks',
+      'GET /api/v1/qc/tasks/:taskId',
+      'POST /api/v1/qc/tasks/:taskId/conditional-release',
       // Story 6.1: Production Order Creation and Release Gate
       'POST /api/v1/production-orders',
       'GET /api/v1/production-orders',

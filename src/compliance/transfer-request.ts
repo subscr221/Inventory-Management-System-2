@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { getLocationById } from '../read/projections/location_register.js';
+import { assertQcGateAllows, gateBusinessDateOf } from './quality.js';
 import {
   applyStockAllocation,
   applyStockIssue,
@@ -25,6 +26,23 @@ import {
   updateTransferRequestStatus,
   getTransferRequestById,
 } from '../read/projections/transfer_request.js';
+
+/** Bridges a lot_master.lot_id UUID to the lot_number TEXT key stock_balance rows carry. */
+async function lotNumberForUuid(lotUuid: string, sku: string, client: PoolClient): Promise<string> {
+  const result = await client.query(
+    `SELECT lot_number FROM lot_master WHERE lot_id = $1 AND sku = $2`,
+    [lotUuid, sku],
+  );
+  if (result.rows.length === 0) {
+    throw new AppError(
+      404,
+      'LOT_NOT_FOUND',
+      `No lot exists for lot_id "${lotUuid}" and sku "${sku}"`,
+      { lot_id: lotUuid, sku },
+    );
+  }
+  return result.rows[0]!['lot_number'] as string;
+}
 
 // ---------------------------------------------------------------------------
 // Shape validation helpers
@@ -238,13 +256,30 @@ export async function applyTransferRequestProjection(
     }
   }
 
+  // Story 8.1 (Task 6): the QC gate on the named lot. A transfer is the one internal movement a
+  // conditionally released lot may take, and only to the location its deviation names; qc_hold
+  // always blocks. Lot lock, gate lock, then the ledger helper takes the stock rows.
+  let lotNumber: string | null = null;
+  if (lotId !== null) {
+    lotNumber = await lotNumberForUuid(lotId, skuId, client);
+    await assertQcGateAllows({
+      lot_id: lotId,
+      sku: skuId,
+      operation: 'transfer',
+      scope_ref: toLocationId,
+      business_date: gateBusinessDateOf(envelope),
+      client,
+    });
+  }
+
   // Allocate at the from-location (decrements available = on_hand - allocated)
   // This reserves the quantity for the transfer without decreasing on_hand yet
   const allocationInput: StockAllocationInput = {
     sku: skuId,
     location_id: fromLocationId,
-    lot_id: lotId,
+    lot_id: lotNumber,
     quantity,
+    qc_gate_cleared: lotId !== null,
   };
   await applyStockAllocation(allocationInput, client);
 
@@ -415,14 +450,32 @@ export async function applyTransferShipProjection(
   // lot is recorded on the in-transit tracking row below and used for receive lot-matching; it is
   // traceability metadata, not the source stock grain. Issuing at the ship lot when the request was
   // lot-less left the allocation stranded and the stock unfindable (INSUFFICIENT_STOCK).
-  const sourceLot = reqRow.lot_id;
+  const sourceLotUuid = reqRow.lot_id;
+  let sourceLotNumber: string | null = null;
+  if (sourceLotUuid !== null) {
+    sourceLotNumber = await lotNumberForUuid(sourceLotUuid, reqRow.sku_id, client);
+  }
+
+  // Story 8.1 (Task 6): the QC gate is re-run at ship time against the request's destination, so a
+  // deviation that expired or a gate that changed since the request cannot be shipped through.
+  if (sourceLotUuid !== null) {
+    await assertQcGateAllows({
+      lot_id: sourceLotUuid,
+      sku: reqRow.sku_id,
+      operation: 'transfer',
+      scope_ref: reqRow.to_location_id,
+      business_date: gateBusinessDateOf(envelope),
+      client,
+    });
+  }
 
   // Issue stock from source (decreases on_hand)
   const issueInput: StockIssueInput = {
     sku: reqRow.sku_id,
     location_id: reqRow.from_location_id,
-    lot_id: sourceLot,
+    lot_id: sourceLotNumber,
     quantity: shippedQuantity,
+    qc_gate_cleared: sourceLotUuid !== null,
   };
   await applyStockIssue(issueInput, client);
 
@@ -430,7 +483,7 @@ export async function applyTransferShipProjection(
   const deallocInput: StockDeallocationInput = {
     sku: reqRow.sku_id,
     location_id: reqRow.from_location_id,
-    lot_id: sourceLot,
+    lot_id: sourceLotNumber,
     quantity: shippedQuantity,
   };
   await applyStockDeallocation(deallocInput, client);
@@ -442,7 +495,7 @@ export async function applyTransferShipProjection(
     `UPDATE stock_balance
      SET in_transit = in_transit + $1, updated_at = now()
      WHERE sku = $2 AND location_id = $3 AND stock_class = 'owned' AND ($4::text IS NULL OR lot_id = $4)`,
-    [shippedQuantity, reqRow.sku_id, reqRow.from_location_id, sourceLot],
+    [shippedQuantity, reqRow.sku_id, reqRow.from_location_id, sourceLotNumber],
   );
   if (inTransitUpdate.rowCount === 0) {
     throw new AppError(
@@ -452,7 +505,7 @@ export async function applyTransferShipProjection(
       {
         sku: reqRow.sku_id,
         location_id: reqRow.from_location_id,
-        lot_id: sourceLot,
+        lot_id: sourceLotNumber,
       },
     );
   }
@@ -597,16 +650,22 @@ export async function applyTransferReceiveProjection(
   // The in-transit tracking row carries the lot actually shipped, which is the authority for
   // receive lot-matching (a lot-less request is shipped under a concrete lot - Story 2.5 review).
   const inTransitRow = await getInTransitByTransferRequest(transferRequestId, client);
-  const shippedLot = inTransitRow?.lot_id ?? reqRow.lot_id;
+  const shippedLotUuid = inTransitRow?.lot_id ?? reqRow.lot_id;
 
   // AC6: Lot matching (receive side) - against the shipped lot, not the (possibly null) request lot.
-  if (lotId !== shippedLot) {
+  if (lotId !== shippedLotUuid) {
     throw new AppError(
       400,
       'LOT_MISMATCH',
-      `Receive lot_id "${lotId}" does not match shipped lot_id "${shippedLot}"`,
-      { ship_lot_id: shippedLot, receive_lot_id: lotId },
+      `Receive lot_id "${lotId}" does not match shipped lot_id "${shippedLotUuid}"`,
+      { ship_lot_id: shippedLotUuid, receive_lot_id: lotId },
     );
+  }
+
+  // Convert shipped lot UUID to lot_number for stock operations
+  let shippedLotNumber: string | null = null;
+  if (shippedLotUuid !== null) {
+    shippedLotNumber = await lotNumberForUuid(shippedLotUuid, reqRow.sku_id, client);
   }
 
   // Receive location must match the approved destination
@@ -656,7 +715,7 @@ export async function applyTransferReceiveProjection(
     `UPDATE stock_balance
      SET in_transit = GREATEST(in_transit - $1, 0), updated_at = now()
       WHERE sku = $2 AND location_id = $3 AND stock_class = 'owned' AND ($4::text IS NULL OR lot_id = $4)`,
-    [receivedQuantity, reqRow.sku_id, reqRow.from_location_id, reqRow.lot_id],
+    [receivedQuantity, reqRow.sku_id, reqRow.from_location_id, shippedLotNumber],
   );
 
   // Receipt at destination: increment on_hand
@@ -664,7 +723,7 @@ export async function applyTransferReceiveProjection(
     sku: reqRow.sku_id,
     location_id: receiveLocationId,
     location_code: receiveLocation.location_code,
-    lot_id: lotId,
+    lot_id: shippedLotNumber,
     quantity: receivedQuantity,
   };
   await applyStockReceipt(receiptInput, client);

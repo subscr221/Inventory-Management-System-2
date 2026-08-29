@@ -25,6 +25,7 @@ import {
   applyStockReceipt,
 } from '../read/projections/stock_balance.js';
 import { getRemainingDemand } from '../read/projections/erp_sales_order.js';
+import { assertQcGateAllows, gateBusinessDateOf } from './quality.js';
 import { createPickTask } from '../read/projections/pick_task.js';
 import { createPickLine } from '../read/projections/pick_line.js';
 
@@ -314,6 +315,14 @@ export async function applyCrossDockTaskCompletedProjection(
     );
   if (lotResult.rows[0]!['quality_hold_status'] !== 'none')
     throw new AppError(400, 'LOT_ON_HOLD', 'The cross-dock lot is on hold');
+  // Story 8.1 (Task 6): cross-dock completion is an outbound path; the QC gate is checked after
+  // the lot lock above and before the stock rows below (lot, gate, stock).
+  await assertQcGateAllows({
+    lot_id: task.lot_id,
+    operation: 'cross_dock',
+    business_date: gateBusinessDateOf(envelope),
+    client,
+  });
   const lotNumber = lotResult.rows[0]!['lot_number'] as string;
   await client.query(
     `SELECT balance_id FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id = $3 AND stock_class = 'owned' ORDER BY balance_id FOR UPDATE`,

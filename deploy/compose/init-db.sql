@@ -8761,3 +8761,782 @@ BEGIN
     GRANT SELECT ON maintenance_sync_conflict TO readonly_user;
   END IF;
 END $$;
+
+-- Story 8.1: inspection_plan (FR-Q-01/FR-Q-02/FR-Q-05). Mirror of read/projections/inspection_plan.sql.
+-- Inspection plan header (Story 8.1, FR-Q-01, AC 1 and AC 2). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.inspection_plan_created domain events;
+-- mutation happens exclusively through persistEvent, which applies this projection inside the
+-- SAME transaction as the domain_events insert.
+--
+-- The header is the SCOPE GRAIN of a plan: one governed product item, one released production or
+-- job-work-kit BOM revision used as the product-specification revision (Annex requirement 2 - QC
+-- never mutates BOM data, it only references the revision), and either the standard scope or a
+-- customer override scoped to an opaque job-work-order reference (Annex requirement 7). The
+-- reference carries NO foreign key until Epic 9 exists; source_order_type is constrained to the
+-- single literal 'job_work_order' so no arbitrary order type is exposed by this story.
+--
+-- uq_inspection_plan_grain is the concurrency backstop for two first-version creates racing on
+-- the same grain (a 23505 on it resolves to 409 DUPLICATE_INSPECTION_PLAN_VERSION in the store's
+-- constraint chain with the existing plan_id). Version numbers are allocated under the header
+-- row's FOR UPDATE lock in src/compliance/quality.ts, never by an unlocked MAX(version) + 1.
+--
+-- Append-only: app_user holds INSERT and SELECT only, never UPDATE or DELETE. A header's grain is
+-- immutable; a new specification revision is a new header.
+
+CREATE TABLE IF NOT EXISTS inspection_plan (
+  plan_id            UUID PRIMARY KEY,
+  scope              TEXT NOT NULL,
+  item_id            UUID NOT NULL,
+  sku                TEXT NOT NULL,
+  bom_revision_id    UUID NOT NULL,
+  source_order_type  TEXT,
+  source_order_ref   TEXT,
+  created_by         UUID NOT NULL,
+  source_event_id    UUID NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_inspection_plan_grain UNIQUE NULLS NOT DISTINCT (item_id, bom_revision_id, scope, source_order_type, source_order_ref),
+  CONSTRAINT chk_inspection_plan_scope CHECK (scope IN ('standard', 'customer_override')),
+  CONSTRAINT chk_inspection_plan_source_order_type CHECK (source_order_type IS NULL OR source_order_type = 'job_work_order'),
+  CONSTRAINT chk_inspection_plan_scope_pairing CHECK (
+    (scope = 'standard' AND source_order_type IS NULL AND source_order_ref IS NULL)
+    OR (scope = 'customer_override' AND source_order_type IS NOT NULL AND source_order_ref IS NOT NULL AND btrim(source_order_ref) <> '' AND char_length(source_order_ref) <= 128)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_inspection_plan_item_revision ON inspection_plan (item_id, bom_revision_id, scope);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_inspection_plan_grain'
+      AND conrelid = 'inspection_plan'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan
+      ADD CONSTRAINT uq_inspection_plan_grain UNIQUE NULLS NOT DISTINCT (item_id, bom_revision_id, scope, source_order_type, source_order_ref);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_scope'
+      AND conrelid = 'inspection_plan'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan
+      ADD CONSTRAINT chk_inspection_plan_scope CHECK (scope IN ('standard', 'customer_override'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_source_order_type'
+      AND conrelid = 'inspection_plan'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan
+      ADD CONSTRAINT chk_inspection_plan_source_order_type CHECK (source_order_type IS NULL OR source_order_type = 'job_work_order');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_scope_pairing'
+      AND conrelid = 'inspection_plan'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan
+      ADD CONSTRAINT chk_inspection_plan_scope_pairing CHECK (
+        (scope = 'standard' AND source_order_type IS NULL AND source_order_ref IS NULL)
+        OR (scope = 'customer_override' AND source_order_type IS NOT NULL AND source_order_ref IS NOT NULL AND btrim(source_order_ref) <> '' AND char_length(source_order_ref) <= 128)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON inspection_plan TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inspection_plan TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 8.1: inspection_plan_version (FR-Q-01/FR-Q-02/FR-Q-05). Mirror of read/projections/inspection_plan_version.sql.
+-- Inspection plan version (Story 8.1, FR-Q-01, AC 1 and AC 2). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.inspection_plan_created domain events;
+-- mutation happens exclusively through persistEvent, which applies this projection inside the
+-- SAME transaction as the domain_events insert.
+--
+-- A version is IMMUTABLE after creation (Annex requirement 1): a change is a new version and every
+-- prior version is preserved. Approval is NOT a column here - it is the append-only
+-- inspection_plan_approval row keyed to plan_version_id, so an approval can never be flipped by an
+-- UPDATE. Each version carries effective_from (Annex requirement 3): resolution picks the approved
+-- version with the greatest effective_from not after the lot's trusted business date.
+--
+-- uq_inspection_plan_version_no backs the version-number allocation done under the plan header's
+-- FOR UPDATE lock (a 23505 resolves to 409 DUPLICATE_INSPECTION_PLAN_VERSION).
+-- uq_inspection_plan_version_effective enforces one version per (plan, effective_from) so
+-- resolution is deterministic by date; a 23505 resolves to 409 INSPECTION_PLAN_EFFECTIVITY_CONFLICT.
+--
+-- aql and inspection_level are the Story 8.2 sampling inputs, stored as an exact bounded NUMERIC and
+-- a bounded text literal; this story performs NO sampling-table lookup. They pair all-or-none.
+--
+-- Append-only: app_user holds INSERT and SELECT only, never UPDATE or DELETE.
+
+CREATE TABLE IF NOT EXISTS inspection_plan_version (
+  plan_version_id    UUID PRIMARY KEY,
+  plan_id            UUID NOT NULL,
+  version_no         INTEGER NOT NULL,
+  effective_from     DATE NOT NULL,
+  aql                NUMERIC(7, 3),
+  inspection_level   TEXT,
+  created_by         UUID NOT NULL,
+  source_event_id    UUID NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_inspection_plan_version_no UNIQUE (plan_id, version_no),
+  CONSTRAINT uq_inspection_plan_version_effective UNIQUE (plan_id, effective_from),
+  CONSTRAINT chk_inspection_plan_version_no_positive CHECK (version_no > 0),
+  CONSTRAINT chk_inspection_plan_version_aql CHECK (aql IS NULL OR (aql > 0 AND aql <= 1000)),
+  CONSTRAINT chk_inspection_plan_version_sampling_pairing CHECK (
+    (aql IS NULL AND inspection_level IS NULL)
+    OR (aql IS NOT NULL AND inspection_level IS NOT NULL AND btrim(inspection_level) <> '' AND char_length(inspection_level) <= 16)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_inspection_plan_version_plan_effective ON inspection_plan_version (plan_id, effective_from DESC, version_no DESC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_inspection_plan_version_no'
+      AND conrelid = 'inspection_plan_version'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_version
+      ADD CONSTRAINT uq_inspection_plan_version_no UNIQUE (plan_id, version_no);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_inspection_plan_version_effective'
+      AND conrelid = 'inspection_plan_version'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_version
+      ADD CONSTRAINT uq_inspection_plan_version_effective UNIQUE (plan_id, effective_from);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_version_no_positive'
+      AND conrelid = 'inspection_plan_version'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_version
+      ADD CONSTRAINT chk_inspection_plan_version_no_positive CHECK (version_no > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_version_aql'
+      AND conrelid = 'inspection_plan_version'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_version
+      ADD CONSTRAINT chk_inspection_plan_version_aql CHECK (aql IS NULL OR (aql > 0 AND aql <= 1000));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_version_sampling_pairing'
+      AND conrelid = 'inspection_plan_version'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_version
+      ADD CONSTRAINT chk_inspection_plan_version_sampling_pairing CHECK (
+        (aql IS NULL AND inspection_level IS NULL)
+        OR (aql IS NOT NULL AND inspection_level IS NOT NULL AND btrim(inspection_level) <> '' AND char_length(inspection_level) <= 16)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON inspection_plan_version TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inspection_plan_version TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 8.1: inspection_plan_characteristic (FR-Q-01/FR-Q-02/FR-Q-05). Mirror of read/projections/inspection_plan_characteristic.sql.
+-- Inspection plan characteristic (Story 8.1, FR-Q-01, Annex requirement 4). This file is the
+-- CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned
+-- database can serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.inspection_plan_created domain events
+-- (one event carries the complete characteristic list of the version it creates); mutation happens
+-- exclusively through persistEvent inside the SAME transaction as the domain_events insert.
+--
+-- One row per characteristic line of an immutable plan version: a stable line number, the class
+-- (critical, major, minor), the test-method or IS/ISO/internal-SOP reference, an optional
+-- instrument type, the result kind (numeric or attribute) with its MATCHING acceptance limits or
+-- criteria, and the sample-handling instructions. chk_inspection_plan_characteristic_kind_pairing
+-- is the kind/limit pairing rule: a numeric characteristic carries at least one bounded NUMERIC
+-- limit (lower <= upper when both are present) and no textual criteria; an attribute
+-- characteristic carries textual criteria and no numeric limits.
+--
+-- Append-only: app_user holds INSERT and SELECT only, never UPDATE or DELETE (a version's lines are
+-- as immutable as the version).
+
+CREATE TABLE IF NOT EXISTS inspection_plan_characteristic (
+  characteristic_id    UUID PRIMARY KEY,
+  plan_version_id      UUID NOT NULL,
+  line_no              INTEGER NOT NULL,
+  characteristic_name  TEXT NOT NULL,
+  characteristic_class TEXT NOT NULL,
+  test_method_ref      TEXT NOT NULL,
+  instrument_type      TEXT,
+  result_kind          TEXT NOT NULL,
+  lower_limit          NUMERIC(18, 6),
+  upper_limit          NUMERIC(18, 6),
+  limit_uom            TEXT,
+  acceptance_criteria  TEXT,
+  sample_handling      TEXT NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_inspection_plan_characteristic_line UNIQUE (plan_version_id, line_no),
+  CONSTRAINT chk_inspection_plan_characteristic_line_no CHECK (line_no > 0),
+  CONSTRAINT chk_inspection_plan_characteristic_class CHECK (characteristic_class IN ('critical', 'major', 'minor')),
+  CONSTRAINT chk_inspection_plan_characteristic_result_kind CHECK (result_kind IN ('numeric', 'attribute')),
+  CONSTRAINT chk_inspection_plan_characteristic_text CHECK (
+    btrim(characteristic_name) <> '' AND char_length(characteristic_name) <= 200
+    AND btrim(test_method_ref) <> '' AND char_length(test_method_ref) <= 200
+    AND (instrument_type IS NULL OR (btrim(instrument_type) <> '' AND char_length(instrument_type) <= 100))
+    AND btrim(sample_handling) <> '' AND char_length(sample_handling) <= 1000
+  ),
+  CONSTRAINT chk_inspection_plan_characteristic_kind_pairing CHECK (
+    (result_kind = 'numeric'
+      AND (lower_limit IS NOT NULL OR upper_limit IS NOT NULL)
+      AND (lower_limit IS NULL OR upper_limit IS NULL OR lower_limit <= upper_limit)
+      AND acceptance_criteria IS NULL
+      AND (limit_uom IS NULL OR (btrim(limit_uom) <> '' AND char_length(limit_uom) <= 32)))
+    OR (result_kind = 'attribute'
+      AND lower_limit IS NULL AND upper_limit IS NULL AND limit_uom IS NULL
+      AND acceptance_criteria IS NOT NULL AND btrim(acceptance_criteria) <> '' AND char_length(acceptance_criteria) <= 1000)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_inspection_plan_characteristic_version ON inspection_plan_characteristic (plan_version_id, line_no);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_inspection_plan_characteristic_line'
+      AND conrelid = 'inspection_plan_characteristic'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_characteristic
+      ADD CONSTRAINT uq_inspection_plan_characteristic_line UNIQUE (plan_version_id, line_no);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_characteristic_line_no'
+      AND conrelid = 'inspection_plan_characteristic'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_characteristic
+      ADD CONSTRAINT chk_inspection_plan_characteristic_line_no CHECK (line_no > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_characteristic_class'
+      AND conrelid = 'inspection_plan_characteristic'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_characteristic
+      ADD CONSTRAINT chk_inspection_plan_characteristic_class CHECK (characteristic_class IN ('critical', 'major', 'minor'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_characteristic_result_kind'
+      AND conrelid = 'inspection_plan_characteristic'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_characteristic
+      ADD CONSTRAINT chk_inspection_plan_characteristic_result_kind CHECK (result_kind IN ('numeric', 'attribute'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_characteristic_text'
+      AND conrelid = 'inspection_plan_characteristic'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_characteristic
+      ADD CONSTRAINT chk_inspection_plan_characteristic_text CHECK (
+        btrim(characteristic_name) <> '' AND char_length(characteristic_name) <= 200
+        AND btrim(test_method_ref) <> '' AND char_length(test_method_ref) <= 200
+        AND (instrument_type IS NULL OR (btrim(instrument_type) <> '' AND char_length(instrument_type) <= 100))
+        AND btrim(sample_handling) <> '' AND char_length(sample_handling) <= 1000
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_characteristic_kind_pairing'
+      AND conrelid = 'inspection_plan_characteristic'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_characteristic
+      ADD CONSTRAINT chk_inspection_plan_characteristic_kind_pairing CHECK (
+        (result_kind = 'numeric'
+          AND (lower_limit IS NOT NULL OR upper_limit IS NOT NULL)
+          AND (lower_limit IS NULL OR upper_limit IS NULL OR lower_limit <= upper_limit)
+          AND acceptance_criteria IS NULL
+          AND (limit_uom IS NULL OR (btrim(limit_uom) <> '' AND char_length(limit_uom) <= 32)))
+        OR (result_kind = 'attribute'
+          AND lower_limit IS NULL AND upper_limit IS NULL AND limit_uom IS NULL
+          AND acceptance_criteria IS NOT NULL AND btrim(acceptance_criteria) <> '' AND char_length(acceptance_criteria) <= 1000)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON inspection_plan_characteristic TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inspection_plan_characteristic TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 8.1: inspection_plan_approval (FR-Q-01/FR-Q-02/FR-Q-05). Mirror of read/projections/inspection_plan_approval.sql.
+-- Inspection plan approval evidence (Story 8.1, FR-Q-01, AC 1). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.inspection_plan_approved domain events;
+-- mutation happens exclusively through persistEvent inside the SAME transaction as the
+-- domain_events insert.
+--
+-- Exactly ONE approval per plan version (Binding Scope Decision 10): the primary key IS the plan
+-- version id, so concurrent approval attempts resolve to one record (a 23505 on the primary key
+-- resolves to 409 INSPECTION_PLAN_ALREADY_APPROVED in the store's constraint chain). The row
+-- carries the SERVER-derived authority: the DOA entry that governed qc.inspection_plan_approval,
+-- its governing role (which must be QC Head-level), the resolved approver (holder or active
+-- delegate), the acting user (who must equal the resolved approver) and the approval instant.
+--
+-- Append-only: app_user holds INSERT and SELECT only, never UPDATE or DELETE. An approval is
+-- never revoked by this story; a superseding plan is a new version with its own approval.
+
+CREATE TABLE IF NOT EXISTS inspection_plan_approval (
+  plan_version_id           UUID PRIMARY KEY,
+  plan_id                   UUID NOT NULL,
+  approved_by               UUID NOT NULL,
+  resolved_approver_user_id UUID NOT NULL,
+  doa_entry_id              UUID NOT NULL,
+  governing_role            TEXT NOT NULL,
+  approved_at               TIMESTAMPTZ NOT NULL,
+  source_event_id           UUID NOT NULL,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_inspection_plan_approval_actor_pairing CHECK (approved_by = resolved_approver_user_id),
+  CONSTRAINT chk_inspection_plan_approval_role CHECK (btrim(governing_role) <> '' AND char_length(governing_role) <= 100)
+);
+
+CREATE INDEX IF NOT EXISTS idx_inspection_plan_approval_plan ON inspection_plan_approval (plan_id, approved_at DESC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_approval_actor_pairing'
+      AND conrelid = 'inspection_plan_approval'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_approval
+      ADD CONSTRAINT chk_inspection_plan_approval_actor_pairing CHECK (approved_by = resolved_approver_user_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_inspection_plan_approval_role'
+      AND conrelid = 'inspection_plan_approval'::regclass
+  ) THEN
+    ALTER TABLE inspection_plan_approval
+      ADD CONSTRAINT chk_inspection_plan_approval_role CHECK (btrim(governing_role) <> '' AND char_length(governing_role) <= 100);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON inspection_plan_approval TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON inspection_plan_approval TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 8.1: qc_inspection_task (FR-Q-01/FR-Q-02/FR-Q-05). Mirror of read/projections/qc_inspection_task.sql.
+-- QC inspection task and QC-gate projection (Story 8.1, FR-Q-02, AC 3 and AC 4). This file is the
+-- CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned
+-- database can serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.completion_received (insert) and
+-- qc.conditional_release_recorded (gate transition) domain events; mutation happens exclusively
+-- through persistEvent inside the SAME transaction as the domain_events insert. The completion
+-- insert rides the PRODUCER's transaction (the hand-off contract in src/compliance/quality.ts), so
+-- the producer-owned lot and stock writes and this QC-owned task commit or roll back together.
+--
+-- This table is BOTH the durable inspection task (the authoritative inbox, Binding Scope Decision
+-- 12 - notifications are not the queue) and the ONE authoritative QC-gate projection keyed by lot
+-- (Binding Scope Decision 2). gate_status is a DISTINCT state axis from
+-- lot_master.quality_hold_status (the manual or recall-hold axis), which this story never widens:
+-- a lot may be conditionally released here and still manually held there, and both block.
+--
+-- gate_status vocabulary in this story: qc_hold (the entry state every completion posts into, no
+-- bypass) and conditionally_released (the FR-Q-05 disposition state, distinct from a bypass).
+-- Story 8.3 widens it for accept and reject. task_status is 'open' until Story 8.2 adds sampling
+-- and result capture. The frozen plan_version_id never changes after creation (Annex requirement
+-- 6): later plan approvals must never alter the plan a held lot is inspected against.
+--
+-- uq_qc_inspection_task_lot and uq_qc_inspection_task_source make replay and concurrent delivery of
+-- the same completion a single effect (a 23505 on either resolves to 409 DUPLICATE_QC_COMPLETION
+-- with the existing task_id in the store's constraint chain).
+--
+-- app_user holds INSERT, SELECT, UPDATE (the gate transition) and never DELETE.
+
+CREATE TABLE IF NOT EXISTS qc_inspection_task (
+  task_id                 UUID PRIMARY KEY,
+  lot_id                  UUID NOT NULL,
+  lot_number              TEXT NOT NULL,
+  source_completion_type  TEXT NOT NULL,
+  source_completion_id    UUID NOT NULL,
+  item_id                 UUID NOT NULL,
+  sku                     TEXT NOT NULL,
+  quantity                NUMERIC(18, 6) NOT NULL,
+  uom                     TEXT NOT NULL,
+  site_id                 UUID NOT NULL,
+  bom_revision_id         UUID NOT NULL,
+  plan_id                 UUID NOT NULL,
+  plan_version_id         UUID NOT NULL,
+  plan_scope              TEXT NOT NULL,
+  source_order_type       TEXT,
+  source_order_ref        TEXT,
+  completed_at            TIMESTAMPTZ NOT NULL,
+  business_date           DATE NOT NULL,
+  task_status             TEXT NOT NULL DEFAULT 'open',
+  gate_status             TEXT NOT NULL DEFAULT 'qc_hold',
+  gate_changed_at         TIMESTAMPTZ NOT NULL,
+  source_event_id         UUID NOT NULL,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_qc_inspection_task_lot UNIQUE (lot_id),
+  CONSTRAINT uq_qc_inspection_task_source UNIQUE (source_completion_type, source_completion_id),
+  CONSTRAINT chk_qc_inspection_task_quantity CHECK (quantity > 0),
+  CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order')),
+  CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open')),
+  CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released')),
+  CONSTRAINT chk_qc_inspection_task_plan_scope CHECK (plan_scope IN ('standard', 'customer_override')),
+  CONSTRAINT chk_qc_inspection_task_scope_pairing CHECK (
+    (plan_scope = 'standard' AND source_order_type IS NULL AND source_order_ref IS NULL)
+    OR (plan_scope = 'customer_override' AND source_order_type = 'job_work_order' AND source_order_ref IS NOT NULL AND btrim(source_order_ref) <> '')
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_qc_inspection_task_gate ON qc_inspection_task (gate_status, business_date, task_id);
+CREATE INDEX IF NOT EXISTS idx_qc_inspection_task_lot_number ON qc_inspection_task (lot_number);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_qc_inspection_task_lot'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT uq_qc_inspection_task_lot UNIQUE (lot_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_qc_inspection_task_source'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT uq_qc_inspection_task_source UNIQUE (source_completion_type, source_completion_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_quantity'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_quantity CHECK (quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_source_type'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_status'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_gate_status'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_plan_scope'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_plan_scope CHECK (plan_scope IN ('standard', 'customer_override'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_scope_pairing'
+      AND conrelid = 'qc_inspection_task'::regclass
+  ) THEN
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_scope_pairing CHECK (
+        (plan_scope = 'standard' AND source_order_type IS NULL AND source_order_ref IS NULL)
+        OR (plan_scope = 'customer_override' AND source_order_type = 'job_work_order' AND source_order_ref IS NOT NULL AND btrim(source_order_ref) <> '')
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON qc_inspection_task TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON qc_inspection_task TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 8.1: qc_deviation (FR-Q-01/FR-Q-02/FR-Q-05). Mirror of read/projections/qc_deviation.sql.
+-- QC deviation evidence (Story 8.1, FR-Q-02 and FR-Q-05, AC 4). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.conditional_release_recorded domain
+-- events; mutation happens exclusively through persistEvent inside the SAME transaction as the
+-- domain_events insert (the deviation, the shared disposition, the gate transition, the event, the
+-- audit entry and the decision notification commit together or not at all).
+--
+-- An IMMUTABLE deviation record (AC 4): justification, explicit conditions, bounded scope and a
+-- future expiry date, plus the requester, the DOA-resolved approver and the DOA entry that governed
+-- qc.conditional_release. decided_on is the IST business date of the decision, so
+-- chk_qc_deviation_expiry (expires_on > decided_on) is a database-enforced "valid future expiry".
+--
+-- scope_kind: internal_movement is the only scope this story makes operationally usable (to the
+-- named location or process in scope_ref, while unexpired); order_allocation and dispatch may be
+-- stored for future Story 8.4 activation but remain blocked until the batch release record exists
+-- (Binding Scope Decisions 5 and 6).
+--
+-- Append-only: app_user holds INSERT and SELECT only, never UPDATE or DELETE.
+
+CREATE TABLE IF NOT EXISTS qc_deviation (
+  deviation_id     UUID PRIMARY KEY,
+  task_id          UUID NOT NULL,
+  lot_id           UUID NOT NULL,
+  deviation_type   TEXT NOT NULL,
+  justification    TEXT NOT NULL,
+  conditions       TEXT NOT NULL,
+  scope_kind       TEXT NOT NULL,
+  scope_ref        TEXT NOT NULL,
+  decided_on       DATE NOT NULL,
+  expires_on       DATE NOT NULL,
+  requested_by     UUID NOT NULL,
+  approved_by      UUID NOT NULL,
+  doa_entry_id     UUID NOT NULL,
+  decided_at       TIMESTAMPTZ NOT NULL,
+  source_event_id  UUID NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_qc_deviation_task_type UNIQUE (task_id, deviation_type),
+  CONSTRAINT chk_qc_deviation_type CHECK (deviation_type IN ('conditional_release')),
+  CONSTRAINT chk_qc_deviation_scope_kind CHECK (scope_kind IN ('internal_movement', 'order_allocation', 'dispatch')),
+  CONSTRAINT chk_qc_deviation_text CHECK (
+    btrim(justification) <> '' AND char_length(justification) <= 2000
+    AND btrim(conditions) <> '' AND char_length(conditions) <= 2000
+    AND btrim(scope_ref) <> '' AND char_length(scope_ref) <= 128
+  ),
+  CONSTRAINT chk_qc_deviation_expiry CHECK (expires_on > decided_on)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qc_deviation_lot ON qc_deviation (lot_id, expires_on);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_qc_deviation_task_type'
+      AND conrelid = 'qc_deviation'::regclass
+  ) THEN
+    ALTER TABLE qc_deviation
+      ADD CONSTRAINT uq_qc_deviation_task_type UNIQUE (task_id, deviation_type);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_deviation_type'
+      AND conrelid = 'qc_deviation'::regclass
+  ) THEN
+    ALTER TABLE qc_deviation
+      ADD CONSTRAINT chk_qc_deviation_type CHECK (deviation_type IN ('conditional_release'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_deviation_scope_kind'
+      AND conrelid = 'qc_deviation'::regclass
+  ) THEN
+    ALTER TABLE qc_deviation
+      ADD CONSTRAINT chk_qc_deviation_scope_kind CHECK (scope_kind IN ('internal_movement', 'order_allocation', 'dispatch'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_deviation_text'
+      AND conrelid = 'qc_deviation'::regclass
+  ) THEN
+    ALTER TABLE qc_deviation
+      ADD CONSTRAINT chk_qc_deviation_text CHECK (
+        btrim(justification) <> '' AND char_length(justification) <= 2000
+        AND btrim(conditions) <> '' AND char_length(conditions) <= 2000
+        AND btrim(scope_ref) <> '' AND char_length(scope_ref) <= 128
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_deviation_expiry'
+      AND conrelid = 'qc_deviation'::regclass
+  ) THEN
+    ALTER TABLE qc_deviation
+      ADD CONSTRAINT chk_qc_deviation_expiry CHECK (expires_on > decided_on);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON qc_deviation TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON qc_deviation TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 8.1: qc_lot_disposition (FR-Q-01/FR-Q-02/FR-Q-05). Mirror of read/projections/qc_lot_disposition.sql.
+-- QC lot disposition (Story 8.1, FR-Q-05, AC 4; extended by Story 8.3). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.conditional_release_recorded domain
+-- events (Story 8.3 adds the accept and reject events); mutation happens exclusively through
+-- persistEvent inside the SAME transaction as the domain_events insert.
+--
+-- The SHARED one-row-per-unsplit-lot disposition grain (Binding Scope Decisions 3 and 4): Story
+-- 8.1 writes only 'conditional_release'; Story 8.3 widens chk_qc_lot_disposition_disposition to
+-- 'accept' and 'reject' and adds partial-split behaviour. uq_qc_lot_disposition_lot is the
+-- concurrency backstop: a sequential or concurrent second disposition for the same lot resolves to
+-- 409 DISPOSITION_EXISTS in the store's constraint chain (the pre-check returns the same code).
+--
+-- Attribution stored now for Story 8.2 and 8.3 segregation-of-duties enforcement: the requester,
+-- the inspector when a result recorder is known, the DOA-resolved approver and the DOA entry.
+-- A conditional release always references its immutable qc_deviation row
+-- (chk_qc_lot_disposition_deviation_pairing); scope, conditions and expiry live THROUGH that row.
+--
+-- Append-only: app_user holds INSERT and SELECT only, never UPDATE or DELETE.
+
+CREATE TABLE IF NOT EXISTS qc_lot_disposition (
+  disposition_id     UUID PRIMARY KEY,
+  lot_id             UUID NOT NULL,
+  task_id            UUID NOT NULL,
+  disposition        TEXT NOT NULL,
+  deviation_id       UUID,
+  plan_version_id    UUID NOT NULL,
+  quantity           NUMERIC(18, 6) NOT NULL,
+  requested_by       UUID NOT NULL,
+  inspector_user_id  UUID,
+  approved_by        UUID NOT NULL,
+  doa_entry_id       UUID NOT NULL,
+  decided_at         TIMESTAMPTZ NOT NULL,
+  source_event_id    UUID NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_qc_lot_disposition_lot UNIQUE (lot_id),
+  CONSTRAINT chk_qc_lot_disposition_disposition CHECK (disposition IN ('conditional_release')),
+  CONSTRAINT chk_qc_lot_disposition_quantity CHECK (quantity > 0),
+  CONSTRAINT chk_qc_lot_disposition_deviation_pairing CHECK (disposition <> 'conditional_release' OR deviation_id IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qc_lot_disposition_task ON qc_lot_disposition (task_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_qc_lot_disposition_lot'
+      AND conrelid = 'qc_lot_disposition'::regclass
+  ) THEN
+    ALTER TABLE qc_lot_disposition
+      ADD CONSTRAINT uq_qc_lot_disposition_lot UNIQUE (lot_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_lot_disposition_disposition'
+      AND conrelid = 'qc_lot_disposition'::regclass
+  ) THEN
+    ALTER TABLE qc_lot_disposition
+      ADD CONSTRAINT chk_qc_lot_disposition_disposition CHECK (disposition IN ('conditional_release'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_lot_disposition_quantity'
+      AND conrelid = 'qc_lot_disposition'::regclass
+  ) THEN
+    ALTER TABLE qc_lot_disposition
+      ADD CONSTRAINT chk_qc_lot_disposition_quantity CHECK (quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_lot_disposition_deviation_pairing'
+      AND conrelid = 'qc_lot_disposition'::regclass
+  ) THEN
+    ALTER TABLE qc_lot_disposition
+      ADD CONSTRAINT chk_qc_lot_disposition_deviation_pairing CHECK (disposition <> 'conditional_release' OR deviation_id IS NOT NULL);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON qc_lot_disposition TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON qc_lot_disposition TO readonly_user;
+  END IF;
+END $$;
