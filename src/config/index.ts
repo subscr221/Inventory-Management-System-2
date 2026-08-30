@@ -208,6 +208,29 @@ function parseClosureCodeCatalogue(name: string, defaults: string): string[] {
   return codes;
 }
 
+/**
+ * Story 6.3: the reason-code list parser, extracted verbatim from the Story 6.2
+ * PRODUCTION_MATERIAL_RETURN_REASON_CODES loader (which itself follows the Story 7.7 pattern).
+ * Only an ABSENT variable takes the defaults - a variable that is present but blank is an operator
+ * statement and fails closed at load rather than silently substituting permissive defaults.
+ */
+function parseReasonCodeList(envVar: string, defaults: string): string[] {
+  const raw = process.env[envVar];
+  const value = raw === undefined ? defaults : raw;
+  const codes = value
+    .split(',')
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+  const MAX_REASON_CODE_LENGTH = 200;
+  const malformed = codes.some((c) => c.length > MAX_REASON_CODE_LENGTH || /[\r\n,]/.test(c));
+  if (codes.length === 0 || new Set(codes).size !== codes.length || malformed) {
+    throw new Error(
+      `Invalid ${envVar} "${raw}": must be a non-empty, duplicate-free, comma-separated list of codes at most ${MAX_REASON_CODE_LENGTH} characters with no line breaks.`,
+    );
+  }
+  return codes;
+}
+
 export const config = {
   port: Number.isNaN(parsedPort) ? 3000 : parsedPort,
   hostname: process.env['HOSTNAME'] ?? '0.0.0.0',
@@ -458,6 +481,38 @@ export const config = {
       }
       return codes;
     })(),
+    // Story 6.3 (FR-MO-09): the symmetric completion tolerance. One value governs BOTH the
+    // over-completion ceiling (order_quantity * (1 + t/100)) and the short-completion floor
+    // (order_quantity * (1 - t/100)) - Binding Decision 6 withdraws the per-item tolerance registry
+    // rather than deferring it. Kept as an exact decimal STRING so the bounds settle in SQL
+    // NUMERIC and never through a JS float. Only an ABSENT variable takes the default; a
+    // present-but-blank value fails closed at load, and a value outside [0, 100] refuses to boot
+    // (a negative tolerance would invert the bounds and a tolerance above 100 would make the floor
+    // negative, silently disabling AC6).
+    completionTolerancePercent: (() => {
+      const raw = process.env['PRODUCTION_COMPLETION_TOLERANCE_PERCENT'];
+      const value = raw === undefined ? '5' : raw.trim();
+      // Strictly BELOW 100 (code review 2026-08-31): at exactly 100 the short floor is 0 and no
+      // non-negative cumulative quantity is ever below it, so every close-short returns
+      // SHORT_CLOSE_NOT_APPLICABLE and AC6 is disabled just as thoroughly as it would be by a
+      // negative floor - the very outcome the above-100 bound exists to prevent.
+      if (!/^\d{1,3}(\.\d{1,4})?$/.test(value) || Number(value) >= 100) {
+        throw new Error(
+          `Invalid PRODUCTION_COMPLETION_TOLERANCE_PERCENT "${raw}": must be a decimal percentage of at least 0 and less than 100, with at most four decimal places.`,
+        );
+      }
+      return value;
+    })(),
+    // Story 6.3 (FR-MO-08): the reason codes a process-scrap declaration may cite.
+    scrapReasonCodes: parseReasonCodeList(
+      'PRODUCTION_SCRAP_REASON_CODES',
+      'PROCESS_LOSS,SETUP_REJECT,MACHINE_FAULT,OPERATOR_ERROR,MATERIAL_DEFECT',
+    ),
+    // Story 6.3 (FR-MO-09): the reason codes a close-short decision may cite.
+    shortCloseReasonCodes: parseReasonCodeList(
+      'PRODUCTION_SHORT_CLOSE_REASON_CODES',
+      'YIELD_SHORTFALL,MATERIAL_EXHAUSTED,ORDER_CURTAILED,QUALITY_LOSS',
+    ),
   },
   quality: {
     // Story 8.1 (FR-Q-01, Binding Scope Decision 10): the roles that count as QC Head-level
@@ -493,7 +548,11 @@ export const config = {
     // Story 8.4 (AC 5): how far ahead of expiry the retention-sample sweep raises the recorded
     // disposal event. 30 days per AC 5, bounded to a year so a mistyped value cannot sweep the
     // whole table on one tick.
-    retentionExpiryAlertLeadDays: parsePositiveIntEnv('QC_RETENTION_EXPIRY_ALERT_LEAD_DAYS', 30, 365),
+    retentionExpiryAlertLeadDays: parsePositiveIntEnv(
+      'QC_RETENTION_EXPIRY_ALERT_LEAD_DAYS',
+      30,
+      365,
+    ),
     // Story 8.4 (AC 5): the retention-sample expiry sweep interval. Hourly, exactly like the
     // notification expiry sweep - the 30-day alert window is a calendar boundary, not a real-time
     // one. Kept beside its three siblings rather than under `notify`, so one feature's knobs live

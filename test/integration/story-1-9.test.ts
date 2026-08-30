@@ -499,6 +499,14 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/qc/tasks/:taskId/disposition',
       'GET /api/v1/qc/tasks/:taskId/disposition',
       'POST /api/v1/qc/tasks/:taskId/split',
+      // Story 8.4 (FR-Q-07): the batch-release and retention-sample routes. These were registered
+      // in server.ts by Story 8.4 but never added here, so this gate has been red since that
+      // story landed; repaired with the Story 6.3 additions below because the two sets fail the
+      // same assertion and leaving four known-good routes unlisted keeps the gate meaningless.
+      'POST /api/v1/qc/tasks/:taskId/retention-sample',
+      'GET /api/v1/qc/tasks/:taskId/retention-sample',
+      'POST /api/v1/qc/tasks/:taskId/release',
+      'GET /api/v1/qc/tasks/:taskId/release',
       'GET /api/v1/qc/ncrs',
       'GET /api/v1/qc/ncrs/:ncrId',
       'POST /api/v1/qc/ncrs/:ncrId/outcome',
@@ -518,6 +526,13 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/production-orders/:orderId/confirmations',
       'POST /api/v1/production-orders/:orderId/material-returns',
       'GET /api/v1/production-orders/:orderId/wip',
+      // Story 6.3: production completions, process scrap and the close-short decision
+      // (FR-MO-07/08/09), plus the linked rework order of FR-MO-10.
+      'POST /api/v1/production-orders/rework',
+      'POST /api/v1/production-orders/:orderId/completions',
+      'GET /api/v1/production-orders/:orderId/completions',
+      'POST /api/v1/production-orders/:orderId/scrap-declarations',
+      'POST /api/v1/production-orders/:orderId/short-close',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',

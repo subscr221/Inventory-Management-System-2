@@ -1,6 +1,13 @@
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
+// Story 6.3 (FR-MO-10): the rework linkage is validated against the Story 8.3 integration contract
+// inside this applier, so a direct POST /api/v1/events cannot forge a rework order (AD-12).
+import {
+  resolveReworkRequest,
+  assertNoReworkOrderYet,
+  deriveReworkOrder,
+} from '../production/rework-order.js';
 import { resolveApprover } from '../api/v1/indents.js';
 import { isReleasedItemMaster } from './bom.js';
 import { evaluateReleaseGate } from '../production/release-gate.js';
@@ -130,6 +137,12 @@ function reject(
   status: number = 400,
 ): never {
   throw new AppError(status, code, message, details);
+}
+
+/** Exact NUMERIC equality settled in the database, never through a JS float. */
+async function numericEquals(client: PoolClient, left: unknown, right: unknown): Promise<boolean> {
+  const result = await client.query('SELECT $1::numeric = $2::numeric AS eq', [left, right]);
+  return result.rows[0]!['eq'] === true;
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +493,66 @@ async function applyCreated(
   p['business_stream'] = (p['business_stream'] as string).trim();
   p['source_reference_id'] = (p['source_reference_id'] as string).trim();
 
+  // Story 6.3 (FR-MO-10, AC 7): the rework linkage. The pair is all-or-nothing, the named event
+  // must be a persisted qc.rework_requested, the declared source lot must be the lot that event
+  // names, and the order's output/quantity/plant must be exactly what the rework request derives -
+  // otherwise a caller could mint an order that claims to be a rework of a lot it has nothing to do
+  // with. One rework order per request is enforced here AND by
+  // uq_production_order_source_rework_event, so the race path returns the same code.
+  const declaredReworkEventId = p['source_rework_event_id'];
+  const declaredSourceLotId = p['source_lot_id'];
+  let reworkEventId: string | null = null;
+  let sourceLotId: string | null = null;
+  if (
+    (declaredReworkEventId !== undefined && declaredReworkEventId !== null) ||
+    (declaredSourceLotId !== undefined && declaredSourceLotId !== null)
+  ) {
+    if (typeof declaredReworkEventId !== 'string' || typeof declaredSourceLotId !== 'string') {
+      reject(
+        'INVALID_PAYLOAD',
+        'source_rework_event_id and source_lot_id must be supplied together',
+        {
+          source_rework_event_id: declaredReworkEventId ?? null,
+          source_lot_id: declaredSourceLotId ?? null,
+        },
+      );
+    }
+    const request = await resolveReworkRequest(declaredReworkEventId, client);
+    if (request.lot_id !== declaredSourceLotId) {
+      reject(
+        'PRODUCTION_ORDER_DERIVATION_MISMATCH',
+        'source_lot_id does not match the lot named by the rework request',
+        { declared_source_lot_id: declaredSourceLotId, lot_id: request.lot_id },
+        409,
+      );
+    }
+    await assertNoReworkOrderYet(declaredReworkEventId, client);
+    const derived = await deriveReworkOrder(request, client);
+    const mismatch =
+      derived.output_item_id !== outputItemId ||
+      derived.plant_location_id !== plantLocationId ||
+      derived.bom_id !== p['bom_id'] ||
+      !(await numericEquals(client, derived.order_quantity, p['order_quantity']));
+    if (mismatch) {
+      reject(
+        'PRODUCTION_ORDER_DERIVATION_MISMATCH',
+        'The rework order does not match the derivation from its rework request',
+        {
+          source_rework_event_id: declaredReworkEventId,
+          expected_output_item_id: derived.output_item_id,
+          expected_plant_location_id: derived.plant_location_id,
+          expected_bom_id: derived.bom_id,
+          expected_order_quantity: derived.order_quantity,
+        },
+        409,
+      );
+    }
+    reworkEventId = declaredReworkEventId;
+    sourceLotId = declaredSourceLotId;
+  }
+  p['source_rework_event_id'] = reworkEventId;
+  p['source_lot_id'] = sourceLotId;
+
   await insertProductionOrder(
     {
       production_order_id: productionOrderId,
@@ -506,6 +579,8 @@ async function applyCreated(
       correlation_id: envelope.metadata.correlation_id ?? null,
       source_event_id: eventId,
       created_at: p['created_at'] as string,
+      source_rework_event_id: reworkEventId,
+      source_lot_id: sourceLotId,
     },
     client,
   );

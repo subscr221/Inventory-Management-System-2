@@ -1144,14 +1144,30 @@ const EXPECTED = [
       'chk_production_order_source_reference_type',
       'chk_production_order_unreversed_non_negative',
       'chk_production_order_expediting_pairing',
+      // Story 6.3 column upgrade (FR-MO-07/09/10): completion aggregates, the close-short decision
+      // and the rework linkage. NOTE: this list pins the CONSTRAINTS only. The seven columns
+      // themselves arrive by ALTER TABLE ... ADD COLUMN, which sits outside the CREATE TABLE body
+      // this generic loop compares, so they are pinned by the dedicated Story 6.3 test below
+      // (code review 2026-08-31 - the comment here previously claimed the loop covered them).
+      'chk_production_order_completed_non_negative',
+      'chk_production_order_short_close_pairing',
+      'chk_production_order_rework_pairing',
     ],
     indexes: [
       'uq_production_order_number_ext',
+      'uq_production_order_source_rework_event',
       'idx_production_order_status',
       'idx_production_order_plant',
       'idx_production_order_output_item',
       'idx_production_order_bom',
       'idx_production_order_business_stream',
+    ],
+    // Name-only matching would stay green if the partial predicate or the UNIQUE keyword were
+    // dropped, and the ENTIRE semantic content of this index is that predicate: it is what makes
+    // one rework order per qc.rework_requested event a database fact rather than a check-then-act
+    // race (code review 2026-08-31, the uq_asset_coverage_reference precedent).
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_production_order_source_rework_event ON production_order (source_rework_event_id) WHERE source_rework_event_id IS NOT NULL',
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
@@ -1197,6 +1213,47 @@ const EXPECTED = [
     ],
     indexes: ['idx_production_wip_ledger_order', 'idx_production_wip_ledger_source_posting'],
     appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 6.3: production completions (FR-MO-07/09). One row per OUTPUT LOT, so a completion that
+  // yields co-products and by-products writes several rows against one source_event_id - the grain
+  // UNIQUE therefore needs NULLS NOT DISTINCT, because the primary output's bom_line_id is null.
+  // Append-only: app_user holds no UPDATE and no DELETE (a completion is a posted fact; a
+  // correction is a new event).
+  {
+    canonical: 'read/projections/production_completion.sql',
+    table: 'production_completion',
+    constraints: [
+      'chk_production_completion_output_class',
+      'chk_production_completion_quantity_positive',
+      'chk_production_completion_line_pairing',
+      'chk_production_completion_approval_pairing',
+      'uq_production_completion_lot',
+      'uq_production_completion_grain',
+    ],
+    indexes: [
+      'idx_production_completion_order',
+      'idx_production_completion_task',
+      'idx_production_completion_item',
+    ],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 6.3: process scrap declarations (FR-MO-08). WIP relief only - the row moves no stock and
+  // is the AD-10 source document for the Phase 2 (Epic 16) FR-SC physical intake. Append-only.
+  {
+    canonical: 'read/projections/production_scrap_declaration.sql',
+    table: 'production_scrap_declaration',
+    constraints: [
+      'chk_production_scrap_quantity_positive',
+      'chk_production_scrap_relieved_non_negative',
+      'chk_production_scrap_reason_code_present',
+      // The replay/rebuild grain: one scrap_declared event, one declaration row.
+      'uq_production_scrap_declaration_event',
+    ],
+    indexes: [
+      'idx_production_scrap_declaration_order',
+      'idx_production_scrap_declaration_business_date',
+    ],
+    appUserGrant: 'INSERT, SELECT',
   },
   // Story 7.7: the asset coverage register (AMC, warranty, insurance), its staged 90/60/30 expiry
   // alerts and the reason-coded warranty override grain (FR-M-10, FR-M-11). The coverage
@@ -2005,6 +2062,83 @@ describe('Story 2.1 schema drift guard', () => {
         `init-db.sql missing ${fragment} (from the asset_coverage.sql backfill)`,
       );
     }
+  });
+
+  // Story 6.3 (FR-MO-07/08/09/10). Two things in this story are invisible to the generic loop
+  // above, and a code review on 2026-08-31 found both unguarded:
+  //
+  // 1. The seven production_order columns arrive by ALTER TABLE ... ADD COLUMN, which is outside
+  //    the CREATE TABLE body extractCreateTable compares. Deleting them from init-db.sql left the
+  //    whole suite green. Same failure mode the MSME and statutory-due upgrades above guard against
+  //    with explicit fragment assertions, so this uses the same idiom.
+  // 2. extractDoBlock takes the FIRST DO block naming a constraint. production_wip_ledger.sql
+  //    carries the Story 6.2 add-if-missing block BEFORE the Story 6.3 widening block, so the
+  //    generic comparison never read the widened definitions at all: the entire widening could be
+  //    deleted from init-db.sql with no test failing. Both texts are asserted here directly.
+  it('Story 6.3: the production_order column upgrade and the WIP relief widening are mirrored', () => {
+    const orderSql = read('read/projections/production_order.sql');
+    const wipSql = read('read/projections/production_wip_ledger.sql');
+    const scrapSql = read('read/projections/production_scrap_declaration.sql');
+
+    const columns = [
+      'completed_quantity     NUMERIC(18,6) NOT NULL DEFAULT 0',
+      'scrapped_quantity      NUMERIC(18,6) NOT NULL DEFAULT 0',
+      'short_close_reason     TEXT',
+      'short_closed_at        TIMESTAMPTZ',
+      'short_closed_by        UUID',
+      'source_rework_event_id UUID',
+      'source_lot_id          UUID',
+    ];
+    for (const column of columns) {
+      const fragment = `ADD COLUMN IF NOT EXISTS ${column}`;
+      assert.ok(orderSql.includes(fragment), `production_order.sql missing ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
+
+    // The widened vocabulary and BOTH relief arms of the pairing CHECK, in every copy that states
+    // them: the inline CREATE TABLE definition, the add-if-missing guard and the upgrade block.
+    const widenedType =
+      "posting_type IN ('directed_issue','backflush','return','completion_relief','scrap_relief')";
+    assert.strictEqual(
+      wipSql.split(widenedType).length - 1,
+      3,
+      'production_wip_ledger.sql must state the widened posting_type in all three copies (inline, add-if-missing guard, upgrade block)',
+    );
+    assert.ok(initDb.includes(widenedType), 'init-db.sql missing the widened posting_type');
+
+    const reliefArms = [
+      "(posting_type = 'scrap_relief' AND source_posting_id IS NOT NULL AND reason_code IS NOT NULL AND open_quantity IS NULL)",
+      "(posting_type = 'completion_relief' AND source_posting_id IS NOT NULL AND reason_code IS NULL AND open_quantity IS NULL)",
+    ];
+    for (const arm of reliefArms) {
+      assert.ok(wipSql.includes(arm), `production_wip_ledger.sql missing pairing arm: ${arm}`);
+      assert.ok(initDb.includes(arm), `init-db.sql missing pairing arm: ${arm}`);
+    }
+    // The narrow Story 6.2 vocabulary must survive nowhere: leaving it in the add-if-missing guard
+    // meant that guard could re-add the narrow constraint and abort the file before the widening.
+    const narrowType = "posting_type IN ('directed_issue','backflush','return'))";
+    assert.ok(
+      !wipSql.includes(narrowType),
+      'production_wip_ledger.sql still states the narrow Story 6.2 posting_type vocabulary',
+    );
+
+    // The upgrade guard must key on BOTH relief markers, or a half-upgraded constraint is treated
+    // as already-upgraded and never repaired.
+    for (const marker of ["NOT LIKE '%completion_relief%'", "NOT LIKE '%scrap_relief%'"]) {
+      assert.ok(
+        wipSql.includes(marker),
+        `production_wip_ledger.sql upgrade guard missing ${marker}`,
+      );
+      assert.ok(initDb.includes(marker), `init-db.sql upgrade guard missing ${marker}`);
+    }
+
+    // The scrap replay grain.
+    const scrapGrain = 'CONSTRAINT uq_production_scrap_declaration_event UNIQUE (source_event_id)';
+    assert.ok(
+      scrapSql.includes(scrapGrain),
+      'production_scrap_declaration.sql missing the event grain',
+    );
+    assert.ok(initDb.includes(scrapGrain), 'init-db.sql missing the scrap event grain');
   });
 
   for (const entry of EXPECTED) {

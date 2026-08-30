@@ -400,13 +400,26 @@ async function lockOrderForMaterial(
  * different tree and this walk rejects it. Wildcard callers (NO_LOCATION_UUID / '*' / absent)
  * are unrestricted exactly as the route-level wildcard is.
  */
-async function assertActorPlantAccess(
+export async function assertActorPlantAccess(
   envelope: EventEnvelope,
   order: ProductionOrderRow,
   client: PoolClient,
 ): Promise<void> {
   const actorLocation = envelope.metadata.actor.location_id;
-  if (typeof actorLocation !== 'string') return;
+  // Code review 2026-08-31: a NON-STRING actor location used to return early, which was an
+  // unenumerated fourth bypass alongside the three deliberate ones below - a direct event that
+  // simply omitted metadata.actor.location_id could act on any plant. It now fails closed.
+  if (typeof actorLocation !== 'string') {
+    reject(
+      'LOCATION_ACCESS_DENIED',
+      'The event carries no actor location, so plant access cannot be established',
+      {
+        production_order_id: order.production_order_id,
+        plant_location_id: order.plant_location_id,
+      },
+      403,
+    );
+  }
   if (actorLocation === '' || actorLocation === '*' || actorLocation === NO_LOCATION_UUID) return;
   if (!(await isLocationDescendantOf(order.plant_location_id, actorLocation, client))) {
     reject(

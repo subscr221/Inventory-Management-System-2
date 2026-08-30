@@ -2817,6 +2817,17 @@ export interface ProductionOrderCreatedPayload {
   source_reference_id: string;
   created_by: string;
   created_at: string;
+  /**
+   * Story 6.3 (FR-MO-10, Binding Decision 9): the rework linkage. A rework order is an ORDINARY
+   * production order, not a new event type, so AC7 linked rework order is these two nullable fields
+   * on the existing creation contract. source_rework_event_id must name a persisted
+   * qc.rework_requested event (404 REWORK_EVENT_NOT_FOUND otherwise) and source_lot_id must be the
+   * lot that event names; the pair is all-or-nothing and one rework order per rework event is a
+   * database fact (uq_production_order_source_rework_event). Both default to null on an ordinary
+   * order, so every pre-6.3 producer is unaffected.
+   */
+  source_rework_event_id?: string | null;
+  source_lot_id?: string | null;
 }
 
 export interface ProductionOrderCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -3057,6 +3068,159 @@ export interface ProductionOrderMaterialReturnedPayload {
 export interface ProductionOrderMaterialReturnedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'production_order.material_returned';
   payload: ProductionOrderMaterialReturnedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 6.3: production completions, scrap and the close-short decision
+// (FR-MO-07, FR-MO-08, FR-MO-09, FR-MO-10)
+// ---------------------------------------------------------------------------
+//
+// Three new events on the EXISTING 'production' stream; stream_id is production_order_id for all
+// three, and all three are requiresBusinessStream false (the order row already holds the tag, and
+// re-tagging a downstream event would make the tag mutable - AD-14). All three require order status
+// 'in_process' (Binding Decision 12): material may be staged and issued while an order is merely
+// released, but nothing is produced, scrapped or short-closed until the order is actually running.
+//
+// Every field documented as derived is DECLARED by the client and CHECKED against the server
+// re-derivation under the order lock (409 PRODUCTION_COMPLETION_DERIVATION_MISMATCH on divergence);
+// every field documented as write-back is stamped onto envelope.payload by the applier before the
+// domain_events insert, so the direct-event and handler paths persist byte-identical payloads.
+
+/** One drained source posting of a WIP relief pass; write-back only, never client-declared. */
+export interface ProductionWipReliefEntry {
+  posting_id: string;
+  source_posting_id: string;
+  bom_line_id: string;
+  component_item_id: string;
+  component_sku: string;
+  lot_number: string | null;
+  source_location_id: string;
+  quantity: string;
+  unit_cost: string;
+  posting_value: string;
+}
+
+/** One output lot of a completion; write-back only, never client-declared. */
+export interface ProductionCompletionOutput {
+  completion_id: string;
+  output_class: 'primary' | 'co_product' | 'by_product';
+  bom_line_id: string | null;
+  output_item_id: string;
+  output_sku: string;
+  lot_id: string;
+  lot_number: string;
+  quantity: string;
+  uom: string;
+  qc_task_id: string;
+}
+
+/**
+ * Story 6.3 (FR-MO-07, FR-MO-09; AC 1, AC 2, AC 3, AC 5): posts a completion. The applier creates
+ * the primary output lot AND one lot per co-product and by-product line of the pinned released
+ * revision, posts each one finished stock at the order plant, and hands each one to the Story 8.1
+ * QC gate through receiveQcCompletion on the SAME transaction - so a lot that cannot enter the gate
+ * (no approved inspection plan, mismatched stock, stock already in sellable use) rolls the whole
+ * completion back, which is what makes AC2 QC_HOLD_REQUIRED structural rather than a check.
+ *
+ * primary_quantity is the ONLY quantity the client supplies; every secondary quantity comes from
+ * the BOM line expected_yield_percent. The CUMULATIVE primary quantity (not this event quantity) is
+ * what the tolerance ceiling bounds, so repeated small over-completions cannot walk past it one at
+ * a time. Over the ceiling, over_completion_approved must be true AND approved_by must be the
+ * DOA-resolved approver AND the acting user must BE that approver (403 APPROVAL_REQUIRED
+ * otherwise, the Story 6.1 release-override chain verbatim).
+ */
+export interface ProductionOrderCompletionPostedPayload {
+  production_order_id: string;
+  primary_quantity: string;
+  completed_at: string;
+  /** Derived: must equal the order released_revision_id (409 BOM_REVISION_DRIFT otherwise). */
+  revision_id?: string;
+  over_completion_approved?: boolean;
+  /** Required exactly when over_completion_approved is true; must be the resolved DOA approver. */
+  approved_by?: string | null;
+  /** Write-back: IST calendar date of completed_at. */
+  business_date?: string;
+  /** Write-back: one entry per output lot, primary first. */
+  outputs?: ProductionCompletionOutput[];
+  /** Write-back: one entry per drained source posting. */
+  wip_relief?: ProductionWipReliefEntry[];
+  /** Write-back: total WIP value relieved by this completion. */
+  relieved_value?: string;
+  /** Write-back: metadata.actor.user_id. */
+  completed_by?: string;
+}
+
+export interface ProductionOrderCompletionPostedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.completion_posted';
+  payload: ProductionOrderCompletionPostedPayload;
+}
+
+/**
+ * Story 6.3 (FR-MO-08, AC 4): declares process scrap. WIP is relieved by the declared scrap VALUE
+ * at the source postings issued cost, oldest open posting first; NO stock moves and no lot is
+ * created (Binding Decision 10) - the physical scrap intake is Phase 2 (Epic 16, FR-SC) and this
+ * row is its AD-10 source document. A declaration whose value would exceed the order open WIP is
+ * rejected 409 SCRAP_EXCEEDS_WIP, never clamped. reason_code must be non-blank (400
+ * REASON_CODE_REQUIRED) and a member of config.production.scrapReasonCodes (422
+ * SCRAP_REASON_CODE_INVALID with the allowed list).
+ */
+export interface ProductionOrderScrapDeclaredPayload {
+  production_order_id: string;
+  scrap_quantity: string;
+  reason_code: string;
+  declared_at: string;
+  /** Write-back: server-minted UUIDv4. */
+  scrap_id?: string;
+  /** Derived: the order order_uom. */
+  uom?: string;
+  /** Write-back: IST calendar date of declared_at. */
+  business_date?: string;
+  /** Write-back: total WIP value relieved. */
+  relieved_value?: string;
+  /** Write-back: one entry per drained source posting. */
+  wip_relief?: ProductionWipReliefEntry[];
+  /** Write-back: metadata.actor.user_id. */
+  declared_by?: string;
+}
+
+export interface ProductionOrderScrapDeclaredEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.scrap_declared';
+  payload: ProductionOrderScrapDeclaredPayload;
+}
+
+/**
+ * Story 6.3 (FR-MO-09, AC 6): records the supervisor close-short decision on an order whose
+ * cumulative primary output fell below the short floor. It stamps the reason, relieves ALL
+ * remaining open WIP so the Story 6.4 zero-WIP closure gate can pass at the reduced quantity, and
+ * records how the residual material was dispositioned. It does NOT transition the order: the
+ * in_process to completed move stays on the Story 6.1 state_changed route and closure is Story 6.4
+ * (Binding Decision 11).
+ *
+ * residual_disposition is a RECORDED FACT about work already done through the Story 6.2 return
+ * route or a scrap declaration, not an instruction this event executes. A second decision on the
+ * same order is 409 SHORT_CLOSE_EXISTS; a decision on an order at or above the floor is 409
+ * SHORT_CLOSE_NOT_APPLICABLE.
+ */
+export interface ProductionOrderShortCloseRecordedPayload {
+  production_order_id: string;
+  reason_code: string;
+  residual_disposition: 'returned' | 'scrapped';
+  decided_at: string;
+  /** Write-back: IST calendar date of decided_at. */
+  business_date?: string;
+  /** Write-back: cumulative primary completed quantity at decision time. */
+  completed_quantity?: string;
+  /** Write-back: total WIP value relieved. */
+  relieved_value?: string;
+  /** Write-back: one entry per drained source posting. */
+  wip_relief?: ProductionWipReliefEntry[];
+  /** Write-back: metadata.actor.user_id. */
+  short_closed_by?: string;
+}
+
+export interface ProductionOrderShortCloseRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'production_order.short_close_recorded';
+  payload: ProductionOrderShortCloseRecordedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -4556,6 +4720,23 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'production_order.material_returned': {
+    streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  // Story 6.3: production completions, scrap declarations and the close-short decision
+  // (FR-MO-07/08/09). Same stream and the same requiresBusinessStream false rule as the 6.2 block
+  // above: the order row holds the tag and AD-14 forbids re-tagging a downstream event. The rework
+  // order of FR-MO-10 rides the EXISTING production_order.created entry (Binding Decision 9), so no
+  // fourth registry entry is added here.
+  'production_order.completion_posted': {
+    streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  'production_order.scrap_declared': {
+    streamType: 'production',
+    requiresBusinessStream: false,
+  },
+  'production_order.short_close_recorded': {
     streamType: 'production',
     requiresBusinessStream: false,
   },

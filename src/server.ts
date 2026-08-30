@@ -345,6 +345,13 @@ import {
   getWipHandler,
 } from './api/v1/production-material.js';
 import {
+  postCompletionHandler,
+  listCompletionsHandler,
+  declareScrapHandler,
+  shortCloseHandler,
+  raiseReworkOrderHandler,
+} from './api/v1/production-completions.js';
+import {
   captureSupplierInvoiceHandler,
   captureDuplicateOverrideHandler,
   getSupplierInvoiceHandler,
@@ -876,6 +883,12 @@ export function createAppRouter(): Router {
   // shadows the list route. The '/api/v1/production-orders' prefix is distinct from the existing
   // '/api/v1/purchase-orders' block; a careless parameter route placed before the list route would
   // swallow it, which is the exact defect this ordering prevents.
+  // Story 6.3: '/production-orders/rework' is registered before the other POSTs on this prefix as
+  // a matter of the static-before-parameter discipline this block already follows. (Corrected
+  // 2026-08-31: the original comment claimed '/production-orders/:orderId' would shadow it, but no
+  // such POST route exists - the only parameterised POSTs are a segment deeper. The ordering is
+  // still right; the stated reason was not.)
+  router.post('/api/v1/production-orders/rework', raiseReworkOrderHandler);
   router.post('/api/v1/production-orders', createProductionOrderHandler);
   router.get('/api/v1/production-orders', listProductionOrdersHandler);
   router.get('/api/v1/production-orders/:orderId', getProductionOrderHandler);
@@ -894,6 +907,12 @@ export function createAppRouter(): Router {
   router.post('/api/v1/production-orders/:orderId/confirmations', recordConfirmationHandler);
   router.post('/api/v1/production-orders/:orderId/material-returns', returnMaterialHandler);
   router.get('/api/v1/production-orders/:orderId/wip', getWipHandler);
+  // Story 6.3: completions, process scrap and the close-short decision (FR-MO-07/08/09). All four
+  // are '/production-orders/:orderId/...' siblings of the 6.2 block above and shadow none of them.
+  router.post('/api/v1/production-orders/:orderId/completions', postCompletionHandler);
+  router.get('/api/v1/production-orders/:orderId/completions', listCompletionsHandler);
+  router.post('/api/v1/production-orders/:orderId/scrap-declarations', declareScrapHandler);
+  router.post('/api/v1/production-orders/:orderId/short-close', shortCloseHandler);
 
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);

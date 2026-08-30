@@ -213,6 +213,11 @@ import {
   assertProductionMaterialShape,
   applyProductionMaterialProjection,
 } from '../compliance/production-material.js';
+// Story 6.3: production completions, process scrap and the close-short decision (FR-MO-07/08/09).
+import {
+  assertProductionCompletionShape,
+  applyProductionCompletionProjection,
+} from '../compliance/production-completion.js';
 import { resolveProductionOrderStageLineDuplicateConflict } from '../read/projections/production_order_stage.js';
 import type {
   PickTaskCreatedEnvelope,
@@ -679,6 +684,9 @@ export async function persistEvent(
   // confirmation/return contracts, mandatory reason codes) is non-DB and runs with the other
   // pre-transaction asserts, so a malformed material event never consumes an idempotency key.
   assertProductionMaterialShape(envelope);
+  // Story 6.3: completion / scrap / close-short shape validation is non-DB and runs with the other
+  // pre-transaction asserts, so a malformed completion never consumes an idempotency key.
+  assertProductionCompletionShape(envelope);
   // Story 8.1: inspection-plan and QC-gate shape validation (strict UUIDs, decimal-string
   // quantities, characteristic kind/limit pairing, calendar dates, explicit-offset timestamps, the
   // declared-derived-field rejections) is non-DB and runs with the other pre-transaction asserts,
@@ -1014,6 +1022,10 @@ export async function persistEvent(
     // or roll back together with the domain_events insert. Every material guard lives here, never
     // only in the HTTP handler (AD-12).
     await applyProductionMaterialProjection(envelope, client, eventId);
+    // Story 6.3: completions create the output lots, post their finished stock, hand every lot to
+    // the Story 8.1 QC gate and relieve WIP - all on this transaction, so any refusal anywhere in
+    // that chain rolls the whole completion back (AC 1, AC 2).
+    await applyProductionCompletionProjection(envelope, client, eventId, auditCtx);
     // Story 8.1: the inspection-plan family (header, immutable versions, characteristics, the
     // append-only approval with its in-transaction DOA re-derivation), the completion hand-off
     // (frozen plan version, task, qc_hold gate, transactional inspection notification - on the
@@ -1148,6 +1160,48 @@ export async function persistEvent(
             typeof envelope.payload['lot_id'] === 'string' ? envelope.payload['lot_id'] : null,
           sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
         });
+      } else if (
+        // Story 6.3: the completion grain (FR-MO-07). Both uniques can only collide on a genuine
+        // replay of the same completion event, because completion_id and the (order, event, class,
+        // line) grain are both server-derived under the order lock.
+        constraint === 'uq_production_completion_lot' ||
+        constraint === 'uq_production_completion_grain' ||
+        constraint === 'production_completion_pkey' ||
+        constraint === 'production_scrap_declaration_pkey' ||
+        // Code review 2026-08-31: the scrap grain is source_event_id, so a re-applied
+        // production_order.scrap_declared collides here instead of writing a second declaration.
+        constraint === 'uq_production_scrap_declaration_event'
+      ) {
+        // The noun follows the event, and the raw index name stays server-side (code review
+        // 2026-08-31): a scrap declaration was being reported as a completion, sending operators
+        // looking for a completion that does not exist.
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          envelope.event_type === 'production_order.scrap_declared'
+            ? 'This scrap declaration has already been recorded'
+            : 'This completion has already been posted',
+          {
+            production_order_id:
+              typeof envelope.payload['production_order_id'] === 'string'
+                ? envelope.payload['production_order_id']
+                : null,
+          },
+        );
+      } else if (constraint === 'uq_production_order_source_rework_event') {
+        // Story 6.3 (FR-MO-10, AC 7): one rework order per qc.rework_requested event. The
+        // check-then-act in resolveReworkRequest and this race path return the same code.
+        throw new AppError(
+          409,
+          'REWORK_ORDER_EXISTS',
+          'A rework order already exists for this rework request',
+          {
+            source_rework_event_id:
+              typeof envelope.payload['source_rework_event_id'] === 'string'
+                ? envelope.payload['source_rework_event_id']
+                : null,
+          },
+        );
       } else if (constraint === 'uq_serial_master_sku_serial_number') {
         throw new AppError(400, 'DUPLICATE_SERIAL', 'Serial number already exists for this SKU', {
           sku: typeof envelope.payload['sku'] === 'string' ? envelope.payload['sku'] : null,
@@ -1627,9 +1681,7 @@ export async function persistEvent(
           'A batch release record already exists for this lot',
           { constraint, ...(await resolveQcReleaseDuplicateConflict(envelope.payload)) },
         );
-      } else if (
-        constraint === 'uq_qc_retention_sample_lot'
-      ) {
+      } else if (constraint === 'uq_qc_retention_sample_lot') {
         // Story 8.4 (AC 4): one retention sample per lot. A raced double-log surfaces the stable
         // 409 with the existing_retention_sample_id rather than a raw 23505 500.
         throw new AppError(

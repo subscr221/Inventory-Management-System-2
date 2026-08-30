@@ -199,6 +199,10 @@ const MIGRATIONS = [
   // is logical.
   '../../read/projections/qc_batch_release.sql',
   '../../read/projections/qc_retention_sample.sql',
+  // Story 6.3: production completions and the scrap declaration ledger (FR-MO-07/08/09/10). The
+  // production_order and production_wip_ledger upgrades ride their existing entries above.
+  '../../read/projections/production_completion.sql',
+  '../../read/projections/production_scrap_declaration.sql',
 ];
 
 async function migrate(): Promise<void> {

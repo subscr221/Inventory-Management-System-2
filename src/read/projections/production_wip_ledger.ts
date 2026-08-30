@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
+import { AppError } from '../../middleware/error.js';
 import { getAvailableBalanceUnderSite } from './stock_balance.js';
 
 /**
@@ -16,10 +17,19 @@ import { getAvailableBalanceUnderSite } from './stock_balance.js';
  * number; every comparison settles in SQL NUMERIC.
  */
 
+/**
+ * Story 6.3 widened the vocabulary with two RELIEF postings (FR-MO-07, FR-MO-08). Like a return
+ * they close open WIP on a named source posting at that posting's issued unit cost and carry a
+ * NULL open_quantity of their own; unlike a return they move no stock. 'scrap_relief' carries the
+ * operator's reason code, 'completion_relief' does not (the completion event is its own reason).
+ */
+export type ProductionWipPostingType =
+  'directed_issue' | 'backflush' | 'return' | 'completion_relief' | 'scrap_relief';
+
 export interface ProductionWipPostingRow {
   posting_id: string;
   production_order_id: string;
-  posting_type: 'directed_issue' | 'backflush' | 'return';
+  posting_type: ProductionWipPostingType;
   bom_line_id: string;
   component_item_id: string;
   component_sku: string;
@@ -84,7 +94,7 @@ function mapRow(row: Record<string, unknown>): ProductionWipPostingRow {
 export interface InsertWipPostingInput {
   posting_id: string;
   production_order_id: string;
-  posting_type: 'directed_issue' | 'backflush' | 'return';
+  posting_type: ProductionWipPostingType;
   bom_line_id: string;
   component_item_id: string;
   component_sku: string;
@@ -270,4 +280,180 @@ export async function getWipSummary(
     net_open_quantity: String(result.rows[0]!['net_open_quantity']),
     net_open_value: String(result.rows[0]!['net_open_value']),
   };
+}
+
+/**
+ * Story 6.3 (FR-MO-07, FR-MO-08; Binding Decision 8): closes open WIP on this order and writes one
+ * relief posting per drained source posting.
+ *
+ * `target` is either a decimal VALUE string (relieve up to that much WIP value) or the literal
+ * 'all' (relieve every open posting, used by the final completion and by the close-short decision
+ * so rounding drift can never strand a residue that Story 6.4's zero-WIP closure gate would then
+ * block on forever). Draining is oldest-posting-first (`created_at ASC, posting_id ASC`), the same
+ * deterministic order the ledger reads in, and every division and subtraction settles in SQL
+ * NUMERIC - never in JS floats.
+ *
+ * A zero-cost posting contributes no value, so a value-bounded pass would otherwise never close it;
+ * it is drained in full whenever any relief budget remains. Locking is an explicit ordered
+ * SELECT ... FOR UPDATE before the UPDATE, so two concurrent relief passes on one order queue in a
+ * fixed order instead of deadlocking.
+ *
+ * Returns the drained detail plus the exact value relieved. It NEVER drives open_quantity negative
+ * and NEVER touches stock_balance.
+ */
+export async function relieveOpenPostings(
+  input: {
+    production_order_id: string;
+    target: string | 'all';
+    posting_type: 'completion_relief' | 'scrap_relief';
+    reason_code: string | null;
+    source_event_id: string;
+    occurred_at: string;
+    mintPostingId: () => string;
+  },
+  client: PoolClient,
+): Promise<{ relieved_value: string; postings: ProductionWipPostingRow[] }> {
+  // Ordered lock first: the UPDATE below cannot guarantee row order on its own.
+  await client.query(
+    `SELECT posting_id FROM production_wip_ledger
+      WHERE production_order_id = $1
+        AND posting_type IN ('directed_issue','backflush')
+        AND open_quantity > 0
+      ORDER BY created_at ASC, posting_id ASC
+      FOR UPDATE`,
+    [input.production_order_id],
+  );
+
+  const isAll = input.target === 'all';
+  const drained = await client.query(
+    `WITH open_rows AS (
+       SELECT posting_id, open_quantity, unit_cost, created_at,
+              SUM(open_quantity * unit_cost) OVER (
+                ORDER BY created_at ASC, posting_id ASC ROWS UNBOUNDED PRECEDING
+              ) AS cum_value
+         FROM production_wip_ledger
+        WHERE production_order_id = $1
+          AND posting_type IN ('directed_issue','backflush')
+          AND open_quantity > 0
+     ),
+     relief AS (
+       SELECT posting_id,
+              -- ROUND to the NUMERIC(18,6) scale of production_wip_ledger.quantity BEFORE the
+              -- positivity filter below (code review 2026-08-31). Filtering an unrounded value let a
+              -- sub-precision residual such as 0.0000004 - reachable whenever a value-bounded
+              -- budget meets a high unit_cost - pass the filter and then round to 0.000000 on
+              -- insert, aborting the entire completion on chk_production_wip_quantity_positive.
+              -- Rounding here also keeps the open_quantity decrement and the relief posting's own
+              -- quantity in exact agreement instead of rounding them independently.
+              -- FLOOR at the NUMERIC(18,6) scale, never ROUND (code review 2026-08-31). Rounding
+              -- half-up let the drain exceed the budget by up to 5e-7 * unit_cost; flooring honours
+              -- the budget in both directions and still keeps the value below the column scale, so
+              -- a sub-precision residual is dropped rather than rounding to 0.000000 on insert and
+              -- aborting the whole completion on chk_production_wip_quantity_positive.
+              FLOOR(
+                CASE
+                  WHEN $3::boolean THEN open_quantity
+                  -- A zero-cost posting consumes no budget, so it is drained whenever the budget
+                  -- has not been overrun - including when a previous row consumed it EXACTLY.
+                  -- The strict > 0 here used to strand such rows, leaving
+                  -- unreversed_transaction_count non-zero forever.
+                  WHEN unit_cost = 0 THEN
+                    CASE WHEN $2::numeric - (cum_value - open_quantity * unit_cost) >= 0
+                         THEN open_quantity ELSE 0 END
+                  ELSE LEAST(
+                    open_quantity,
+                    GREATEST($2::numeric - (cum_value - open_quantity * unit_cost), 0) / unit_cost
+                  )
+                END * 1000000
+              ) / 1000000 AS relief_quantity
+         FROM open_rows
+     )
+     UPDATE production_wip_ledger l
+        SET open_quantity = l.open_quantity - r.relief_quantity
+       FROM relief r
+      WHERE l.posting_id = r.posting_id
+        AND r.relief_quantity > 0
+     RETURNING l.posting_id AS source_posting_id, l.bom_line_id, l.component_item_id,
+               l.component_sku, l.lot_number, l.source_location_id, l.unit_cost,
+               r.relief_quantity::text AS relief_quantity, l.created_at`,
+    [input.production_order_id, isAll ? '0' : input.target, isAll],
+  );
+
+  const rows = [...drained.rows].sort((a, b) => {
+    const at = new Date(String(a['created_at'])).getTime();
+    const bt = new Date(String(b['created_at'])).getTime();
+    if (at !== bt) return at - bt;
+    return String(a['source_posting_id']).localeCompare(String(b['source_posting_id']));
+  });
+
+  const postings: ProductionWipPostingRow[] = [];
+  for (const row of rows) {
+    const postingId = input.mintPostingId();
+    await insertWipPosting(
+      {
+        posting_id: postingId,
+        production_order_id: input.production_order_id,
+        posting_type: input.posting_type,
+        bom_line_id: row['bom_line_id'] as string,
+        component_item_id: row['component_item_id'] as string,
+        component_sku: row['component_sku'] as string,
+        lot_number: (row['lot_number'] as string | null) ?? null,
+        source_location_id: row['source_location_id'] as string,
+        quantity: String(row['relief_quantity']),
+        open_quantity: null,
+        unit_cost: String(row['unit_cost']),
+        reason_code: input.reason_code,
+        source_posting_id: row['source_posting_id'] as string,
+        source_event_id: input.source_event_id,
+        occurred_at: input.occurred_at,
+      },
+      client,
+    );
+    const persisted = await getPostingById(postingId, client);
+    if (!persisted) {
+      // Fail loudly (code review 2026-08-31): silently omitting it made the persisted event payload
+      // under-report a real WIP movement while relieved_value still counted it - a fail-open on a
+      // compliance trail.
+      throw new AppError(
+        500,
+        'WIP_RELIEF_UNREADABLE',
+        'A relief posting was written but could not be read back',
+        { posting_id: postingId, production_order_id: input.production_order_id },
+      );
+    }
+    postings.push(persisted);
+  }
+
+  // The relieved value is summed in SQL over the postings just written, never accumulated in JS.
+  const total = await client.query(
+    `SELECT COALESCE(SUM(posting_value), 0)::text AS relieved_value
+       FROM production_wip_ledger
+      WHERE production_order_id = $1 AND source_event_id = $2
+        AND posting_type IN ('completion_relief','scrap_relief')`,
+    [input.production_order_id, input.source_event_id],
+  );
+  return {
+    relieved_value: String(total.rows[0]!['relieved_value']),
+    postings,
+  };
+}
+
+/**
+ * The total value ISSUED to this order, i.e. the sum of every issue and backflush posting at the
+ * cost it was issued at, regardless of how much of it is still open.
+ *
+ * This is the basis the completion relief prorates against (product-owner decision, code review
+ * 2026-08-31). Prorating against the CURRENT open value instead made relief decay geometrically -
+ * three 30-unit completions on a 100-unit order relieved 30%, then 21%, then 14.7%, so 90% of the
+ * order relieved only 65.7% of WIP and every interim period was mis-valued.
+ */
+export async function getIssuedWipValue(orderId: string, client: PoolClient): Promise<string> {
+  const result = await client.query(
+    `SELECT COALESCE(SUM(posting_value), 0)::text AS issued_value
+       FROM production_wip_ledger
+      WHERE production_order_id = $1
+        AND posting_type IN ('directed_issue','backflush')`,
+    [orderId],
+  );
+  return String(result.rows[0]!['issued_value']);
 }

@@ -107,6 +107,54 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 6.3 (FR-MO-07/09/10) column upgrade. These columns are added by a GUARDED ALTER rather
+-- than being written into the CREATE TABLE above, so the file stays re-appliable against a live
+-- database provisioned before Story 6.3 (the Story 8.4 review lesson: an unguarded ADD COLUMN
+-- breaks re-application). completed_quantity accumulates the PRIMARY output only - co-products and
+-- by-products are separate outputs and never count toward the ordered quantity. The three
+-- short_close_* columns are the FR-MO-09 close-short decision Story 6.4's closure gate reads; the
+-- pairing CHECK makes a half-recorded decision structurally impossible. source_rework_event_id and
+-- source_lot_id are the FR-MO-10 rework linkage: a rework order is an ordinary production order
+-- (Binding Decision 9), and the partial unique index makes one rework order per qc.rework_requested
+-- event a database fact rather than a check-then-act race.
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS completed_quantity     NUMERIC(18,6) NOT NULL DEFAULT 0;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS scrapped_quantity      NUMERIC(18,6) NOT NULL DEFAULT 0;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS short_close_reason     TEXT;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS short_closed_at        TIMESTAMPTZ;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS short_closed_by        UUID;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS source_rework_event_id UUID;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS source_lot_id          UUID;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_completed_non_negative'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_completed_non_negative CHECK (completed_quantity >= 0 AND scrapped_quantity >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_short_close_pairing'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_short_close_pairing CHECK ((short_close_reason IS NOT NULL AND btrim(short_close_reason) <> '' AND short_closed_at IS NOT NULL AND short_closed_by IS NOT NULL) OR (short_close_reason IS NULL AND short_closed_at IS NULL AND short_closed_by IS NULL));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_rework_pairing'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_rework_pairing CHECK ((source_rework_event_id IS NOT NULL AND source_lot_id IS NOT NULL) OR (source_rework_event_id IS NULL AND source_lot_id IS NULL));
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_production_order_source_rework_event ON production_order (source_rework_event_id) WHERE source_rework_event_id IS NOT NULL;
+
 -- Server-side human-ID allocation for the MO-YYYY-NNNN format. A sequence is the only lock-free
 -- allocator that survives concurrent creations; the year prefix is applied in the applier. Gaps on
 -- rolled-back creates are acceptable - uniqueness is what matters (the indent_number_seq precedent).

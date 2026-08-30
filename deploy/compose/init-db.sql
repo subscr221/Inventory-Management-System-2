@@ -7858,6 +7858,54 @@ BEGIN
   END IF;
 END $$;
 
+-- Story 6.3 (FR-MO-07/09/10) column upgrade. These columns are added by a GUARDED ALTER rather
+-- than being written into the CREATE TABLE above, so the file stays re-appliable against a live
+-- database provisioned before Story 6.3 (the Story 8.4 review lesson: an unguarded ADD COLUMN
+-- breaks re-application). completed_quantity accumulates the PRIMARY output only - co-products and
+-- by-products are separate outputs and never count toward the ordered quantity. The three
+-- short_close_* columns are the FR-MO-09 close-short decision Story 6.4's closure gate reads; the
+-- pairing CHECK makes a half-recorded decision structurally impossible. source_rework_event_id and
+-- source_lot_id are the FR-MO-10 rework linkage: a rework order is an ordinary production order
+-- (Binding Decision 9), and the partial unique index makes one rework order per qc.rework_requested
+-- event a database fact rather than a check-then-act race.
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS completed_quantity     NUMERIC(18,6) NOT NULL DEFAULT 0;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS scrapped_quantity      NUMERIC(18,6) NOT NULL DEFAULT 0;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS short_close_reason     TEXT;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS short_closed_at        TIMESTAMPTZ;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS short_closed_by        UUID;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS source_rework_event_id UUID;
+ALTER TABLE production_order ADD COLUMN IF NOT EXISTS source_lot_id          UUID;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_completed_non_negative'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_completed_non_negative CHECK (completed_quantity >= 0 AND scrapped_quantity >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_short_close_pairing'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_short_close_pairing CHECK ((short_close_reason IS NOT NULL AND btrim(short_close_reason) <> '' AND short_closed_at IS NOT NULL AND short_closed_by IS NOT NULL) OR (short_close_reason IS NULL AND short_closed_at IS NULL AND short_closed_by IS NULL));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_order_rework_pairing'
+      AND conrelid = 'production_order'::regclass
+  ) THEN
+    ALTER TABLE production_order
+      ADD CONSTRAINT chk_production_order_rework_pairing CHECK ((source_rework_event_id IS NOT NULL AND source_lot_id IS NOT NULL) OR (source_rework_event_id IS NULL AND source_lot_id IS NULL));
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_production_order_source_rework_event ON production_order (source_rework_event_id) WHERE source_rework_event_id IS NOT NULL;
+
 -- Server-side human-ID allocation for the MO-YYYY-NNNN format. A sequence is the only lock-free
 -- allocator that survives concurrent creations; the year prefix is applied in the applier. Gaps on
 -- rolled-back creates are acceptable - uniqueness is what matters (the indent_number_seq precedent).
@@ -8400,11 +8448,15 @@ CREATE TABLE IF NOT EXISTS production_wip_ledger (
   source_event_id      UUID NOT NULL,
   occurred_at          TIMESTAMPTZ NOT NULL,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_production_wip_posting_type CHECK (posting_type IN ('directed_issue','backflush','return')),
+  CONSTRAINT chk_production_wip_posting_type CHECK (posting_type IN ('directed_issue','backflush','return','completion_relief','scrap_relief')),
   CONSTRAINT chk_production_wip_quantity_positive CHECK (quantity > 0),
   CONSTRAINT chk_production_wip_open_non_negative CHECK (open_quantity IS NULL OR open_quantity >= 0),
   CONSTRAINT chk_production_wip_posting_pairing CHECK (
     (posting_type = 'return' AND source_posting_id IS NOT NULL AND reason_code IS NOT NULL AND open_quantity IS NULL)
+    OR
+    (posting_type = 'scrap_relief' AND source_posting_id IS NOT NULL AND reason_code IS NOT NULL AND open_quantity IS NULL)
+    OR
+    (posting_type = 'completion_relief' AND source_posting_id IS NOT NULL AND reason_code IS NULL AND open_quantity IS NULL)
     OR
     (posting_type IN ('directed_issue','backflush') AND source_posting_id IS NULL AND reason_code IS NULL AND open_quantity IS NOT NULL)
   )
@@ -8421,7 +8473,7 @@ BEGIN
       AND conrelid = 'production_wip_ledger'::regclass
   ) THEN
     ALTER TABLE production_wip_ledger
-      ADD CONSTRAINT chk_production_wip_posting_type CHECK (posting_type IN ('directed_issue','backflush','return'));
+      ADD CONSTRAINT chk_production_wip_posting_type CHECK (posting_type IN ('directed_issue','backflush','return','completion_relief','scrap_relief'));
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -8447,6 +8499,74 @@ BEGIN
     ALTER TABLE production_wip_ledger
       ADD CONSTRAINT chk_production_wip_posting_pairing CHECK (
         (posting_type = 'return' AND source_posting_id IS NOT NULL AND reason_code IS NOT NULL AND open_quantity IS NULL)
+        OR
+        (posting_type = 'scrap_relief' AND source_posting_id IS NOT NULL AND reason_code IS NOT NULL AND open_quantity IS NULL)
+        OR
+        (posting_type = 'completion_relief' AND source_posting_id IS NOT NULL AND reason_code IS NULL AND open_quantity IS NULL)
+        OR
+        (posting_type IN ('directed_issue','backflush') AND source_posting_id IS NULL AND reason_code IS NULL AND open_quantity IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+-- Story 6.3 (FR-MO-07/08) constraint widening. On a database provisioned BEFORE this story both
+-- constraints already exist carrying the narrow Story 6.2 definitions, and an add-if-missing guard
+-- cannot upgrade a constraint that already exists: they must be DROPPED first.
+--
+-- Code review 2026-08-31: the inline CREATE TABLE pairing CHECK and the add-if-missing guards above
+-- were still stating the narrow Story 6.2 definitions, so this file carried two conflicting
+-- authoritative texts under one constraint name. That was not cosmetic. The add-if-missing guard
+-- runs BEFORE this block, so against a database where the constraint had been dropped while
+-- completion_relief or scrap_relief rows already existed, it re-added the NARROW definition, failed
+-- validation with check_violation and aborted the whole file before the widening could run. All
+-- three copies now state the widened definition; this block remains because it is the only thing
+-- that upgrades a database still carrying the narrow constraint from Story 6.2. The drop is itself guarded on the
+-- constraint text, so re-applying this file to an already-upgraded database is a no-op.
+--
+-- 'completion_relief' and 'scrap_relief' are the two new relief postings. Like a return they close
+-- open WIP on a named source posting (source_posting_id NOT NULL, open_quantity NULL) at that
+-- posting's issued unit cost; unlike a return they move no stock. A scrap relief carries the
+-- operator's reason code, a completion relief does not (the completion event is its own reason).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_wip_posting_type'
+      AND conrelid = 'production_wip_ledger'::regclass
+      AND (pg_get_constraintdef(oid) NOT LIKE '%completion_relief%'
+        OR pg_get_constraintdef(oid) NOT LIKE '%scrap_relief%')
+  ) THEN
+    ALTER TABLE production_wip_ledger DROP CONSTRAINT chk_production_wip_posting_type;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_wip_posting_type'
+      AND conrelid = 'production_wip_ledger'::regclass
+  ) THEN
+    ALTER TABLE production_wip_ledger
+      ADD CONSTRAINT chk_production_wip_posting_type CHECK (posting_type IN ('directed_issue','backflush','return','completion_relief','scrap_relief'));
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_wip_posting_pairing'
+      AND conrelid = 'production_wip_ledger'::regclass
+      AND (pg_get_constraintdef(oid) NOT LIKE '%completion_relief%'
+        OR pg_get_constraintdef(oid) NOT LIKE '%scrap_relief%')
+  ) THEN
+    ALTER TABLE production_wip_ledger DROP CONSTRAINT chk_production_wip_posting_pairing;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_wip_posting_pairing'
+      AND conrelid = 'production_wip_ledger'::regclass
+  ) THEN
+    ALTER TABLE production_wip_ledger
+      ADD CONSTRAINT chk_production_wip_posting_pairing CHECK (
+        (posting_type = 'return' AND source_posting_id IS NOT NULL AND reason_code IS NOT NULL AND open_quantity IS NULL)
+        OR
+        (posting_type = 'scrap_relief' AND source_posting_id IS NOT NULL AND reason_code IS NOT NULL AND open_quantity IS NULL)
+        OR
+        (posting_type = 'completion_relief' AND source_posting_id IS NOT NULL AND reason_code IS NULL AND open_quantity IS NULL)
         OR
         (posting_type IN ('directed_issue','backflush') AND source_posting_id IS NULL AND reason_code IS NULL AND open_quantity IS NOT NULL)
       );
@@ -10651,5 +10771,221 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON qc_retention_sample TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 6.3: production completion projection (FR-MO-07/09). Mirror of read/projections/production_completion.sql.
+-- Production completion read model (Story 6.3, FR-MO-07/09, AD-5). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying production_order.completion_posted events;
+-- mutation happens exclusively through persistEvent, which applies this projection inside the SAME
+-- transaction as the domain_events insert.
+--
+-- The grain is ONE ROW PER OUTPUT LOT, not one row per completion event: a single completion posts
+-- the primary output plus every co-product and by-product line of the pinned released revision, and
+-- each of those is its own lot with its own Story 8.1 inspection task (AC 3). completion_id is also
+-- the source_completion_id handed to the QC gate, so the gate's unique-source guard and this table's
+-- primary key are the same identity.
+--
+-- The table is APPEND-ONLY (app_user holds INSERT/SELECT only, the production_wip_ledger
+-- precedent). A completion is a posted fact; a correction is a new event, never an UPDATE.
+--
+-- output_class 'primary' rows carry a NULL bom_line_id (the primary output is the order's own
+-- output_item_id, not a BOM line), so the grain UNIQUE uses NULLS NOT DISTINCT - without it two
+-- primary rows for the same event would both be admitted.
+
+CREATE TABLE IF NOT EXISTS production_completion (
+  completion_id             UUID PRIMARY KEY,
+  production_order_id       UUID NOT NULL,
+  output_class              TEXT NOT NULL,
+  bom_line_id               UUID,
+  output_item_id            UUID NOT NULL,
+  output_sku                TEXT NOT NULL,
+  lot_id                    UUID NOT NULL,
+  lot_number                TEXT NOT NULL,
+  quantity                  NUMERIC(18,6) NOT NULL,
+  uom                       TEXT NOT NULL,
+  qc_task_id                UUID NOT NULL,
+  plant_location_id         UUID NOT NULL,
+  business_date             DATE NOT NULL,
+  over_completion_approved  BOOLEAN NOT NULL DEFAULT false,
+  approved_by               UUID,
+  completed_by              UUID NOT NULL,
+  completed_at              TIMESTAMPTZ NOT NULL,
+  source_event_id           UUID NOT NULL,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_production_completion_output_class CHECK (output_class IN ('primary','co_product','by_product')),
+  CONSTRAINT chk_production_completion_quantity_positive CHECK (quantity > 0),
+  CONSTRAINT chk_production_completion_line_pairing CHECK ((output_class = 'primary' AND bom_line_id IS NULL) OR (output_class IN ('co_product','by_product') AND bom_line_id IS NOT NULL)),
+  CONSTRAINT chk_production_completion_approval_pairing CHECK ((over_completion_approved = true AND approved_by IS NOT NULL) OR (over_completion_approved = false AND approved_by IS NULL)),
+  CONSTRAINT uq_production_completion_lot UNIQUE (lot_id),
+  CONSTRAINT uq_production_completion_grain UNIQUE NULLS NOT DISTINCT (production_order_id, source_event_id, output_class, bom_line_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_production_completion_order ON production_completion (production_order_id);
+CREATE INDEX IF NOT EXISTS idx_production_completion_task ON production_completion (qc_task_id);
+CREATE INDEX IF NOT EXISTS idx_production_completion_item ON production_completion (output_item_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_completion_output_class'
+      AND conrelid = 'production_completion'::regclass
+  ) THEN
+    ALTER TABLE production_completion
+      ADD CONSTRAINT chk_production_completion_output_class CHECK (output_class IN ('primary','co_product','by_product'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_completion_quantity_positive'
+      AND conrelid = 'production_completion'::regclass
+  ) THEN
+    ALTER TABLE production_completion
+      ADD CONSTRAINT chk_production_completion_quantity_positive CHECK (quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_completion_line_pairing'
+      AND conrelid = 'production_completion'::regclass
+  ) THEN
+    ALTER TABLE production_completion
+      ADD CONSTRAINT chk_production_completion_line_pairing CHECK ((output_class = 'primary' AND bom_line_id IS NULL) OR (output_class IN ('co_product','by_product') AND bom_line_id IS NOT NULL));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_completion_approval_pairing'
+      AND conrelid = 'production_completion'::regclass
+  ) THEN
+    ALTER TABLE production_completion
+      ADD CONSTRAINT chk_production_completion_approval_pairing CHECK ((over_completion_approved = true AND approved_by IS NOT NULL) OR (over_completion_approved = false AND approved_by IS NULL));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_production_completion_lot'
+      AND conrelid = 'production_completion'::regclass
+  ) THEN
+    ALTER TABLE production_completion
+      ADD CONSTRAINT uq_production_completion_lot UNIQUE (lot_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_production_completion_grain'
+      AND conrelid = 'production_completion'::regclass
+  ) THEN
+    ALTER TABLE production_completion
+      ADD CONSTRAINT uq_production_completion_grain UNIQUE NULLS NOT DISTINCT (production_order_id, source_event_id, output_class, bom_line_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON production_completion TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON production_completion TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 6.3: production scrap declaration projection (FR-MO-08). Mirror of read/projections/production_scrap_declaration.sql.
+-- Production scrap declaration read model (Story 6.3, FR-MO-08, AD-5). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying production_order.scrap_declared events;
+-- mutation happens exclusively through persistEvent, which applies this projection inside the SAME
+-- transaction as the domain_events insert.
+--
+-- A scrap declaration relieves WIP and moves NO stock (Story 6.3 Binding Decision 10): it creates
+-- no lot, posts no stock row and never drives a balance negative. The physical scrap intake
+-- (FR-SC) is Phase 2 (Epic 16); this row is the AD-10 source document for it, and it is also the
+-- expected-versus-actual reconciliation input Story 6.4 (FR-B-08) reads.
+--
+-- The table is APPEND-ONLY (app_user holds INSERT/SELECT only, the production_wip_ledger
+-- precedent). relieved_value is the WIP value actually drained by this declaration, settled in SQL
+-- NUMERIC at the source postings' issued cost, never at today's average.
+--
+-- Code review 2026-08-31: uq_production_scrap_declaration_event is the replay and rebuild guard.
+-- scrap_id is server-minted per call, so the primary key alone cannot make a second application of
+-- the SAME domain event collide - which left the banner's "rebuildable by replaying" claim false
+-- for this table while its sibling production_completion was already defended by
+-- uq_production_completion_grain. One scrap_declared event yields exactly one declaration row, so
+-- source_event_id IS the grain.
+
+CREATE TABLE IF NOT EXISTS production_scrap_declaration (
+  scrap_id             UUID PRIMARY KEY,
+  production_order_id  UUID NOT NULL,
+  scrap_quantity       NUMERIC(18,6) NOT NULL,
+  uom                  TEXT NOT NULL,
+  reason_code          TEXT NOT NULL,
+  relieved_value       NUMERIC(14,3) NOT NULL,
+  business_date        DATE NOT NULL,
+  declared_by          UUID NOT NULL,
+  declared_at          TIMESTAMPTZ NOT NULL,
+  source_event_id      UUID NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_production_scrap_quantity_positive CHECK (scrap_quantity > 0),
+  CONSTRAINT chk_production_scrap_relieved_non_negative CHECK (relieved_value >= 0),
+  CONSTRAINT chk_production_scrap_reason_code_present CHECK (btrim(reason_code) <> ''),
+  CONSTRAINT uq_production_scrap_declaration_event UNIQUE (source_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_production_scrap_declaration_order ON production_scrap_declaration (production_order_id);
+CREATE INDEX IF NOT EXISTS idx_production_scrap_declaration_business_date ON production_scrap_declaration (business_date);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_scrap_quantity_positive'
+      AND conrelid = 'production_scrap_declaration'::regclass
+  ) THEN
+    ALTER TABLE production_scrap_declaration
+      ADD CONSTRAINT chk_production_scrap_quantity_positive CHECK (scrap_quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_scrap_relieved_non_negative'
+      AND conrelid = 'production_scrap_declaration'::regclass
+  ) THEN
+    ALTER TABLE production_scrap_declaration
+      ADD CONSTRAINT chk_production_scrap_relieved_non_negative CHECK (relieved_value >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_scrap_reason_code_present'
+      AND conrelid = 'production_scrap_declaration'::regclass
+  ) THEN
+    ALTER TABLE production_scrap_declaration
+      ADD CONSTRAINT chk_production_scrap_reason_code_present CHECK (btrim(reason_code) <> '');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_production_scrap_declaration_event'
+      AND conrelid = 'production_scrap_declaration'::regclass
+  ) THEN
+    ALTER TABLE production_scrap_declaration
+      ADD CONSTRAINT uq_production_scrap_declaration_event UNIQUE (source_event_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON production_scrap_declaration TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON production_scrap_declaration TO readonly_user;
   END IF;
 END $$;

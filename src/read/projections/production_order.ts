@@ -35,6 +35,19 @@ export interface ProductionOrderRow {
   cancelled_at: string | null;
   cancelled_by: string | null;
   unreversed_transaction_count: number;
+  /**
+   * Story 6.3 (FR-MO-07/09/10). completed_quantity accumulates the PRIMARY output only; the
+   * three short_close_* fields are the FR-MO-09 close-short decision Story 6.4's closure gate
+   * reads; the two source_* fields are the FR-MO-10 rework linkage (Binding Decision 9). All are
+   * exact decimal strings or nulls, never JS numbers.
+   */
+  completed_quantity: string;
+  scrapped_quantity: string;
+  short_close_reason: string | null;
+  short_closed_at: string | null;
+  short_closed_by: string | null;
+  source_rework_event_id: string | null;
+  source_lot_id: string | null;
   created_by: string;
   correlation_id: string | null;
   source_event_id: string;
@@ -80,6 +93,13 @@ function mapRow(row: Record<string, unknown>): ProductionOrderRow {
     cancelled_at: isoOrNull(row['cancelled_at']),
     cancelled_by: (row['cancelled_by'] as string | null) ?? null,
     unreversed_transaction_count: Number(row['unreversed_transaction_count']),
+    completed_quantity: String(row['completed_quantity'] ?? '0'),
+    scrapped_quantity: String(row['scrapped_quantity'] ?? '0'),
+    short_close_reason: (row['short_close_reason'] as string | null) ?? null,
+    short_closed_at: isoOrNull(row['short_closed_at']),
+    short_closed_by: (row['short_closed_by'] as string | null) ?? null,
+    source_rework_event_id: (row['source_rework_event_id'] as string | null) ?? null,
+    source_lot_id: (row['source_lot_id'] as string | null) ?? null,
     created_by: row['created_by'] as string,
     correlation_id: (row['correlation_id'] as string | null) ?? null,
     source_event_id: row['source_event_id'] as string,
@@ -92,7 +112,9 @@ const ORDER_COLUMNS = `production_order_id, order_number_ext, output_item_id, ou
        order_quantity, order_uom, plant_location_id, bom_id, released_revision_id,
        business_stream, source_reference_type, source_reference_id, status,
        expediting_flag, override_by, override_reason, released_at, released_by,
-       cancelled_at, cancelled_by, unreversed_transaction_count, created_by,
+       cancelled_at, cancelled_by, unreversed_transaction_count, completed_quantity,
+       scrapped_quantity, short_close_reason, short_closed_at, short_closed_by,
+       source_rework_event_id, source_lot_id, created_by,
        correlation_id, source_event_id, created_at, updated_at`;
 
 export interface InsertProductionOrderInput {
@@ -116,6 +138,9 @@ export interface InsertProductionOrderInput {
   cancelled_at: string | null;
   cancelled_by: string | null;
   unreversed_transaction_count: number;
+  /** Story 6.3 (FR-MO-10): the rework linkage, all-or-nothing and null on an ordinary order. */
+  source_rework_event_id?: string | null;
+  source_lot_id?: string | null;
   created_by: string;
   correlation_id: string | null;
   source_event_id: string;
@@ -132,8 +157,9 @@ export async function insertProductionOrder(
       order_uom, plant_location_id, bom_id, business_stream, source_reference_type,
       source_reference_id, status, expediting_flag, override_by, override_reason,
       released_at, released_by, cancelled_at, cancelled_by, unreversed_transaction_count,
-      created_by, correlation_id, source_event_id, created_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+      created_by, correlation_id, source_event_id, created_at, source_rework_event_id,
+      source_lot_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
     [
       input.production_order_id,
       input.order_number_ext,
@@ -159,6 +185,8 @@ export async function insertProductionOrder(
       input.correlation_id,
       input.source_event_id,
       input.created_at,
+      input.source_rework_event_id ?? null,
+      input.source_lot_id ?? null,
     ],
   );
 }
@@ -265,6 +293,12 @@ export interface UpdateProductionOrderStatePatch {
   released_by?: string | null;
   cancelled_at?: string | null;
   cancelled_by?: string | null;
+  /** Story 6.3: completion and scrap aggregates, and the close-short decision stamps. */
+  completed_quantity?: string;
+  scrapped_quantity?: string;
+  short_close_reason?: string | null;
+  short_closed_at?: string | null;
+  short_closed_by?: string | null;
 }
 
 export async function updateProductionOrderState(
@@ -290,6 +324,11 @@ export async function updateProductionOrderState(
   if (patch.released_by !== undefined) push('released_by', patch.released_by);
   if (patch.cancelled_at !== undefined) push('cancelled_at', patch.cancelled_at);
   if (patch.cancelled_by !== undefined) push('cancelled_by', patch.cancelled_by);
+  if (patch.completed_quantity !== undefined) push('completed_quantity', patch.completed_quantity);
+  if (patch.scrapped_quantity !== undefined) push('scrapped_quantity', patch.scrapped_quantity);
+  if (patch.short_close_reason !== undefined) push('short_close_reason', patch.short_close_reason);
+  if (patch.short_closed_at !== undefined) push('short_closed_at', patch.short_closed_at);
+  if (patch.short_closed_by !== undefined) push('short_closed_by', patch.short_closed_by);
 
   await client.query(
     `UPDATE production_order SET ${sets.join(', ')} WHERE production_order_id = $1`,
@@ -311,4 +350,21 @@ export async function allocateProductionOrderNumber(
   const result = await client.query(`SELECT nextval('production_order_number_seq') AS n`);
   const n = String(result.rows[0]['n']);
   return `MO-${year}-${n.padStart(4, '0')}`;
+}
+
+/**
+ * Story 6.3 (FR-MO-10, AC 7): resolves the rework order already raised from a qc.rework_requested
+ * event, if any. The check-then-act it backs is closed by uq_production_order_source_rework_event,
+ * so the race path returns the same REWORK_ORDER_EXISTS through the 23505 mapping.
+ */
+export async function getProductionOrderByReworkEventId(
+  reworkEventId: string,
+  client?: PoolClient,
+): Promise<ProductionOrderRow | null> {
+  if (!UUID_REGEX.test(reworkEventId)) return null;
+  const result = await runner(client).query(
+    `SELECT ${ORDER_COLUMNS} FROM production_order WHERE source_rework_event_id = $1`,
+    [reworkEventId],
+  );
+  return result.rows.length > 0 ? mapRow(result.rows[0]!) : null;
 }
