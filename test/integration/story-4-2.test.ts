@@ -1329,7 +1329,11 @@ describe('Story 4.2 Supplier Performance Scorecards Integration Tests', () => {
     assert.strictEqual(rows.length, 0);
   });
 
-  it('AC6: a direct quality_acceptance event is a no-op applier - the projection stays empty', async () => {
+  // Story 8.3 activated this metric kind: the applier is no longer a no-op, it derives the value
+  // from the qc_lot_disposition row named by reference_entity_id. The guarantee this test protects
+  // is unchanged and now stronger - nothing can fabricate quality data. A quality_acceptance event
+  // whose reference entity is not a real disposition is REJECTED rather than silently ignored.
+  it('AC6: a quality_acceptance event with no real disposition behind it is rejected, and nothing is projected', async () => {
     const res = await directEvent(
       supplierId,
       metricPayload({
@@ -1338,10 +1342,8 @@ describe('Story 4.2 Supplier Performance Scorecards Integration Tests', () => {
         context: { disposition: 'accept' },
       }),
     );
-    assert.ok(
-      res.status >= 200 && res.status < 300,
-      `quality event should be accepted but not projected: ${JSON.stringify(res.body)}`,
-    );
+    assert.strictEqual(res.status, 404, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'DISPOSITION_NOT_FOUND');
     const count = await getAdminPool().query(
       `SELECT count(*)::int AS c FROM supplier_scorecard_metric WHERE metric_kind = 'quality_acceptance'`,
     );

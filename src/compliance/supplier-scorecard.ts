@@ -186,14 +186,9 @@ export async function applySupplierScorecardProjection(
     );
   }
 
-  // Epic 8 hook (Task 7.4): quality acceptance has no legitimate source until qc.lot_dispositioned
-  // lands. The applier is a deliberate no-op so nothing can fabricate quality data early.
-  if (metricKind === 'quality_acceptance') {
-    console.debug(
-      `[scorecard] quality_acceptance metric applier is a no-op until Epic 8 lands (supplier ${supplierId})`,
-    );
-    return;
-  }
+  // Epic 8 Story 8.3 activated this kind: qc.lot_dispositioned is registered and
+  // qc_lot_disposition is the governed source projection, so quality_acceptance now runs the same
+  // locked re-derivation path as every other metric kind (the Story 4.2 no-op is retired).
 
   // AC7 correction chain: supersedes_metric_id must point at an existing row of the SAME supplier
   // and metric kind, otherwise the chain semantics are fabricated.
@@ -425,6 +420,52 @@ async function deriveMetric(
         confirmed_at: new Date(po.confirmedAt).toISOString(),
         business_days: businessDays,
         holiday_count: holidays.length,
+      },
+    };
+  }
+
+  if (metricKind === 'quality_acceptance') {
+    // Story 8.3 (AC 8): the reference entity is a qc_lot_disposition row. The lot outcome is a
+    // binary quality fact - 1 for an accepted lot, 0 for a rejected one - so the trend is the
+    // supplier's acceptance rate. A conditional release is an exception under a deviation and a
+    // split is not an outcome at all, so neither is a legitimate measurement.
+    const dispositionRes = await client.query(
+      `SELECT disposition_id, lot_id, task_id, disposition, quantity::text AS quantity,
+              decided_at, source_event_id
+         FROM qc_lot_disposition WHERE disposition_id = $1`,
+      [referenceEntityId],
+    );
+    if (dispositionRes.rows.length === 0) {
+      reject(
+        'DISPOSITION_NOT_FOUND',
+        'Lot disposition not found',
+        { disposition_id: referenceEntityId },
+        404,
+      );
+    }
+    const disposition = dispositionRes.rows[0] as Record<string, unknown>;
+    const kind = disposition['disposition'] as string;
+    if (kind !== 'accept' && kind !== 'reject') {
+      reject(
+        'SCORECARD_REFERENCE_INVALID',
+        'Quality acceptance is measured from accept and reject dispositions only',
+        { disposition_id: referenceEntityId, disposition: kind },
+        409,
+      );
+    }
+    const decidedAt = disposition['decided_at'];
+    return {
+      valueNum: kind === 'accept' ? '1.000000' : '0.000000',
+      businessDate: toIstCalendarDate(
+        decidedAt instanceof Date ? decidedAt : new Date(String(decidedAt)),
+      ),
+      referenceEventId: disposition['source_event_id'] as string,
+      context: {
+        disposition: kind,
+        disposition_id: referenceEntityId,
+        lot_id: disposition['lot_id'],
+        task_id: disposition['task_id'],
+        quantity: String(disposition['quantity']),
       },
     };
   }

@@ -3,8 +3,9 @@ import type { EventEnvelope } from './store.js';
 /**
  * Event types introduced by Story 2.5: Inter-Location Transfer Requests.
  *
- * Reserved event name (not registered): `qc.lot_dispositioned` - Epic 8 Story 8.3 lot
- * disposition. Story 4.2's quality-acceptance scorecard applier activates when Epic 8 lands.
+ * `qc.lot_dispositioned` (once reserved here) is registered by Epic 8 Story 8.3 with the QC event
+ * block at the tail of SUPPORTED_EVENT_TYPES; Story 4.2's quality-acceptance scorecard applier is
+ * active against it.
  */
 
 // ---------------------------------------------------------------------------
@@ -1518,9 +1519,11 @@ export interface LegacyKitMigratedEnvelope extends Omit<EventEnvelope, 'payload'
  * Story 4.2: Supplier Performance Scorecards. One append-only metric observation per upstream
  * source event. All NUMERIC values are strings; business_date is an IST calendar date string.
  *
- * Future hook (Epic 8 Story 8.3): the `qc.lot_dispositioned` event name is reserved for the
- * quality-acceptance metric source. It is NOT registered in SUPPORTED_EVENT_TYPES here - Epic 8
- * registers it when lot disposition lands; Story 4.2's quality-acceptance applier activates then.
+ * Quality-acceptance source (Epic 8 Story 8.3): `qc.lot_dispositioned` is now registered in
+ * SUPPORTED_EVENT_TYPES and the quality-acceptance applier is live. The metric's
+ * reference_entity_id is a qc_lot_disposition.disposition_id; value_num is derived on the server
+ * as '1' for an accepted lot and '0' for a rejected one, and a conditional_release or split
+ * reference is rejected with SCORECARD_REFERENCE_INVALID.
  */
 export interface SupplierScorecardMetricRecordedPayload {
   metric_id: string;
@@ -3403,6 +3406,169 @@ export interface QcConditionalReleaseRecordedEnvelope extends Omit<EventEnvelope
 }
 
 /**
+ * Story 8.3 (FR-Q-05, AC 1): the ONE authoritative quality outcome for a lot. stream_id is the
+ * task_id. `disposition` is 'accept' or 'reject' only - a conditional release keeps its own Story
+ * 8.1 event (qc.conditional_release_recorded) and a split keeps qc.lot_split_recorded; all three
+ * write the same shared one-row-per-lot qc_lot_disposition grain, so a second disposition of any
+ * kind is 409 DISPOSITION_EXISTS.
+ *
+ * The seam locks the lot row, then the task row (the fixed lot, gate, stock lock order), requires
+ * task_status 'inspected' (409 QC_INSPECTION_REQUIRED), requires the gate to still be qc_hold or
+ * conditionally_released, requires the independent manual or recall hold to be clear (400
+ * LOT_ON_HOLD), writes one disposition row and the gate transition, and - for a reject - the one
+ * open qc_ncr row the outcome command later decides. Accept and reject carry NO DOA gate (Binding
+ * Scope Decision 5): doa_entry_id stays null.
+ *
+ * Every optional field below is SEAM-DERIVED write-back; a client that declares one is rejected
+ * with 409 QC_DERIVATION_MISMATCH.
+ */
+export interface QcLotDispositionedPayload {
+  task_id: string;
+  lot_id: string;
+  disposition_id: string;
+  disposition: 'accept' | 'reject';
+  justification: string;
+  decided_at: string;
+  /** Minted by the handler for a reject only; absent or null for an accept. */
+  ncr_id?: string | null;
+  /** Derived under lock; persisted write-back only. */
+  lot_number?: string;
+  sku?: string;
+  site_id?: string;
+  plan_version_id?: string;
+  quantity?: string;
+  sampling_outcome?: 'accepted' | 'not_accepted' | null;
+  requested_by?: string;
+  approved_by?: string;
+  inspector_user_id?: string | null;
+  previous_gate_status?: 'qc_hold' | 'conditionally_released';
+  gate_status?: 'accepted' | 'rejected';
+}
+
+export interface QcLotDispositionedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.lot_dispositioned';
+  payload: QcLotDispositionedPayload;
+}
+
+/**
+ * Story 8.3 (FR-Q-05, AC 2): the partial split. stream_id is the parent task_id. The client sends
+ * only the split shares (2 to 20 entries, 1-based contiguous `sequence`, positive decimal-string
+ * `quantity` summing EXACTLY to the parent lot quantity - 400 QC_SPLIT_QUANTITY_MISMATCH
+ * otherwise). Each child lot, lot number, task and source_completion_id is server-minted, the
+ * parent's owned stock is relabelled grain by grain onto the children in the same transaction (409
+ * INSUFFICIENT_STOCK when the parent's unallocated owned on-hand does not cover the split), and
+ * the parent takes the terminal 'split' disposition and gate state.
+ *
+ * Children inherit the parent's frozen plan_version_id and its whole inspection result set
+ * (sampling_id, sampling_outcome, counts, inspector, inspected_at), so each child is immediately
+ * dispositionable without re-sampling.
+ */
+export interface QcLotSplitRecordedPayload {
+  task_id: string;
+  lot_id: string;
+  disposition_id: string;
+  justification: string;
+  decided_at: string;
+  splits: Array<{
+    sequence: number;
+    quantity: string;
+    /** Derived; persisted write-back only. */
+    lot_id?: string;
+    lot_number?: string;
+    task_id?: string;
+    source_completion_id?: string;
+  }>;
+  /** Derived under lock; persisted write-back only. */
+  lot_number?: string;
+  sku?: string;
+  site_id?: string;
+  plan_version_id?: string;
+  quantity?: string;
+  requested_by?: string;
+  approved_by?: string;
+  inspector_user_id?: string | null;
+  previous_gate_status?: 'qc_hold' | 'conditionally_released';
+  gate_status?: 'split';
+}
+
+export interface QcLotSplitRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.lot_split_recorded';
+  payload: QcLotSplitRecordedPayload;
+}
+
+/**
+ * Story 8.3 (FR-Q-06, AC 3, AC 4 and AC 5): the once-only NCR outcome. stream_id is the ncr_id.
+ * 'rework' flags the lot and persists a qc.rework_requested event on the SAME transaction as the
+ * integration contract Story 6.3 consumes. 'downgrade' requires a downgrade_sku that exists in
+ * item_master and differs from the lot's own SKU (400 DOWNGRADE_SKU_REQUIRED or
+ * DOWNGRADE_SKU_INVALID), mints an ungoverned seconds lot and relabels the whole quantity onto it.
+ * 'scrap' moves no stock: it sets lot_master.quality_hold_status to 'held' with reason
+ * scrap_pending and retains this event as the AD-10 source document for the Phase 2 (Epic 16)
+ * FR-SC intake.
+ *
+ * A second outcome for the same NCR is 409 NCR_OUTCOME_EXISTS (the UPDATE is guarded by
+ * `WHERE outcome IS NULL`, so the race and the sequential path return the same code).
+ */
+export interface QcNcrOutcomeRecordedPayload {
+  ncr_id: string;
+  lot_id: string;
+  outcome: 'rework' | 'downgrade' | 'scrap';
+  outcome_reason: string;
+  decided_at: string;
+  /** Required exactly when outcome is 'downgrade'. */
+  downgrade_sku?: string;
+  /**
+   * Required exactly when outcome is 'rework': the event id the handler mints for the companion
+   * qc.rework_requested event it persists on the SAME transaction. The applier writes it into
+   * qc_ncr.rework_requested_event_id, and qc.rework_requested is only admissible when its own
+   * event_id already sits in that column - that linkage is what makes a direct post of the
+   * integration contract impossible to forge.
+   */
+  rework_event_id?: string;
+  /** Derived under lock; persisted write-back only. */
+  task_id?: string;
+  lot_number?: string;
+  sku?: string;
+  site_id?: string;
+  quantity?: string;
+  outcome_by?: string;
+  downgrade_lot_id?: string | null;
+  downgrade_lot_number?: string | null;
+  rework_requested_event_id?: string | null;
+  quality_hold_status?: 'none' | 'held';
+}
+
+export interface QcNcrOutcomeRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.ncr_outcome_recorded';
+  payload: QcNcrOutcomeRecordedPayload;
+}
+
+/**
+ * Story 8.3 (FR-Q-06, AC 5): the rework integration contract. Persisted by the NCR-outcome command
+ * itself, in the same transaction, whenever the outcome is 'rework'. EVERY field is server-derived
+ * and the event is only admissible from that owning outcome, so a direct POST is rejected with 409
+ * QC_REWORK_NOT_DERIVED. Story 6.3 subscribes to it to create the rework order and the new lot
+ * that re-enters the QC gate; until then a synthetic subscriber test proves the shape.
+ */
+export interface QcReworkRequestedPayload {
+  ncr_id: string;
+  lot_id: string;
+  lot_number: string;
+  task_id: string;
+  sku: string;
+  site_id: string;
+  quantity: string;
+  plan_version_id: string;
+  requested_by: string;
+  requested_at: string;
+}
+
+export interface QcReworkRequestedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.rework_requested';
+  payload: QcReworkRequestedPayload;
+}
+
+/**
  * Story 8.2 (FR-Q-03, AC 1): freezes the IS 2500 (Part 1) / ISO 2859-1 single-sampling plan on a
  * task. stream_id is the task_id. Only task_id, sampling_id and determined_at are client fields;
  * every other field is SEAM-DERIVED under the lot, task and switching-state locks (lot size from
@@ -4306,7 +4472,8 @@ export const SUPPORTED_EVENT_TYPES = {
   // commands are decisions on an already-tagged task or on plan master data (AD-14).
   // qc.result_recorded is registered HERE for the first time with the full (task-bound) shape; the
   // Story 1.7 synthetic shape stays valid on the same type and the Story 1.7 assertCalibrationLockout
-  // keeps narrowing on it (Binding Scope Decision 1). qc.lot_dispositioned stays reserved for 8.3.
+  // keeps narrowing on it (Binding Scope Decision 1). qc.lot_dispositioned is registered by Story
+  // 8.3 in the block below.
   'qc.sampling_determined': {
     streamType: 'qc',
     requiresBusinessStream: false,
@@ -4324,6 +4491,27 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'qc.sampling_state_adjusted': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  // Story 8.3: lot disposition, partial split and NCR outcomes (FR-Q-05, FR-Q-06). All four ride
+  // the 'qc' stream and none carries a business stream: every one is a decision on an already
+  // tagged task whose business stream was fixed by the completion hand-off (AD-14). This is the
+  // registration Story 4.2 reserved qc.lot_dispositioned for - the supplier-scorecard
+  // quality-acceptance metric now has a real source event.
+  'qc.lot_dispositioned': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.lot_split_recorded': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.ncr_outcome_recorded': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.rework_requested': {
     streamType: 'qc',
     requiresBusinessStream: false,
   },

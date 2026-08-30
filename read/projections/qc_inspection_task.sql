@@ -18,9 +18,12 @@
 -- lot_master.quality_hold_status (the manual or recall-hold axis), which this story never widens:
 -- a lot may be conditionally released here and still manually held there, and both block.
 --
--- gate_status vocabulary in this story: qc_hold (the entry state every completion posts into, no
--- bypass) and conditionally_released (the FR-Q-05 disposition state, distinct from a bypass).
--- Story 8.3 widens it for accept and reject. task_status is the INSPECTION axis, independent of
+-- gate_status vocabulary: qc_hold (the entry state every completion posts into, no bypass) and
+-- conditionally_released (the FR-Q-05 deviation state, distinct from a bypass) from Story 8.1,
+-- plus accepted, rejected and split from Story 8.3. ONLY 'accepted' leaves
+-- QC_GATE_BLOCKED_STATUSES; 'rejected' and 'split' block exactly as qc_hold does (a split parent
+-- has no stock left, and a rejected lot is pending its NCR outcome).
+-- task_status is the INSPECTION axis, independent of
 -- the gate: 'open' at creation, 'sampling_determined' once Story 8.2 freezes the sampling plan
 -- (results are accepted only in this state), 'inspected' once inspection completes with its
 -- sampling_outcome and counts (the Story 8.2 additive columns below; sampling_id references the
@@ -69,7 +72,7 @@ CREATE TABLE IF NOT EXISTS qc_inspection_task (
   CONSTRAINT chk_qc_inspection_task_quantity CHECK (quantity > 0),
   CONSTRAINT chk_qc_inspection_task_source_type CHECK (source_completion_type IN ('synthetic_completion', 'production_order', 'job_work_order')),
   CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected')),
-  CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released')),
+  CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released', 'accepted', 'rejected', 'split')),
   CONSTRAINT chk_qc_inspection_task_plan_scope CHECK (plan_scope IN ('standard', 'customer_override')),
   CONSTRAINT chk_qc_inspection_task_scope_pairing CHECK (
     (plan_scope = 'standard' AND source_order_type IS NULL AND source_order_ref IS NULL)
@@ -138,7 +141,7 @@ BEGIN
       AND conrelid = 'qc_inspection_task'::regclass
   ) THEN
     ALTER TABLE qc_inspection_task
-      ADD CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released'));
+      ADD CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released', 'accepted', 'rejected', 'split'));
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -176,6 +179,24 @@ BEGIN
     ALTER TABLE qc_inspection_task DROP CONSTRAINT chk_qc_inspection_task_status;
     ALTER TABLE qc_inspection_task
       ADD CONSTRAINT chk_qc_inspection_task_status CHECK (task_status IN ('open', 'sampling_determined', 'inspected'));
+  END IF;
+END $$;
+
+-- Story 8.3 (Binding Scope Decision 3): widen the gate vocabulary on a database created by Story
+-- 8.1 or 8.2, where chk_qc_inspection_task_gate_status admits only the two Story 8.1 states.
+-- Guarded on pg_get_constraintdef exactly like the task_status block above; once the definition
+-- names 'accepted' the block is a no-op on every re-run.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_inspection_task_gate_status'
+      AND conrelid = 'qc_inspection_task'::regclass
+      AND pg_get_constraintdef(oid) NOT LIKE '%accepted%'
+  ) THEN
+    ALTER TABLE qc_inspection_task DROP CONSTRAINT chk_qc_inspection_task_gate_status;
+    ALTER TABLE qc_inspection_task
+      ADD CONSTRAINT chk_qc_inspection_task_gate_status CHECK (gate_status IN ('qc_hold', 'conditionally_released', 'accepted', 'rejected', 'split'));
   END IF;
 END $$;
 

@@ -316,6 +316,12 @@ import {
   completeInspectionHandler,
   listSamplingStatesHandler,
   adjustSamplingStateHandler,
+  recordDispositionHandler,
+  getDispositionHandler,
+  recordSplitHandler,
+  listQcNcrsHandler,
+  getQcNcrHandler,
+  recordNcrOutcomeHandler,
 } from './api/v1/quality.js';
 import {
   createProductionOrderHandler,
@@ -366,6 +372,7 @@ import {
   recordOnTimeDeliveryMetricHandler,
   recordPriceVarianceMetricHandler,
   recordResponsivenessMetricHandler,
+  recordQualityAcceptanceMetricHandler,
 } from './api/v1/supplier-scorecards.js';
 import {
   generatePickTasksHandler,
@@ -839,6 +846,17 @@ export function createAppRouter(): Router {
   router.post('/api/v1/qc/tasks/:taskId/observations', recordQcObservationsHandler);
   router.get('/api/v1/qc/tasks/:taskId/results', listQcResultsHandler);
   router.post('/api/v1/qc/tasks/:taskId/inspection-completion', completeInspectionHandler);
+  // Story 8.3: Lot Disposition - Accept, Reject, Conditional Release (FR-Q-05, FR-Q-06). ROUTE
+  // ORDER MATTERS: the '/qc/ncrs' list route is registered BEFORE '/qc/ncrs/:ncrId' so the
+  // parameter segment cannot swallow the list, and the three '/qc/tasks/:taskId/*' routes carry
+  // distinct literal tail segments after the shared parameter, so none shadows the bare
+  // '/qc/tasks/:taskId' route above or its Story 8.2 siblings.
+  router.post('/api/v1/qc/tasks/:taskId/disposition', recordDispositionHandler);
+  router.get('/api/v1/qc/tasks/:taskId/disposition', getDispositionHandler);
+  router.post('/api/v1/qc/tasks/:taskId/split', recordSplitHandler);
+  router.get('/api/v1/qc/ncrs', listQcNcrsHandler);
+  router.get('/api/v1/qc/ncrs/:ncrId', getQcNcrHandler);
+  router.post('/api/v1/qc/ncrs/:ncrId/outcome', recordNcrOutcomeHandler);
 
   // Story 6.1: Production Order Creation and Release Gate (FR-MO-01/02/03). ROUTE ORDER MATTERS:
   // '/production-orders' (both verbs) is registered BEFORE any '/production-orders/:orderId' route,
@@ -896,8 +914,9 @@ export function createAppRouter(): Router {
   router.get('/api/v1/compliance/payment-clearance-feed/eligible', listClearanceEligibleHandler);
 
   // Story 4.2: Supplier Performance Scorecards - consolidated trend read plus drill-through, and
-  // the three thin metric write routes (quality acceptance intentionally has no write route
-  // until Epic 8 lands its qc.lot_dispositioned source).
+  // the three thin metric write routes. Story 8.3 adds the fourth (quality acceptance), whose
+  // source is a qc_lot_disposition row; it is mounted under /api/v1/qc/dispositions because the
+  // disposition, not a procurement document, is the reference entity.
   router.get('/api/v1/supplier-scorecards/:supplierId', getSupplierScorecardHandler);
   router.get(
     '/api/v1/supplier-scorecards/:supplierId/transactions',
@@ -907,6 +926,10 @@ export function createAppRouter(): Router {
   router.post(
     '/api/v1/three-way-match/:matchId/scorecard/price-variance',
     recordPriceVarianceMetricHandler,
+  );
+  router.post(
+    '/api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',
+    recordQualityAcceptanceMetricHandler,
   );
   router.post(
     '/api/v1/purchase-orders/:poId/scorecard/responsiveness',

@@ -20,10 +20,16 @@ import {
   INSPECTION_PLAN_APPROVAL_DOA_TYPE,
   INSPECTION_PLAN_APPROVED,
   INSPECTION_PLAN_CREATED,
+  LOT_DISPOSITIONS,
   MAX_READINGS_PER_RESULT,
+  NCR_OUTCOMES,
   QC_CONDITIONAL_RELEASE_RECORDED,
   QC_INSPECTION_COMPLETED,
+  QC_LOT_DISPOSITIONED,
+  QC_LOT_SPLIT_RECORDED,
+  QC_NCR_OUTCOME_RECORDED,
   QC_OBSERVATION_RECORDED,
+  QC_REWORK_REQUESTED,
   QC_RESULT_RECORDED,
   QC_SAMPLING_DETERMINED,
   QC_SAMPLING_STATE_ADJUSTED,
@@ -55,7 +61,17 @@ import {
   listQcInspectionTasks,
 } from '../../read/projections/qc_inspection_task.js';
 import type { QcGateStatus, QcTaskStatus } from '../../read/projections/qc_inspection_task.js';
-import { getConditionalReleaseForLot } from '../../read/projections/qc_lot_disposition.js';
+import {
+  getConditionalReleaseForLot,
+  getQcLotDispositionByLotId,
+} from '../../read/projections/qc_lot_disposition.js';
+import {
+  getQcNcrById,
+  getQcNcrByLotId,
+  listQcNcrs,
+} from '../../read/projections/qc_ncr.js';
+import type { QcNcrOutcome } from '../../read/projections/qc_ncr.js';
+import { listQcLotSplitsByParent } from '../../read/projections/qc_lot_split.js';
 
 /**
  * Story 8.1 REST surface for inspection plans and the QC gate (FR-Q-01, FR-Q-02, FR-Q-05). Module
@@ -72,7 +88,15 @@ import { getConditionalReleaseForLot } from '../../read/projections/qc_lot_dispo
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO8601_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
-const GATE_STATUSES = new Set(['qc_hold', 'conditionally_released']);
+// Story 8.3: the gate-status filter vocabulary is derived from the projection's own type so the
+// list route can never drift from the CHECK constraint (a local literal was the drift risk).
+const GATE_STATUSES: ReadonlySet<string> = new Set<QcGateStatus>([
+  'qc_hold',
+  'conditionally_released',
+  'accepted',
+  'rejected',
+  'split',
+]);
 const TASK_STATUSES = new Set(['open', 'sampling_determined', 'inspected']);
 const PLAN_SCOPES = new Set(['standard', 'customer_override']);
 
@@ -189,6 +213,14 @@ const AUDITED_REJECTIONS = new Set([
   'APPROVAL_UNRESOLVED',
   'SOD_VIOLATION',
   'CALIBRATION_LOCKOUT',
+  // Story 8.3 (AC 6): a refused disposition, split or NCR outcome is a statutory record of a
+  // refused quality decision, not a routine 4xx.
+  'LOCATION_ACCESS_DENIED',
+  'QC_INSPECTION_REQUIRED',
+  'DISPOSITION_EXISTS',
+  'NCR_OUTCOME_EXISTS',
+  'INSUFFICIENT_STOCK',
+  'LOT_ON_HOLD',
 ]);
 
 function requireBody(
@@ -1348,6 +1380,365 @@ const adjustSamplingStateBase: RouteHandler = async (req, res, params) => {
 };
 
 // ---------------------------------------------------------------------------
+// Story 8.3: disposition, partial split, NCR outcomes (FR-Q-05, FR-Q-06)
+// ---------------------------------------------------------------------------
+
+/** The task-scoped disposition view every Story 8.3 write route echoes back. */
+async function dispositionView(task: {
+  task_id: string;
+  lot_id: string;
+}): Promise<Record<string, unknown>> {
+  const refreshed = await getQcInspectionTaskById(task.task_id);
+  const disposition = await getQcLotDispositionByLotId(task.lot_id);
+  const ncr = await getQcNcrByLotId(task.lot_id);
+  const children = await listQcLotSplitsByParent(task.lot_id);
+  return {
+    task: refreshed,
+    disposition,
+    ncr,
+    ...(children.length > 0 ? { splits: children } : {}),
+  };
+}
+
+const recordDispositionBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let taskId = '';
+  let lotId: string | null = null;
+  let siteId: string | undefined;
+  try {
+    taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    lotId = task.lot_id;
+    siteId = task.site_id;
+    assertWriteSiteAccess(req, task.site_id);
+
+    const disposition = body['disposition'];
+    if (typeof disposition !== 'string' || !LOT_DISPOSITIONS.has(disposition)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'disposition must be one of: accept, reject');
+    }
+    if (typeof body['justification'] !== 'string' || body['justification'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'justification must be a non-empty string');
+    }
+    // Pre-check the inspection axis so the common mistake gets its code without a write attempt;
+    // the seam re-derives the same rule under the lot and gate locks.
+    if (task.task_status !== 'inspected') {
+      throw new AppError(
+        409,
+        'QC_INSPECTION_REQUIRED',
+        'A disposition requires a completed inspection for this lot',
+        { task_id: taskId, lot_id: lotId, task_status: task.task_status },
+      );
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: taskId,
+        event_type: QC_LOT_DISPOSITIONED,
+        payload: {
+          task_id: taskId,
+          lot_id: task.lot_id,
+          disposition_id: randomUUID(),
+          disposition,
+          justification: (body['justification'] as string).trim(),
+          decided_at: optionalTimestamp(body, 'decided_at', now),
+          ...(disposition === 'reject' ? { ncr_id: randomUUID() } : {}),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, QC_LOT_DISPOSITIONED, 'disposition_id');
+    assertTaskReplay(persisted, QC_LOT_DISPOSITIONED, taskId);
+    sendJson(res, 201, { event_id: persisted.event_id, ...(await dispositionView(task)) });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { task_id: taskId, lot_id: lotId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const recordSplitBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let taskId = '';
+  let lotId: string | null = null;
+  let siteId: string | undefined;
+  try {
+    taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    lotId = task.lot_id;
+    siteId = task.site_id;
+    assertWriteSiteAccess(req, task.site_id);
+
+    if (typeof body['justification'] !== 'string' || body['justification'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'justification must be a non-empty string');
+    }
+    const splits = body['splits'];
+    if (!Array.isArray(splits)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'splits must be an array');
+    }
+    if (task.task_status !== 'inspected') {
+      throw new AppError(
+        409,
+        'QC_INSPECTION_REQUIRED',
+        'A split requires a completed inspection for this lot',
+        { task_id: taskId, lot_id: lotId, task_status: task.task_status },
+      );
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: taskId,
+        event_type: QC_LOT_SPLIT_RECORDED,
+        payload: {
+          task_id: taskId,
+          lot_id: task.lot_id,
+          disposition_id: randomUUID(),
+          justification: (body['justification'] as string).trim(),
+          decided_at: optionalTimestamp(body, 'decided_at', now),
+          // Only sequence and quantity survive the seam's shape assert; every child identity is
+          // minted there and written back.
+          splits: splits.map((entry) => {
+            const split = (entry ?? {}) as Record<string, unknown>;
+            return { sequence: split['sequence'], quantity: split['quantity'] };
+          }),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, QC_LOT_SPLIT_RECORDED, 'disposition_id');
+    assertTaskReplay(persisted, QC_LOT_SPLIT_RECORDED, taskId);
+    sendJson(res, 201, { event_id: persisted.event_id, ...(await dispositionView(task)) });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { task_id: taskId, lot_id: lotId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const getDispositionBase: RouteHandler = async (req, res, params) => {
+  try {
+    const taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    assertReadSiteAccess(req, task.site_id);
+    sendJson(res, 200, await dispositionView(task));
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const recordNcrOutcomeBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let ncrId = '';
+  let siteId: string | undefined;
+  try {
+    ncrId = requireUuidParam(params, 'ncrId');
+    const ncr = await getQcNcrById(ncrId);
+    if (!ncr) {
+      throw new AppError(404, 'NCR_NOT_FOUND', 'Non-conformance report not found', {
+        ncr_id: ncrId,
+      });
+    }
+    siteId = ncr.site_id;
+    assertWriteSiteAccess(req, ncr.site_id);
+
+    const outcome = body['outcome'];
+    if (typeof outcome !== 'string' || !NCR_OUTCOMES.has(outcome)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'outcome must be one of: rework, downgrade, scrap');
+    }
+    if (typeof body['outcome_reason'] !== 'string' || body['outcome_reason'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'outcome_reason must be a non-empty string');
+    }
+    if (outcome === 'downgrade') {
+      if (typeof body['downgrade_sku'] !== 'string' || body['downgrade_sku'].trim() === '') {
+        throw new AppError(
+          400,
+          'DOWNGRADE_SKU_REQUIRED',
+          'downgrade_sku is required on a downgrade outcome',
+          { ncr_id: ncrId },
+        );
+      }
+    } else if (body['downgrade_sku'] !== undefined) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'downgrade_sku is only valid on a downgrade outcome',
+        { outcome },
+      );
+    }
+    if (ncr.outcome !== null) {
+      throw new AppError(409, 'NCR_OUTCOME_EXISTS', 'The NCR outcome has already been recorded', {
+        ncr_id: ncrId,
+        outcome: ncr.outcome,
+      });
+    }
+
+    const decidedAt = optionalTimestamp(body, 'decided_at', now);
+    const idempotencyKey = idempotencyKeyFrom(body);
+    // A rework outcome mints the companion event id up front: the outcome applier stores it on the
+    // NCR and the qc.rework_requested applier refuses any event the NCR does not already name.
+    const reworkEventId = outcome === 'rework' ? randomUUID() : null;
+    // The outcome event's own id is minted up front too, so replay is detected by comparing it to
+    // what persistEvent actually persisted (its own idempotency-key/event_id pre-check plus 23505
+    // race handling is the single race-free source of truth) rather than by a separate check-then-
+    // act SELECT, which two concurrent same-key requests could both pass before either commits.
+    const outcomeEventId = randomUUID();
+
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      const persisted = await persistEvent(
+        {
+          event_id: outcomeEventId,
+          stream_type: 'qc',
+          stream_id: ncrId,
+          event_type: QC_NCR_OUTCOME_RECORDED,
+          payload: {
+            ncr_id: ncrId,
+            lot_id: ncr.lot_id,
+            outcome,
+            outcome_reason: (body['outcome_reason'] as string).trim(),
+            decided_at: decidedAt,
+            ...(outcome === 'downgrade'
+              ? { downgrade_sku: (body['downgrade_sku'] as string).trim() }
+              : {}),
+            ...(reworkEventId ? { rework_event_id: reworkEventId } : {}),
+          },
+          metadata: qcMetadata(actor, now),
+          idempotency_key: idempotencyKey,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
+        auditCtxFor(req, actor, 201),
+        client,
+      );
+      if (persisted.event_type !== QC_NCR_OUTCOME_RECORDED) {
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'This idempotency key is already in use by a different event',
+          { existing_event_id: persisted.event_id, existing_event_type: persisted.event_type },
+        );
+      }
+      const replayed = persisted.event_id !== outcomeEventId;
+      if (reworkEventId !== null && !replayed) {
+        const decided = await getQcNcrById(ncrId, client);
+        await persistEvent(
+          {
+            event_id: reworkEventId,
+            stream_type: 'qc',
+            stream_id: ncrId,
+            event_type: QC_REWORK_REQUESTED,
+            payload: {
+              ncr_id: ncrId,
+              lot_id: ncr.lot_id,
+              lot_number: ncr.lot_number,
+              task_id: ncr.task_id,
+              sku: ncr.sku,
+              site_id: ncr.site_id,
+              quantity: ncr.quantity,
+              plan_version_id: (await requireTask(ncr.task_id)).plan_version_id,
+              requested_by: actor.userId,
+              requested_at: decided?.outcome_at ?? decidedAt,
+            },
+            metadata: { ...qcMetadata(actor, now), causation_id: persisted.event_id },
+            idempotency_key: null,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
+          auditCtxFor(req, actor, 201),
+          client,
+        );
+      }
+      await client.query('COMMIT');
+      const refreshed = await getQcNcrById(ncrId);
+      sendJson(res, replayed ? 200 : 201, { event_id: persisted.event_id, ncr: refreshed });
+    } catch (err: unknown) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { ncr_id: ncrId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const listNcrsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const siteId = url.searchParams.get('site_id');
+  const outcome = url.searchParams.get('outcome');
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+  try {
+    if (siteId !== null && !isUuid(siteId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'site_id must be a UUID');
+    }
+    if (outcome !== null && outcome !== 'open' && !NCR_OUTCOMES.has(outcome)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'outcome must be one of: open, rework, downgrade, scrap',
+      );
+    }
+    if (
+      (limitRaw !== null && !/^\d+$/.test(limitRaw)) ||
+      (offsetRaw !== null && !/^\d+$/.test(offsetRaw))
+    ) {
+      throw new AppError(400, 'INVALID_PARAMS', 'limit and offset must be non-negative integers');
+    }
+    const scoped = scopedSiteIds(req, siteId);
+    if (scoped === null) {
+      sendJson(res, 200, { ncrs: [] });
+      return;
+    }
+    const ncrs = await listQcNcrs({
+      ...scoped,
+      ...(outcome === null ? {} : { outcome: outcome as QcNcrOutcome | 'open' }),
+      limit: limitRaw === null ? undefined : Number(limitRaw),
+      offset: offsetRaw === null ? undefined : Number(offsetRaw),
+    });
+    sendJson(res, 200, { ncrs });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const getNcrBase: RouteHandler = async (req, res, params) => {
+  try {
+    const ncrId = requireUuidParam(params, 'ncrId');
+    const ncr = await getQcNcrById(ncrId);
+    if (!ncr) {
+      throw new AppError(404, 'NCR_NOT_FOUND', 'Non-conformance report not found', {
+        ncr_id: ncrId,
+      });
+    }
+    assertReadSiteAccess(req, ncr.site_id);
+    sendJson(res, 200, { ncr });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Exports (module `qc`)
 // ---------------------------------------------------------------------------
 
@@ -1410,3 +1801,18 @@ export const listSamplingStatesHandler = requireRole({ module: 'qc', functionSco
 export const adjustSamplingStateHandler = requireRole({ module: 'qc', functionScope: 'write' })(
   adjustSamplingStateBase,
 );
+// Story 8.3
+export const recordDispositionHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  recordDispositionBase,
+);
+export const recordSplitHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  recordSplitBase,
+);
+export const getDispositionHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  getDispositionBase,
+);
+export const recordNcrOutcomeHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  recordNcrOutcomeBase,
+);
+export const listQcNcrsHandler = requireRole({ module: 'qc', functionScope: 'read' })(listNcrsBase);
+export const getQcNcrHandler = requireRole({ module: 'qc', functionScope: 'read' })(getNcrBase);

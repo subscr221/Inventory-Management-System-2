@@ -2,7 +2,12 @@ import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { sendJson, sendRequestError } from '../../middleware/error.js';
-import { getAuthContext, getAuthorizedAssignment, getTraceId } from '../../middleware/context.js';
+import {
+  getAuthContext,
+  getAuthorizedAssignment,
+  getParsedBody,
+  getTraceId,
+} from '../../middleware/context.js';
 import { requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -10,6 +15,7 @@ import { getSupplierById } from '../../read/projections/supplier.js';
 import { getGrnById } from '../../read/projections/grn.js';
 import { getPurchaseOrderById } from '../../read/projections/purchase_order.js';
 import { getMatchById } from '../../read/projections/three_way_match.js';
+import { getQcLotDispositionById } from '../../read/projections/qc_lot_disposition.js';
 import {
   getScorecardSummary,
   listScorecardMetrics,
@@ -26,8 +32,8 @@ import { config } from '../../config/index.js';
 /**
  * Story 4.2: supplier performance scorecard HTTP surface - the consolidated scorecard read, the
  * drill-through read, and the three thin metric write routes (on-time delivery, price variance,
- * responsiveness). Quality acceptance deliberately has NO write route: Epic 8 Story 8.3 is its
- * only legitimate source and it is not built (AC2).
+ * responsiveness) plus the Story 8.3 quality-acceptance route, whose only legitimate source -
+ * a qc_lot_disposition row - exists now that lot disposition has landed.
  *
  * The write routes are convenience entry points, not enforcement points: they load the source
  * record, compute the candidate value in SQL NUMERIC, and call persistEvent. The compliance seam
@@ -548,6 +554,105 @@ export const recordResponsivenessMetricBase: RouteHandler = async (req, res, par
   });
 };
 
+/**
+ * Story 8.3 (AC 8): the quality-acceptance write route Story 4.2 deliberately left unbuilt. Its
+ * source is a qc_lot_disposition row, which is why it could not exist before lot disposition
+ * landed.
+ *
+ * The caller supplies supplier_id: a QC inspection task carries no supplier link (the job-work
+ * order that would provide one is Epic 9), so the platform does not invent one. Everything else -
+ * the value, the business date and the reference event - is derived from the governed projection
+ * here and re-derived under lock by the seam, which rejects a disagreement with
+ * SCORECARD_DERIVATION_MISMATCH and a conditional_release or split reference with
+ * SCORECARD_REFERENCE_INVALID.
+ */
+export const recordQualityAcceptanceMetricBase: RouteHandler = async (req, res, params) => {
+  const dispositionId = params['dispositionId'];
+  if (!dispositionId || !UUID_REGEX.test(dispositionId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'dispositionId must be a UUID', {
+      disposition_id: dispositionId,
+    });
+    return;
+  }
+  const body = (getParsedBody(req) as Record<string, unknown> | undefined) ?? {};
+  const supplierId = body['supplier_id'];
+  if (typeof supplierId !== 'string' || !UUID_REGEX.test(supplierId)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplier_id must be a UUID', {
+      supplier_id: supplierId ?? null,
+    });
+    return;
+  }
+  const supplier = await getSupplierById(supplierId);
+  if (!supplier) {
+    sendRequestError(req, res, 404, 'SUPPLIER_NOT_FOUND', 'Supplier not found', {
+      supplier_id: supplierId,
+    });
+    return;
+  }
+  const disposition = await getQcLotDispositionById(dispositionId);
+  if (!disposition) {
+    sendRequestError(req, res, 404, 'DISPOSITION_NOT_FOUND', 'Lot disposition not found', {
+      disposition_id: dispositionId,
+    });
+    return;
+  }
+  if (disposition.disposition !== 'accept' && disposition.disposition !== 'reject') {
+    sendRequestError(
+      req,
+      res,
+      409,
+      'SCORECARD_REFERENCE_INVALID',
+      'Quality acceptance is measured from accept and reject dispositions only',
+      { disposition_id: dispositionId, disposition: disposition.disposition },
+    );
+    return;
+  }
+
+  const valueNum = disposition.disposition === 'accept' ? '1.000000' : '0.000000';
+  const actor = actorContext(req);
+  const occurredAt = new Date().toISOString();
+  const persisted = await persistEvent(
+    {
+      stream_type: 'procurement',
+      stream_id: disposition.lot_id,
+      event_type: 'supplier_scorecard.metric_recorded',
+      event_id: randomUUID(),
+      payload: {
+        metric_id: randomUUID(),
+        supplier_id: supplierId,
+        metric_kind: 'quality_acceptance',
+        reference_event_id: disposition.source_event_id,
+        reference_entity_id: disposition.disposition_id,
+        value_num: valueNum,
+        context: {
+          disposition: disposition.disposition,
+          disposition_id: disposition.disposition_id,
+          lot_id: disposition.lot_id,
+          task_id: disposition.task_id,
+          quantity: disposition.quantity,
+        },
+        business_date: toIstCalendarDate(new Date(disposition.decided_at)),
+      },
+      metadata: eventMetadata(actor, occurredAt),
+      idempotency_key: `scorecard-quality-acceptance-${disposition.disposition_id}`,
+    },
+    auditCtxFor(req, actor, 201),
+  );
+
+  // The idempotency key is derived from disposition_id alone, so a replay with a different
+  // supplier_id in the body must still report the supplier_id that was actually persisted, not
+  // the (discarded) value from this request's body.
+  const persistedPayload = persisted.payload as Record<string, unknown>;
+  sendJson(res, 201, {
+    event_id: persisted.event_id,
+    supplier_id: persistedPayload['supplier_id'] as string,
+    metric_kind: 'quality_acceptance',
+    value_num: persistedPayload['value_num'] as string,
+    disposition_id: disposition.disposition_id,
+    disposition: disposition.disposition,
+  });
+};
+
 // ---------------------------------------------------------------------------
 // RBAC-wrapped handlers. Reads are procurement/read, writes procurement/write - no role-name
 // literal appears anywhere in this file.
@@ -577,3 +682,8 @@ export const recordResponsivenessMetricHandler: RouteHandler = requireRole({
   module: 'procurement',
   functionScope: 'write',
 })(recordResponsivenessMetricBase);
+
+export const recordQualityAcceptanceMetricHandler: RouteHandler = requireRole({
+  module: 'procurement',
+  functionScope: 'write',
+})(recordQualityAcceptanceMetricBase);

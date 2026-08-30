@@ -12,7 +12,8 @@ import { getPool } from '../../config/db.js';
  */
 
 export type QcDeviationScopeKind = 'internal_movement' | 'order_allocation' | 'dispatch';
-export type QcDisposition = 'conditional_release';
+export type QcDisposition = 'conditional_release' | 'accept' | 'reject' | 'split';
+export type QcSamplingOutcomeSnapshot = 'accepted' | 'not_accepted';
 
 export interface QcDeviationRow {
   deviation_id: string;
@@ -44,10 +45,19 @@ export interface QcLotDispositionRow {
   requested_by: string;
   inspector_user_id: string | null;
   approved_by: string;
-  doa_entry_id: string;
+  /**
+   * Story 8.3 (Binding Scope Decision 5): the DOA gate belongs to the conditional-release
+   * exception path only, so this is null for accept, reject and split.
+   * chk_qc_lot_disposition_doa_pairing enforces the pairing in the database.
+   */
+  doa_entry_id: string | null;
   decided_at: string;
   source_event_id: string;
   created_at: string;
+  /** Story 8.3: the task's sampling outcome at the moment of decision, or null when uninspected. */
+  sampling_outcome: QcSamplingOutcomeSnapshot | null;
+  /** Story 8.3: the NCR raised by a reject disposition; null for every other disposition. */
+  ncr_id: string | null;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -64,7 +74,7 @@ const DEVIATION_COLUMNS = `deviation_id, task_id, lot_id, deviation_type, justif
 
 const DISPOSITION_COLUMNS = `disposition_id, lot_id, task_id, disposition, deviation_id, plan_version_id,
     quantity::text AS quantity, requested_by, inspector_user_id, approved_by, doa_entry_id, decided_at,
-    source_event_id, created_at`;
+    source_event_id, created_at, sampling_outcome, ncr_id`;
 
 const toIso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
 
@@ -101,10 +111,12 @@ function mapDisposition(row: Record<string, unknown>): QcLotDispositionRow {
     requested_by: row['requested_by'] as string,
     inspector_user_id: (row['inspector_user_id'] as string | null) ?? null,
     approved_by: row['approved_by'] as string,
-    doa_entry_id: row['doa_entry_id'] as string,
+    doa_entry_id: (row['doa_entry_id'] as string | null) ?? null,
     decided_at: toIso(row['decided_at']),
     source_event_id: row['source_event_id'] as string,
     created_at: toIso(row['created_at']),
+    sampling_outcome: (row['sampling_outcome'] as QcSamplingOutcomeSnapshot | null) ?? null,
+    ncr_id: (row['ncr_id'] as string | null) ?? null,
   };
 }
 
@@ -180,8 +192,8 @@ export async function insertQcLotDisposition(
   await client.query(
     `INSERT INTO qc_lot_disposition (disposition_id, lot_id, task_id, disposition, deviation_id,
        plan_version_id, quantity, requested_by, inspector_user_id, approved_by, doa_entry_id, decided_at,
-       source_event_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8, $9, $10, $11, $12, $13)`,
+       source_event_id, sampling_outcome, ncr_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8, $9, $10, $11, $12, $13, $14, $15)`,
     [
       row.disposition_id,
       row.lot_id,
@@ -196,6 +208,8 @@ export async function insertQcLotDisposition(
       row.doa_entry_id,
       row.decided_at,
       row.source_event_id,
+      row.sampling_outcome,
+      row.ncr_id,
     ],
   );
 }

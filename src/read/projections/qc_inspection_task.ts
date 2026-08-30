@@ -8,7 +8,10 @@ import { getPool } from '../../config/db.js';
  * runs under the row's FOR UPDATE lock (app_user holds UPDATE on this table alone in the family).
  *
  * QC_GATE_BLOCKED_STATUSES is the vocabulary every lot-consumption path treats as "not released":
- * both Story 8.1 states. Story 8.3 introduces the accepted state that leaves this set.
+ * both Story 8.1 states plus the two terminal Story 8.3 states. 'accepted' is the ONE gate status
+ * that leaves this set (Story 8.3 Binding Scope Decision 3); 'rejected' blocks because the lot is
+ * pending its NCR outcome, and 'split' blocks because the parent's quantity now lives on its
+ * children. Never write a gate-status literal outside this module - splice these constants.
  *
  * qcGateExclusionSql is the SQL predicate the Epic 2 ledger helpers splice into their drain windows
  * (Task 6): a stock_balance row whose lot_id (the lot NUMBER) belongs to a lot with a gated task is
@@ -17,7 +20,12 @@ import { getPool } from '../../config/db.js';
  * qc_gate_cleared so a permitted conditionally-released internal movement is not re-excluded.
  */
 
-export type QcGateStatus = 'qc_hold' | 'conditionally_released';
+export type QcGateStatus =
+  | 'qc_hold'
+  | 'conditionally_released'
+  | 'accepted'
+  | 'rejected'
+  | 'split';
 /** Story 8.2 (Binding Scope Decision 5): the inspection axis, independent of the gate axis. */
 export type QcTaskStatus = 'open' | 'sampling_determined' | 'inspected';
 export type QcSamplingOutcome = 'accepted' | 'not_accepted';
@@ -26,7 +34,17 @@ export type QcSourceCompletionType = 'synthetic_completion' | 'production_order'
 export const QC_GATE_BLOCKED_STATUSES: readonly QcGateStatus[] = [
   'qc_hold',
   'conditionally_released',
+  'rejected',
+  'split',
 ];
+
+/**
+ * The blocked states that a per-lot assertQcGateAllows pass can NOT clear. A conditional release is
+ * clearable (the deviation names the movement); a hold, a rejection and a split are not.
+ */
+export const QC_GATE_HARD_BLOCKED_STATUSES: readonly QcGateStatus[] = QC_GATE_BLOCKED_STATUSES.filter(
+  (status) => status !== 'conditionally_released',
+);
 
 export interface QcInspectionTaskRow {
   task_id: string;
@@ -320,7 +338,8 @@ export async function transitionQcTaskStatus(
  * (defense in depth).
  */
 export function qcGateExclusionSql(alias: string, cleared: boolean): string {
-  const statuses = cleared ? `('qc_hold')` : `('qc_hold', 'conditionally_released')`;
+  const vocabulary = cleared ? QC_GATE_HARD_BLOCKED_STATUSES : QC_GATE_BLOCKED_STATUSES;
+  const statuses = `(${vocabulary.map((status) => `'${status}'`).join(', ')})`;
   return `NOT EXISTS (
       SELECT 1 FROM qc_inspection_task qt
        WHERE qt.lot_number = ${alias}.lot_id

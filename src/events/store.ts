@@ -1588,9 +1588,20 @@ export async function persistEvent(
         constraint === 'uq_qc_lot_disposition_lot' ||
         constraint === 'qc_lot_disposition_pkey' ||
         constraint === 'uq_qc_deviation_task_type' ||
-        constraint === 'qc_deviation_pkey'
+        constraint === 'qc_deviation_pkey' ||
+        // Story 8.3: a raced split loses on one of its own child grains before it loses on the
+        // parent's 'split' disposition row; both are the same fact for the caller.
+        constraint === 'uq_qc_lot_split_child' ||
+        constraint === 'uq_qc_lot_split_sequence' ||
+        constraint === 'qc_lot_split_pkey' ||
+        // Story 8.3 (Annex requirement 8): one NCR per rejected lot. The reject disposition raises
+        // it, so a raced second reject surfaces here with the same existing_disposition_id the
+        // sequential DISPOSITION_EXISTS pre-check would name - same code, same shape.
+        constraint === 'uq_qc_ncr_lot' ||
+        constraint === 'uq_qc_ncr_disposition' ||
+        constraint === 'qc_ncr_pkey'
       ) {
-        // Story 8.1 (Binding Scope Decision 4): one disposition per unsplit lot. A sequential or
+        // Story 8.1 (Binding Scope Decision 4): one disposition per lot. A sequential or
         // concurrent second disposition is DISPOSITION_EXISTS with the existing_disposition_id.
         throw new AppError(
           409,

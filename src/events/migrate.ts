@@ -183,6 +183,14 @@ const MIGRATIONS = [
   '../../read/projections/qc_sampling_plan.sql',
   '../../read/projections/qc_inspection_result.sql',
   '../../read/projections/qc_sampling_switching_state.sql',
+  // Story 8.3: the parent-to-child split linkage and the non-conformance report for FR-Q-05 and
+  // FR-Q-06. Appended at the tail after the Story 8.2 files; the Story 8.3 widening of
+  // qc_inspection_task (gate vocabulary) and qc_lot_disposition (disposition vocabulary, nullable
+  // doa_entry_id, sampling_outcome and ncr_id) rides those files' guarded blocks above, so
+  // qc_lot_disposition.sql MUST stay ahead of these two. Neither carries an FK, so the order
+  // between them is logical.
+  '../../read/projections/qc_lot_split.sql',
+  '../../read/projections/qc_ncr.sql',
 ];
 
 async function migrate(): Promise<void> {

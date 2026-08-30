@@ -495,6 +495,14 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/qc/tasks/:taskId/inspection-completion',
       'GET /api/v1/qc/sampling-states',
       'POST /api/v1/qc/sampling-states/:planId/sites/:siteId/actions',
+      // Story 8.3: Lot Disposition - Accept, Reject, Conditional Release
+      'POST /api/v1/qc/tasks/:taskId/disposition',
+      'GET /api/v1/qc/tasks/:taskId/disposition',
+      'POST /api/v1/qc/tasks/:taskId/split',
+      'GET /api/v1/qc/ncrs',
+      'GET /api/v1/qc/ncrs/:ncrId',
+      'POST /api/v1/qc/ncrs/:ncrId/outcome',
+      'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',
       // Story 6.1: Production Order Creation and Release Gate
       'POST /api/v1/production-orders',
       'GET /api/v1/production-orders',

@@ -1,10 +1,16 @@
+import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { config } from '../config/index.js';
 import { isValidCalendarDate, toIstCalendarDate } from '../lib/business-days.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
-import { getItemById } from '../read/projections/item_master.js';
+import { getItemById, itemExistsBySku } from '../read/projections/item_master.js';
+import {
+  createLot,
+  lotExistsByNumberAndSku,
+  placeQualityHold,
+} from '../read/projections/lot_master.js';
 import { getBomById, getBomRevisionById } from '../read/projections/bom.js';
 import { assertNotRdDraft } from './bom.js';
 import {
@@ -82,6 +88,20 @@ import {
   isInspectionLevel,
   tighterAql,
 } from '../quality/aql-tables.js';
+import {
+  insertQcNcr,
+  getQcNcrById,
+  setQcNcrOutcome,
+} from '../read/projections/qc_ncr.js';
+import { insertQcLotSplit } from '../read/projections/qc_lot_split.js';
+import {
+  appendRelabelTrace,
+  availableScaled,
+  fromScaledQuantity,
+  lockOwnedLotGrains,
+  relabelLotQuantity,
+  toScaledQuantity,
+} from '../quality/lot-split.js';
 
 /**
  * Story 8.1 compliance seam for the inspection-plan family and the QC gate (FR-Q-01, FR-Q-02,
@@ -123,6 +143,12 @@ export const QC_RESULT_RECORDED = 'qc.result_recorded';
 export const QC_OBSERVATION_RECORDED = 'qc.observation_recorded';
 export const QC_INSPECTION_COMPLETED = 'qc.inspection_completed';
 export const QC_SAMPLING_STATE_ADJUSTED = 'qc.sampling_state_adjusted';
+// Story 8.3 (FR-Q-05, FR-Q-06): the accept/reject disposition, the partial split, the once-only
+// NCR outcome and the rework integration contract Story 6.3 subscribes to.
+export const QC_LOT_DISPOSITIONED = 'qc.lot_dispositioned';
+export const QC_LOT_SPLIT_RECORDED = 'qc.lot_split_recorded';
+export const QC_NCR_OUTCOME_RECORDED = 'qc.ncr_outcome_recorded';
+export const QC_REWORK_REQUESTED = 'qc.rework_requested';
 export const QUALITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   INSPECTION_PLAN_CREATED,
   INSPECTION_PLAN_APPROVED,
@@ -133,6 +159,10 @@ export const QUALITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   QC_OBSERVATION_RECORDED,
   QC_INSPECTION_COMPLETED,
   QC_SAMPLING_STATE_ADJUSTED,
+  QC_LOT_DISPOSITIONED,
+  QC_LOT_SPLIT_RECORDED,
+  QC_NCR_OUTCOME_RECORDED,
+  QC_REWORK_REQUESTED,
 ]);
 /**
  * Story 8.1 Binding Scope Decision 9 / Story 8.2 Binding Scope Decision 8: every QC command is
@@ -167,6 +197,15 @@ export const SOURCE_COMPLETION_TYPES: ReadonlySet<string> = new Set([
 ]);
 export const MAX_CHARACTERISTICS = 500;
 const MAX_TEXT_2000 = 2000;
+
+// Story 8.3 (FR-Q-05, FR-Q-06).
+export const LOT_DISPOSITIONS: ReadonlySet<string> = new Set(['accept', 'reject']);
+export const NCR_OUTCOMES: ReadonlySet<string> = new Set(['rework', 'downgrade', 'scrap']);
+/** Annex requirement 4: a split produces at least two and at most twenty children. */
+export const MIN_SPLIT_CHILDREN = 2;
+export const MAX_SPLIT_CHILDREN = 20;
+/** Annex requirement 9 (scrap): the reason stamped on the lot's independent hold axis. */
+export const SCRAP_PENDING_HOLD_REASON = 'scrap_pending';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // An explicit UTC offset is REQUIRED (the Story 7.2 offset lesson).
@@ -897,6 +936,252 @@ function assertSamplingStateAdjustedShape(envelope: EventEnvelope): void {
   );
 }
 
+/**
+ * Story 8.3 (FR-Q-05, AC 1). Client fields: task_id (= stream_id), lot_id, the minted
+ * disposition_id, the accept/reject choice, a justification and the decision instant. A reject
+ * additionally carries the minted ncr_id; an accept must not. Everything else is derived under the
+ * lot and task locks.
+ */
+function assertLotDispositionedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['task_id'])) reject('INVALID_PAYLOAD', 'task_id must be a UUID');
+  if (envelope.stream_id !== p['task_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the task_id for qc.lot_dispositioned', {
+      stream_id: envelope.stream_id,
+      payload_task_id: p['task_id'],
+    });
+  }
+  if (!isUuid(p['lot_id'])) reject('INVALID_PAYLOAD', 'lot_id must be a UUID');
+  if (!isUuid(p['disposition_id'])) reject('INVALID_PAYLOAD', 'disposition_id must be a UUID');
+  if (typeof p['disposition'] !== 'string' || !LOT_DISPOSITIONS.has(p['disposition'])) {
+    reject('INVALID_PAYLOAD', 'disposition must be one of: accept, reject');
+  }
+  if (!isBoundedText(p['justification'], MAX_TEXT_2000)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `justification must be a non-empty string of at most ${MAX_TEXT_2000} characters`,
+    );
+  }
+  if (!isIsoTimestamp(p['decided_at'])) {
+    reject('INVALID_PAYLOAD', 'decided_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  // The NCR is created BY the reject (Annex requirement 8), so its identity travels with the event
+  // and an accept may never carry one - the qc_lot_disposition ncr pairing check mirrors this.
+  if (p['disposition'] === 'reject') {
+    if (!isUuid(p['ncr_id'])) {
+      reject('INVALID_PAYLOAD', 'ncr_id must be a UUID on a reject disposition');
+    }
+  } else if (p['ncr_id'] !== undefined && p['ncr_id'] !== null) {
+    reject('INVALID_PAYLOAD', 'ncr_id is only valid on a reject disposition', {
+      disposition: p['disposition'],
+    });
+  }
+  rejectDeclaredDerived(
+    p,
+    [
+      'lot_number',
+      'sku',
+      'site_id',
+      'plan_version_id',
+      'quantity',
+      'sampling_outcome',
+      'requested_by',
+      'approved_by',
+      'inspector_user_id',
+      'previous_gate_status',
+      'gate_status',
+    ],
+    QC_LOT_DISPOSITIONED,
+  );
+}
+
+/**
+ * Story 8.3 (FR-Q-05, AC 2). The client sends only the split shares. Quantities are validated as
+ * decimal strings here; the sum-equals-parent check needs the task row and therefore runs in the
+ * applier under the lock (QC_SPLIT_QUANTITY_MISMATCH).
+ */
+function assertLotSplitRecordedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['task_id'])) reject('INVALID_PAYLOAD', 'task_id must be a UUID');
+  if (envelope.stream_id !== p['task_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the task_id for qc.lot_split_recorded', {
+      stream_id: envelope.stream_id,
+      payload_task_id: p['task_id'],
+    });
+  }
+  if (!isUuid(p['lot_id'])) reject('INVALID_PAYLOAD', 'lot_id must be a UUID');
+  if (!isUuid(p['disposition_id'])) reject('INVALID_PAYLOAD', 'disposition_id must be a UUID');
+  if (!isBoundedText(p['justification'], MAX_TEXT_2000)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `justification must be a non-empty string of at most ${MAX_TEXT_2000} characters`,
+    );
+  }
+  if (!isIsoTimestamp(p['decided_at'])) {
+    reject('INVALID_PAYLOAD', 'decided_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  const splits = p['splits'];
+  if (
+    !Array.isArray(splits) ||
+    splits.length < MIN_SPLIT_CHILDREN ||
+    splits.length > MAX_SPLIT_CHILDREN
+  ) {
+    reject(
+      'QC_SPLIT_INVALID',
+      `splits must be an array of ${MIN_SPLIT_CHILDREN} to ${MAX_SPLIT_CHILDREN} entries`,
+      { split_count: Array.isArray(splits) ? splits.length : null },
+    );
+  }
+  const seen = new Set<number>();
+  for (const [index, entry] of (splits as unknown[]).entries()) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      reject('QC_SPLIT_INVALID', 'every split entry must be an object', { index });
+    }
+    const split = entry as Record<string, unknown>;
+    const sequence = split['sequence'];
+    if (typeof sequence !== 'number' || !Number.isSafeInteger(sequence) || sequence < 1) {
+      reject('QC_SPLIT_INVALID', 'every split sequence must be a positive integer', { index });
+    }
+    if (seen.has(sequence as number)) {
+      reject('QC_SPLIT_INVALID', 'split sequences must be unique', { sequence });
+    }
+    seen.add(sequence as number);
+    if (!isPositiveQuantity(split['quantity'])) {
+      reject('QC_SPLIT_INVALID', 'every split quantity must be a positive decimal string', {
+        index,
+        quantity: split['quantity'] ?? null,
+      });
+    }
+    rejectDeclaredDerived(
+      split,
+      ['lot_id', 'lot_number', 'task_id', 'source_completion_id'],
+      QC_LOT_SPLIT_RECORDED,
+    );
+  }
+  // Contiguous 1-based sequences (Annex requirement 4): the child lot-number suffix is derived from
+  // the sequence, so a gap would mint non-contiguous lot numbers for a single split.
+  for (let expected = 1; expected <= (splits as unknown[]).length; expected += 1) {
+    if (!seen.has(expected)) {
+      reject('QC_SPLIT_INVALID', 'split sequences must be contiguous starting at 1', {
+        missing_sequence: expected,
+      });
+    }
+  }
+  rejectDeclaredDerived(
+    p,
+    [
+      'lot_number',
+      'sku',
+      'site_id',
+      'plan_version_id',
+      'quantity',
+      'requested_by',
+      'approved_by',
+      'inspector_user_id',
+      'previous_gate_status',
+      'gate_status',
+    ],
+    QC_LOT_SPLIT_RECORDED,
+  );
+}
+
+/** Story 8.3 (FR-Q-06, AC 3, AC 4 and AC 5): the once-only NCR outcome. */
+function assertNcrOutcomeRecordedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['ncr_id'])) reject('INVALID_PAYLOAD', 'ncr_id must be a UUID');
+  if (envelope.stream_id !== p['ncr_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the ncr_id for qc.ncr_outcome_recorded', {
+      stream_id: envelope.stream_id,
+      payload_ncr_id: p['ncr_id'],
+    });
+  }
+  if (!isUuid(p['lot_id'])) reject('INVALID_PAYLOAD', 'lot_id must be a UUID');
+  if (typeof p['outcome'] !== 'string' || !NCR_OUTCOMES.has(p['outcome'])) {
+    reject('INVALID_PAYLOAD', 'outcome must be one of: rework, downgrade, scrap');
+  }
+  if (!isBoundedText(p['outcome_reason'], MAX_TEXT_2000)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `outcome_reason must be a non-empty string of at most ${MAX_TEXT_2000} characters`,
+    );
+  }
+  if (!isIsoTimestamp(p['decided_at'])) {
+    reject('INVALID_PAYLOAD', 'decided_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  if (p['outcome'] === 'downgrade') {
+    if (!isBoundedText(p['downgrade_sku'], 128)) {
+      reject(
+        'DOWNGRADE_SKU_REQUIRED',
+        'downgrade_sku is required on a downgrade outcome and must be a non-empty string of at most 128 characters',
+      );
+    }
+  } else if (p['downgrade_sku'] !== undefined) {
+    reject('INVALID_PAYLOAD', 'downgrade_sku is only valid on a downgrade outcome', {
+      outcome: p['outcome'],
+    });
+  }
+  if (p['outcome'] === 'rework') {
+    if (!isUuid(p['rework_event_id'])) {
+      reject(
+        'INVALID_PAYLOAD',
+        'rework_event_id must be a UUID on a rework outcome (it is the id of the companion qc.rework_requested event)',
+      );
+    }
+  } else if (p['rework_event_id'] !== undefined) {
+    reject('INVALID_PAYLOAD', 'rework_event_id is only valid on a rework outcome', {
+      outcome: p['outcome'],
+    });
+  }
+  rejectDeclaredDerived(
+    p,
+    [
+      'task_id',
+      'lot_number',
+      'sku',
+      'site_id',
+      'quantity',
+      'outcome_by',
+      'downgrade_lot_id',
+      'downgrade_lot_number',
+      'rework_requested_event_id',
+      'quality_hold_status',
+    ],
+    QC_NCR_OUTCOME_RECORDED,
+  );
+}
+
+/**
+ * Story 8.3 (FR-Q-06, AC 5): the rework integration contract. EVERY field is derived, so this
+ * assert only checks the shape is complete and well-formed; the applier re-derives all ten values
+ * from the NCR and the task and rejects any disagreement (QC_DERIVATION_MISMATCH), and refuses the
+ * event entirely unless the owning NCR already names this event id (QC_REWORK_NOT_DERIVED).
+ */
+function assertReworkRequestedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['ncr_id'])) reject('INVALID_PAYLOAD', 'ncr_id must be a UUID');
+  if (envelope.stream_id !== p['ncr_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the ncr_id for qc.rework_requested', {
+      stream_id: envelope.stream_id,
+      payload_ncr_id: p['ncr_id'],
+    });
+  }
+  for (const field of ['lot_id', 'task_id', 'site_id', 'plan_version_id', 'requested_by']) {
+    if (!isUuid(p[field])) reject('INVALID_PAYLOAD', `${field} must be a UUID`);
+  }
+  if (!isBoundedText(p['lot_number'], 128)) {
+    reject('INVALID_PAYLOAD', 'lot_number must be a non-empty string of at most 128 characters');
+  }
+  if (!isBoundedText(p['sku'], 128)) {
+    reject('INVALID_PAYLOAD', 'sku must be a non-empty string of at most 128 characters');
+  }
+  if (!isPositiveQuantity(p['quantity'])) {
+    reject('INVALID_PAYLOAD', 'quantity must be a positive decimal string');
+  }
+  if (!isIsoTimestamp(p['requested_at'])) {
+    reject('INVALID_PAYLOAD', 'requested_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+}
+
 export function assertQualityShape(envelope: EventEnvelope): void {
   assertQualityForeignStreamRejected(envelope);
   switch (qualityEventType(envelope)) {
@@ -926,6 +1211,18 @@ export function assertQualityShape(envelope: EventEnvelope): void {
       return;
     case QC_SAMPLING_STATE_ADJUSTED:
       assertSamplingStateAdjustedShape(envelope);
+      return;
+    case QC_LOT_DISPOSITIONED:
+      assertLotDispositionedShape(envelope);
+      return;
+    case QC_LOT_SPLIT_RECORDED:
+      assertLotSplitRecordedShape(envelope);
+      return;
+    case QC_NCR_OUTCOME_RECORDED:
+      assertNcrOutcomeRecordedShape(envelope);
+      return;
+    case QC_REWORK_REQUESTED:
+      assertReworkRequestedShape(envelope);
       return;
     default:
       return;
@@ -1804,6 +2101,10 @@ async function applyConditionalReleaseRecorded(
       doa_entry_id: authority.doa_entry_id,
       decided_at: decidedAt,
       source_event_id: eventId,
+      // Story 8.3 additive columns: a conditional release is decided before inspection completes,
+      // so the sampling outcome is whatever the task carries (usually null) and no NCR exists.
+      sampling_outcome: task.sampling_outcome,
+      ncr_id: null,
     },
     client,
   );
@@ -1851,6 +2152,757 @@ async function applyConditionalReleaseRecorded(
     },
     client,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Story 8.3 appliers (disposition, partial split, NCR outcomes, rework contract)
+// ---------------------------------------------------------------------------
+
+interface DispositionableLot {
+  lot_id: string;
+  lot_number: string;
+  sku: string;
+  expiry_date: string | null;
+  task: QcInspectionTaskRow;
+  inspector_user_id: string | null;
+}
+
+/**
+ * The shared fail-closed preamble for every Story 8.3 disposition (accept, reject and split).
+ * Locking contract is the platform's fixed order and must not change: the lot row FOR UPDATE, then
+ * the QC-gate row FOR UPDATE, then (for a split) the stock rows.
+ *
+ * Rejection order is deliberate. DISPOSITION_EXISTS is evaluated BEFORE the gate check so a second
+ * attempt on an already-decided lot always reports the disposition, never a gate-state code.
+ */
+async function lockLotForDisposition(
+  lotId: string,
+  taskId: string,
+  client: PoolClient,
+): Promise<DispositionableLot> {
+  const lotResult = await client.query(
+    `SELECT lot_id, lot_number, sku, expiry_date::text AS expiry_date, quality_hold_status
+       FROM lot_master WHERE lot_id = $1 FOR UPDATE`,
+    [lotId],
+  );
+  if (lotResult.rows.length === 0) {
+    reject('LOT_NOT_FOUND', 'The lot does not resolve', { lot_id: lotId }, 404);
+  }
+  const lot = lotResult.rows[0]!;
+  const task = await getQcInspectionTaskByLotId(lotId, client, true);
+  if (!task) {
+    reject('QC_TASK_NOT_FOUND', 'No QC inspection task exists for this lot', { lot_id: lotId }, 404);
+  }
+  if (task.task_id !== taskId) {
+    reject(
+      'QC_DERIVATION_MISMATCH',
+      'The declared task_id is not the inspection task of this lot',
+      { lot_id: lotId, declared_task_id: taskId, task_id: task.task_id },
+      409,
+    );
+  }
+  const existing = await getQcLotDispositionByLotId(lotId, client);
+  if (existing) {
+    reject(
+      'DISPOSITION_EXISTS',
+      'A disposition has already been recorded for this lot',
+      {
+        lot_id: lotId,
+        existing_disposition_id: existing.disposition_id,
+        existing_disposition: existing.disposition,
+      },
+      409,
+    );
+  }
+  if (task.gate_status !== 'qc_hold' && task.gate_status !== 'conditionally_released') {
+    // Belt and braces: the disposition row above is the authoritative guard, so a terminal gate
+    // with no disposition row would be a corrupted projection. Report it as the same code.
+    reject(
+      'DISPOSITION_EXISTS',
+      'The QC gate has already reached a terminal state for this lot',
+      { lot_id: lotId, gate_status: task.gate_status },
+      409,
+    );
+  }
+  if (task.task_status !== 'inspected') {
+    reject(
+      'QC_INSPECTION_REQUIRED',
+      'A disposition requires a completed inspection for this lot',
+      { lot_id: lotId, task_id: task.task_id, task_status: task.task_status },
+      409,
+    );
+  }
+  if (lot['quality_hold_status'] !== 'none') {
+    reject(
+      'LOT_ON_HOLD',
+      'Lot is on quality hold and cannot be dispositioned',
+      { lot_id: lotId, task_id: task.task_id, reason: 'manual_hold' },
+      400,
+    );
+  }
+  const recorders = await knownResultRecorders(task.task_id, client);
+  return {
+    lot_id: lotId,
+    lot_number: lot['lot_number'] as string,
+    sku: lot['sku'] as string,
+    expiry_date: (lot['expiry_date'] as string | null) ?? null,
+    task,
+    inspector_user_id: recorders[0] ?? null,
+  };
+}
+
+/** Story 8.3 (FR-Q-05, AC 1): accept or reject. A reject also raises the one open NCR. */
+async function applyLotDispositioned(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const taskId = p['task_id'] as string;
+  const lotId = p['lot_id'] as string;
+  const dispositionId = p['disposition_id'] as string;
+  const disposition = p['disposition'] as 'accept' | 'reject';
+  const decidedAt = p['decided_at'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+
+  const held = await lockLotForDisposition(lotId, taskId, client);
+  const { task } = held;
+  const ncrId = disposition === 'reject' ? (p['ncr_id'] as string) : null;
+
+  await insertQcLotDisposition(
+    {
+      disposition_id: dispositionId,
+      lot_id: lotId,
+      task_id: taskId,
+      disposition,
+      deviation_id: null,
+      plan_version_id: task.plan_version_id,
+      quantity: task.quantity,
+      requested_by: actorId,
+      inspector_user_id: held.inspector_user_id,
+      approved_by: actorId,
+      // Binding Scope Decision 5: the normal path carries no DOA gate, so nothing fabricates one.
+      doa_entry_id: null,
+      decided_at: decidedAt,
+      source_event_id: eventId,
+      sampling_outcome: task.sampling_outcome,
+      ncr_id: ncrId,
+    },
+    client,
+  );
+
+  if (disposition === 'reject') {
+    // Annex requirement 8: the NCR is created BY the reject, so a rejected lot can never exist
+    // without its NCR record.
+    await insertQcNcr(
+      {
+        ncr_id: ncrId!,
+        lot_id: lotId,
+        lot_number: held.lot_number,
+        task_id: taskId,
+        disposition_id: dispositionId,
+        site_id: task.site_id,
+        sku: task.sku,
+        quantity: task.quantity,
+        justification: (p['justification'] as string).trim(),
+        raised_by: actorId,
+        raised_at: decidedAt,
+        source_event_id: eventId,
+      },
+      client,
+    );
+  }
+
+  const gateStatus = disposition === 'accept' ? 'accepted' : 'rejected';
+  const moved = await transitionQcGate(taskId, task.gate_status, gateStatus, decidedAt, client);
+  if (moved !== 1) {
+    reject(
+      'DISPOSITION_EXISTS',
+      'The QC gate changed before the disposition could be applied',
+      { lot_id: lotId, task_id: taskId, expected_gate_status: task.gate_status },
+      409,
+    );
+  }
+
+  p['lot_number'] = held.lot_number;
+  p['sku'] = task.sku;
+  p['site_id'] = task.site_id;
+  p['plan_version_id'] = task.plan_version_id;
+  p['quantity'] = task.quantity;
+  p['sampling_outcome'] = task.sampling_outcome;
+  p['requested_by'] = actorId;
+  p['approved_by'] = actorId;
+  p['inspector_user_id'] = held.inspector_user_id;
+  p['previous_gate_status'] = task.gate_status;
+  p['gate_status'] = gateStatus;
+
+  await emitNotificationInTransaction(
+    {
+      target: {
+        role: config.quality.inspectionTaskNotificationRole,
+        location_id: task.site_id,
+      },
+      event_type: 'qc_lot_dispositioned',
+      status_verb: disposition === 'accept' ? 'Accepted' : 'Rejected',
+      object_type: 'qc_inspection_task',
+      object_id: taskId,
+      actor_label: `Lot ${held.lot_number} (${task.sku})`,
+      next_step:
+        disposition === 'accept'
+          ? 'The lot has left the QC gate and is available to downstream operations'
+          : 'Record the NCR outcome (rework, downgrade or scrap) for this lot',
+      actor: envelope.metadata.actor,
+      correlation_id: envelope.metadata.correlation_id,
+      causation_id: eventId,
+      occurred_at: envelope.metadata.occurred_at,
+    },
+    client,
+  );
+}
+
+/** Story 8.3 (FR-Q-05, AC 2): the partial split into independently dispositionable child lots. */
+async function applyLotSplitRecorded(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const taskId = p['task_id'] as string;
+  const lotId = p['lot_id'] as string;
+  const dispositionId = p['disposition_id'] as string;
+  const decidedAt = p['decided_at'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+
+  const held = await lockLotForDisposition(lotId, taskId, client);
+  const { task } = held;
+
+  const splits = [...(p['splits'] as Array<Record<string, unknown>>)].sort(
+    (a, b) => (a['sequence'] as number) - (b['sequence'] as number),
+  );
+  let totalScaled = 0n;
+  for (const split of splits) {
+    totalScaled += toScaledQuantity(split['quantity'] as string);
+  }
+  const parentScaled = toScaledQuantity(task.quantity);
+  if (totalScaled !== parentScaled) {
+    reject(
+      'QC_SPLIT_QUANTITY_MISMATCH',
+      'The split quantities must sum exactly to the lot quantity',
+      {
+        lot_id: lotId,
+        lot_quantity: task.quantity,
+        split_total: fromScaledQuantity(totalScaled),
+      },
+      400,
+    );
+  }
+
+  // Lock and validate the whole stock position BEFORE the first write, so an INSUFFICIENT_STOCK
+  // rejection leaves no partial effect.
+  const grains = await lockOwnedLotGrains(task.sku, task.lot_number, client);
+  const available = availableScaled(grains, { lot_id: lotId, lot_number: task.lot_number });
+  if (available < totalScaled) {
+    reject(
+      'INSUFFICIENT_STOCK',
+      'The lot does not hold enough unallocated owned stock for this split',
+      {
+        lot_id: lotId,
+        lot_number: task.lot_number,
+        available: fromScaledQuantity(available),
+        requested: fromScaledQuantity(totalScaled),
+      },
+      409,
+    );
+  }
+  const firstGrain = grains[0] ?? null;
+
+  for (const split of splits) {
+    const sequence = split['sequence'] as number;
+    const quantity = split['quantity'] as string;
+    const childLotNumber = `${task.lot_number}-${String(sequence).padStart(2, '0')}`;
+    if (await lotExistsByNumberAndSku(childLotNumber, task.sku, client)) {
+      reject(
+        'DUPLICATE_LOT',
+        'The derived child lot number already exists',
+        { parent_lot_number: task.lot_number, child_lot_number: childLotNumber },
+        // 400 matches the uq_lot_master_lot_number arm in the store's 23505 chain, so the
+        // sequential pre-check and the race path return the identical status and code.
+        400,
+      );
+    }
+    const childLot = await createLot(
+      {
+        lot_number: childLotNumber,
+        sku: task.sku,
+        expiry_date: held.expiry_date,
+        quality_hold_status: 'none',
+        quality_hold_reason: null,
+      },
+      client,
+    );
+    await relabelLotQuantity(
+      {
+        parent_lot_id: lotId,
+        parent_lot_number: task.lot_number,
+        sku: task.sku,
+        target_lot_id: childLot.lot_id,
+        target_lot_number: childLotNumber,
+        target_sku: task.sku,
+        quantity,
+      },
+      grains,
+      client,
+    );
+
+    // Annex requirement 7: uq_qc_inspection_task_source forbids reusing the parent's completion
+    // identity, so each child task mints a fresh one and qc_lot_split carries the real provenance.
+    const childTaskId = randomUUID();
+    const childSourceCompletionId = randomUUID();
+    await insertQcInspectionTask(
+      {
+        task_id: childTaskId,
+        lot_id: childLot.lot_id,
+        lot_number: childLotNumber,
+        source_completion_type: task.source_completion_type,
+        source_completion_id: childSourceCompletionId,
+        item_id: task.item_id,
+        sku: task.sku,
+        quantity,
+        uom: task.uom,
+        site_id: task.site_id,
+        bom_revision_id: task.bom_revision_id,
+        plan_id: task.plan_id,
+        plan_version_id: task.plan_version_id,
+        plan_scope: task.plan_scope,
+        source_order_type: task.source_order_type,
+        source_order_ref: task.source_order_ref,
+        completed_at: task.completed_at,
+        business_date: task.business_date,
+        gate_changed_at: decidedAt,
+        source_event_id: eventId,
+      },
+      client,
+    );
+    // Children inherit the parent's whole inspection result set, so each is immediately
+    // dispositionable without re-sampling (Binding Scope Decision 7).
+    const inherited = await transitionQcTaskStatus(
+      childTaskId,
+      'open',
+      'inspected',
+      {
+        sampling_id: task.sampling_id!,
+        sampling_outcome: task.sampling_outcome!,
+        nonconforming_sample_units: task.nonconforming_sample_units ?? 0,
+        critical_nonconformities: task.critical_nonconformities ?? 0,
+        inspected_by: task.inspected_by!,
+        inspected_at: task.inspected_at!,
+      },
+      client,
+    );
+    if (inherited !== 1) {
+      reject(
+        'QC_SPLIT_INVALID',
+        'The child inspection task could not inherit the parent inspection',
+        { child_task_id: childTaskId, parent_task_id: taskId },
+        409,
+      );
+    }
+    await insertQcLotSplit(
+      {
+        split_id: randomUUID(),
+        parent_lot_id: lotId,
+        parent_lot_number: task.lot_number,
+        parent_task_id: taskId,
+        disposition_id: dispositionId,
+        child_lot_id: childLot.lot_id,
+        child_lot_number: childLotNumber,
+        child_task_id: childTaskId,
+        sequence,
+        quantity,
+        source_event_id: eventId,
+      },
+      client,
+    );
+    split['lot_id'] = childLot.lot_id;
+    split['lot_number'] = childLotNumber;
+    split['task_id'] = childTaskId;
+    split['source_completion_id'] = childSourceCompletionId;
+  }
+
+  // The parent must be empty of owned stock now; a remainder is a coding error, not a tolerance.
+  const remaining = await lockOwnedLotGrains(task.sku, task.lot_number, client);
+  const remainder = remaining.reduce((sum, grain) => sum + toScaledQuantity(grain.on_hand), 0n);
+  if (remainder !== 0n) {
+    reject(
+      'QC_SPLIT_INVALID',
+      'The parent lot still holds owned stock after the split',
+      { lot_id: lotId, remaining: fromScaledQuantity(remainder) },
+      409,
+    );
+  }
+
+  await insertQcLotDisposition(
+    {
+      disposition_id: dispositionId,
+      lot_id: lotId,
+      task_id: taskId,
+      disposition: 'split',
+      deviation_id: null,
+      plan_version_id: task.plan_version_id,
+      quantity: task.quantity,
+      requested_by: actorId,
+      inspector_user_id: held.inspector_user_id,
+      approved_by: actorId,
+      doa_entry_id: null,
+      decided_at: decidedAt,
+      source_event_id: eventId,
+      sampling_outcome: task.sampling_outcome,
+      ncr_id: null,
+    },
+    client,
+  );
+  const moved = await transitionQcGate(taskId, task.gate_status, 'split', decidedAt, client);
+  if (moved !== 1) {
+    reject(
+      'DISPOSITION_EXISTS',
+      'The QC gate changed before the split could be applied',
+      { lot_id: lotId, task_id: taskId, expected_gate_status: task.gate_status },
+      409,
+    );
+  }
+
+  await appendRelabelTrace(
+    {
+      lot_id: lotId,
+      sku: task.sku,
+      event_id: eventId,
+      event_type: QC_LOT_SPLIT_RECORDED,
+      quantity: task.quantity,
+      occurred_at: envelope.metadata.occurred_at,
+      location_id: firstGrain?.location_id ?? null,
+      location_code: firstGrain?.location_code ?? null,
+    },
+    client,
+  );
+
+  p['lot_number'] = task.lot_number;
+  p['sku'] = task.sku;
+  p['site_id'] = task.site_id;
+  p['plan_version_id'] = task.plan_version_id;
+  p['quantity'] = task.quantity;
+  p['requested_by'] = actorId;
+  p['approved_by'] = actorId;
+  p['inspector_user_id'] = held.inspector_user_id;
+  p['previous_gate_status'] = task.gate_status;
+  p['gate_status'] = 'split';
+  p['splits'] = splits;
+
+  await emitNotificationInTransaction(
+    {
+      target: {
+        role: config.quality.inspectionTaskNotificationRole,
+        location_id: task.site_id,
+      },
+      event_type: 'qc_lot_split_recorded',
+      status_verb: 'Split',
+      object_type: 'qc_inspection_task',
+      object_id: taskId,
+      actor_label: `Lot ${task.lot_number} (${task.sku})`,
+      next_step: `Disposition each of the ${splits.length} child lots independently`,
+      actor: envelope.metadata.actor,
+      correlation_id: envelope.metadata.correlation_id,
+      causation_id: eventId,
+      occurred_at: envelope.metadata.occurred_at,
+    },
+    client,
+  );
+}
+
+/** Story 8.3 (FR-Q-06, AC 3, AC 4 and AC 5): the once-only NCR outcome. */
+async function applyNcrOutcomeRecorded(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const ncrId = p['ncr_id'] as string;
+  const lotId = p['lot_id'] as string;
+  const outcome = p['outcome'] as 'rework' | 'downgrade' | 'scrap';
+  const decidedAt = p['decided_at'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+
+  // Same lock prefix as every other QC write: the lot row first, then the NCR row.
+  const lotResult = await client.query(
+    `SELECT lot_id, lot_number, sku, expiry_date::text AS expiry_date, quality_hold_status
+       FROM lot_master WHERE lot_id = $1 FOR UPDATE`,
+    [lotId],
+  );
+  if (lotResult.rows.length === 0) {
+    reject('LOT_NOT_FOUND', 'The lot does not resolve', { lot_id: lotId }, 404);
+  }
+  const lot = lotResult.rows[0]!;
+  // AC6: any disposition OR NCR command on a lot under an independent manual or recall hold is
+  // rejected fail-closed with LOT_ON_HOLD, re-derived under the same lock as every other QC write.
+  if (lot['quality_hold_status'] !== 'none') {
+    reject(
+      'LOT_ON_HOLD',
+      'Lot is on quality hold and the NCR outcome cannot be recorded',
+      { lot_id: lotId, ncr_id: ncrId, reason: 'manual_hold' },
+      400,
+    );
+  }
+  const ncr = await getQcNcrById(ncrId, client, true);
+  if (!ncr || ncr.lot_id !== lotId) {
+    reject(
+      'NCR_NOT_FOUND',
+      'No non-conformance report resolves for this lot',
+      { ncr_id: ncrId, lot_id: lotId },
+      404,
+    );
+  }
+  if (ncr.outcome !== null) {
+    reject(
+      'NCR_OUTCOME_EXISTS',
+      'The NCR outcome has already been recorded',
+      { ncr_id: ncrId, outcome: ncr.outcome },
+      409,
+    );
+  }
+
+  let downgradeLotId: string | null = null;
+  let downgradeLotNumber: string | null = null;
+  let qualityHoldStatus: 'none' | 'held' = 'none';
+
+  if (outcome === 'downgrade') {
+    const downgradeSku = (p['downgrade_sku'] as string).trim();
+    if (downgradeSku === ncr.sku) {
+      reject(
+        'DOWNGRADE_SKU_INVALID',
+        'The downgrade SKU must differ from the rejected lot SKU',
+        { ncr_id: ncrId, sku: ncr.sku },
+        400,
+      );
+    }
+    if (!(await itemExistsBySku(downgradeSku, client))) {
+      reject(
+        'DOWNGRADE_SKU_INVALID',
+        'The downgrade SKU is not registered in the item master',
+        { ncr_id: ncrId, downgrade_sku: downgradeSku },
+        400,
+      );
+    }
+    downgradeLotNumber = `${ncr.lot_number}-DG`;
+    if (await lotExistsByNumberAndSku(downgradeLotNumber, downgradeSku, client)) {
+      reject(
+        'DUPLICATE_LOT',
+        'The derived downgrade lot number already exists',
+        { lot_number: ncr.lot_number, downgrade_lot_number: downgradeLotNumber },
+        400,
+      );
+    }
+    const grains = await lockOwnedLotGrains(ncr.sku, ncr.lot_number, client);
+    const available = availableScaled(grains, { lot_id: lotId, lot_number: ncr.lot_number });
+    if (available < toScaledQuantity(ncr.quantity)) {
+      reject(
+        'INSUFFICIENT_STOCK',
+        'The lot does not hold enough unallocated owned stock to downgrade',
+        {
+          lot_id: lotId,
+          available: fromScaledQuantity(available),
+          requested: ncr.quantity,
+        },
+        409,
+      );
+    }
+    const firstGrain = grains[0] ?? null;
+    // Binding Scope Decision 8: the downgrade lot carries NO inspection task, so the QC gate
+    // treats it as ungoverned stock and it is sellable seconds.
+    const downgradeLot = await createLot(
+      {
+        lot_number: downgradeLotNumber,
+        sku: downgradeSku,
+        expiry_date: (lot['expiry_date'] as string | null) ?? null,
+        quality_hold_status: 'none',
+        quality_hold_reason: null,
+      },
+      client,
+    );
+    downgradeLotId = downgradeLot.lot_id;
+    await relabelLotQuantity(
+      {
+        parent_lot_id: lotId,
+        parent_lot_number: ncr.lot_number,
+        sku: ncr.sku,
+        target_lot_id: downgradeLot.lot_id,
+        target_lot_number: downgradeLotNumber,
+        target_sku: downgradeSku,
+        quantity: ncr.quantity,
+      },
+      grains,
+      client,
+    );
+    await appendRelabelTrace(
+      {
+        lot_id: lotId,
+        sku: ncr.sku,
+        event_id: eventId,
+        event_type: QC_NCR_OUTCOME_RECORDED,
+        quantity: ncr.quantity,
+        occurred_at: envelope.metadata.occurred_at,
+        location_id: firstGrain?.location_id ?? null,
+        location_code: firstGrain?.location_code ?? null,
+      },
+      client,
+    );
+  }
+
+  if (outcome === 'scrap') {
+    // Annex requirement 10: scrap moves nothing. It parks the quantity on the INDEPENDENT hold
+    // axis so every consumption path blocks, and retains this event as the AD-10 source document
+    // for the Phase 2 (Epic 16) FR-SC intake.
+    const heldLot = await placeQualityHold(
+      ncr.lot_number,
+      ncr.sku,
+      SCRAP_PENDING_HOLD_REASON,
+      client,
+    );
+    if (!heldLot) {
+      reject(
+        'LOT_NOT_FOUND',
+        'The lot could not be placed on the scrap-pending hold',
+        { lot_id: lotId, lot_number: ncr.lot_number },
+        404,
+      );
+    }
+    qualityHoldStatus = 'held';
+  }
+
+  const reworkEventId = outcome === 'rework' ? (p['rework_event_id'] as string) : null;
+  const decided = await setQcNcrOutcome(
+    {
+      ncr_id: ncrId,
+      outcome,
+      outcome_reason: (p['outcome_reason'] as string).trim(),
+      outcome_by: actorId,
+      outcome_at: decidedAt,
+      outcome_event_id: eventId,
+      downgrade_sku: outcome === 'downgrade' ? (p['downgrade_sku'] as string).trim() : null,
+      downgrade_lot_id: downgradeLotId,
+      rework_requested_event_id: reworkEventId,
+    },
+    client,
+  );
+  if (!decided) {
+    // The guarded UPDATE is the concurrency backstop: a raced second outcome updates zero rows.
+    reject(
+      'NCR_OUTCOME_EXISTS',
+      'The NCR outcome has already been recorded',
+      { ncr_id: ncrId },
+      409,
+    );
+  }
+
+  p['task_id'] = ncr.task_id;
+  p['lot_number'] = ncr.lot_number;
+  p['sku'] = ncr.sku;
+  p['site_id'] = ncr.site_id;
+  p['quantity'] = ncr.quantity;
+  p['outcome_by'] = actorId;
+  p['downgrade_lot_id'] = downgradeLotId;
+  p['downgrade_lot_number'] = downgradeLotNumber;
+  p['rework_requested_event_id'] = reworkEventId;
+  p['quality_hold_status'] = qualityHoldStatus;
+
+  await emitNotificationInTransaction(
+    {
+      target: {
+        role: config.quality.inspectionTaskNotificationRole,
+        location_id: ncr.site_id,
+      },
+      event_type: 'qc_ncr_outcome_recorded',
+      status_verb: 'NCR outcome recorded',
+      object_type: 'qc_ncr',
+      object_id: ncrId,
+      actor_label: `Lot ${ncr.lot_number} (${ncr.sku})`,
+      next_step:
+        outcome === 'rework'
+          ? 'A rework order will consume this lot and produce a new lot for the QC gate'
+          : outcome === 'downgrade'
+            ? `Quantity relabelled onto downgrade lot ${downgradeLotNumber}`
+            : 'Quantity is blocked pending scrap disposal',
+      actor: envelope.metadata.actor,
+      correlation_id: envelope.metadata.correlation_id,
+      causation_id: eventId,
+      occurred_at: envelope.metadata.occurred_at,
+    },
+    client,
+  );
+}
+
+/**
+ * Story 8.3 (FR-Q-06, AC 5): the rework integration contract. It writes no projection - it exists
+ * so Story 6.3 has a subscribable fact - but it is NOT freely postable: the owning NCR must already
+ * name this exact event id (the handler mints it and the outcome applier stores it), and every
+ * field is re-derived from the NCR and the task.
+ */
+async function applyReworkRequested(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const ncrId = p['ncr_id'] as string;
+  const ncr = await getQcNcrById(ncrId, client);
+  if (!ncr || ncr.outcome !== 'rework' || ncr.rework_requested_event_id !== eventId) {
+    reject(
+      'QC_REWORK_NOT_DERIVED',
+      'A rework request is only admissible from the NCR outcome that mints it',
+      { ncr_id: ncrId, event_id: eventId },
+      409,
+    );
+  }
+  const task = await getQcInspectionTaskById(ncr.task_id, client);
+  if (!task) {
+    reject('QC_TASK_NOT_FOUND', 'The NCR task does not resolve', { ncr_id: ncrId }, 404);
+  }
+  const derived: Record<string, unknown> = {
+    lot_id: ncr.lot_id,
+    lot_number: ncr.lot_number,
+    task_id: ncr.task_id,
+    sku: ncr.sku,
+    site_id: ncr.site_id,
+    plan_version_id: task.plan_version_id,
+    requested_by: ncr.outcome_by,
+  };
+  for (const [field, expected] of Object.entries(derived)) {
+    if (p[field] !== expected) {
+      reject(
+        'QC_DERIVATION_MISMATCH',
+        `${field} disagrees with the server re-derivation for qc.rework_requested`,
+        { field, declared_value: p[field], derived_value: expected },
+        409,
+      );
+    }
+  }
+  // quantity and requested_at are NUMERIC/timestamp round-trips: the declared string can differ in
+  // scale or offset formatting from the canonical re-derivation while denoting the same value, so
+  // compare by value (compareDecimalStrings, epoch millis) rather than by raw string equality.
+  if (compareDecimalStrings(p['quantity'] as string, ncr.quantity) !== 0) {
+    reject(
+      'QC_DERIVATION_MISMATCH',
+      'quantity disagrees with the server re-derivation for qc.rework_requested',
+      { field: 'quantity', declared_value: p['quantity'], derived_value: ncr.quantity },
+      409,
+    );
+  }
+  if (new Date(p['requested_at'] as string).getTime() !== new Date(ncr.outcome_at as string).getTime()) {
+    reject(
+      'QC_DERIVATION_MISMATCH',
+      'requested_at disagrees with the server re-derivation for qc.rework_requested',
+      { field: 'requested_at', declared_value: p['requested_at'], derived_value: ncr.outcome_at },
+      409,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2555,6 +3607,18 @@ export async function applyQualityProjection(
     case QC_SAMPLING_STATE_ADJUSTED:
       await applySamplingStateAdjusted(envelope, client, eventId);
       return;
+    case QC_LOT_DISPOSITIONED:
+      await applyLotDispositioned(envelope, client, eventId);
+      return;
+    case QC_LOT_SPLIT_RECORDED:
+      await applyLotSplitRecorded(envelope, client, eventId);
+      return;
+    case QC_NCR_OUTCOME_RECORDED:
+      await applyNcrOutcomeRecorded(envelope, client, eventId);
+      return;
+    case QC_REWORK_REQUESTED:
+      await applyReworkRequested(envelope, client, eventId);
+      return;
     default:
       return;
   }
@@ -2666,6 +3730,34 @@ export async function assertQcGateAllows(check: QcGateCheck): Promise<void> {
       ...base,
       reason: 'qc_hold',
     });
+  }
+  // Story 8.3 (Binding Scope Decision 4): the three terminal gate states. They are handled BEFORE
+  // the conditional-release logic below so a new gate state can never fall through into the
+  // deviation checks, which would read a non-existent deviation as an authorization.
+  if (task.gate_status === 'rejected') {
+    throw new AppError(400, 'LOT_ON_HOLD', 'Lot was rejected at the QC gate', {
+      ...base,
+      reason: 'rejected',
+    });
+  }
+  if (task.gate_status === 'split') {
+    throw new AppError(
+      400,
+      'LOT_ON_HOLD',
+      'Lot was split at the QC gate; consume its child lots instead',
+      { ...base, reason: 'split' },
+    );
+  }
+  if (task.gate_status === 'accepted') {
+    // An accepted lot has left the gate. The INDEPENDENT manual or recall hold still blocks it -
+    // the two axes are separate and both must be clear.
+    if (lot['quality_hold_status'] !== 'none') {
+      throw new AppError(400, 'LOT_ON_HOLD', 'Lot is on quality hold', {
+        ...base,
+        reason: 'manual_hold',
+      });
+    }
+    return;
   }
   // conditionally_released
   if (lot['quality_hold_status'] !== 'none') {
