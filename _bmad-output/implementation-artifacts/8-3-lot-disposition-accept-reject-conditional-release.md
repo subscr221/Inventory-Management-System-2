@@ -811,6 +811,26 @@ These do not block implementation; the story proceeds on the stated default.
 - [Source: `_bmad-output/implementation-artifacts/8-2-aql-sampling-and-result-capture.md`]
 - [Source: `_bmad-output/implementation-artifacts/deferred-work.md`, lines 194, 469, 489]
 
+### Post-Review Amendment (2026-08-30): segregation of duties on acceptance
+
+Reopened after the Story 8.4 code review, on a product-owner decision recorded in that story's Open
+Question 3.
+
+`applyLotDispositioned` accepted a lot signed by whoever recorded its results - the same person could
+inspect the lot and approve it. `applyConditionalReleaseRecorded` had always refused that with
+`SOD_VIOLATION`, so the exception path was stricter than the normal one, and NFR-SEC-05 ("enforced
+segregation of duties") is the only requirement in the project that speaks to it: no Epic 8
+acceptance criterion names an approver for either acceptance or release.
+
+`lockLotForDisposition` now returns the full `result_recorders` list, and `applyLotDispositioned`
+rejects `SOD_VIOLATION` (409) when the actor appears in it **and** the disposition is `accept`.
+Rejects and splits are deliberately left unguarded, with the reasoning stated at the guard.
+
+Two regression tests were added to `test/integration/story-8-3.test.ts` - one proving a recorder
+cannot self-approve and that a second party then can, one proving a recorder may still reject their
+own lot - plus a dedicated non-recording approver identity threaded through both this file's and
+Story 8.4's fixtures. The guard was mutation-verified.
+
 ## Dev Agent Record
 
 ### Agent Model Used

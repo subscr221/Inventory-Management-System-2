@@ -206,6 +206,8 @@ import {
   resolveQcDispositionDuplicateConflict,
   resolveQcSamplingDuplicateConflict,
   resolveQcResultDuplicateConflict,
+  resolveQcReleaseDuplicateConflict,
+  resolveQcRetentionSampleDuplicateConflict,
 } from '../compliance/quality.js';
 import {
   assertProductionMaterialShape,
@@ -1608,6 +1610,33 @@ export async function persistEvent(
           'DISPOSITION_EXISTS',
           'A disposition has already been recorded for this lot',
           { constraint, ...(await resolveQcDispositionDuplicateConflict(envelope.payload)) },
+        );
+      } else if (
+        constraint === 'uq_qc_batch_release_lot' ||
+        constraint === 'uq_qc_batch_release_disposition'
+      ) {
+        // Story 8.4 (AC 7): one batch release per lot, and one per disposition. A sequential or
+        // concurrent second release is RELEASE_EXISTS carrying the existing release_id - the same
+        // shape DISPOSITION_EXISTS has, so a caller handles both identically. The *_pkey constraints
+        // are deliberately NOT mapped here: release_id is a freshly minted UUID, so a pkey violation
+        // is a UUID collision, not "a record already exists for this lot", and reporting it as such
+        // would return a message that is simply false with no existing_release_id to act on.
+        throw new AppError(
+          409,
+          'RELEASE_EXISTS',
+          'A batch release record already exists for this lot',
+          { constraint, ...(await resolveQcReleaseDuplicateConflict(envelope.payload)) },
+        );
+      } else if (
+        constraint === 'uq_qc_retention_sample_lot'
+      ) {
+        // Story 8.4 (AC 4): one retention sample per lot. A raced double-log surfaces the stable
+        // 409 with the existing_retention_sample_id rather than a raw 23505 500.
+        throw new AppError(
+          409,
+          'RETENTION_SAMPLE_EXISTS',
+          'A retention sample already exists for this lot',
+          { constraint, ...(await resolveQcRetentionSampleDuplicateConflict(envelope.payload)) },
         );
       } else if (
         constraint === 'uq_qc_sampling_plan_task' ||

@@ -3,15 +3,17 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { config } from '../config/index.js';
+import type { RetentionSampleScope } from '../config/index.js';
 import { isValidCalendarDate, toIstCalendarDate } from '../lib/business-days.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
-import { getItemById, itemExistsBySku } from '../read/projections/item_master.js';
+import { getItemById, getItemBySku, itemExistsBySku } from '../read/projections/item_master.js';
 import {
   createLot,
   lotExistsByNumberAndSku,
   placeQualityHold,
 } from '../read/projections/lot_master.js';
 import { getBomById, getBomRevisionById } from '../read/projections/bom.js';
+import { locationExistsById } from '../read/projections/location_register.js';
 import { assertNotRdDraft } from './bom.js';
 import {
   findActiveDelegation,
@@ -53,6 +55,18 @@ import {
   insertQcDeviation,
   insertQcLotDisposition,
 } from '../read/projections/qc_lot_disposition.js';
+import {
+  getQcBatchReleaseByLotId,
+  insertQcBatchRelease,
+} from '../read/projections/qc_batch_release.js';
+import type { QcDocumentKind } from '../read/projections/qc_batch_release.js';
+import {
+  getQcRetentionSampleById,
+  getQcRetentionSampleByLotId,
+  insertQcRetentionSample,
+  markQcRetentionSampleDisposalPending,
+  setQcRetentionSampleExpiry,
+} from '../read/projections/qc_retention_sample.js';
 import {
   getQcSamplingPlanByTaskId,
   insertQcSamplingPlan,
@@ -149,6 +163,12 @@ export const QC_LOT_DISPOSITIONED = 'qc.lot_dispositioned';
 export const QC_LOT_SPLIT_RECORDED = 'qc.lot_split_recorded';
 export const QC_NCR_OUTCOME_RECORDED = 'qc.ncr_outcome_recorded';
 export const QC_REWORK_REQUESTED = 'qc.rework_requested';
+// Story 8.4 (FR-Q-07, FR-Q-08): the batch release record, the retention sample and the recorded
+// disposal the 30-day expiry alert raises. All three are central-only (nothing about release or
+// retention is captured at the edge PWA).
+export const QC_BATCH_RELEASE_RECORDED = 'qc.batch_release_recorded';
+export const QC_RETENTION_SAMPLE_LOGGED = 'qc.retention_sample_logged';
+export const QC_RETENTION_SAMPLE_DISPOSED = 'qc.retention_sample_disposed';
 export const QUALITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   INSPECTION_PLAN_CREATED,
   INSPECTION_PLAN_APPROVED,
@@ -163,6 +183,9 @@ export const QUALITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   QC_LOT_SPLIT_RECORDED,
   QC_NCR_OUTCOME_RECORDED,
   QC_REWORK_REQUESTED,
+  QC_BATCH_RELEASE_RECORDED,
+  QC_RETENTION_SAMPLE_LOGGED,
+  QC_RETENTION_SAMPLE_DISPOSED,
 ]);
 /**
  * Story 8.1 Binding Scope Decision 9 / Story 8.2 Binding Scope Decision 8: every QC command is
@@ -207,6 +230,43 @@ export const MAX_SPLIT_CHILDREN = 20;
 /** Annex requirement 9 (scrap): the reason stamped on the lot's independent hold axis. */
 export const SCRAP_PENDING_HOLD_REASON = 'scrap_pending';
 
+// Story 8.4 (FR-Q-07, Binding Scope Decision 1): the two dispositions a lot may be released from.
+export const RELEASABLE_DISPOSITIONS: ReadonlySet<string> = new Set([
+  'accept',
+  'conditional_release',
+]);
+// The certificate-format vocabulary (Binding Scope Decision 4) is owned by the projection module
+// (QC_DOCUMENT_KINDS in src/read/projections/qc_batch_release.ts) and is deliberately NOT
+// re-declared here: a second same-named constant for the same fact is exactly what drifts.
+const MAX_UOM_LENGTH = 32;
+/**
+ * Story 8.4 review: the statutory retention window is derived from a CLIENT-supplied timestamp, so
+ * that timestamp is bounded server-side. Without this, a back-dated decided_at mints a certificate
+ * whose retention has already lapsed - the outcome AC2's RETENTION_FLOOR_VIOLATION boot guard
+ * exists to prevent, reached by a different route - and a back-dated logged_at makes the very next
+ * sweep tick flip a brand-new sample to disposal_pending, which no code path can undo.
+ */
+const MAX_RETENTION_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const MAX_RETENTION_CLOCK_BACKDATE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function assertRetentionClockBounds(value: string, field: string, context: string): void {
+  const at = new Date(value).getTime();
+  const now = Date.now();
+  if (at > now + MAX_RETENTION_CLOCK_SKEW_MS) {
+    reject('INVALID_PAYLOAD', `${field} cannot be in the future on ${context}`, {
+      field,
+      [field]: value,
+    });
+  }
+  if (at < now - MAX_RETENTION_CLOCK_BACKDATE_MS) {
+    reject(
+      'INVALID_PAYLOAD',
+      `${field} is too far in the past on ${context}; the retention window is derived from it`,
+      { field, [field]: value },
+    );
+  }
+}
+
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // An explicit UTC offset is REQUIRED (the Story 7.2 offset lesson).
 const ISO8601_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
@@ -232,7 +292,8 @@ function isBoundedText(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
 
-function isPositiveQuantity(value: unknown): value is string {
+/** Exported so the API layer validates with the SAME rule instead of a second drifting copy. */
+export function isPositiveQuantity(value: unknown): value is string {
   return typeof value === 'string' && QUANTITY_REGEX.test(value) && /[1-9]/.test(value);
 }
 
@@ -1182,6 +1243,97 @@ function assertReworkRequestedShape(envelope: EventEnvelope): void {
   }
 }
 
+/**
+ * Story 8.4 (FR-Q-07, AC 1, AC 6 and AC 7): the batch release command. Only task_id, lot_id,
+ * release_id and decided_at are the client's; everything else is derived under lock by the applier
+ * (Binding Scope Decisions 1, 2, 4 and 7), so declaring any of it is 409 QC_DERIVATION_MISMATCH.
+ */
+function assertBatchReleaseRecordedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  for (const field of ['task_id', 'lot_id', 'release_id']) {
+    if (!isUuid(p[field])) reject('INVALID_PAYLOAD', `${field} must be a UUID`);
+  }
+  assertTaskStream(envelope, p);
+  if (!isIsoTimestamp(p['decided_at'])) {
+    reject('INVALID_PAYLOAD', 'decided_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  rejectDeclaredDerived(
+    p,
+    [
+      'disposition_id',
+      'retention_sample_id',
+      'document_kind',
+      'document_ref',
+      'retention_years',
+      'retention_expires_on',
+      'bis_licence_number',
+      'released_by',
+      'lot_number',
+      'sku',
+      'site_id',
+      'quantity',
+      'disposition',
+    ],
+    QC_BATCH_RELEASE_RECORDED,
+  );
+}
+
+/**
+ * Story 8.4 (FR-Q-08, AC 4): the retention-sample log. Deliberately NOT gated on disposition state
+ * here or in the applier - AC 4's ordering only makes sense if a sample can be logged any time
+ * after the task exists, independent of whether release has been attempted yet (Task 3). Only
+ * qc.batch_release_recorded gates on both disposition state and retention-sample presence.
+ */
+function assertRetentionSampleLoggedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  for (const field of ['task_id', 'lot_id', 'retention_sample_id', 'location_id']) {
+    if (!isUuid(p[field])) reject('INVALID_PAYLOAD', `${field} must be a UUID`);
+  }
+  assertTaskStream(envelope, p);
+  if (!isPositiveQuantity(p['quantity'])) {
+    reject('INVALID_PAYLOAD', 'quantity must be a positive decimal string');
+  }
+  // Bound the TRIMMED value: chk_qc_retention_sample_uom checks char_length on the trimmed string
+  // the applier actually inserts, so a pre-trim bound would refuse a padded but legal value.
+  if (typeof p['uom'] !== 'string' || !isBoundedText(p['uom'].trim(), MAX_UOM_LENGTH)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `uom must be a non-empty string of at most ${MAX_UOM_LENGTH} characters`,
+    );
+  }
+  if (!isIsoTimestamp(p['logged_at'])) {
+    reject('INVALID_PAYLOAD', 'logged_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  rejectDeclaredDerived(
+    p,
+    ['expires_on', 'retention_years', 'logged_by', 'lot_number', 'sku', 'site_id', 'status'],
+    QC_RETENTION_SAMPLE_LOGGED,
+  );
+}
+
+/**
+ * Story 8.4 (FR-Q-08, AC 5): the recorded disposal. System-actor only - it has no write route and
+ * is emitted solely by the retention-expiry sweep - so the applier additionally refuses any event
+ * whose sample is not still 'retained'.
+ */
+function assertRetentionSampleDisposedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  for (const field of ['retention_sample_id', 'lot_id']) {
+    if (!isUuid(p[field])) reject('INVALID_PAYLOAD', `${field} must be a UUID`);
+  }
+  if (envelope.stream_id !== p['retention_sample_id']) {
+    reject(
+      'INVALID_PAYLOAD',
+      'stream_id must be the retention_sample_id for qc.retention_sample_disposed',
+      { stream_id: envelope.stream_id, payload_retention_sample_id: p['retention_sample_id'] },
+    );
+  }
+  if (!isIsoTimestamp(p['disposed_at'])) {
+    reject('INVALID_PAYLOAD', 'disposed_at must be an ISO 8601 timestamp with an explicit offset');
+  }
+  rejectDeclaredDerived(p, ['task_id', 'expires_on', 'status'], QC_RETENTION_SAMPLE_DISPOSED);
+}
+
 export function assertQualityShape(envelope: EventEnvelope): void {
   assertQualityForeignStreamRejected(envelope);
   switch (qualityEventType(envelope)) {
@@ -1223,6 +1375,15 @@ export function assertQualityShape(envelope: EventEnvelope): void {
       return;
     case QC_REWORK_REQUESTED:
       assertReworkRequestedShape(envelope);
+      return;
+    case QC_BATCH_RELEASE_RECORDED:
+      assertBatchReleaseRecordedShape(envelope);
+      return;
+    case QC_RETENTION_SAMPLE_LOGGED:
+      assertRetentionSampleLoggedShape(envelope);
+      return;
+    case QC_RETENTION_SAMPLE_DISPOSED:
+      assertRetentionSampleDisposedShape(envelope);
       return;
     default:
       return;
@@ -2165,6 +2326,8 @@ interface DispositionableLot {
   expiry_date: string | null;
   task: QcInspectionTaskRow;
   inspector_user_id: string | null;
+  /** Every user who recorded a result on this task, for the NFR-SEC-05 segregation check. */
+  result_recorders: string[];
 }
 
 /**
@@ -2248,6 +2411,7 @@ async function lockLotForDisposition(
     expiry_date: (lot['expiry_date'] as string | null) ?? null,
     task,
     inspector_user_id: recorders[0] ?? null,
+    result_recorders: recorders,
   };
 }
 
@@ -2267,6 +2431,24 @@ async function applyLotDispositioned(
 
   const held = await lockLotForDisposition(lotId, taskId, client);
   const { task } = held;
+
+  // NFR-SEC-05, segregation of duties. ACCEPTANCE is the binding quality decision - it is what
+  // lets stock leave the QC gate - so the person who recorded the results may not also sign it.
+  // This mirrors applyConditionalReleaseRecorded, which has always enforced exactly this.
+  //
+  // Deliberately scoped to 'accept'. A reject is not a self-approval, and blocking a recorder from
+  // rejecting their own lot would delay containment of bad material, which is actively harmful. A
+  // split likewise decides nothing on its own: each child lot carries its own disposition and is
+  // guarded here in turn.
+  if (disposition === 'accept' && held.result_recorders.includes(actorId)) {
+    reject(
+      'SOD_VIOLATION',
+      'A result recorder for this lot cannot approve its acceptance',
+      { lot_id: lotId, task_id: taskId, approver_user_id: actorId },
+      409,
+    );
+  }
+
   const ncrId = disposition === 'reject' ? (p['ncr_id'] as string) : null;
 
   await insertQcLotDisposition(
@@ -3570,6 +3752,488 @@ async function applySamplingStateAdjusted(
   p['authorizing_role'] = actor.role;
 }
 
+// ---------------------------------------------------------------------------
+// Story 8.4: CoA/CoC, retention samples and batch release records (FR-Q-07, FR-Q-08)
+// ---------------------------------------------------------------------------
+
+/**
+ * Binding Scope Decision 2: AC 3's CM/L or R-number comes from Story 8.7's BIS Licence Register,
+ * which does not exist yet and is sequenced AFTER this story. This is the explicit hand-off point:
+ * Story 8.7 replaces the body with a lookup against the licence register keyed on (sku, site).
+ * Until then it resolves to null, qc_batch_release.bis_licence_number carries the null, and a null
+ * NEVER blocks release - AC 3 only requires printing the number when one is available. The same
+ * kind of documented forward reference as Story 4.2's early reservation of qc.lot_dispositioned.
+ */
+export async function resolveBisLicenceNumber(
+  _sku: string,
+  _siteId: string,
+): Promise<string | null> {
+  return null;
+}
+
+/**
+ * Binding Scope Decision 7: the retention window for one lot, in years. Since the boot guard in
+ * src/config/index.ts already enforces retentionYearsDefault >= bisRetentionFloorYears (that guard
+ * IS AC 2's RETENTION_FLOOR_VIOLATION check), this Math.max currently evaluates to
+ * retentionYearsDefault whatever the flag says. That is deliberate future-proofing for a real
+ * per-SKU BIS STI registry (Open Question 2 / Story 8.6-8.7), NOT a no-op to simplify away: when
+ * the floor becomes per-scheme rather than global, this is the single place it starts to bite.
+ *
+ * Both applyRetentionSampleLogged and applyBatchReleaseRecorded resolve through here, so both
+ * agree on the year count; the release record is then the authority for the expiry DATE and
+ * re-stamps the sample (AC1 ties retention to release).
+ *
+ * The two bounds are parameters defaulting to config so the Math.max is actually exercisable in a
+ * test. With the boot guard in force the floor can never exceed the default, which would otherwise
+ * make this function provably equal to `retentionYearsDefault` and any test of it a tautology.
+ */
+/**
+ * Story 8.4 Open Question 1, answered by the product owner 2026-08-30: a retention sample is
+ * required for every released lot by default, or only for BIS-covered products when the deployment
+ * opts into the narrower rule.
+ *
+ * The scope is a parameter defaulting to config so the branch is exercisable in a test without
+ * mutating global config - the same reason resolveRetentionYears takes its bounds explicitly.
+ */
+export function retentionSampleRequiredFor(
+  bisLicenceRequired: boolean,
+  scope: RetentionSampleScope = config.quality.retentionSampleScope,
+): boolean {
+  return scope === 'all_released_lots' || bisLicenceRequired;
+}
+
+export function resolveRetentionYears(
+  bisLicenceRequired: boolean,
+  defaultYears: number = config.quality.retentionYearsDefault,
+  floorYears: number = config.quality.bisRetentionFloorYears,
+): number {
+  return Math.max(defaultYears, bisLicenceRequired ? floorYears : 0);
+}
+
+/**
+ * Adds a whole number of years to a YYYY-MM-DD calendar date, clamping 29 February onto 28 February
+ * in a non-leap target year. Pure calendar arithmetic on the string components - a retention expiry
+ * is a legal calendar date and must never round-trip through a JS Date's local timezone.
+ */
+export function addYearsToCalendarDate(date: string, years: number): string {
+  const [y, m, d] = date.split('-').map((part) => Number(part));
+  const targetYear = y! + years;
+  const lastDayOfMonth = new Date(Date.UTC(targetYear, m!, 0)).getUTCDate();
+  const day = Math.min(d!, lastDayOfMonth);
+  const mm = String(m).padStart(2, '0');
+  const dd = String(day).padStart(2, '0');
+  return `${String(targetYear).padStart(4, '0')}-${mm}-${dd}`;
+}
+
+/**
+ * Locks the lot row FOR UPDATE and resolves the task, keeping the fixed lot-then-task lock order
+ * every Story 8.1-8.3 applier uses (lockLotForDisposition is the template; this one deliberately
+ * does NOT carry that function's disposition/gate/inspection pre-checks, because a retention sample
+ * may be logged at any point after the task exists - see Task 3's ordering note).
+ */
+async function lockLotForRetention(
+  lotId: string,
+  taskId: string,
+  client: PoolClient,
+): Promise<{ lot_number: string; quality_hold_status: string; task: QcInspectionTaskRow }> {
+  const lotResult = await client.query(
+    `SELECT lot_id, lot_number, quality_hold_status FROM lot_master WHERE lot_id = $1 FOR UPDATE`,
+    [lotId],
+  );
+  if (lotResult.rows.length === 0) {
+    reject('LOT_NOT_FOUND', 'The lot does not resolve', { lot_id: lotId }, 404);
+  }
+  const task = await getQcInspectionTaskByLotId(lotId, client, true);
+  if (!task) {
+    reject('QC_TASK_NOT_FOUND', 'No QC inspection task exists for this lot', { lot_id: lotId }, 404);
+  }
+  if (task.task_id !== taskId) {
+    reject(
+      'QC_DERIVATION_MISMATCH',
+      'The declared task_id is not the inspection task of this lot',
+      { lot_id: lotId, declared_task_id: taskId, task_id: task.task_id },
+      409,
+    );
+  }
+  return {
+    lot_number: lotResult.rows[0]!['lot_number'] as string,
+    quality_hold_status: lotResult.rows[0]!['quality_hold_status'] as string,
+    task,
+  };
+}
+
+/**
+ * Story 8.4 review: the released item drives BOTH the certificate kind (Binding Scope Decision 4)
+ * and the retention window, so an unresolvable SKU must fail CLOSED. Coalescing a missing item row
+ * to "not BIS-covered" would silently issue a CoA - shorter window, no CM/L number - for a product
+ * that may well be BIS-covered, which is exactly the guarantee AC1 and AC3 make. Every other master
+ * lookup in this seam refuses on a missing row; this one does too.
+ */
+async function resolveBisCoverage(
+  sku: string,
+  client: PoolClient,
+  context: string,
+): Promise<boolean> {
+  const item = await getItemBySku(sku, client);
+  if (!item) {
+    reject(
+      'ITEM_NOT_FOUND',
+      `The item master row for this lot's SKU does not resolve, so BIS coverage cannot be determined for ${context}`,
+      { sku },
+      409,
+    );
+  }
+  return item.bis_licence_required === true;
+}
+
+/** Story 8.4 (FR-Q-08, AC 4): logs the one retention sample that lets this lot be released. */
+async function applyRetentionSampleLogged(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const taskId = p['task_id'] as string;
+  const lotId = p['lot_id'] as string;
+  const retentionSampleId = p['retention_sample_id'] as string;
+  const quantity = p['quantity'] as string;
+  const uom = (p['uom'] as string).trim();
+  const locationId = p['location_id'] as string;
+  const loggedAt = p['logged_at'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+
+  assertRetentionClockBounds(loggedAt, 'logged_at', QC_RETENTION_SAMPLE_LOGGED);
+
+  const { lot_number: lotNumber, task } = await lockLotForRetention(lotId, taskId, client);
+  // The sample is evidentiary, so it may be logged while the lot is on hold - only RELEASE is
+  // gated on the hold axis. But the storage location must be real and must belong to the task's
+  // site: this row is the only record telling an auditor where the physical evidence is.
+  if (!(await locationExistsById(locationId, client))) {
+    reject(
+      'LOCATION_NOT_FOUND',
+      'The retention-sample storage location does not resolve',
+      { location_id: locationId },
+      400,
+    );
+  }
+  const retentionYears = resolveRetentionYears(
+    await resolveBisCoverage(task.sku, client, QC_RETENTION_SAMPLE_LOGGED),
+  );
+  // Provisional only: the release record is the authority for the retention clock (AC1 ties
+  // retention to release), and applyBatchReleaseRecorded re-stamps this value under the same lot
+  // lock. Until then the sample carries its own log-anchored window so it is never unbounded.
+  const expiresOn = addYearsToCalendarDate(toIstCalendarDate(new Date(loggedAt)), retentionYears);
+
+  // uq_qc_retention_sample_lot is the one-per-lot backstop: a raced second log loses here as a
+  // 23505 that the store's constraint chain resolves to 409 RETENTION_SAMPLE_EXISTS.
+  await insertQcRetentionSample(
+    {
+      retention_sample_id: retentionSampleId,
+      lot_id: lotId,
+      task_id: taskId,
+      quantity,
+      uom,
+      location_id: locationId,
+      logged_by: actorId,
+      logged_at: loggedAt,
+      expires_on: expiresOn,
+      source_event_id: eventId,
+    },
+    client,
+  );
+
+  p['expires_on'] = expiresOn;
+  p['retention_years'] = retentionYears;
+  p['logged_by'] = actorId;
+  // The trimmed value is what the projection stores, so the event must carry it too - otherwise a
+  // padded input leaves the stored event and its own projection disagreeing on the unit.
+  p['uom'] = uom;
+  p['lot_number'] = lotNumber;
+  p['sku'] = task.sku;
+  p['site_id'] = task.site_id;
+}
+
+/** Story 8.4 (FR-Q-07, AC 1, AC 3, AC 6 and AC 7): the batch release record and its CoA/CoC. */
+async function applyBatchReleaseRecorded(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const taskId = p['task_id'] as string;
+  const lotId = p['lot_id'] as string;
+  const releaseId = p['release_id'] as string;
+  const decidedAt = p['decided_at'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+
+  assertRetentionClockBounds(decidedAt, 'decided_at', QC_BATCH_RELEASE_RECORDED);
+
+  const {
+    lot_number: lotNumber,
+    quality_hold_status: qualityHoldStatus,
+    task,
+  } = await lockLotForRetention(lotId, taskId, client);
+
+  // AC6 fail-closed, and the independent hold axis every sibling applier re-derives under this same
+  // lock (lockLotForDisposition, applyNcrOutcomeRecorded, assertQcGateAllows). Without it a lot
+  // placed on recall or scrap_pending hold AFTER its accept disposition would still be certified.
+  if (qualityHoldStatus !== 'none') {
+    reject(
+      'LOT_ON_HOLD',
+      'Lot is on quality hold and cannot be released',
+      { lot_id: lotId, task_id: taskId, reason: 'manual_hold' },
+      400,
+    );
+  }
+
+  // Binding Scope Decision 1: release is eligible only on an already-decided accept or conditional
+  // release. Re-derived under the lot lock, never trusted from the request.
+  const disposition = await getQcLotDispositionByLotId(lotId, client);
+  if (!disposition || !RELEASABLE_DISPOSITIONS.has(disposition.disposition)) {
+    reject(
+      'QC_RELEASE_NOT_ELIGIBLE',
+      'A lot can only be released from an accept or conditional_release disposition',
+      {
+        lot_id: lotId,
+        task_id: taskId,
+        disposition: disposition?.disposition ?? null,
+        gate_status: task.gate_status,
+      },
+      409,
+    );
+  }
+
+  // AC6's second clause: "or whose gate has not reached that state". The disposition row and the
+  // gate are separate axes and a corrupted projection can disagree; releasing is precisely what
+  // lifts the conditional-release movement restriction (see assertQcGateAllows), so the gate is
+  // re-derived here rather than merely reported in the error detail.
+  if (task.gate_status !== 'accepted' && task.gate_status !== 'conditionally_released') {
+    reject(
+      'QC_RELEASE_NOT_ELIGIBLE',
+      'The QC gate has not reached a releasable state for this lot',
+      {
+        lot_id: lotId,
+        task_id: taskId,
+        disposition: disposition.disposition,
+        gate_status: task.gate_status,
+      },
+      409,
+    );
+  }
+
+  // A conditional release is authorized by a deviation with an expiry. assertQcGateAllows refuses
+  // movement on a lapsed deviation and documents that the restriction lasts "until its batch
+  // release record exists" - so minting that record on a lapsed deviation would launder an expired
+  // authorization into a permanent one.
+  if (disposition.disposition === 'conditional_release') {
+    const conditional = await getConditionalReleaseForLot(lotId, client);
+    const expiresOn = conditional?.deviation?.expires_on ?? null;
+    if (!expiresOn || expiresOn < gateBusinessDateOf(envelope)) {
+      reject(
+        'QC_RELEASE_NOT_ELIGIBLE',
+        'The conditional-release deviation authorizing this lot has expired',
+        {
+          lot_id: lotId,
+          task_id: taskId,
+          disposition: disposition.disposition,
+          deviation_expires_on: expiresOn,
+        },
+        409,
+      );
+    }
+  }
+
+  // Binding Scope Decisions 3 and 4: a BIS-covered product (item_master.bis_licence_required) gets
+  // the CoC, which is where AC 3's CM/L or R-number is printed; everything else gets the CoA. This
+  // is resolved BEFORE the retention-sample gate because, under the narrower scope, BIS coverage is
+  // what decides whether a sample is required at all.
+  const bisCovered = await resolveBisCoverage(task.sku, client, QC_BATCH_RELEASE_RECORDED);
+
+  // Binding Scope Decision 6, as amended by Open Question 1: required for every released lot by
+  // default, or only for BIS-covered products when the deployment narrows the scope. The sample
+  // must also still be RETAINED - one already routed for disposal backs nothing, so a certificate
+  // asserting a retained sample would be false.
+  const sampleRequired = retentionSampleRequiredFor(bisCovered);
+  const sample = await getQcRetentionSampleByLotId(lotId, client);
+  if (sampleRequired) {
+    if (!sample) {
+      reject(
+        'RETENTION_SAMPLE_REQUIRED',
+        'A retention sample must be logged for this lot before it can be released',
+        { lot_id: lotId, task_id: taskId, retention_sample_scope: config.quality.retentionSampleScope },
+        409,
+      );
+    }
+    if (sample.status !== 'retained') {
+      reject(
+        'RETENTION_SAMPLE_REQUIRED',
+        'The retention sample for this lot is no longer retained',
+        { lot_id: lotId, task_id: taskId, retention_sample_status: sample.status },
+        409,
+      );
+    }
+  }
+
+  const documentKind: QcDocumentKind = bisCovered ? 'coc' : 'coa';
+  const retentionYears = resolveRetentionYears(bisCovered);
+  const retentionExpiresOn = addYearsToCalendarDate(
+    toIstCalendarDate(new Date(decidedAt)),
+    retentionYears,
+  );
+  // Binding Scope Decision 2: null until Story 8.7's licence register lands; never blocks release.
+  const bisLicenceNumber = bisCovered
+    ? await resolveBisLicenceNumber(task.sku, task.site_id)
+    : null;
+
+  // uq_qc_batch_release_lot / uq_qc_batch_release_disposition backstop a second release exactly the
+  // way uq_qc_lot_disposition_lot backstops a second disposition: a 23505 the store's constraint
+  // chain resolves to 409 RELEASE_EXISTS with the existing release_id.
+  await insertQcBatchRelease(
+    {
+      release_id: releaseId,
+      lot_id: lotId,
+      task_id: taskId,
+      disposition_id: disposition.disposition_id,
+      document_kind: documentKind,
+      retention_years: retentionYears,
+      retention_expires_on: retentionExpiresOn,
+      bis_licence_number: bisLicenceNumber,
+      released_by: actorId,
+      released_at: decidedAt,
+      source_event_id: eventId,
+    },
+    client,
+  );
+
+  // AC1 ties the retention window to RELEASE ("when it is released ... retained for a default 7
+  // years"), so the release record is the single authority and the sample is re-stamped to match.
+  // Before this, the sample expired on logged_at + N while the certificate claimed decided_at + N,
+  // and since AC4 forces logged_at <= decided_at the physical evidence was always scheduled for
+  // disposal BEFORE the certificate it backs left its own retention window.
+  // Only when one exists: under the narrower scope a non-BIS lot may legitimately have none.
+  if (sample) {
+    await setQcRetentionSampleExpiry(sample.retention_sample_id, retentionExpiresOn, client);
+  }
+
+  p['disposition_id'] = disposition.disposition_id;
+  p['retention_sample_id'] = sample?.retention_sample_id ?? null;
+  p['document_kind'] = documentKind;
+  p['retention_years'] = retentionYears;
+  p['retention_expires_on'] = retentionExpiresOn;
+  p['bis_licence_number'] = bisLicenceNumber;
+  p['released_by'] = actorId;
+  p['lot_number'] = lotNumber;
+  p['sku'] = task.sku;
+  p['site_id'] = task.site_id;
+  p['quantity'] = disposition.quantity;
+  p['disposition'] = disposition.disposition;
+
+  // AD-17: release is a decision, so it announces itself in the same transaction.
+  await emitNotificationInTransaction(
+    {
+      target: {
+        role: config.quality.inspectionTaskNotificationRole,
+        location_id: task.site_id,
+      },
+      event_type: 'qc_batch_release_recorded',
+      status_verb: 'Released',
+      object_type: 'qc_inspection_task',
+      object_id: taskId,
+      actor_label: `Lot ${lotNumber} (${task.sku})`,
+      next_step: `The ${documentKind.toUpperCase()} is on record and retained until ${retentionExpiresOn}`,
+      actor: envelope.metadata.actor,
+      correlation_id: envelope.metadata.correlation_id,
+      causation_id: eventId,
+      occurred_at: envelope.metadata.occurred_at,
+    },
+    client,
+  );
+}
+
+/**
+ * Story 8.4 (FR-Q-08, AC 5): the recorded disposal that routes an expiring sample to
+ * 'disposal_pending'. Emitted by the retention-expiry sweep under the system actor; there is no
+ * write route.
+ *
+ * The UPDATE is guarded by `WHERE status = 'retained'`, so it can never double-transition a row.
+ * A zero-row result is REFUSED with 409 RETENTION_SAMPLE_NOT_RETAINED rather than written back as
+ * a success: the only caller that can reach that state is a forged direct POST, which must not be
+ * able to claim a transition that never happened. This is a deliberate departure from Task 4's
+ * "no-op" wording, confirmed at review; the sweep never hits it, because its candidate query is
+ * guarded by the same predicate, and the sweep isolates each row so one refusal cannot abort the
+ * batch.
+ */
+async function applyRetentionSampleDisposed(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const retentionSampleId = p['retention_sample_id'] as string;
+  const lotId = p['lot_id'] as string;
+
+  // Lock the sample row before reading the values this applier writes back and cross-checks:
+  // without FOR UPDATE the status read below is a check-then-act window and the 409 detail can
+  // report a status that no longer holds by the time the guarded UPDATE runs.
+  const sample = await getQcRetentionSampleById(retentionSampleId, client, true);
+  if (!sample) {
+    reject(
+      'RETENTION_SAMPLE_NOT_FOUND',
+      'The retention sample does not resolve',
+      { retention_sample_id: retentionSampleId },
+      404,
+    );
+  }
+  if (sample.lot_id !== lotId) {
+    reject(
+      'QC_DERIVATION_MISMATCH',
+      'The declared lot_id is not the lot of this retention sample',
+      { retention_sample_id: retentionSampleId, declared_lot_id: lotId, lot_id: sample.lot_id },
+      409,
+    );
+  }
+  const moved = await markQcRetentionSampleDisposalPending(retentionSampleId, eventId, client);
+  if (!moved) {
+    reject(
+      'RETENTION_SAMPLE_NOT_RETAINED',
+      'The retention sample has already left the retained state',
+      { retention_sample_id: retentionSampleId, status: sample.status },
+      409,
+    );
+  }
+
+  p['task_id'] = sample.task_id;
+  p['lot_id'] = sample.lot_id;
+  p['expires_on'] = sample.expires_on;
+  p['status'] = 'disposal_pending';
+
+  // AC5 is an ALERT, not merely a status column. Without this the sweep flipped a row and emitted
+  // an event that nothing surfaced to a human, so the "30-day expiry alert" alerted nobody. The
+  // task carries the site the QC role is scoped to.
+  const task = await getQcInspectionTaskById(sample.task_id, client);
+  if (task) {
+    await emitNotificationInTransaction(
+      {
+        target: {
+          role: config.quality.inspectionTaskNotificationRole,
+          location_id: task.site_id,
+        },
+        event_type: 'qc_retention_sample_disposal_pending',
+        status_verb: 'Due for disposal',
+        object_type: 'qc_inspection_task',
+        object_id: sample.task_id,
+        actor_label: `Retention sample for lot ${task.lot_number} (${task.sku})`,
+        next_step: `The retention window closes on ${sample.expires_on}; route the sample for physical disposal`,
+        actor: envelope.metadata.actor,
+        correlation_id: envelope.metadata.correlation_id,
+        causation_id: eventId,
+        occurred_at: envelope.metadata.occurred_at,
+      },
+      client,
+    );
+  }
+}
+
 export async function applyQualityProjection(
   envelope: EventEnvelope,
   client: PoolClient,
@@ -3618,6 +4282,15 @@ export async function applyQualityProjection(
       return;
     case QC_REWORK_REQUESTED:
       await applyReworkRequested(envelope, client, eventId);
+      return;
+    case QC_RETENTION_SAMPLE_LOGGED:
+      await applyRetentionSampleLogged(envelope, client, eventId);
+      return;
+    case QC_BATCH_RELEASE_RECORDED:
+      await applyBatchReleaseRecorded(envelope, client, eventId);
+      return;
+    case QC_RETENTION_SAMPLE_DISPOSED:
+      await applyRetentionSampleDisposed(envelope, client, eventId);
       return;
     default:
       return;
@@ -3912,6 +4585,39 @@ export async function resolveQcDispositionDuplicateConflict(
   if (isUuid(payload['lot_id'])) {
     const existing = await getQcLotDispositionByLotId(payload['lot_id']);
     if (existing) return { ...attempted, existing_disposition_id: existing.disposition_id };
+  }
+  return attempted;
+}
+
+/**
+ * Story 8.4 (AC 7): the uq_qc_batch_release_lot / uq_qc_batch_release_disposition race path names
+ * the release that won, exactly as the sequential RELEASE_EXISTS pre-check would.
+ */
+export async function resolveQcReleaseDuplicateConflict(
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const attempted: Record<string, unknown> = {
+    lot_id: isUuid(payload['lot_id']) ? payload['lot_id'] : null,
+  };
+  if (isUuid(payload['lot_id'])) {
+    const existing = await getQcBatchReleaseByLotId(payload['lot_id']);
+    if (existing) return { ...attempted, existing_release_id: existing.release_id };
+  }
+  return attempted;
+}
+
+/** Story 8.4 (AC 4): the uq_qc_retention_sample_lot race path names the sample that won. */
+export async function resolveQcRetentionSampleDuplicateConflict(
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const attempted: Record<string, unknown> = {
+    lot_id: isUuid(payload['lot_id']) ? payload['lot_id'] : null,
+  };
+  if (isUuid(payload['lot_id'])) {
+    const existing = await getQcRetentionSampleByLotId(payload['lot_id']);
+    if (existing) {
+      return { ...attempted, existing_retention_sample_id: existing.retention_sample_id };
+    }
   }
   return attempted;
 }

@@ -322,6 +322,10 @@ import {
   listQcNcrsHandler,
   getQcNcrHandler,
   recordNcrOutcomeHandler,
+  logRetentionSampleHandler,
+  releaseLotHandler,
+  getQcReleaseHandler,
+  getQcRetentionSampleHandler,
 } from './api/v1/quality.js';
 import {
   createProductionOrderHandler,
@@ -408,6 +412,7 @@ import {
 import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
 import { runExpiryCycle } from './notify/expire.js';
+import { runRetentionExpiryCycle } from './notify/retention-expiry.js';
 
 export function createAppRouter(): Router {
   const router = new Router();
@@ -854,6 +859,13 @@ export function createAppRouter(): Router {
   router.post('/api/v1/qc/tasks/:taskId/disposition', recordDispositionHandler);
   router.get('/api/v1/qc/tasks/:taskId/disposition', getDispositionHandler);
   router.post('/api/v1/qc/tasks/:taskId/split', recordSplitHandler);
+  // Story 8.4: four new leaf paths under the same '/qc/tasks/:taskId/*' family. Release is a
+  // DOWNSTREAM step on top of an already-decided disposition, so it sits after the disposition and
+  // split routes; no path-prefix ambiguity exists between any of them.
+  router.post('/api/v1/qc/tasks/:taskId/retention-sample', logRetentionSampleHandler);
+  router.get('/api/v1/qc/tasks/:taskId/retention-sample', getQcRetentionSampleHandler);
+  router.post('/api/v1/qc/tasks/:taskId/release', releaseLotHandler);
+  router.get('/api/v1/qc/tasks/:taskId/release', getQcReleaseHandler);
   router.get('/api/v1/qc/ncrs', listQcNcrsHandler);
   router.get('/api/v1/qc/ncrs/:ncrId', getQcNcrHandler);
   router.post('/api/v1/qc/ncrs/:ncrId/outcome', recordNcrOutcomeHandler);
@@ -1020,6 +1032,8 @@ const server = createAppServer();
 let dispatchTimer: ReturnType<typeof setInterval> | undefined;
 let escalationTimer: ReturnType<typeof setInterval> | undefined;
 let expiryTimer: ReturnType<typeof setInterval> | undefined;
+// Story 8.4 (AC 5): the QC retention-sample expiry sweep, on the same in-process interval pattern.
+let retentionExpiryTimer: ReturnType<typeof setInterval> | undefined;
 
 /**
  * Wraps a poll-cycle in a re-entrancy guard: setInterval does NOT skip a tick while the async
@@ -1059,11 +1073,16 @@ function startServer(): void {
     guarded('expiry', () => runExpiryCycle()),
     config.notify.expiryIntervalMs,
   );
+  retentionExpiryTimer = setInterval(
+    guarded('qc retention expiry', () => runRetentionExpiryCycle()),
+    config.quality.retentionExpiryIntervalMs,
+  );
 
   const stopTimers = (): void => {
     clearInterval(dispatchTimer);
     clearInterval(escalationTimer);
     clearInterval(expiryTimer);
+    clearInterval(retentionExpiryTimer);
   };
 
   process.on('SIGTERM', () => {

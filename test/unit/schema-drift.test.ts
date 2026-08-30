@@ -1438,6 +1438,40 @@ const EXPECTED = [
     indexes: [] as string[],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 8.4 (FR-Q-07, AC 1/3/6/7): the append-only batch release record. No revision concept, so
+  // app_user never holds UPDATE.
+  {
+    canonical: 'read/projections/qc_batch_release.sql',
+    table: 'qc_batch_release',
+    constraints: [
+      'uq_qc_batch_release_lot',
+      'uq_qc_batch_release_disposition',
+      'chk_qc_batch_release_document_kind',
+      'chk_qc_batch_release_retention_years',
+      'chk_qc_batch_release_bis_licence_pairing',
+    ],
+    indexes: ['idx_qc_batch_release_task'],
+    indexBodies: ['ON qc_batch_release (task_id)'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  // Story 8.4 (FR-Q-08, AC 4/5): the retention sample; the disposal sweep is the one UPDATE.
+  {
+    canonical: 'read/projections/qc_retention_sample.sql',
+    table: 'qc_retention_sample',
+    constraints: [
+      'uq_qc_retention_sample_lot',
+      'chk_qc_retention_sample_quantity',
+      'chk_qc_retention_sample_uom',
+      'chk_qc_retention_sample_status',
+      'chk_qc_retention_sample_disposal_pairing',
+    ],
+    indexes: ['idx_qc_retention_sample_task', 'idx_qc_retention_sample_expiry'],
+    indexBodies: [
+      'ON qc_retention_sample (task_id)',
+      'ON qc_retention_sample (status, expires_on)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

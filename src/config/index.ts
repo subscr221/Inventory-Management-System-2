@@ -45,14 +45,51 @@ const authMode = resolveAuthMode();
  * `Number('oops')` yields NaN, and `setInterval(fn, NaN)` coerces the delay to 0 ms - turning a
  * mistyped `NOTIFY_*_MS` env var into a tight, unthrottled loop that hammers the database.
  */
-function parsePositiveIntEnv(name: string, fallback: number): number {
+function parsePositiveIntEnv(name: string, fallback: number, max?: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === '') return fallback;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid ${name} "${raw}": must be a positive integer.`);
   }
+  // An upper bound is not pedantry here: an unbounded retention-alert lead makes every retained
+  // sample due on the first sweep tick and irreversibly flips them all, an unbounded retention
+  // year count produces a calendar date no `::date` cast accepts, and an interval above 2^31-1 is
+  // silently clamped by Node's setInterval to 1 ms - a tick storm instead of an hourly sweep.
+  if (max !== undefined && parsed > max) {
+    throw new Error(`Invalid ${name} "${raw}": must not exceed ${max}.`);
+  }
   return parsed;
+}
+
+/** Node clamps any setInterval delay above this to 1 ms, so every interval knob is bounded by it. */
+const MAX_INTERVAL_MS = 2_147_483_647;
+
+/**
+ * Story 8.4 Open Question 1, answered by the product owner 2026-08-30: which released lots require a
+ * retention sample before they can be released.
+ *
+ * `all_released_lots` (the default) keeps Binding Scope Decision 6 - every lot released via accept
+ * or conditional_release needs one. `bis_covered_only` narrows it to products where
+ * item_master.bis_licence_required is true.
+ *
+ * Fails closed on an unrecognised value rather than silently falling back to either behaviour: the
+ * two settings differ in whether a statutory evidence sample exists at all, so a typo must stop the
+ * boot, not quietly pick one.
+ */
+export const RETENTION_SAMPLE_SCOPES = ['all_released_lots', 'bis_covered_only'] as const;
+export type RetentionSampleScope = (typeof RETENTION_SAMPLE_SCOPES)[number];
+
+function parseRetentionSampleScope(): RetentionSampleScope {
+  const raw = process.env['QC_RETENTION_SAMPLE_SCOPE'];
+  if (raw === undefined || raw.trim() === '') return 'all_released_lots';
+  const value = raw.trim();
+  if (!(RETENTION_SAMPLE_SCOPES as readonly string[]).includes(value)) {
+    throw new Error(
+      `Invalid QC_RETENTION_SAMPLE_SCOPE "${raw}": must be one of ${RETENTION_SAMPLE_SCOPES.join(', ')}.`,
+    );
+  }
+  return value as RetentionSampleScope;
 }
 
 /**
@@ -443,5 +480,51 @@ export const config = {
       }
       return value;
     })(),
+    // Story 8.4 (FR-Q-07, AC 1 and AC 2, Binding Scope Decision 7): the retention window stamped on
+    // every batch release record and retention sample, and the BIS Scheme of Testing and Inspection
+    // (STI) floor it may never fall below. There is no per-SKU/per-scheme STI registry anywhere in
+    // this codebase yet, so the floor is modelled as a single admin-configurable value and AC 2's
+    // RETENTION_FLOOR_VIOLATION is a boot-time guard, not a runtime route: a deployment configured
+    // below the statutory floor fails to start rather than silently issuing under-retained
+    // certificates. Both default to 7 (ARCHITECTURE-SPINE.md Retention Policy: "CoA / CoC
+    // documents: 7 years"), i.e. no floor above the default until a real STI registry exists.
+    retentionYearsDefault: parsePositiveIntEnv('QC_RETENTION_YEARS_DEFAULT', 7, 100),
+    bisRetentionFloorYears: parsePositiveIntEnv('QC_BIS_RETENTION_FLOOR_YEARS', 7, 100),
+    // Story 8.4 (AC 5): how far ahead of expiry the retention-sample sweep raises the recorded
+    // disposal event. 30 days per AC 5, bounded to a year so a mistyped value cannot sweep the
+    // whole table on one tick.
+    retentionExpiryAlertLeadDays: parsePositiveIntEnv('QC_RETENTION_EXPIRY_ALERT_LEAD_DAYS', 30, 365),
+    // Story 8.4 (AC 5): the retention-sample expiry sweep interval. Hourly, exactly like the
+    // notification expiry sweep - the 30-day alert window is a calendar boundary, not a real-time
+    // one. Kept beside its three siblings rather than under `notify`, so one feature's knobs live
+    // in one namespace.
+    retentionExpiryIntervalMs: parsePositiveIntEnv(
+      'QC_RETENTION_EXPIRY_INTERVAL_MS',
+      3_600_000,
+      MAX_INTERVAL_MS,
+    ),
+    /** Rows one sweep tick may claim, so a backlog cannot lock the whole table in one transaction. */
+    retentionExpiryBatchSize: parsePositiveIntEnv('QC_RETENTION_EXPIRY_BATCH_SIZE', 500, 10_000),
+    // Story 8.4 Open Question 1 (answered 2026-08-30): which lots need a retention sample before
+    // release. Defaults to the broader rule, so an unconfigured deployment keeps the safer
+    // behaviour rather than silently releasing lots with no physical evidence retained.
+    retentionSampleScope: parseRetentionSampleScope(),
   },
 } as const;
+
+// Story 8.4 (AC 2): RETENTION_FLOOR_VIOLATION. Validated at boot, beside the config object it
+// guards, in the same throw-at-startup style as the quality/production catalogue parsers above -
+// a retention default below the BIS STI floor is a misconfiguration that must never reach a
+// request, because every release record it stamps would carry an unlawfully short retention window.
+if (config.quality.retentionYearsDefault < config.quality.bisRetentionFloorYears) {
+  // Carries a machine-identifiable `code` so a supervisor, a test, or an operator can tell this
+  // boot refusal apart from any other startup failure. AC2 names an ERROR CODE, and a bare message
+  // substring is not one.
+  const violation = Object.assign(
+    new Error(
+      `RETENTION_FLOOR_VIOLATION: QC_RETENTION_YEARS_DEFAULT (${config.quality.retentionYearsDefault}) must not be below QC_BIS_RETENTION_FLOOR_YEARS (${config.quality.bisRetentionFloorYears}), the BIS Scheme of Testing and Inspection retention floor.`,
+    ),
+    { code: 'RETENTION_FLOOR_VIOLATION' },
+  );
+  throw violation;
+}

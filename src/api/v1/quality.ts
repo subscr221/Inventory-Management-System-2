@@ -27,13 +27,17 @@ import {
   QC_INSPECTION_COMPLETED,
   QC_LOT_DISPOSITIONED,
   QC_LOT_SPLIT_RECORDED,
+  QC_BATCH_RELEASE_RECORDED,
   QC_NCR_OUTCOME_RECORDED,
+  RELEASABLE_DISPOSITIONS,
   QC_OBSERVATION_RECORDED,
+  QC_RETENTION_SAMPLE_LOGGED,
   QC_REWORK_REQUESTED,
   QC_RESULT_RECORDED,
   QC_SAMPLING_DETERMINED,
   QC_SAMPLING_STATE_ADJUSTED,
   SWITCHING_ACTIONS,
+  isPositiveQuantity,
   resolveInspectionPlanForLot,
   resolveQcAuthority,
 } from '../../compliance/quality.js';
@@ -72,6 +76,8 @@ import {
 } from '../../read/projections/qc_ncr.js';
 import type { QcNcrOutcome } from '../../read/projections/qc_ncr.js';
 import { listQcLotSplitsByParent } from '../../read/projections/qc_lot_split.js';
+import { getQcBatchReleaseByLotId } from '../../read/projections/qc_batch_release.js';
+import { getQcRetentionSampleByLotId } from '../../read/projections/qc_retention_sample.js';
 
 /**
  * Story 8.1 REST surface for inspection plans and the QC gate (FR-Q-01, FR-Q-02, FR-Q-05). Module
@@ -98,6 +104,11 @@ const GATE_STATUSES: ReadonlySet<string> = new Set<QcGateStatus>([
   'split',
 ]);
 const TASK_STATUSES = new Set(['open', 'sampling_determined', 'inspected']);
+/** Story 8.4: the seam owns the rule; this is the same predicate, imported rather than re-declared. */
+const isPositiveQuantityInput = (value: unknown): value is string =>
+  typeof value === 'string' && isPositiveQuantity(value);
+/** chk_qc_retention_sample_uom bounds the trimmed value; the route mirrors it exactly. */
+const MAX_UOM_LENGTH = 32;
 const PLAN_SCOPES = new Set(['standard', 'customer_override']);
 
 function isUuid(value: unknown): value is string {
@@ -221,6 +232,18 @@ const AUDITED_REJECTIONS = new Set([
   'NCR_OUTCOME_EXISTS',
   'INSUFFICIENT_STOCK',
   'LOT_ON_HOLD',
+  // Story 8.4 (AC 8): a refused release or retention-sample log is a statutory record of a refused
+  // quality decision. Both "already exists" duplicate codes are here, not just one.
+  'QC_RELEASE_NOT_ELIGIBLE',
+  'RETENTION_SAMPLE_REQUIRED',
+  'RELEASE_EXISTS',
+  'RETENTION_SAMPLE_EXISTS',
+  // Reachable on both new write routes through lockLotForRetention: a caller asserting a task/lot
+  // binding that is not the lot's own inspection task is a refused state change on a statutory
+  // record, which AC8 requires in the audit log.
+  'QC_DERIVATION_MISMATCH',
+  'ITEM_NOT_FOUND',
+  'LOCATION_NOT_FOUND',
 ]);
 
 function requireBody(
@@ -1739,6 +1762,236 @@ const getNcrBase: RouteHandler = async (req, res, params) => {
 };
 
 // ---------------------------------------------------------------------------
+// Story 8.4: retention samples and batch release (FR-Q-07, FR-Q-08)
+// ---------------------------------------------------------------------------
+
+async function releaseView(task: {
+  task_id: string;
+  lot_id: string;
+}): Promise<Record<string, unknown>> {
+  const refreshed = await getQcInspectionTaskById(task.task_id);
+  const release = await getQcBatchReleaseByLotId(task.lot_id);
+  const retentionSample = await getQcRetentionSampleByLotId(task.lot_id);
+  return { task: refreshed, release, retention_sample: retentionSample };
+}
+
+const logRetentionSampleBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let taskId = '';
+  let lotId: string | null = null;
+  let siteId: string | undefined;
+  try {
+    taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    lotId = task.lot_id;
+    siteId = task.site_id;
+    assertWriteSiteAccess(req, task.site_id);
+
+    if (!isPositiveQuantityInput(body['quantity'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'quantity must be a positive decimal string', {
+        quantity: body['quantity'] ?? null,
+      });
+    }
+    if (
+      typeof body['uom'] !== 'string' ||
+      body['uom'].trim() === '' ||
+      body['uom'].trim().length > MAX_UOM_LENGTH
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `uom must be a non-empty string of at most ${MAX_UOM_LENGTH} characters`,
+        { uom: body['uom'] ?? null },
+      );
+    }
+    if (!isUuid(body['location_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'location_id must be a UUID');
+    }
+
+    // The event id is minted up front so replay is detected by comparing it against what
+    // persistEvent actually persisted, never by a check-then-act SELECT two concurrent same-key
+    // requests could both pass (the Story 8.3 recordNcrOutcomeBase lesson).
+    const eventId = randomUUID();
+    const persisted = await persistEvent(
+      {
+        event_id: eventId,
+        stream_type: 'qc',
+        stream_id: taskId,
+        event_type: QC_RETENTION_SAMPLE_LOGGED,
+        payload: {
+          task_id: taskId,
+          lot_id: task.lot_id,
+          retention_sample_id: randomUUID(),
+          quantity: body['quantity'],
+          uom: (body['uom'] as string).trim(),
+          location_id: body['location_id'],
+          logged_at: optionalTimestamp(body, 'logged_at', now),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, QC_RETENTION_SAMPLE_LOGGED, 'retention_sample_id');
+    assertTaskReplay(persisted, QC_RETENTION_SAMPLE_LOGGED, taskId);
+    const replayed = persisted.event_id !== eventId;
+    sendJson(res, replayed ? 200 : 201, {
+      event_id: persisted.event_id,
+      retention_sample: await getQcRetentionSampleByLotId(task.lot_id),
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { task_id: taskId, lot_id: lotId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const releaseLotBase: RouteHandler = async (req, res, params) => {
+  // The release carries no domain fields, but an absent body and a NON-OBJECT body are different
+  // things: a JSON array or string silently loses `idempotency_key`, turning a client's retry into
+  // a genuinely new attempt that is then refused 409 instead of replaying as 200.
+  const rawBody = getParsedBody(req);
+  if (rawBody !== undefined && (typeof rawBody !== 'object' || rawBody === null || Array.isArray(rawBody))) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body must be a JSON object');
+    return;
+  }
+  const body = (rawBody as Record<string, unknown> | undefined) ?? {};
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let taskId = '';
+  let lotId: string | null = null;
+  let siteId: string | undefined;
+  try {
+    taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    lotId = task.lot_id;
+    siteId = task.site_id;
+    assertWriteSiteAccess(req, task.site_id);
+
+    // Cheap pre-checks so the common mistakes get their code without a write attempt and without
+    // taking the lot row lock, exactly as recordDispositionBase and recordSplitBase do. The seam
+    // re-derives both under the lock - these are a courtesy, never the guarantee.
+    const disposition = await getQcLotDispositionByLotId(task.lot_id);
+    if (!disposition || !RELEASABLE_DISPOSITIONS.has(disposition.disposition)) {
+      throw new AppError(
+        409,
+        'QC_RELEASE_NOT_ELIGIBLE',
+        'A lot can only be released from an accept or conditional_release disposition',
+        {
+          task_id: taskId,
+          lot_id: task.lot_id,
+          disposition: disposition?.disposition ?? null,
+          gate_status: task.gate_status,
+        },
+      );
+    }
+    // Only pre-checked under the broad scope, where a sample is required for every lot regardless
+    // of the item. Under `bis_covered_only` the requirement depends on BIS coverage, which the seam
+    // resolves under the lot lock - this pre-check is a courtesy, never the guarantee.
+    const existingSample =
+      config.quality.retentionSampleScope === 'all_released_lots'
+        ? await getQcRetentionSampleByLotId(task.lot_id)
+        : null;
+    if (
+      config.quality.retentionSampleScope === 'all_released_lots' &&
+      (!existingSample || existingSample.status !== 'retained')
+    ) {
+      throw new AppError(
+        409,
+        'RETENTION_SAMPLE_REQUIRED',
+        existingSample
+          ? 'The retention sample for this lot is no longer retained'
+          : 'A retention sample must be logged for this lot before it can be released',
+        {
+          task_id: taskId,
+          lot_id: task.lot_id,
+          ...(existingSample ? { retention_sample_status: existingSample.status } : {}),
+        },
+      );
+    }
+
+    // Every field of the release is server-derived (Binding Scope Decisions 1-4 and 7); the body
+    // carries nothing but an optional idempotency key and decided_at.
+    const eventId = randomUUID();
+    const persisted = await persistEvent(
+      {
+        event_id: eventId,
+        stream_type: 'qc',
+        stream_id: taskId,
+        event_type: QC_BATCH_RELEASE_RECORDED,
+        payload: {
+          task_id: taskId,
+          lot_id: task.lot_id,
+          release_id: randomUUID(),
+          decided_at: optionalTimestamp(body, 'decided_at', now),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, QC_BATCH_RELEASE_RECORDED, 'release_id');
+    assertTaskReplay(persisted, QC_BATCH_RELEASE_RECORDED, taskId);
+    const replayed = persisted.event_id !== eventId;
+    sendJson(res, replayed ? 200 : 201, {
+      event_id: persisted.event_id,
+      ...(await releaseView(task)),
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { task_id: taskId, lot_id: lotId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const getReleaseBase: RouteHandler = async (req, res, params) => {
+  try {
+    const taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    assertReadSiteAccess(req, task.site_id);
+    const release = await getQcBatchReleaseByLotId(task.lot_id);
+    if (!release) {
+      throw new AppError(404, 'RELEASE_NOT_FOUND', 'No batch release record exists for this lot', {
+        task_id: taskId,
+        lot_id: task.lot_id,
+      });
+    }
+    sendJson(res, 200, { release });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const getRetentionSampleBase: RouteHandler = async (req, res, params) => {
+  try {
+    const taskId = requireUuidParam(params, 'taskId');
+    const task = await requireTask(taskId);
+    assertReadSiteAccess(req, task.site_id);
+    const retentionSample = await getQcRetentionSampleByLotId(task.lot_id);
+    if (!retentionSample) {
+      // Distinct from the applier's RETENTION_SAMPLE_NOT_FOUND, which means "this id does not
+      // resolve"; here nothing has been logged yet, which is a different fact for a caller.
+      throw new AppError(
+        404,
+        'RETENTION_SAMPLE_NOT_LOGGED',
+        'No retention sample has been logged for this lot',
+        { task_id: taskId, lot_id: task.lot_id },
+      );
+    }
+    sendJson(res, 200, { retention_sample: retentionSample });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Exports (module `qc`)
 // ---------------------------------------------------------------------------
 
@@ -1815,4 +2068,16 @@ export const recordNcrOutcomeHandler = requireRole({ module: 'qc', functionScope
   recordNcrOutcomeBase,
 );
 export const listQcNcrsHandler = requireRole({ module: 'qc', functionScope: 'read' })(listNcrsBase);
+export const logRetentionSampleHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  logRetentionSampleBase,
+);
+export const releaseLotHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  releaseLotBase,
+);
+export const getQcReleaseHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  getReleaseBase,
+);
+export const getQcRetentionSampleHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  getRetentionSampleBase,
+);
 export const getQcNcrHandler = requireRole({ module: 'qc', functionScope: 'read' })(getNcrBase);

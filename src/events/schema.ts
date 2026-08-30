@@ -3569,6 +3569,122 @@ export interface QcReworkRequestedEnvelope extends Omit<EventEnvelope, 'payload'
 }
 
 /**
+ * Story 8.4 (FR-Q-07, AC 1, AC 3, AC 6 and AC 7): the batch release record and its CoA/CoC.
+ * stream_id is the task_id. Release is a DOWNSTREAM step on top of an already-decided disposition
+ * (Binding Scope Decision 1), not a rename of it: the applier refuses 409 QC_RELEASE_NOT_ELIGIBLE
+ * unless the lot's qc_lot_disposition row is 'accept' or 'conditional_release', and 409
+ * RETENTION_SAMPLE_REQUIRED unless a qc_retention_sample row already exists for the lot. A second
+ * release for the same lot is 409 RELEASE_EXISTS (sequentially and under a race, via
+ * uq_qc_batch_release_lot / uq_qc_batch_release_disposition).
+ *
+ * task_id, lot_id and release_id are the ONLY client fields. Every other field is SEAM-DERIVED
+ * under the lot lock and written back: disposition_id from the lot's disposition row, document_kind
+ * from the released item's item_master.bis_licence_required ('coc' for a BIS-covered product,
+ * 'coa' otherwise - Binding Scope Decision 4), retention_years from resolveRetentionYears,
+ * retention_expires_on from decided_at + retention_years, bis_licence_number from the
+ * resolveBisLicenceNumber stub (null until Story 8.7 - a null NEVER blocks release), released_by
+ * from the authenticated actor.
+ *
+ * Server-derived, rejected if declared, in full: disposition_id, retention_sample_id, document_kind,
+ * document_ref, retention_years, retention_expires_on, bis_licence_number, released_by, lot_number,
+ * sku, site_id, quantity, disposition. Declaring any of them is 409 QC_DERIVATION_MISMATCH.
+ */
+export interface QcBatchReleaseRecordedPayload {
+  task_id: string;
+  lot_id: string;
+  release_id: string;
+  decided_at: string;
+  /** Derived under lock; persisted write-back only. */
+  disposition_id?: string;
+  /** The retention sample this release re-stamped, or null when the scope did not require one. */
+  retention_sample_id?: string | null;
+  document_kind?: 'coa' | 'coc';
+  retention_years?: number;
+  retention_expires_on?: string;
+  bis_licence_number?: string | null;
+  released_by?: string;
+  lot_number?: string;
+  sku?: string;
+  site_id?: string;
+  quantity?: string;
+  disposition?: 'accept' | 'conditional_release';
+}
+
+export interface QcBatchReleaseRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.batch_release_recorded';
+  payload: QcBatchReleaseRecordedPayload;
+}
+
+/**
+ * Story 8.4 (FR-Q-08, AC 4): the retention sample that must exist before a lot can be released
+ * (Binding Scope Decision 6 - every released lot, not only BIS-covered products). stream_id is the
+ * task_id. Deliberately NOT gated on disposition state: AC 4's ordering ("release attempted before
+ * the retention sample is logged") only makes sense if logging can happen any time after the
+ * inspection task exists, whether or not release has been attempted.
+ *
+ * task_id, lot_id, retention_sample_id, quantity, uom, location_id and logged_at are client
+ * fields. expires_on is SEAM-DERIVED under lock as logged_at + resolveRetentionYears, and is
+ * PROVISIONAL: when the lot is released, applyBatchReleaseRecorded re-stamps it from the release
+ * record's retention_expires_on, so exactly one clock governs both rows. (Before that re-stamp
+ * existed the two disagreed, and since AC4 forces logged_at <= decided_at the physical sample was
+ * always scheduled for disposal before the certificate it backs left retention.) location_id must
+ * resolve in location_register; a retention sample is evidentiary and moves no stock (Binding Scope
+ * Decision 8).
+ *
+ * Server-derived, rejected if declared: expires_on, retention_years, logged_by, lot_number, sku,
+ * site_id, status.
+ */
+export interface QcRetentionSampleLoggedPayload {
+  task_id: string;
+  lot_id: string;
+  retention_sample_id: string;
+  quantity: string;
+  uom: string;
+  location_id: string;
+  logged_at: string;
+  /** Derived under lock; persisted write-back only. */
+  expires_on?: string;
+  retention_years?: number;
+  logged_by?: string;
+  lot_number?: string;
+  sku?: string;
+  site_id?: string;
+}
+
+export interface QcRetentionSampleLoggedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.retention_sample_logged';
+  payload: QcRetentionSampleLoggedPayload;
+}
+
+/**
+ * Story 8.4 (FR-Q-08, AC 5): the recorded disposal event the 30-day expiry alert raises. Emitted
+ * ONLY by the retention-expiry sweep under the fixed SYSTEM_ACTOR identity (no human disposed_by,
+ * mirroring notification.expired) - there is no write route for it. It flips the sample from
+ * 'retained' to 'disposal_pending' and nothing else: physical disposal is Phase 2 / Epic 16, so
+ * qc_retention_sample.disposed_at stays null. The applier emits the AC5 alert notification in the
+ * same transaction. The UPDATE is guarded by `WHERE status = 'retained'` so it can never
+ * double-transition a row; a zero-row result is refused with 409 RETENTION_SAMPLE_NOT_RETAINED,
+ * which only a forged direct post can reach - the sweep's candidate query carries the same
+ * predicate.
+ *
+ * Server-derived, rejected if declared: task_id, lot_id, expires_on, status.
+ */
+export interface QcRetentionSampleDisposedPayload {
+  retention_sample_id: string;
+  lot_id: string;
+  disposed_at: string;
+  /** Derived under lock; persisted write-back only. */
+  task_id?: string;
+  expires_on?: string;
+  status?: 'disposal_pending';
+}
+
+export interface QcRetentionSampleDisposedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.retention_sample_disposed';
+  payload: QcRetentionSampleDisposedPayload;
+}
+
+/**
  * Story 8.2 (FR-Q-03, AC 1): freezes the IS 2500 (Part 1) / ISO 2859-1 single-sampling plan on a
  * task. stream_id is the task_id. Only task_id, sampling_id and determined_at are client fields;
  * every other field is SEAM-DERIVED under the lot, task and switching-state locks (lot size from
@@ -4512,6 +4628,22 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'qc.rework_requested': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  // Story 8.4: the batch release record, the retention sample and its recorded disposal (FR-Q-07,
+  // FR-Q-08). Same reasoning as the Story 8.3 family - all three ride the 'qc' stream and none
+  // carries a business stream, because each acts on a task whose business stream was already fixed
+  // by the completion hand-off (AD-14).
+  'qc.batch_release_recorded': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.retention_sample_logged': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.retention_sample_disposed': {
     streamType: 'qc',
     requiresBusinessStream: false,
   },

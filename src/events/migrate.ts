@@ -191,6 +191,14 @@ const MIGRATIONS = [
   // between them is logical.
   '../../read/projections/qc_lot_split.sql',
   '../../read/projections/qc_ncr.sql',
+  // Story 8.4: the batch release record and the retention sample for FR-Q-07 and FR-Q-08. Both
+  // read qc_inspection_task and qc_lot_disposition conceptually (release is eligible only on an
+  // accept/conditional_release disposition - Binding Scope Decision 1), so they are appended after
+  // qc_lot_disposition.sql and the Story 8.3 files. Neither carries an FK - they are derived,
+  // rebuildable projections in the same style as qc_lot_split/qc_ncr - so the order between them
+  // is logical.
+  '../../read/projections/qc_batch_release.sql',
+  '../../read/projections/qc_retention_sample.sql',
 ];
 
 async function migrate(): Promise<void> {
