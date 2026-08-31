@@ -14,6 +14,20 @@ bucket_definitions:
   # Rules support NO joins or subqueries, so released-ness is denormalized onto the rows by the
   # lifecycle seam (updateBomStatus) instead of computed here. Without the marker, draft, on_hold,
   # obsolete and R&D-draft lines (including placeholders) would replicate to every edge device.
+  # Story 8.5 (FR-Q-09, AC 1/2, Binding Scope Decision 6): quality-hold propagation to the edge.
+  # A GLOBAL bucket (no parameters query), following released_bom_structure exactly: a held lot may
+  # be physically anywhere - a receiving site, a truck, a job worker - so site-filtering the bucket
+  # would leave every site but the placing one blind to the hold, which is the opposite of AC 1's
+  # "all instances flip to Blocked on every connected node". Legacy Sync Rules support NO joins or
+  # subqueries, so the bucket replicates the held rows of lot_master itself (the one enforcement
+  # flag, already denormalized - lot_number, sku and the reason live on the row). The client table
+  # is named held_lot via the FROM alias and must match edge/src/local-db/schema.ts exactly.
+  # "Applied on the device immediately on reconnect" is PowerSync's own replication - no timer, no
+  # poll, no push (Binding Scope Decision 7's budget is measured centrally, not enforced here).
+  quality_holds:
+    data:
+      - SELECT lot_id AS id, lot_id, lot_number, sku, quality_hold_status, quality_hold_reason, updated_at FROM lot_master AS held_lot WHERE quality_hold_status = 'held'
+
   released_bom_structure:
     data:
       - SELECT bom_id AS id, bom_id, parent_item_id, parent_sku, parent_uom, business_stream, bom_type, status, current_revision_id, updated_at FROM bom WHERE status = 'released'

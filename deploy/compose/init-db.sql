@@ -10449,20 +10449,14 @@ CREATE INDEX IF NOT EXISTS idx_qc_ncr_task ON qc_ncr (task_id);
 
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'uq_qc_ncr_lot'
-      AND conrelid = 'qc_ncr'::regclass
-  ) THEN
-    ALTER TABLE qc_ncr ADD CONSTRAINT uq_qc_ncr_lot UNIQUE (lot_id);
-  END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'uq_qc_ncr_disposition'
-      AND conrelid = 'qc_ncr'::regclass
-  ) THEN
-    ALTER TABLE qc_ncr ADD CONSTRAINT uq_qc_ncr_disposition UNIQUE (disposition_id);
-  END IF;
+  -- Story 8.5: the uq_qc_ncr_lot and uq_qc_ncr_disposition add-if-missing guards that used to
+  -- open this block are REMOVED, not merely superseded. The widening section below drops both
+  -- table constraints and replaces them with partial unique INDEXES (one of them under the SAME
+  -- name), so a surviving guard here would re-add the constraint on the next re-apply and abort
+  -- the file with "relation uq_qc_ncr_disposition already exists" - the exact narrow-guard
+  -- re-application failure the Story 6.3 posting_type widening already taught. The inline CREATE
+  -- TABLE constraints stay for a FRESH database; the widening section normalizes either starting
+  -- point to the partial-index form.
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_qc_ncr_quantity'
@@ -10530,6 +10524,59 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON qc_ncr TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 8.5 (FR-Q-10, Binding Scope Decision 9): the NCR gains a second ORIGIN. A hold-sourced NCR
+-- is raised independently of any disposition, so disposition_id and task_id become nullable and
+-- the one-per-lot backstop narrows to disposition-sourced rows only (a lot may accumulate several
+-- hold-sourced NCRs over its life, but the Story 8.3 "created BY the reject" invariant is
+-- unchanged for origin = 'disposition'). uq_qc_ncr_lot is REPLACED by the partial
+-- uq_qc_ncr_lot_disposition_sourced and uq_qc_ncr_disposition is re-stated as a partial unique
+-- index; BOTH keep resolving to 409 NCR_EXISTS in the store's constraint chain, byte-identical to
+-- the Story 8.3 behaviour.
+--
+-- chk_qc_ncr_origin is the FULL biconditional (the Story 8.4 one-directional CHECK lesson):
+-- origin = 'disposition' exactly when disposition_id and task_id are both non-null, and
+-- origin = 'hold' exactly when defect_code is non-null (AC 3: a hold-sourced NCR always carries a
+-- defect code; hold_id stays nullable because a lot may be flag-held by the Story 2.3 ad hoc route
+-- without a governed qc_quality_hold row).
+--
+-- chk_qc_ncr_outcome is widened to admit 'closed_with_capa' (Binding Scope Decision 14): the
+-- hold-sourced terminal outcome that moves no stock, so chk_qc_ncr_downgrade_pairing and
+-- chk_qc_ncr_rework_pairing stay true unchanged.
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS origin TEXT;
+UPDATE qc_ncr SET origin = 'disposition' WHERE origin IS NULL;
+ALTER TABLE qc_ncr ALTER COLUMN origin SET NOT NULL;
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS hold_id UUID;
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS defect_code TEXT;
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS capa_id UUID;
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS capa_mandatory BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE qc_ncr ALTER COLUMN disposition_id DROP NOT NULL;
+ALTER TABLE qc_ncr ALTER COLUMN task_id DROP NOT NULL;
+
+ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS uq_qc_ncr_lot;
+ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS uq_qc_ncr_disposition;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qc_ncr_lot_disposition_sourced ON qc_ncr (lot_id) WHERE disposition_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qc_ncr_disposition ON qc_ncr (disposition_id) WHERE disposition_id IS NOT NULL;
+
+DO $$
+BEGIN
+  ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS chk_qc_ncr_outcome;
+  ALTER TABLE qc_ncr
+    ADD CONSTRAINT chk_qc_ncr_outcome CHECK (outcome IS NULL OR outcome IN ('rework', 'downgrade', 'scrap', 'closed_with_capa'));
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_ncr_origin'
+      AND conrelid = 'qc_ncr'::regclass
+  ) THEN
+    ALTER TABLE qc_ncr
+      ADD CONSTRAINT chk_qc_ncr_origin CHECK (
+        origin IN ('disposition', 'hold')
+        AND (origin = 'disposition') = (disposition_id IS NOT NULL AND task_id IS NOT NULL)
+        AND (origin = 'hold') = (defect_code IS NOT NULL)
+        AND (hold_id IS NULL OR origin = 'hold')
+      );
   END IF;
 END $$;
 
@@ -10987,5 +11034,247 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON production_scrap_declaration TO readonly_user;
+  END IF;
+END $$;
+
+-- QC governed quality hold (Story 8.5, FR-Q-09, AC 1 and AC 2). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.hold_placed and qc.hold_released domain
+-- events; mutation happens exclusively through persistEvent inside the SAME transaction as the
+-- domain_events insert.
+--
+-- Story 8.5 Binding Scope Decision 1: this table is the governed RECORD of the hold decision, not
+-- a second enforcement axis. The applier that inserts a row here sets
+-- lot_master.quality_hold_status = 'held' inside the SAME transaction; every enforcement site
+-- (assertQcGateAllows, dispatch, cross-dock, lot-serial-validation, receiving, the Story 8.4
+-- release path) keeps reading that one flag and is untouched by this story.
+--
+-- uq_qc_quality_hold_open is the one-OPEN-hold-per-lot backstop (a 23505 resolves to 409
+-- HOLD_EXISTS in the store's constraint chain). Released holds are history and do not count
+-- against the grain, hence the partial predicate - the UNIQUE keyword plus the WHERE clause ARE
+-- the semantics, exactly like uq_production_order_source_rework_event.
+--
+-- chk_qc_quality_hold_release_pairing is the FULL biconditional (the Story 8.4 one-directional
+-- CHECK lesson): status = 'released' exactly when all four release columns are non-null, and
+-- status = 'open' exactly when all four are null. There is no reopen; release is terminal.
+--
+-- app_user holds INSERT, SELECT and UPDATE (the one open -> released transition) and never DELETE.
+
+CREATE TABLE IF NOT EXISTS qc_quality_hold (
+  hold_id          UUID PRIMARY KEY,
+  lot_id           UUID NOT NULL,
+  lot_number       TEXT NOT NULL,
+  sku              TEXT NOT NULL,
+  site_id          UUID NOT NULL,
+  hold_reason      TEXT NOT NULL,
+  defect_code      TEXT,
+  status           TEXT NOT NULL DEFAULT 'open',
+  placed_by        UUID NOT NULL,
+  placed_at        TIMESTAMPTZ NOT NULL,
+  source_event_id  UUID NOT NULL,
+  released_by      UUID,
+  released_at      TIMESTAMPTZ,
+  release_reason   TEXT,
+  release_event_id UUID,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_qc_quality_hold_status CHECK (status IN ('open', 'released')),
+  CONSTRAINT chk_qc_quality_hold_reason CHECK (btrim(hold_reason) <> '' AND char_length(hold_reason) <= 2000),
+  CONSTRAINT chk_qc_quality_hold_release_reason CHECK (
+    release_reason IS NULL OR (btrim(release_reason) <> '' AND char_length(release_reason) <= 2000)
+  ),
+  CONSTRAINT chk_qc_quality_hold_release_pairing CHECK (
+    (status = 'released') = (released_by IS NOT NULL)
+    AND (released_by IS NOT NULL) = (released_at IS NOT NULL)
+    AND (released_at IS NOT NULL) = (release_reason IS NOT NULL)
+    AND (release_reason IS NOT NULL) = (release_event_id IS NOT NULL)
+  )
+);
+
+-- One OPEN hold per lot; released holds are retained history and never block a new hold.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qc_quality_hold_open ON qc_quality_hold (lot_id) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_qc_quality_hold_site ON qc_quality_hold (site_id, placed_at, hold_id);
+CREATE INDEX IF NOT EXISTS idx_qc_quality_hold_lot ON qc_quality_hold (lot_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_quality_hold_status'
+      AND conrelid = 'qc_quality_hold'::regclass
+  ) THEN
+    ALTER TABLE qc_quality_hold
+      ADD CONSTRAINT chk_qc_quality_hold_status CHECK (status IN ('open', 'released'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_quality_hold_reason'
+      AND conrelid = 'qc_quality_hold'::regclass
+  ) THEN
+    ALTER TABLE qc_quality_hold
+      ADD CONSTRAINT chk_qc_quality_hold_reason CHECK (btrim(hold_reason) <> '' AND char_length(hold_reason) <= 2000);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_quality_hold_release_reason'
+      AND conrelid = 'qc_quality_hold'::regclass
+  ) THEN
+    ALTER TABLE qc_quality_hold
+      ADD CONSTRAINT chk_qc_quality_hold_release_reason CHECK (
+        release_reason IS NULL OR (btrim(release_reason) <> '' AND char_length(release_reason) <= 2000)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_quality_hold_release_pairing'
+      AND conrelid = 'qc_quality_hold'::regclass
+  ) THEN
+    ALTER TABLE qc_quality_hold
+      ADD CONSTRAINT chk_qc_quality_hold_release_pairing CHECK (
+        (status = 'released') = (released_by IS NOT NULL)
+        AND (released_by IS NOT NULL) = (released_at IS NOT NULL)
+        AND (released_at IS NOT NULL) = (release_reason IS NOT NULL)
+        AND (release_reason IS NOT NULL) = (release_event_id IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON qc_quality_hold TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON qc_quality_hold TO readonly_user;
+  END IF;
+END $$;
+
+-- QC corrective and preventive action record (Story 8.5, FR-Q-10, AC 3 and AC 4). This file is
+-- the CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned
+-- database can serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying qc.capa_opened and qc.capa_closed domain
+-- events; mutation happens exclusively through persistEvent inside the SAME transaction as the
+-- domain_events insert.
+--
+-- Story 8.5 Binding Scope Decision 11: a CAPA is a first-class record with its own lifecycle
+-- (open -> closed), owner, due date and closure evidence - AC 3's "linked to a CAPA record" is a
+-- validated reference to a row here, never a free-text id. capa_number is minted server-side from
+-- qc_capa_number_seq (the production_order_number_seq pattern); uq_qc_capa_number is the backstop
+-- (a 23505 resolves to 409 CAPA_EXISTS in the store's constraint chain).
+--
+-- chk_qc_capa_closure_pairing is the FULL biconditional (the Story 8.4 one-directional CHECK
+-- lesson): status = 'closed' exactly when all four closure columns are non-null, and
+-- status = 'open' exactly when all four are null. There is no reopen.
+--
+-- app_user holds INSERT, SELECT and UPDATE (the one open -> closed transition) and never DELETE.
+
+CREATE TABLE IF NOT EXISTS qc_capa (
+  capa_id           UUID PRIMARY KEY,
+  capa_number       TEXT NOT NULL,
+  sku               TEXT NOT NULL,
+  defect_code       TEXT NOT NULL,
+  title             TEXT NOT NULL,
+  root_cause        TEXT,
+  corrective_action TEXT,
+  preventive_action TEXT,
+  owner_user_id     UUID NOT NULL,
+  due_on            DATE NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'open',
+  opened_by         UUID NOT NULL,
+  opened_at         TIMESTAMPTZ NOT NULL,
+  closed_by         UUID,
+  closed_at         TIMESTAMPTZ,
+  closure_evidence  TEXT,
+  source_event_id   UUID NOT NULL,
+  close_event_id    UUID,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_qc_capa_number UNIQUE (capa_number),
+  CONSTRAINT chk_qc_capa_status CHECK (status IN ('open', 'closed')),
+  CONSTRAINT chk_qc_capa_title CHECK (btrim(title) <> '' AND char_length(title) <= 2000),
+  CONSTRAINT chk_qc_capa_closure_evidence CHECK (
+    closure_evidence IS NULL OR (btrim(closure_evidence) <> '' AND char_length(closure_evidence) <= 2000)
+  ),
+  CONSTRAINT chk_qc_capa_closure_pairing CHECK (
+    (status = 'closed') = (closed_by IS NOT NULL)
+    AND (closed_by IS NOT NULL) = (closed_at IS NOT NULL)
+    AND (closed_at IS NOT NULL) = (closure_evidence IS NOT NULL)
+    AND (closure_evidence IS NOT NULL) = (close_event_id IS NOT NULL)
+  )
+);
+
+CREATE SEQUENCE IF NOT EXISTS qc_capa_number_seq;
+
+CREATE INDEX IF NOT EXISTS idx_qc_capa_sku_defect ON qc_capa (sku, defect_code, status);
+CREATE INDEX IF NOT EXISTS idx_qc_capa_status ON qc_capa (status, due_on, capa_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_qc_capa_number'
+      AND conrelid = 'qc_capa'::regclass
+  ) THEN
+    ALTER TABLE qc_capa ADD CONSTRAINT uq_qc_capa_number UNIQUE (capa_number);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_capa_status'
+      AND conrelid = 'qc_capa'::regclass
+  ) THEN
+    ALTER TABLE qc_capa ADD CONSTRAINT chk_qc_capa_status CHECK (status IN ('open', 'closed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_capa_title'
+      AND conrelid = 'qc_capa'::regclass
+  ) THEN
+    ALTER TABLE qc_capa
+      ADD CONSTRAINT chk_qc_capa_title CHECK (btrim(title) <> '' AND char_length(title) <= 2000);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_capa_closure_evidence'
+      AND conrelid = 'qc_capa'::regclass
+  ) THEN
+    ALTER TABLE qc_capa
+      ADD CONSTRAINT chk_qc_capa_closure_evidence CHECK (
+        closure_evidence IS NULL OR (btrim(closure_evidence) <> '' AND char_length(closure_evidence) <= 2000)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_capa_closure_pairing'
+      AND conrelid = 'qc_capa'::regclass
+  ) THEN
+    ALTER TABLE qc_capa
+      ADD CONSTRAINT chk_qc_capa_closure_pairing CHECK (
+        (status = 'closed') = (closed_by IS NOT NULL)
+        AND (closed_by IS NOT NULL) = (closed_at IS NOT NULL)
+        AND (closed_at IS NOT NULL) = (closure_evidence IS NOT NULL)
+        AND (closure_evidence IS NOT NULL) = (close_event_id IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON qc_capa TO app_user;
+    GRANT USAGE ON qc_capa_number_seq TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON qc_capa TO readonly_user;
   END IF;
 END $$;

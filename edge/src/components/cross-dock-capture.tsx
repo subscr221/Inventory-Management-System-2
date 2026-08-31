@@ -59,8 +59,10 @@ export function CrossDockCapture({
     try {
       const identifier = await onConfirm?.(task, stagingBin.trim());
       setResult(`${t('crossDock.pendingResult')} ${t('crossDock.scannedBin')}: ${stagingBin.trim()}. ${identifier ?? task.cross_dock_task_id}. ${t('crossDock.nextAction')}`);
-    } catch {
-      setResult(t('crossDock.loadError'));
+    } catch (err) {
+      // Story 8.5 (AC 2): surface the pre-capture held-lot refusal verbatim so the technician is
+      // told about a hold before capture, not after replay.
+      setResult(err instanceof Error && err.message ? err.message : t('crossDock.loadError'));
     }
   }
 

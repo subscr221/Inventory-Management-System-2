@@ -77,20 +77,14 @@ CREATE INDEX IF NOT EXISTS idx_qc_ncr_task ON qc_ncr (task_id);
 
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'uq_qc_ncr_lot'
-      AND conrelid = 'qc_ncr'::regclass
-  ) THEN
-    ALTER TABLE qc_ncr ADD CONSTRAINT uq_qc_ncr_lot UNIQUE (lot_id);
-  END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'uq_qc_ncr_disposition'
-      AND conrelid = 'qc_ncr'::regclass
-  ) THEN
-    ALTER TABLE qc_ncr ADD CONSTRAINT uq_qc_ncr_disposition UNIQUE (disposition_id);
-  END IF;
+  -- Story 8.5: the uq_qc_ncr_lot and uq_qc_ncr_disposition add-if-missing guards that used to
+  -- open this block are REMOVED, not merely superseded. The widening section below drops both
+  -- table constraints and replaces them with partial unique INDEXES (one of them under the SAME
+  -- name), so a surviving guard here would re-add the constraint on the next re-apply and abort
+  -- the file with "relation uq_qc_ncr_disposition already exists" - the exact narrow-guard
+  -- re-application failure the Story 6.3 posting_type widening already taught. The inline CREATE
+  -- TABLE constraints stay for a FRESH database; the widening section normalizes either starting
+  -- point to the partial-index form.
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_qc_ncr_quantity'
@@ -158,5 +152,58 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON qc_ncr TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 8.5 (FR-Q-10, Binding Scope Decision 9): the NCR gains a second ORIGIN. A hold-sourced NCR
+-- is raised independently of any disposition, so disposition_id and task_id become nullable and
+-- the one-per-lot backstop narrows to disposition-sourced rows only (a lot may accumulate several
+-- hold-sourced NCRs over its life, but the Story 8.3 "created BY the reject" invariant is
+-- unchanged for origin = 'disposition'). uq_qc_ncr_lot is REPLACED by the partial
+-- uq_qc_ncr_lot_disposition_sourced and uq_qc_ncr_disposition is re-stated as a partial unique
+-- index; BOTH keep resolving to 409 NCR_EXISTS in the store's constraint chain, byte-identical to
+-- the Story 8.3 behaviour.
+--
+-- chk_qc_ncr_origin is the FULL biconditional (the Story 8.4 one-directional CHECK lesson):
+-- origin = 'disposition' exactly when disposition_id and task_id are both non-null, and
+-- origin = 'hold' exactly when defect_code is non-null (AC 3: a hold-sourced NCR always carries a
+-- defect code; hold_id stays nullable because a lot may be flag-held by the Story 2.3 ad hoc route
+-- without a governed qc_quality_hold row).
+--
+-- chk_qc_ncr_outcome is widened to admit 'closed_with_capa' (Binding Scope Decision 14): the
+-- hold-sourced terminal outcome that moves no stock, so chk_qc_ncr_downgrade_pairing and
+-- chk_qc_ncr_rework_pairing stay true unchanged.
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS origin TEXT;
+UPDATE qc_ncr SET origin = 'disposition' WHERE origin IS NULL;
+ALTER TABLE qc_ncr ALTER COLUMN origin SET NOT NULL;
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS hold_id UUID;
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS defect_code TEXT;
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS capa_id UUID;
+ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS capa_mandatory BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE qc_ncr ALTER COLUMN disposition_id DROP NOT NULL;
+ALTER TABLE qc_ncr ALTER COLUMN task_id DROP NOT NULL;
+
+ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS uq_qc_ncr_lot;
+ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS uq_qc_ncr_disposition;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qc_ncr_lot_disposition_sourced ON qc_ncr (lot_id) WHERE disposition_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qc_ncr_disposition ON qc_ncr (disposition_id) WHERE disposition_id IS NOT NULL;
+
+DO $$
+BEGIN
+  ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS chk_qc_ncr_outcome;
+  ALTER TABLE qc_ncr
+    ADD CONSTRAINT chk_qc_ncr_outcome CHECK (outcome IS NULL OR outcome IN ('rework', 'downgrade', 'scrap', 'closed_with_capa'));
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_ncr_origin'
+      AND conrelid = 'qc_ncr'::regclass
+  ) THEN
+    ALTER TABLE qc_ncr
+      ADD CONSTRAINT chk_qc_ncr_origin CHECK (
+        origin IN ('disposition', 'hold')
+        AND (origin = 'disposition') = (disposition_id IS NOT NULL AND task_id IS NOT NULL)
+        AND (origin = 'hold') = (defect_code IS NOT NULL)
+        AND (hold_id IS NULL OR origin = 'hold')
+      );
   END IF;
 END $$;

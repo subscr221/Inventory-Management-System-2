@@ -175,11 +175,26 @@ export const cachedClosureCode = new Table(
   { localOnly: true },
 );
 
+// Story 8.5 (FR-Q-09, AC 1/2): the quality-hold propagation table, synced (NOT localOnly) from
+// the global quality_holds bucket in sync/sync-rules.yaml - the edge never writes it, there is no
+// capture screen and no outbox path for it. Table name and column list must match the bucket
+// query exactly. The pre-capture guard reads this table so a technician is told about a hold
+// BEFORE capture rather than after replay rejection.
+export const heldLot = new Table({
+  lot_id: column.text,
+  lot_number: column.text,
+  sku: column.text,
+  quality_hold_status: column.text,
+  quality_hold_reason: column.text,
+  updated_at: column.text,
+});
+
 export const EdgeSchema = new Schema({
   edge_outbox: edgeOutbox,
   cached_user_context: cachedUserContext,
   cached_site_context: cachedSiteContext,
   sync_failures: syncFailures,
+  held_lot: heldLot,
   bom,
   bom_revision: bomRevision,
   bom_line: bomLine,

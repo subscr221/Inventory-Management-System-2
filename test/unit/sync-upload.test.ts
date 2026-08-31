@@ -83,6 +83,10 @@ describe('Story 1.8 sync upload classification', () => {
       'INVALID_SIGNAL_TYPE',
       // Story 2.9 ERP read-only reference projection rejection
       'SOURCE_SYSTEM_READ_ONLY',
+      // Story 8.5 (FR-Q-09, AC 2): a queued edge transaction replayed against a lot held after
+      // capture is rejected permanently and classified needs_attention - that IS "flagged for
+      // supervisor review" (Binding Scope Decision 8; the syncFailures row is the review queue).
+      'LOT_ON_HOLD',
     ]) {
       assertClassification(classifyUploadFailure(new AppError(400, code, 'Permanent failure')), {
         action: 'complete',

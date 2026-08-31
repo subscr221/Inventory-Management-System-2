@@ -21,6 +21,7 @@ import {
   clearQualityHold,
 } from '../../read/projections/lot_master.js';
 import { appendTraceEntry, getTraceForLot } from '../../read/projections/lot_trace.js';
+import { getOpenQcQualityHoldByLotId } from '../../read/projections/qc_quality_hold.js';
 import { getStockBalancesBySku } from '../../read/projections/stock_balance.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
@@ -412,6 +413,23 @@ const clearQualityHoldBase: RouteHandler = async (req, res, params) => {
         'LOT_NOT_FOUND',
         `No lot master record exists for lot_id "${lotNumber}"`,
         { lot_id: lotNumber },
+      );
+      return;
+    }
+    // Story 8.5 (Binding Scope Decision 3): this ad hoc clear route must NOT be able to lift a
+    // governed QC hold - without this guard the entire governed-hold story is bypassable by one
+    // pre-existing route (the exact hold-bypass class the 8.3 and 8.4 reviews each found once).
+    // Fail closed: an open qc_quality_hold row for the lot refuses the clear outright.
+    const governedHold = await getOpenQcQualityHoldByLotId(existingLot.lot_id, client);
+    if (governedHold) {
+      await client.query('ROLLBACK');
+      sendRequestError(
+        req,
+        res,
+        409,
+        'QUALITY_HOLD_GOVERNED',
+        'An open governed QC hold exists for this lot; it can only be lifted through the QC hold release route',
+        { lot_id: existingLot.lot_id, hold_id: governedHold.hold_id },
       );
       return;
     }

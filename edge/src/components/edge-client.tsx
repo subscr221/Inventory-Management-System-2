@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PowerSyncDatabase } from '@powersync/web';
 import { createTestCaptureEvent } from '../capture/test-capture';
 import { createCrossDockCompletionEvent } from '../capture/cross-dock';
+import { assertLotNotHeld } from '../capture/held-lot';
 import { createIndentRaisedEvent } from '../capture/indent';
 import {
   createFaultReportedEvent,
@@ -322,6 +323,11 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
     const db = database.current;
     if (!db || !state.userId || !state.siteId) {
       throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
+    }
+    // Story 8.5 (AC 2): pre-capture held-lot guard - the technician is told BEFORE capture; the
+    // central LOT_ON_HOLD rejection plus needs_attention/syncFailures remains the authority.
+    if (task.lot_number) {
+      await assertLotNotHeld(db, task.lot_number);
     }
     const event = createCrossDockCompletionEvent({
       taskId: task.cross_dock_task_id,

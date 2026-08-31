@@ -208,6 +208,8 @@ import {
   resolveQcResultDuplicateConflict,
   resolveQcReleaseDuplicateConflict,
   resolveQcRetentionSampleDuplicateConflict,
+  resolveQcHoldDuplicateConflict,
+  resolveQcCapaDuplicateConflict,
 } from '../compliance/quality.js';
 import {
   assertProductionMaterialShape,
@@ -1653,7 +1655,13 @@ export async function persistEvent(
         // Story 8.3 (Annex requirement 8): one NCR per rejected lot. The reject disposition raises
         // it, so a raced second reject surfaces here with the same existing_disposition_id the
         // sequential DISPOSITION_EXISTS pre-check would name - same code, same shape.
-        constraint === 'uq_qc_ncr_lot' ||
+        // Story 8.5 (Binding Scope Decision 9): uq_qc_ncr_lot became the PARTIAL
+        // uq_qc_ncr_lot_disposition_sourced (disposition-sourced rows only) and
+        // uq_qc_ncr_disposition became a same-named partial index; both keep resolving through
+        // THIS existing arm so the Story 8.3 behaviour is byte-identical (EXTEND, never duplicate
+        // an arm for the same underlying fact - the 8.3 review lesson). A hold-sourced insert has
+        // disposition_id NULL and can never trip either.
+        constraint === 'uq_qc_ncr_lot_disposition_sourced' ||
         constraint === 'uq_qc_ncr_disposition' ||
         constraint === 'qc_ncr_pkey'
       ) {
@@ -1681,6 +1689,19 @@ export async function persistEvent(
           'A batch release record already exists for this lot',
           { constraint, ...(await resolveQcReleaseDuplicateConflict(envelope.payload)) },
         );
+      } else if (constraint === 'uq_qc_quality_hold_open') {
+        // Story 8.5 (AC 1): one OPEN hold per lot. A raced double-place surfaces the stable 409
+        // with the same existing_hold_id the sequential HOLD_EXISTS pre-check names.
+        throw new AppError(409, 'HOLD_EXISTS', 'An open quality hold already exists for this lot', {
+          constraint,
+          ...(await resolveQcHoldDuplicateConflict(envelope.payload)),
+        });
+      } else if (constraint === 'uq_qc_capa_number') {
+        // Story 8.5: the server-minted CAPA number collided (sequential or concurrent).
+        throw new AppError(409, 'CAPA_EXISTS', 'The minted CAPA number already exists', {
+          constraint,
+          ...(await resolveQcCapaDuplicateConflict(envelope.payload)),
+        });
       } else if (constraint === 'uq_qc_retention_sample_lot') {
         // Story 8.4 (AC 4): one retention sample per lot. A raced double-log surfaces the stable
         // 409 with the existing_retention_sample_id rather than a raw 23505 500.

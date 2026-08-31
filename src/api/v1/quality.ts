@@ -29,6 +29,13 @@ import {
   QC_LOT_SPLIT_RECORDED,
   QC_BATCH_RELEASE_RECORDED,
   QC_NCR_OUTCOME_RECORDED,
+  QC_HOLD_PLACED,
+  QC_HOLD_RELEASED,
+  QC_NCR_RAISED,
+  QC_CAPA_OPENED,
+  QC_CAPA_CLOSED,
+  QC_CAPA_LINKED,
+  NCR_HOLD_TERMINAL_OUTCOME,
   RELEASABLE_DISPOSITIONS,
   QC_OBSERVATION_RECORDED,
   QC_RETENTION_SAMPLE_LOGGED,
@@ -69,15 +76,22 @@ import {
   getConditionalReleaseForLot,
   getQcLotDispositionByLotId,
 } from '../../read/projections/qc_lot_disposition.js';
-import {
-  getQcNcrById,
-  getQcNcrByLotId,
-  listQcNcrs,
-} from '../../read/projections/qc_ncr.js';
+import { getQcNcrById, getQcNcrByLotId, listQcNcrs } from '../../read/projections/qc_ncr.js';
 import type { QcNcrOutcome } from '../../read/projections/qc_ncr.js';
 import { listQcLotSplitsByParent } from '../../read/projections/qc_lot_split.js';
 import { getQcBatchReleaseByLotId } from '../../read/projections/qc_batch_release.js';
 import { getQcRetentionSampleByLotId } from '../../read/projections/qc_retention_sample.js';
+import { getLotById } from '../../read/projections/lot_master.js';
+import { getQcInspectionTaskByLotId } from '../../read/projections/qc_inspection_task.js';
+import {
+  getOpenQcQualityHoldByLotId,
+  getQcQualityHoldById,
+  listQcQualityHolds,
+} from '../../read/projections/qc_quality_hold.js';
+import type { QcHoldStatus } from '../../read/projections/qc_quality_hold.js';
+import { getQcCapaById, listQcCapas } from '../../read/projections/qc_capa.js';
+import type { QcCapaStatus } from '../../read/projections/qc_capa.js';
+import { assembleRecallTrace } from '../../quality/recall-trace.js';
 
 /**
  * Story 8.1 REST surface for inspection plans and the QC gate (FR-Q-01, FR-Q-02, FR-Q-05). Module
@@ -244,6 +258,19 @@ const AUDITED_REJECTIONS = new Set([
   'QC_DERIVATION_MISMATCH',
   'ITEM_NOT_FOUND',
   'LOCATION_NOT_FOUND',
+  // Story 8.5 (FR-Q-09/FR-Q-10): a refused hold placement/release, defect-code citation, CAPA
+  // link/close or misdirected NCR outcome is a statutory record of a refused quality decision.
+  // Both "already exists" duplicate codes are here (the 8.4 lesson). QUALITY_HOLD_GOVERNED lives
+  // on the Story 2.3 lots surface, which carries no audit machinery, so it is deliberately not
+  // listed - a code in this table that no route in THIS file throws is exactly the drift the 8.4
+  // review flagged.
+  'HOLD_EXISTS',
+  'HOLD_ALREADY_RELEASED',
+  'DEFECT_CODE_UNKNOWN',
+  'CAPA_EXISTS',
+  'CAPA_NOT_OPEN',
+  'CAPA_ALREADY_LINKED',
+  'NCR_OUTCOME_NOT_APPLICABLE',
 ]);
 
 function requireBody(
@@ -1583,8 +1610,18 @@ const recordNcrOutcomeBase: RouteHandler = async (req, res, params) => {
     assertWriteSiteAccess(req, ncr.site_id);
 
     const outcome = body['outcome'];
-    if (typeof outcome !== 'string' || !NCR_OUTCOMES.has(outcome)) {
-      throw new AppError(400, 'INVALID_PARAMS', 'outcome must be one of: rework, downgrade, scrap');
+    // Story 8.5: closed_with_capa joins the vocabulary; the seam rejects it on a
+    // disposition-sourced NCR and rejects the three disposition-family outcomes on a hold-sourced
+    // NCR (NCR_OUTCOME_NOT_APPLICABLE), so the route stays a thin shape check.
+    if (
+      typeof outcome !== 'string' ||
+      (!NCR_OUTCOMES.has(outcome) && outcome !== NCR_HOLD_TERMINAL_OUTCOME)
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'outcome must be one of: rework, downgrade, scrap, closed_with_capa',
+      );
     }
     if (typeof body['outcome_reason'] !== 'string' || body['outcome_reason'].trim() === '') {
       throw new AppError(400, 'INVALID_PARAMS', 'outcome_reason must be a non-empty string');
@@ -1676,7 +1713,9 @@ const recordNcrOutcomeBase: RouteHandler = async (req, res, params) => {
               sku: ncr.sku,
               site_id: ncr.site_id,
               quantity: ncr.quantity,
-              plan_version_id: (await requireTask(ncr.task_id)).plan_version_id,
+              // A rework outcome is only reachable on a disposition-sourced NCR (the seam rejects
+              // it otherwise), so task_id is non-null here by construction (Story 8.5 widening).
+              plan_version_id: (await requireTask(ncr.task_id as string)).plan_version_id,
               requested_by: actor.userId,
               requested_at: decided?.outcome_at ?? decidedAt,
             },
@@ -1715,11 +1754,16 @@ const listNcrsBase: RouteHandler = async (req, res, _params) => {
     if (siteId !== null && !isUuid(siteId)) {
       throw new AppError(400, 'INVALID_PARAMS', 'site_id must be a UUID');
     }
-    if (outcome !== null && outcome !== 'open' && !NCR_OUTCOMES.has(outcome)) {
+    if (
+      outcome !== null &&
+      outcome !== 'open' &&
+      !NCR_OUTCOMES.has(outcome) &&
+      outcome !== NCR_HOLD_TERMINAL_OUTCOME
+    ) {
       throw new AppError(
         400,
         'INVALID_PARAMS',
-        'outcome must be one of: open, rework, downgrade, scrap',
+        'outcome must be one of: open, rework, downgrade, scrap, closed_with_capa',
       );
     }
     if (
@@ -1856,7 +1900,10 @@ const releaseLotBase: RouteHandler = async (req, res, params) => {
   // things: a JSON array or string silently loses `idempotency_key`, turning a client's retry into
   // a genuinely new attempt that is then refused 409 instead of replaying as 200.
   const rawBody = getParsedBody(req);
-  if (rawBody !== undefined && (typeof rawBody !== 'object' || rawBody === null || Array.isArray(rawBody))) {
+  if (
+    rawBody !== undefined &&
+    (typeof rawBody !== 'object' || rawBody === null || Array.isArray(rawBody))
+  ) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body must be a JSON object');
     return;
   }
@@ -2081,3 +2128,501 @@ export const getQcRetentionSampleHandler = requireRole({ module: 'qc', functionS
   getRetentionSampleBase,
 );
 export const getQcNcrHandler = requireRole({ module: 'qc', functionScope: 'read' })(getNcrBase);
+
+// ---------------------------------------------------------------------------
+// Story 8.5: governed quality holds, hold-sourced NCRs and CAPA (FR-Q-09, FR-Q-10)
+// ---------------------------------------------------------------------------
+
+const QC_HOLD_STATUS_FILTER = new Set(['open', 'released']);
+const QC_CAPA_STATUS_FILTER = new Set(['open', 'closed']);
+
+const placeQcHoldBase: RouteHandler = async (req, res, _params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let lotId: string | null = null;
+  let siteId: string | undefined;
+  try {
+    if (!isUuid(body['lot_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'lot_id must be a UUID');
+    }
+    const lot = await getLotById(body['lot_id'] as string);
+    if (!lot) {
+      throw new AppError(404, 'LOT_NOT_FOUND', 'The lot does not resolve', {
+        lot_id: body['lot_id'],
+      });
+    }
+    lotId = lot.lot_id;
+    // Site scoping rides the lot's inspection task when one exists; an ungoverned lot is still
+    // holdable (containment must not wait on governance) and is scoped by the write role alone.
+    const task = await getQcInspectionTaskByLotId(lot.lot_id);
+    if (task) {
+      siteId = task.site_id;
+      assertWriteSiteAccess(req, task.site_id);
+    }
+    if (typeof body['hold_reason'] !== 'string' || body['hold_reason'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'hold_reason must be a non-empty string');
+    }
+    const defectCode = optionalNullableString(body, 'defect_code');
+    const holdId = randomUUID();
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: holdId,
+        event_type: QC_HOLD_PLACED,
+        payload: {
+          hold_id: holdId,
+          lot_id: lot.lot_id,
+          hold_reason: (body['hold_reason'] as string).trim(),
+          ...(defectCode !== null ? { defect_code: defectCode } : {}),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedHoldId = replayIdOrReject(persisted, QC_HOLD_PLACED, 'hold_id');
+    const replayed = persistedHoldId !== holdId;
+    const hold = await getQcQualityHoldById(persistedHoldId);
+    sendJson(res, replayed ? 200 : 201, { event_id: persisted.event_id, hold });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { lot_id: lotId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const releaseQcHoldBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let holdId = '';
+  let siteId: string | undefined;
+  try {
+    holdId = requireUuidParam(params, 'holdId');
+    const hold = await getQcQualityHoldById(holdId);
+    if (!hold) {
+      throw new AppError(404, 'HOLD_NOT_FOUND', 'The named hold does not resolve', {
+        hold_id: holdId,
+      });
+    }
+    siteId = hold.site_id;
+    assertWriteSiteAccess(req, hold.site_id);
+    if (typeof body['release_reason'] !== 'string' || body['release_reason'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'release_reason must be a non-empty string');
+    }
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: holdId,
+        event_type: QC_HOLD_RELEASED,
+        payload: {
+          hold_id: holdId,
+          release_reason: (body['release_reason'] as string).trim(),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, QC_HOLD_RELEASED, 'hold_id');
+    const refreshed = await getQcQualityHoldById(holdId);
+    sendJson(
+      res,
+      refreshed?.status === 'released' && refreshed.release_event_id !== persisted.event_id
+        ? 200
+        : 201,
+      {
+        event_id: persisted.event_id,
+        hold: refreshed,
+      },
+    );
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { hold_id: holdId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+/** Binding Scope Decision 7: the hold read reports the measured propagation budget. */
+function holdBudgetEnvelope(hold: NonNullable<Awaited<ReturnType<typeof getQcQualityHoldById>>>): {
+  placed_at: string;
+  elapsed_minutes: number;
+  propagation_budget_minutes: number;
+  propagation_budget_breached: boolean;
+} {
+  const elapsed = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(hold.placed_at).getTime()) / 60_000),
+  );
+  return {
+    placed_at: hold.placed_at,
+    elapsed_minutes: elapsed,
+    propagation_budget_minutes: config.qc.holdPropagationBudgetMinutes,
+    propagation_budget_breached: elapsed > config.qc.holdPropagationBudgetMinutes,
+  };
+}
+
+const getQcHoldBase: RouteHandler = async (req, res, params) => {
+  try {
+    const holdId = requireUuidParam(params, 'holdId');
+    const hold = await getQcQualityHoldById(holdId);
+    if (!hold) {
+      throw new AppError(404, 'HOLD_NOT_FOUND', 'The named hold does not resolve', {
+        hold_id: holdId,
+      });
+    }
+    assertReadSiteAccess(req, hold.site_id);
+    sendJson(res, 200, { hold, ...holdBudgetEnvelope(hold) });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const listQcHoldsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const siteId = url.searchParams.get('site_id');
+  const status = url.searchParams.get('status');
+  const lotId = url.searchParams.get('lot_id');
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+  try {
+    if (siteId !== null && !isUuid(siteId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'site_id must be a UUID');
+    }
+    if (status !== null && !QC_HOLD_STATUS_FILTER.has(status)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'status must be one of: open, released');
+    }
+    if (lotId !== null && !isUuid(lotId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'lot_id must be a UUID');
+    }
+    if (
+      (limitRaw !== null && !/^\d+$/.test(limitRaw)) ||
+      (offsetRaw !== null && !/^\d+$/.test(offsetRaw))
+    ) {
+      throw new AppError(400, 'INVALID_PARAMS', 'limit and offset must be non-negative integers');
+    }
+    const scoped = scopedSiteIds(req, siteId);
+    if (scoped === null) {
+      sendJson(res, 200, { holds: [] });
+      return;
+    }
+    const holds = await listQcQualityHolds({
+      ...scoped,
+      ...(status === null ? {} : { status: status as QcHoldStatus }),
+      ...(lotId === null ? {} : { lot_id: lotId }),
+      limit: limitRaw === null ? undefined : Number(limitRaw),
+      offset: offsetRaw === null ? undefined : Number(offsetRaw),
+    });
+    sendJson(res, 200, { holds });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const getQcHoldTraceBase: RouteHandler = async (req, res, params) => {
+  try {
+    const holdId = requireUuidParam(params, 'holdId');
+    const hold = await getQcQualityHoldById(holdId);
+    if (!hold) {
+      throw new AppError(404, 'HOLD_NOT_FOUND', 'The named hold does not resolve', {
+        hold_id: holdId,
+      });
+    }
+    assertReadSiteAccess(req, hold.site_id);
+    const trace = await assembleRecallTrace(hold);
+    sendJson(res, 200, trace as unknown as Record<string, unknown>);
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const raiseQcNcrBase: RouteHandler = async (req, res, _params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let lotId: string | null = null;
+  let siteId: string | undefined;
+  try {
+    if (!isUuid(body['lot_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'lot_id must be a UUID');
+    }
+    const lot = await getLotById(body['lot_id'] as string);
+    if (!lot) {
+      throw new AppError(404, 'LOT_NOT_FOUND', 'The lot does not resolve', {
+        lot_id: body['lot_id'],
+      });
+    }
+    lotId = lot.lot_id;
+    const task = await getQcInspectionTaskByLotId(lot.lot_id);
+    const openHold = await getOpenQcQualityHoldByLotId(lot.lot_id);
+    siteId = task?.site_id ?? openHold?.site_id;
+    if (siteId) assertWriteSiteAccess(req, siteId);
+    if (typeof body['defect_code'] !== 'string' || body['defect_code'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'defect_code must be a non-empty string');
+    }
+    if (typeof body['justification'] !== 'string' || body['justification'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'justification must be a non-empty string');
+    }
+    if (!isPositiveQuantityInput(body['quantity'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'quantity must be a positive decimal string');
+    }
+    const capaId = optionalNullableString(body, 'capa_id');
+    if (capaId !== null && !isUuid(capaId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'capa_id must be a UUID when supplied');
+    }
+    const ncrId = randomUUID();
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: ncrId,
+        event_type: QC_NCR_RAISED,
+        payload: {
+          ncr_id: ncrId,
+          lot_id: lot.lot_id,
+          defect_code: body['defect_code'],
+          justification: (body['justification'] as string).trim(),
+          quantity: body['quantity'],
+          ...(capaId !== null ? { capa_id: capaId } : {}),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedNcrId = replayIdOrReject(persisted, QC_NCR_RAISED, 'ncr_id');
+    const replayed = persistedNcrId !== ncrId;
+    const ncr = await getQcNcrById(persistedNcrId);
+    sendJson(res, replayed ? 200 : 201, { event_id: persisted.event_id, ncr });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { lot_id: lotId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const linkQcCapaBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let ncrId = '';
+  let siteId: string | undefined;
+  try {
+    ncrId = requireUuidParam(params, 'ncrId');
+    const ncr = await getQcNcrById(ncrId);
+    if (!ncr) {
+      throw new AppError(404, 'NCR_NOT_FOUND', 'Non-conformance report not found', {
+        ncr_id: ncrId,
+      });
+    }
+    siteId = ncr.site_id;
+    assertWriteSiteAccess(req, ncr.site_id);
+    if (!isUuid(body['capa_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'capa_id must be a UUID');
+    }
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: ncrId,
+        event_type: QC_CAPA_LINKED,
+        payload: { ncr_id: ncrId, capa_id: body['capa_id'] },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, QC_CAPA_LINKED, 'ncr_id');
+    const refreshed = await getQcNcrById(ncrId);
+    sendJson(res, 201, { event_id: persisted.event_id, ncr: refreshed });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { ncr_id: ncrId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const openQcCapaBase: RouteHandler = async (req, res, _params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    for (const field of ['sku', 'defect_code', 'title']) {
+      if (typeof body[field] !== 'string' || body[field].trim() === '') {
+        throw new AppError(400, 'INVALID_PARAMS', `${field} must be a non-empty string`);
+      }
+    }
+    if (!isUuid(body['owner_user_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'owner_user_id must be a UUID');
+    }
+    if (typeof body['due_on'] !== 'string' || !isValidCalendarDate(body['due_on'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'due_on must be a YYYY-MM-DD calendar date');
+    }
+    const rootCause = optionalNullableString(body, 'root_cause');
+    const corrective = optionalNullableString(body, 'corrective_action');
+    const preventive = optionalNullableString(body, 'preventive_action');
+    const capaId = randomUUID();
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: capaId,
+        event_type: QC_CAPA_OPENED,
+        payload: {
+          capa_id: capaId,
+          sku: (body['sku'] as string).trim(),
+          defect_code: body['defect_code'],
+          title: (body['title'] as string).trim(),
+          ...(rootCause !== null ? { root_cause: rootCause } : {}),
+          ...(corrective !== null ? { corrective_action: corrective } : {}),
+          ...(preventive !== null ? { preventive_action: preventive } : {}),
+          owner_user_id: body['owner_user_id'],
+          due_on: body['due_on'],
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedCapaId = replayIdOrReject(persisted, QC_CAPA_OPENED, 'capa_id');
+    const replayed = persistedCapaId !== capaId;
+    const capa = await getQcCapaById(persistedCapaId);
+    sendJson(res, replayed ? 200 : 201, { event_id: persisted.event_id, capa });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, {});
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const closeQcCapaBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let capaId = '';
+  try {
+    capaId = requireUuidParam(params, 'capaId');
+    const capa = await getQcCapaById(capaId);
+    if (!capa) {
+      throw new AppError(404, 'CAPA_NOT_FOUND', 'The named CAPA does not resolve', {
+        capa_id: capaId,
+      });
+    }
+    if (typeof body['closure_evidence'] !== 'string' || body['closure_evidence'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'closure_evidence must be a non-empty string');
+    }
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: capaId,
+        event_type: QC_CAPA_CLOSED,
+        payload: {
+          capa_id: capaId,
+          closure_evidence: (body['closure_evidence'] as string).trim(),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, QC_CAPA_CLOSED, 'capa_id');
+    const refreshed = await getQcCapaById(capaId);
+    sendJson(res, 201, { event_id: persisted.event_id, capa: refreshed });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { capa_id: capaId });
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const listQcCapasBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const status = url.searchParams.get('status');
+  const sku = url.searchParams.get('sku');
+  const defectCode = url.searchParams.get('defect_code');
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+  try {
+    if (status !== null && !QC_CAPA_STATUS_FILTER.has(status)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'status must be one of: open, closed');
+    }
+    if (
+      (limitRaw !== null && !/^\d+$/.test(limitRaw)) ||
+      (offsetRaw !== null && !/^\d+$/.test(offsetRaw))
+    ) {
+      throw new AppError(400, 'INVALID_PARAMS', 'limit and offset must be non-negative integers');
+    }
+    const capas = await listQcCapas({
+      ...(status === null ? {} : { status: status as QcCapaStatus }),
+      ...(sku === null ? {} : { sku }),
+      ...(defectCode === null ? {} : { defect_code: defectCode }),
+      limit: limitRaw === null ? undefined : Number(limitRaw),
+      offset: offsetRaw === null ? undefined : Number(offsetRaw),
+    });
+    sendJson(res, 200, { capas });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const getQcCapaBase: RouteHandler = async (req, res, params) => {
+  try {
+    const capaId = requireUuidParam(params, 'capaId');
+    const capa = await getQcCapaById(capaId);
+    if (!capa) {
+      throw new AppError(404, 'CAPA_NOT_FOUND', 'The named CAPA does not resolve', {
+        capa_id: capaId,
+      });
+    }
+    sendJson(res, 200, { capa });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// Story 8.5
+export const placeQcHoldHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  placeQcHoldBase,
+);
+export const releaseQcHoldHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  releaseQcHoldBase,
+);
+export const listQcHoldsHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  listQcHoldsBase,
+);
+export const getQcHoldHandler = requireRole({ module: 'qc', functionScope: 'read' })(getQcHoldBase);
+export const getQcHoldTraceHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  getQcHoldTraceBase,
+);
+export const raiseQcNcrHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  raiseQcNcrBase,
+);
+export const linkQcCapaHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  linkQcCapaBase,
+);
+export const openQcCapaHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  openQcCapaBase,
+);
+export const closeQcCapaHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  closeQcCapaBase,
+);
+export const listQcCapasHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  listQcCapasBase,
+);
+export const getQcCapaHandler = requireRole({ module: 'qc', functionScope: 'read' })(getQcCapaBase);

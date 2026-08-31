@@ -326,6 +326,17 @@ import {
   releaseLotHandler,
   getQcReleaseHandler,
   getQcRetentionSampleHandler,
+  placeQcHoldHandler,
+  releaseQcHoldHandler,
+  listQcHoldsHandler,
+  getQcHoldHandler,
+  getQcHoldTraceHandler,
+  raiseQcNcrHandler,
+  linkQcCapaHandler,
+  openQcCapaHandler,
+  closeQcCapaHandler,
+  listQcCapasHandler,
+  getQcCapaHandler,
 } from './api/v1/quality.js';
 import {
   createProductionOrderHandler,
@@ -876,6 +887,23 @@ export function createAppRouter(): Router {
   router.get('/api/v1/qc/ncrs', listQcNcrsHandler);
   router.get('/api/v1/qc/ncrs/:ncrId', getQcNcrHandler);
   router.post('/api/v1/qc/ncrs/:ncrId/outcome', recordNcrOutcomeHandler);
+  // Story 8.5: governed quality holds, hold-sourced NCRs and CAPA. ROUTE ORDER MATTERS, in the
+  // same discipline as the blocks above: '/qc/holds' and '/qc/capas' carry their own static
+  // segments so they cannot be swallowed by '/qc/tasks/:taskId' or '/qc/ncrs/:ncrId'; each list
+  // route is registered BEFORE its parameterised sibling, and the two new '/qc/ncrs' writes ride
+  // the existing '/qc/ncrs' family (the hold-sourced raise is a static POST on the collection; the
+  // CAPA link is a deeper leaf under ':ncrId' exactly like '/outcome' above).
+  router.post('/api/v1/qc/ncrs', raiseQcNcrHandler);
+  router.post('/api/v1/qc/ncrs/:ncrId/capa', linkQcCapaHandler);
+  router.post('/api/v1/qc/holds', placeQcHoldHandler);
+  router.get('/api/v1/qc/holds', listQcHoldsHandler);
+  router.get('/api/v1/qc/holds/:holdId', getQcHoldHandler);
+  router.post('/api/v1/qc/holds/:holdId/release', releaseQcHoldHandler);
+  router.get('/api/v1/qc/holds/:holdId/trace', getQcHoldTraceHandler);
+  router.post('/api/v1/qc/capas', openQcCapaHandler);
+  router.get('/api/v1/qc/capas', listQcCapasHandler);
+  router.get('/api/v1/qc/capas/:capaId', getQcCapaHandler);
+  router.post('/api/v1/qc/capas/:capaId/close', closeQcCapaHandler);
 
   // Story 6.1: Production Order Creation and Release Gate (FR-MO-01/02/03). ROUTE ORDER MATTERS:
   // '/production-orders' (both verbs) is registered BEFORE any '/production-orders/:orderId' route,

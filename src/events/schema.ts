@@ -3849,6 +3849,174 @@ export interface QcRetentionSampleDisposedEnvelope extends Omit<EventEnvelope, '
 }
 
 /**
+ * Story 8.5 (FR-Q-09, AC 1): places the governed quality hold. stream_id is the hold_id. The
+ * applier locks the lot row FOR UPDATE, inserts the qc_quality_hold row, sets
+ * lot_master.quality_hold_status = 'held' in the SAME transaction (Binding Scope Decision 1 - the
+ * flag every enforcement site already reads), appends the lot_trace entry and emits the AD-17
+ * transactional notification. Placement is deliberately single-actor and never approval-gated
+ * (Decision 5): delaying containment is actively harmful. A second open hold for the lot rejects
+ * 409 HOLD_EXISTS (uq_qc_quality_hold_open backstops the race). defect_code, when given, must be
+ * in the fail-closed QC_DEFECT_CODES catalogue (422 DEFECT_CODE_UNKNOWN with the allowed list).
+ *
+ * Server-derived, rejected if declared: placed_at, site_id, sku, lot_number, status, placed_by.
+ */
+export interface QcHoldPlacedPayload {
+  hold_id: string;
+  lot_id: string;
+  hold_reason: string;
+  defect_code?: string | null;
+  /** Derived under lock; persisted write-back only. */
+  placed_at?: string;
+  site_id?: string;
+  sku?: string;
+  lot_number?: string;
+  status?: 'open';
+  placed_by?: string;
+}
+
+export interface QcHoldPlacedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.hold_placed';
+  payload: QcHoldPlacedPayload;
+}
+
+/**
+ * Story 8.5 (FR-Q-09, Binding Scope Decision 4): releases a governed hold. stream_id is the
+ * hold_id. Release is a distinct, reason-carrying, SEGREGATED decision: the releasing actor must
+ * not be the actor who placed the hold (409 SOD_VIOLATION, no config escape hatch - confirmed
+ * 2026-08-31). The applier's guarded UPDATE (`WHERE status = 'open'`) makes a concurrent second
+ * release a zero-row update resolved to 409 HOLD_ALREADY_RELEASED, and clears
+ * lot_master.quality_hold_status back to 'none' ONLY when no other open hold exists for the lot.
+ *
+ * Server-derived, rejected if declared: released_at, site_id, sku, lot_number, status, lot_id,
+ * released_by.
+ */
+export interface QcHoldReleasedPayload {
+  hold_id: string;
+  release_reason: string;
+  /** Derived under lock; persisted write-back only. */
+  released_at?: string;
+  site_id?: string;
+  sku?: string;
+  lot_number?: string;
+  status?: 'released';
+  lot_id?: string;
+  released_by?: string;
+}
+
+export interface QcHoldReleasedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.hold_released';
+  payload: QcHoldReleasedPayload;
+}
+
+/**
+ * Story 8.5 (FR-Q-10, AC 3): raises a HOLD-SOURCED NCR, independent of any disposition (Binding
+ * Scope Decision 9 - the Story 8.3 disposition-sourced creation path is untouched). stream_id is
+ * the ncr_id. Requires a held or defective lot: an open qc_quality_hold OR
+ * lot_master.quality_hold_status = 'held', re-derived under the lot lock. defect_code is
+ * mandatory and validated against the catalogue; capa_id, when supplied, must resolve to an OPEN
+ * CAPA. The applier computes capa_mandatory (Decision 12/13: the enterprise-wide 90-day IST
+ * repeat-defect window, enforced at CLOSE, not at raise) and stamps it on the row.
+ *
+ * Server-derived, rejected if declared: raised_at, site_id, sku, lot_number, hold_id,
+ * capa_mandatory, raised_by.
+ */
+export interface QcNcrRaisedPayload {
+  ncr_id: string;
+  lot_id: string;
+  defect_code: string;
+  justification: string;
+  quantity: string;
+  capa_id?: string | null;
+  /** Derived under lock; persisted write-back only. */
+  raised_at?: string;
+  site_id?: string;
+  sku?: string;
+  lot_number?: string;
+  hold_id?: string | null;
+  capa_mandatory?: boolean;
+  raised_by?: string;
+}
+
+export interface QcNcrRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.ncr_raised';
+  payload: QcNcrRaisedPayload;
+}
+
+/**
+ * Story 8.5 (FR-Q-10, Binding Scope Decision 11): opens a first-class CAPA record. stream_id is
+ * the capa_id. capa_number is minted SERVER-side from qc_capa_number_seq (409 CAPA_EXISTS on the
+ * uq_qc_capa_number backstop); sku and defect_code name the enterprise-wide grain the repeat rule
+ * counts on; due_on is an IST business date.
+ *
+ * Server-derived, rejected if declared: capa_number, opened_by, opened_at, status.
+ */
+export interface QcCapaOpenedPayload {
+  capa_id: string;
+  sku: string;
+  defect_code: string;
+  title: string;
+  root_cause?: string | null;
+  corrective_action?: string | null;
+  preventive_action?: string | null;
+  owner_user_id: string;
+  due_on: string;
+  /** Derived under lock; persisted write-back only. */
+  capa_number?: string;
+  opened_by?: string;
+  opened_at?: string;
+  status?: 'open';
+}
+
+export interface QcCapaOpenedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.capa_opened';
+  payload: QcCapaOpenedPayload;
+}
+
+/**
+ * Story 8.5 (FR-Q-10): closes a CAPA with closure evidence. stream_id is the capa_id. The guarded
+ * UPDATE (`WHERE status = 'open'`) makes a second close a zero-row update resolved to 409
+ * CAPA_NOT_OPEN. Closure is a decision, so the applier emits the AD-17 transactional notification.
+ *
+ * Server-derived, rejected if declared: closed_by, closed_at, status.
+ */
+export interface QcCapaClosedPayload {
+  capa_id: string;
+  closure_evidence: string;
+  /** Derived under lock; persisted write-back only. */
+  closed_by?: string;
+  closed_at?: string;
+  status?: 'closed';
+}
+
+export interface QcCapaClosedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.capa_closed';
+  payload: QcCapaClosedPayload;
+}
+
+/**
+ * Story 8.5 (FR-Q-10, AC 4): links an existing OPEN CAPA to an open NCR. stream_id is the ncr_id.
+ * The guarded UPDATE (`WHERE capa_id IS NULL`) makes a second link a zero-row update resolved to
+ * 409 CAPA_ALREADY_LINKED. Linking is what satisfies the mandatory-CAPA close gate
+ * (409 APPROVAL_REQUIRED until it happens - Binding Scope Decision 13).
+ *
+ * Server-derived, rejected if declared: linked_by, linked_at, sku, defect_code.
+ */
+export interface QcCapaLinkedPayload {
+  ncr_id: string;
+  capa_id: string;
+  /** Derived under lock; persisted write-back only. */
+  linked_by?: string;
+  linked_at?: string;
+  sku?: string;
+  defect_code?: string;
+}
+
+export interface QcCapaLinkedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.capa_linked';
+  payload: QcCapaLinkedPayload;
+}
+
+/**
  * Story 8.2 (FR-Q-03, AC 1): freezes the IS 2500 (Part 1) / ISO 2859-1 single-sampling plan on a
  * task. stream_id is the task_id. Only task_id, sampling_id and determined_at are client fields;
  * every other field is SEAM-DERIVED under the lot, task and switching-state locks (lot size from
@@ -4825,6 +4993,35 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'qc.retention_sample_disposed': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  // Story 8.5: the governed hold record, its segregated release, the hold-sourced NCR and the CAPA
+  // family (FR-Q-09, FR-Q-10). Same reasoning as the Story 8.3/8.4 families - all six ride the
+  // 'qc' stream and none carries a business stream: a hold or CAPA is a decision about a lot or a
+  // (sku, defect) grain, not an inventory movement, and the lot_trace entries the hold applier
+  // writes derive their business stream from the item master (AD-14).
+  'qc.hold_placed': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.hold_released': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.ncr_raised': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.capa_opened': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.capa_closed': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.capa_linked': {
     streamType: 'qc',
     requiresBusinessStream: false,
   },

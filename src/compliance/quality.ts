@@ -8,10 +8,12 @@ import { isValidCalendarDate, toIstCalendarDate } from '../lib/business-days.js'
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import { getItemById, getItemBySku, itemExistsBySku } from '../read/projections/item_master.js';
 import {
+  clearQualityHold,
   createLot,
   lotExistsByNumberAndSku,
   placeQualityHold,
 } from '../read/projections/lot_master.js';
+import { appendTraceEntry } from '../read/projections/lot_trace.js';
 import { getBomById, getBomRevisionById } from '../read/projections/bom.js';
 import { locationExistsById } from '../read/projections/location_register.js';
 import { assertNotRdDraft } from './bom.js';
@@ -104,9 +106,25 @@ import {
 } from '../quality/aql-tables.js';
 import {
   insertQcNcr,
+  insertHoldSourcedQcNcr,
   getQcNcrById,
   setQcNcrOutcome,
+  countMatchingNcrsInWindow,
+  linkCapaToNcr,
 } from '../read/projections/qc_ncr.js';
+import {
+  getOpenQcQualityHoldByLotId,
+  getQcQualityHoldById,
+  insertQcQualityHold,
+  otherOpenQcQualityHoldExists,
+  releaseQcQualityHold,
+} from '../read/projections/qc_quality_hold.js';
+import {
+  allocateQcCapaNumber,
+  closeQcCapa,
+  getQcCapaById,
+  insertQcCapa,
+} from '../read/projections/qc_capa.js';
 import { insertQcLotSplit } from '../read/projections/qc_lot_split.js';
 import {
   appendRelabelTrace,
@@ -169,6 +187,16 @@ export const QC_REWORK_REQUESTED = 'qc.rework_requested';
 export const QC_BATCH_RELEASE_RECORDED = 'qc.batch_release_recorded';
 export const QC_RETENTION_SAMPLE_LOGGED = 'qc.retention_sample_logged';
 export const QC_RETENTION_SAMPLE_DISPOSED = 'qc.retention_sample_disposed';
+// Story 8.5 (FR-Q-09, FR-Q-10): the governed hold record over the existing lot_master enforcement
+// flag, the hold-sourced NCR origin and the first-class CAPA. All six are central-only - they join
+// QC_CENTRAL_ONLY_EVENT_TYPES by construction (the derivation below filters out only
+// qc.result_recorded), which a test asserts rather than assumes.
+export const QC_HOLD_PLACED = 'qc.hold_placed';
+export const QC_HOLD_RELEASED = 'qc.hold_released';
+export const QC_NCR_RAISED = 'qc.ncr_raised';
+export const QC_CAPA_OPENED = 'qc.capa_opened';
+export const QC_CAPA_CLOSED = 'qc.capa_closed';
+export const QC_CAPA_LINKED = 'qc.capa_linked';
 export const QUALITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   INSPECTION_PLAN_CREATED,
   INSPECTION_PLAN_APPROVED,
@@ -186,6 +214,12 @@ export const QUALITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   QC_BATCH_RELEASE_RECORDED,
   QC_RETENTION_SAMPLE_LOGGED,
   QC_RETENTION_SAMPLE_DISPOSED,
+  QC_HOLD_PLACED,
+  QC_HOLD_RELEASED,
+  QC_NCR_RAISED,
+  QC_CAPA_OPENED,
+  QC_CAPA_CLOSED,
+  QC_CAPA_LINKED,
 ]);
 /**
  * Story 8.1 Binding Scope Decision 9 / Story 8.2 Binding Scope Decision 8: every QC command is
@@ -1157,8 +1191,14 @@ function assertNcrOutcomeRecordedShape(envelope: EventEnvelope): void {
     });
   }
   if (!isUuid(p['lot_id'])) reject('INVALID_PAYLOAD', 'lot_id must be a UUID');
-  if (typeof p['outcome'] !== 'string' || !NCR_OUTCOMES.has(p['outcome'])) {
-    reject('INVALID_PAYLOAD', 'outcome must be one of: rework, downgrade, scrap');
+  // Story 8.5 (Binding Scope Decision 14): 'closed_with_capa' is the hold-sourced terminal
+  // outcome; the applier rejects it on a disposition-sourced NCR and rejects the three
+  // disposition-family outcomes on a hold-sourced NCR (NCR_OUTCOME_NOT_APPLICABLE).
+  if (
+    typeof p['outcome'] !== 'string' ||
+    (!NCR_OUTCOMES.has(p['outcome']) && p['outcome'] !== NCR_HOLD_TERMINAL_OUTCOME)
+  ) {
+    reject('INVALID_PAYLOAD', 'outcome must be one of: rework, downgrade, scrap, closed_with_capa');
   }
   if (!isBoundedText(p['outcome_reason'], MAX_TEXT_2000)) {
     reject(
@@ -1384,6 +1424,24 @@ export function assertQualityShape(envelope: EventEnvelope): void {
       return;
     case QC_RETENTION_SAMPLE_DISPOSED:
       assertRetentionSampleDisposedShape(envelope);
+      return;
+    case QC_HOLD_PLACED:
+      assertHoldPlacedShape(envelope);
+      return;
+    case QC_HOLD_RELEASED:
+      assertHoldReleasedShape(envelope);
+      return;
+    case QC_NCR_RAISED:
+      assertNcrRaisedShape(envelope);
+      return;
+    case QC_CAPA_OPENED:
+      assertCapaOpenedShape(envelope);
+      return;
+    case QC_CAPA_CLOSED:
+      assertCapaClosedShape(envelope);
+      return;
+    case QC_CAPA_LINKED:
+      assertCapaLinkedShape(envelope);
       return;
     default:
       return;
@@ -2354,7 +2412,12 @@ async function lockLotForDisposition(
   const lot = lotResult.rows[0]!;
   const task = await getQcInspectionTaskByLotId(lotId, client, true);
   if (!task) {
-    reject('QC_TASK_NOT_FOUND', 'No QC inspection task exists for this lot', { lot_id: lotId }, 404);
+    reject(
+      'QC_TASK_NOT_FOUND',
+      'No QC inspection task exists for this lot',
+      { lot_id: lotId },
+      404,
+    );
   }
   if (task.task_id !== taskId) {
     reject(
@@ -2809,7 +2872,7 @@ async function applyNcrOutcomeRecorded(
   const p = envelope.payload as Record<string, unknown>;
   const ncrId = p['ncr_id'] as string;
   const lotId = p['lot_id'] as string;
-  const outcome = p['outcome'] as 'rework' | 'downgrade' | 'scrap';
+  const outcome = p['outcome'] as 'rework' | 'downgrade' | 'scrap' | 'closed_with_capa';
   const decidedAt = p['decided_at'] as string;
   const actorId = envelope.metadata.actor.user_id;
 
@@ -2823,16 +2886,6 @@ async function applyNcrOutcomeRecorded(
     reject('LOT_NOT_FOUND', 'The lot does not resolve', { lot_id: lotId }, 404);
   }
   const lot = lotResult.rows[0]!;
-  // AC6: any disposition OR NCR command on a lot under an independent manual or recall hold is
-  // rejected fail-closed with LOT_ON_HOLD, re-derived under the same lock as every other QC write.
-  if (lot['quality_hold_status'] !== 'none') {
-    reject(
-      'LOT_ON_HOLD',
-      'Lot is on quality hold and the NCR outcome cannot be recorded',
-      { lot_id: lotId, ncr_id: ncrId, reason: 'manual_hold' },
-      400,
-    );
-  }
   const ncr = await getQcNcrById(ncrId, client, true);
   if (!ncr || ncr.lot_id !== lotId) {
     reject(
@@ -2847,6 +2900,64 @@ async function applyNcrOutcomeRecorded(
       'NCR_OUTCOME_EXISTS',
       'The NCR outcome has already been recorded',
       { ncr_id: ncrId, outcome: ncr.outcome },
+      409,
+    );
+  }
+  // Story 8.5 (Binding Scope Decision 14): the outcome vocabularies do not mix. rework, downgrade
+  // and scrap all key off a disposition a hold-sourced NCR does not have; closed_with_capa moves
+  // no stock and exists only for the hold origin.
+  if (ncr.origin === 'hold' && outcome !== 'closed_with_capa') {
+    reject(
+      'NCR_OUTCOME_NOT_APPLICABLE',
+      'A disposition-family outcome cannot be recorded on a hold-sourced NCR',
+      { ncr_id: ncrId, origin: ncr.origin, outcome },
+      409,
+    );
+  }
+  if (ncr.origin === 'disposition' && outcome === 'closed_with_capa') {
+    reject(
+      'NCR_OUTCOME_NOT_APPLICABLE',
+      'closed_with_capa is only valid on a hold-sourced NCR',
+      { ncr_id: ncrId, origin: ncr.origin, outcome },
+      409,
+    );
+  }
+  // AC6 (Story 8.3): any disposition-family NCR outcome on a lot under an independent manual or
+  // recall hold is rejected fail-closed with LOT_ON_HOLD, re-derived under the same lock as every
+  // other QC write. Story 8.5 (Binding Scope Decision 14) sequences this AFTER the origin gate -
+  // a hold-sourced NCR's lot is held BY DEFINITION, so its origin/vocabulary refusal must win -
+  // and exempts 'closed_with_capa', which moves no stock, so the hold-bypass class this guard
+  // exists for cannot occur through it. The lot lock above is still taken first, unchanged.
+  if (outcome !== 'closed_with_capa' && lot['quality_hold_status'] !== 'none') {
+    reject(
+      'LOT_ON_HOLD',
+      'Lot is on quality hold and the NCR outcome cannot be recorded',
+      { lot_id: lotId, ncr_id: ncrId, reason: 'manual_hold' },
+      400,
+    );
+  }
+  // Story 8.5 (AC 4, Binding Scope Decision 13): the mandatory-CAPA gate is enforced at CLOSE.
+  if (outcome === 'closed_with_capa' && ncr.capa_mandatory && ncr.capa_id === null) {
+    const businessDate = toIstCalendarDate(new Date(ncr.raised_at));
+    const matchingCount = await countMatchingNcrsInWindow(
+      ncr.sku,
+      ncr.defect_code ?? '',
+      businessDate,
+      config.qc.repeatDefectWindowDays,
+      client,
+    );
+    reject(
+      'APPROVAL_REQUIRED',
+      `A CAPA is mandatory before this NCR can be closed: ${matchingCount} matching NCR(s) for (${ncr.sku}, ${ncr.defect_code}) inside the ${config.qc.repeatDefectWindowDays}-day repeat-defect window. Link one via POST /api/v1/qc/ncrs/:ncrId/capa.`,
+      {
+        ncr_id: ncrId,
+        sku: ncr.sku,
+        defect_code: ncr.defect_code,
+        matching_ncr_count: matchingCount,
+        repeat_defect_threshold: config.qc.repeatDefectThreshold,
+        repeat_defect_window_days: config.qc.repeatDefectWindowDays,
+        link_route: `POST /api/v1/qc/ncrs/${ncrId}/capa`,
+      },
       409,
     );
   }
@@ -3011,7 +3122,9 @@ async function applyNcrOutcomeRecorded(
           ? 'A rework order will consume this lot and produce a new lot for the QC gate'
           : outcome === 'downgrade'
             ? `Quantity relabelled onto downgrade lot ${downgradeLotNumber}`
-            : 'Quantity is blocked pending scrap disposal',
+            : outcome === 'closed_with_capa'
+              ? 'The NCR is closed with its CAPA; the hold is released separately'
+              : 'Quantity is blocked pending scrap disposal',
       actor: envelope.metadata.actor,
       correlation_id: envelope.metadata.correlation_id,
       causation_id: eventId,
@@ -3035,7 +3148,14 @@ async function applyReworkRequested(
   const p = envelope.payload as Record<string, unknown>;
   const ncrId = p['ncr_id'] as string;
   const ncr = await getQcNcrById(ncrId, client);
-  if (!ncr || ncr.outcome !== 'rework' || ncr.rework_requested_event_id !== eventId) {
+  // Story 8.5 widening: task_id is nullable on a hold-sourced NCR, but a rework outcome is only
+  // recordable on a disposition-sourced one, so the null arm folds into the same refusal.
+  if (
+    !ncr ||
+    ncr.outcome !== 'rework' ||
+    ncr.rework_requested_event_id !== eventId ||
+    ncr.task_id === null
+  ) {
     reject(
       'QC_REWORK_NOT_DERIVED',
       'A rework request is only admissible from the NCR outcome that mints it',
@@ -3077,7 +3197,9 @@ async function applyReworkRequested(
       409,
     );
   }
-  if (new Date(p['requested_at'] as string).getTime() !== new Date(ncr.outcome_at as string).getTime()) {
+  if (
+    new Date(p['requested_at'] as string).getTime() !== new Date(ncr.outcome_at as string).getTime()
+  ) {
     reject(
       'QC_DERIVATION_MISMATCH',
       'requested_at disagrees with the server re-derivation for qc.rework_requested',
@@ -3845,7 +3967,12 @@ async function lockLotForRetention(
   }
   const task = await getQcInspectionTaskByLotId(lotId, client, true);
   if (!task) {
-    reject('QC_TASK_NOT_FOUND', 'No QC inspection task exists for this lot', { lot_id: lotId }, 404);
+    reject(
+      'QC_TASK_NOT_FOUND',
+      'No QC inspection task exists for this lot',
+      { lot_id: lotId },
+      404,
+    );
   }
   if (task.task_id !== taskId) {
     reject(
@@ -4060,7 +4187,11 @@ async function applyBatchReleaseRecorded(
       reject(
         'RETENTION_SAMPLE_REQUIRED',
         'A retention sample must be logged for this lot before it can be released',
-        { lot_id: lotId, task_id: taskId, retention_sample_scope: config.quality.retentionSampleScope },
+        {
+          lot_id: lotId,
+          task_id: taskId,
+          retention_sample_scope: config.quality.retentionSampleScope,
+        },
         409,
       );
     }
@@ -4291,6 +4422,24 @@ export async function applyQualityProjection(
       return;
     case QC_RETENTION_SAMPLE_DISPOSED:
       await applyRetentionSampleDisposed(envelope, client, eventId);
+      return;
+    case QC_HOLD_PLACED:
+      await applyHoldPlaced(envelope, client, eventId);
+      return;
+    case QC_HOLD_RELEASED:
+      await applyHoldReleased(envelope, client, eventId);
+      return;
+    case QC_NCR_RAISED:
+      await applyNcrRaised(envelope, client, eventId);
+      return;
+    case QC_CAPA_OPENED:
+      await applyCapaOpened(envelope, client, eventId);
+      return;
+    case QC_CAPA_CLOSED:
+      await applyCapaClosed(envelope, client, eventId);
+      return;
+    case QC_CAPA_LINKED:
+      await applyCapaLinked(envelope, client, eventId);
       return;
     default:
       return;
@@ -4651,4 +4800,683 @@ export function resolveQcResultDuplicateConflict(
       .map((r) => r['sample_unit_no'])
       .filter((u): u is number => typeof u === 'number'),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Story 8.5: governed quality holds, hold-sourced NCRs and CAPA (FR-Q-09, FR-Q-10)
+// ---------------------------------------------------------------------------
+
+/** Binding Scope Decision 14: the hold-sourced terminal outcome. Moves no stock. */
+export const NCR_HOLD_TERMINAL_OUTCOME = 'closed_with_capa';
+
+/**
+ * Binding Scope Decision 10: the fail-closed defect-code gate, mirroring the Story 7.8
+ * closure-code route - the allowed list is returned in the error detail.
+ */
+function assertKnownDefectCode(value: unknown, context: string): void {
+  if (typeof value !== 'string' || !config.qc.defectCodes.includes(value)) {
+    reject(
+      'DEFECT_CODE_UNKNOWN',
+      `defect_code is not in the configured QC defect-code catalogue on ${context}`,
+      { defect_code: value ?? null, allowed: config.qc.defectCodes },
+      422,
+    );
+  }
+}
+
+/**
+ * Binding Scope Decision 12: the enterprise-wide repeat-defect predicate. Bounds arrive as
+ * PARAMETERS, never module constants, so a unit test exercises real boundaries (the Story 8.4
+ * tautological-config lesson). The window is the `windowDays` IST calendar days STRICTLY
+ * preceding `businessDate` (a predecessor exactly `windowDays` old is outside; one day younger is
+ * inside; the new NCR is never its own predecessor).
+ */
+export async function isRepeatDefect(
+  sku: string,
+  defectCode: string,
+  businessDate: string,
+  threshold: number,
+  windowDays: number,
+  client?: PoolClient,
+): Promise<boolean> {
+  const prior = await countMatchingNcrsInWindow(sku, defectCode, businessDate, windowDays, client);
+  return prior >= threshold;
+}
+
+function assertHoldPlacedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['hold_id'])) reject('INVALID_PAYLOAD', 'hold_id must be a UUID');
+  if (envelope.stream_id !== p['hold_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the hold_id for qc.hold_placed', {
+      stream_id: envelope.stream_id,
+      payload_hold_id: p['hold_id'],
+    });
+  }
+  if (!isUuid(p['lot_id'])) reject('INVALID_PAYLOAD', 'lot_id must be a UUID');
+  if (!isBoundedText(p['hold_reason'], MAX_TEXT_2000)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `hold_reason must be a non-empty string of at most ${MAX_TEXT_2000} characters`,
+    );
+  }
+  if (p['defect_code'] !== undefined && p['defect_code'] !== null) {
+    assertKnownDefectCode(p['defect_code'], QC_HOLD_PLACED);
+  }
+  rejectDeclaredDerived(
+    p,
+    ['placed_at', 'site_id', 'sku', 'lot_number', 'status', 'placed_by'],
+    QC_HOLD_PLACED,
+  );
+}
+
+function assertHoldReleasedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['hold_id'])) reject('INVALID_PAYLOAD', 'hold_id must be a UUID');
+  if (envelope.stream_id !== p['hold_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the hold_id for qc.hold_released', {
+      stream_id: envelope.stream_id,
+      payload_hold_id: p['hold_id'],
+    });
+  }
+  if (!isBoundedText(p['release_reason'], MAX_TEXT_2000)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `release_reason must be a non-empty string of at most ${MAX_TEXT_2000} characters`,
+    );
+  }
+  rejectDeclaredDerived(
+    p,
+    ['released_at', 'site_id', 'sku', 'lot_number', 'status', 'lot_id', 'released_by'],
+    QC_HOLD_RELEASED,
+  );
+}
+
+function assertNcrRaisedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['ncr_id'])) reject('INVALID_PAYLOAD', 'ncr_id must be a UUID');
+  if (envelope.stream_id !== p['ncr_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the ncr_id for qc.ncr_raised', {
+      stream_id: envelope.stream_id,
+      payload_ncr_id: p['ncr_id'],
+    });
+  }
+  if (!isUuid(p['lot_id'])) reject('INVALID_PAYLOAD', 'lot_id must be a UUID');
+  assertKnownDefectCode(p['defect_code'], QC_NCR_RAISED);
+  if (!isBoundedText(p['justification'], MAX_TEXT_2000)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `justification must be a non-empty string of at most ${MAX_TEXT_2000} characters`,
+    );
+  }
+  if (!isPositiveQuantity(p['quantity'])) {
+    reject('INVALID_PAYLOAD', 'quantity must be a positive decimal string');
+  }
+  if (p['capa_id'] !== undefined && p['capa_id'] !== null && !isUuid(p['capa_id'])) {
+    reject('INVALID_PAYLOAD', 'capa_id must be a UUID when supplied');
+  }
+  rejectDeclaredDerived(
+    p,
+    ['raised_at', 'site_id', 'sku', 'lot_number', 'hold_id', 'capa_mandatory', 'raised_by'],
+    QC_NCR_RAISED,
+  );
+}
+
+function assertCapaOpenedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['capa_id'])) reject('INVALID_PAYLOAD', 'capa_id must be a UUID');
+  if (envelope.stream_id !== p['capa_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the capa_id for qc.capa_opened', {
+      stream_id: envelope.stream_id,
+      payload_capa_id: p['capa_id'],
+    });
+  }
+  if (!isBoundedText(p['sku'], 128)) {
+    reject('INVALID_PAYLOAD', 'sku must be a non-empty string of at most 128 characters');
+  }
+  assertKnownDefectCode(p['defect_code'], QC_CAPA_OPENED);
+  if (!isBoundedText(p['title'], MAX_TEXT_2000)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `title must be a non-empty string of at most ${MAX_TEXT_2000} characters`,
+    );
+  }
+  for (const field of ['root_cause', 'corrective_action', 'preventive_action']) {
+    if (p[field] !== undefined && p[field] !== null && !isBoundedText(p[field], MAX_TEXT_2000)) {
+      reject(
+        'INVALID_PAYLOAD',
+        `${field} must be null or a non-empty string of at most ${MAX_TEXT_2000} characters`,
+      );
+    }
+  }
+  if (!isUuid(p['owner_user_id'])) reject('INVALID_PAYLOAD', 'owner_user_id must be a UUID');
+  if (typeof p['due_on'] !== 'string' || !isValidCalendarDate(p['due_on'])) {
+    reject('INVALID_PAYLOAD', 'due_on must be a YYYY-MM-DD calendar date');
+  }
+  rejectDeclaredDerived(p, ['capa_number', 'opened_by', 'opened_at', 'status'], QC_CAPA_OPENED);
+}
+
+function assertCapaClosedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['capa_id'])) reject('INVALID_PAYLOAD', 'capa_id must be a UUID');
+  if (envelope.stream_id !== p['capa_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the capa_id for qc.capa_closed', {
+      stream_id: envelope.stream_id,
+      payload_capa_id: p['capa_id'],
+    });
+  }
+  if (!isBoundedText(p['closure_evidence'], MAX_TEXT_2000)) {
+    reject(
+      'INVALID_PAYLOAD',
+      `closure_evidence must be a non-empty string of at most ${MAX_TEXT_2000} characters`,
+    );
+  }
+  rejectDeclaredDerived(p, ['closed_by', 'closed_at', 'status'], QC_CAPA_CLOSED);
+}
+
+function assertCapaLinkedShape(envelope: EventEnvelope): void {
+  const p = envelope.payload as Record<string, unknown>;
+  if (!isUuid(p['ncr_id'])) reject('INVALID_PAYLOAD', 'ncr_id must be a UUID');
+  if (envelope.stream_id !== p['ncr_id']) {
+    reject('INVALID_PAYLOAD', 'stream_id must be the ncr_id for qc.capa_linked', {
+      stream_id: envelope.stream_id,
+      payload_ncr_id: p['ncr_id'],
+    });
+  }
+  if (!isUuid(p['capa_id'])) reject('INVALID_PAYLOAD', 'capa_id must be a UUID');
+  rejectDeclaredDerived(p, ['linked_by', 'linked_at', 'sku', 'defect_code'], QC_CAPA_LINKED);
+}
+
+/**
+ * AC 1: places the governed hold. Locks the LOT row first, then the QC task row (the lot-then-task
+ * order every Story 8.1-8.4 applier uses - the other order deadlocks against them), inserts the
+ * qc_quality_hold record, sets the ONE enforcement flag (Binding Scope Decision 1) in the same
+ * transaction, appends the lot_trace entry and emits the AD-17 transactional notification.
+ *
+ * Flag-reason subtlety: when the lot is ALREADY flag-held (a Story 2.3 ad hoc hold, or the Story
+ * 8.3 scrap_pending parking), the existing reason is PRESERVED rather than overwritten - the
+ * governed record still exists and still blocks, but releasing it must not be able to lift a
+ * containment this hold did not create (the hold-bypass class the 8.3/8.4 reviews each found).
+ */
+async function applyHoldPlaced(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const holdId = p['hold_id'] as string;
+  const lotId = p['lot_id'] as string;
+  const holdReason = (p['hold_reason'] as string).trim();
+  const defectCode = (p['defect_code'] as string | null | undefined) ?? null;
+  const actorId = envelope.metadata.actor.user_id;
+  const placedAt = envelope.metadata.occurred_at;
+
+  const lotResult = await client.query(
+    `SELECT lot_id, lot_number, sku, quality_hold_status, quality_hold_reason
+       FROM lot_master WHERE lot_id = $1 FOR UPDATE`,
+    [lotId],
+  );
+  if (lotResult.rows.length === 0) {
+    reject('LOT_NOT_FOUND', 'The lot does not resolve', { lot_id: lotId }, 404);
+  }
+  const lot = lotResult.rows[0]!;
+  const lotNumber = lot['lot_number'] as string;
+  const sku = lot['sku'] as string;
+  // Lot-then-task lock order (may be null: an ungoverned lot is still holdable).
+  const task = await getQcInspectionTaskByLotId(lotId, client, true);
+
+  const existing = await getOpenQcQualityHoldByLotId(lotId, client);
+  if (existing) {
+    reject(
+      'HOLD_EXISTS',
+      'An open quality hold already exists for this lot',
+      { lot_id: lotId, existing_hold_id: existing.hold_id },
+      409,
+    );
+  }
+
+  const siteId = task?.site_id ?? envelope.metadata.actor.location_id;
+  await insertQcQualityHold(
+    {
+      hold_id: holdId,
+      lot_id: lotId,
+      lot_number: lotNumber,
+      sku,
+      site_id: siteId,
+      hold_reason: holdReason,
+      defect_code: defectCode,
+      placed_by: actorId,
+      placed_at: placedAt,
+      source_event_id: eventId,
+    },
+    client,
+  );
+
+  // Set the ONE enforcement flag, preserving a pre-existing reason (see the doc comment above).
+  if (lot['quality_hold_status'] !== 'held') {
+    const flagged = await placeQualityHold(lotNumber, sku, holdReason, client);
+    if (!flagged) {
+      reject('LOT_NOT_FOUND', 'The lot could not be flag-held', { lot_id: lotId }, 404);
+    }
+  }
+
+  const item = await getItemBySku(sku, client);
+  await appendTraceEntry(
+    {
+      lot_id: lotId,
+      event_id: eventId,
+      event_type: QC_HOLD_PLACED,
+      sku,
+      location_id: null,
+      location_code: null,
+      quantity_change: '0',
+      business_stream: item?.business_stream ?? 'production',
+      timestamp: placedAt,
+    },
+    client,
+  );
+
+  p['placed_at'] = placedAt;
+  p['site_id'] = siteId;
+  p['sku'] = sku;
+  p['lot_number'] = lotNumber;
+  p['status'] = 'open';
+  p['placed_by'] = actorId;
+
+  // AD-17: a hold is a decision.
+  await emitNotificationInTransaction(
+    {
+      target: { role: config.quality.inspectionTaskNotificationRole, location_id: siteId },
+      event_type: 'qc_hold_placed',
+      status_verb: 'Quality hold placed',
+      object_type: 'qc_quality_hold',
+      object_id: holdId,
+      actor_label: `Lot ${lotNumber} (${sku})`,
+      next_step:
+        'All stock in this lot is blocked on every node; run the where-used/where-shipped trace',
+      actor: envelope.metadata.actor,
+      correlation_id: envelope.metadata.correlation_id,
+      causation_id: eventId,
+      occurred_at: envelope.metadata.occurred_at,
+    },
+    client,
+  );
+}
+
+/**
+ * Binding Scope Decision 4: release is a distinct, reason-carrying, SEGREGATED decision - the
+ * releasing actor must not be the placer (SOD_VIOLATION, no config escape hatch). The guarded
+ * UPDATE makes a concurrent second release a zero-row update (HOLD_ALREADY_RELEASED). The
+ * enforcement flag clears ONLY when no other open governed hold exists AND the flag was not set by
+ * an independent containment this hold does not own (scrap_pending in particular - lifting it here
+ * would reintroduce the hold-bypass class).
+ */
+async function applyHoldReleased(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const holdId = p['hold_id'] as string;
+  const releaseReason = (p['release_reason'] as string).trim();
+  const actorId = envelope.metadata.actor.user_id;
+  const releasedAt = envelope.metadata.occurred_at;
+
+  // Read WITHOUT a lock to learn the lot (the Story 8.2 pattern), then lock lot-first.
+  const peek = await getQcQualityHoldById(holdId, client);
+  if (!peek) {
+    reject('HOLD_NOT_FOUND', 'The named hold does not resolve', { hold_id: holdId }, 404);
+  }
+  const lotResult = await client.query(
+    `SELECT lot_id, lot_number, sku, quality_hold_status, quality_hold_reason
+       FROM lot_master WHERE lot_id = $1 FOR UPDATE`,
+    [peek.lot_id],
+  );
+  if (lotResult.rows.length === 0) {
+    reject('LOT_NOT_FOUND', 'The lot does not resolve', { lot_id: peek.lot_id }, 404);
+  }
+  const lot = lotResult.rows[0]!;
+  const hold = await getQcQualityHoldById(holdId, client, true);
+  if (!hold) {
+    reject('HOLD_NOT_FOUND', 'The named hold does not resolve', { hold_id: holdId }, 404);
+  }
+  if (hold.status !== 'open') {
+    reject(
+      'HOLD_ALREADY_RELEASED',
+      'The hold is no longer open',
+      { hold_id: holdId, status: hold.status },
+      409,
+    );
+  }
+  if (hold.placed_by === actorId) {
+    reject(
+      'SOD_VIOLATION',
+      'The actor who placed a hold cannot release it',
+      { hold_id: holdId, placed_by: hold.placed_by },
+      409,
+    );
+  }
+
+  const released = await releaseQcQualityHold(
+    {
+      hold_id: holdId,
+      released_by: actorId,
+      released_at: releasedAt,
+      release_reason: releaseReason,
+      release_event_id: eventId,
+    },
+    client,
+  );
+  if (!released) {
+    reject('HOLD_ALREADY_RELEASED', 'The hold is no longer open', { hold_id: holdId }, 409);
+  }
+
+  const otherOpen = await otherOpenQcQualityHoldExists(hold.lot_id, holdId, client);
+  const thisHoldSetTheFlag = lot['quality_hold_reason'] === hold.hold_reason;
+  if (!otherOpen && thisHoldSetTheFlag) {
+    await clearQualityHold(hold.lot_number, hold.sku, client);
+  }
+
+  const item = await getItemBySku(hold.sku, client);
+  await appendTraceEntry(
+    {
+      lot_id: hold.lot_id,
+      event_id: eventId,
+      event_type: QC_HOLD_RELEASED,
+      sku: hold.sku,
+      location_id: null,
+      location_code: null,
+      quantity_change: '0',
+      business_stream: item?.business_stream ?? 'production',
+      timestamp: releasedAt,
+    },
+    client,
+  );
+
+  p['released_at'] = releasedAt;
+  p['site_id'] = hold.site_id;
+  p['sku'] = hold.sku;
+  p['lot_number'] = hold.lot_number;
+  p['status'] = 'released';
+  p['lot_id'] = hold.lot_id;
+  p['released_by'] = actorId;
+
+  // AD-17: a release is a decision.
+  await emitNotificationInTransaction(
+    {
+      target: { role: config.quality.inspectionTaskNotificationRole, location_id: hold.site_id },
+      event_type: 'qc_hold_released',
+      status_verb: 'Quality hold released',
+      object_type: 'qc_quality_hold',
+      object_id: holdId,
+      actor_label: `Lot ${hold.lot_number} (${hold.sku})`,
+      next_step:
+        otherOpen || !thisHoldSetTheFlag
+          ? 'The lot remains blocked by another open hold'
+          : 'The lot is no longer blocked',
+      actor: envelope.metadata.actor,
+      correlation_id: envelope.metadata.correlation_id,
+      causation_id: eventId,
+      occurred_at: envelope.metadata.occurred_at,
+    },
+    client,
+  );
+}
+
+/**
+ * AC 3: the HOLD-SOURCED NCR (Binding Scope Decision 9). Requires a held or defective lot: an open
+ * governed hold OR lot_master.quality_hold_status = 'held', re-derived under the lot lock. Never
+ * touches applyLotDispositioned's creation path. capa_mandatory is computed here (Decision 12) and
+ * ENFORCED at close (Decision 13).
+ */
+async function applyNcrRaised(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const ncrId = p['ncr_id'] as string;
+  const lotId = p['lot_id'] as string;
+  const defectCode = p['defect_code'] as string;
+  const capaId = (p['capa_id'] as string | null | undefined) ?? null;
+  const actorId = envelope.metadata.actor.user_id;
+  const raisedAt = envelope.metadata.occurred_at;
+
+  const lotResult = await client.query(
+    `SELECT lot_id, lot_number, sku, quality_hold_status FROM lot_master
+      WHERE lot_id = $1 FOR UPDATE`,
+    [lotId],
+  );
+  if (lotResult.rows.length === 0) {
+    reject('LOT_NOT_FOUND', 'The lot does not resolve', { lot_id: lotId }, 404);
+  }
+  const lot = lotResult.rows[0]!;
+  const task = await getQcInspectionTaskByLotId(lotId, client, true);
+  const openHold = await getOpenQcQualityHoldByLotId(lotId, client);
+  if (!openHold && lot['quality_hold_status'] !== 'held') {
+    reject(
+      'HOLD_NOT_FOUND',
+      'A hold-sourced NCR requires a held or defective lot: no open hold resolves and the lot is not flag-held',
+      { lot_id: lotId, quality_hold_status: lot['quality_hold_status'] },
+      404,
+    );
+  }
+  if (capaId !== null) {
+    const capa = await getQcCapaById(capaId, client);
+    if (!capa) {
+      reject('CAPA_NOT_FOUND', 'The named CAPA does not resolve', { capa_id: capaId }, 404);
+    }
+    if (capa.status !== 'open') {
+      reject(
+        'CAPA_NOT_OPEN',
+        'The named CAPA is not open',
+        { capa_id: capaId, status: capa.status },
+        409,
+      );
+    }
+  }
+
+  const sku = lot['sku'] as string;
+  const businessDate = toIstCalendarDate(new Date(raisedAt));
+  const capaMandatory = await isRepeatDefect(
+    sku,
+    defectCode,
+    businessDate,
+    config.qc.repeatDefectThreshold,
+    config.qc.repeatDefectWindowDays,
+    client,
+  );
+  const siteId = task?.site_id ?? openHold?.site_id ?? envelope.metadata.actor.location_id;
+  await insertHoldSourcedQcNcr(
+    {
+      ncr_id: ncrId,
+      lot_id: lotId,
+      lot_number: lot['lot_number'] as string,
+      site_id: siteId,
+      sku,
+      quantity: p['quantity'] as string,
+      justification: (p['justification'] as string).trim(),
+      raised_by: actorId,
+      raised_at: raisedAt,
+      source_event_id: eventId,
+      hold_id: openHold?.hold_id ?? null,
+      defect_code: defectCode,
+      capa_id: capaId,
+      capa_mandatory: capaMandatory,
+    },
+    client,
+  );
+
+  p['raised_at'] = raisedAt;
+  p['site_id'] = siteId;
+  p['sku'] = sku;
+  p['lot_number'] = lot['lot_number'];
+  p['hold_id'] = openHold?.hold_id ?? null;
+  p['capa_mandatory'] = capaMandatory;
+  p['raised_by'] = actorId;
+}
+
+/** Binding Scope Decision 11: capa_number is minted server-side; 409 CAPA_EXISTS on collision. */
+async function applyCapaOpened(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const capaId = p['capa_id'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+  const openedAt = envelope.metadata.occurred_at;
+  const istYear = Number(toIstCalendarDate(new Date(openedAt)).slice(0, 4));
+  const capaNumber = await allocateQcCapaNumber(istYear, client);
+
+  await insertQcCapa(
+    {
+      capa_id: capaId,
+      capa_number: capaNumber,
+      sku: (p['sku'] as string).trim(),
+      defect_code: p['defect_code'] as string,
+      title: (p['title'] as string).trim(),
+      root_cause: (p['root_cause'] as string | null | undefined) ?? null,
+      corrective_action: (p['corrective_action'] as string | null | undefined) ?? null,
+      preventive_action: (p['preventive_action'] as string | null | undefined) ?? null,
+      owner_user_id: p['owner_user_id'] as string,
+      due_on: p['due_on'] as string,
+      opened_by: actorId,
+      opened_at: openedAt,
+      source_event_id: eventId,
+    },
+    client,
+  );
+
+  p['capa_number'] = capaNumber;
+  p['opened_by'] = actorId;
+  p['opened_at'] = openedAt;
+  p['status'] = 'open';
+}
+
+/** Closure requires evidence; the guarded UPDATE makes a second close CAPA_NOT_OPEN. */
+async function applyCapaClosed(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const capaId = p['capa_id'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+  const closedAt = envelope.metadata.occurred_at;
+
+  const capa = await getQcCapaById(capaId, client, true);
+  if (!capa) {
+    reject('CAPA_NOT_FOUND', 'The named CAPA does not resolve', { capa_id: capaId }, 404);
+  }
+  if (capa.status !== 'open') {
+    reject('CAPA_NOT_OPEN', 'The CAPA is not open', { capa_id: capaId, status: capa.status }, 409);
+  }
+  const closed = await closeQcCapa(
+    {
+      capa_id: capaId,
+      closed_by: actorId,
+      closed_at: closedAt,
+      closure_evidence: (p['closure_evidence'] as string).trim(),
+      close_event_id: eventId,
+    },
+    client,
+  );
+  if (!closed) {
+    reject('CAPA_NOT_OPEN', 'The CAPA is not open', { capa_id: capaId }, 409);
+  }
+
+  p['closed_by'] = actorId;
+  p['closed_at'] = closedAt;
+  p['status'] = 'closed';
+
+  // AD-17: a CAPA closure is a decision. Enterprise-scoped record, so no location filter.
+  await emitNotificationInTransaction(
+    {
+      target: { role: config.quality.inspectionTaskNotificationRole, location_id: null },
+      event_type: 'qc_capa_closed',
+      status_verb: 'CAPA closed',
+      object_type: 'qc_capa',
+      object_id: capaId,
+      actor_label: `${capa.capa_number} (${capa.sku}, ${capa.defect_code})`,
+      next_step: 'Linked NCRs can now be closed with closed_with_capa',
+      actor: envelope.metadata.actor,
+      correlation_id: envelope.metadata.correlation_id,
+      causation_id: eventId,
+      occurred_at: envelope.metadata.occurred_at,
+    },
+    client,
+  );
+}
+
+/** AC 4: links an OPEN CAPA to an open NCR exactly once (CAPA_ALREADY_LINKED on the second). */
+async function applyCapaLinked(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  _eventId: string,
+): Promise<void> {
+  const p = envelope.payload as Record<string, unknown>;
+  const ncrId = p['ncr_id'] as string;
+  const capaId = p['capa_id'] as string;
+  const actorId = envelope.metadata.actor.user_id;
+
+  // Read WITHOUT a lock to learn the lot, then the standard lot-first lock prefix.
+  const peek = await getQcNcrById(ncrId, client);
+  if (!peek) {
+    reject('NCR_NOT_FOUND', 'No non-conformance report resolves', { ncr_id: ncrId }, 404);
+  }
+  await client.query(`SELECT lot_id FROM lot_master WHERE lot_id = $1 FOR UPDATE`, [peek.lot_id]);
+  const ncr = await getQcNcrById(ncrId, client, true);
+  if (!ncr) {
+    reject('NCR_NOT_FOUND', 'No non-conformance report resolves', { ncr_id: ncrId }, 404);
+  }
+  if (ncr.outcome !== null) {
+    reject(
+      'NCR_OUTCOME_EXISTS',
+      'The NCR is already closed and cannot take a CAPA link',
+      { ncr_id: ncrId, outcome: ncr.outcome },
+      409,
+    );
+  }
+  const capa = await getQcCapaById(capaId, client, true);
+  if (!capa) {
+    reject('CAPA_NOT_FOUND', 'The named CAPA does not resolve', { capa_id: capaId }, 404);
+  }
+  if (capa.status !== 'open') {
+    reject(
+      'CAPA_NOT_OPEN',
+      'The named CAPA is not open',
+      { capa_id: capaId, status: capa.status },
+      409,
+    );
+  }
+  const linked = await linkCapaToNcr(ncrId, capaId, client);
+  if (!linked) {
+    reject(
+      'CAPA_ALREADY_LINKED',
+      'The NCR already carries a CAPA',
+      { ncr_id: ncrId, existing_capa_id: ncr.capa_id },
+      409,
+    );
+  }
+
+  p['linked_by'] = actorId;
+  p['linked_at'] = envelope.metadata.occurred_at;
+  p['sku'] = ncr.sku;
+  p['defect_code'] = ncr.defect_code;
+}
+
+/** 23505 duplicate resolver: the race path returns the SAME detail as the sequential HOLD_EXISTS. */
+export async function resolveQcHoldDuplicateConflict(
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const lotId = isUuid(payload['lot_id']) ? payload['lot_id'] : null;
+  const existing = lotId ? await getOpenQcQualityHoldByLotId(lotId) : null;
+  return { lot_id: lotId, existing_hold_id: existing?.hold_id ?? null };
+}
+
+/** 23505 duplicate resolver for the minted-CAPA-number collision (CAPA_EXISTS). */
+export async function resolveQcCapaDuplicateConflict(
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return { capa_id: isUuid(payload['capa_id']) ? payload['capa_id'] : null };
 }

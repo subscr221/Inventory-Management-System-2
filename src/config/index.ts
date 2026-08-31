@@ -569,6 +569,32 @@ export const config = {
     // behaviour rather than silently releasing lots with no physical evidence retained.
     retentionSampleScope: parseRetentionSampleScope(),
   },
+  qc: {
+    // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -
+    // per-site catalogues are incompatible with the enterprise-wide repeat count in Decision 12
+    // (the same physical defect coded differently at two plants would never reach the threshold).
+    // Parsed with the exact Story 7.8 fail-closed contract: only an ABSENT variable takes the ten
+    // confirmed seed codes; present-but-blank, duplicate, over-length or line-break-carrying fails
+    // at load. A catalogue change is an environment change, never a code change.
+    defectCodes: parseClosureCodeCatalogue(
+      'QC_DEFECT_CODES',
+      'DIMENSIONAL,SURFACE_FINISH,MATERIAL_NONCONFORMITY,CONTAMINATION,ASSEMBLY,FUNCTIONAL,MARKING_LABELLING,PACKAGING,CORROSION,DOCUMENTATION',
+    ),
+    // Story 8.5 (FR-Q-10, Binding Scope Decision 12): the enterprise-wide repeat-defect rule.
+    // "Three or more NCRs for the same product and defect within 90 days" - both numbers are
+    // policy, not code. The predicate itself takes these as PARAMETERS (the Story 8.4
+    // tautological-config lesson), so a unit test exercises real boundaries.
+    repeatDefectThreshold: parsePositiveIntEnv('QC_REPEAT_DEFECT_THRESHOLD', 3, 1000),
+    repeatDefectWindowDays: parsePositiveIntEnv('QC_REPEAT_DEFECT_WINDOW_DAYS', 90, 3650),
+    // Story 8.5 (FR-Q-09, Binding Scope Decision 7): the 15-minute propagation contract is a
+    // MEASURED budget, not a sleep. The hold read/trace routes report now() - placed_at against
+    // this bound as propagation_budget_breached; nothing waits on it.
+    holdPropagationBudgetMinutes: parsePositiveIntEnv(
+      'QC_HOLD_PROPAGATION_BUDGET_MINUTES',
+      15,
+      1440,
+    ),
+  },
 } as const;
 
 // Story 8.4 (AC 2): RETENTION_FLOOR_VIOLATION. Validated at boot, beside the config object it

@@ -203,6 +203,13 @@ const MIGRATIONS = [
   // production_order and production_wip_ledger upgrades ride their existing entries above.
   '../../read/projections/production_completion.sql',
   '../../read/projections/production_scrap_declaration.sql',
+  // Story 8.5: the governed quality hold record and the CAPA register (FR-Q-09/FR-Q-10). Both read
+  // lot_master and qc_ncr conceptually (the hold applier sets the lot_master flag; a hold-sourced
+  // NCR names a hold and a CAPA), so they are appended after every file above. Neither carries an
+  // FK - they are derived, rebuildable projections in the same style as qc_ncr - so the order
+  // between them is logical. The qc_ncr origin/CAPA widening rides its existing entry above.
+  '../../read/projections/qc_quality_hold.sql',
+  '../../read/projections/qc_capa.sql',
 ];
 
 async function migrate(): Promise<void> {

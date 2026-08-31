@@ -1529,6 +1529,39 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 8.5 (FR-Q-09, AC 1/2): the governed quality hold record; the release is the one UPDATE.
+  // The one-OPEN-hold-per-lot grain is a partial unique index whose predicate carries the entire
+  // semantics, so its full body is pinned (the uq_production_order_source_rework_event precedent).
+  {
+    canonical: 'read/projections/qc_quality_hold.sql',
+    table: 'qc_quality_hold',
+    constraints: [
+      'chk_qc_quality_hold_status',
+      'chk_qc_quality_hold_reason',
+      'chk_qc_quality_hold_release_reason',
+      'chk_qc_quality_hold_release_pairing',
+    ],
+    indexes: ['uq_qc_quality_hold_open', 'idx_qc_quality_hold_site', 'idx_qc_quality_hold_lot'],
+    indexBodies: [
+      "CREATE UNIQUE INDEX IF NOT EXISTS uq_qc_quality_hold_open ON qc_quality_hold (lot_id) WHERE status = 'open';",
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 8.5 (FR-Q-10, AC 3/4): the first-class CAPA record; the close is the one UPDATE.
+  {
+    canonical: 'read/projections/qc_capa.sql',
+    table: 'qc_capa',
+    constraints: [
+      'uq_qc_capa_number',
+      'chk_qc_capa_status',
+      'chk_qc_capa_title',
+      'chk_qc_capa_closure_evidence',
+      'chk_qc_capa_closure_pairing',
+    ],
+    indexes: ['idx_qc_capa_sku_defect', 'idx_qc_capa_status'],
+    indexBodies: ['ON qc_capa (sku, defect_code, status)', 'ON qc_capa (status, due_on, capa_id)'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -2139,6 +2172,56 @@ describe('Story 2.1 schema drift guard', () => {
       'production_scrap_declaration.sql missing the event grain',
     );
     assert.ok(initDb.includes(scrapGrain), 'init-db.sql missing the scrap event grain');
+  });
+
+  // Story 8.5 (FR-Q-10, Binding Scope Decision 9): the qc_ncr origin/CAPA widening arrives by
+  // ALTER TABLE statements OUTSIDE the CREATE TABLE body the generic loop compares (the Story 7.6
+  // lesson), so every fragment - the added columns, the dropped NOT NULLs, the replaced unique
+  // constraints and both rewritten CHECKs - is pinned here in BOTH copies.
+  it('Story 8.5 mirrors the qc_ncr origin/CAPA widening into init-db.sql', () => {
+    const ncrSql = read('read/projections/qc_ncr.sql');
+    for (const fragment of [
+      'ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS origin TEXT;',
+      "UPDATE qc_ncr SET origin = 'disposition' WHERE origin IS NULL;",
+      'ALTER TABLE qc_ncr ALTER COLUMN origin SET NOT NULL;',
+      'ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS hold_id UUID;',
+      'ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS defect_code TEXT;',
+      'ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS capa_id UUID;',
+      'ALTER TABLE qc_ncr ADD COLUMN IF NOT EXISTS capa_mandatory BOOLEAN NOT NULL DEFAULT false;',
+      'ALTER TABLE qc_ncr ALTER COLUMN disposition_id DROP NOT NULL;',
+      'ALTER TABLE qc_ncr ALTER COLUMN task_id DROP NOT NULL;',
+      'ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS uq_qc_ncr_lot;',
+      'ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS uq_qc_ncr_disposition;',
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_qc_ncr_lot_disposition_sourced ON qc_ncr (lot_id) WHERE disposition_id IS NOT NULL;',
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_qc_ncr_disposition ON qc_ncr (disposition_id) WHERE disposition_id IS NOT NULL;',
+      "ADD CONSTRAINT chk_qc_ncr_outcome CHECK (outcome IS NULL OR outcome IN ('rework', 'downgrade', 'scrap', 'closed_with_capa'));",
+      "(origin = 'disposition') = (disposition_id IS NOT NULL AND task_id IS NOT NULL)",
+      "(origin = 'hold') = (defect_code IS NOT NULL)",
+      "(hold_id IS NULL OR origin = 'hold')",
+    ]) {
+      assert.ok(ncrSql.includes(fragment), `qc_ncr.sql missing ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
+    // The superseded add-if-missing guards must survive NOWHERE: a guard re-adding the dropped
+    // uq_qc_ncr_disposition constraint collides with the same-named replacement index and aborts
+    // re-application (the Story 6.3 narrow-guard lesson, found live during this story's
+    // migrate-twice gate).
+    for (const gone of [
+      'ADD CONSTRAINT uq_qc_ncr_lot UNIQUE (lot_id)',
+      'ADD CONSTRAINT uq_qc_ncr_disposition UNIQUE (disposition_id)',
+    ]) {
+      assert.ok(!ncrSql.includes(`    ${gone};`), `qc_ncr.sql still re-adds: ${gone}`);
+    }
+    // The CAPA number sequence and its grant ride the canonical file into init-db (the generic
+    // loop never asserts sequences - the production_order_number_seq precedent).
+    const capaSql = read('read/projections/qc_capa.sql');
+    for (const fragment of [
+      'CREATE SEQUENCE IF NOT EXISTS qc_capa_number_seq;',
+      'GRANT USAGE ON qc_capa_number_seq TO app_user;',
+    ]) {
+      assert.ok(capaSql.includes(fragment), `qc_capa.sql missing ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    }
   });
 
   for (const entry of EXPECTED) {
