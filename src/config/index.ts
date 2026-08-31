@@ -93,6 +93,33 @@ function parseRetentionSampleScope(): RetentionSampleScope {
 }
 
 /**
+ * Story 8.6 (FR-Q-11/FR-Q-14, Binding Scope Decision 3): whether the statutory release blocks
+ * (BIS_LICENCE_INVALID, LABEL_VERSION_MISSING) reject at release. `enforce` is the default -
+ * the fail-closed statutory posture. `dormant` exists SOLELY for the A-13 migration window (BIS
+ * licence data must be loaded before the FR-Q-11 block goes live) and preserves Story 8.4
+ * behaviour byte-for-byte: the licence number is recorded when the register has one, null
+ * otherwise, and neither block rejects.
+ *
+ * Only an ABSENT variable takes the default; a present-but-blank or unrecognised value refuses
+ * boot (the repo-wide fail-closed config invariant) - the two settings differ in whether a
+ * statutory gate exists at all, so a typo must stop the boot, not quietly pick one.
+ */
+export const STATUTORY_RELEASE_BLOCK_MODES = ['enforce', 'dormant'] as const;
+export type StatutoryReleaseBlockMode = (typeof STATUTORY_RELEASE_BLOCK_MODES)[number];
+
+function parseStatutoryReleaseBlockMode(): StatutoryReleaseBlockMode {
+  const raw = process.env['QC_STATUTORY_RELEASE_BLOCKS'];
+  if (raw === undefined) return 'enforce';
+  const value = raw.trim();
+  if (!(STATUTORY_RELEASE_BLOCK_MODES as readonly string[]).includes(value)) {
+    throw new Error(
+      `Invalid QC_STATUTORY_RELEASE_BLOCKS "${raw}": must be one of ${STATUTORY_RELEASE_BLOCK_MODES.join(', ')}.`,
+    );
+  }
+  return value as StatutoryReleaseBlockMode;
+}
+
+/**
  * Parses a positive-number statutory rate from the environment, falling back to `fallback`
  * for an unset, non-numeric, or non-positive value. Fractional values are valid: the MSMED
  * s.16 rate is three times the RBI bank rate, which is frequently fractional (3 x 6.5 = 19.5),
@@ -568,6 +595,10 @@ export const config = {
     // release. Defaults to the broader rule, so an unconfigured deployment keeps the safer
     // behaviour rather than silently releasing lots with no physical evidence retained.
     retentionSampleScope: parseRetentionSampleScope(),
+    // Story 8.6 (Binding Scope Decision 3): the statutory release blocks' enforcement mode. The
+    // block predicates take this as a PARAMETER (the Story 8.4 tautological-config lesson), so
+    // unit tests exercise both branches without reloading config.
+    statutoryReleaseBlocks: parseStatutoryReleaseBlockMode(),
   },
   qc: {
     // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -

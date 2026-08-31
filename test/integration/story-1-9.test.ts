@@ -510,6 +510,23 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/qc/ncrs',
       'GET /api/v1/qc/ncrs/:ncrId',
       'POST /api/v1/qc/ncrs/:ncrId/outcome',
+      // Story 8.5 (FR-Q-09/FR-Q-10): the governed hold, hold-sourced NCR and CAPA routes. Same
+      // repair note as the Story 8.4 block above: registered in server.ts by Story 8.5 but never
+      // added here, found red during the Story 8.6 spine gate and repaired alongside the 8.6
+      // dashboard route below so the gate stays meaningful.
+      'POST /api/v1/qc/ncrs',
+      'POST /api/v1/qc/ncrs/:ncrId/capa',
+      'POST /api/v1/qc/holds',
+      'GET /api/v1/qc/holds',
+      'GET /api/v1/qc/holds/:holdId',
+      'POST /api/v1/qc/holds/:holdId/release',
+      'GET /api/v1/qc/holds/:holdId/trace',
+      'POST /api/v1/qc/capas',
+      'GET /api/v1/qc/capas',
+      'GET /api/v1/qc/capas/:capaId',
+      'POST /api/v1/qc/capas/:capaId/close',
+      // Story 8.6 (FR-Q-13): the quality reporting dashboard.
+      'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',
       // Story 6.1: Production Order Creation and Release Gate
       'POST /api/v1/production-orders',

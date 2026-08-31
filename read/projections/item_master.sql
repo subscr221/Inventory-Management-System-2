@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS item_master (
   hazmat                      BOOLEAN NOT NULL DEFAULT false,
   quarantine_required         BOOLEAN NOT NULL DEFAULT false,
   bis_licence_required        BOOLEAN NOT NULL DEFAULT false,
+  legal_metrology_required    BOOLEAN NOT NULL DEFAULT false,
   valuation_method            TEXT NOT NULL,
   business_stream             TEXT NOT NULL,
   status                      TEXT NOT NULL DEFAULT 'active',
@@ -62,6 +63,11 @@ ALTER TABLE item_master ADD COLUMN IF NOT EXISTS count_variance_tolerance_percen
 
 -- Story 3.5: size_class for putaway bin-matching (small / standard / large / oversized).
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS size_class TEXT NOT NULL DEFAULT 'standard';
+
+-- Story 8.6 (FR-Q-14): Legal Metrology packaged-commodity flag, mirroring bis_licence_required.
+-- Default false keeps the LABEL_VERSION_MISSING release block inert for every existing item until
+-- the flag is deliberately set (Binding Scope Decision 7).
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS legal_metrology_required BOOLEAN NOT NULL DEFAULT false;
 
 DO $$
 BEGIN

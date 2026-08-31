@@ -164,11 +164,14 @@ END $$;
 -- index; BOTH keep resolving to 409 NCR_EXISTS in the store's constraint chain, byte-identical to
 -- the Story 8.3 behaviour.
 --
--- chk_qc_ncr_origin is the FULL biconditional (the Story 8.4 one-directional CHECK lesson):
--- origin = 'disposition' exactly when disposition_id and task_id are both non-null, and
--- origin = 'hold' exactly when defect_code is non-null (AC 3: a hold-sourced NCR always carries a
--- defect code; hold_id stays nullable because a lot may be flag-held by the Story 2.3 ad hoc route
--- without a governed qc_quality_hold row).
+-- chk_qc_ncr_origin (as widened by Story 8.6 Binding Scope Decision 9): the origin enum, the
+-- disposition biconditional ('disposition' exactly when disposition_id and task_id are both
+-- non-null) and the hold_id pairing are unchanged from Story 8.5. ONLY the hold/defect conjunct
+-- relaxed, from a biconditional to the one-way (origin = 'hold') implies (defect_code IS NOT NULL):
+-- a hold-sourced NCR still ALWAYS carries a defect code (AC 3), and a disposition-origin NCR MAY
+-- now carry one (the optional reject-path defect_code feeding the FR-Q-13 by-defect-code metric).
+-- hold_id stays nullable because a lot may be flag-held by the Story 2.3 ad hoc route without a
+-- governed qc_quality_hold row.
 --
 -- chk_qc_ncr_outcome is widened to admit 'closed_with_capa' (Binding Scope Decision 14): the
 -- hold-sourced terminal outcome that moves no stock, so chk_qc_ncr_downgrade_pairing and
@@ -193,6 +196,18 @@ BEGIN
   ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS chk_qc_ncr_outcome;
   ALTER TABLE qc_ncr
     ADD CONSTRAINT chk_qc_ncr_outcome CHECK (outcome IS NULL OR outcome IN ('rework', 'downgrade', 'scrap', 'closed_with_capa'));
+  -- Story 8.6 widening (Binding Scope Decision 9): drop-then-add keyed on pg_get_constraintdef
+  -- (the Story 8.3 template). The Story 8.5 biconditional definition contains no '<>' operator
+  -- while the widened one does, so the marker is unambiguous and the block is a no-op once the
+  -- widened definition is in place (migrate-twice clean).
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_ncr_origin'
+      AND conrelid = 'qc_ncr'::regclass
+      AND pg_get_constraintdef(oid) NOT LIKE '%<>%'
+  ) THEN
+    ALTER TABLE qc_ncr DROP CONSTRAINT chk_qc_ncr_origin;
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_qc_ncr_origin'
@@ -202,7 +217,7 @@ BEGIN
       ADD CONSTRAINT chk_qc_ncr_origin CHECK (
         origin IN ('disposition', 'hold')
         AND (origin = 'disposition') = (disposition_id IS NOT NULL AND task_id IS NOT NULL)
-        AND (origin = 'hold') = (defect_code IS NOT NULL)
+        AND (origin <> 'hold' OR defect_code IS NOT NULL)
         AND (hold_id IS NULL OR origin = 'hold')
       );
   END IF;

@@ -1562,6 +1562,40 @@ const EXPECTED = [
     indexBodies: ['ON qc_capa (sku, defect_code, status)', 'ON qc_capa (status, due_on, capa_id)'],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 8.6 (FR-Q-11, AC 1/2): the BIS licence register enforcement contract. Fixture-seeded
+  // reference data - app_user holds SELECT only (Binding Scope Decision 1); the site-scope
+  // uniqueness grain is a COALESCE expression index so all-sites (NULL site_id) rows dedupe.
+  {
+    canonical: 'read/projections/compliance_bis_licence.sql',
+    table: 'compliance_bis_licence',
+    constraints: [
+      'chk_compliance_bis_licence_number',
+      'chk_compliance_bis_licence_type',
+      'chk_compliance_bis_licence_window',
+    ],
+    indexes: ['uq_compliance_bis_licence_scope', 'idx_compliance_bis_licence_sku'],
+    indexBodies: ['ON compliance_bis_licence (sku, valid_to)'],
+    appUserGrant: 'SELECT',
+  },
+  // Story 8.6 (FR-Q-14, AC 3): the Legal Metrology label master enforcement contract. The
+  // single-current-version invariant is the partial unique uq_label_master_current, whose full
+  // body is pinned (the uq_qc_quality_hold_open precedent); approval pairing is the FULL
+  // biconditional (Story 8.4 one-directional CHECK lesson).
+  {
+    canonical: 'read/projections/label_master.sql',
+    table: 'label_master',
+    constraints: [
+      'chk_label_master_sku',
+      'chk_label_master_version',
+      'chk_label_master_status',
+      'chk_label_master_approval_pairing',
+    ],
+    indexes: ['uq_label_master_current', 'idx_label_master_sku'],
+    indexBodies: [
+      "CREATE UNIQUE INDEX IF NOT EXISTS uq_label_master_current\n  ON label_master (sku) WHERE status = 'approved';",
+    ],
+    appUserGrant: 'SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -2196,7 +2230,10 @@ describe('Story 2.1 schema drift guard', () => {
       'CREATE UNIQUE INDEX IF NOT EXISTS uq_qc_ncr_disposition ON qc_ncr (disposition_id) WHERE disposition_id IS NOT NULL;',
       "ADD CONSTRAINT chk_qc_ncr_outcome CHECK (outcome IS NULL OR outcome IN ('rework', 'downgrade', 'scrap', 'closed_with_capa'));",
       "(origin = 'disposition') = (disposition_id IS NOT NULL AND task_id IS NOT NULL)",
-      "(origin = 'hold') = (defect_code IS NOT NULL)",
+      // Story 8.6 (Binding Scope Decision 9) relaxed ONLY the hold/defect conjunct, from the
+      // Story 8.5 biconditional to hold-implies-code; the other three conjuncts stay pinned above
+      // and below unchanged.
+      "(origin <> 'hold' OR defect_code IS NOT NULL)",
       "(hold_id IS NULL OR origin = 'hold')",
     ]) {
       assert.ok(ncrSql.includes(fragment), `qc_ncr.sql missing ${fragment}`);
@@ -2222,6 +2259,20 @@ describe('Story 2.1 schema drift guard', () => {
       assert.ok(capaSql.includes(fragment), `qc_capa.sql missing ${fragment}`);
       assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
     }
+  });
+
+  it('Story 8.6 mirrors the legal_metrology_required flag into both item_master copies', () => {
+    // FR-Q-14 / Binding Scope Decision 7: the Legal Metrology flag mirrors bis_licence_required
+    // everywhere; default false keeps the LABEL_VERSION_MISSING block inert for existing items.
+    const itemSql = read('read/projections/item_master.sql');
+    const fragment =
+      'ADD COLUMN IF NOT EXISTS legal_metrology_required BOOLEAN NOT NULL DEFAULT false';
+    assert.ok(itemSql.includes(fragment), `item_master.sql missing ${fragment}`);
+    assert.ok(initDb.includes(fragment), `init-db.sql missing ${fragment}`);
+    assert.ok(
+      itemSql.includes('legal_metrology_required    BOOLEAN NOT NULL DEFAULT false,'),
+      'item_master.sql CREATE TABLE missing legal_metrology_required',
+    );
   });
 
   for (const entry of EXPECTED) {

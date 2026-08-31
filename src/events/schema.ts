@@ -3595,6 +3595,12 @@ export interface QcLotDispositionedPayload {
   decided_at: string;
   /** Minted by the handler for a reject only; absent or null for an accept. */
   ncr_id?: string | null;
+  /**
+   * Story 8.6 (Binding Scope Decision 9): optional catalogue defect code, reject only. Carried
+   * onto the disposition-origin qc_ncr row for the FR-Q-13 by-defect-code rejection metric; an
+   * unknown code is 422 DEFECT_CODE_UNKNOWN.
+   */
+  defect_code?: string | null;
   /** Derived under lock; persisted write-back only. */
   lot_number?: string;
   sku?: string;
@@ -3746,8 +3752,11 @@ export interface QcReworkRequestedEnvelope extends Omit<EventEnvelope, 'payload'
  * from the released item's item_master.bis_licence_required ('coc' for a BIS-covered product,
  * 'coa' otherwise - Binding Scope Decision 4), retention_years from resolveRetentionYears,
  * retention_expires_on from decided_at + retention_years, bis_licence_number from the
- * resolveBisLicenceNumber stub (null until Story 8.7 - a null NEVER blocks release), released_by
- * from the authenticated actor.
+ * register-backed resolveBisLicence over compliance_bis_licence (Story 8.6, reversing Story 8.4's
+ * null-never-blocks stub: under QC_STATUTORY_RELEASE_BLOCKS=enforce a BIS-covered product with no
+ * valid licence is rejected BIS_LICENCE_INVALID, and a Legal Metrology item with no current
+ * approved label_master row is rejected LABEL_VERSION_MISSING; `dormant` preserves the Story 8.4
+ * number-if-available behaviour), released_by from the authenticated actor.
  *
  * Server-derived, rejected if declared, in full: disposition_id, retention_sample_id, document_kind,
  * document_ref, retention_years, retention_expires_on, bis_licence_number, released_by, lot_number,

@@ -27,6 +27,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCIM_HEADERS = { Authorization: 'Bearer test-only-scim-bearer-token-not-for-production-use' };
 const run = randomUUID().slice(0, 8);
+/** Story 8.6 (Binding Scope Decision 14): the register number every BIS-covered fixture seeds. */
+const SEEDED_BIS_LICENCE_NUMBER = `CM/L-84-${run}`;
 const DEVICE_ID = `edge-8-4-${run}`;
 
 interface HttpResult {
@@ -275,6 +277,19 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
     planCounter += 1;
     const sku = `FG-8-4-${run}-${planCounter}`;
     const itemId = await createItem(sku, bisCovered ? { bis_licence_required: true } : {});
+    if (bisCovered) {
+      // Story 8.6 (Binding Scope Decision 14): the statutory release blocks default to `enforce`,
+      // so every BIS-covered fixture seeds one valid, global-scope licence row through the admin
+      // pool (the register has no write routes in 8.6). The coc-path assertion below now proves
+      // the RELEASE RECORD CARRIES THIS REGISTER NUMBER - the honest end-state, strengthening the
+      // Story 8.4 null-stub assertion rather than weakening it.
+      await getAdminPool().query(
+        `INSERT INTO compliance_bis_licence
+           (licence_id, licence_number, licence_type, sku, site_id, valid_from, valid_to)
+         VALUES ($1, $2, 'cml', $3, NULL, '2020-01-01', '2099-12-31')`,
+        [randomUUID(), SEEDED_BIS_LICENCE_NUMBER, sku],
+      );
+    }
     const revisionId = await draftAndRelease(itemId);
     const created = await makeRequest(
       port,
@@ -576,6 +591,10 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
       '../../read/projections/qc_ncr.sql',
       '../../read/projections/qc_batch_release.sql',
       '../../read/projections/qc_retention_sample.sql',
+      // Story 8.6: the release seam now reads the statutory register tables on every release, and
+      // planOk seeds a licence row for BIS-covered fixtures (Binding Scope Decision 14).
+      '../../read/projections/compliance_bis_licence.sql',
+      '../../read/projections/label_master.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
@@ -584,7 +603,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE qc_retention_sample, qc_batch_release, qc_ncr, qc_lot_split, qc_sampling_switching_state, qc_inspection_result, qc_sampling_plan, qc_lot_disposition, qc_deviation, qc_inspection_task, inspection_plan_approval, inspection_plan_characteristic, inspection_plan_version, inspection_plan, supplier_scorecard_metric, supplier, bom_alternate, bom_explosion, bom_explosion_line, bom_cost_rollup_line, bom_cost_rollup, bom_outbound_message, bom_structure, bom_line, bom_revision, bom, inventory_valuation, lot_trace, serial_master, lot_master, stock_balance, item_master, location_register, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE compliance_bis_licence, label_master, qc_retention_sample, qc_batch_release, qc_ncr, qc_lot_split, qc_sampling_switching_state, qc_inspection_result, qc_sampling_plan, qc_lot_disposition, qc_deviation, qc_inspection_task, inspection_plan_approval, inspection_plan_characteristic, inspection_plan_version, inspection_plan, supplier_scorecard_metric, supplier, bom_alternate, bom_explosion, bom_explosion_line, bom_cost_rollup_line, bom_cost_rollup, bom_outbound_message, bom_structure, bom_line, bom_revision, bom, inventory_valuation, lot_trace, serial_master, lot_master, stock_balance, item_master, location_register, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');
@@ -817,9 +836,10 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
     const row = res.body['release'] as Record<string, unknown>;
     // Binding Scope Decisions 3 and 4: bis_licence_required = true selects the CoC format.
     assert.strictEqual(row['document_kind'], 'coc');
-    // Binding Scope Decision 2: resolveBisLicenceNumber is a stub until Story 8.7's licence
-    // register lands, so the CM/L or R-number is null - and a null NEVER blocks the release.
-    assert.strictEqual(row['bis_licence_number'], null);
+    // Story 8.6 (Binding Scope Decision 14, reversing Story 8.4 Decision 2): the register-backed
+    // resolveBisLicence stamps the SEEDED register number onto the release record - not null (the
+    // 8.4 stub) and not any client-supplied value (the forgery test below).
+    assert.strictEqual(row['bis_licence_number'], SEEDED_BIS_LICENCE_NUMBER);
     assert.strictEqual(row['retention_years'], 7);
     assert.strictEqual(await countRows('qc_batch_release', 'lot_id = $1', [held.lotId]), 1);
     // Testing Standards: every success path asserts the audit row AND the transactional

@@ -606,3 +606,45 @@ Closed by this story: the four Story 6.2 deferrals for FR-MO-07 (completions, co
 - `business_date` on both new tables is a free `DATE NOT NULL` with no database-level relationship to the adjacent `completed_at` / `declared_at` timestamp - deferred, the seam derives it with `toIstCalendarDate` and rejects a divergent declaration, so the gap is reachable only by direct SQL.
 - `production_completion.qc_task_id` has no uniqueness and no foreign key, so the one-inspection-task-per-output-lot invariant is documented in a banner and enforced only over in `qc_inspection_task` - deferred, `uq_qc_inspection_task_lot` makes the duplicate unreachable through the applier.
 - `uq_production_completion_grain` includes `output_class`, so one BOM line could in principle be inserted twice under two different classes for one event - deferred, unreachable because `chk_bom_line_output_class` gives a BOM line exactly one class and the resolver reads that class off the row.
+
+## Deferred from: code review of 8-6-statutory-release-blocks-and-quality-reporting.md, Group 1 - schema/contract layer (2026-08-31)
+
+- `compliance_bis_licence.sku` / `label_master.sku` carry no FK to `item_master` [read/projections/compliance_bis_licence.sql, read/projections/label_master.sql] - deferred, Binding Scope Decision 1 scopes this story to the minimal enforcement contract; Story 8.7 owns CRUD/validation on both tables.
+- `compliance_bis_licence.site_id` carries no FK to a sites table [read/projections/compliance_bis_licence.sql] - deferred, same Story 8.7 governance boundary.
+- `licence_number`/`sku` have no case-folding, so near-duplicate casing can produce duplicate register rows [read/projections/compliance_bis_licence.sql] - deferred, data-quality concern for Story 8.7's CRUD/validation layer.
+- `label_master` has no unique `(sku, label_version)` and no CHECK enforcing the draft to approved to superseded transition path [read/projections/label_master.sql] - deferred, Story 8.7 owns the approval workflow this story does not implement.
+- `label_master.approved_by` carries no FK to a users/identity table [read/projections/label_master.sql] - deferred, same Story 8.7 governance boundary.
+- `uq_compliance_bis_licence_scope` keys on `(licence_number, sku, site)` without `valid_from`, so a legitimate renewal cannot be inserted as a second row [read/projections/compliance_bis_licence.sql] - deferred, this story ships no write path; Story 8.7 decides the renewal insert/update shape.
+- `findValidBisLicence`'s tie-break (`site_id IS NOT NULL DESC, valid_to DESC, licence_id`) is arbitrary when two distinct licence numbers are simultaneously valid for the same sku/site [src/read/projections/compliance_bis_licence.ts] - deferred, preventing overlapping same-scope licences is Story 8.7 register-governance territory.
+
+## Deferred from: code review of 8-6-statutory-release-blocks-and-quality-reporting.md, Group 2 - seam logic (2026-08-31)
+
+- `applyBatchReleaseRecorded` calls `getItemBySku` a second time to read `legal_metrology_required`, duplicating the lookup `resolveBisCoverage` already did on the same row a few lines earlier [src/compliance/quality.ts:~4249] - deferred, minor extra round-trip inside the lock, not a correctness issue.
+- The quality dashboard's `from`/`to` params have no upper bound on range width, so an arbitrarily large window can force an expensive unbounded aggregate scan [src/api/v1/quality.ts: getQualityDashboardBase] - deferred, matches the supplier-scorecard pattern this story explicitly mirrors, which has no such cap either.
+
+## Deferred from: code review of 8-6-statutory-release-blocks-and-quality-reporting.md, Group 3 - dashboard aggregation (2026-09-01)
+
+- `capaAgingMetric` takes no `siteFilter` and returns CAPAs enterprise-wide, a literal AC 7 gap even though disclosed and schema-grounded (`qc_capa` has no site column) [src/quality/reporting.ts: capaAgingMetric] - deferred, no fix possible without adding a site column to `qc_capa`, a schema-level decision beyond this story.
+- `ncrAgingMetric`'s and `capaAgingMetric`'s age-bucket histograms fetch every open row into Node and bucket in JS rather than aggregating in SQL [src/quality/reporting.ts: ncrAgingMetric, capaAgingMetric] - deferred, a scale concern only at high open-NCR/CAPA volumes.
+- `buildQualityDashboard` awaits its seven metric queries sequentially rather than via `Promise.all` [src/quality/reporting.ts: buildQualityDashboard] - deferred, `client` is an optional shared-connection parameter and parallelizing could break a caller passing one shared `PoolClient`; revisit once test usage of this parameter is known.
+
+## Deferred from: code review of 8-6-statutory-release-blocks-and-quality-reporting.md, Group 4 - tests (2026-09-01)
+
+- `dormant` mode is never exercised end-to-end via a real `POST .../release` - only proven via child-process config-load string checks and hand-fed pure-predicate unit tests [test/integration/story-8-6.test.ts].
+- `conditional_releases` metric and its `deviation_id` drill-through field (named in AC 5) have zero positive-value test coverage - only the empty/no-data shape is ever asserted [test/integration/story-8-6.test.ts].
+- No test for a single item that is both `bis_licence_required` AND `legal_metrology_required` (block ordering, whether one masks the other) [test/integration/story-8-6.test.ts].
+- `DASHBOARD_SERIES_LIMIT` (200) is only asserted as a bare constant, never exercised by actually producing >200 series rows and confirming truncation [test/unit/qc-dashboard-metrics.test.ts].
+- Fragile inter-`it` state coupling: `codedRejectHeld`/`acceptedC1`/`seededCapaId` are assigned inside one `it` and read by later, nominally independent `it` blocks instead of `before()` [test/integration/story-8-6.test.ts].
+- `r_number` licence type is declared in the schema but every test seeds `'cml'` only [test/integration/story-8-6.test.ts: seedLicence].
+- The drill-through disposition check asserts only HTTP 200, not response content, unlike the NCR/CAPA drill-throughs in the same test [test/integration/story-8-6.test.ts].
+- `istDate()` reimplements IST offset arithmetic by hand rather than reusing a production helper, risking a rare midnight-rollover flake in the boundary test [test/integration/story-8-6.test.ts] - not an unambiguous fix, since the file deliberately computes expected values independently of production code.
+- Global-vs-site-specific licence precedence (Decision 6) is only proven at site A; no test confirms a global row covers a second, different site [test/integration/story-8-6.test.ts].
+- The AC 3 label test accumulates a draft row before inserting the approved row in one linear narrative, implicitly also testing (but never calling out) that an approved row wins over a coexisting draft row [test/integration/story-8-6.test.ts].
+- `Decision 8`'s uniqueness test only proves the constraint fires on a second INSERT, never demonstrates the read-side consequence `findCurrentApprovedLabel` protects against [test/integration/story-8-6.test.ts].
+- `valid_from` exactly equal to `asOf` (licence starts today) is untested - only the `valid_to` boundary is covered [test/integration/story-8-6.test.ts].
+- Site-specific licence row invalid/expired while a global row is valid (fallback to global) is untested [test/integration/story-8-6.test.ts].
+- Label supersede-then-reapprove workflow is untested [test/integration/story-8-6.test.ts].
+- CAPA overdue boundary (`due_on` exactly `asOf` vs `asOf + 1`) is untested [test/integration/story-8-6.test.ts].
+- Dashboard `from == to` (zero-width window) and a calendar-invalid-but-well-formed date (e.g. `2026-02-30`) are both untested [test/integration/story-8-6.test.ts].
+- Site-A dashboard isolation test only checks the absence of site-C rows, never pins site-A's own expected counts [test/integration/story-8-6.test.ts].
+- No unauthorized/unauthenticated access test for `GET /api/v1/qc/reports/dashboard` [test/integration/story-8-6.test.ts].

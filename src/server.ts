@@ -306,6 +306,7 @@ import {
   approveInspectionPlanHandler,
   submitSyntheticCompletionHandler,
   listQcTasksHandler,
+  getQualityDashboardHandler,
   getQcTaskHandler,
   recordConditionalReleaseHandler,
   determineSamplingHandler,
@@ -858,6 +859,11 @@ export function createAppRouter(): Router {
     '/api/v1/qc/sampling-states/:planId/sites/:siteId/actions',
     adjustSamplingStateHandler,
   );
+  // Story 8.6: the FR-Q-13 quality reporting dashboard. ROUTE ORDER MATTERS: the static
+  // '/qc/reports/dashboard' segment is registered BEFORE the parameterised '/qc/tasks/:taskId'
+  // family below (the same static-before-parameter discipline as the whole qc block), so no
+  // parameter segment can ever swallow it.
+  router.get('/api/v1/qc/reports/dashboard', getQualityDashboardHandler);
   router.get('/api/v1/qc/tasks', listQcTasksHandler);
   router.get('/api/v1/qc/tasks/:taskId', getQcTaskHandler);
   router.post('/api/v1/qc/tasks/:taskId/conditional-release', recordConditionalReleaseHandler);

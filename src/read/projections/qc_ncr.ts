@@ -53,7 +53,12 @@ export interface QcNcrRow {
   updated_at: string;
 }
 
-/** The Story 8.3 disposition-sourced insert; origin is stamped 'disposition' here. */
+/**
+ * The Story 8.3 disposition-sourced insert; origin is stamped 'disposition' here. Story 8.6
+ * (Binding Scope Decision 9) widens it with an OPTIONAL defect_code: chk_qc_ncr_origin now only
+ * requires a code on hold-origin rows, and a coded reject NCR feeds the FR-Q-13 by-defect-code
+ * rejection metric (an uncoded one buckets as UNSPECIFIED).
+ */
 export interface InsertQcNcrRow {
   ncr_id: string;
   lot_id: string;
@@ -67,6 +72,7 @@ export interface InsertQcNcrRow {
   raised_by: string;
   raised_at: string;
   source_event_id: string;
+  defect_code?: string | null;
 }
 
 /** The Story 8.5 hold-sourced insert; origin is stamped 'hold' here. */
@@ -152,8 +158,8 @@ function mapRow(row: Record<string, unknown>): QcNcrRow {
 export async function insertQcNcr(row: InsertQcNcrRow, client: PoolClient): Promise<void> {
   await client.query(
     `INSERT INTO qc_ncr (ncr_id, lot_id, lot_number, task_id, disposition_id, site_id, sku,
-       quantity, justification, raised_by, raised_at, source_event_id, origin)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10, $11, $12, 'disposition')`,
+       quantity, justification, raised_by, raised_at, source_event_id, origin, defect_code)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10, $11, $12, 'disposition', $13)`,
     [
       row.ncr_id,
       row.lot_id,
@@ -167,6 +173,7 @@ export async function insertQcNcr(row: InsertQcNcrRow, client: PoolClient): Prom
       row.raised_by,
       row.raised_at,
       row.source_event_id,
+      row.defect_code ?? null,
     ],
   );
 }

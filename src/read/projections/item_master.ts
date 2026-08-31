@@ -34,6 +34,7 @@ export interface ItemMaster {
   hazmat: boolean;
   quarantine_required: boolean;
   bis_licence_required: boolean;
+  legal_metrology_required: boolean;
   valuation_method: ValuationMethod;
   business_stream: string;
   status: ItemStatus;
@@ -55,6 +56,7 @@ export interface CreateItemInput {
   hazmat: boolean;
   quarantine_required: boolean;
   bis_licence_required: boolean;
+  legal_metrology_required: boolean;
   valuation_method: ValuationMethod;
   business_stream: string;
   status: ItemStatus;
@@ -73,6 +75,7 @@ export interface UpdateItemPatch {
   hazmat?: boolean;
   quarantine_required?: boolean;
   bis_licence_required?: boolean;
+  legal_metrology_required?: boolean;
   valuation_method?: ValuationMethod;
   business_stream?: string;
   status?: ItemStatus;
@@ -91,7 +94,7 @@ function runner(client?: PoolClient): Queryable {
 }
 
 const ITEM_COLUMNS = `item_id, sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required,
-       bis_licence_required, valuation_method, business_stream, status,
+       bis_licence_required, legal_metrology_required, valuation_method, business_stream, status,
        standard_cost_designation, standard_cost_amount, variance_review_cadence, variance_tolerance_percent,
        count_variance_tolerance_percent, size_class, created_at, updated_at`;
 
@@ -116,6 +119,7 @@ function mapRow(row: Record<string, unknown>): ItemMaster {
     hazmat: row['hazmat'] as boolean,
     quarantine_required: row['quarantine_required'] as boolean,
     bis_licence_required: row['bis_licence_required'] as boolean,
+    legal_metrology_required: row['legal_metrology_required'] as boolean,
     valuation_method: row['valuation_method'] as ValuationMethod,
     business_stream: row['business_stream'] as string,
     status: row['status'] as ItemStatus,
@@ -135,10 +139,10 @@ export async function createItem(input: CreateItemInput, client?: PoolClient): P
   const result = await runner(client).query(
     `INSERT INTO item_master
        (sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required, bis_licence_required,
-        valuation_method, business_stream, status,
+        legal_metrology_required, valuation_method, business_stream, status,
         standard_cost_designation, standard_cost_amount, variance_review_cadence, variance_tolerance_percent,
         count_variance_tolerance_percent, size_class)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
      RETURNING ${ITEM_COLUMNS}`,
     [
       input.sku,
@@ -148,6 +152,7 @@ export async function createItem(input: CreateItemInput, client?: PoolClient): P
       input.hazmat,
       input.quarantine_required,
       input.bis_licence_required,
+      input.legal_metrology_required,
       input.valuation_method,
       input.business_stream,
       input.status,
@@ -182,6 +187,8 @@ export async function updateItem(
     push('quarantine_required', patch.quarantine_required);
   if (patch.bis_licence_required !== undefined)
     push('bis_licence_required', patch.bis_licence_required);
+  if (patch.legal_metrology_required !== undefined)
+    push('legal_metrology_required', patch.legal_metrology_required);
   if (patch.valuation_method !== undefined) push('valuation_method', patch.valuation_method);
   if (patch.business_stream !== undefined) push('business_stream', patch.business_stream);
   if (patch.status !== undefined) push('status', patch.status);

@@ -763,6 +763,7 @@ CREATE TABLE IF NOT EXISTS item_master (
   hazmat                      BOOLEAN NOT NULL DEFAULT false,
   quarantine_required         BOOLEAN NOT NULL DEFAULT false,
   bis_licence_required        BOOLEAN NOT NULL DEFAULT false,
+  legal_metrology_required    BOOLEAN NOT NULL DEFAULT false,
   valuation_method            TEXT NOT NULL,
   business_stream             TEXT NOT NULL,
   status                      TEXT NOT NULL DEFAULT 'active',
@@ -803,6 +804,11 @@ ALTER TABLE item_master ADD COLUMN IF NOT EXISTS variance_review_cadence TEXT;
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS variance_tolerance_percent NUMERIC(7, 4);
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS count_variance_tolerance_percent NUMERIC(7, 4);
 ALTER TABLE item_master ADD COLUMN IF NOT EXISTS size_class TEXT NOT NULL DEFAULT 'standard';
+
+-- Story 8.6 (FR-Q-14): Legal Metrology packaged-commodity flag, mirroring bis_licence_required.
+-- Default false keeps the LABEL_VERSION_MISSING release block inert for every existing item until
+-- the flag is deliberately set (Binding Scope Decision 7).
+ALTER TABLE item_master ADD COLUMN IF NOT EXISTS legal_metrology_required BOOLEAN NOT NULL DEFAULT false;
 
 DO $$
 BEGIN
@@ -10536,11 +10542,14 @@ END $$;
 -- index; BOTH keep resolving to 409 NCR_EXISTS in the store's constraint chain, byte-identical to
 -- the Story 8.3 behaviour.
 --
--- chk_qc_ncr_origin is the FULL biconditional (the Story 8.4 one-directional CHECK lesson):
--- origin = 'disposition' exactly when disposition_id and task_id are both non-null, and
--- origin = 'hold' exactly when defect_code is non-null (AC 3: a hold-sourced NCR always carries a
--- defect code; hold_id stays nullable because a lot may be flag-held by the Story 2.3 ad hoc route
--- without a governed qc_quality_hold row).
+-- chk_qc_ncr_origin (as widened by Story 8.6 Binding Scope Decision 9): the origin enum, the
+-- disposition biconditional ('disposition' exactly when disposition_id and task_id are both
+-- non-null) and the hold_id pairing are unchanged from Story 8.5. ONLY the hold/defect conjunct
+-- relaxed, from a biconditional to the one-way (origin = 'hold') implies (defect_code IS NOT NULL):
+-- a hold-sourced NCR still ALWAYS carries a defect code (AC 3), and a disposition-origin NCR MAY
+-- now carry one (the optional reject-path defect_code feeding the FR-Q-13 by-defect-code metric).
+-- hold_id stays nullable because a lot may be flag-held by the Story 2.3 ad hoc route without a
+-- governed qc_quality_hold row.
 --
 -- chk_qc_ncr_outcome is widened to admit 'closed_with_capa' (Binding Scope Decision 14): the
 -- hold-sourced terminal outcome that moves no stock, so chk_qc_ncr_downgrade_pairing and
@@ -10565,6 +10574,18 @@ BEGIN
   ALTER TABLE qc_ncr DROP CONSTRAINT IF EXISTS chk_qc_ncr_outcome;
   ALTER TABLE qc_ncr
     ADD CONSTRAINT chk_qc_ncr_outcome CHECK (outcome IS NULL OR outcome IN ('rework', 'downgrade', 'scrap', 'closed_with_capa'));
+  -- Story 8.6 widening (Binding Scope Decision 9): drop-then-add keyed on pg_get_constraintdef
+  -- (the Story 8.3 template). The Story 8.5 biconditional definition contains no '<>' operator
+  -- while the widened one does, so the marker is unambiguous and the block is a no-op once the
+  -- widened definition is in place (migrate-twice clean).
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_qc_ncr_origin'
+      AND conrelid = 'qc_ncr'::regclass
+      AND pg_get_constraintdef(oid) NOT LIKE '%<>%'
+  ) THEN
+    ALTER TABLE qc_ncr DROP CONSTRAINT chk_qc_ncr_origin;
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'chk_qc_ncr_origin'
@@ -10574,7 +10595,7 @@ BEGIN
       ADD CONSTRAINT chk_qc_ncr_origin CHECK (
         origin IN ('disposition', 'hold')
         AND (origin = 'disposition') = (disposition_id IS NOT NULL AND task_id IS NOT NULL)
-        AND (origin = 'hold') = (defect_code IS NOT NULL)
+        AND (origin <> 'hold' OR defect_code IS NOT NULL)
         AND (hold_id IS NULL OR origin = 'hold')
       );
   END IF;
@@ -10607,9 +10628,12 @@ END $$;
 -- precedent of supplier_invoice's attachment_ref. THIS ROW plus its event IS the retained record
 -- for the retention_years window today (ARCHITECTURE-SPINE.md Retention Policy).
 --
--- Binding Scope Decision 2: bis_licence_number carries whatever resolveBisLicenceNumber returns and
--- is NULL until Story 8.7's BIS licence register lands. A null NEVER blocks release - AC 3 only
--- requires printing the number when one is available.
+-- Story 8.6 Binding Scope Decision 2 (reversing Story 8.4 Decision 2): bis_licence_number carries
+-- what the register-backed resolveBisLicence returns from compliance_bis_licence. Under `enforce`
+-- mode (the QC_STATUTORY_RELEASE_BLOCKS default) a BIS-covered product with NO valid covering
+-- licence is REJECTED with BIS_LICENCE_INVALID before this row is written; under `dormant` (the
+-- A-13 licence-data load window) the Story 8.4 behaviour holds: number when the register has one,
+-- null otherwise, and a null does not block.
 --
 -- chk_qc_batch_release_bis_licence_pairing states the full invariant AC 3 actually claims: a licence
 -- number may exist ONLY on a CoC (it is the BIS conformance format), and when present it must be
@@ -11276,5 +11300,180 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON qc_capa TO readonly_user;
+  END IF;
+END $$;
+
+-- BIS licence register - minimal enforcement contract (Story 8.6, FR-Q-11, AC 1 and AC 2). This
+-- file is the CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned
+-- database can serve reads as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Story 8.6 Binding Scope Decision 1: this table carries ONLY the columns the statutory release
+-- block reads. Story 8.7 adds the CRUD routes, approval workflow, edit-logging, expiry alerts and
+-- any additional columns. Story 8.6 ships NO write routes and NO event types for this table;
+-- integration fixtures seed rows through the admin pool, so app_user holds SELECT only.
+--
+-- Binding Scope Decision 5: a row covers a release when sku matches, the site scope admits the
+-- task's site, and valid_from <= asOf <= valid_to (asOf is the IST calendar date derived from the
+-- server-stamped release time). licence_type distinguishes a CM/L number from an R-number under
+-- the BIS Conformity Assessment Regulations 2018.
+--
+-- Binding Scope Decision 6: site_id NULL means the licence covers ALL sites; the resolver prefers
+-- a site-specific row over a global row when both are valid. The uniqueness grain
+-- (licence_number, sku, site scope) treats all-NULL site rows as equal, which a plain UNIQUE
+-- constraint would not (NULLs compare distinct), so it is a unique expression index over
+-- COALESCE(site_id, zero-uuid).
+
+CREATE TABLE IF NOT EXISTS compliance_bis_licence (
+  licence_id     UUID PRIMARY KEY,
+  licence_number TEXT NOT NULL,
+  licence_type   TEXT NOT NULL,
+  sku            TEXT NOT NULL,
+  site_id        UUID,
+  valid_from     DATE NOT NULL,
+  valid_to       DATE NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_compliance_bis_licence_number CHECK (btrim(licence_number) <> ''),
+  CONSTRAINT chk_compliance_bis_licence_type CHECK (licence_type IN ('cml', 'r_number')),
+  CONSTRAINT chk_compliance_bis_licence_window CHECK (valid_to >= valid_from)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_compliance_bis_licence_scope
+  ON compliance_bis_licence (
+    licence_number,
+    sku,
+    COALESCE(site_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  );
+
+CREATE INDEX IF NOT EXISTS idx_compliance_bis_licence_sku ON compliance_bis_licence (sku, valid_to);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_compliance_bis_licence_number'
+      AND conrelid = 'compliance_bis_licence'::regclass
+  ) THEN
+    ALTER TABLE compliance_bis_licence
+      ADD CONSTRAINT chk_compliance_bis_licence_number CHECK (btrim(licence_number) <> '');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_compliance_bis_licence_type'
+      AND conrelid = 'compliance_bis_licence'::regclass
+  ) THEN
+    ALTER TABLE compliance_bis_licence
+      ADD CONSTRAINT chk_compliance_bis_licence_type CHECK (licence_type IN ('cml', 'r_number'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_compliance_bis_licence_window'
+      AND conrelid = 'compliance_bis_licence'::regclass
+  ) THEN
+    ALTER TABLE compliance_bis_licence
+      ADD CONSTRAINT chk_compliance_bis_licence_window CHECK (valid_to >= valid_from);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT SELECT ON compliance_bis_licence TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON compliance_bis_licence TO readonly_user;
+  END IF;
+END $$;
+
+-- Legal Metrology label master - minimal enforcement contract (Story 8.6, FR-Q-14, AC 3). This
+-- file is the CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned
+-- database can serve reads as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Story 8.6 Binding Scope Decision 1: this table carries ONLY the columns the statutory release
+-- block reads (the LABEL_VERSION_MISSING check passes when an 'approved' row exists for the
+-- task's sku). Story 8.7 adds the version-control CRUD, approval workflow (DOA) and edit-logging.
+-- Story 8.6 ships NO write routes and NO event types for this table; integration fixtures seed
+-- rows through the admin pool, so app_user holds SELECT only.
+--
+-- Binding Scope Decision 8: "current approved label version" is a partial-unique row -
+-- uq_label_master_current enforces the single-current-version invariant structurally from day
+-- one. chk_label_master_approval_pairing is the FULL biconditional (the Story 8.4 one-directional
+-- CHECK lesson): a row is approved-or-superseded exactly when it carries approval metadata, and
+-- approved_by pairs with approved_at in both directions.
+
+CREATE TABLE IF NOT EXISTS label_master (
+  label_id      UUID PRIMARY KEY,
+  sku           TEXT NOT NULL,
+  label_version TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'draft',
+  approved_by   UUID,
+  approved_at   TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_label_master_sku CHECK (btrim(sku) <> ''),
+  CONSTRAINT chk_label_master_version CHECK (btrim(label_version) <> ''),
+  CONSTRAINT chk_label_master_status CHECK (status IN ('draft', 'approved', 'superseded')),
+  CONSTRAINT chk_label_master_approval_pairing CHECK (
+    (status = 'approved' OR status = 'superseded') = (approved_at IS NOT NULL)
+    AND (approved_at IS NOT NULL) = (approved_by IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_label_master_current
+  ON label_master (sku) WHERE status = 'approved';
+
+CREATE INDEX IF NOT EXISTS idx_label_master_sku ON label_master (sku, status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_label_master_sku'
+      AND conrelid = 'label_master'::regclass
+  ) THEN
+    ALTER TABLE label_master ADD CONSTRAINT chk_label_master_sku CHECK (btrim(sku) <> '');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_label_master_version'
+      AND conrelid = 'label_master'::regclass
+  ) THEN
+    ALTER TABLE label_master
+      ADD CONSTRAINT chk_label_master_version CHECK (btrim(label_version) <> '');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_label_master_status'
+      AND conrelid = 'label_master'::regclass
+  ) THEN
+    ALTER TABLE label_master
+      ADD CONSTRAINT chk_label_master_status CHECK (status IN ('draft', 'approved', 'superseded'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_label_master_approval_pairing'
+      AND conrelid = 'label_master'::regclass
+  ) THEN
+    ALTER TABLE label_master
+      ADD CONSTRAINT chk_label_master_approval_pairing CHECK (
+        (status = 'approved' OR status = 'superseded') = (approved_at IS NOT NULL)
+        AND (approved_at IS NOT NULL) = (approved_by IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT SELECT ON label_master TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON label_master TO readonly_user;
   END IF;
 END $$;

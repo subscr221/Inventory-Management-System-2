@@ -47,7 +47,13 @@ import {
   isPositiveQuantity,
   resolveInspectionPlanForLot,
   resolveQcAuthority,
+  resolveBisLicence,
 } from '../../compliance/quality.js';
+import { getItemBySku } from '../../read/projections/item_master.js';
+import { findCurrentApprovedLabel } from '../../read/projections/label_master.js';
+import { toIstCalendarDate } from '../../lib/business-days.js';
+import { isDateString } from '../../compliance/msme.js';
+import { buildQualityDashboard, DASHBOARD_COVERAGE } from '../../quality/reporting.js';
 import { config } from '../../config/index.js';
 import { receiveQcCompletion } from '../../quality/completion.js';
 import { getQcSamplingPlanByTaskId } from '../../read/projections/qc_sampling_plan.js';
@@ -271,6 +277,10 @@ const AUDITED_REJECTIONS = new Set([
   'CAPA_NOT_OPEN',
   'CAPA_ALREADY_LINKED',
   'NCR_OUTCOME_NOT_APPLICABLE',
+  // Story 8.6 (AC 1/AC 3): a release refused by a statutory block (missing BIS licence, missing
+  // approved Legal Metrology label) is a statutory record of a refused quality decision.
+  'BIS_LICENCE_INVALID',
+  'LABEL_VERSION_MISSING',
 ]);
 
 function requireBody(
@@ -1472,6 +1482,17 @@ const recordDispositionBase: RouteHandler = async (req, res, params) => {
     if (typeof body['justification'] !== 'string' || body['justification'].trim() === '') {
       throw new AppError(400, 'INVALID_PARAMS', 'justification must be a non-empty string');
     }
+    // Story 8.6 (Binding Scope Decision 9): an optional catalogue defect code on the reject path
+    // only. Shape and catalogue membership are enforced in assertLotDispositionedShape (422
+    // DEFECT_CODE_UNKNOWN); this route check just refuses the obviously malformed value early.
+    if (body['defect_code'] !== undefined && body['defect_code'] !== null) {
+      if (disposition !== 'reject') {
+        throw new AppError(400, 'INVALID_PARAMS', 'defect_code is only valid on a reject disposition');
+      }
+      if (typeof body['defect_code'] !== 'string' || body['defect_code'].trim() === '') {
+        throw new AppError(400, 'INVALID_PARAMS', 'defect_code must be a non-empty string');
+      }
+    }
     // Pre-check the inspection axis so the common mistake gets its code without a write attempt;
     // the seam re-derives the same rule under the lot and gate locks.
     if (task.task_status !== 'inspected') {
@@ -1496,6 +1517,11 @@ const recordDispositionBase: RouteHandler = async (req, res, params) => {
           justification: (body['justification'] as string).trim(),
           decided_at: optionalTimestamp(body, 'decided_at', now),
           ...(disposition === 'reject' ? { ncr_id: randomUUID() } : {}),
+          ...(disposition === 'reject' &&
+          typeof body['defect_code'] === 'string' &&
+          body['defect_code'].trim() !== ''
+            ? { defect_code: body['defect_code'].trim() }
+            : {}),
         },
         metadata: qcMetadata(actor, now),
         idempotency_key: idempotencyKeyFrom(body),
@@ -1962,6 +1988,36 @@ const releaseLotBase: RouteHandler = async (req, res, params) => {
       );
     }
 
+    // Story 8.6 statutory-block courtesy pre-checks, mirroring the pre-checks above: the seam
+    // re-derives both under the lot lock and is the guarantee. Only under `enforce` - `dormant`
+    // (the A-13 load window) never rejects on these axes (AC 4).
+    if (config.quality.statutoryReleaseBlocks === 'enforce') {
+      const releasedItem = await getItemBySku(task.sku);
+      const preCheckAsOf = toIstCalendarDate(new Date(now));
+      if (
+        releasedItem?.bis_licence_required === true &&
+        (await resolveBisLicence(task.sku, task.site_id, preCheckAsOf)) === null
+      ) {
+        throw new AppError(
+          409,
+          'BIS_LICENCE_INVALID',
+          'No valid, unexpired BIS licence covers this product; release is blocked (FR-Q-11)',
+          { task_id: taskId, lot_id: task.lot_id, sku: task.sku, as_of: preCheckAsOf },
+        );
+      }
+      if (
+        releasedItem?.legal_metrology_required === true &&
+        (await findCurrentApprovedLabel(task.sku)) === null
+      ) {
+        throw new AppError(
+          409,
+          'LABEL_VERSION_MISSING',
+          'No current approved Legal Metrology label version exists for this product; release is blocked (FR-Q-14)',
+          { task_id: taskId, lot_id: task.lot_id, sku: task.sku },
+        );
+      }
+    }
+
     // Every field of the release is server-derived (Binding Scope Decisions 1-4 and 7); the body
     // carries nothing but an optional idempotency key and decided_at.
     const eventId = randomUUID();
@@ -2128,6 +2184,55 @@ export const getQcRetentionSampleHandler = requireRole({ module: 'qc', functionS
   getRetentionSampleBase,
 );
 export const getQcNcrHandler = requireRole({ module: 'qc', functionScope: 'read' })(getNcrBase);
+
+// ---------------------------------------------------------------------------
+// Story 8.6: quality reporting dashboard (FR-Q-13)
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/v1/qc/reports/dashboard - the scorecard-shaped FR-Q-13 aggregate (Binding Scope
+ * Decision 10). `from`/`to` are inclusive YYYY-MM-DD IST calendar dates (400 INVALID_PARAMS
+ * otherwise), defaulting to the trailing 90 days. Site narrowing follows the caller's `qc` read
+ * assignments through the same readSiteScope the list routes use (AC 7); the calibration-lockout
+ * metric's coverage caveat is documented in src/quality/reporting.ts.
+ */
+const getQualityDashboardBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const fromParam = url.searchParams.get('from');
+  const toParam = url.searchParams.get('to');
+  if (fromParam !== null && !isDateString(fromParam)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'from must be a YYYY-MM-DD calendar date', {
+      from: fromParam,
+    });
+    return;
+  }
+  if (toParam !== null && !isDateString(toParam)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'to must be a YYYY-MM-DD calendar date', {
+      to: toParam,
+    });
+    return;
+  }
+  const asOf = toIstCalendarDate(new Date());
+  const to = toParam ?? asOf;
+  const from = fromParam ?? toIstCalendarDate(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000));
+  if (from > to) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'from must not be after to', { from, to });
+    return;
+  }
+  const scope = readSiteScope(req);
+  const siteFilter = scope.wildcard ? null : [...scope.locations];
+  const metrics = await buildQualityDashboard({ from, to, asOf }, siteFilter);
+  sendJson(res, 200, {
+    period: { from, to, as_of: asOf },
+    generated_at: new Date().toISOString(),
+    coverage: DASHBOARD_COVERAGE,
+    metrics,
+  });
+};
+
+export const getQualityDashboardHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  getQualityDashboardBase,
+);
 
 // ---------------------------------------------------------------------------
 // Story 8.5: governed quality holds, hold-sourced NCRs and CAPA (FR-Q-09, FR-Q-10)

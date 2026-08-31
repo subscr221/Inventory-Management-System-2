@@ -25,9 +25,12 @@
 -- precedent of supplier_invoice's attachment_ref. THIS ROW plus its event IS the retained record
 -- for the retention_years window today (ARCHITECTURE-SPINE.md Retention Policy).
 --
--- Binding Scope Decision 2: bis_licence_number carries whatever resolveBisLicenceNumber returns and
--- is NULL until Story 8.7's BIS licence register lands. A null NEVER blocks release - AC 3 only
--- requires printing the number when one is available.
+-- Story 8.6 Binding Scope Decision 2 (reversing Story 8.4 Decision 2): bis_licence_number carries
+-- what the register-backed resolveBisLicence returns from compliance_bis_licence. Under `enforce`
+-- mode (the QC_STATUTORY_RELEASE_BLOCKS default) a BIS-covered product with NO valid covering
+-- licence is REJECTED with BIS_LICENCE_INVALID before this row is written; under `dormant` (the
+-- A-13 licence-data load window) the Story 8.4 behaviour holds: number when the register has one,
+-- null otherwise, and a null does not block.
 --
 -- chk_qc_batch_release_bis_licence_pairing states the full invariant AC 3 actually claims: a licence
 -- number may exist ONLY on a CoC (it is the BIS conformance format), and when present it must be

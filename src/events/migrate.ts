@@ -210,6 +210,14 @@ const MIGRATIONS = [
   // between them is logical. The qc_ncr origin/CAPA widening rides its existing entry above.
   '../../read/projections/qc_quality_hold.sql',
   '../../read/projections/qc_capa.sql',
+  // Story 8.6: the minimal enforcement-contract tables for the statutory release blocks
+  // (FR-Q-11 BIS licence register, FR-Q-14 Legal Metrology label master). Both are fixture-seeded
+  // reference data with NO app write path in this story (Story 8.7 adds governance), carry no FK,
+  // and are read by the release applier only, so they are appended at the tail. The
+  // item_master.legal_metrology_required widening rides item_master.sql's guarded block above; the
+  // qc_ncr defect_code widening rides qc_ncr.sql's entry above.
+  '../../read/projections/compliance_bis_licence.sql',
+  '../../read/projections/label_master.sql',
 ];
 
 async function migrate(): Promise<void> {

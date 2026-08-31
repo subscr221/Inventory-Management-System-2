@@ -309,6 +309,7 @@ const createItemBase: RouteHandler = async (req, res, _params) => {
     hazmat: parseBooleanField(body, 'hazmat', false),
     quarantine_required: parseBooleanField(body, 'quarantine_required', false),
     bis_licence_required: parseBooleanField(body, 'bis_licence_required', false),
+    legal_metrology_required: parseBooleanField(body, 'legal_metrology_required', false),
     valuation_method: body['valuation_method'],
     business_stream: body['business_stream'],
     status: isItemStatus(body['status']) ? body['status'] : 'active',
@@ -384,6 +385,7 @@ const updateItemBase: RouteHandler = async (req, res, params) => {
     'hazmat',
     'quarantine_required',
     'bis_licence_required',
+    'legal_metrology_required',
   ] as const) {
     if (body[field] !== undefined) {
       if (typeof body[field] !== 'boolean') {

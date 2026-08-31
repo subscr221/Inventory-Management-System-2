@@ -3,10 +3,12 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { config } from '../config/index.js';
-import type { RetentionSampleScope } from '../config/index.js';
+import type { RetentionSampleScope, StatutoryReleaseBlockMode } from '../config/index.js';
 import { isValidCalendarDate, toIstCalendarDate } from '../lib/business-days.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import { getItemById, getItemBySku, itemExistsBySku } from '../read/projections/item_master.js';
+import { findValidBisLicence } from '../read/projections/compliance_bis_licence.js';
+import { findCurrentApprovedLabel } from '../read/projections/label_master.js';
 import {
   clearQualityHold,
   createLot,
@@ -1070,6 +1072,18 @@ function assertLotDispositionedShape(envelope: EventEnvelope): void {
     reject('INVALID_PAYLOAD', 'ncr_id is only valid on a reject disposition', {
       disposition: p['disposition'],
     });
+  }
+  // Story 8.6 (Binding Scope Decision 9): an OPTIONAL catalogue defect code on the reject path,
+  // carried onto the disposition-origin NCR for the FR-Q-13 by-defect-code rejection metric. An
+  // unknown code is 422 DEFECT_CODE_UNKNOWN (the Story 8.5 catalogue contract); an accept may not
+  // carry one at all.
+  if (p['defect_code'] !== undefined && p['defect_code'] !== null) {
+    if (p['disposition'] !== 'reject') {
+      reject('INVALID_PAYLOAD', 'defect_code is only valid on a reject disposition', {
+        disposition: p['disposition'],
+      });
+    }
+    assertKnownDefectCode(p['defect_code'], QC_LOT_DISPOSITIONED);
   }
   rejectDeclaredDerived(
     p,
@@ -2538,7 +2552,10 @@ async function applyLotDispositioned(
 
   if (disposition === 'reject') {
     // Annex requirement 8: the NCR is created BY the reject, so a rejected lot can never exist
-    // without its NCR record.
+    // without its NCR record. Story 8.6 (Binding Scope Decision 9): the optional defect_code
+    // (already catalogue-validated in assertLotDispositionedShape) rides onto the NCR so the
+    // FR-Q-13 by-defect-code metric can attribute the rejection; absent, the metric buckets the
+    // row as UNSPECIFIED.
     await insertQcNcr(
       {
         ncr_id: ncrId!,
@@ -2553,6 +2570,7 @@ async function applyLotDispositioned(
         raised_by: actorId,
         raised_at: decidedAt,
         source_event_id: eventId,
+        defect_code: (p['defect_code'] as string | null | undefined) ?? null,
       },
       client,
     );
@@ -3879,18 +3897,49 @@ async function applySamplingStateAdjusted(
 // ---------------------------------------------------------------------------
 
 /**
- * Binding Scope Decision 2: AC 3's CM/L or R-number comes from Story 8.7's BIS Licence Register,
- * which does not exist yet and is sequenced AFTER this story. This is the explicit hand-off point:
- * Story 8.7 replaces the body with a lookup against the licence register keyed on (sku, site).
- * Until then it resolves to null, qc_batch_release.bis_licence_number carries the null, and a null
- * NEVER blocks release - AC 3 only requires printing the number when one is available. The same
- * kind of documented forward reference as Story 4.2's early reservation of qc.lot_dispositioned.
+ * Story 8.6 Binding Scope Decision 2: the register-backed replacement for the Story 8.4
+ * resolveBisLicenceNumber stub, and a DELIBERATE, VISIBLE reversal of Story 8.4 Binding Scope
+ * Decision 2 ("a null licence number never blocks release"). The compliance_bis_licence register
+ * now exists (this story forward-creates the enforcement contract; Story 8.7 layers governance),
+ * so under `enforce` mode a null result for a BIS-covered product REJECTS the release with
+ * BIS_LICENCE_INVALID. Under `dormant` (the A-13 licence-data load window) the Story 8.4
+ * behaviour is preserved byte-for-byte: number when the register has one, null otherwise, no
+ * rejection.
+ *
+ * Validity is a date-window check on the server clock (Decision 5): asOf is the IST calendar
+ * date of the server-stamped release time, never a client-supplied field. Site scope per
+ * Decision 6: site_id NULL covers all sites, and a site-specific row wins over a global one.
  */
-export async function resolveBisLicenceNumber(
-  _sku: string,
-  _siteId: string,
-): Promise<string | null> {
-  return null;
+export async function resolveBisLicence(
+  sku: string,
+  siteId: string,
+  asOf: string,
+  client?: PoolClient,
+): Promise<{ licence_number: string; licence_type: string } | null> {
+  const row = await findValidBisLicence(sku, siteId, asOf, client);
+  return row ? { licence_number: row.licence_number, licence_type: row.licence_type } : null;
+}
+
+/**
+ * Story 8.6 statutory-block predicates (FR-Q-11 / FR-Q-14). The enforcement mode is a PARAMETER,
+ * not read from config inside the predicate (the Story 8.4 tautological-config lesson), so unit
+ * tests exercise both branches without reloading config. `dormant` exists solely for the A-13
+ * migration window and makes both predicates constantly false (AC 4).
+ */
+export function bisLicenceBlockApplies(
+  mode: StatutoryReleaseBlockMode,
+  bisCovered: boolean,
+  licenceFound: boolean,
+): boolean {
+  return mode === 'enforce' && bisCovered && !licenceFound;
+}
+
+export function labelVersionBlockApplies(
+  mode: StatutoryReleaseBlockMode,
+  legalMetrologyRequired: boolean,
+  approvedLabelExists: boolean,
+): boolean {
+  return mode === 'enforce' && legalMetrologyRequired && !approvedLabelExists;
 }
 
 /**
@@ -4176,6 +4225,41 @@ async function applyBatchReleaseRecorded(
   // what decides whether a sample is required at all.
   const bisCovered = await resolveBisCoverage(task.sku, client, QC_BATCH_RELEASE_RECORDED);
 
+  // Story 8.6 statutory release blocks (FR-Q-11 / FR-Q-14, Binding Scope Decisions 2-6), placed
+  // immediately after coverage resolution and BEFORE the retention-sample gates, under the same
+  // lot lock. Validity asOf is the IST calendar date of the SERVER-stamped occurred_at (the route
+  // mints it from its own clock), never the client-suppliable decided_at - the Story 8.4
+  // client-clock lesson. In `dormant` mode (A-13 licence-data load window) neither block rejects
+  // and the licence number is recorded when the register has one - Story 8.4 behaviour verbatim.
+  const statutoryMode = config.quality.statutoryReleaseBlocks;
+  const releaseAsOf = toIstCalendarDate(new Date(envelope.metadata.occurred_at));
+  const licence = bisCovered
+    ? await resolveBisLicence(task.sku, task.site_id, releaseAsOf, client)
+    : null;
+  if (bisLicenceBlockApplies(statutoryMode, bisCovered, licence !== null)) {
+    reject(
+      'BIS_LICENCE_INVALID',
+      'No valid, unexpired BIS licence covers this product; release is blocked (FR-Q-11)',
+      { lot_id: lotId, task_id: taskId, sku: task.sku, site_id: task.site_id, as_of: releaseAsOf },
+      409,
+    );
+  }
+  if (statutoryMode === 'enforce') {
+    // resolveBisCoverage already failed closed on a missing item row, so the item resolves here.
+    const releasedItem = await getItemBySku(task.sku, client);
+    if (releasedItem?.legal_metrology_required === true) {
+      const approvedLabelExists = (await findCurrentApprovedLabel(task.sku, client)) !== null;
+      if (labelVersionBlockApplies(statutoryMode, true, approvedLabelExists)) {
+        reject(
+          'LABEL_VERSION_MISSING',
+          'No current approved Legal Metrology label version exists for this product; release is blocked (FR-Q-14)',
+          { lot_id: lotId, task_id: taskId, sku: task.sku },
+          409,
+        );
+      }
+    }
+  }
+
   // Binding Scope Decision 6, as amended by Open Question 1: required for every released lot by
   // default, or only for BIS-covered products when the deployment narrows the scope. The sample
   // must also still be RETAINED - one already routed for disposal backs nothing, so a certificate
@@ -4211,10 +4295,10 @@ async function applyBatchReleaseRecorded(
     toIstCalendarDate(new Date(decidedAt)),
     retentionYears,
   );
-  // Binding Scope Decision 2: null until Story 8.7's licence register lands; never blocks release.
-  const bisLicenceNumber = bisCovered
-    ? await resolveBisLicenceNumber(task.sku, task.site_id)
-    : null;
+  // Story 8.6 Binding Scope Decision 2: the register number, resolved above under the same lock.
+  // Under `enforce` a BIS-covered release cannot reach this line without one; under `dormant` it
+  // is number-if-available (Story 8.4 behaviour).
+  const bisLicenceNumber = licence?.licence_number ?? null;
 
   // uq_qc_batch_release_lot / uq_qc_batch_release_disposition backstop a second release exactly the
   // way uq_qc_lot_disposition_lot backstops a second disposition: a 23505 the store's constraint
@@ -4830,6 +4914,12 @@ function assertKnownDefectCode(value: unknown, context: string): void {
  * tautological-config lesson). The window is the `windowDays` IST calendar days STRICTLY
  * preceding `businessDate` (a predecessor exactly `windowDays` old is outside; one day younger is
  * inside; the new NCR is never its own predecessor).
+ *
+ * Story 8.6 interplay (Binding Scope Decision 9, disclosed deliberately): the underlying count
+ * queries qc_ncr by (sku, defect_code) REGARDLESS of origin, so a reject-disposition NCR that
+ * carries the new optional defect_code now counts toward this mandatory-CAPA threshold alongside
+ * hold-origin NCRs. That is the intended statutory reading of "same product and defect"; if the
+ * PO answers Open Question 3 the other way, this predicate gains an origin = 'hold' filter.
  */
 export async function isRepeatDefect(
   sku: string,
