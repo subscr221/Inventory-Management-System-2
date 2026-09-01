@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { getPool } from '../../config/db.js';
 
 export interface AuditEntryPayload {
   trace_id: string;
@@ -40,6 +41,27 @@ export async function logAuditEntry(client: PoolClient, payload: AuditEntryPaylo
       payload.details ? JSON.stringify(payload.details) : null,
     ],
   );
+}
+
+/**
+ * Story 6.4: the connect/log/release wrapper for a rejection that never reaches persistEvent and
+ * therefore has no transaction of its own to ride (the Story 6.1 AC7 release-override precedent,
+ * which wrote this boilerplate inline). FR-AC-13 requires the refusal itself to be in the edit log,
+ * not merely the writes that succeeded.
+ *
+ * Never throws: an edit-log failure must not convert a clean business rejection into a 500, and the
+ * caller is on its way to throwing an AppError that carries the real reason.
+ */
+export async function logRejectionAudit(payload: AuditEntryPayload): Promise<void> {
+  let client: PoolClient | null = null;
+  try {
+    client = await getPool().connect();
+    await logAuditEntry(client, payload);
+  } catch {
+    // Deliberately swallowed - see the contract above.
+  } finally {
+    client?.release();
+  }
 }
 
 export async function logTamperAttempt(

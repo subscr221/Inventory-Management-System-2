@@ -212,6 +212,12 @@ import {
   resolveQcCapaDuplicateConflict,
 } from '../compliance/quality.js';
 import {
+  assertComplianceMasterDataShape,
+  applyComplianceMasterDataProjection,
+  resolveBisLicenceExistsDuplicateConflict,
+  resolveLabelVersionExistsDuplicateConflict,
+} from '../compliance/master-data.js';
+import {
   assertProductionMaterialShape,
   applyProductionMaterialProjection,
 } from '../compliance/production-material.js';
@@ -696,6 +702,11 @@ export async function persistEvent(
   // name on any stream other than 'qc' (the stream-mismatch bypass closure, Task 3). The Story 1.7
   // qc.result_recorded calibration lockout above is untouched.
   assertQualityShape(envelope);
+  // Story 8.7: compliance master-data shape validation (BIS licence register CRUD, expiry-flag
+  // stage vocabulary, label draft/approval, the declared-derived-field rejections) is non-DB and
+  // runs with the other pre-transaction asserts, so a malformed compliance event never consumes an
+  // idempotency key.
+  assertComplianceMasterDataShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -1036,6 +1047,12 @@ export async function persistEvent(
     // so every QC-gate write commits or rolls back with the domain_events insert. Every guard lives
     // here, never only in the HTTP handler (AD-12).
     await applyQualityProjection(envelope, client, eventId);
+    // Story 8.7: the BIS licence register (CRUD, renewal, overlap guard), the expiry-alert ledger
+    // (idempotent stage flags, the expiry status flip) and the label-master version control (draft,
+    // DOA-resolved approval, supersede) run inside this same transaction, so every governance write
+    // commits or rolls back with the domain_events insert. Every guard lives here, never only in
+    // the HTTP handler (AD-12).
+    await applyComplianceMasterDataProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -1574,6 +1591,25 @@ export async function persistEvent(
                 : null,
           },
         );
+      } else if (constraint === 'uq_compliance_bis_licence_scope') {
+        // Story 8.7 (Task 3.3): one licence per (case-folded number, sku, site scope). The race
+        // path returns the same BIS_LICENCE_EXISTS contract as the sequential applier arm, plus
+        // the conflicting row's existing_licence_id.
+        throw new AppError(
+          409,
+          'BIS_LICENCE_EXISTS',
+          'A licence with this number already exists for this sku and site scope',
+          await resolveBisLicenceExistsDuplicateConflict(envelope.payload),
+        );
+      } else if (constraint === 'uq_label_master_version') {
+        // Story 8.7 (Task 3.3): one row per (sku, case-folded label_version). Same code and same
+        // existing_label_id as the sequential pre-check.
+        throw new AppError(
+          409,
+          'LABEL_VERSION_EXISTS',
+          'A label draft with this sku and version already exists',
+          await resolveLabelVersionExistsDuplicateConflict(envelope.payload),
+        );
       } else if (constraint === 'uq_inspection_plan_grain') {
         // Story 8.1: one plan header per scope grain. The race path returns the same code and the
         // same existing_plan_id as the sequential pre-check (INSPECTION_PLAN_SCOPE_MISMATCH).
@@ -2052,6 +2088,23 @@ export async function persistEvent(
   } finally {
     if (ownsTransaction) client.release();
   }
+}
+
+/**
+ * The event already persisted under an idempotency key, if any. Route-level pre-checks use this to
+ * stand down on a retry: a pre-check that rejects before persistEvent runs (an overlap guard, a
+ * uniqueness guard) would otherwise turn a legitimate retry of a SUCCESSFUL write into a 409,
+ * because the state the client created is itself what the pre-check now trips over.
+ */
+export async function findEventByIdempotencyKey(
+  idempotencyKey: string,
+): Promise<PersistedEvent | null> {
+  const result = await getPool().query(
+    `SELECT event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at
+     FROM domain_events WHERE idempotency_key = $1 LIMIT 1`,
+    [idempotencyKey],
+  );
+  return result.rows.length > 0 ? mapRowToEvent(result.rows[0]) : null;
 }
 
 export async function readStream(streamType: string, streamId: string): Promise<PersistedEvent[]> {

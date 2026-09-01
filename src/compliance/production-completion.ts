@@ -32,7 +32,7 @@ import { resolveApprover } from '../api/v1/indents.js';
 // Table 10 (Reuse Inventory) and Task 5.5: the plant-scope re-check is the 6.2 seam's, exported
 // rather than re-created. A second copy was written here originally and a code review on
 // 2026-08-31 removed it - two copies of an authorisation check can drift apart.
-import { assertActorPlantAccess } from './production-material.js';
+import { assertActorPlantAccess, assertOrderNotClosed } from './production-material.js';
 import { toIstCalendarDate } from '../lib/business-days.js';
 
 /**
@@ -285,6 +285,9 @@ async function lockOrderForCompletion(
  * later completion would resurrect an order that has been settled (code review 2026-08-31).
  */
 function assertOrderAcceptsProduction(order: ProductionOrderRow): void {
+  // Story 6.4 (FR-MO-12, AC 4): a closed order answers ORDER_CLOSED, not the generic
+  // INVALID_STATE_TRANSITION below. Shared with the material seam, never re-implemented.
+  assertOrderNotClosed(order);
   if (order.status !== 'in_process') {
     reject(
       'INVALID_STATE_TRANSITION',
@@ -877,6 +880,11 @@ async function applyShortCloseRecorded(
   const p = envelope.payload as Record<string, unknown>;
   const order = await lockOrderForCompletion(envelope, client);
   await assertActorPlantAccess(envelope, order, client);
+  // Story 6.4 (AC 4): ORDER_CLOSED before the generic gate, exactly as in
+  // assertOrderAcceptsProduction. This applier keeps its own copy of the status check rather than
+  // calling that helper because the close-short decision is the one event that is legitimate on an
+  // order already carrying a short_closed_at.
+  assertOrderNotClosed(order);
   if (order.status !== 'in_process') {
     reject(
       'INVALID_STATE_TRANSITION',

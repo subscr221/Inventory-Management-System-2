@@ -17,12 +17,21 @@
 -- one. chk_label_master_approval_pairing is the FULL biconditional (the Story 8.4 one-directional
 -- CHECK lesson): a row is approved-or-superseded exactly when it carries approval metadata, and
 -- approved_by pairs with approved_at in both directions.
+--
+-- Story 8.7 Binding Scope Decision 2: adds uq_label_master_version (one row per (sku,
+-- label_version)), case-folded and whitespace-trimmed to match uq_compliance_bis_licence_scope -
+-- 'V1' and 'v1' are the same version of a label, not two. It also adds created_by (the drafting
+-- actor), which the applier reads to enforce drafter-is-not-approver segregation of duties. The draft -> approved -> superseded transition is enforced in the applier, NOT
+-- as a CHECK constraint, because PostgreSQL CHECK constraints cannot see OLD row values; the
+-- transition is proven by integration tests instead. app_user gains INSERT/UPDATE because Story
+-- 8.7 routes write through the app pool inside persistEvent transactions.
 
 CREATE TABLE IF NOT EXISTS label_master (
   label_id      UUID PRIMARY KEY,
   sku           TEXT NOT NULL,
   label_version TEXT NOT NULL,
   status        TEXT NOT NULL DEFAULT 'draft',
+  created_by    UUID,
   approved_by   UUID,
   approved_at   TIMESTAMPTZ,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -38,7 +47,36 @@ CREATE TABLE IF NOT EXISTS label_master (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_label_master_current
   ON label_master (sku) WHERE status = 'approved';
 
+-- Recreated rather than IF NOT EXISTS alone: an 8.7 database that already carries the
+-- case-sensitive (sku, label_version) form would silently keep it, since CREATE INDEX IF NOT
+-- EXISTS matches on name, not on body. Guarded on the body actually differing so a routine
+-- re-migrate does not rebuild the index under ACCESS EXCLUSIVE, and so a database holding
+-- case-colliding versions fails with rows named rather than a bare 23505.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = 'uq_label_master_version'
+      AND indexdef NOT LIKE '%lower(btrim%'
+  ) THEN
+    IF EXISTS (
+      SELECT 1 FROM label_master
+      GROUP BY sku, lower(btrim(label_version))
+      HAVING count(*) > 1
+    ) THEN
+      RAISE EXCEPTION 'label_master holds versions differing only by case or whitespace within one sku; dedupe them before migrating (SELECT sku, lower(btrim(label_version)), count(*) FROM label_master GROUP BY 1,2 HAVING count(*) > 1)';
+    END IF;
+    DROP INDEX uq_label_master_version;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_label_master_version
+  ON label_master (sku, lower(btrim(label_version)));
+
 CREATE INDEX IF NOT EXISTS idx_label_master_sku ON label_master (sku, status);
+
+ALTER TABLE label_master ADD COLUMN IF NOT EXISTS created_by UUID;
 
 DO $$
 BEGIN
@@ -81,7 +119,7 @@ END $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-    GRANT SELECT ON label_master TO app_user;
+    GRANT SELECT, INSERT, UPDATE ON label_master TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON label_master TO readonly_user;

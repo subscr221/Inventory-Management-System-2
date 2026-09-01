@@ -17,6 +17,7 @@ import {
   type StockDrainRow,
 } from '../read/projections/stock_balance.js';
 import { getInventoryValuation } from '../read/projections/inventory_valuation.js';
+import { getItemById } from '../read/projections/item_master.js';
 import { assertQcGateAllows, gateBusinessDateOf } from './quality.js';
 import {
   insertProductionOrderStage,
@@ -379,6 +380,13 @@ async function lockOrderForMaterial(
       404,
     );
   }
+  // Story 6.4 (FR-MO-12, AC 4): a CLOSED order is immutable, and says so in its own code. This
+  // branch runs BEFORE the generic status gate below, which would otherwise answer
+  // INVALID_STATE_TRANSITION - true, but indistinguishable from "this order was cancelled" or
+  // "this order is still planned", and therefore useless to an operator or an auditor asking why a
+  // posting was refused. The rejection is written to the edit log by persistEvent like every other
+  // seam rejection.
+  assertOrderNotClosed(order);
   if (order.status !== 'released' && order.status !== 'in_process') {
     reject(
       'INVALID_STATE_TRANSITION',
@@ -388,6 +396,70 @@ async function lockOrderForMaterial(
     );
   }
   return order;
+}
+
+/**
+ * Story 6.4 (FR-MO-12, AC 4): closed orders are immutable. Exported so the completion seam raises
+ * the identical code from its own status gate - one owner for the rule, two call sites, exactly as
+ * assertActorPlantAccess is shared rather than duplicated (the code-review 2026-08-31 lesson).
+ */
+/**
+ * Story 6.4 (FR-MO-11, AC 2): a lot-controlled component must carry a recorded lot on every path
+ * that consumes it. The control flags live on item_master (Story 2.1) and the precedence rule -
+ * serial control wins, because a serial-controlled movement legitimately carries no lot - is the
+ * one src/compliance/lot-serial-validation.ts already applies to stock.received / stock.issued.
+ * That module's gate never fires for production events (it is scoped to those two event types), so
+ * the same rule is applied here for the production stream rather than reimplemented differently.
+ */
+export async function assertLotRecordedForControlledComponent(
+  componentItemId: string,
+  componentSku: string,
+  lotNumber: string | null,
+  productionOrderId: string,
+  bomLineId: string,
+  client: PoolClient,
+): Promise<void> {
+  if (lotNumber !== null) return;
+  const item = await getItemById(componentItemId, client);
+  // Code review 2026-09-01: an unresolved component_item_id used to return early, silently
+  // permitting a lot-less consumption. Fails closed like assertActorPlantAccess's non-string
+  // location: an item that cannot be resolved cannot be proven un-lot-controlled.
+  if (!item) {
+    reject(
+      'LOT_REQUIRED',
+      'The component item cannot be resolved, so lot control cannot be established',
+      {
+        production_order_id: productionOrderId,
+        bom_line_id: bomLineId,
+        component_item_id: componentItemId,
+      },
+      400,
+    );
+  }
+  if (item.serial_controlled) return;
+  if (!item.lot_controlled) return;
+  reject(
+    'LOT_REQUIRED',
+    'The component is lot-controlled and cannot be consumed without a recorded lot',
+    {
+      production_order_id: productionOrderId,
+      bom_line_id: bomLineId,
+      component_item_id: componentItemId,
+      component_sku: componentSku,
+    },
+    400,
+  );
+}
+
+export function assertOrderNotClosed(order: ProductionOrderRow): void {
+  if (order.status === 'closed') {
+    reject(
+      'ORDER_CLOSED',
+      'The production order is closed and accepts no further postings or edits',
+      { production_order_id: order.production_order_id, status: order.status },
+      409,
+    );
+  }
 }
 
 /**
@@ -647,6 +719,19 @@ async function applyMaterialStaged(
     const declaredLot = line['lot_number'] as string | null;
     const lotNumber =
       typeof declaredLot === 'string' && declaredLot.trim() !== '' ? declaredLot : null;
+    // Story 6.4 (FR-MO-11, AC 2): a lot-controlled component cannot be consumed without a recorded
+    // lot. Enforced HERE, at staging, because the stage row is what the issue applier later reads
+    // its lot from - a lot-less stage row would carry an un-traceable issue all the way into the
+    // WIP ledger and out of the genealogy. Serial control takes precedence exactly as it does in
+    // src/compliance/lot-serial-validation.ts, and LOT_REQUIRED is that module's code, reused.
+    await assertLotRecordedForControlledComponent(
+      requirement.component_item_id,
+      requirement.component_sku,
+      lotNumber,
+      productionOrderId,
+      bomLineId,
+      client,
+    );
     await insertProductionOrderStage(
       {
         stage_id: stageId,
@@ -1017,6 +1102,21 @@ async function applyConfirmationRecorded(
       line.bom_line_id,
       unitCost,
     );
+    // Story 6.4 (FR-MO-11, AC 2): backflush resolves its own lots from the FEFO drain, so the
+    // normal case satisfies the rule by construction - but un-lotted balance rows of a
+    // lot-controlled item (legacy stock, a receipt that predates the control flag) would drain into
+    // a lot-less WIP posting and break the genealogy silently. The whole confirmation rejects: a
+    // partially traceable consumption is not a lesser problem than an untraceable one.
+    for (const posting of postings) {
+      await assertLotRecordedForControlledComponent(
+        line.component_item_id,
+        line.component_sku,
+        (posting['lot_number'] as string | null) ?? null,
+        productionOrderId,
+        line.bom_line_id,
+        client,
+      );
+    }
     for (const posting of postings) {
       const postingValue = await insertWipPosting(
         {

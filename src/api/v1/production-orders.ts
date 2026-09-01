@@ -22,6 +22,10 @@ import {
 } from '../../read/projections/production_order.js';
 import { evaluateReleaseGate, type ReleaseGateResult } from '../../production/release-gate.js';
 import { resolveApprover } from './indents.js';
+// Story 6.4: the genealogy service and the closure-written variance report (FR-MO-11, FR-B-08).
+import { getLotGenealogy } from '../../production/lot-genealogy.js';
+import { getCompletionByLotId } from '../../read/projections/production_completion.js';
+import { listConsumptionVarianceByOrder } from '../../read/projections/production_consumption_variance.js';
 
 /**
  * Story 6.1 REST surface: production order creation, read, the release-gate dry run, release,
@@ -530,6 +534,67 @@ const getReleaseGateBase: RouteHandler = async (req, res, params) => {
 };
 
 // ---------------------------------------------------------------------------
+// GET /api/v1/production-orders/:orderId/consumption-variance
+// ---------------------------------------------------------------------------
+
+/**
+ * Story 6.4 (FR-B-08): the variance report written by the closure gate. A read-only surface over
+ * rows the seam already wrote - the report is never computed here, so two callers can never see two
+ * different answers for the same closed order.
+ */
+const getConsumptionVarianceBase: RouteHandler = async (req, res, params) => {
+  try {
+    const orderId = requireUuidParam(params, 'orderId');
+    const order = await loadOrderOr404(orderId);
+    assertPlantLocationAccess(req, order.plant_location_id, 'read');
+    const lines = await listConsumptionVarianceByOrder(orderId);
+    sendJson(res, 200, {
+      production_order_id: orderId,
+      status: order.status,
+      // An order that has not closed has no report yet; that is a 200 with an empty list and an
+      // explicit flag, not a 404 - the caller asked a legitimate question about a real order.
+      computed: lines.length > 0,
+      breached_line_count: lines.filter((line) => line.tolerance_breached).length,
+      lines,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/production-orders/lots/:lotId/genealogy
+// ---------------------------------------------------------------------------
+
+/**
+ * Story 6.4 (FR-MO-11, AC 1): the as-consumed genealogy of one output lot. Registered under the
+ * production-orders prefix because the lot's order is what scopes access to it: the caller must
+ * hold read scope on the plant that produced the lot, exactly as for the order itself.
+ */
+const getLotGenealogyBase: RouteHandler = async (req, res, params) => {
+  try {
+    const lotId = requireUuidParam(params, 'lotId');
+    // Authorisation runs on the OWNING ORDER before the genealogy is computed (the code-review
+    // 2026-08-31 lesson from the 6.3 rework route, which ran every lookup before authorising and
+    // leaked foreign-plant linkage): resolve the lot to its order, authorise, and only then read
+    // what the lot consumed. A lot that is not a production output at all is a 404 with no plant to
+    // authorise against, which discloses nothing about another plant's work.
+    const completion = await getCompletionByLotId(lotId);
+    if (!completion) {
+      throw new AppError(404, 'OUTPUT_LOT_NOT_FOUND', 'The lot is not a production output lot', {
+        lot_id: lotId,
+      });
+    }
+    const order = await loadOrderOr404(completion.production_order_id);
+    assertPlantLocationAccess(req, order.plant_location_id, 'read');
+    const genealogy = await getLotGenealogy(lotId);
+    sendJson(res, 200, genealogy as unknown as Record<string, unknown>);
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // POST /api/v1/production-orders/:orderId/release
 // ---------------------------------------------------------------------------
 
@@ -901,3 +966,13 @@ export const cancelProductionOrderHandler = requireRole({
   module: 'production',
   functionScope: 'write',
 })(cancelProductionOrderBase);
+
+export const getConsumptionVarianceHandler = requireRole({
+  module: 'production',
+  functionScope: 'read',
+})(getConsumptionVarianceBase);
+
+export const getLotGenealogyHandler = requireRole({
+  module: 'production',
+  functionScope: 'read',
+})(getLotGenealogyBase);

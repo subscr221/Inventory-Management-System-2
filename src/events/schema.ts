@@ -2875,6 +2875,43 @@ export interface ProductionOrderStateChangedPayload {
   new_status: 'in_process' | 'completed' | 'closed';
   changed_by: string;
   changed_at: string;
+  /**
+   * Story 6.4 (FR-MO-12, AC 3): SERVER-DERIVED, written back onto the payload by the closure gate
+   * and present ONLY on the transition into `closed`. A caller that declares it is rejected 409
+   * PRODUCTION_ORDER_DERIVATION_MISMATCH - the gate's verdict is not a field a client may assert.
+   */
+  closure_checks?: {
+    wip_net_open_quantity: string;
+    wip_net_open_value: string;
+    open_stage_count: number;
+    output_lot_count: number;
+    dispositioned_lot_count: number;
+  };
+  /**
+   * Story 6.4 (FR-B-08, AC 7): SERVER-DERIVED summary of the consumption variance report written
+   * to production_consumption_variance in this same transaction; present ONLY on the transition
+   * into `closed`, and likewise rejected when declared. `computed: false` with an
+   * `unavailable_reason` records the disclosed degradation: the BOM moved under a finished order,
+   * so the expectation could not be resolved and closure proceeded without a report rather than
+   * trapping the order in `completed`.
+   */
+  variance?: {
+    computed: boolean;
+    unavailable_reason: string | null;
+    basis_quantity: string;
+    revision_id: string | null;
+    tolerance_percent: string;
+    line_count: number;
+    breached_line_count: number;
+    breached_lines: Array<{
+      bom_line_id: string;
+      component_sku: string;
+      expected_quantity: string;
+      actual_quantity: string;
+      variance_percent: string | null;
+      implied_scrap_percent: string | null;
+    }>;
+  };
 }
 
 export interface ProductionOrderStateChangedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -4191,6 +4228,102 @@ export interface QcSamplingStateAdjustedEnvelope extends Omit<EventEnvelope, 'pa
 }
 
 // ---------------------------------------------------------------------------
+// Story 8.7: compliance master data (FR-Q-11 BIS licence register, FR-Q-14 Legal Metrology label
+// masters). Five events on the 'compliance' stream.
+//
+// BSD-1 convention: a field marked SERVER-DERIVED is computed by the applier and must NOT appear on
+// an inbound payload - src/compliance/master-data.ts rejects a declared one with
+// COMPLIANCE_DERIVATION_MISMATCH. Fields marked SERVER-CAPTURED are resolved by the ROUTE before
+// persistEvent and DO travel on the payload, so a projection rebuild is deterministic after the
+// source registry has drifted; the applier re-derives and compares them on first apply.
+// ---------------------------------------------------------------------------
+
+export interface ComplianceBisLicenceRecordedPayload {
+  licence_id: string;
+  licence_number: string;
+  licence_type: 'cml' | 'r_number';
+  sku: string;
+  /** NULL means the licence covers ALL sites (BSD-6). */
+  site_id: string | null;
+  valid_from: string;
+  valid_to: string;
+  /** SERVER-DERIVED from the window at write time; never declared. */
+  status?: never;
+}
+
+export interface ComplianceBisLicenceRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'compliance.bis_licence_recorded';
+  payload: ComplianceBisLicenceRecordedPayload;
+}
+
+export interface ComplianceBisLicenceUpdatedPayload {
+  licence_id: string;
+  /** In-place renewal: at least one of the two is required, both are optional (BSD-3). */
+  valid_from?: string;
+  valid_to?: string;
+  /** SERVER-DERIVED or immutable register identity; never declared on an update. */
+  status?: never;
+  licence_number?: never;
+  licence_type?: never;
+  sku?: never;
+  site_id?: never;
+}
+
+export interface ComplianceBisLicenceUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'compliance.bis_licence_updated';
+  payload: ComplianceBisLicenceUpdatedPayload;
+}
+
+export interface ComplianceBisLicenceExpiryFlaggedPayload {
+  licence_id: string;
+  /** 90/60/30 are alert stages; 0 records the expiry flip. Re-derived from valid_to on apply. */
+  stage_days: 90 | 60 | 30 | 0;
+  /** SERVER-DERIVED; the applier reads the register, never the payload. */
+  status?: never;
+  valid_to?: never;
+  flagged_at?: never;
+}
+
+export interface ComplianceBisLicenceExpiryFlaggedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'compliance.bis_licence_expiry_flagged';
+  payload: ComplianceBisLicenceExpiryFlaggedPayload;
+}
+
+export interface ComplianceLabelVersionDraftedPayload {
+  label_id: string;
+  sku: string;
+  label_version: string;
+  /** SERVER-DERIVED: a draft carries no approval metadata, and created_by comes from the actor. */
+  status?: never;
+  approved_by?: never;
+  approved_at?: never;
+}
+
+export interface ComplianceLabelVersionDraftedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'compliance.label_version_drafted';
+  payload: ComplianceLabelVersionDraftedPayload;
+}
+
+export interface ComplianceLabelVersionApprovedPayload {
+  label_id: string;
+  /** SERVER-CAPTURED (BSD-4): resolved by the route, re-derived and compared by the applier. */
+  approved_by: string;
+  doa_entry_id: string;
+  governing_role: string;
+  delegation_applied: boolean;
+  /** SERVER-DERIVED: stamped from the envelope, or read from the existing row. */
+  approved_at?: never;
+  status?: never;
+  sku?: never;
+  label_version?: never;
+}
+
+export interface ComplianceLabelVersionApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'compliance.label_version_approved';
+  payload: ComplianceLabelVersionApprovedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -5032,6 +5165,30 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'qc.capa_linked': {
     streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  // Story 8.7: compliance master data (BIS licence register, Legal Metrology label masters) on a
+  // NEW 'compliance' stream. Master data, not inventory movements, so business-stream tagging is
+  // not gated on them - the supplier.registered/asset.registered precedent (BSD-1). All five are
+  // central-only: no edge sync set entries, no requiresBusinessStream.
+  'compliance.bis_licence_recorded': {
+    streamType: 'compliance',
+    requiresBusinessStream: false,
+  },
+  'compliance.bis_licence_updated': {
+    streamType: 'compliance',
+    requiresBusinessStream: false,
+  },
+  'compliance.bis_licence_expiry_flagged': {
+    streamType: 'compliance',
+    requiresBusinessStream: false,
+  },
+  'compliance.label_version_drafted': {
+    streamType: 'compliance',
+    requiresBusinessStream: false,
+  },
+  'compliance.label_version_approved': {
+    streamType: 'compliance',
     requiresBusinessStream: false,
   },
 } as const;

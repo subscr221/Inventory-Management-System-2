@@ -135,14 +135,19 @@ function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
 }
 
-interface ActorContext {
+export interface ActorContext {
   userId: string;
   role: string;
   auditLocationId: string;
   eventLocationId: string;
 }
 
-function actorContext(req: IncomingMessage): ActorContext {
+/**
+ * Story 8.7 (BSD-7 wheel-reinvention guard): exported so src/api/v1/compliance.ts reuses this
+ * shell rather than copying it a third time (production-material.ts already has its own local
+ * copy, predating this rule).
+ */
+export function actorContext(req: IncomingMessage): ActorContext {
   const authContext = getAuthContext(req);
   const assignment = getAuthorizedAssignment(req);
   const userId = authContext?.userId ?? NO_LOCATION_UUID;
@@ -152,7 +157,7 @@ function actorContext(req: IncomingMessage): ActorContext {
   return { userId, role, auditLocationId, eventLocationId };
 }
 
-function auditCtxFor(
+export function auditCtxFor(
   req: IncomingMessage,
   actor: ActorContext,
   httpStatus: number,
@@ -176,7 +181,7 @@ function sendAppError(req: IncomingMessage, res: Parameters<RouteHandler>[1], er
   throw err;
 }
 
-function idempotencyKeyFrom(body: Record<string, unknown>): string {
+export function idempotencyKeyFrom(body: Record<string, unknown>): string {
   return typeof body['idempotency_key'] === 'string' && body['idempotency_key'].trim() !== ''
     ? body['idempotency_key']
     : randomUUID();
@@ -186,7 +191,7 @@ function idempotencyKeyFrom(body: Record<string, unknown>): string {
  * persistEvent returns ANY event already holding this idempotency key. A legitimate replay is the
  * same event type carrying the same id field; anything else is a reused key (the Story 7.1 lesson).
  */
-function replayIdOrReject(
+export function replayIdOrReject(
   persisted: PersistedEvent,
   expectedEventType: string,
   idField: string,
@@ -212,7 +217,7 @@ function replayIdOrReject(
  * never reaches persistEvent (or was rolled back by it), so the row is written on a dedicated
  * pool client (the gate.ts / production-orders precedent) before the 403 is sent.
  */
-async function auditRejectedAttempt(
+export async function auditRejectedAttempt(
   req: IncomingMessage,
   actor: ActorContext,
   err: AppError,
@@ -1487,7 +1492,11 @@ const recordDispositionBase: RouteHandler = async (req, res, params) => {
     // DEFECT_CODE_UNKNOWN); this route check just refuses the obviously malformed value early.
     if (body['defect_code'] !== undefined && body['defect_code'] !== null) {
       if (disposition !== 'reject') {
-        throw new AppError(400, 'INVALID_PARAMS', 'defect_code is only valid on a reject disposition');
+        throw new AppError(
+          400,
+          'INVALID_PARAMS',
+          'defect_code is only valid on a reject disposition',
+        );
       }
       if (typeof body['defect_code'] !== 'string' || body['defect_code'].trim() === '') {
         throw new AppError(400, 'INVALID_PARAMS', 'defect_code must be a non-empty string');

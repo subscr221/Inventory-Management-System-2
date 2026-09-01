@@ -17,9 +17,17 @@ import {
   getProductionOrderByIdForUpdate,
   insertProductionOrder,
   updateProductionOrderState,
+  type ProductionOrderRow,
 } from '../read/projections/production_order.js';
 import { applyStockDeallocation } from '../read/projections/stock_balance.js';
 import { listStagesByOrder } from '../read/projections/production_order_stage.js';
+// Story 6.4 (FR-MO-12, FR-B-08): the closure gate reads the WIP ledger, the staging rows and the
+// Epic 8 disposition projection, then writes the consumption variance report - all under the order
+// lock this applier already holds.
+import { getWipSummary } from '../read/projections/production_wip_ledger.js';
+import { listCompletionsByOrder } from '../read/projections/production_completion.js';
+import { getQcLotDispositionByLotId } from '../read/projections/qc_lot_disposition.js';
+import { computeConsumptionVariance } from '../production/consumption-variance.js';
 
 /**
  * Story 6.1 compliance seam for the production order lifecycle (FR-MO-01/02/03). Structurally
@@ -342,6 +350,134 @@ async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Pr
   return existing.rows.length > 0;
 }
 
+/** The Story 6.3 guard, verbatim: a server-derived field a caller declares is a fabrication attempt. */
+function assertNotDeclared(p: Record<string, unknown>, fields: string[]): void {
+  for (const field of fields) {
+    const value = p[field];
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    reject(
+      'PRODUCTION_ORDER_DERIVATION_MISMATCH',
+      `${field} is server-derived and must not be declared`,
+      { field },
+      409,
+    );
+  }
+}
+
+/**
+ * Story 6.4 (FR-MO-12, AC 3): the closure gate. Runs on the locked order row inside the closing
+ * transaction, so its verdict is the verdict at the instant of closure and two concurrent closes
+ * cannot both pass it.
+ *
+ * The three checks, in the order the Locking Contract already establishes (order row -> WIP
+ * postings -> staging -> QC): every one of them is evaluated even when an earlier one fails, so the
+ * operator is told everything blocking the order in one response instead of discovering the next
+ * blocker after clearing the last. The rejection names the first blocking reason and carries the
+ * full list in details.blocking_reasons - the AC3 plural contract Story 6.2's shortfall_lines set.
+ *
+ * "No picks are open" is production's OWN staging table: a production_order_stage row still in
+ * `allocated` holds stock the order never issued. Epic 3's pick_task is deliberately NOT consulted
+ * (Story 6.2 Binding Decision 3: it is dispatch-scoped and no production order ever appears in it).
+ */
+async function assertClosureAllowed(
+  order: ProductionOrderRow,
+  client: PoolClient,
+): Promise<Record<string, unknown>> {
+  const blocking: Array<Record<string, unknown>> = [];
+
+  const wip = await getWipSummary(order.production_order_id, client);
+  const wipZero = await client.query(`SELECT ($1::numeric = 0 AND $2::numeric = 0) AS zero`, [
+    wip.net_open_quantity,
+    wip.net_open_value,
+  ]);
+  if (wipZero.rows[0]!['zero'] !== true) {
+    blocking.push({
+      reason: 'WIP_NOT_ZERO',
+      net_open_quantity: wip.net_open_quantity,
+      net_open_value: wip.net_open_value,
+    });
+  }
+
+  const stages = await listStagesByOrder(order.production_order_id, client);
+  const openStages = stages.filter((stage) => stage.status === 'allocated');
+  if (openStages.length > 0) {
+    blocking.push({
+      reason: 'STAGING_OPEN',
+      open_stage_count: openStages.length,
+      open_stages: openStages.map((stage) => ({
+        stage_id: stage.stage_id,
+        bom_line_id: stage.bom_line_id,
+        component_sku: stage.component_sku,
+        required_quantity: stage.required_quantity,
+        issued_quantity: stage.issued_quantity,
+      })),
+    });
+  }
+
+  // AC3: EVERY output lot, co-products and by-products included. A row in qc_lot_disposition is
+  // what "a recorded QC disposition" means - all four values (accept, reject, conditional_release,
+  // split) are terminal decisions off qc_hold, and an order whose output was rejected is still an
+  // order that has been through QC. A `split` parent satisfies the check at this grain: the split's
+  // child lots are Epic 8's to disposition and are not this order's completion rows.
+  // Code review 2026-09-01: listCompletionsByOrder caps at 200 rows per call. A bare single call
+  // silently ignored completions past row 200, letting closure pass without checking every output
+  // lot's disposition (violates AC3's "EVERY output lot" contract). Paged to exhaustion instead.
+  const undispositioned: Array<Record<string, unknown>> = [];
+  let totalCompletionCount = 0;
+  let offset = 0;
+  for (;;) {
+    const page = await listCompletionsByOrder({
+      orderId: order.production_order_id,
+      limit: 200,
+      offset,
+      client,
+    });
+    totalCompletionCount += page.length;
+    for (const completion of page) {
+      const disposition = await getQcLotDispositionByLotId(completion.lot_id, client);
+      if (disposition === null) {
+        undispositioned.push({
+          lot_id: completion.lot_id,
+          lot_number: completion.lot_number,
+          output_class: completion.output_class,
+          qc_task_id: completion.qc_task_id,
+        });
+      }
+    }
+    if (page.length < 200) break;
+    offset += 200;
+  }
+  if (undispositioned.length > 0) {
+    blocking.push({
+      reason: 'LOTS_UNDISPOSITIONED',
+      undispositioned_lot_count: undispositioned.length,
+      undispositioned_lots: undispositioned,
+    });
+  }
+
+  if (blocking.length > 0) {
+    reject(
+      'CLOSURE_GATE_BLOCKED',
+      'The order does not satisfy the closure gate',
+      {
+        production_order_id: order.production_order_id,
+        first_blocking_reason: (blocking[0] as { reason: string }).reason,
+        blocking_reasons: blocking,
+      },
+      409,
+    );
+  }
+
+  return {
+    wip_net_open_quantity: wip.net_open_quantity,
+    wip_net_open_value: wip.net_open_value,
+    open_stage_count: 0,
+    output_lot_count: totalCompletionCount,
+    dispositioned_lot_count: totalCompletionCount,
+  };
+}
+
 export async function applyProductionOrderProjection(
   envelope: EventEnvelope,
   client: PoolClient,
@@ -358,7 +494,7 @@ export async function applyProductionOrderProjection(
       await applyReleased(envelope, client);
       break;
     case 'production_order.state_changed':
-      await applyStateChanged(envelope, client);
+      await applyStateChanged(envelope, client, eventId);
       break;
     case 'production_order.cancelled':
       await applyCancelled(envelope, client);
@@ -759,13 +895,23 @@ async function applyReleased(envelope: EventEnvelope, client: PoolClient): Promi
   );
 }
 
-async function applyStateChanged(envelope: EventEnvelope, client: PoolClient): Promise<void> {
+async function applyStateChanged(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   if (await alreadyPersisted(envelope, client)) return;
 
   const p = envelope.payload as Record<string, unknown>;
   const productionOrderId = p['production_order_id'] as string;
   const declaredPreviousStatus = p['previous_status'] as string;
   const newStatus = p['new_status'] as 'in_process' | 'completed' | 'closed';
+
+  // Story 6.4: the closure gate's verdict and the FR-B-08 variance report are SERVER-DERIVED. A
+  // caller that declares them is attempting to write a fact it does not own, exactly as a declared
+  // wip_relief is in Story 6.3 - reject rather than overwrite, so the direct-event path cannot
+  // stamp a passed gate onto an order that never ran one.
+  assertNotDeclared(p, ['closure_checks', 'variance']);
 
   const order = await getProductionOrderByIdForUpdate(productionOrderId, client);
   if (!order) {
@@ -808,6 +954,37 @@ async function applyStateChanged(envelope: EventEnvelope, client: PoolClient): P
   }
 
   p['changed_by'] = envelope.metadata.actor.user_id;
+
+  // Story 6.4 (AC 3, AC 7): closure is the one transition that gates. It runs AFTER the Table 2
+  // edge check, so a request to close an order that is not `completed` still returns
+  // INVALID_STATE_TRANSITION rather than a gate verdict about an order that could never close.
+  if (newStatus === 'closed') {
+    p['closure_checks'] = await assertClosureAllowed(order, client);
+    // The variance report is written only once the gate has passed: an order that cannot close has
+    // no closure instant to measure against. computeConsumptionVariance never throws for a
+    // resolvable business reason - a BOM that moved under the order degrades to
+    // variance.computed = false rather than trapping a finished order in `completed` forever.
+    const variance = await computeConsumptionVariance(order, eventId, client);
+    p['variance'] = {
+      computed: variance.computed,
+      unavailable_reason: variance.unavailable_reason,
+      basis_quantity: variance.basis_quantity,
+      revision_id: variance.revision_id,
+      tolerance_percent: variance.tolerance_percent,
+      line_count: variance.lines.length,
+      breached_line_count: variance.breached_line_count,
+      breached_lines: variance.lines
+        .filter((line) => line.tolerance_breached)
+        .map((line) => ({
+          bom_line_id: line.bom_line_id,
+          component_sku: line.component_sku,
+          expected_quantity: line.expected_quantity,
+          actual_quantity: line.actual_quantity,
+          variance_percent: line.variance_percent,
+          implied_scrap_percent: line.implied_scrap_percent,
+        })),
+    };
+  }
 
   await updateProductionOrderState(productionOrderId, { status: newStatus }, client);
 }

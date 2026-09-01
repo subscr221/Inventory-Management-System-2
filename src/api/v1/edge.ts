@@ -13,6 +13,9 @@ import { validateEnvelope, persistEvent } from '../../events/store.js';
 import {
   validateEdgeEnvelope,
   assertEdgeMaintenanceEventAllowed,
+  // Story 6.4 (FR-MO-13, AC 6): the production-stream allowlist and the edit-log write its refusal
+  // requires.
+  assertEdgeProductionEventAllowed,
   assertEdgeQcEventAllowed,
   isPermanentUploadErrorCode,
   REBASE_SAFE_EVENT_TYPES,
@@ -22,6 +25,7 @@ import {
   getStreamHeadVersions,
   listStreamEventTypesAfter,
 } from '../../sync/stream-heads.js';
+import { logRejectionAudit } from '../../read/projections/audit_log.js';
 import { raiseMaintenanceSyncConflict } from '../../maintenance/sync-conflicts.js';
 import type { SyncConflictCause } from '../../maintenance/sync-conflicts.js';
 import { notifyFaultReported } from '../../maintenance/fault-notifications.js';
@@ -236,6 +240,34 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   // Story 8.1 (Binding Scope Decision 9): the same allowlist shape for the qc stream - plan
   // creation, approval, completion hand-off and conditional release are central-only.
   assertEdgeQcEventAllowed(body);
+  // Story 6.4 (FR-MO-13, AC 6): the production stream's allowlist. Release, cancel and close are
+  // central-only; close is caught by a payload predicate because it shares an event type with the
+  // transitions a plant device legitimately records offline. AC 6 requires the REFUSAL itself to
+  // reach the edit log - it never reaches persistEvent, so it is written here before rethrowing.
+  try {
+    assertEdgeProductionEventAllowed(body);
+  } catch (err: unknown) {
+    if (err instanceof AppError && err.errorCode === 'CENTRAL_ONLY_OPERATION') {
+      await logRejectionAudit({
+        trace_id: getTraceId(req) ?? '',
+        user_id: authContext.userId,
+        role: assignment.role,
+        location_id: assignment.locationId,
+        endpoint: req.url ?? '',
+        method: req.method ?? 'POST',
+        event_id: null,
+        http_status: err.statusCode,
+        error_code: err.errorCode,
+        details: {
+          stream_type: body.stream_type,
+          stream_id: body.stream_id,
+          production_order_id: body.payload?.['production_order_id'] ?? null,
+          ...err.details,
+        },
+      });
+    }
+    throw err;
+  }
 
   // Story 7.8 (Binding Decision 1, AD-16, Story 1.8 AC): a replayed edge submission is HTTP 409
   // DUPLICATE_EVENT with the existing event identity, on BOTH the sequential path (this SELECT)

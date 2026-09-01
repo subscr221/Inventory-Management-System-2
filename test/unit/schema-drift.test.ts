@@ -1255,6 +1255,27 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 6.4: the consumption variance report written by the closure gate (FR-B-08). One row per
+  // (order, bom_line) - the report is computed once, at the completed -> closed transition, which
+  // the lifecycle permits exactly once per order. Append-only: a variance line is a measurement
+  // taken at the instant of closure, never restated. The breached index is PARTIAL (the exception
+  // list is the read that matters), so it is pinned by name here like every other partial index.
+  {
+    canonical: 'read/projections/production_consumption_variance.sql',
+    table: 'production_consumption_variance',
+    constraints: [
+      'chk_production_consumption_variance_supply_method',
+      'chk_production_consumption_variance_quantities_non_negative',
+      'chk_production_consumption_variance_tolerance_range',
+      'uq_production_consumption_variance_grain',
+    ],
+    indexes: [
+      'idx_production_consumption_variance_order',
+      'idx_production_consumption_variance_breached',
+      'idx_production_consumption_variance_line',
+    ],
+    appUserGrant: 'INSERT, SELECT',
+  },
   // Story 7.7: the asset coverage register (AMC, warranty, insurance), its staged 90/60/30 expiry
   // alerts and the reason-coded warranty override grain (FR-M-10, FR-M-11). The coverage
   // uniqueness grain is an EXPRESSION index (lower(reference_number_ext)) and therefore lives in
@@ -1563,7 +1584,7 @@ const EXPECTED = [
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
   // Story 8.6 (FR-Q-11, AC 1/2): the BIS licence register enforcement contract. Fixture-seeded
-  // reference data - app_user holds SELECT only (Binding Scope Decision 1); the site-scope
+  // reference data - app_user gains INSERT/UPDATE for the Story 8.7 write routes; the site-scope
   // uniqueness grain is a COALESCE expression index so all-sites (NULL site_id) rows dedupe.
   {
     canonical: 'read/projections/compliance_bis_licence.sql',
@@ -1572,15 +1593,26 @@ const EXPECTED = [
       'chk_compliance_bis_licence_number',
       'chk_compliance_bis_licence_type',
       'chk_compliance_bis_licence_window',
+      'chk_compliance_bis_licence_status',
     ],
-    indexes: ['uq_compliance_bis_licence_scope', 'idx_compliance_bis_licence_sku'],
-    indexBodies: ['ON compliance_bis_licence (sku, valid_to)'],
-    appUserGrant: 'SELECT',
+    indexes: [
+      'uq_compliance_bis_licence_scope',
+      'idx_compliance_bis_licence_sku',
+      'idx_compliance_bis_licence_expiry',
+    ],
+    indexBodies: [
+      'ON compliance_bis_licence (sku, valid_to)',
+      "CREATE UNIQUE INDEX IF NOT EXISTS uq_compliance_bis_licence_scope\n  ON compliance_bis_licence (\n    lower(btrim(licence_number)),\n    sku,\n    COALESCE(site_id, '00000000-0000-0000-0000-000000000000'::uuid)\n  );",
+    ],
+    appUserGrant: 'SELECT, INSERT, UPDATE',
   },
   // Story 8.6 (FR-Q-14, AC 3): the Legal Metrology label master enforcement contract. The
   // single-current-version invariant is the partial unique uq_label_master_current, whose full
   // body is pinned (the uq_qc_quality_hold_open precedent); approval pairing is the FULL
-  // biconditional (Story 8.4 one-directional CHECK lesson).
+  // biconditional (Story 8.4 one-directional CHECK lesson). Story 8.7 adds uq_label_master_version
+  // (one row per (sku, case-folded label_version), matching uq_compliance_bis_licence_scope), the
+  // created_by drafting-actor column behind the approval segregation-of-duties guard, and app_user
+  // gains INSERT/UPDATE for its write routes.
   {
     canonical: 'read/projections/label_master.sql',
     table: 'label_master',
@@ -1590,11 +1622,30 @@ const EXPECTED = [
       'chk_label_master_status',
       'chk_label_master_approval_pairing',
     ],
-    indexes: ['uq_label_master_current', 'idx_label_master_sku'],
+    indexes: ['uq_label_master_current', 'uq_label_master_version', 'idx_label_master_sku'],
     indexBodies: [
       "CREATE UNIQUE INDEX IF NOT EXISTS uq_label_master_current\n  ON label_master (sku) WHERE status = 'approved';",
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_label_master_version\n  ON label_master (sku, lower(btrim(label_version)));',
     ],
-    appUserGrant: 'SELECT',
+    appUserGrant: 'SELECT, INSERT, UPDATE',
+  },
+  // Story 8.7 (FR-Q-11, AC 2): the BIS licence expiry alert ledger - one row per
+  // (licence_id, valid_to, stage_days), the idempotency ledger for the 90/60/30/0-day sweep. The
+  // window is part of the key so a renewal re-arms the alerts without deleting the history.
+  {
+    canonical: 'read/projections/compliance_bis_licence_alert.sql',
+    table: 'compliance_bis_licence_alert',
+    // Both constraints are declared inline on CREATE TABLE with no guarded ALTER-add DO block
+    // (the table is created fresh, not evolved), so there is nothing for extractDoBlock to pin;
+    // the CREATE TABLE body comparison above already covers them byte-for-byte.
+    // Story 8.7 code review: the stage CHECK IS the AC 2 contract and the primary key IS the
+    // idempotency grain, so both are pinned rather than left to the CREATE TABLE body comparison.
+    constraints: ['chk_compliance_bis_licence_alert_stage', 'pk_compliance_bis_licence_alert'],
+    indexes: [] as string[],
+    indexBodies: [] as string[],
+    // Append-only: INSERT and SELECT only. An alert that fired is a posted regulatory fact, and
+    // the (licence_id, valid_to, stage_days) key means renewal re-arms without erasing anything.
+    appUserGrant: 'SELECT, INSERT',
   },
 ];
 

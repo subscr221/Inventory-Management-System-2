@@ -1,5 +1,14 @@
 # Deferred Work
 
+## Deferred from: code review of story-6-4 (2026-09-01)
+
+- Permanent error-code lists hand-duplicated across `edge/src/sync/connector.ts` and `src/sync/upload.ts` with no shared constant — deferred, requires a cross-package structural change (edge is a separately built package with no shared module path today)
+- Genealogy over-reports for orders with multiple sequential completions on the same order (consumed-material window is order-scoped by `completed_at` cutoff, not scoped to the individual completion event) [src/production/lot-genealogy.ts] — deferred per user decision; architecturally deep, the event-sourced ledger doesn't tie individual postings to specific completions outside the same-event-sibling case
+- `consumption-variance.ts` `requirementByLine` map silently overwrites on a same-`bom_line_id` collision across supply methods, contradicting the file's own "disjoint by construction" comment [src/production/consumption-variance.ts] — deferred, low probability, no reproduction path found
+- `getActualConsumptionByLine` SQL's `bool_or`/`MIN` aggregation misrepresents `supply_method`/item/sku when one BOM line has both directed-issue and backflush postings on one order [src/production/consumption-variance.ts] — deferred, same low-probability class as above
+- Variance line silently dropped (no log) when ledger data can't identify `component_item_id`/`component_sku` [src/production/consumption-variance.ts] — deferred, no audit trail but low priority
+- `assertClosureAllowed`'s WIP-zero numeric cast has no try/catch around a bad-shape DB error [src/compliance/production-order.ts] — deferred, would 500 instead of a clean gate rejection on a WIP-projection data-shape regression; not caused by this story
+
 ## Deferred from: code review of 1-1-core-infrastructure-deployment-and-event-store-schema.md (2026-07-12)
 
 - No authentication or authorization anywhere [src/server.ts:515] — deferred, pre-existing (Story 1.2 scope)
@@ -648,3 +657,32 @@ Closed by this story: the four Story 6.2 deferrals for FR-MO-07 (completions, co
 - Dashboard `from == to` (zero-width window) and a calendar-invalid-but-well-formed date (e.g. `2026-02-30`) are both untested [test/integration/story-8-6.test.ts].
 - Site-A dashboard isolation test only checks the absence of site-C rows, never pins site-A's own expected counts [test/integration/story-8-6.test.ts].
 - No unauthorized/unauthenticated access test for `GET /api/v1/qc/reports/dashboard` [test/integration/story-8-6.test.ts].
+
+## Deferred from: code review of story 8-7 (2026-09-01)
+
+- Whole 500-licence BIS expiry batch runs in one transaction, holding `FOR UPDATE` row locks against the release path for the full cycle. Fix is one transaction per licence (or per chunk), which also makes partial progress safe. `src/compliance/bis-licence-expiry.ts`.
+- Two concurrent `bis_licence_recorded` events with different licence numbers but overlapping windows for the same sku/site can both pass `requireNoOverlap` and persist. No unique index covers windows; needs a `daterange` exclusion constraint or an advisory lock on `(sku, site_id)`. `src/compliance/master-data.ts`.
+- `resolveComplianceAuthority` does not resolve delegation transitively and does not verify the delegate is active; it also passes amount `0` where amount-agnostic matching is meant. Pre-existing, mirrors `resolveQcAuthority`. `src/compliance/master-data.ts`.
+- `ROLLBACK TO SAVEPOINT` inside the sweep's catch block can itself throw on a fatal connection error, masking the original failure. Pre-existing sweep pattern shared with the 8.4 retention cycle. `src/compliance/bis-licence-expiry.ts`.
+- Re-approval of a `superseded` label version reports the same error code as re-approval of an `approved` one, so a superseded label cannot be distinguished from a double-approval. `src/compliance/master-data.ts`.
+
+## Deferred from: code review of story 8-7, group 2 (2026-09-02)
+
+- GET-by-id handlers raise `BIS_LICENCE_NOT_FOUND` / `LABEL_MASTER_NOT_FOUND`, both members of `AUDITED_REJECTIONS`, but do not audit; PATCH audits the same codes. The audit log therefore shows a partial population of those codes. House-wide question: decide whether a not-found probe is auditable and make every path agree. `src/api/v1/compliance.ts`.
+- The BIS expiry sweep timer has no enable/kill switch and does not run a first tick at boot, so nothing sweeps for the first interval and a misbehaving sweep can only be stopped by redeploying with a near-maximum interval. Matches the other three cycles, so this is a house-wide operational gap. `src/server.ts`.
+- SIGTERM clears the sweep interval without awaiting an in-flight cycle, so the pool can close under a running sweep. House timer pattern shared by all four cycles. `src/server.ts`.
+- Story 6.4 scope: `GET /api/v1/production-orders/lots/:lotId/genealogy` is registered after the `:orderId` siblings, and its comment claims the opposite. It survives only because the path has three segments; a future `GET /:orderId/genealogy` would silently shadow it. `src/server.ts`.
+- Story 6.4 scope: the `consumptionVarianceTolerancePercent` regex rejects `.5` and `+10` while its error message describes "a decimal percentage of at least 0". `src/config/index.ts`.
+
+## Deferred from: code review of story 8-7, group 3 (2026-09-02)
+
+- `GRANT SELECT, INSERT, UPDATE` on `compliance_bis_licence` and `label_master` is table-wide, so `app_user` can rewrite `approved_by`, `approved_at`, `licence_number` and `valid_from`, though the accessors only ever write the window, the status and the approval trio. Column-level grants would make the segregation-of-duties claim structural rather than procedural. House-wide grant posture, so not changed unilaterally.
+- Story 6.4 schema, payload interfaces and migration-list entries ride in the same working tree as Story 8.7, so the 8.7 schema gates and drift pins validate a mixed change set and per-story revert is not possible. Split at commit time.
+- Story 6.4 scope: the `variance` payload on `ProductionOrderStateChangedPayload` permits contradictory states - `computed: false` with a populated `breached_lines`, or `computed: true` alongside an `unavailable_reason`. A discriminated union on `computed` would make those unrepresentable. `src/events/schema.ts`.
+- Story 6.4 scope: the `production_consumption_variance` block in `deploy/compose/init-db.sql` opens with a duplicated one-line header immediately followed by the fuller header - a copy-paste artifact from the mirroring step.
+
+## Deferred from: code review of story 8-7, group 4 (2026-09-02)
+
+- No test asserts that the BIS expiry sweep is actually registered on a timer in `server.ts`. Every test invokes `runBisLicenceExpiryCycle` by direct import, so deleting the scheduler registration would leave the whole suite green while the statutory sweep never runs in production. This gap is shared by all four in-process cycles (notification dispatch, escalation, retention expiry, BIS expiry), so it wants one house-wide scheduler-registration test rather than a per-story one.
+
+- The BIS expiry sweep asserts `failed` and `cycleFailed` only in their success state. Proving the per-row SAVEPOINT isolation (one poisoned row must not abort the tick) needs a fault-injection point the sweep does not expose; a test that cannot fail would be worse than no test. Wants either a seam for injecting a persist failure or a fixture that makes one applier throw deterministically. `src/compliance/bis-licence-expiry.ts`.

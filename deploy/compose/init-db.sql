@@ -11314,7 +11314,21 @@ END $$;
 -- Story 8.6 Binding Scope Decision 1: this table carries ONLY the columns the statutory release
 -- block reads. Story 8.7 adds the CRUD routes, approval workflow, edit-logging, expiry alerts and
 -- any additional columns. Story 8.6 ships NO write routes and NO event types for this table;
--- integration fixtures seed rows through the admin pool, so app_user holds SELECT only.
+-- integration fixtures seed rows through the admin pool. Story 8.7 grants app_user
+-- INSERT/UPDATE (see the grants at the foot of this file); the Story 8.6 read-only posture no
+-- longer holds.
+--
+-- Story 8.7 Binding Scope Decision 2: adds `status` ('active'/'expired') as the AC 2 "marked
+-- invalid" artifact. Story 8.7 code review: status is an ALERTING ARTIFACT, never a release gate.
+-- The valid_from/valid_to window is the only truth the release path reads, because an unconditional
+-- status flip (a mis-dated sweep tick, a UTC-vs-IST boundary) would otherwise block every release
+-- for a licence whose window is still valid, with no path back except a manual PATCH. Fail-closed
+-- is right; unrecoverable fail-closed is not. The column is still written by the sweep and is what
+-- the ledger and the notifications are derived from. The scope uniqueness index is replaced with
+-- a case-folded, trimmed form (lower(btrim(licence_number))) closing the case-folding deferral;
+-- write paths trim licence_number, preserving original case in the stored value. app_user gains
+-- INSERT/UPDATE because Story 8.7 routes write through the app pool inside persistEvent
+-- transactions.
 --
 -- Binding Scope Decision 5: a row covers a release when sku matches, the site scope admits the
 -- task's site, and valid_from <= asOf <= valid_to (asOf is the IST calendar date derived from the
@@ -11335,20 +11349,60 @@ CREATE TABLE IF NOT EXISTS compliance_bis_licence (
   site_id        UUID,
   valid_from     DATE NOT NULL,
   valid_to       DATE NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'active',
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_compliance_bis_licence_number CHECK (btrim(licence_number) <> ''),
   CONSTRAINT chk_compliance_bis_licence_type CHECK (licence_type IN ('cml', 'r_number')),
   CONSTRAINT chk_compliance_bis_licence_window CHECK (valid_to >= valid_from)
 );
 
+-- ADD COLUMN IF NOT EXISTS rather than an information_schema probe: the probe filtered on
+-- table_name alone, so a same-named table in ANY other schema (a bak, tenant or restore-staging
+-- schema) satisfied it and the column was silently never added here.
+ALTER TABLE compliance_bis_licence ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+
+-- The column defaults to 'active', which is wrong for any pre-existing row whose window has
+-- already closed (every Story 8.6 fixture row with a past valid_to). Backfill once, idempotently.
+UPDATE compliance_bis_licence SET status = 'expired'
+ WHERE status = 'active' AND valid_to < CURRENT_DATE;
+
+-- The scope index moved to a case-folded, trimmed body. CREATE INDEX IF NOT EXISTS matches on NAME
+-- only, so an existing database would silently keep the old case-sensitive body - hence the drop.
+-- It is guarded on the body actually differing so a routine re-migrate does not rebuild a large
+-- unique index under ACCESS EXCLUSIVE, and does not leave a window with no uniqueness at all.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = 'uq_compliance_bis_licence_scope'
+      AND indexdef NOT LIKE '%lower(btrim%'
+  ) THEN
+    IF EXISTS (
+      SELECT 1 FROM compliance_bis_licence
+      GROUP BY lower(btrim(licence_number)), sku,
+               COALESCE(site_id, '00000000-0000-0000-0000-000000000000'::uuid)
+      HAVING count(*) > 1
+    ) THEN
+      RAISE EXCEPTION 'compliance_bis_licence holds rows that differ only by licence_number case or whitespace within one (sku, site) scope; dedupe them before migrating (SELECT lower(btrim(licence_number)), sku, site_id, count(*) FROM compliance_bis_licence GROUP BY 1,2,3 HAVING count(*) > 1)';
+    END IF;
+    DROP INDEX uq_compliance_bis_licence_scope;
+  END IF;
+END $$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_compliance_bis_licence_scope
   ON compliance_bis_licence (
-    licence_number,
+    lower(btrim(licence_number)),
     sku,
     COALESCE(site_id, '00000000-0000-0000-0000-000000000000'::uuid)
   );
 
 CREATE INDEX IF NOT EXISTS idx_compliance_bis_licence_sku ON compliance_bis_licence (sku, valid_to);
+
+-- The expiry sweep reads WHERE status = 'active' AND valid_to <= today + horizon ORDER BY valid_to;
+-- without this partial index every tick seq-scans and sorts the whole register.
+CREATE INDEX IF NOT EXISTS idx_compliance_bis_licence_expiry
+  ON compliance_bis_licence (valid_to) WHERE status = 'active';
 
 DO $$
 BEGIN
@@ -11376,12 +11430,20 @@ BEGIN
     ALTER TABLE compliance_bis_licence
       ADD CONSTRAINT chk_compliance_bis_licence_window CHECK (valid_to >= valid_from);
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_compliance_bis_licence_status'
+      AND conrelid = 'compliance_bis_licence'::regclass
+  ) THEN
+    ALTER TABLE compliance_bis_licence
+      ADD CONSTRAINT chk_compliance_bis_licence_status CHECK (status IN ('active', 'expired'));
+  END IF;
 END $$;
 
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-    GRANT SELECT ON compliance_bis_licence TO app_user;
+    GRANT SELECT, INSERT, UPDATE ON compliance_bis_licence TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON compliance_bis_licence TO readonly_user;
@@ -11407,12 +11469,21 @@ END $$;
 -- one. chk_label_master_approval_pairing is the FULL biconditional (the Story 8.4 one-directional
 -- CHECK lesson): a row is approved-or-superseded exactly when it carries approval metadata, and
 -- approved_by pairs with approved_at in both directions.
+--
+-- Story 8.7 Binding Scope Decision 2: adds uq_label_master_version (one row per (sku,
+-- label_version)), case-folded and whitespace-trimmed to match uq_compliance_bis_licence_scope -
+-- 'V1' and 'v1' are the same version of a label, not two. It also adds created_by (the drafting
+-- actor), which the applier reads to enforce drafter-is-not-approver segregation of duties. The draft -> approved -> superseded transition is enforced in the applier, NOT
+-- as a CHECK constraint, because PostgreSQL CHECK constraints cannot see OLD row values; the
+-- transition is proven by integration tests instead. app_user gains INSERT/UPDATE because Story
+-- 8.7 routes write through the app pool inside persistEvent transactions.
 
 CREATE TABLE IF NOT EXISTS label_master (
   label_id      UUID PRIMARY KEY,
   sku           TEXT NOT NULL,
   label_version TEXT NOT NULL,
   status        TEXT NOT NULL DEFAULT 'draft',
+  created_by    UUID,
   approved_by   UUID,
   approved_at   TIMESTAMPTZ,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -11428,7 +11499,36 @@ CREATE TABLE IF NOT EXISTS label_master (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_label_master_current
   ON label_master (sku) WHERE status = 'approved';
 
+-- Recreated rather than IF NOT EXISTS alone: an 8.7 database that already carries the
+-- case-sensitive (sku, label_version) form would silently keep it, since CREATE INDEX IF NOT
+-- EXISTS matches on name, not on body. Guarded on the body actually differing so a routine
+-- re-migrate does not rebuild the index under ACCESS EXCLUSIVE, and so a database holding
+-- case-colliding versions fails with rows named rather than a bare 23505.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = 'uq_label_master_version'
+      AND indexdef NOT LIKE '%lower(btrim%'
+  ) THEN
+    IF EXISTS (
+      SELECT 1 FROM label_master
+      GROUP BY sku, lower(btrim(label_version))
+      HAVING count(*) > 1
+    ) THEN
+      RAISE EXCEPTION 'label_master holds versions differing only by case or whitespace within one sku; dedupe them before migrating (SELECT sku, lower(btrim(label_version)), count(*) FROM label_master GROUP BY 1,2 HAVING count(*) > 1)';
+    END IF;
+    DROP INDEX uq_label_master_version;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_label_master_version
+  ON label_master (sku, lower(btrim(label_version)));
+
 CREATE INDEX IF NOT EXISTS idx_label_master_sku ON label_master (sku, status);
+
+ALTER TABLE label_master ADD COLUMN IF NOT EXISTS created_by UUID;
 
 DO $$
 BEGIN
@@ -11471,9 +11571,215 @@ END $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
-    GRANT SELECT ON label_master TO app_user;
+    GRANT SELECT, INSERT, UPDATE ON label_master TO app_user;
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON label_master TO readonly_user;
+  END IF;
+END $$;
+
+-- BIS licence expiry alert ledger (Story 8.7, FR-Q-11, AC 2). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads as app_user without depending on deploy/compose/init-db.sql. deploy/compose/init-db.sql
+-- duplicates this content for first-boot container init - change both files together. Every
+-- statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file can be re-applied to a
+-- live database safely.
+--
+-- One row per (licence_id, valid_to, stage_days) is the idempotency ledger for the 90/60/30-day
+-- expiry sweep (the asset_coverage_alert grain from Story 7.7). stage_days = 0 records the expiry
+-- flip.
+--
+-- Story 8.7 code review: valid_to is IN THE KEY deliberately. The ledger is APPEND-ONLY - an alert
+-- that fired is a posted regulatory fact and is never erased, exactly as production_consumption
+-- _variance is append-only for a posted measurement. Renewal therefore re-arms the alerts by
+-- construction: an in-place window update changes valid_to, the new window has no ledger rows, and
+-- the 90/60/30 stages fire again for it while the history of the old window survives. An earlier
+-- revision keyed on (licence_id, stage_days) alone and DELETEd the rows on renewal; that was a
+-- workaround for the wrong key, and app_user held DELETE on compliance data to support it. Both
+-- are gone.
+--
+-- No FK to compliance_bis_licence: Binding Scope Decision 8 forbids cross-projection foreign keys,
+-- so referential integrity is the applier's job (it loads the licence FOR UPDATE before writing a
+-- ledger row). Unlike a derived, rebuildable projection this table is NOT rebuildable - it is the
+-- record of which notifications were actually raised - so it is never truncated on a replay.
+
+CREATE TABLE IF NOT EXISTS compliance_bis_licence_alert (
+  licence_id  UUID NOT NULL,
+  valid_to    DATE NOT NULL,
+  stage_days  INTEGER NOT NULL,
+  flagged_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_compliance_bis_licence_alert_stage CHECK (stage_days IN (90, 60, 30, 0)),
+  CONSTRAINT pk_compliance_bis_licence_alert PRIMARY KEY (licence_id, valid_to, stage_days)
+);
+
+-- Upgrade path for a database carrying the pre-review (licence_id, stage_days) form: add the
+-- window column, backfill it from the register, and swap the UNIQUE constraint for the primary key.
+ALTER TABLE compliance_bis_licence_alert ADD COLUMN IF NOT EXISTS valid_to DATE;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM compliance_bis_licence_alert WHERE valid_to IS NULL
+  ) THEN
+    UPDATE compliance_bis_licence_alert a
+       SET valid_to = l.valid_to
+      FROM compliance_bis_licence l
+     WHERE a.licence_id = l.licence_id AND a.valid_to IS NULL;
+    -- A row whose licence no longer exists cannot be attributed to a window. It is left NULL on
+    -- purpose: the NOT NULL promotion below is skipped rather than deleting audit history, so the
+    -- operator sees the un-backfilled rows instead of losing them.
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'compliance_bis_licence_alert'
+      AND column_name = 'valid_to'
+      AND is_nullable = 'YES'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM compliance_bis_licence_alert WHERE valid_to IS NULL
+  ) THEN
+    ALTER TABLE compliance_bis_licence_alert ALTER COLUMN valid_to SET NOT NULL;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_compliance_bis_licence_alert'
+      AND conrelid = 'compliance_bis_licence_alert'::regclass
+  ) THEN
+    ALTER TABLE compliance_bis_licence_alert DROP CONSTRAINT uq_compliance_bis_licence_alert;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'pk_compliance_bis_licence_alert'
+      AND conrelid = 'compliance_bis_licence_alert'::regclass
+  ) THEN
+    ALTER TABLE compliance_bis_licence_alert
+      ADD CONSTRAINT pk_compliance_bis_licence_alert PRIMARY KEY (licence_id, valid_to, stage_days);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_compliance_bis_licence_alert_stage'
+      AND conrelid = 'compliance_bis_licence_alert'::regclass
+  ) THEN
+    ALTER TABLE compliance_bis_licence_alert
+      ADD CONSTRAINT chk_compliance_bis_licence_alert_stage CHECK (stage_days IN (90, 60, 30, 0));
+  END IF;
+END $$;
+
+-- No separate licence_id index: the primary key leads with licence_id and serves every lookup this
+-- table performs, so a second index would be pure write amplification on the sweep insert path.
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    -- INSERT and SELECT only. The ledger is append-only: no UPDATE, and deliberately no DELETE.
+    GRANT SELECT, INSERT ON compliance_bis_licence_alert TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON compliance_bis_licence_alert TO readonly_user;
+  END IF;
+END $$;
+
+-- Story 6.4: consumption variance read model (FR-B-08). Mirror of read/projections/production_consumption_variance.sql.
+-- Consumption variance read model (Story 6.4, FR-B-08, AD-5). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: rows are rebuildable by replaying the production_order.state_changed event
+-- that closed the order; mutation happens exclusively through persistEvent, which applies this
+-- projection inside the SAME transaction as the domain_events insert.
+--
+-- The grain is ONE ROW PER (production_order_id, bom_line_id): the closure gate computes the whole
+-- report in one pass, so a second row for a line would mean the report ran twice - which the
+-- lifecycle forbids, because completed -> closed fires exactly once per order.
+--
+-- The table is APPEND-ONLY (app_user holds INSERT/SELECT only, the production_completion
+-- precedent). A variance line is a posted measurement at the instant of closure; a correction is a
+-- new closure of a new order, never an UPDATE of this row.
+--
+-- expected_quantity carries the BOM scrap-percent expectation (base_quantity_per inflated by
+-- bom_scrap_percent); expected_base_quantity is the same requirement WITHOUT any scrap allowance.
+-- implied_scrap_percent = (actual_quantity / expected_base_quantity - 1) * 100 is therefore the
+-- scrap-percent recalibration signal FR-B-08 hands to the BOM module: the scrap percent this run
+-- actually exhibited, against the one the BOM declared. Both are null when the basis is zero
+-- (an order closed with no primary output has no per-unit expectation to divide by).
+
+CREATE TABLE IF NOT EXISTS production_consumption_variance (
+  variance_id               UUID PRIMARY KEY,
+  production_order_id       UUID NOT NULL,
+  bom_line_id               UUID NOT NULL,
+  component_item_id         UUID NOT NULL,
+  component_sku             TEXT NOT NULL,
+  supply_method             TEXT NOT NULL,
+  basis_quantity            NUMERIC(18,6) NOT NULL,
+  expected_quantity         NUMERIC(18,6) NOT NULL,
+  expected_base_quantity    NUMERIC(18,6) NOT NULL,
+  actual_quantity           NUMERIC(18,6) NOT NULL,
+  variance_quantity         NUMERIC(18,6) NOT NULL,
+  variance_percent          NUMERIC(12,4),
+  bom_scrap_percent         NUMERIC(7,4),
+  implied_scrap_percent     NUMERIC(12,4),
+  tolerance_percent         NUMERIC(7,4) NOT NULL,
+  tolerance_breached        BOOLEAN NOT NULL,
+  revision_id               UUID NOT NULL,
+  source_event_id           UUID NOT NULL,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_production_consumption_variance_supply_method CHECK (supply_method IN ('directed_issue','backflush')),
+  CONSTRAINT chk_production_consumption_variance_quantities_non_negative CHECK (basis_quantity >= 0 AND expected_quantity >= 0 AND expected_base_quantity >= 0 AND actual_quantity >= 0),
+  CONSTRAINT chk_production_consumption_variance_tolerance_range CHECK (tolerance_percent >= 0 AND tolerance_percent < 100),
+  CONSTRAINT uq_production_consumption_variance_grain UNIQUE (production_order_id, bom_line_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_production_consumption_variance_order ON production_consumption_variance (production_order_id);
+CREATE INDEX IF NOT EXISTS idx_production_consumption_variance_breached ON production_consumption_variance (tolerance_breached) WHERE tolerance_breached = true;
+CREATE INDEX IF NOT EXISTS idx_production_consumption_variance_line ON production_consumption_variance (bom_line_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_consumption_variance_supply_method'
+      AND conrelid = 'production_consumption_variance'::regclass
+  ) THEN
+    ALTER TABLE production_consumption_variance
+      ADD CONSTRAINT chk_production_consumption_variance_supply_method CHECK (supply_method IN ('directed_issue','backflush'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_consumption_variance_quantities_non_negative'
+      AND conrelid = 'production_consumption_variance'::regclass
+  ) THEN
+    ALTER TABLE production_consumption_variance
+      ADD CONSTRAINT chk_production_consumption_variance_quantities_non_negative CHECK (basis_quantity >= 0 AND expected_quantity >= 0 AND expected_base_quantity >= 0 AND actual_quantity >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_production_consumption_variance_tolerance_range'
+      AND conrelid = 'production_consumption_variance'::regclass
+  ) THEN
+    ALTER TABLE production_consumption_variance
+      ADD CONSTRAINT chk_production_consumption_variance_tolerance_range CHECK (tolerance_percent >= 0 AND tolerance_percent < 100);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_production_consumption_variance_grain'
+      AND conrelid = 'production_consumption_variance'::regclass
+  ) THEN
+    ALTER TABLE production_consumption_variance
+      ADD CONSTRAINT uq_production_consumption_variance_grain UNIQUE (production_order_id, bom_line_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON production_consumption_variance TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON production_consumption_variance TO readonly_user;
   END IF;
 END $$;

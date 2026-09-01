@@ -218,6 +218,15 @@ const MIGRATIONS = [
   // qc_ncr defect_code widening rides qc_ncr.sql's entry above.
   '../../read/projections/compliance_bis_licence.sql',
   '../../read/projections/label_master.sql',
+  // Story 8.7: expiry-alert idempotency ledger for the BIS licence 90/60/30-day sweep. Appended
+  // immediately after label_master.sql per Story 8.7 Binding Scope Decision 2.
+  '../../read/projections/compliance_bis_licence_alert.sql',
+  // Story 6.4: the consumption variance report written by the closure gate (FR-B-08). It reads
+  // production_wip_ledger and production_completion conceptually (actual consumption against the
+  // primary output actually produced), so it is appended after both. It carries no FK - a derived,
+  // rebuildable projection in the same style as production_scrap_declaration - so its position
+  // relative to the Epic 8 files above is logical only.
+  '../../read/projections/production_consumption_variance.sql',
 ];
 
 async function migrate(): Promise<void> {

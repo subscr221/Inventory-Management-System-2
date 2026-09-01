@@ -340,6 +340,16 @@ import {
   getQcCapaHandler,
 } from './api/v1/quality.js';
 import {
+  createBisLicenceHandler,
+  listBisLicencesHandler,
+  getBisLicenceHandler,
+  updateBisLicenceHandler,
+  draftLabelMasterHandler,
+  listLabelMastersHandler,
+  getLabelMasterHandler,
+  approveLabelMasterHandler,
+} from './api/v1/compliance.js';
+import {
   createProductionOrderHandler,
   listProductionOrdersHandler,
   getProductionOrderHandler,
@@ -347,6 +357,8 @@ import {
   releaseProductionOrderHandler,
   transitionProductionOrderHandler,
   cancelProductionOrderHandler,
+  getConsumptionVarianceHandler,
+  getLotGenealogyHandler,
 } from './api/v1/production-orders.js';
 import {
   stageMaterialHandler,
@@ -432,6 +444,7 @@ import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
 import { runExpiryCycle } from './notify/expire.js';
 import { runRetentionExpiryCycle } from './notify/retention-expiry.js';
+import { runBisLicenceExpiryCycle } from './compliance/bis-licence-expiry.js';
 
 export function createAppRouter(): Router {
   const router = new Router();
@@ -948,6 +961,17 @@ export function createAppRouter(): Router {
   router.post('/api/v1/production-orders/:orderId/scrap-declarations', declareScrapHandler);
   router.post('/api/v1/production-orders/:orderId/short-close', shortCloseHandler);
 
+  // Story 6.4 (FR-MO-11, FR-B-08): the as-consumed lot genealogy and the closure-written
+  // consumption variance report. '/production-orders/lots/:lotId/genealogy' is registered BEFORE
+  // the ':orderId' siblings for the same reason '/production-orders/rework' is: a literal segment
+  // on a prefix that also carries a parameter segment must not be reachable only by luck of
+  // ordering. The variance route is an ordinary ':orderId' sibling and shadows nothing.
+  router.get('/api/v1/production-orders/lots/:lotId/genealogy', getLotGenealogyHandler);
+  router.get(
+    '/api/v1/production-orders/:orderId/consumption-variance',
+    getConsumptionVarianceHandler,
+  );
+
   // Story 4.7: Supplier Invoice Capture
   router.post('/api/v1/supplier-invoices', captureSupplierInvoiceHandler);
   router.post('/api/v1/supplier-invoices/duplicate-overrides', captureDuplicateOverrideHandler);
@@ -965,6 +989,17 @@ export function createAppRouter(): Router {
   router.get('/api/v1/compliance/msme/ageing', msmeAgeingReportHandler);
   router.post('/api/v1/compliance/msme/ageing-feed/run', runMsmeAgeingFeedHandler);
   router.post('/api/v1/compliance/msme/daily-check', runMsmeDailyCheckHandler);
+
+  // Story 8.7: BIS licence register and Legal Metrology label masters (FR-Q-11, FR-Q-14).
+  // ROUTE ORDER MATTERS: static GET list routes before their :licenceId/:labelId siblings.
+  router.post('/api/v1/compliance/bis-licences', createBisLicenceHandler);
+  router.get('/api/v1/compliance/bis-licences', listBisLicencesHandler);
+  router.get('/api/v1/compliance/bis-licences/:licenceId', getBisLicenceHandler);
+  router.patch('/api/v1/compliance/bis-licences/:licenceId', updateBisLicenceHandler);
+  router.post('/api/v1/compliance/label-masters', draftLabelMasterHandler);
+  router.get('/api/v1/compliance/label-masters', listLabelMastersHandler);
+  router.get('/api/v1/compliance/label-masters/:labelId', getLabelMasterHandler);
+  router.post('/api/v1/compliance/label-masters/:labelId/approve', approveLabelMasterHandler);
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
   // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP
@@ -1087,6 +1122,8 @@ let escalationTimer: ReturnType<typeof setInterval> | undefined;
 let expiryTimer: ReturnType<typeof setInterval> | undefined;
 // Story 8.4 (AC 5): the QC retention-sample expiry sweep, on the same in-process interval pattern.
 let retentionExpiryTimer: ReturnType<typeof setInterval> | undefined;
+// Story 8.7 (AC 2): the BIS licence expiry sweep, on the same in-process interval pattern.
+let bisLicenceExpiryTimer: ReturnType<typeof setInterval> | undefined;
 
 /**
  * Wraps a poll-cycle in a re-entrancy guard: setInterval does NOT skip a tick while the async
@@ -1130,12 +1167,17 @@ function startServer(): void {
     guarded('qc retention expiry', () => runRetentionExpiryCycle()),
     config.quality.retentionExpiryIntervalMs,
   );
+  bisLicenceExpiryTimer = setInterval(
+    guarded('bis licence expiry', () => runBisLicenceExpiryCycle()),
+    config.quality.bisLicenceExpiryIntervalMs,
+  );
 
   const stopTimers = (): void => {
     clearInterval(dispatchTimer);
     clearInterval(escalationTimer);
     clearInterval(expiryTimer);
     clearInterval(retentionExpiryTimer);
+    clearInterval(bisLicenceExpiryTimer);
   };
 
   process.on('SIGTERM', () => {

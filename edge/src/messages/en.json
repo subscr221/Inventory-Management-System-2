@@ -273,5 +273,21 @@
   "maintenance.closure.resultLabel": "Work order closure capture result",
   "maintenance.closure.nextAction": "The closure will sync when connected.",
   "maintenance.closure.correction": "Choose a fault, cause and remedy code, then submit again.",
-  "maintenance.unavailable": "Sign in and connect once before maintenance capture is available."
+  "maintenance.unavailable": "Sign in and connect once before maintenance capture is available.",
+  "errors.ORDER_CLOSED": "This production order is closed and can no longer be changed.",
+  "errors.CLOSURE_GATE_BLOCKED": "This production order cannot be closed yet: open WIP, staged material or an uninspected output lot remains.",
+  "errors.PRODUCTION_ORDER_NOT_FOUND": "That production order no longer exists on the server.",
+  "errors.PRODUCTION_ORDER_DERIVATION_MISMATCH": "The production order changed on the server since this was captured.",
+  "errors.PRODUCTION_MATERIAL_DERIVATION_MISMATCH": "The material details changed on the server since this was captured.",
+  "errors.PRODUCTION_COMPLETION_DERIVATION_MISMATCH": "The completion details changed on the server since this was captured.",
+  "errors.INVALID_STATE_TRANSITION": "That change is not allowed from the current state.",
+  "errors.UNREVERSED_TRANSACTIONS": "Material issued against this order must be returned or reversed first.",
+  "errors.BOM_REVISION_DRIFT": "The bill of materials changed since this order was released. Ask a planner to re-release it.",
+  "errors.MATERIAL_REQUIREMENT_SET_TRUNCATED": "The bill of materials is too deep to explode completely. Contact engineering.",
+  "errors.STAGE_NOT_FOUND": "That staged material line no longer exists on the server.",
+  "errors.STAGE_ALREADY_ISSUED": "That staged material line has already been issued in full.",
+  "errors.RETURN_EXCEEDS_ISSUE": "You cannot return more than was issued to this order.",
+  "errors.REASON_CODE_REQUIRED": "Choose a reason code before submitting.",
+  "errors.WIP_COST_UNRESOLVED": "This component has no costed valuation yet, so it cannot be issued.",
+  "errors.QC_HOLD_REQUIRED": "Finished output must post into QC Hold, never straight to sellable stock."
 }

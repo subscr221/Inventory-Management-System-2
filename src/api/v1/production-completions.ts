@@ -71,6 +71,10 @@ const AUDITED_REJECTIONS = new Set([
   'SHORT_CLOSE_EXISTS',
   'REWORK_ORDER_EXISTS',
   'LOCATION_ACCESS_DENIED',
+  // Story 6.4 (FR-MO-12, AC 4): "the attempt is rejected ... and written to the edit log" is the
+  // acceptance criterion itself, so a posting refused against a closed order is audited exactly as
+  // a blocked over-completion is.
+  'ORDER_CLOSED',
 ]);
 
 function isUuid(value: unknown): value is string {
@@ -248,6 +252,16 @@ async function loadOrderOr404(orderId: string): Promise<ProductionOrderRow> {
 
 /** Binding Decision 12 pre-check: nothing is produced until the order is actually running. */
 function assertInProcess(order: ProductionOrderRow): void {
+  // Story 6.4 (FR-MO-12, AC 4): the handler MIRRORS the seam's ORDER_CLOSED branch, so the REST
+  // surface reports the specific code rather than the generic state rejection below.
+  if (order.status === 'closed') {
+    throw new AppError(
+      409,
+      'ORDER_CLOSED',
+      'The production order is closed and accepts no further postings or edits',
+      { production_order_id: order.production_order_id, status: order.status },
+    );
+  }
   if (order.status !== 'in_process') {
     throw new AppError(
       400,

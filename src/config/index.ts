@@ -45,9 +45,25 @@ const authMode = resolveAuthMode();
  * `Number('oops')` yields NaN, and `setInterval(fn, NaN)` coerces the delay to 0 ms - turning a
  * mistyped `NOTIFY_*_MS` env var into a tight, unthrottled loop that hammers the database.
  */
-function parsePositiveIntEnv(name: string, fallback: number, max?: number): number {
+/**
+ * `strictBlank` applies the BSD-6 repo-wide invariant: an ABSENT variable takes the default, but a
+ * present-but-blank one REFUSES BOOT. The house helper historically treated blank as absent, so
+ * the flag is opt-in per knob rather than a silent change to every existing caller.
+ */
+function parsePositiveIntEnv(
+  name: string,
+  fallback: number,
+  max?: number,
+  strictBlank = false,
+): number {
   const raw = process.env[name];
-  if (raw === undefined || raw.trim() === '') return fallback;
+  if (raw === undefined) return fallback;
+  if (raw.trim() === '') {
+    if (strictBlank) {
+      throw new Error(`Invalid ${name} "": must not be blank - unset it to take the default.`);
+    }
+    return fallback;
+  }
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid ${name} "${raw}": must be a positive integer.`);
@@ -540,6 +556,24 @@ export const config = {
       'PRODUCTION_SHORT_CLOSE_REASON_CODES',
       'YIELD_SHORTFALL,MATERIAL_EXHAUSTED,ORDER_CURTAILED,QUALITY_LOSS',
     ),
+    // Story 6.4 (FR-B-08): the symmetric consumption-variance tolerance. A closure-time variance
+    // line whose ABSOLUTE variance percent exceeds this value is flagged for the BOM module's
+    // scrap-percent recalibration signal. Kept as an exact decimal STRING so the comparison settles
+    // in SQL NUMERIC and never through a JS float, and bounded exactly like
+    // completionTolerancePercent: only an ABSENT variable takes the default, a present-but-blank
+    // value fails closed at load, and a value outside [0, 100) refuses to boot - at 100 or above no
+    // realistic over-consumption is ever flagged and the whole report becomes decorative, while a
+    // negative tolerance would flag every line including the exact ones.
+    consumptionVarianceTolerancePercent: (() => {
+      const raw = process.env['PRODUCTION_CONSUMPTION_VARIANCE_TOLERANCE_PERCENT'];
+      const value = raw === undefined ? '10' : raw.trim();
+      if (!/^\d{1,3}(\.\d{1,4})?$/.test(value) || Number(value) >= 100) {
+        throw new Error(
+          `Invalid PRODUCTION_CONSUMPTION_VARIANCE_TOLERANCE_PERCENT "${raw}": must be a decimal percentage of at least 0 and less than 100, with at most four decimal places.`,
+        );
+      }
+      return value;
+    })(),
   },
   quality: {
     // Story 8.1 (FR-Q-01, Binding Scope Decision 10): the roles that count as QC Head-level
@@ -599,6 +633,22 @@ export const config = {
     // block predicates take this as a PARAMETER (the Story 8.4 tautological-config lesson), so
     // unit tests exercise both branches without reloading config.
     statutoryReleaseBlocks: parseStatutoryReleaseBlockMode(),
+    // Story 8.7 (FR-Q-11, Binding Scope Decision 6): the BIS licence expiry sweep interval and
+    // batch size, on the exact retentionExpiryIntervalMs/retentionExpiryBatchSize pattern above.
+    // Both are fail-closed on a present-but-blank value (BSD-6): a blank knob in a deploy config
+    // reads as "operator meant something and it did not land", never as the default.
+    bisLicenceExpiryIntervalMs: parsePositiveIntEnv(
+      'QC_BIS_LICENCE_EXPIRY_INTERVAL_MS',
+      3_600_000,
+      MAX_INTERVAL_MS,
+      true,
+    ),
+    bisLicenceExpiryBatchSize: parsePositiveIntEnv(
+      'QC_BIS_LICENCE_EXPIRY_BATCH_SIZE',
+      500,
+      10_000,
+      true,
+    ),
   },
   qc: {
     // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -

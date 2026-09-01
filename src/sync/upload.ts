@@ -178,6 +178,26 @@ const PERMANENT_ERROR_CODES = new Set([
   'INSTRUMENT_NOT_FOUND',
   'INSTRUMENT_NOT_PERMITTED',
   'QC_DERIVATION_MISMATCH',
+  // Story 6.4: every permanent code a replayed production upload can surface from the 6.2/6.3/6.4
+  // seams (FR-MO-13). The twin set in edge/src/sync/connector.ts carries the identical block (the
+  // Story 4.3 rule); CENTRAL_ONLY_OPERATION, INSUFFICIENT_STOCK, LOT_REQUIRED, APPROVAL_REQUIRED
+  // and INVALID_PAYLOAD are already present above.
+  'ORDER_CLOSED',
+  'CLOSURE_GATE_BLOCKED',
+  'PRODUCTION_ORDER_NOT_FOUND',
+  'PRODUCTION_ORDER_DERIVATION_MISMATCH',
+  'PRODUCTION_MATERIAL_DERIVATION_MISMATCH',
+  'PRODUCTION_COMPLETION_DERIVATION_MISMATCH',
+  'INVALID_STATE_TRANSITION',
+  'UNREVERSED_TRANSACTIONS',
+  'BOM_REVISION_DRIFT',
+  'MATERIAL_REQUIREMENT_SET_TRUNCATED',
+  'STAGE_NOT_FOUND',
+  'STAGE_ALREADY_ISSUED',
+  'RETURN_EXCEEDS_ISSUE',
+  'REASON_CODE_REQUIRED',
+  'WIP_COST_UNRESOLVED',
+  'QC_HOLD_REQUIRED',
 ]);
 
 /** Story 7.8: the server-side twin of the edge connector's permanent set, exported for the edge upload handler's safety-fault queueing decision. */
@@ -234,6 +254,66 @@ export function assertEdgeMaintenanceEventAllowed(envelope: EventEnvelope): void
     403,
     'CENTRAL_ONLY_OPERATION',
     'This maintenance operation must be performed centrally, not from an edge device',
+    { event_type: envelope.event_type },
+  );
+}
+
+/**
+ * Story 6.4 (FR-MO-13, AC 6): the event types the edge may upload on the `production` stream.
+ * Plant-floor execution - staging, issuing, confirming, returning, completing and declaring scrap -
+ * replays from a device; order creation, release, cancellation and the close-short decision are
+ * planning and supervisory acts that stay central.
+ */
+export const EDGE_PRODUCTION_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'production_order.material_staged',
+  'production_order.material_issued',
+  'production_order.confirmation_recorded',
+  'production_order.material_returned',
+  'production_order.completion_posted',
+  'production_order.scrap_declared',
+  'production_order.state_changed',
+]);
+
+/**
+ * The one production state transition that is central-only. AC 6 names release, cancel and CLOSE,
+ * but unlike the other two, closing is NOT its own event type: it is
+ * production_order.state_changed carrying new_status 'closed', and that same event type also
+ * carries released -> in_process and in_process -> completed, which a plant device legitimately
+ * records while offline.
+ *
+ * DISCLOSED DEVIATION from the Story 7.8 / 8.1 precedent: assertEdgeQcEventAllowed and
+ * assertEdgeMaintenanceEventAllowed gate purely on event-type set membership, and copying that
+ * shape here would have forced a choice between admitting offline closure and barring the whole
+ * transition family from the floor. This guard therefore inspects ONE payload field. It is the
+ * narrowest possible extension of the pattern, and it is checked BEFORE the allowlist so widening
+ * EDGE_PRODUCTION_EVENT_TYPES alone can never admit a closure (the QC_CENTRAL_ONLY_EVENT_TYPES
+ * ordering rule, applied to a payload predicate instead of a type).
+ */
+function isEdgeCentralOnlyProductionEvent(envelope: EventEnvelope): boolean {
+  if (envelope.event_type !== 'production_order.state_changed') return false;
+  const payload = envelope.payload as Record<string, unknown> | undefined;
+  // Code review 2026-09-01: a missing/malformed payload used to read as `undefined !== 'closed'`
+  // and fall through to the allowlist (which admits state_changed), skipping this predicate
+  // entirely. A state_changed event with no resolvable new_status cannot be proven NOT a close, so
+  // it fails closed here rather than falling through.
+  return typeof payload?.['new_status'] !== 'string' || payload['new_status'] === 'closed';
+}
+
+export function assertEdgeProductionEventAllowed(envelope: EventEnvelope): void {
+  if (!envelope.event_type.startsWith('production_order.')) return;
+  if (isEdgeCentralOnlyProductionEvent(envelope)) {
+    throw new AppError(
+      403,
+      'CENTRAL_ONLY_OPERATION',
+      'Closing a production order must be performed centrally, not from an edge device',
+      { event_type: envelope.event_type, new_status: 'closed' },
+    );
+  }
+  if (EDGE_PRODUCTION_EVENT_TYPES.has(envelope.event_type)) return;
+  throw new AppError(
+    403,
+    'CENTRAL_ONLY_OPERATION',
+    'This production operation must be performed centrally, not from an edge device',
     { event_type: envelope.event_type },
   );
 }

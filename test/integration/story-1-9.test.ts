@@ -550,6 +550,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/production-orders/:orderId/completions',
       'POST /api/v1/production-orders/:orderId/scrap-declarations',
       'POST /api/v1/production-orders/:orderId/short-close',
+      // Story 6.4: the as-consumed lot genealogy (FR-MO-11) and the closure-written consumption
+      // variance report (FR-B-08). Both are reads; closure itself rides the existing transition
+      // route, so no new write route is added by this story.
+      'GET /api/v1/production-orders/lots/:lotId/genealogy',
+      'GET /api/v1/production-orders/:orderId/consumption-variance',
       // Story 4.7: Supplier Invoice Capture
       'POST /api/v1/supplier-invoices',
       'POST /api/v1/supplier-invoices/duplicate-overrides',
@@ -565,6 +570,15 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/compliance/msme/ageing',
       'POST /api/v1/compliance/msme/ageing-feed/run',
       'POST /api/v1/compliance/msme/daily-check',
+      // Story 8.7: BIS licence register and Legal Metrology label masters
+      'POST /api/v1/compliance/bis-licences',
+      'GET /api/v1/compliance/bis-licences',
+      'GET /api/v1/compliance/bis-licences/:licenceId',
+      'PATCH /api/v1/compliance/bis-licences/:licenceId',
+      'POST /api/v1/compliance/label-masters',
+      'GET /api/v1/compliance/label-masters',
+      'GET /api/v1/compliance/label-masters/:labelId',
+      'POST /api/v1/compliance/label-masters/:labelId/approve',
       // Story 4.5: Goods Receipt and Three-Way Match
       'POST /api/v1/grns/:grnId/link-po',
       'POST /api/v1/three-way-match/run',

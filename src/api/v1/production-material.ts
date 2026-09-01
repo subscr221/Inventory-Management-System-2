@@ -11,7 +11,7 @@ import {
 import { requireRole } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { PersistedEvent } from '../../events/store.js';
-import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
+import { logRejectionAudit, type AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
 import {
   getProductionOrderById,
@@ -228,7 +228,30 @@ async function loadOrderOr404(orderId: string): Promise<ProductionOrderRow> {
 }
 
 /** Binding Decision 11 pre-check: material flow runs only on released or in_process orders. */
-function assertMaterialState(order: { production_order_id: string; status: string }): void {
+async function assertMaterialState(
+  order: { production_order_id: string; status: string },
+  auditCtx: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
+): Promise<void> {
+  // Story 6.4 (FR-MO-12, AC 4): the handler MIRRORS the seam's ORDER_CLOSED branch. Without this
+  // the handler's own generic pre-check answered INVALID_STATE_TRANSITION first and the seam's more
+  // specific code was unreachable through the REST surface - the rule was enforced but invisible.
+  if (order.status === 'closed') {
+    // AC 4: the REFUSAL itself is the edit-log entry the acceptance criterion asks for. It never
+    // reaches persistEvent, so it is written here on its own client (the Story 6.1 AC7 precedent).
+    await logRejectionAudit({
+      ...auditCtx,
+      http_status: 409,
+      event_id: null,
+      error_code: 'ORDER_CLOSED',
+      details: { production_order_id: order.production_order_id, status: order.status },
+    });
+    throw new AppError(
+      409,
+      'ORDER_CLOSED',
+      'The production order is closed and accepts no further postings or edits',
+      { production_order_id: order.production_order_id, status: order.status },
+    );
+  }
   if (order.status !== 'released' && order.status !== 'in_process') {
     throw new AppError(
       400,
@@ -294,7 +317,7 @@ const stageMaterialBase: RouteHandler = async (req, res, params) => {
     }
     const order = await loadOrderOr404(orderId);
     assertPlantLocationAccess(req, order.plant_location_id, 'write');
-    assertMaterialState(order);
+    await assertMaterialState(order, auditCtxFor(req, actor, 409));
 
     // The handler pre-runs the requirement set so the payload can declare the derived
     // component/quantity triple and the caller gets a clean BOM_REVISION_DRIFT /
@@ -468,7 +491,7 @@ const issueMaterialBase: RouteHandler = async (req, res, params) => {
     }
     const order = await loadOrderOr404(orderId);
     assertPlantLocationAccess(req, order.plant_location_id, 'write');
-    assertMaterialState(order);
+    await assertMaterialState(order, auditCtxFor(req, actor, 409));
 
     const stageId = body['stage_id'];
     if (!isUuid(stageId)) throw new AppError(400, 'INVALID_PARAMS', 'stage_id must be a UUID');
@@ -596,7 +619,7 @@ const recordConfirmationBase: RouteHandler = async (req, res, params) => {
     }
     const order = await loadOrderOr404(orderId);
     assertPlantLocationAccess(req, order.plant_location_id, 'write');
-    assertMaterialState(order);
+    await assertMaterialState(order, auditCtxFor(req, actor, 409));
 
     const confirmedQuantity = body['confirmed_quantity'];
     if (!isPositiveDecimal(confirmedQuantity)) {
@@ -743,7 +766,7 @@ const returnMaterialBase: RouteHandler = async (req, res, params) => {
     }
     const order = await loadOrderOr404(orderId);
     assertPlantLocationAccess(req, order.plant_location_id, 'write');
-    assertMaterialState(order);
+    await assertMaterialState(order, auditCtxFor(req, actor, 409));
 
     const sourcePostingId = body['source_posting_id'];
     if (!isUuid(sourcePostingId)) {
