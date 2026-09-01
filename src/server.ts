@@ -1117,13 +1117,8 @@ const server = createAppServer();
 // start inside startServer() (the real running process), never when a test builds its own
 // Router/Server directly, so tests control cycle timing explicitly via runDispatchCycle()/
 // runEscalationCycle()/runExpiryCycle() instead of racing a background timer.
-let dispatchTimer: ReturnType<typeof setInterval> | undefined;
-let escalationTimer: ReturnType<typeof setInterval> | undefined;
-let expiryTimer: ReturnType<typeof setInterval> | undefined;
 // Story 8.4 (AC 5): the QC retention-sample expiry sweep, on the same in-process interval pattern.
-let retentionExpiryTimer: ReturnType<typeof setInterval> | undefined;
 // Story 8.7 (AC 2): the BIS licence expiry sweep, on the same in-process interval pattern.
-let bisLicenceExpiryTimer: ReturnType<typeof setInterval> | undefined;
 
 /**
  * Wraps a poll-cycle in a re-entrancy guard: setInterval does NOT skip a tick while the async
@@ -1145,39 +1140,63 @@ function guarded(name: string, cycle: () => Promise<unknown>): () => void {
   };
 }
 
+/** One scheduled background cycle: a name, the interval it runs on, and the work it does. */
+export interface BackgroundCycle {
+  name: string;
+  intervalMs: number;
+  cycle: () => Promise<unknown>;
+}
+
+/**
+ * THE registry of in-process background cycles. This exists as a value rather than as five inline
+ * setInterval calls so the schedule itself is assertable: before this seam, deleting a
+ * registration from startServer left the entire test suite green while the cycle silently never
+ * ran in production - and two of these five (retention expiry, BIS licence expiry) drive statutory
+ * obligations. test/unit/background-cycles.test.ts pins this list.
+ *
+ * Every cycle is wrapped in `guarded` at scheduling time, so a run slower than its own interval
+ * drops the overlapping tick rather than double-processing.
+ */
+export function backgroundCycles(): BackgroundCycle[] {
+  return [
+    {
+      name: 'dispatch',
+      intervalMs: config.notify.dispatchIntervalMs,
+      cycle: () => runDispatchCycle(),
+    },
+    {
+      name: 'escalation',
+      intervalMs: config.notify.escalationIntervalMs,
+      cycle: () => runEscalationCycle(),
+    },
+    {
+      name: 'expiry',
+      intervalMs: config.notify.expiryIntervalMs,
+      cycle: () => runExpiryCycle(),
+    },
+    {
+      name: 'qc retention expiry',
+      intervalMs: config.quality.retentionExpiryIntervalMs,
+      cycle: () => runRetentionExpiryCycle(),
+    },
+    {
+      name: 'bis licence expiry',
+      intervalMs: config.quality.bisLicenceExpiryIntervalMs,
+      cycle: () => runBisLicenceExpiryCycle(),
+    },
+  ];
+}
+
 function startServer(): void {
   server.listen(config.port, config.hostname, () => {
     console.log(`Server listening on http://${config.hostname}:${config.port}`);
     console.log(`Environment: ${config.nodeEnv}`);
   });
 
-  dispatchTimer = setInterval(
-    guarded('dispatch', () => runDispatchCycle()),
-    config.notify.dispatchIntervalMs,
-  );
-  escalationTimer = setInterval(
-    guarded('escalation', () => runEscalationCycle()),
-    config.notify.escalationIntervalMs,
-  );
-  expiryTimer = setInterval(
-    guarded('expiry', () => runExpiryCycle()),
-    config.notify.expiryIntervalMs,
-  );
-  retentionExpiryTimer = setInterval(
-    guarded('qc retention expiry', () => runRetentionExpiryCycle()),
-    config.quality.retentionExpiryIntervalMs,
-  );
-  bisLicenceExpiryTimer = setInterval(
-    guarded('bis licence expiry', () => runBisLicenceExpiryCycle()),
-    config.quality.bisLicenceExpiryIntervalMs,
-  );
+  const timers = backgroundCycles().map((c) => setInterval(guarded(c.name, c.cycle), c.intervalMs));
 
   const stopTimers = (): void => {
-    clearInterval(dispatchTimer);
-    clearInterval(escalationTimer);
-    clearInterval(expiryTimer);
-    clearInterval(retentionExpiryTimer);
-    clearInterval(bisLicenceExpiryTimer);
+    for (const timer of timers) clearInterval(timer);
   };
 
   process.on('SIGTERM', () => {
