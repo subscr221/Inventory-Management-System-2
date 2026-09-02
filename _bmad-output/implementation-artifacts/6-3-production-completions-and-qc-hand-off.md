@@ -4,7 +4,7 @@ baseline_commit: e03772f0f1bf835751cb27d5d561c08da4f444aa
 
 # Story 6.3: Production Completions and QC Hand-off
 
-Status: review
+Status: done
 
 ## Change Log
 
