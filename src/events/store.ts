@@ -223,6 +223,10 @@ import {
   applyServiceOrderProjection,
 } from '../compliance/service-order.js';
 import {
+  assertJobworkMaterialReceivedShape,
+  applyJobworkMaterialReceivedProjection,
+} from '../compliance/jobwork-receipt.js';
+import {
   assertProductionMaterialShape,
   applyProductionMaterialProjection,
 } from '../compliance/production-material.js';
@@ -722,6 +726,10 @@ export async function persistEvent(
   // asserts, so a malformed jobwork event never consumes an idempotency key. It also rejects a
   // jobwork.* event name on any other stream (the Story 8.1 stream-mismatch closure).
   assertServiceOrderShape(envelope);
+  // Story 9.2: customer-material receipt shape validation (closed shape, strict UUIDs, calendar
+  // challan_date, strictly positive NUMERIC-string quantities, the derived variance fields
+  // refused on input) is non-DB and runs with the other pre-transaction asserts.
+  assertJobworkMaterialReceivedShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -1077,6 +1085,13 @@ export async function persistEvent(
     // FOR UPDATE inside the applier (the Epic 8 hold-bypass lesson), so the projection row and
     // the domain event commit or roll back together.
     await applyServiceOrderProjection(envelope, client, eventId);
+    // Story 9.2: the customer-material custody receipt runs inside this same transaction (for the
+    // GRN path, nested inside the goods.received transaction): the order status is re-derived
+    // under the order advisory lock plus FOR UPDATE, the tolerance variance is computed and
+    // written back onto the payload, and the FIRST receipt fires confirmed -> in_process through
+    // the 9.1 transitionServiceOrder seam, so the custody row, the order flip, and the domain
+    // event commit or roll back together.
+    await applyJobworkMaterialReceivedProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's

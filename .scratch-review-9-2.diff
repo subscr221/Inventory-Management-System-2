@@ -1,0 +1,3518 @@
+diff --git a/_bmad-output/implementation-artifacts/9-2-customer-material-receipt-and-segregated-stock.md b/_bmad-output/implementation-artifacts/9-2-customer-material-receipt-and-segregated-stock.md
+index b7fc630..5314ac1 100644
+--- a/_bmad-output/implementation-artifacts/9-2-customer-material-receipt-and-segregated-stock.md
++++ b/_bmad-output/implementation-artifacts/9-2-customer-material-receipt-and-segregated-stock.md
+@@ -1,6 +1,10 @@
++---
++baseline_commit: 5250c250641f3eb6ee1ed6fa937f933e4ea6db25
++---
++
+ # Story 9.2: Customer Material Receipt and Segregated Stock
+ 
+-Status: ready-for-dev
++Status: review
+ 
+ <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
+ 
+@@ -22,43 +26,43 @@ so that customer-owned material is never mixed with or consumed by other demand.
+ 
+ ## Tasks / Subtasks
+ 
+-- [ ] Task 1: Event contract and registry (AC: 1, 2)
+-  - [ ] 1.1 Register `jobwork.material_received` in `src/events/schema.ts` on the existing `jobwork` stream (stream_id = `service_order_id`), central-only, `requiresBusinessStream: false` (the order row already carries `business_stream = 'job_work'`). Payload: `{ service_order_id, receipt_id, grn_line_id, challan_number_ext, challan_date, sku, lot_id, received_qty, challan_qty, uom, variance_qty, variance_flagged, site_id, received_by }`. `receipt_id` minted client-side (UUIDv4, BSD-10 idiom from 9.1).
+-  - [ ] 1.2 Add payload shape assert `assertJobworkMaterialReceivedShape` in the seam (pre-DB, closed-shape: reject unknown keys, mirror the 9.1 review patch 10).
+-  - [ ] 1.3 Wire shape assert and applier into `src/events/store.ts` following the 9.1 wiring shape.
+-- [ ] Task 2: Projection `jobwork_material_receipt` (AC: 2, 3)
+-  - [ ] 2.1 Canonical DDL `read/projections/jobwork_material_receipt.sql` (LF), byte-identical mirror in `deploy/compose/init-db.sql`, tail-append registration in `src/events/migrate.ts`, idempotent, app_user grants in-file. Columns: `receipt_id PK, service_order_id FK-shaped, grn_line_id, challan_number_ext, challan_date DATE, sku, lot_id, received_qty NUMERIC(18,3), challan_qty NUMERIC(18,3), uom, variance_qty NUMERIC(18,3), variance_flagged BOOLEAN, received_by, site_id, correlation_id, source_event_id, created_at`. Unique `uq_jobwork_receipt_grn_line (grn_line_id)` so one GRN line yields one custody receipt row.
+-  - [ ] 2.2 Add schema-drift pin entry in `test/unit/schema-drift.test.ts` (canonical path, table, constraints, indexes, indexBodies), following the `service_order` entry at ~L1691.
+-- [ ] Task 3: Receipt seam logic (AC: 1, 2, 3, 7)
+-  - [ ] 3.1 New module `src/compliance/jobwork-receipt.ts` (or extend `service-order.ts` if cohesion is better; keep the seam split idiom: assert pre-DB, apply in-txn). Applier, under `pg_advisory_xact_lock` keyed by `service_order_id` then row `FOR UPDATE`:
++- [x] Task 1: Event contract and registry (AC: 1, 2)
++  - [x] 1.1 Register `jobwork.material_received` in `src/events/schema.ts` on the existing `jobwork` stream (stream_id = `service_order_id`), central-only, `requiresBusinessStream: false` (the order row already carries `business_stream = 'job_work'`). Payload: `{ service_order_id, receipt_id, grn_line_id, challan_number_ext, challan_date, sku, lot_id, received_qty, challan_qty, uom, variance_qty, variance_flagged, site_id, received_by }`. `receipt_id` minted client-side (UUIDv4, BSD-10 idiom from 9.1).
++  - [x] 1.2 Add payload shape assert `assertJobworkMaterialReceivedShape` in the seam (pre-DB, closed-shape: reject unknown keys, mirror the 9.1 review patch 10).
++  - [x] 1.3 Wire shape assert and applier into `src/events/store.ts` following the 9.1 wiring shape.
++- [x] Task 2: Projection `jobwork_material_receipt` (AC: 2, 3)
++  - [x] 2.1 Canonical DDL `read/projections/jobwork_material_receipt.sql` (LF), byte-identical mirror in `deploy/compose/init-db.sql`, tail-append registration in `src/events/migrate.ts`, idempotent, app_user grants in-file. Columns: `receipt_id PK, service_order_id FK-shaped, grn_line_id, challan_number_ext, challan_date DATE, sku, lot_id, received_qty NUMERIC(18,3), challan_qty NUMERIC(18,3), uom, variance_qty NUMERIC(18,3), variance_flagged BOOLEAN, received_by, site_id, correlation_id, source_event_id, created_at`. Unique `uq_jobwork_receipt_grn_line (grn_line_id)` so one GRN line yields one custody receipt row.
++  - [x] 2.2 Add schema-drift pin entry in `test/unit/schema-drift.test.ts` (canonical path, table, constraints, indexes, indexBodies), following the `service_order` entry at ~L1691.
++- [x] Task 3: Receipt seam logic (AC: 1, 2, 3, 7)
++  - [x] 3.1 New module `src/compliance/jobwork-receipt.ts` (or extend `service-order.ts` if cohesion is better; keep the seam split idiom: assert pre-DB, apply in-txn). Applier, under `pg_advisory_xact_lock` keyed by `service_order_id` then row `FOR UPDATE`:
+     - Re-derive order status in-transaction; refuse `SOURCE_DOCUMENT_REQUIRED` unless `confirmed` or `in_process` (fail-closed, hold-bypass lesson: never trust route pre-checks).
+     - Verify `site_id` matches the order's `site_id`; mismatch refuses `SOURCE_DOCUMENT_REQUIRED`.
+     - Ownership binding (AC7): the receipt is bound to the order's `customer_party_code`; mirror `assertConsignmentReceiptOwnership` (`src/compliance/ownership.ts:241`) invoked from the projection applier so every write path is covered.
+     - Compute `variance_qty = received_qty - challan_qty`; flag when `abs(variance_qty) > challan_qty * tolerance`; attribute to `received_by`.
+     - Insert the `jobwork_material_receipt` row; `23505` on `uq_jobwork_receipt_grn_line` resolves to a distinguishable refusal (check WHICH constraint fired, 9.1 review patch 7).
+     - If order status is `confirmed`, call `transitionServiceOrder(serviceOrderId, 'in_process', {...}, client)` (exported at `src/compliance/service-order.ts:572`, built for exactly this); if already `in_process`, skip.
+-  - [ ] 3.2 Receipt tolerance config: fail-closed boot-validated knob `JOBWORK_RECEIPT_TOLERANCE_PCT` (default `0.5`, weighbridge class-III instrument accuracy; valid range `0` to `10` inclusive, non-numeric, negative, or above-cap refuses to boot), following the 8.4 `resolveRetentionYears` boot-guard pattern. Flag when `abs(variance_qty) > challan_qty * (tolerance / 100)`; exactly-at-tolerance does NOT flag. `challan_qty` must be strictly positive (shape assert refuses `INVALID_PARAMS` pre-DB, no division-by-zero path). Unit-test both branches plus the at-boundary case with a parameterized predicate (no tautological config assertions, 8.4 lesson). Document the knob name in the story Completion Notes so site admins can find it.
+-- [ ] Task 4: Stock integration through the existing receiving flow (AC: 4, 7)
+-  - [ ] 4.1 Extend `src/compliance/receiving.ts` `applyGoodsReceivedProjection`: when the receipt payload carries `stock_class: 'job_work'`, REQUIRE `service_order_id`, `challan_number_ext`, `challan_date`; absent means 409 `SOURCE_DOCUMENT_REQUIRED`. The existing synthetic `stock.received` hand-off (receiving.ts ~L540) carries `stock_class: 'job_work'` so `applyStockReceipt` writes the segregated grain row. Emit or apply the `jobwork.material_received` record in the SAME transaction as the GRN line.
+-  - [ ] 4.2 Do NOT invent a parallel receipt route: the gate and receiving flows (GRN via `POST /api/v1/grn-lines`) are the entry point per FR-JW-03; `grn_line.stock_class` already exists with default `'owned'`.
+-  - [ ] 4.3 QC-hold interplay (DECIDED): customer material keeps the existing qc_hold and quarantine routing of `applyGoodsReceivedProjection` unchanged - BIS-licensed or quarantine-required items land in `ZONE-QC-HOLD` (receiving.ts:479-492) exactly like owned stock; NO exemption. QC hold and custody COMPOSE: the `jobwork_material_receipt` custody row is written at receipt time, not at putaway release, so a quarantined customer lot is still in custody from the moment it enters the building. Add a test arm: quarantine-required item received as `job_work` lands in the quarantine location AND the custody row exists.
+-- [ ] Task 5: Cross-issue guard (AC: 5, 6)
+-  - [ ] 5.1 In `src/compliance/stock-balance.ts`: TOTAL bar, not a demand classifier. ANY `kind === 'allocation'` or issue naming `stock_class: 'job_work'` throws 400 `CROSS_ISSUE_BLOCKED` (code pre-registered in the spine stable list; reuse, do not mint), details `{sku, stock_class, lot_id, location_id, demand_kind}`. In 9.2 there is no legitimate `job_work` demand path; Story 9.3's custody-consumption seam opens its own gated door. Do NOT build "is this demand job-work?" classification logic - a total bar has one mutation-testable arm, a classifier lies green. Model on the `PROTOTYPE_NOT_SALEABLE` arm at stock-balance.ts:306-313, as a separate check (do not add `job_work` to `NON_SALEABLE_STOCK_CLASSES`; that set's semantics are prototype-specific). Classless defaults already drain `'owned'` only; verify no query widens.
+-  - [ ] 5.2 Extend the lot-level laundering bar (stock-balance.ts:319-345, advisory-lock key `stock_class_guard:{sku}:lot:{lotId}` constant 8808): introduce a named `SEGREGATED_STOCK_CLASSES` set (`prototype`, `job_work`) so the guard trigger at L319-321 (currently fires only on `owned` or non-saleable receipts) also fires on `job_work` receipts, and class-conflict detection covers `job_work` both directions.
+-  - [ ] 5.3 Mirror the vocabulary and guard change verbatim in `src/compliance/cycle-count.ts` (VALID_STOCK_CLASSES duplicated at L63; guard trigger at L1006 and conflict-class list at L1024 must gain `job_work` in lockstep; the stock-balance.ts comment mandates both files move together) and confirm the cycle-count class-conflict path covers `job_work`.
+-  - [ ] 5.4 Amend the BSD-12 carve-out comment block (stock-balance.ts:298-305) to cover `CROSS_ISSUE_BLOCKED`: the stock surface carries no audit machinery and a seam refusal aborts the transaction, so the attempt is captured by the Story 1.3 statutory request middleware instead; do NOT add the code to any `AUDITED_REJECTIONS` set unless a quality-surface route in `src/api/v1/quality.ts` gains a path that emits it. Disclose as an AC5-letter deviation in Debug Log References.
+-  - [ ] 5.5 Confirm downstream consumers stay blind: planning availability, forward pick, site availability (hard-filtered `stock_class = 'owned'`), cross-dock (`src/compliance/cross-dock.ts:328-333`), valuation (`src/api/v1/valuation.ts` non-owned handling: job_work stock must carry no value).
+-- [ ] Task 6: Read routes (AC: 2, 3)
+-  - [ ] 6.1 `GET /api/v1/service-orders/:id/receipts` (module `jobwork`, read) listing receipt rows with variance fields; site-scoped via `permittedLocationsForModuleScope`; 404-vs-403 ordering per the 9.1 info-leak fix.
+-  - [ ] 6.2 Add all new routes to the spine allowlist in `test/integration/story-1-9.test.ts` (~L536, with a story comment), and mount in `src/server.ts`.
+-- [ ] Task 7: Tests (all ACs)
+-  - [ ] 7.1 `test/integration/story-9-2.test.ts` cloned from the story-9-1 fixture shape (local harness re-implementation, never import cross-story; SCIM plus dev-token actors; admin pool for fixture writes and cleanup; docker `ims-postgres-test` port 5442). Seed: two sites, `job_work_kit` BOM, confirmed service order via the 9.1 routes, item and location rows for GRN flow.
+-  - [ ] 7.2 Arms: refusal without order, with draft order, with wrong-site order, missing challan (AC1); happy path receipt with challan persisted and order flipped `in_process`, second receipt does not re-transition (AC2); over-tolerance variance flagged and attributed, within-tolerance not flagged (AC3); stock_balance row `job_work` class, invisible to availability (AC4); `CROSS_ISSUE_BLOCKED` on allocation, pick, transfer, and classless drain attempts, error details `{demand_kind, actor-visible context}` asserted (no audit row: BSD-12 carve-out, AC5); laundering bar both directions plus cycle-count arm (AC6); customer mismatch refusal via generic `/api/v1/events` route (AC7).
+-  - [ ] 7.3 Unit tests: tolerance predicate both branches, transition predicate arms, shape-assert closed-shape rejection. Mutation-verify the two load-bearing guards at TWO points (seam AND route; route pre-checks mask seam-only mutants, 8.6 lesson): the confirmed-order gate and the cross-issue guard.
+-  - [ ] 7.4 Idempotency: replay of `jobwork.material_received` with the same idempotency key returns the stored event (200), no duplicate receipt row, no double transition; use `findEventByIdempotencyKey` to avoid tripping on own writes (8.7 lesson).
+-- [ ] Task 8: Gates (all ACs)
+-  - [ ] 8.1 Build, tsc, eslint, prettier clean; migrate twice idempotent against the test DB; schema-drift suite green.
+-  - [ ] 8.2 Full suite vs baseline: 0 new failures; document the noise floor (31 at 3e5ba49: CRLF drift, idempotency family, story-7-8 flake). Story 9.1 work is UNCOMMITTED in the working tree; establish the baseline with 9.1 present.
++  - [x] 3.2 Receipt tolerance config: fail-closed boot-validated knob `JOBWORK_RECEIPT_TOLERANCE_PCT` (default `0.5`, weighbridge class-III instrument accuracy; valid range `0` to `10` inclusive, non-numeric, negative, or above-cap refuses to boot), following the 8.4 `resolveRetentionYears` boot-guard pattern. Flag when `abs(variance_qty) > challan_qty * (tolerance / 100)`; exactly-at-tolerance does NOT flag. `challan_qty` must be strictly positive (shape assert refuses `INVALID_PARAMS` pre-DB, no division-by-zero path). Unit-test both branches plus the at-boundary case with a parameterized predicate (no tautological config assertions, 8.4 lesson). Document the knob name in the story Completion Notes so site admins can find it.
++- [x] Task 4: Stock integration through the existing receiving flow (AC: 4, 7)
++  - [x] 4.1 Extend `src/compliance/receiving.ts` `applyGoodsReceivedProjection`: when the receipt payload carries `stock_class: 'job_work'`, REQUIRE `service_order_id`, `challan_number_ext`, `challan_date`; absent means 409 `SOURCE_DOCUMENT_REQUIRED`. The existing synthetic `stock.received` hand-off (receiving.ts ~L540) carries `stock_class: 'job_work'` so `applyStockReceipt` writes the segregated grain row. Emit or apply the `jobwork.material_received` record in the SAME transaction as the GRN line.
++  - [x] 4.2 Do NOT invent a parallel receipt route: the gate and receiving flows (GRN via `POST /api/v1/grn-lines`) are the entry point per FR-JW-03; `grn_line.stock_class` already exists with default `'owned'`.
++  - [x] 4.3 QC-hold interplay (DECIDED): customer material keeps the existing qc_hold and quarantine routing of `applyGoodsReceivedProjection` unchanged - BIS-licensed or quarantine-required items land in `ZONE-QC-HOLD` (receiving.ts:479-492) exactly like owned stock; NO exemption. QC hold and custody COMPOSE: the `jobwork_material_receipt` custody row is written at receipt time, not at putaway release, so a quarantined customer lot is still in custody from the moment it enters the building. Add a test arm: quarantine-required item received as `job_work` lands in the quarantine location AND the custody row exists.
++- [x] Task 5: Cross-issue guard (AC: 5, 6)
++  - [x] 5.1 In `src/compliance/stock-balance.ts`: TOTAL bar, not a demand classifier. ANY `kind === 'allocation'` or issue naming `stock_class: 'job_work'` throws 400 `CROSS_ISSUE_BLOCKED` (code pre-registered in the spine stable list; reuse, do not mint), details `{sku, stock_class, lot_id, location_id, demand_kind}`. In 9.2 there is no legitimate `job_work` demand path; Story 9.3's custody-consumption seam opens its own gated door. Do NOT build "is this demand job-work?" classification logic - a total bar has one mutation-testable arm, a classifier lies green. Model on the `PROTOTYPE_NOT_SALEABLE` arm at stock-balance.ts:306-313, as a separate check (do not add `job_work` to `NON_SALEABLE_STOCK_CLASSES`; that set's semantics are prototype-specific). Classless defaults already drain `'owned'` only; verify no query widens.
++  - [x] 5.2 Extend the lot-level laundering bar (stock-balance.ts:319-345, advisory-lock key `stock_class_guard:{sku}:lot:{lotId}` constant 8808): introduce a named `SEGREGATED_STOCK_CLASSES` set (`prototype`, `job_work`) so the guard trigger at L319-321 (currently fires only on `owned` or non-saleable receipts) also fires on `job_work` receipts, and class-conflict detection covers `job_work` both directions.
++  - [x] 5.3 Mirror the vocabulary and guard change verbatim in `src/compliance/cycle-count.ts` (VALID_STOCK_CLASSES duplicated at L63; guard trigger at L1006 and conflict-class list at L1024 must gain `job_work` in lockstep; the stock-balance.ts comment mandates both files move together) and confirm the cycle-count class-conflict path covers `job_work`.
++  - [x] 5.4 Amend the BSD-12 carve-out comment block (stock-balance.ts:298-305) to cover `CROSS_ISSUE_BLOCKED`: the stock surface carries no audit machinery and a seam refusal aborts the transaction, so the attempt is captured by the Story 1.3 statutory request middleware instead; do NOT add the code to any `AUDITED_REJECTIONS` set unless a quality-surface route in `src/api/v1/quality.ts` gains a path that emits it. Disclose as an AC5-letter deviation in Debug Log References.
++  - [x] 5.5 Confirm downstream consumers stay blind: planning availability, forward pick, site availability (hard-filtered `stock_class = 'owned'`), cross-dock (`src/compliance/cross-dock.ts:328-333`), valuation (`src/api/v1/valuation.ts` non-owned handling: job_work stock must carry no value).
++- [x] Task 6: Read routes (AC: 2, 3)
++  - [x] 6.1 `GET /api/v1/service-orders/:id/receipts` (module `jobwork`, read) listing receipt rows with variance fields; site-scoped via `permittedLocationsForModuleScope`; 404-vs-403 ordering per the 9.1 info-leak fix.
++  - [x] 6.2 Add all new routes to the spine allowlist in `test/integration/story-1-9.test.ts` (~L536, with a story comment), and mount in `src/server.ts`.
++- [x] Task 7: Tests (all ACs)
++  - [x] 7.1 `test/integration/story-9-2.test.ts` cloned from the story-9-1 fixture shape (local harness re-implementation, never import cross-story; SCIM plus dev-token actors; admin pool for fixture writes and cleanup; docker `ims-postgres-test` port 5442). Seed: two sites, `job_work_kit` BOM, confirmed service order via the 9.1 routes, item and location rows for GRN flow.
++  - [x] 7.2 Arms: refusal without order, with draft order, with wrong-site order, missing challan (AC1); happy path receipt with challan persisted and order flipped `in_process`, second receipt does not re-transition (AC2); over-tolerance variance flagged and attributed, within-tolerance not flagged (AC3); stock_balance row `job_work` class, invisible to availability (AC4); `CROSS_ISSUE_BLOCKED` on allocation, pick, transfer, and classless drain attempts, error details `{demand_kind, actor-visible context}` asserted (no audit row: BSD-12 carve-out, AC5); laundering bar both directions plus cycle-count arm (AC6); customer mismatch refusal via generic `/api/v1/events` route (AC7).
++  - [x] 7.3 Unit tests: tolerance predicate both branches, transition predicate arms, shape-assert closed-shape rejection. Mutation-verify the two load-bearing guards at TWO points (seam AND route; route pre-checks mask seam-only mutants, 8.6 lesson): the confirmed-order gate and the cross-issue guard.
++  - [x] 7.4 Idempotency: replay of `jobwork.material_received` with the same idempotency key returns the stored event (200), no duplicate receipt row, no double transition; use `findEventByIdempotencyKey` to avoid tripping on own writes (8.7 lesson).
++- [x] Task 8: Gates (all ACs)
++  - [x] 8.1 Build, tsc, eslint, prettier clean; migrate twice idempotent against the test DB; schema-drift suite green.
++  - [x] 8.2 Full suite vs baseline: 0 new failures; document the noise floor (31 at 3e5ba49: CRLF drift, idempotency family, story-7-8 flake). Story 9.1 work is UNCOMMITTED in the working tree; establish the baseline with 9.1 present.
+ 
+ ## Dev Notes
+ 
+@@ -132,8 +136,139 @@ All three former open questions are CLOSED; implement as written, no PO gate rem
+ 
+ ### Agent Model Used
+ 
++Claude Fable 5.1 (claude-fable-5-1), dev-story workflow, 2026-09-03.
++
+ ### Debug Log References
+ 
++- Baseline commit 5250c25 (Story 9.1 committed, tree clean). Story 9.1 was NOT uncommitted
++  as the story text assumed; the baseline is HEAD.
++- Disclosed AC5-letter deviation: `CROSS_ISSUE_BLOCKED` is raised from the stock surface
++  (`applyStockBalanceProjection`), which carries no audit machinery; a seam refusal aborts its
++  transaction, so no audit row is written. The attempt is captured by the Story 1.3 statutory
++  request middleware. The BSD-12 carve-out comment block in `src/compliance/stock-balance.ts`
++  now covers this code; it is in no `AUDITED_REJECTIONS` set. The story-9-2 suite asserts
++  the audit_log count for the code does not move.
++- Disclosed deviation (FR-JW-03 tightening): a `stock.received` carrying
++  `stock_class = 'job_work'` is accepted ONLY from the receiving hand-off. The receiving seam
++  stamps its synthetic stock view with a module-private Symbol (`RECEIVING_HANDOFF`); a JSON
++  body through `POST /api/v1/events` or the edge upload cannot carry a Symbol key, so a direct
++  job_work `stock.received` refuses 409 `SOURCE_DOCUMENT_REQUIRED` even with a correct order
++  binding. Mutation-verified (mutant 3).
++- Deliberate fixture change: the Story 2.8 test "job_work receipts stay outside the
++  ownership gate (Epic 9 flow untouched)" asserted that a direct job_work `stock.received`
++  succeeds. Story 9.2 activates the class and AC7 reverses that outcome, so the test now
++  asserts 409 `SOURCE_DOCUMENT_REQUIRED` and no balance row, while still proving the
++  consignment agreement gate does not apply to job_work.
++- Disclosed deviation (inverse gate): the custody applier verifies in-transaction that the
++  `grn_line_id` it names exists, is `job_work` class, not rejected, and matches sku, lot,
++  quantity and site. A direct `jobwork.material_received` through `/api/v1/events` with an
++  invented or borrowed (owned) GRN line refuses 409 `SOURCE_DOCUMENT_REQUIRED` and cannot
++  flip the order.
++- Disclosed deviation (laundering-bar code): a lot-level class conflict that involves
++  `job_work` on either side refuses `CROSS_ISSUE_BLOCKED` (details carry
++  `existing_stock_class` and `demand_kind`); prototype-versus-owned conflicts keep
++  `PROTOTYPE_NOT_SALEABLE`. The story named no code for this arm.
++- Disclosed deviation (ownership mismatch code): a supplied `owner_party_code` that differs
++  from the order's `customer_party_code` refuses 409 `OWNER_PARTY_MISMATCH` (the Story 2.8
++  consignment code, reused rather than minted). When the clerk supplies none, the receiving
++  seam derives it from the order and the gate re-verifies under lock.
++- Disclosed deviation (receipt_id): the GRN route mints no ids for the nested event, so
++  `receipt_id` is minted server-side in the receiving hand-off (a client-supplied UUID
++  `receipt_id` on the GRN body is honoured). The nested event's idempotency key is the natural
++  key `jobwork.material_received:{grn_line_id}`.
++- Disclosed harness fact: `POST /api/v1/grn-lines` has never supported idempotent replay
++  (the route forwards no idempotency key; a second identical post is a pre-existing
++  `STREAM_CONFLICT`). Task 7.4 is therefore proven on the `jobwork.material_received` event
++  through `/api/v1/events` with the stored key: 200 with the stored event id, one custody row,
++  no second transition.
++- Job-work receipts ride the unchanged Story 3.4 GRN flow, so each still needs a PO line for
++  the sku and an accepted weighbridge token (the fixture seeds both per receipt).
++- Mutation verification (story-9-2 suite, 18 tests, run per mutant, all restored): mutant 1
++  order gate always open, killed by 2 tests (route and seam point); mutant 2 cross-issue bar
++  removed, killed by 2 tests (route and seam point); mutant 3 receiving-handoff gate removed,
++  killed by 1 test; mutant 4 `SEGREGATED_STOCK_CLASSES` without `job_work`, killed by 1 test.
++- Schema-drift suite: 140/143 with 3 pre-existing failures (compliance_bis_licence and
++  label_master index-body pins, gate_dwell_metric CRLF drift), identical at baseline.
++- Migrate-twice against docker `ims-postgres-test` (port 5442): both runs complete.
++- `graphify update .` run after the code changes.
++- Full suite vs baseline 5250c25 (fresh worktree, same test DB, sequential): baseline
++  1703 tests, 31 failures; current tree 1747 tests (44 new, all green), 33 failures. Of the
++  2 failures not at baseline, one was the Story 2.8 job_work test deliberately flipped by
++  this story (re-run: story-2-8 suite 23/24, the remaining failure is the pre-existing
++  "agreement idempotency" case), and the other is `gate_dwell_metric` CRLF drift on an
++  untouched working-tree file that a fresh checkout normalizes (known noise family). Net new
++  failures: 0. Pre-existing floor: idempotency family (1.1, 1.6, 2.2, 2.3, 2.4, 2.8),
++  2.5 x15, 1.7, 2.1, 3.10, 3.6, 5.3, schema-drift x2.
++
+ ### Completion Notes List
+ 
++- Site-admin knob: `JOBWORK_RECEIPT_TOLERANCE_PCT` (percent of challan quantity), default
++  `0.5`, valid `0` to `10` inclusive with at most four decimals; absent takes the default,
++  present-but-blank, non-numeric, negative or above 10 refuses boot. Flag when
++  `abs(received_qty - challan_qty)` STRICTLY exceeds `challan_qty * pct / 100`; exactly at
++  the band does not flag. Exact scaled-integer arithmetic (BigInt), no JS float.
++- Event `jobwork.material_received` registered on the `jobwork` stream
++  (`stream_id = service_order_id`, `requiresBusinessStream: false`), closed shape, strict
++  UUIDs, calendar `challan_date`, strictly positive NUMERIC-string quantities;
++  `variance_qty` and `variance_flagged` are server-derived, refused on input and written back
++  onto the stored payload.
++- Projection `jobwork_material_receipt` (canonical `read/projections/`, byte-identical
++  mirror in `deploy/compose/init-db.sql` with that file's CRLF endings, tail-append in
++  `migrate.ts`, in-file app_user grants INSERT, SELECT), unique `uq_jobwork_receipt_grn_line`,
++  positive-quantity CHECKs, schema-drift pin added.
++- Receiving: `applyGoodsReceivedProjection` job_work arm requires `service_order_id`,
++  `challan_number_ext`, `challan_date`, `challan_qty` (409 `SOURCE_DOCUMENT_REQUIRED`),
++  stamps the stock view for the hand-off gate, and nests the custody event via
++  `persistEvent(envelope, undefined, client)` inside the same transaction after the GRN line
++  insert (the bis-licence-expiry precedent). QC hold and custody compose: a
++  quarantine-required item lands in ZONE-QC-HOLD with a held putaway AND the custody row.
++- Custody applier: order advisory lock plus FOR UPDATE, refuses unless `confirmed` or
++  `in_process` at the receipt site, verifies the GRN line, computes variance, inserts the row
++  (23505 classified by constraint name into a 409 `DUPLICATE_EVENT` with the constraint in
++  details), then fires `transitionServiceOrder(..., 'in_process')` on the first receipt only.
++- Stock surface: total bar on `job_work` allocation and issue (400 `CROSS_ISSUE_BLOCKED`,
++  details `{sku, stock_class, lot_id, location_id, demand_kind}`); new
++  `SEGREGATED_STOCK_CLASSES` (`prototype`, `job_work`) widens the lot-level laundering bar in
++  both directions; `NON_SALEABLE_STOCK_CLASSES` untouched. `cycle-count.ts` mirrored in
++  lockstep (the count-adjustment inflow path refuses the same conflicts).
++- Downstream consumers verified blind, not rebuilt: pick generation, transfer source query,
++  cross-dock (`non_owned_stock` non-qualification asserted), planning and site availability
++  all hard-filter `stock_class = 'owned'`; valuation reports job_work under
++  `non_owned_quantities` with no carrying value; no `inventory_valuation` row is written.
++- Read route `GET /api/v1/service-orders/:serviceOrderId/receipts` (module jobwork, read),
++  404-versus-403 collapsed as in the 9.1 GET-by-id; mounted and added to the spine
++  allowlist.
++- Tests: `test/unit/jobwork-receipt-predicates.test.ts` (17),
++  `test/unit/jobwork-receipt-config.test.ts` (8, child-process boot guard),
++  `test/integration/story-9-2.test.ts` (18, all ACs, seam and route points, replay,
++  cycle-count arm, quarantine arm).
++
+ ### File List
++
++- `src/compliance/jobwork-receipt.ts` (new)
++- `src/read/projections/jobwork_material_receipt.ts` (new)
++- `read/projections/jobwork_material_receipt.sql` (new)
++- `deploy/compose/init-db.sql`
++- `src/events/migrate.ts`
++- `src/events/schema.ts`
++- `src/events/store.ts`
++- `src/config/index.ts`
++- `src/compliance/receiving.ts`
++- `src/compliance/stock-balance.ts`
++- `src/compliance/cycle-count.ts`
++- `src/api/v1/service-orders.ts`
++- `src/server.ts`
++- `test/integration/story-9-2.test.ts` (new)
++- `test/unit/jobwork-receipt-predicates.test.ts` (new)
++- `test/unit/jobwork-receipt-config.test.ts` (new)
++- `test/integration/story-2-8.test.ts` (deliberate fixture change, see Debug Log)
++- `test/integration/story-1-9.test.ts`
++- `test/unit/schema-drift.test.ts`
++- `_bmad-output/implementation-artifacts/9-2-customer-material-receipt-and-segregated-stock.md`
++- `_bmad-output/implementation-artifacts/sprint-status.yaml`
++- `graphify-out/` (regenerated by `graphify update .`)
++
++## Change Log
++
++- 2026-09-03: Story 9.2 implemented (Tasks 1 to 8), all tasks checked, status set to review.
++  Full-suite result recorded in the Debug Log References noise-floor entry.
+diff --git a/_bmad-output/implementation-artifacts/sprint-status.yaml b/_bmad-output/implementation-artifacts/sprint-status.yaml
+index 7ebccfe..056a289 100644
+--- a/_bmad-output/implementation-artifacts/sprint-status.yaml
++++ b/_bmad-output/implementation-artifacts/sprint-status.yaml
+@@ -361,7 +361,7 @@
+ # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
+ 
+ generated: 2026-07-12
+-last_updated: 2026-09-02
++last_updated: 2026-09-03
+ # story 6-4 dev-story 2026-09-01: implemented all 9 tasks from baseline 905a48e (clean tree). Closes
+ #   Epic 6. One new projection (production_consumption_variance, append-only, grain
+ #   (production_order_id, bom_line_id)) plus two pure services: src/production/lot-genealogy.ts (no
+@@ -1103,7 +1103,7 @@ development_status:
+   # --- Epic 9: Job-Work Services  [PILOT] ---
+   epic-9: in-progress
+   9-1-job-work-service-order-creation: done   # PILOT
+-  9-2-customer-material-receipt-and-segregated-stock: ready-for-dev   # PILOT  # created 2026-09-02 via create-story workflow (baseline: 9.1 done, UNCOMMITTED in working tree): Customer Material Receipt and Segregated Stock (FR-JW-03, FR-JW-04, FR-JW-05). 8 binding decisions; load-bearing ones: reuse existing stock_class 'job_work' (already in VALID_STOCK_CLASSES, this story activates it - no new 'customer' class), receipt rides the existing goods.received/GRN flow with a new jobwork.material_received order-linked custody record in the same transaction (AD-6 custody-ledger stream stays 9.3 scope), first receipt fires the forward-built transitionServiceOrder(in_process) seam from 9.1 BSD-2, custody bound to the order's customer_party_code verified in-transaction (consignment ownership-gate precedent), challan_date persisted as the 9.5 Rule 45 clock anchor, epic-invented receipt tolerance as one fail-closed config knob default flag-any-deviation, pre-registered SOURCE_DOCUMENT_REQUIRED/CROSS_ISSUE_BLOCKED reused, laundering bar + duplicated cycle-count vocabulary widened to job_work. 8 tasks. All 3 open questions RESOLVED same day (party-mode round-table, code-grounded): tolerance default 0.5% knob JOBWORK_RECEIPT_TOLERANCE_PCT boot-validated 0-10 (zero default = alert fatigue; variance_qty stored regardless), no QC exemption for customer material (hold and custody compose, custody row at receipt), shortfall=overage single signed variance category; plus cross-issue guard redesigned as TOTAL bar (no job_work demand path until 9.3) throwing 400 from stock surface per PROTOTYPE_NOT_SALEABLE idiom with BSD-12 audit carve-out extended (AC5 letter deviation disclosed, statutory middleware carries the attempt), new SEGREGATED_STOCK_CLASSES set widens laundering bar, challan_qty strictly positive
++  9-2-customer-material-receipt-and-segregated-stock: review   # PILOT  # created 2026-09-02 via create-story workflow (baseline: 9.1 done, UNCOMMITTED in working tree): Customer Material Receipt and Segregated Stock (FR-JW-03, FR-JW-04, FR-JW-05). 8 binding decisions; load-bearing ones: reuse existing stock_class 'job_work' (already in VALID_STOCK_CLASSES, this story activates it - no new 'customer' class), receipt rides the existing goods.received/GRN flow with a new jobwork.material_received order-linked custody record in the same transaction (AD-6 custody-ledger stream stays 9.3 scope), first receipt fires the forward-built transitionServiceOrder(in_process) seam from 9.1 BSD-2, custody bound to the order's customer_party_code verified in-transaction (consignment ownership-gate precedent), challan_date persisted as the 9.5 Rule 45 clock anchor, epic-invented receipt tolerance as one fail-closed config knob default flag-any-deviation, pre-registered SOURCE_DOCUMENT_REQUIRED/CROSS_ISSUE_BLOCKED reused, laundering bar + duplicated cycle-count vocabulary widened to job_work. 8 tasks. All 3 open questions RESOLVED same day (party-mode round-table, code-grounded): tolerance default 0.5% knob JOBWORK_RECEIPT_TOLERANCE_PCT boot-validated 0-10 (zero default = alert fatigue; variance_qty stored regardless), no QC exemption for customer material (hold and custody compose, custody row at receipt), shortfall=overage single signed variance category; plus cross-issue guard redesigned as TOTAL bar (no job_work demand path until 9.3) throwing 400 from stock surface per PROTOTYPE_NOT_SALEABLE idiom with BSD-12 audit carve-out extended (AC5 letter deviation disclosed, statutory middleware carries the attempt), new SEGREGATED_STOCK_CLASSES set widens laundering bar, challan_qty strictly positive
+   9-3-custody-ledger-and-consumption: backlog   # PILOT
+   9-4-process-loss-offcut-election-capture-and-qc-gated-dispatch: backlog   # PILOT
+   9-5-statutory-return-clocks-and-closure-gate: backlog   # PILOT
+diff --git a/deploy/compose/init-db.sql b/deploy/compose/init-db.sql
+index d552d1f..29912ca 100644
+--- a/deploy/compose/init-db.sql
++++ b/deploy/compose/init-db.sql
+@@ -12129,3 +12129,77 @@ BEGIN
+     GRANT SELECT ON service_order TO readonly_user;
+   END IF;
+ END $$;
++
++-- Job-work customer-material receipt read model (Story 9.2). This file is the CANONICAL
++-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
++-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
++-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
++-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
++-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
++-- can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying jobwork.material_received domain events;
++-- mutation happens exclusively through persistEvent, which applies this projection inside the
++-- SAME transaction as the domain_events insert (and, for the GRN path, the same transaction as
++-- the grn_line and stock_balance writes). One GRN line yields exactly one custody receipt row
++-- (uq_jobwork_receipt_grn_line). service_order_id is FK-shaped, not an FK: projections are
++-- rebuildable independently (the Story 9.1 BSD-8 idiom). challan_date is the IST business date
++-- the Story 9.5 Rule 45 return clock counts from. variance_qty is SIGNED (received - challan);
++-- variance_flagged records whether its absolute value exceeded the configured receipt tolerance
++-- (JOBWORK_RECEIPT_TOLERANCE_PCT) at receipt time, attributed to received_by.
++
++CREATE TABLE IF NOT EXISTS jobwork_material_receipt (
++  receipt_id         UUID PRIMARY KEY,
++  service_order_id   UUID NOT NULL,
++  grn_line_id        UUID NOT NULL,
++  challan_number_ext TEXT NOT NULL,
++  challan_date       DATE NOT NULL,
++  sku                TEXT NOT NULL,
++  lot_id             TEXT,
++  received_qty       NUMERIC(18,3) NOT NULL,
++  challan_qty        NUMERIC(18,3) NOT NULL,
++  uom                TEXT NOT NULL,
++  variance_qty       NUMERIC(18,3) NOT NULL,
++  variance_flagged   BOOLEAN NOT NULL DEFAULT false,
++  received_by        UUID NOT NULL,
++  site_id            UUID NOT NULL,
++  correlation_id     UUID,
++  source_event_id    UUID NOT NULL,
++  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT chk_jobwork_receipt_received_positive CHECK (received_qty > 0),
++  CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0)
++);
++
++CREATE UNIQUE INDEX IF NOT EXISTS uq_jobwork_receipt_grn_line ON jobwork_material_receipt (grn_line_id);
++CREATE INDEX IF NOT EXISTS idx_jobwork_receipt_order ON jobwork_material_receipt (service_order_id, created_at);
++CREATE INDEX IF NOT EXISTS idx_jobwork_receipt_site ON jobwork_material_receipt (site_id);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_jobwork_receipt_received_positive'
++      AND conrelid = 'jobwork_material_receipt'::regclass
++  ) THEN
++    ALTER TABLE jobwork_material_receipt
++      ADD CONSTRAINT chk_jobwork_receipt_received_positive CHECK (received_qty > 0);
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_jobwork_receipt_challan_positive'
++      AND conrelid = 'jobwork_material_receipt'::regclass
++  ) THEN
++    ALTER TABLE jobwork_material_receipt
++      ADD CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT ON jobwork_material_receipt TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON jobwork_material_receipt TO readonly_user;
++  END IF;
++END $$;
+diff --git a/src/api/v1/service-orders.ts b/src/api/v1/service-orders.ts
+index 9ea9974..f0185ab 100644
+--- a/src/api/v1/service-orders.ts
++++ b/src/api/v1/service-orders.ts
+@@ -13,6 +13,7 @@ import {
+ } from '../../compliance/service-order.js';
+ import { getServiceOrderById, listServiceOrders } from '../../read/projections/service_order.js';
+ import type { ServiceOrderRow } from '../../read/projections/service_order.js';
++import { listJobworkMaterialReceiptsByOrder } from '../../read/projections/jobwork_material_receipt.js';
+ 
+ /**
+  * Story 9.1 REST surface for job-work service orders (FR-JW-01, FR-JW-02, FR-B-16, FR-AC-13).
+@@ -366,6 +367,41 @@ const getServiceOrderBase: RouteHandler = async (req, res, params) => {
+   }
+ };
+ 
++/**
++ * Story 9.2 (AC2, AC3): the customer-material receipts recorded against an order, with the
++ * challan and variance fields the Story 9.3 custody statement will render. Same 404-vs-403
++ * ordering as GET-by-id (the 9.1 info-leak fix): an order at a site the caller cannot read is
++ * indistinguishable from a missing order.
++ */
++const listServiceOrderReceiptsBase: RouteHandler = async (req, res, params) => {
++  try {
++    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
++    const order = await getServiceOrderById(serviceOrderId);
++    let accessDenied = false;
++    if (order) {
++      try {
++        assertSiteReadAccess(req, order.site_id);
++      } catch (err) {
++        if (err instanceof AppError && err.errorCode === 'LOCATION_ACCESS_DENIED') {
++          accessDenied = true;
++        } else {
++          throw err;
++        }
++      }
++    }
++    if (!order || accessDenied) {
++      sendRequestError(req, res, 404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
++        service_order_id: serviceOrderId,
++      });
++      return;
++    }
++    const receipts = await listJobworkMaterialReceiptsByOrder(serviceOrderId);
++    sendJson(res, 200, { service_order_id: serviceOrderId, receipts });
++  } catch (err: unknown) {
++    sendAppError(req, res, err);
++  }
++};
++
+ const listServiceOrdersBase: RouteHandler = async (req, res, _params) => {
+   try {
+     const url = new URL(req.url ?? '/', 'http://localhost');
+@@ -453,3 +489,8 @@ export const listServiceOrdersHandler = requireRole({
+   module: 'jobwork',
+   functionScope: 'read',
+ })(listServiceOrdersBase);
++
++export const listServiceOrderReceiptsHandler = requireRole({
++  module: 'jobwork',
++  functionScope: 'read',
++})(listServiceOrderReceiptsBase);
+diff --git a/src/compliance/cycle-count.ts b/src/compliance/cycle-count.ts
+index 99c6c73..432697c 100644
+--- a/src/compliance/cycle-count.ts
++++ b/src/compliance/cycle-count.ts
+@@ -61,8 +61,14 @@ const CYCLE_COUNT_EVENT_TYPES = new Set([
+ // counting it is legitimate, only allocating or laundering it into 'owned' is barred, and that bar
+ // lives at the stock-balance applier choke point.
+ const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work', 'prototype']);
+-/** FR-Q-12 (Story 8.8): mirrors stock-balance.ts - prototype stock can never become saleable. */
+-const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
++/**
++ * Story 9.2 (FR-JW-04): mirrors stock-balance.ts SEGREGATED_STOCK_CLASSES verbatim - the classes
++ * the lot-level laundering bar segregates ('prototype' with its FR-Q-12 PROTOTYPE_NOT_SALEABLE
++ * code from Story 8.8, 'job_work' customer-owned material with CROSS_ISSUE_BLOCKED). The two
++ * files move together.
++ */
++const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work']);
++const JOB_WORK_STOCK_CLASS = 'job_work';
+ const COUNT_ADJUSTMENT_DOA_TYPE = 'inventory.count_adjustment';
+ const SIGNOFF_ROLES = new Set([
+   'inventory_controller',
+@@ -1003,39 +1009,49 @@ async function applyStockAdjusted(
+   // (or the lot-less grain) holds a non-saleable balance, and a non-saleable inflow is refused
+   // when a saleable-class balance exists. Serialize on the SAME advisory-lock key the receipt
+   // guard uses (seed 8808) so the two paths cannot race each other past the check.
+-  if (delta > 0 && (stockClass === 'owned' || NON_SALEABLE_STOCK_CLASSES.has(stockClass))) {
++  // Story 9.2 (FR-JW-04, AC6): the conflict set is SEGREGATED_STOCK_CLASSES, so an owned inflow
++  // is refused when the lot holds prototype OR job_work material, and a segregated-class inflow
++  // is refused when the lot holds a balance in ANY other class (job_work covered both directions).
++  if (delta > 0 && (stockClass === 'owned' || SEGREGATED_STOCK_CLASSES.has(stockClass))) {
+     const guardKey =
+       lotId !== null
+         ? `stock_class_guard:${sku}:lot:${lotId}`
+         : `stock_class_guard:${sku}:loc:${locationId}`;
+     await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 8808))`, [guardKey]);
+-    const conflictIsNonSaleable = stockClass === 'owned';
++    const inflowIsOwned = stockClass === 'owned';
+     const conflicting = await client.query(
+       lotId !== null
+         ? `SELECT stock_class FROM stock_balance
+             WHERE sku = $1 AND lot_id = $2
+-              AND ${conflictIsNonSaleable ? '' : 'NOT '}(stock_class = ANY($3::text[]))
++              AND ${inflowIsOwned ? 'stock_class = ANY($3::text[])' : 'stock_class <> $3'}
+             LIMIT 1`
+         : `SELECT stock_class FROM stock_balance
+             WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL
+-              AND ${conflictIsNonSaleable ? '' : 'NOT '}(stock_class = ANY($3::text[]))
++              AND ${inflowIsOwned ? 'stock_class = ANY($3::text[])' : 'stock_class <> $3'}
+             LIMIT 1`,
+       lotId !== null
+-        ? [sku, lotId, [...NON_SALEABLE_STOCK_CLASSES]]
+-        : [sku, locationId, [...NON_SALEABLE_STOCK_CLASSES]],
++        ? [sku, lotId, inflowIsOwned ? [...SEGREGATED_STOCK_CLASSES] : stockClass]
++        : [sku, locationId, inflowIsOwned ? [...SEGREGATED_STOCK_CLASSES] : stockClass],
+     );
+     if (conflicting.rows.length > 0) {
++      const existingClass = (conflicting.rows[0] as { stock_class: string }).stock_class;
++      const jobWorkConflict =
++        stockClass === JOB_WORK_STOCK_CLASS || existingClass === JOB_WORK_STOCK_CLASS;
+       throw new AppError(
+         400,
+-        'PROTOTYPE_NOT_SALEABLE',
+-        conflictIsNonSaleable
+-          ? 'This lot already holds a non-saleable prototype balance; an owned count adjustment cannot create saleable stock for it'
+-          : 'This lot already holds a saleable-class balance and cannot gain prototype stock by count adjustment',
++        jobWorkConflict ? 'CROSS_ISSUE_BLOCKED' : 'PROTOTYPE_NOT_SALEABLE',
++        jobWorkConflict
++          ? `This lot already holds a ${existingClass} balance; a ${stockClass} count adjustment would cross customer-owned material with another class`
++          : inflowIsOwned
++            ? 'This lot already holds a non-saleable prototype balance; an owned count adjustment cannot create saleable stock for it'
++            : 'This lot already holds a saleable-class balance and cannot gain prototype stock by count adjustment',
+         {
+           sku,
++          stock_class: stockClass,
+           lot_id: lotId,
+           location_id: locationId,
+-          existing_stock_class: (conflicting.rows[0] as { stock_class: string }).stock_class,
++          existing_stock_class: existingClass,
++          ...(jobWorkConflict ? { demand_kind: 'count_adjustment' } : {}),
+         },
+       );
+     }
+diff --git a/src/compliance/receiving.ts b/src/compliance/receiving.ts
+index f6cb45d..3817ad0 100644
+--- a/src/compliance/receiving.ts
++++ b/src/compliance/receiving.ts
+@@ -1,7 +1,14 @@
+ import { randomUUID } from 'node:crypto';
+ import type { PoolClient } from 'pg';
+ import type { EventEnvelope } from '../events/store.js';
++import { persistEvent } from '../events/store.js';
+ import { AppError } from '../middleware/error.js';
++import { getServiceOrderById } from '../read/projections/service_order.js';
++import {
++  JOBWORK_MATERIAL_RECEIVED,
++  JOB_WORK_STOCK_CLASS,
++  RECEIVING_HANDOFF,
++} from './jobwork-receipt.js';
+ import { emitNotificationInTransaction } from '../notify/emit.js';
+ import { getItemBySku } from '../read/projections/item_master.js';
+ import { getLocationById, getLocationByCode } from '../read/projections/location_register.js';
+@@ -359,6 +366,47 @@ export async function applyGoodsReceivedProjection(
+     : null;
+   const stockClass = isNonEmptyString(p['stock_class']) ? (p['stock_class'] as string) : 'owned';
+ 
++  // 2b. Story 9.2 (FR-JW-03): customer material rides THIS flow, never a parallel receipt route.
++  //     A job_work receipt REQUIRES the confirmed service order and the inbound challan
++  //     (number, date, quantity); absence is 409 SOURCE_DOCUMENT_REQUIRED. Existence, status,
++  //     site, and customer binding are re-derived under lock by the seam gates below
++  //     (assertJobworkReceiptOwnership on the stock hand-off, then the custody applier) - this
++  //     block only shapes the hand-off.
++  const jobWork = stockClass === JOB_WORK_STOCK_CLASS;
++  if (jobWork) {
++    if (!isUuid(p['service_order_id'])) {
++      throw new AppError(
++        409,
++        'SOURCE_DOCUMENT_REQUIRED',
++        'Customer material can only be received against a confirmed service order (service_order_id is required)',
++        { sku, stock_class: stockClass },
++      );
++    }
++    if (!isNonEmptyString(p['challan_number_ext']) || !isNonEmptyString(p['challan_date'])) {
++      throw new AppError(
++        409,
++        'SOURCE_DOCUMENT_REQUIRED',
++        'Customer material can only be received with the inbound challan (challan_number_ext and challan_date are required)',
++        { sku, service_order_id: p['service_order_id'] },
++      );
++    }
++    if (normalizeQty(p['challan_qty']) === null) {
++      throw new AppError(
++        409,
++        'SOURCE_DOCUMENT_REQUIRED',
++        'Customer material can only be received with the inbound challan quantity (challan_qty must be a positive NUMERIC value)',
++        { sku, service_order_id: p['service_order_id'] },
++      );
++    }
++    // The customer binding travels on the stock view as owner_party_code (the consignment idiom)
++    // so the stock-surface gate verifies it against the order under lock. Derived from the order
++    // when the clerk did not supply one; a supplied value must still match (AC7).
++    if (!isNonEmptyString(p['owner_party_code'])) {
++      const order = await getServiceOrderById(p['service_order_id'] as string, client);
++      if (order) p['owner_party_code'] = order.customer_party_code;
++    }
++  }
++
+   // 3. Tolerance band (AC5/AC6) computed entirely in PostgreSQL NUMERIC against the Story 2.9 PO line.
+   //    Serialize concurrent receipts on the same PO line BEFORE reading the cumulative sum so two
+   //    lines cannot both pass the band and over-receive.
+@@ -560,9 +608,17 @@ export async function applyGoodsReceivedProjection(
+       ...(p['unit_cost'] !== undefined && p['unit_cost'] !== null
+         ? { unit_cost: Number(p['unit_cost']) }
+         : {}),
++      // Story 9.2 AC7: the stock-surface ownership gate binds a job_work receipt to its order.
++      ...(jobWork ? { service_order_id: p['service_order_id'] } : {}),
+       business_stream: item.business_stream,
+     },
+   };
++  // Story 9.2 (FR-JW-03): only THIS hand-off may post job_work stock. A Symbol key cannot arrive
++  // in a JSON body, so the stock-surface gate distinguishes the receiving flow from a direct
++  // stock.received without trusting any payload field.
++  if (jobWork) {
++    (stockView as unknown as Record<symbol, unknown>)[RECEIVING_HANDOFF] = true;
++  }
+   await applyLotSerialValidation(stockView, client, eventId);
+   await applyStockBalanceProjection(stockView, client);
+ 
+@@ -647,6 +703,49 @@ export async function applyGoodsReceivedProjection(
+     },
+     client,
+   );
++
++  // 7b. Story 9.2 (FR-JW-03, FR-JW-05): the order-linked custody record, persisted as its own
++  //     jobwork.material_received domain event INSIDE this transaction (the bis-licence-expiry
++  //     nested-persistEvent precedent). The custody applier re-derives the order under lock,
++  //     computes the challan variance, and fires confirmed -> in_process on the first receipt.
++  //     QC hold and custody COMPOSE: this row is written at receipt, not at putaway release, so a
++  //     quarantined customer lot is in custody from the moment it enters the building.
++  if (jobWork) {
++    const receiptId = isUuid(p['receipt_id']) ? (p['receipt_id'] as string) : randomUUID();
++    await persistEvent(
++      {
++        stream_type: 'jobwork',
++        stream_id: p['service_order_id'] as string,
++        event_type: JOBWORK_MATERIAL_RECEIVED,
++        payload: {
++          service_order_id: p['service_order_id'],
++          receipt_id: receiptId,
++          grn_line_id: p['grn_line_id'],
++          challan_number_ext: (p['challan_number_ext'] as string).trim(),
++          challan_date: p['challan_date'],
++          sku,
++          lot_id: resolvedLotId,
++          received_qty: receivedQty,
++          challan_qty: normalizeQty(p['challan_qty']) as string,
++          uom,
++          site_id: siteId,
++          received_by: receivedBy,
++        },
++        metadata: {
++          ...envelope.metadata,
++          correlation_id: correlationId,
++          causation_id: eventId,
++        },
++        // Natural idempotency key: one custody record per GRN line. A replay of the custody
++        // event with this key returns the stored event from persistEvent's short-circuit
++        // (no second row, no second transition attempt).
++        idempotency_key: `${JOBWORK_MATERIAL_RECEIVED}:${p['grn_line_id'] as string}`,
++      },
++      undefined,
++      client,
++    );
++  }
++
+   if (qualifiedCrossDock) {
+     await insertCrossDockTask(
+       {
+diff --git a/src/compliance/stock-balance.ts b/src/compliance/stock-balance.ts
+index 7a1af80..1ecaa09 100644
+--- a/src/compliance/stock-balance.ts
++++ b/src/compliance/stock-balance.ts
+@@ -13,6 +13,7 @@ import {
+   SUPPLIER_OWNED_STOCK_CLASSES,
+   OWNER_PARTY_CODE_REGEX,
+ } from './ownership.js';
++import { assertJobworkReceiptOwnership } from './jobwork-receipt.js';
+ 
+ /**
+  * Central stock-balance seam (Story 2.2), split in two because the two halves run at different
+@@ -68,6 +69,22 @@ const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work',
+ /** FR-Q-12: prototype stock can never be allocated, nor laundered into an owned balance row. */
+ const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
+ 
++/**
++ * Story 9.2 (FR-JW-04): the classes the LOT-level laundering bar below segregates. A lot born in
++ * one of these classes can never later gain a balance in any other class, and vice versa.
++ * 'prototype' keeps its FR-Q-12 non-saleable semantics and error code; 'job_work' (customer-owned
++ * material, Epic 9) is segregated for custody, not for saleability, and refuses with
++ * CROSS_ISSUE_BLOCKED. Kept OUT of NON_SALEABLE_STOCK_CLASSES: that set's semantics are
++ * prototype-specific. Duplicated in cycle-count.ts - the two files move together.
++ */
++const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work']);
++const JOB_WORK_STOCK_CLASS = 'job_work';
++
++/** The laundering-bar refusal code for a conflict involving `conflictClass` (see SEGREGATED_STOCK_CLASSES). */
++function segregationErrorCode(conflictClass: string): string {
++  return conflictClass === JOB_WORK_STOCK_CLASS ? 'CROSS_ISSUE_BLOCKED' : 'PROTOTYPE_NOT_SALEABLE';
++}
++
+ /** ponytail: NUMERIC(18,6) ceiling, prevents Postgres overflow on insert/update */
+ const MAX_QUANTITY = 1e12;
+ 
+@@ -303,6 +320,12 @@ export async function applyStockBalanceProjection(
+   // this code is raised from the Story 2.2/2.8 stock surface, which carries no audit machinery -
+   // the same carve-out already documented there for QUALITY_HOLD_GOVERNED. The omission is a
+   // decision, not the Story 8.3 NCR_EXISTS lesson repeating.
++  //
++  // Story 9.2 extends the same carve-out to CROSS_ISSUE_BLOCKED (below): a seam refusal aborts
++  // its transaction, so no audit row can be written from here; the attempting user and demand
++  // source are captured by the Story 1.3 statutory request middleware instead (the disclosed
++  // AC5-letter deviation). Do NOT add the code to any AUDITED_REJECTIONS set unless a
++  // quality-surface route gains a path that emits it.
+   if (NON_SALEABLE_STOCK_CLASSES.has(stockClass) && kind === 'allocation') {
+     throw new AppError(
+       400,
+@@ -311,15 +334,32 @@ export async function applyStockBalanceProjection(
+       { sku, stock_class: stockClass, lot_id: lotId, location_id: location.location_id },
+     );
+   }
++  // Story 9.2 AC5 (FR-JW-04): a TOTAL bar on customer-owned stock, not a demand classifier. In
++  // 9.2 no legitimate demand path for 'job_work' stock exists at all - consumption arrives only
++  // with the Story 9.3 custody-consumption seam, which opens its own gated door - so ANY
++  // allocation or issue naming the class is refused. One arm, mutation-testable; a classifier
++  // would lie green. CROSS_ISSUE_BLOCKED is a pre-registered stable code shared with Epic 10:
++  // the semantics stay generic (attempted class-crossing demand), never job-work-specific.
++  if (stockClass === JOB_WORK_STOCK_CLASS && (kind === 'allocation' || kind === 'issue')) {
++    throw new AppError(
++      400,
++      'CROSS_ISSUE_BLOCKED',
++      `Stock in the ${stockClass} class is segregated and cannot be issued, allocated, or picked by any demand`,
++      {
++        sku,
++        stock_class: stockClass,
++        lot_id: lotId,
++        location_id: location.location_id,
++        demand_kind: kind,
++      },
++    );
++  }
+   // Code review 2026-09-02: the check below is check-then-act, so both sides of a laundering pair
+-  // (a prototype receipt and an owned receipt) must serialize on the same transaction-scoped
++  // (a segregated receipt and an owned receipt) must serialize on the same transaction-scoped
+   // advisory lock - a plain SELECT under READ COMMITTED lets two concurrent transactions each see
+   // no conflicting row and both commit. Key on (sku, lot_id) - the lot-level grain the guard now
+   // enforces - falling back to (sku, location_id) for lot-less balances.
+-  if (
+-    kind === 'receipt' &&
+-    (stockClass === 'owned' || NON_SALEABLE_STOCK_CLASSES.has(stockClass))
+-  ) {
++  if (kind === 'receipt' && (stockClass === 'owned' || SEGREGATED_STOCK_CLASSES.has(stockClass))) {
+     const guardKey =
+       lotId !== null
+         ? `stock_class_guard:${sku}:lot:${lotId}`
+@@ -328,11 +368,13 @@ export async function applyStockBalanceProjection(
+   }
+   // Code review 2026-09-02 (widening BSD-11 per review decision): the laundering bar is LOT-level,
+   // not one (sku, location, lot) row - transferring the prototype stock away and receiving 'owned'
+-  // for the same lot anywhere must still refuse. Lot-less prototype balances stay grain-scoped by
++  // for the same lot anywhere must still refuse. Lot-less segregated balances stay grain-scoped by
+   // (sku, location). The arm applies to receipts only (inflows): issues and allocations of a
+-  // legitimately coexisting owned balance must not be frozen by a neighbouring prototype row.
++  // legitimately coexisting owned balance must not be frozen by a neighbouring segregated row.
++  // Story 9.2 widens the conflict set from NON_SALEABLE to SEGREGATED_STOCK_CLASSES so an owned
++  // receipt can no more launder customer-owned job_work material than prototype stock.
+   if (stockClass === 'owned' && kind === 'receipt') {
+-    const prototypeBalance = await client.query(
++    const segregatedBalance = await client.query(
+       lotId !== null
+         ? `SELECT stock_class FROM stock_balance
+             WHERE sku = $1 AND lot_id = $2 AND stock_class = ANY($3::text[])
+@@ -342,51 +384,67 @@ export async function applyStockBalanceProjection(
+               AND stock_class = ANY($3::text[])
+             LIMIT 1`,
+       lotId !== null
+-        ? [sku, lotId, [...NON_SALEABLE_STOCK_CLASSES]]
+-        : [sku, location.location_id, [...NON_SALEABLE_STOCK_CLASSES]],
++        ? [sku, lotId, [...SEGREGATED_STOCK_CLASSES]]
++        : [sku, location.location_id, [...SEGREGATED_STOCK_CLASSES]],
+     );
+-    if (prototypeBalance.rows.length > 0) {
++    if (segregatedBalance.rows.length > 0) {
++      const existingClass = (segregatedBalance.rows[0] as { stock_class: string }).stock_class;
+       throw new AppError(
+         400,
+-        'PROTOTYPE_NOT_SALEABLE',
+-        'This lot already holds a non-saleable prototype balance and cannot be moved to owned stock',
++        segregationErrorCode(existingClass),
++        existingClass === JOB_WORK_STOCK_CLASS
++          ? 'This lot already holds segregated customer-owned (job_work) material and cannot gain an owned balance'
++          : 'This lot already holds a non-saleable prototype balance and cannot be moved to owned stock',
+         {
+           sku,
++          stock_class: stockClass,
+           lot_id: lotId,
+           location_id: location.location_id,
+-          existing_stock_class: (prototypeBalance.rows[0] as { stock_class: string }).stock_class,
++          existing_stock_class: existingClass,
++          ...(existingClass === JOB_WORK_STOCK_CLASS ? { demand_kind: kind } : {}),
+         },
+       );
+     }
+   }
+   // Code review 2026-09-02 round 2: the symmetric arm. Without it the bar is order-dependent -
+   // owned-then-prototype receipt ordering commits the same coexisting owned+prototype state that
+-  // prototype-then-owned refuses. A lot is prototype from birth or it is not; a prototype receipt
+-  // into a lot already carrying a saleable-class balance is refused with the same code.
+-  if (NON_SALEABLE_STOCK_CLASSES.has(stockClass) && kind === 'receipt') {
+-    const saleableBalance = await client.query(
++  // prototype-then-owned refuses. A lot is segregated from birth or it is not; a segregated-class
++  // receipt into a lot already carrying ANY other class's balance is refused. Story 9.2: the arm
++  // now covers job_work in both directions (a job_work receipt into an owned or prototype lot,
++  // a prototype receipt into a job_work lot).
++  if (SEGREGATED_STOCK_CLASSES.has(stockClass) && kind === 'receipt') {
++    const otherClassBalance = await client.query(
+       lotId !== null
+         ? `SELECT stock_class FROM stock_balance
+-            WHERE sku = $1 AND lot_id = $2 AND NOT (stock_class = ANY($3::text[]))
++            WHERE sku = $1 AND lot_id = $2 AND stock_class <> $3
+             LIMIT 1`
+         : `SELECT stock_class FROM stock_balance
+             WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL
+-              AND NOT (stock_class = ANY($3::text[]))
++              AND stock_class <> $3
+             LIMIT 1`,
+-      lotId !== null
+-        ? [sku, lotId, [...NON_SALEABLE_STOCK_CLASSES]]
+-        : [sku, location.location_id, [...NON_SALEABLE_STOCK_CLASSES]],
++      lotId !== null ? [sku, lotId, stockClass] : [sku, location.location_id, stockClass],
+     );
+-    if (saleableBalance.rows.length > 0) {
++    if (otherClassBalance.rows.length > 0) {
++      const existingClass = (otherClassBalance.rows[0] as { stock_class: string }).stock_class;
++      // A job_work conflict on either side is a custody-segregation breach (CROSS_ISSUE_BLOCKED);
++      // a prototype-vs-owned conflict keeps its FR-Q-12 code.
++      const conflictClass =
++        stockClass === JOB_WORK_STOCK_CLASS || existingClass === JOB_WORK_STOCK_CLASS
++          ? JOB_WORK_STOCK_CLASS
++          : stockClass;
+       throw new AppError(
+         400,
+-        'PROTOTYPE_NOT_SALEABLE',
+-        'This lot already holds a saleable-class balance and cannot receive prototype stock',
++        segregationErrorCode(conflictClass),
++        conflictClass === JOB_WORK_STOCK_CLASS
++          ? `This lot already holds a ${existingClass} balance and cannot receive ${stockClass} stock (customer-owned material is segregated at lot level)`
++          : 'This lot already holds a saleable-class balance and cannot receive prototype stock',
+         {
+           sku,
++          stock_class: stockClass,
+           lot_id: lotId,
+           location_id: location.location_id,
+-          existing_stock_class: (saleableBalance.rows[0] as { stock_class: string }).stock_class,
++          existing_stock_class: existingClass,
++          ...(conflictClass === JOB_WORK_STOCK_CLASS ? { demand_kind: kind } : {}),
+         },
+       );
+     }
+@@ -403,6 +461,10 @@ export async function applyStockBalanceProjection(
+       location.location_id,
+       client,
+     );
++    // Story 9.2 AC7: a job_work receipt must name a receivable service order and an
++    // owner_party_code equal to that order's customer_party_code - the same choke point, so a
++    // direct stock.received cannot mint unattributed customer stock either.
++    await assertJobworkReceiptOwnership(envelope, stockClass, sku, location.location_id, client);
+     await applyStockReceipt(
+       {
+         sku,
+diff --git a/src/config/index.ts b/src/config/index.ts
+index 1b56273..0ca42ff 100644
+--- a/src/config/index.ts
++++ b/src/config/index.ts
+@@ -650,6 +650,28 @@ export const config = {
+       true,
+     ),
+   },
++  jobwork: {
++    // Story 9.2 (FR-JW-03, FR-JW-05; Binding Scope Decision 6): the customer-material receipt
++    // tolerance, in percent of the inbound challan quantity. A receipt whose ABSOLUTE variance
++    // (received_qty - challan_qty) STRICTLY exceeds challan_qty * (t / 100) is flagged as an
++    // exception attributed to the receiving user; exactly-at-tolerance does NOT flag. Default 0.5
++    // (weighbridge class-III instrument accuracy is 0.2-0.5 percent): a zero default would flag
++    // every routine weighbridge wobble and train clerks to ignore the flag, which fails ignored,
++    // not closed. variance_qty is stored on every receipt regardless, so nothing is hidden.
++    // Kept as an exact decimal STRING (the completionTolerancePercent precedent) so the predicate
++    // settles in scaled integer arithmetic, never through a JS float. Only an ABSENT variable
++    // takes the default; present-but-blank, non-numeric, negative, or above 10 refuses to boot.
++    receiptTolerancePercent: (() => {
++      const raw = process.env['JOBWORK_RECEIPT_TOLERANCE_PCT'];
++      const value = raw === undefined ? '0.5' : raw.trim();
++      if (!/^\d{1,2}(\.\d{1,4})?$/.test(value) || Number(value) > 10) {
++        throw new Error(
++          `Invalid JOBWORK_RECEIPT_TOLERANCE_PCT "${raw}": must be a decimal percentage from 0 to 10 inclusive, with at most four decimal places.`,
++        );
++      }
++      return value;
++    })(),
++  },
+   qc: {
+     // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -
+     // per-site catalogues are incompatible with the enterprise-wide repeat count in Decision 12
+diff --git a/src/events/migrate.ts b/src/events/migrate.ts
+index 1862dee..bc929a0 100644
+--- a/src/events/migrate.ts
++++ b/src/events/migrate.ts
+@@ -237,6 +237,9 @@ const MIGRATIONS = [
+   // Story 9.1: job-work service order read model on the new 'jobwork' stream (tail-append,
+   // BSD-8). References bom (Story 5.6) and location_register, both created above.
+   '../../read/projections/service_order.sql',
++  // Story 9.2: customer-material receipt custody record (tail-append). FK-shaped reference to
++  // service_order above and to grn_line (Story 3.4), no declared FK.
++  '../../read/projections/jobwork_material_receipt.sql',
+ ];
+ 
+ async function migrate(): Promise<void> {
+diff --git a/src/events/schema.ts b/src/events/schema.ts
+index 59f5d80..740f1e4 100644
+--- a/src/events/schema.ts
++++ b/src/events/schema.ts
+@@ -4467,6 +4467,36 @@ export interface JobworkOrderConfirmedEnvelope extends Omit<EventEnvelope, 'payl
+   payload: JobworkOrderConfirmedPayload;
+ }
+ 
++/**
++ * Story 9.2 (FR-JW-03, FR-JW-04, FR-JW-05): the order-linked custody record written in the SAME
++ * transaction as the GRN line that received customer material. receipt_id is minted client-side
++ * (the 9.1 BSD-10 idiom). challan_date is an IST business DATE - the Story 9.5 Rule 45 return
++ * clock counts from it. variance_qty (received_qty - challan_qty, signed) and variance_flagged
++ * are SERVER-DERIVED: the seam refuses them on input and rewrites the payload before the
++ * domain_events insert, so the stored event carries what this process computed.
++ */
++export interface JobworkMaterialReceivedPayload {
++  service_order_id: string;
++  receipt_id: string;
++  grn_line_id: string;
++  challan_number_ext: string;
++  challan_date: string;
++  sku: string;
++  lot_id: string | null;
++  received_qty: string;
++  challan_qty: string;
++  uom: string;
++  variance_qty?: string;
++  variance_flagged?: boolean;
++  site_id: string;
++  received_by: string;
++}
++
++export interface JobworkMaterialReceivedEnvelope extends Omit<EventEnvelope, 'payload'> {
++  event_type: 'jobwork.material_received';
++  payload: JobworkMaterialReceivedPayload;
++}
++
+ // ---------------------------------------------------------------------------
+ // Supported event types registry
+ // ---------------------------------------------------------------------------
+@@ -5373,4 +5403,10 @@ export const SUPPORTED_EVENT_TYPES = {
+     streamType: 'jobwork',
+     requiresBusinessStream: false,
+   },
++  // Story 9.2: the customer-material receipt custody record rides the order's stream
++  // (stream_id = service_order_id); the order row already carries business_stream = 'job_work'.
++  'jobwork.material_received': {
++    streamType: 'jobwork',
++    requiresBusinessStream: false,
++  },
+ } as const;
+diff --git a/src/events/store.ts b/src/events/store.ts
+index 836b1a1..6211214 100644
+--- a/src/events/store.ts
++++ b/src/events/store.ts
+@@ -222,6 +222,10 @@ import {
+   assertServiceOrderShape,
+   applyServiceOrderProjection,
+ } from '../compliance/service-order.js';
++import {
++  assertJobworkMaterialReceivedShape,
++  applyJobworkMaterialReceivedProjection,
++} from '../compliance/jobwork-receipt.js';
+ import {
+   assertProductionMaterialShape,
+   applyProductionMaterialProjection,
+@@ -722,6 +726,10 @@ export async function persistEvent(
+   // asserts, so a malformed jobwork event never consumes an idempotency key. It also rejects a
+   // jobwork.* event name on any other stream (the Story 8.1 stream-mismatch closure).
+   assertServiceOrderShape(envelope);
++  // Story 9.2: customer-material receipt shape validation (closed shape, strict UUIDs, calendar
++  // challan_date, strictly positive NUMERIC-string quantities, the derived variance fields
++  // refused on input) is non-DB and runs with the other pre-transaction asserts.
++  assertJobworkMaterialReceivedShape(envelope);
+   assertThreeWayMatchShape(envelope);
+   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
+   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
+@@ -1077,6 +1085,13 @@ export async function persistEvent(
+     // FOR UPDATE inside the applier (the Epic 8 hold-bypass lesson), so the projection row and
+     // the domain event commit or roll back together.
+     await applyServiceOrderProjection(envelope, client, eventId);
++    // Story 9.2: the customer-material custody receipt runs inside this same transaction (for the
++    // GRN path, nested inside the goods.received transaction): the order status is re-derived
++    // under the order advisory lock plus FOR UPDATE, the tolerance variance is computed and
++    // written back onto the payload, and the FIRST receipt fires confirmed -> in_process through
++    // the 9.1 transitionServiceOrder seam, so the custody row, the order flip, and the domain
++    // event commit or roll back together.
++    await applyJobworkMaterialReceivedProjection(envelope, client, eventId);
+     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
+     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
+     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
+diff --git a/src/server.ts b/src/server.ts
+index 638764a..349ec7d 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -361,6 +361,7 @@ import {
+   confirmServiceOrderHandler,
+   getServiceOrderHandler as getJobworkServiceOrderHandler,
+   listServiceOrdersHandler,
++  listServiceOrderReceiptsHandler,
+ } from './api/v1/service-orders.js';
+ import {
+   createProductionOrderHandler,
+@@ -1035,6 +1036,9 @@ export function createAppRouter(): Router {
+   router.get('/api/v1/service-orders/:serviceOrderId', getJobworkServiceOrderHandler);
+   router.patch('/api/v1/service-orders/:serviceOrderId', updateServiceOrderHandler);
+   router.post('/api/v1/service-orders/:serviceOrderId/confirm', confirmServiceOrderHandler);
++  // Story 9.2: customer-material receipts recorded against an order (FR-JW-03, FR-JW-05). The
++  // receipt itself rides POST /api/v1/grn-lines with stock_class 'job_work'; this is read-only.
++  router.get('/api/v1/service-orders/:serviceOrderId/receipts', listServiceOrderReceiptsHandler);
+ 
+   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
+   // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP
+diff --git a/test/integration/story-1-9.test.ts b/test/integration/story-1-9.test.ts
+index 15b73b8..4db0df4 100644
+--- a/test/integration/story-1-9.test.ts
++++ b/test/integration/story-1-9.test.ts
+@@ -538,6 +538,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
+       'GET /api/v1/service-orders/:serviceOrderId',
+       'PATCH /api/v1/service-orders/:serviceOrderId',
+       'POST /api/v1/service-orders/:serviceOrderId/confirm',
++      // Story 9.2: customer-material receipts against an order (FR-JW-03, FR-JW-05).
++      'GET /api/v1/service-orders/:serviceOrderId/receipts',
+       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
+       'GET /api/v1/qc/reports/dashboard',
+       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',
+diff --git a/test/integration/story-2-8.test.ts b/test/integration/story-2-8.test.ts
+index 72be4bc..9e7aadc 100644
+--- a/test/integration/story-2-8.test.ts
++++ b/test/integration/story-2-8.test.ts
+@@ -379,7 +379,11 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
+     assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+   });
+ 
+-  it('job_work receipts stay outside the ownership gate (Epic 9 flow untouched)', async () => {
++  it('job_work receipts stay outside the ownership-agreement gate; Story 9.2 owns the class and refuses a direct receipt', async () => {
++    // Story 9.2 (FR-JW-03, AC7): customer material enters only through the gate and receiving
++    // flows against a confirmed service order. The consignment/vmi agreement gate still does not
++    // apply to job_work (no OWNERSHIP_AGREEMENT_NOT_FOUND); the Story 9.2 receiving-flow gate
++    // refuses the direct stock.received instead, and no balance row is written.
+     const sku = 'RM-0099-JW';
+     await seedItem(sku);
+     const res = await postStockEvent('stock.received', {
+@@ -388,9 +392,10 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
+       quantity: 5,
+       stock_class: 'job_work',
+     });
+-    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
++    assert.strictEqual(res.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
+     const stock = await getStock(sku);
+-    assert.strictEqual(classEntry(stock, locAId, 'job_work')!['on_hand'], 5);
++    assert.strictEqual(classEntry(stock, locAId, 'job_work'), undefined);
+   });
+ 
+   // --- AC2: classless issues draw owned only ------------------------------
+diff --git a/test/unit/schema-drift.test.ts b/test/unit/schema-drift.test.ts
+index 6bf2f0c..626a0cb 100644
+--- a/test/unit/schema-drift.test.ts
++++ b/test/unit/schema-drift.test.ts
+@@ -1703,6 +1703,19 @@ const EXPECTED = [
+     ],
+     indexBodies: ['ON service_order (order_number_ext, site_id)'],
+   },
++  // Story 9.2: customer-material receipt custody record (one row per GRN line).
++  {
++    canonical: 'read/projections/jobwork_material_receipt.sql',
++    table: 'jobwork_material_receipt',
++    constraints: ['chk_jobwork_receipt_received_positive', 'chk_jobwork_receipt_challan_positive'],
++    indexes: [
++      'uq_jobwork_receipt_grn_line',
++      'idx_jobwork_receipt_order',
++      'idx_jobwork_receipt_site',
++    ],
++    indexBodies: ['ON jobwork_material_receipt (grn_line_id)'],
++    appUserGrant: 'INSERT, SELECT',
++  },
+ ];
+ 
+ describe('Story 2.1 schema drift guard', () => {
+diff --git a/read/projections/jobwork_material_receipt.sql b/read/projections/jobwork_material_receipt.sql
+new file mode 100644
+index 0000000..78a86d6
+--- /dev/null
++++ b/read/projections/jobwork_material_receipt.sql
+@@ -0,0 +1,73 @@
++-- Job-work customer-material receipt read model (Story 9.2). This file is the CANONICAL
++-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
++-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
++-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
++-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
++-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
++-- can be re-applied to a live database safely.
++--
++-- Derived state ONLY: rows are rebuildable by replaying jobwork.material_received domain events;
++-- mutation happens exclusively through persistEvent, which applies this projection inside the
++-- SAME transaction as the domain_events insert (and, for the GRN path, the same transaction as
++-- the grn_line and stock_balance writes). One GRN line yields exactly one custody receipt row
++-- (uq_jobwork_receipt_grn_line). service_order_id is FK-shaped, not an FK: projections are
++-- rebuildable independently (the Story 9.1 BSD-8 idiom). challan_date is the IST business date
++-- the Story 9.5 Rule 45 return clock counts from. variance_qty is SIGNED (received - challan);
++-- variance_flagged records whether its absolute value exceeded the configured receipt tolerance
++-- (JOBWORK_RECEIPT_TOLERANCE_PCT) at receipt time, attributed to received_by.
++
++CREATE TABLE IF NOT EXISTS jobwork_material_receipt (
++  receipt_id         UUID PRIMARY KEY,
++  service_order_id   UUID NOT NULL,
++  grn_line_id        UUID NOT NULL,
++  challan_number_ext TEXT NOT NULL,
++  challan_date       DATE NOT NULL,
++  sku                TEXT NOT NULL,
++  lot_id             TEXT,
++  received_qty       NUMERIC(18,3) NOT NULL,
++  challan_qty        NUMERIC(18,3) NOT NULL,
++  uom                TEXT NOT NULL,
++  variance_qty       NUMERIC(18,3) NOT NULL,
++  variance_flagged   BOOLEAN NOT NULL DEFAULT false,
++  received_by        UUID NOT NULL,
++  site_id            UUID NOT NULL,
++  correlation_id     UUID,
++  source_event_id    UUID NOT NULL,
++  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
++  CONSTRAINT chk_jobwork_receipt_received_positive CHECK (received_qty > 0),
++  CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0)
++);
++
++CREATE UNIQUE INDEX IF NOT EXISTS uq_jobwork_receipt_grn_line ON jobwork_material_receipt (grn_line_id);
++CREATE INDEX IF NOT EXISTS idx_jobwork_receipt_order ON jobwork_material_receipt (service_order_id, created_at);
++CREATE INDEX IF NOT EXISTS idx_jobwork_receipt_site ON jobwork_material_receipt (site_id);
++
++DO $$
++BEGIN
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_jobwork_receipt_received_positive'
++      AND conrelid = 'jobwork_material_receipt'::regclass
++  ) THEN
++    ALTER TABLE jobwork_material_receipt
++      ADD CONSTRAINT chk_jobwork_receipt_received_positive CHECK (received_qty > 0);
++  END IF;
++  IF NOT EXISTS (
++    SELECT 1 FROM pg_constraint
++    WHERE conname = 'chk_jobwork_receipt_challan_positive'
++      AND conrelid = 'jobwork_material_receipt'::regclass
++  ) THEN
++    ALTER TABLE jobwork_material_receipt
++      ADD CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0);
++  END IF;
++END $$;
++
++DO $$
++BEGIN
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
++    GRANT INSERT, SELECT ON jobwork_material_receipt TO app_user;
++  END IF;
++  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
++    GRANT SELECT ON jobwork_material_receipt TO readonly_user;
++  END IF;
++END $$;
+diff --git a/src/compliance/jobwork-receipt.ts b/src/compliance/jobwork-receipt.ts
+new file mode 100644
+index 0000000..8ce7536
+--- /dev/null
++++ b/src/compliance/jobwork-receipt.ts
+@@ -0,0 +1,480 @@
++import type { PoolClient } from 'pg';
++import type { EventEnvelope } from '../events/store.js';
++import type { JobworkMaterialReceivedPayload } from '../events/schema.js';
++import { AppError } from '../middleware/error.js';
++import { config } from '../config/index.js';
++import { getServiceOrderById } from '../read/projections/service_order.js';
++import type { ServiceOrderRow } from '../read/projections/service_order.js';
++import { insertJobworkMaterialReceipt } from '../read/projections/jobwork_material_receipt.js';
++import { transitionServiceOrder } from './service-order.js';
++import { OWNERSHIP_ERROR_CODES } from './ownership.js';
++
++/**
++ * Story 9.2: customer-material receipt seam (FR-JW-03, FR-JW-04, FR-JW-05).
++ *
++ * Split like every other seam: assert* runs BEFORE any DB write (a malformed
++ * jobwork.material_received never consumes an idempotency key); apply* runs INSIDE the event
++ * transaction under pg_advisory_xact_lock keyed by service_order_id, then re-reads the order row
++ * FOR UPDATE (the Epic 8 hold-bypass lesson: route pre-checks are advisory only).
++ *
++ * Two gates live here and are reached from every write path:
++ * - assertJobworkReceiptOwnership: invoked from applyStockBalanceProjection for every
++ *   stock_class 'job_work' RECEIPT (the Story 2.8 assertConsignmentReceiptOwnership precedent), so
++ *   a direct POST /api/v1/events stock.received can no more mint unattributed customer stock than
++ *   the GRN flow can (AC7).
++ * - applyJobworkMaterialReceivedProjection: the custody record itself, the tolerance variance, and
++ *   the FIRST-receipt confirmed -> in_process transition through the 9.1 BSD-2 seam (AC2, AC3).
++ */
++
++const JOBWORK_STREAM_TYPES = new Set(['jobwork']);
++export const JOBWORK_MATERIAL_RECEIVED = 'jobwork.material_received';
++export const JOB_WORK_STOCK_CLASS = 'job_work';
++
++/**
++ * FR-JW-03: customer material enters ONLY through the gate and receiving flows. The receiving
++ * seam stamps its synthetic stock.received view with this Symbol; a JSON body arriving through
++ * POST /api/v1/events or the edge upload can never carry a Symbol key, so the stock-surface gate
++ * can tell the GRN hand-off from any other job_work receipt attempt without trusting a payload
++ * field. Only receiving.ts may set it.
++ */
++export const RECEIVING_HANDOFF = Symbol('jobwork.receiving_handoff');
++
++function isReceivingHandoff(envelope: EventEnvelope): boolean {
++  return (envelope as unknown as Record<symbol, unknown>)[RECEIVING_HANDOFF] === true;
++}
++
++/** The order states a customer-material receipt may post against (AC1). */
++const RECEIVABLE_ORDER_STATUSES: ReadonlySet<ServiceOrderRow['status']> = new Set([
++  'confirmed',
++  'in_process',
++]);
++
++const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++const DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
++/** Up to 15 integer digits and 3 decimals - the NUMERIC(18,3) column grain. */
++const QTY_REGEX = /^\d{1,15}(\.\d{1,3})?$/;
++const MAX_TEXT_LENGTH = 200;
++
++const RECEIPT_FIELDS = new Set([
++  'service_order_id',
++  'receipt_id',
++  'grn_line_id',
++  'challan_number_ext',
++  'challan_date',
++  'sku',
++  'lot_id',
++  'received_qty',
++  'challan_qty',
++  'uom',
++  'site_id',
++  'received_by',
++]);
++/** Server-derived fields: refused on input, rewritten by the applier (the 8.1 declared-derived idiom). */
++const DERIVED_FIELDS = ['variance_qty', 'variance_flagged'] as const;
++
++function isUuid(value: unknown): value is string {
++  return typeof value === 'string' && UUID_REGEX.test(value);
++}
++
++function isNonEmptyString(value: unknown): value is string {
++  return typeof value === 'string' && value.trim().length > 0;
++}
++
++function isCalendarDate(value: unknown): value is string {
++  if (typeof value !== 'string') return false;
++  const match = DATE_REGEX.exec(value);
++  if (!match) return false;
++  const year = Number(match[1]);
++  const month = Number(match[2]);
++  const day = Number(match[3]);
++  const date = new Date(Date.UTC(year, month - 1, day));
++  return (
++    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
++  );
++}
++
++/** A strictly positive NUMERIC(18,3) quantity as a string ("0", "0.000", 12 (number) all refuse). */
++export function isPositiveQtyString(value: unknown): value is string {
++  return typeof value === 'string' && QTY_REGEX.test(value) && !/^0+(\.0+)?$/.test(value);
++}
++
++function reject(
++  code: string,
++  message: string,
++  details?: Record<string, unknown>,
++  status: number = 400,
++): never {
++  throw new AppError(status, code, message, details);
++}
++
++// ---------------------------------------------------------------------------
++// Tolerance predicate (parameterized so a unit test can fail - the 8.4 lesson)
++// ---------------------------------------------------------------------------
++
++/** Scale every decimal into an integer of 10^8 so quantity (3 dp) x percent (4 dp) stays exact. */
++const SCALE = 8n;
++const SCALE_FACTOR = 10n ** SCALE;
++
++function toScaled(value: string): bigint {
++  const negative = value.startsWith('-');
++  const unsigned = negative ? value.slice(1) : value;
++  const [whole, frac = ''] = unsigned.split('.');
++  const padded = (frac + '0'.repeat(Number(SCALE))).slice(0, Number(SCALE));
++  const scaled = BigInt(whole || '0') * SCALE_FACTOR + BigInt(padded);
++  return negative ? -scaled : scaled;
++}
++
++function fromScaled(value: bigint, decimals: number = 3): string {
++  const negative = value < 0n;
++  const abs = negative ? -value : value;
++  const whole = abs / SCALE_FACTOR;
++  const frac = (abs % SCALE_FACTOR).toString().padStart(Number(SCALE), '0').slice(0, decimals);
++  return `${negative ? '-' : ''}${whole.toString()}${decimals > 0 ? `.${frac}` : ''}`;
++}
++
++/** Signed variance received - challan, as a NUMERIC(18,3) string ("-0.500", "2.000", "0.000"). */
++export function receiptVarianceQty(receivedQty: string, challanQty: string): string {
++  return fromScaled(toScaled(receivedQty) - toScaled(challanQty));
++}
++
++/**
++ * FR-JW-05 receipt tolerance: flag when |variance| STRICTLY exceeds challan_qty * (pct / 100).
++ * Exactly at the band does NOT flag. Exact scaled-integer arithmetic; no JS float anywhere.
++ * tolerancePercent is a PARAMETER (defaulting to config) so tests exercise real boundaries
++ * instead of asserting the config against itself.
++ */
++export function receiptVarianceFlagged(
++  varianceQty: string,
++  challanQty: string,
++  tolerancePercent: string = config.jobwork.receiptTolerancePercent,
++): boolean {
++  const variance = toScaled(varianceQty);
++  const absVariance = variance < 0n ? -variance : variance;
++  // |v| > c * t / 100  <=>  |v| * 100 * SCALE_FACTOR > c * t   (both sides scaled by SCALE^2)
++  return absVariance * 100n * SCALE_FACTOR > toScaled(challanQty) * toScaled(tolerancePercent);
++}
++
++/** True when a receipt against an order in `status` must fire the in_process transition (AC2). */
++export function firstReceiptTransitionRequired(status: ServiceOrderRow['status']): boolean {
++  return status === 'confirmed';
++}
++
++/** True when an order in `status` can accept a customer-material receipt at all (AC1). */
++export function orderAcceptsReceipt(status: ServiceOrderRow['status']): boolean {
++  return RECEIVABLE_ORDER_STATUSES.has(status);
++}
++
++// ---------------------------------------------------------------------------
++// Pre-transaction shape validation (no DB access)
++// ---------------------------------------------------------------------------
++
++export function assertJobworkMaterialReceivedShape(envelope: EventEnvelope): void {
++  if (envelope.event_type !== JOBWORK_MATERIAL_RECEIVED) return;
++  // The event NAME on any other stream is rejected before an applier can silently ignore it (the
++  // Story 8.1 stream-mismatch bypass closure, mirrored from assertServiceOrderShape).
++  if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) {
++    reject('INVALID_EVENT_ENVELOPE', 'jobwork.* events must ride the jobwork stream', {
++      event_type: envelope.event_type,
++      stream_type: envelope.stream_type,
++    });
++  }
++  const p = envelope.payload as Record<string, unknown>;
++
++  for (const field of DERIVED_FIELDS) {
++    if (p[field] !== undefined) {
++      reject('INVALID_PARAMS', `${field} is derived by the server and must not be supplied`, {
++        field,
++      });
++    }
++  }
++  for (const key of Object.keys(p)) {
++    if (!RECEIPT_FIELDS.has(key)) {
++      reject('INVALID_PARAMS', `${key} is not a recognized field on this event`, { field: key });
++    }
++  }
++  for (const field of ['service_order_id', 'receipt_id', 'grn_line_id', 'site_id', 'received_by']) {
++    if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
++  }
++  if (envelope.stream_id !== p['service_order_id']) {
++    reject('INVALID_EVENT_ENVELOPE', 'stream_id must equal service_order_id', {
++      stream_id: envelope.stream_id,
++      service_order_id: p['service_order_id'],
++    });
++  }
++  for (const field of ['challan_number_ext', 'sku', 'uom']) {
++    if (!isNonEmptyString(p[field]) || (p[field] as string).trim().length > MAX_TEXT_LENGTH) {
++      reject(
++        'INVALID_PARAMS',
++        `${field} is required and must be a non-empty string of at most ${MAX_TEXT_LENGTH} characters`,
++      );
++    }
++    p[field] = (p[field] as string).trim();
++  }
++  if (!isCalendarDate(p['challan_date'])) {
++    reject('INVALID_PARAMS', 'challan_date is required and must be a YYYY-MM-DD calendar date');
++  }
++  if (p['lot_id'] !== undefined && p['lot_id'] !== null) {
++    if (!isNonEmptyString(p['lot_id']) || (p['lot_id'] as string).trim().length > MAX_TEXT_LENGTH) {
++      reject('INVALID_PARAMS', 'lot_id must be a non-empty string when supplied');
++    }
++    p['lot_id'] = (p['lot_id'] as string).trim();
++  }
++  // Strictly positive challan_qty: the tolerance band is challan_qty * pct, so a zero challan
++  // would make every receipt an over-tolerance receipt with no meaningful base.
++  for (const field of ['received_qty', 'challan_qty']) {
++    if (!isPositiveQtyString(p[field])) {
++      reject(
++        'INVALID_PARAMS',
++        `${field} is required and must be a strictly positive NUMERIC string with at most 3 decimals`,
++        { field, value: p[field] ?? null },
++      );
++    }
++  }
++}
++
++// ---------------------------------------------------------------------------
++// In-transaction gates (DB access)
++// ---------------------------------------------------------------------------
++
++async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Promise<boolean> {
++  if (!envelope.idempotency_key && !envelope.event_id) return false;
++  const existing = await client.query(
++    `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 LIMIT 1`,
++    [envelope.idempotency_key ?? null, envelope.event_id ?? null],
++  );
++  return existing.rows.length > 0;
++}
++
++/** Same key and seed as service-order.ts advisoryLock, so receipts serialize with transitions. */
++async function lockOrder(serviceOrderId: string, client: PoolClient): Promise<void> {
++  await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [serviceOrderId]);
++}
++
++/**
++ * Re-derives the order under lock and refuses fail-closed unless it is a confirmed or in_process
++ * order at the receiving site (AC1, AC7). Shared by both gates so the GRN flow and a direct
++ * stock.received give the same answer.
++ */
++async function requireReceivableOrder(
++  serviceOrderId: unknown,
++  siteId: string | null,
++  client: PoolClient,
++): Promise<ServiceOrderRow> {
++  if (!isUuid(serviceOrderId)) {
++    reject(
++      'SOURCE_DOCUMENT_REQUIRED',
++      'A job_work receipt requires a confirmed service order (service_order_id)',
++      { service_order_id: serviceOrderId ?? null },
++      409,
++    );
++  }
++  await lockOrder(serviceOrderId, client);
++  const order = await getServiceOrderById(serviceOrderId, client, true);
++  if (!order) {
++    reject(
++      'SOURCE_DOCUMENT_REQUIRED',
++      'A job_work receipt requires a confirmed service order; none exists for service_order_id',
++      { service_order_id: serviceOrderId },
++      409,
++    );
++  }
++  if (!orderAcceptsReceipt(order.status)) {
++    reject(
++      'SOURCE_DOCUMENT_REQUIRED',
++      `A job_work receipt requires a confirmed service order; this order is ${order.status}`,
++      { service_order_id: serviceOrderId, status: order.status },
++      409,
++    );
++  }
++  if (siteId !== null && order.site_id !== siteId) {
++    reject(
++      'SOURCE_DOCUMENT_REQUIRED',
++      'The service order belongs to a different site than the receipt',
++      { service_order_id: serviceOrderId, order_site_id: order.site_id, site_id: siteId },
++      409,
++    );
++  }
++  return order;
++}
++
++/**
++ * AC7 ownership binding for the STOCK surface: every stock.received carrying stock_class
++ * 'job_work' - the GRN hand-off, a direct POST /api/v1/events, an edge upload - must name a
++ * receivable service order and an owner_party_code equal to that order's customer_party_code.
++ * Invoked from applyStockBalanceProjection so no write path can mint unattributed customer stock.
++ * Refuses BEFORE any balance mutation, so the transaction rolls back without consuming an
++ * idempotency key. Non-job_work classes pass through untouched.
++ */
++export async function assertJobworkReceiptOwnership(
++  envelope: EventEnvelope,
++  stockClass: string,
++  sku: string,
++  locationId: string,
++  client: PoolClient,
++): Promise<void> {
++  if (stockClass !== JOB_WORK_STOCK_CLASS) return;
++  if (!isReceivingHandoff(envelope)) {
++    reject(
++      'SOURCE_DOCUMENT_REQUIRED',
++      'Customer material (stock_class job_work) can only be received through the gate and receiving flows (POST /api/v1/grn-lines against a confirmed service order)',
++      { sku, location_id: locationId, stock_class: stockClass },
++      409,
++    );
++  }
++  const order = await requireReceivableOrder(envelope.payload['service_order_id'], null, client);
++  const ownerPartyCode =
++    typeof envelope.payload['owner_party_code'] === 'string'
++      ? envelope.payload['owner_party_code'].trim()
++      : null;
++  if (ownerPartyCode === null || ownerPartyCode !== order.customer_party_code) {
++    reject(
++      OWNERSHIP_ERROR_CODES.OWNER_PARTY_MISMATCH,
++      'owner_party_code must equal the customer_party_code of the linked service order',
++      {
++        sku,
++        location_id: locationId,
++        stock_class: stockClass,
++        service_order_id: order.service_order_id,
++        supplied_owner_party_code: ownerPartyCode,
++      },
++      409,
++    );
++  }
++  envelope.payload['owner_party_code'] = ownerPartyCode;
++}
++
++/**
++ * The custody record (AC2, AC3). Under the order advisory lock + FOR UPDATE: re-derives the
++ * order status (confirmed or in_process, same site), computes the signed variance and the
++ * tolerance flag, inserts the receipt row (one per GRN line), rewrites the payload's derived
++ * fields, and fires confirmed -> in_process through transitionServiceOrder on the FIRST receipt
++ * only. A second receipt against an in_process order records without re-transitioning.
++ */
++export async function applyJobworkMaterialReceivedProjection(
++  envelope: EventEnvelope,
++  client: PoolClient,
++  eventId: string,
++): Promise<void> {
++  if (envelope.event_type !== JOBWORK_MATERIAL_RECEIVED) return;
++  if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) return;
++  if (await alreadyPersisted(envelope, client)) return;
++
++  const p = envelope.payload as unknown as JobworkMaterialReceivedPayload;
++  const order = await requireReceivableOrder(p.service_order_id, p.site_id, client);
++
++  // FR-JW-03 (the inverse of the stock-surface gate): a custody record exists only for material
++  // that physically came through the receiving flow. The GRN line it names must already be in
++  // this transaction (the hand-off inserts it before nesting this event) with the segregated
++  // class and the same sku, lot, quantity, and site; a direct POST /api/v1/events with an
++  // invented or foreign GRN line cannot mint custody or flip the order.
++  const grnLine = await client.query(
++    `SELECT gl.stock_class, gl.sku, gl.lot_id, gl.received_qty::text AS received_qty, gl.status,
++            g.site_id
++       FROM grn_line gl JOIN grn g ON g.grn_id = gl.grn_id
++      WHERE gl.grn_line_id = $1`,
++    [p.grn_line_id],
++  );
++  const line = grnLine.rows[0] as
++    | {
++        stock_class: string;
++        sku: string;
++        lot_id: string | null;
++        received_qty: string;
++        status: string;
++        site_id: string;
++      }
++    | undefined;
++  if (
++    !line ||
++    line.stock_class !== JOB_WORK_STOCK_CLASS ||
++    line.status === 'rejected' ||
++    line.sku !== p.sku ||
++    (line.lot_id ?? null) !== (p.lot_id ?? null) ||
++    line.site_id !== order.site_id ||
++    Number(line.received_qty) !== Number(p.received_qty)
++  ) {
++    reject(
++      'SOURCE_DOCUMENT_REQUIRED',
++      'A customer-material custody receipt must reference the posted job_work GRN line it was received on',
++      {
++        grn_line_id: p.grn_line_id,
++        service_order_id: order.service_order_id,
++        ...(line
++          ? {
++              grn_line_stock_class: line.stock_class,
++              grn_line_status: line.status,
++              grn_line_sku: line.sku,
++            }
++          : { grn_line_found: false }),
++      },
++      409,
++    );
++  }
++
++  const varianceQty = receiptVarianceQty(p.received_qty, p.challan_qty);
++  const varianceFlagged = receiptVarianceFlagged(varianceQty, p.challan_qty);
++
++  try {
++    await insertJobworkMaterialReceipt(
++      {
++        receipt_id: p.receipt_id,
++        service_order_id: order.service_order_id,
++        grn_line_id: p.grn_line_id,
++        challan_number_ext: p.challan_number_ext,
++        challan_date: p.challan_date,
++        sku: p.sku,
++        lot_id: p.lot_id ?? null,
++        received_qty: p.received_qty,
++        challan_qty: p.challan_qty,
++        uom: p.uom,
++        variance_qty: varianceQty,
++        variance_flagged: varianceFlagged,
++        received_by: p.received_by,
++        site_id: order.site_id,
++        correlation_id: envelope.metadata.correlation_id ?? null,
++        source_event_id: eventId,
++      },
++      client,
++    );
++  } catch (err: unknown) {
++    // Check WHICH constraint fired (the 9.1 review patch 7 lesson): a second custody row for the
++    // same GRN line and a reused receipt_id are different refusals, and neither is a replay - a
++    // genuine replay was short-circuited by alreadyPersisted above.
++    if (err instanceof Error && 'code' in err && (err as { code: string }).code === '23505') {
++      const constraint = (err as { constraint?: string }).constraint;
++      if (constraint === 'uq_jobwork_receipt_grn_line') {
++        reject(
++          'DUPLICATE_EVENT',
++          'A custody receipt already exists for this GRN line',
++          { grn_line_id: p.grn_line_id, constraint },
++          409,
++        );
++      }
++      if (constraint === 'jobwork_material_receipt_pkey') {
++        reject(
++          'DUPLICATE_EVENT',
++          'A custody receipt with this receipt_id already exists',
++          { receipt_id: p.receipt_id, constraint },
++          409,
++        );
++      }
++    }
++    throw err;
++  }
++
++  // The stored event carries what THIS process derived, never what the caller asserted.
++  envelope.payload['variance_qty'] = varianceQty;
++  envelope.payload['variance_flagged'] = varianceFlagged;
++
++  if (firstReceiptTransitionRequired(order.status)) {
++    await transitionServiceOrder(
++      order.service_order_id,
++      'in_process',
++      {
++        occurredAt: envelope.metadata.occurred_at ?? new Date().toISOString(),
++        actorUserId: envelope.metadata.actor.user_id,
++      },
++      client,
++    );
++  }
++}
+diff --git a/src/read/projections/jobwork_material_receipt.ts b/src/read/projections/jobwork_material_receipt.ts
+new file mode 100644
+index 0000000..ad5ab57
+--- /dev/null
++++ b/src/read/projections/jobwork_material_receipt.ts
+@@ -0,0 +1,129 @@
++import type { PoolClient } from 'pg';
++import { getPool } from '../../config/db.js';
++
++/** One row per customer-material GRN line received against a job-work service order (Story 9.2). */
++export interface JobworkMaterialReceiptRow {
++  receipt_id: string;
++  service_order_id: string;
++  grn_line_id: string;
++  challan_number_ext: string;
++  challan_date: string;
++  sku: string;
++  lot_id: string | null;
++  received_qty: string;
++  challan_qty: string;
++  uom: string;
++  variance_qty: string;
++  variance_flagged: boolean;
++  received_by: string;
++  site_id: string;
++  correlation_id: string | null;
++  source_event_id: string;
++  created_at: string;
++}
++
++type Queryable = Pick<PoolClient, 'query'>;
++
++function runner(client?: PoolClient): Queryable {
++  return client ?? getPool();
++}
++
++const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++
++// challan_date round-trips as a DATE; select it as text so callers never see a JS Date shifted
++// through the local timezone (the Story 9.1 DATE-vs-timezone gotcha).
++const SELECT_COLUMNS = `receipt_id, service_order_id, grn_line_id, challan_number_ext,
++  to_char(challan_date, 'YYYY-MM-DD') AS challan_date, sku, lot_id,
++  received_qty::text AS received_qty, challan_qty::text AS challan_qty, uom,
++  variance_qty::text AS variance_qty, variance_flagged, received_by, site_id, correlation_id,
++  source_event_id, created_at`;
++
++export interface InsertJobworkMaterialReceiptInput {
++  receipt_id: string;
++  service_order_id: string;
++  grn_line_id: string;
++  challan_number_ext: string;
++  challan_date: string;
++  sku: string;
++  lot_id: string | null;
++  received_qty: string;
++  challan_qty: string;
++  uom: string;
++  variance_qty: string;
++  variance_flagged: boolean;
++  received_by: string;
++  site_id: string;
++  correlation_id: string | null;
++  source_event_id: string;
++}
++
++/** Plain INSERT: a duplicate receipt_id or grn_line_id surfaces as 23505 for the seam to classify. */
++export async function insertJobworkMaterialReceipt(
++  input: InsertJobworkMaterialReceiptInput,
++  client: PoolClient,
++): Promise<void> {
++  await client.query(
++    `INSERT INTO jobwork_material_receipt (
++       receipt_id, service_order_id, grn_line_id, challan_number_ext, challan_date, sku, lot_id,
++       received_qty, challan_qty, uom, variance_qty, variance_flagged, received_by, site_id,
++       correlation_id, source_event_id
++     ) VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8::numeric, $9::numeric, $10, $11::numeric, $12, $13, $14, $15, $16)`,
++    [
++      input.receipt_id,
++      input.service_order_id,
++      input.grn_line_id,
++      input.challan_number_ext,
++      input.challan_date,
++      input.sku,
++      input.lot_id,
++      input.received_qty,
++      input.challan_qty,
++      input.uom,
++      input.variance_qty,
++      input.variance_flagged,
++      input.received_by,
++      input.site_id,
++      input.correlation_id,
++      input.source_event_id,
++    ],
++  );
++}
++
++export async function getJobworkMaterialReceiptById(
++  receiptId: string,
++  client?: PoolClient,
++): Promise<JobworkMaterialReceiptRow | null> {
++  if (!UUID_REGEX.test(receiptId)) return null;
++  const result = await runner(client).query(
++    `SELECT ${SELECT_COLUMNS} FROM jobwork_material_receipt WHERE receipt_id = $1`,
++    [receiptId],
++  );
++  return (result.rows[0] as JobworkMaterialReceiptRow) ?? null;
++}
++
++export async function getJobworkMaterialReceiptByGrnLine(
++  grnLineId: string,
++  client?: PoolClient,
++): Promise<JobworkMaterialReceiptRow | null> {
++  if (!UUID_REGEX.test(grnLineId)) return null;
++  const result = await runner(client).query(
++    `SELECT ${SELECT_COLUMNS} FROM jobwork_material_receipt WHERE grn_line_id = $1`,
++    [grnLineId],
++  );
++  return (result.rows[0] as JobworkMaterialReceiptRow) ?? null;
++}
++
++/** Receipts for one order, oldest first (the order the Story 9.3 custody statement renders). */
++export async function listJobworkMaterialReceiptsByOrder(
++  serviceOrderId: string,
++  client?: PoolClient,
++): Promise<JobworkMaterialReceiptRow[]> {
++  if (!UUID_REGEX.test(serviceOrderId)) return [];
++  const result = await runner(client).query(
++    `SELECT ${SELECT_COLUMNS} FROM jobwork_material_receipt
++      WHERE service_order_id = $1
++      ORDER BY created_at ASC, receipt_id ASC`,
++    [serviceOrderId],
++  );
++  return result.rows as JobworkMaterialReceiptRow[];
++}
+diff --git a/test/integration/story-9-2.test.ts b/test/integration/story-9-2.test.ts
+new file mode 100644
+index 0000000..d4990d3
+--- /dev/null
++++ b/test/integration/story-9-2.test.ts
+@@ -0,0 +1,1401 @@
++import { describe, it, before, after } from 'node:test';
++import assert from 'node:assert/strict';
++import { randomUUID } from 'node:crypto';
++import { request as httpRequest, type Server, type IncomingMessage } from 'node:http';
++import type { AddressInfo } from 'node:net';
++import { readFileSync } from 'node:fs';
++import { resolve, dirname } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import type { PoolClient } from 'pg';
++import { createAppRouter, createAppServer } from '../../src/server.js';
++import { closePool, closeAdminPool, getAdminPool, getPool } from '../../src/config/db.js';
++import { applyStockBalanceProjection } from '../../src/compliance/stock-balance.js';
++import { applyJobworkMaterialReceivedProjection } from '../../src/compliance/jobwork-receipt.js';
++import { AppError } from '../../src/middleware/error.js';
++import type { EventEnvelope } from '../../src/events/store.js';
++
++/**
++ * Story 9.2 Customer Material Receipt and Segregated Stock (FR-JW-03, FR-JW-04, FR-JW-05).
++ * Real PostgreSQL, the real production router, SCIM provisioning and dev-token auth. Tests run
++ * serially; every identifier is run-scoped. Fixture writes use the admin pool (app_user lacks
++ * DELETE). The harness scaffolding is a deliberate local re-implementation of the story-9-1 and
++ * story-3-4 closures, which are not exported (never import cross-story).
++ *
++ * Customer material rides the Story 3.4 GRN flow (POST /api/v1/grn-lines) with
++ * stock_class 'job_work': every receipt therefore needs a PO line for the sku and an accepted
++ * weighbridge token, exactly like owned stock. A fresh PO (ordered 100000, no over-receipt in
++ * play) and a fresh token are seeded per receipt.
++ */
++
++const __dirname = dirname(fileURLToPath(import.meta.url));
++const SCIM_HEADERS = { Authorization: 'Bearer test-only-scim-bearer-token-not-for-production-use' };
++const run = randomUUID().slice(0, 8);
++const RUN = run.toUpperCase();
++
++interface HttpResult {
++  status: number;
++  body: Record<string, unknown>;
++}
++
++interface Role {
++  role: string;
++  module: string;
++  functionScope: 'read' | 'write';
++  locationId: string;
++}
++
++function detailsOf(body: Record<string, unknown>): Record<string, unknown> {
++  const details = body['details'];
++  return typeof details === 'object' && details !== null
++    ? (details as Record<string, unknown>)
++    : {};
++}
++
++function makeRequest(
++  port: number,
++  method: string,
++  path: string,
++  body?: unknown,
++  headers?: Record<string, string>,
++): Promise<HttpResult> {
++  return new Promise((resolvePromise, reject) => {
++    const data = body ? JSON.stringify(body) : undefined;
++    const req = httpRequest(
++      {
++        hostname: 'localhost',
++        port,
++        path,
++        method,
++        headers: {
++          'Content-Type': 'application/json',
++          ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
++          ...headers,
++        },
++      },
++      (res: IncomingMessage) => {
++        const chunks: Buffer[] = [];
++        res.on('data', (chunk: Buffer) => chunks.push(chunk));
++        res.on('error', reject);
++        res.on('end', () => {
++          const raw = Buffer.concat(chunks).toString('utf-8');
++          let parsed: Record<string, unknown> = {};
++          if (raw) {
++            try {
++              parsed = JSON.parse(raw) as Record<string, unknown>;
++            } catch {
++              parsed = { error_code: 'NON_JSON_BODY', raw };
++            }
++          }
++          resolvePromise({ status: res.statusCode ?? 0, body: parsed });
++        });
++      },
++    );
++    req.on('error', reject);
++    req.setTimeout(60000, () => req.destroy(new Error(`Request timed out: ${method} ${path}`)));
++    if (data) req.write(data);
++    req.end();
++  });
++}
++
++async function provisionUser(port: number, externalId: string, roles: Role[]): Promise<string> {
++  const res = await makeRequest(
++    port,
++    'POST',
++    '/api/v1/scim/v2/Users',
++    { externalId, email: externalId, displayName: externalId, roles },
++    SCIM_HEADERS,
++  );
++  assert.strictEqual(
++    res.status,
++    201,
++    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
++  );
++  return (res.body as Record<string, string>)['userId']!;
++}
++
++async function authFor(port: number, sub: string): Promise<Record<string, string>> {
++  const res = await makeRequest(port, 'POST', '/api/v1/auth/dev-token', { sub });
++  assert.ok(res.status >= 200 && res.status < 300, `dev-token ${sub} failed`);
++  return { Authorization: `Bearer ${res.body['token'] as string}` };
++}
++
++describe('Story 9.2 Customer Material Receipt and Segregated Stock', () => {
++  let server: Server;
++  let port: number;
++
++  let storeUserId: string;
++  let storeHeaders: Record<string, string>;
++  let coordinatorUserId: string;
++  let coordinatorHeaders: Record<string, string>;
++  let managerHeaders: Record<string, string>;
++  let siteBReaderHeaders: Record<string, string>;
++
++  let siteAId: string;
++  let siteBId: string;
++  let dockId: string;
++  let qcZoneId: string;
++  let kitBomId: string;
++
++  const CUSTOMER = `CUST-9-2-${RUN}`;
++  const SKU = `SKU-CUST-${RUN}`;
++  const SKU_Q = `SKU-CUST-Q-${RUN}`;
++  const SKU_OWNED = `SKU-OWNED-${RUN}`;
++  const DOCK_CODE = `RECV-DOCK-9-2-${run}`;
++  let poCounter = 0;
++
++  // -------------------------------------------------------------------------
++  // Fixture helpers
++  // -------------------------------------------------------------------------
++
++  async function seedLocation(
++    level: string,
++    code: string,
++    siteId: string | null,
++    extra: { zoneType?: string; quarantine?: boolean } = {},
++  ): Promise<string> {
++    const locationId = randomUUID();
++    await getAdminPool().query(
++      `INSERT INTO location_register (location_id, location_code, level, parent_location_id, site_id, zone_type, temperature_class, quarantine, status)
++       VALUES ($1, $2, $3, $4, $5, $6, 'ambient', $7, 'active')`,
++      [
++        locationId,
++        code,
++        level,
++        siteId,
++        siteId ?? locationId,
++        extra.zoneType ?? 'general',
++        extra.quarantine ?? false,
++      ],
++    );
++    return locationId;
++  }
++
++  async function seedItem(sku: string, quarantineRequired = false): Promise<void> {
++    await getAdminPool().query(
++      `INSERT INTO item_master (sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required, bis_licence_required, valuation_method, business_stream, status)
++       VALUES ($1, 'KG', false, false, false, $2, false, 'weighted_average', 'job_work', 'active')`,
++      [sku, quarantineRequired],
++    );
++  }
++
++  async function seedBom(): Promise<string> {
++    const bomId = randomUUID();
++    await getAdminPool().query(
++      `INSERT INTO bom (bom_id, parent_item_id, parent_sku, parent_uom, business_stream, bom_type, status, created_by, source_event_id)
++       VALUES ($1, $2, $3, 'EA', 'job_work', 'job_work_kit', 'released', $4, $5)`,
++      [bomId, randomUUID(), `KIT-9-2-${run}`, coordinatorUserId, randomUUID()],
++    );
++    return bomId;
++  }
++
++  /** Fresh PO + line for one receipt; a huge ordered_qty keeps the Story 3.4 over-receipt band out. */
++  async function seedPo(sku: string): Promise<string> {
++    poCounter += 1;
++    const poRef = `PO-JW-${run}-${poCounter}`;
++    await getAdminPool().query(
++      `INSERT INTO erp_purchase_order (po_number_ext, supplier_ref_ext, currency, expected_delivery_date, status, source_system, last_synced_at)
++       VALUES ($1, 'SUP-JW', 'INR', '2026-10-01', 'open', 'ERP', now())`,
++      [poRef],
++    );
++    await getAdminPool().query(
++      `INSERT INTO erp_purchase_order_line (po_number_ext, line_no, sku, ordered_qty, open_qty, unit_price, over_receipt_tolerance_pct, under_receipt_tolerance_pct, source_system, last_synced_at)
++       VALUES ($1, 1, $2, 100000, 100000, 1, 5, 5, 'ERP', now())`,
++      [poRef, sku],
++    );
++    return poRef;
++  }
++
++  async function seedToken(poRef: string, siteId: string = siteAId): Promise<string> {
++    const token = randomUUID();
++    await getAdminPool().query(
++      `INSERT INTO weighbridge_event
++        (weighbridge_event_id, correlation_id, gate_event_id, site_id, site_code_ext, po_ref_ext, line_no,
++         tare_kg, gross_kg, net_kg, status, device_id, capture_method, weighed_by, business_date, source_event_id)
++       VALUES ($1, $2, $3, $4, 'site-A-9-2', $5, 1, 1000, 2000, 1000, 'accepted', 'WB-9-2', 'MANUAL', $6, '2026-09-03', $7)`,
++      [randomUUID(), token, randomUUID(), siteId, poRef, coordinatorUserId, randomUUID()],
++    );
++    return token;
++  }
++
++  /** A confirmed order for CUSTOMER at siteA (or overrides) via the Story 9.1 routes. */
++  async function confirmedOrder(overrides: Record<string, unknown> = {}): Promise<string> {
++    const create = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/service-orders',
++      {
++        site_id: siteAId,
++        customer_party_code: CUSTOMER,
++        customer_name: 'Acme Fabrication Pvt Ltd',
++        spec_reference_ext: `SPEC-${run}`,
++        price_basis: { basis_type: 'per_kg', rate: 12.5, currency: 'INR' },
++        kit_bom_id: kitBomId,
++        idempotency_key: randomUUID(),
++        ...overrides,
++      },
++      coordinatorHeaders,
++    );
++    assert.strictEqual(create.status, 201, `create order failed: ${JSON.stringify(create.body)}`);
++    const orderId = (create.body['service_order'] as Record<string, unknown>)[
++      'service_order_id'
++    ] as string;
++    const confirm = await makeRequest(
++      port,
++      'POST',
++      `/api/v1/service-orders/${orderId}/confirm`,
++      { idempotency_key: randomUUID() },
++      coordinatorHeaders,
++    );
++    assert.strictEqual(confirm.status, 200, `confirm failed: ${JSON.stringify(confirm.body)}`);
++    return orderId;
++  }
++
++  async function draftOrder(): Promise<string> {
++    const create = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/service-orders',
++      {
++        site_id: siteAId,
++        customer_party_code: CUSTOMER,
++        customer_name: 'Acme Fabrication Pvt Ltd',
++        price_basis: { basis_type: 'per_kg', rate: 12.5, currency: 'INR' },
++        kit_bom_id: kitBomId,
++        idempotency_key: randomUUID(),
++      },
++      coordinatorHeaders,
++    );
++    assert.strictEqual(create.status, 201, JSON.stringify(create.body));
++    return (create.body['service_order'] as Record<string, unknown>)['service_order_id'] as string;
++  }
++
++  interface ReceiptOpts {
++    sku?: string;
++    receivedQty?: string | number;
++    challanQty?: string | number;
++    lotId?: string;
++    serviceOrderId?: string | null;
++    challan?: boolean;
++    extra?: Record<string, unknown>;
++    headers?: Record<string, string>;
++  }
++
++  /** Posts a job_work GRN line (fresh PO + token) and returns the response plus the ids used. */
++  async function receive(
++    opts: ReceiptOpts = {},
++  ): Promise<HttpResult & { grnLineId: string; grnId: string; poRef: string }> {
++    const sku = opts.sku ?? SKU;
++    const poRef = await seedPo(sku);
++    const token = await seedToken(poRef);
++    const grnId = randomUUID();
++    const grnLineId = randomUUID();
++    const body: Record<string, unknown> = {
++      grn_id: grnId,
++      grn_line_id: grnLineId,
++      correlation_id: token,
++      po_ref_ext: poRef,
++      line_no: 1,
++      source_document: 'PO',
++      sku,
++      target_location_code: DOCK_CODE,
++      received_qty: opts.receivedQty ?? '1000',
++      stock_class: 'job_work',
++      lot_id: opts.lotId ?? `LOT-JW-${run}-${randomUUID().slice(0, 6)}`,
++      ...(opts.serviceOrderId === null ? {} : { service_order_id: opts.serviceOrderId }),
++      ...(opts.challan === false
++        ? {}
++        : {
++            challan_number_ext: `CH-${run}-${randomUUID().slice(0, 6)}`,
++            challan_date: '2026-09-01',
++            challan_qty: opts.challanQty ?? '1000',
++          }),
++      ...(opts.extra ?? {}),
++    };
++    const res = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/grn-lines',
++      body,
++      opts.headers ?? storeHeaders,
++    );
++    return { ...res, grnLineId, grnId, poRef };
++  }
++
++  async function orderRow(serviceOrderId: string): Promise<Record<string, unknown>> {
++    const r = await getAdminPool().query(
++      `SELECT * FROM service_order WHERE service_order_id = $1`,
++      [serviceOrderId],
++    );
++    assert.strictEqual(r.rows.length, 1);
++    return r.rows[0] as Record<string, unknown>;
++  }
++
++  async function receiptRows(serviceOrderId: string): Promise<Array<Record<string, unknown>>> {
++    const r = await getAdminPool().query(
++      `SELECT receipt_id, grn_line_id, challan_number_ext, to_char(challan_date, 'YYYY-MM-DD') AS challan_date,
++              sku, lot_id, received_qty::text AS received_qty, challan_qty::text AS challan_qty,
++              variance_qty::text AS variance_qty, variance_flagged, received_by, site_id, source_event_id
++         FROM jobwork_material_receipt WHERE service_order_id = $1 ORDER BY created_at, receipt_id`,
++      [serviceOrderId],
++    );
++    return r.rows as Array<Record<string, unknown>>;
++  }
++
++  async function countRows(table: string, where: string, params: unknown[]): Promise<number> {
++    const r = await getAdminPool().query(
++      `SELECT count(*)::int AS n FROM ${table} WHERE ${where}`,
++      params,
++    );
++    return r.rows[0]!['n'] as number;
++  }
++
++  async function balances(sku: string): Promise<Array<Record<string, unknown>>> {
++    const r = await getAdminPool().query(
++      `SELECT location_id, lot_id, stock_class, on_hand::text AS on_hand, allocated::text AS allocated, available::text AS available
++         FROM stock_balance WHERE sku = $1 ORDER BY stock_class, lot_id`,
++      [sku],
++    );
++    return r.rows as Array<Record<string, unknown>>;
++  }
++
++  async function auditCount(errorCode: string): Promise<number> {
++    return countRows('audit_log', 'error_code = $1', [errorCode]);
++  }
++
++  function stockEnvelope(
++    eventType: string,
++    payload: Record<string, unknown>,
++    extra: Record<string, unknown> = {},
++  ): Record<string, unknown> {
++    return {
++      stream_type: 'inventory',
++      stream_id: randomUUID(),
++      event_type: eventType,
++      payload: { business_stream: 'job_work', ...payload },
++      metadata: {
++        correlation_id: randomUUID(),
++        actor: { user_id: storeUserId, role: 'store_assistant', location_id: siteAId },
++        occurred_at: new Date().toISOString(),
++      },
++      ...extra,
++    };
++  }
++
++  async function postEvent(
++    envelope: Record<string, unknown>,
++    headers: Record<string, string> = storeHeaders,
++  ): Promise<HttpResult> {
++    return makeRequest(port, 'POST', '/api/v1/events', envelope, headers);
++  }
++
++  async function withRolledBackClient<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
++    const client = await getPool().connect();
++    try {
++      await client.query('BEGIN');
++      return await fn(client);
++    } finally {
++      await client.query('ROLLBACK').catch(() => {});
++      client.release();
++    }
++  }
++
++  // -------------------------------------------------------------------------
++  // Harness
++  // -------------------------------------------------------------------------
++
++  before(async () => {
++    const adminPool = getAdminPool();
++    for (const file of [
++      '../../events/domain_events.sql',
++      '../../read/projections/users.sql',
++      '../../read/projections/audit_log.sql',
++      '../../read/projections/doa_registry.sql',
++      '../../read/projections/business_stream_config.sql',
++      '../../read/projections/location.sql',
++      '../../read/projections/instrument_calibration.sql',
++      '../../read/projections/notification.sql',
++      '../../read/projections/item_master.sql',
++      '../../read/projections/location_register.sql',
++      '../../read/projections/stock_balance.sql',
++      '../../read/projections/lot_master.sql',
++      '../../read/projections/serial_master.sql',
++      '../../read/projections/lot_trace.sql',
++      '../../read/projections/inventory_valuation.sql',
++      '../../read/projections/transfer_request.sql',
++      '../../read/projections/in_transit.sql',
++      '../../read/projections/cycle_count.sql',
++      '../../read/projections/physical_verification.sql',
++      '../../read/projections/inventory_planning.sql',
++      '../../read/projections/replenishment_recommendation.sql',
++      '../../read/projections/obsolescence_flag.sql',
++      '../../read/projections/ownership_agreement.sql',
++      '../../read/projections/erp_purchase_order.sql',
++      '../../read/projections/erp_sales_order.sql',
++      '../../read/projections/integration_exception.sql',
++      '../../read/projections/gate_event.sql',
++      '../../read/projections/weighbridge_event.sql',
++      '../../read/projections/grn.sql',
++      '../../read/projections/grn_line.sql',
++      '../../read/projections/putaway_task.sql',
++      '../../read/projections/asn.sql',
++      '../../read/projections/asn_line.sql',
++      '../../read/projections/pick_task.sql',
++      '../../read/projections/bom.sql',
++      '../../read/projections/service_order.sql',
++      '../../read/projections/jobwork_material_receipt.sql',
++    ]) {
++      await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
++    }
++    await adminPool.query('ALTER TABLE audit_log DISABLE TRIGGER ALL');
++    await adminPool.query('ALTER TABLE audit_log_tamper_attempt_log DISABLE TRIGGER ALL');
++    await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
++    try {
++      await adminPool.query(
++        'TRUNCATE jobwork_material_receipt, service_order, bom, pick_task, asn_line, asn, putaway_task, grn_line, grn, weighbridge_event, gate_event, integration_exception, erp_sync_state, erp_sales_order, erp_purchase_order_line, erp_purchase_order, ownership_agreement, obsolescence_flag, replenishment_recommendation, inventory_planning_params, physical_verification_line, physical_verification, cycle_count_line, cycle_count, in_transit, transfer_request, inventory_valuation, lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
++      );
++    } finally {
++      await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');
++      await adminPool.query('ALTER TABLE audit_log_tamper_attempt_log ENABLE TRIGGER ALL');
++      await adminPool.query('ALTER TABLE audit_log_archive ENABLE TRIGGER ALL');
++    }
++
++    server = createAppServer(createAppRouter());
++    await new Promise<void>((resolvePromise, reject) => {
++      server.once('error', reject);
++      server.listen(0, () => {
++        server.off('error', reject);
++        port = (server.address() as AddressInfo).port;
++        resolvePromise();
++      });
++    });
++
++    siteAId = await seedLocation('site', `SITE-A-9-2-${run}`, null);
++    siteBId = await seedLocation('site', `SITE-B-9-2-${run}`, null);
++    dockId = await seedLocation('zone', DOCK_CODE, siteAId, { zoneType: 'staging' });
++    qcZoneId = await seedLocation('zone', 'ZONE-QC-HOLD', siteAId, {
++      zoneType: 'quarantine',
++      quarantine: true,
++    });
++    await seedItem(SKU);
++    await seedItem(SKU_Q, true);
++    await seedItem(SKU_OWNED);
++
++    coordinatorUserId = await provisionUser(port, `jw-coordinator-9-2-${run}@example.com`, [
++      { role: 'jobwork_coordinator', module: 'jobwork', functionScope: 'write', locationId: '*' },
++      { role: 'jobwork_coordinator', module: 'jobwork', functionScope: 'read', locationId: '*' },
++    ]);
++    coordinatorHeaders = await authFor(port, `jw-coordinator-9-2-${run}@example.com`);
++
++    // The receiving clerk: GRN write at site A, inventory write for the direct stock-event arms,
++    // jobwork read for the receipts route, and the cycle-count create scope.
++    storeUserId = await provisionUser(port, `jw-store-9-2-${run}@example.com`, [
++      { role: 'store_assistant', module: 'receiving', functionScope: 'write', locationId: siteAId },
++      { role: 'store_assistant', module: 'inventory', functionScope: 'write', locationId: '*' },
++      { role: 'store_assistant', module: 'jobwork', functionScope: 'read', locationId: '*' },
++    ]);
++    storeHeaders = await authFor(port, `jw-store-9-2-${run}@example.com`);
++
++    // Warehouse manager: pick generation (module warehouse), transfer creation and cycle-count
++    // approval (module inventory); the DOA holder for count adjustments.
++    await provisionUser(port, `jw-manager-9-2-${run}@example.com`, [
++      { role: 'warehouse_manager', module: 'warehouse', functionScope: 'write', locationId: '*' },
++      { role: 'warehouse_manager', module: 'inventory', functionScope: 'write', locationId: '*' },
++      { role: 'warehouse_manager', module: 'inventory', functionScope: 'read', locationId: '*' },
++    ]);
++    managerHeaders = await authFor(port, `jw-manager-9-2-${run}@example.com`);
++
++    await provisionUser(port, `jw-siteb-reader-9-2-${run}@example.com`, [
++      { role: 'jobwork_reader', module: 'jobwork', functionScope: 'read', locationId: siteBId },
++    ]);
++    siteBReaderHeaders = await authFor(port, `jw-siteb-reader-9-2-${run}@example.com`);
++
++    // DOA band for count adjustments (any variance value -> warehouse_manager), for the AC6
++    // cycle-count arm.
++    await getAdminPool().query(
++      `INSERT INTO doa_registry_entries (entry_id, role, transaction_type, value_min, value_max, active)
++       VALUES ($1, 'warehouse_manager', 'inventory.count_adjustment', NULL, NULL, true)`,
++      [randomUUID()],
++    );
++
++    kitBomId = await seedBom();
++  });
++
++  after(async () => {
++    await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
++    await closePool();
++    await closeAdminPool();
++  });
++
++  // -------------------------------------------------------------------------
++  // AC 1: receipt blocked without a confirmed order and challan
++  // -------------------------------------------------------------------------
++
++  it('AC1: a job_work receipt with no service_order_id refuses SOURCE_DOCUMENT_REQUIRED and writes nothing', async () => {
++    const res = await receive({ serviceOrderId: null });
++    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
++    assert.strictEqual(res.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++    assert.strictEqual(await countRows('grn_line', 'grn_line_id = $1', [res.grnLineId]), 0);
++    assert.strictEqual(await countRows('grn', 'grn_id = $1', [res.grnId]), 0);
++  });
++
++  it('AC1: an unknown, a draft, and a wrong-site order all refuse SOURCE_DOCUMENT_REQUIRED (transaction rolled back)', async () => {
++    const unknown = await receive({ serviceOrderId: randomUUID() });
++    assert.strictEqual(unknown.status, 409, JSON.stringify(unknown.body));
++    assert.strictEqual(unknown.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++
++    const draftId = await draftOrder();
++    const draft = await receive({ serviceOrderId: draftId });
++    assert.strictEqual(draft.status, 409, JSON.stringify(draft.body));
++    assert.strictEqual(draft.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++    assert.strictEqual(detailsOf(draft.body)['status'], 'draft');
++    assert.strictEqual((await orderRow(draftId))['status'], 'draft');
++
++    const siteBOrder = await confirmedOrder({ site_id: siteBId });
++    const wrongSite = await receive({ serviceOrderId: siteBOrder });
++    assert.strictEqual(wrongSite.status, 409, JSON.stringify(wrongSite.body));
++    assert.strictEqual(wrongSite.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++    assert.strictEqual((await orderRow(siteBOrder))['status'], 'confirmed');
++    assert.strictEqual(await countRows('grn_line', 'grn_line_id = $1', [wrongSite.grnLineId]), 0);
++    assert.strictEqual(
++      await countRows('stock_balance', "sku = $1 AND stock_class = 'job_work'", [SKU]),
++      0,
++    );
++  });
++
++  it('AC1: a confirmed order but no challan reference, date, or quantity refuses SOURCE_DOCUMENT_REQUIRED', async () => {
++    const orderId = await confirmedOrder();
++    const none = await receive({ serviceOrderId: orderId, challan: false });
++    assert.strictEqual(none.status, 409, JSON.stringify(none.body));
++    assert.strictEqual(none.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++
++    const noDate = await receive({
++      serviceOrderId: orderId,
++      challan: false,
++      extra: { challan_number_ext: 'CH-NODATE', challan_qty: '1000' },
++    });
++    assert.strictEqual(noDate.status, 409, JSON.stringify(noDate.body));
++    assert.strictEqual(noDate.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++
++    const zeroQty = await receive({ serviceOrderId: orderId, challanQty: '0' });
++    assert.strictEqual(zeroQty.status, 409, JSON.stringify(zeroQty.body));
++    assert.strictEqual(zeroQty.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++
++    assert.strictEqual((await orderRow(orderId))['status'], 'confirmed');
++    assert.strictEqual((await receiptRows(orderId)).length, 0);
++  });
++
++  it('AC1 seam point (mutation guard): the custody applier itself refuses a draft order under lock, before any row is written', async () => {
++    const draftId = await draftOrder();
++    const envelope = {
++      stream_type: 'jobwork',
++      stream_id: draftId,
++      event_type: 'jobwork.material_received',
++      payload: {
++        service_order_id: draftId,
++        receipt_id: randomUUID(),
++        grn_line_id: randomUUID(),
++        challan_number_ext: 'CH-SEAM',
++        challan_date: '2026-09-01',
++        sku: SKU,
++        lot_id: `LOT-SEAM-${run}`,
++        received_qty: '10.000',
++        challan_qty: '10.000',
++        uom: 'KG',
++        site_id: siteAId,
++        received_by: storeUserId,
++      },
++      metadata: {
++        correlation_id: randomUUID(),
++        actor: { user_id: storeUserId, role: 'store_assistant', location_id: siteAId },
++        occurred_at: new Date().toISOString(),
++      },
++    } as unknown as EventEnvelope;
++    await withRolledBackClient(async (client) => {
++      await assert.rejects(
++        applyJobworkMaterialReceivedProjection(envelope, client, randomUUID()),
++        (err: unknown) =>
++          err instanceof AppError &&
++          err.errorCode === 'SOURCE_DOCUMENT_REQUIRED' &&
++          err.statusCode === 409 &&
++          (err.details as Record<string, unknown>)['status'] === 'draft',
++      );
++    });
++    assert.strictEqual((await orderRow(draftId))['status'], 'draft');
++    assert.strictEqual((await receiptRows(draftId)).length, 0);
++  });
++
++  // -------------------------------------------------------------------------
++  // AC 2: challan captured, receipt recorded, first receipt flips in_process
++  // -------------------------------------------------------------------------
++
++  it('AC2: the first receipt persists the challan, the custody row, the job_work GRN line, and flips confirmed -> in_process in one transaction; the second does not re-transition', async () => {
++    const orderId = await confirmedOrder();
++    const lot = `LOT-JW-AC2-${run}`;
++    const first = await receive({ serviceOrderId: orderId, lotId: lot, receivedQty: '1000' });
++    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
++    const line = first.body['grn_line'] as Record<string, unknown>;
++    assert.strictEqual(line['stock_class'], 'job_work');
++    assert.strictEqual(line['status'], 'posted');
++
++    const order = await orderRow(orderId);
++    assert.strictEqual(order['status'], 'in_process');
++    assert.ok(order['in_process_at'], 'in_process_at stamped');
++    const firstInProcessAt = String(order['in_process_at']);
++
++    const rows = await receiptRows(orderId);
++    assert.strictEqual(rows.length, 1);
++    assert.strictEqual(rows[0]!['grn_line_id'], first.grnLineId);
++    assert.match(String(rows[0]!['challan_number_ext']), /^CH-/);
++    assert.strictEqual(rows[0]!['challan_date'], '2026-09-01');
++    assert.strictEqual(rows[0]!['received_qty'], '1000.000');
++    assert.strictEqual(rows[0]!['challan_qty'], '1000.000');
++    assert.strictEqual(rows[0]!['variance_qty'], '0.000');
++    assert.strictEqual(rows[0]!['variance_flagged'], false);
++    assert.strictEqual(rows[0]!['received_by'], storeUserId);
++    assert.strictEqual(rows[0]!['lot_id'], lot);
++    assert.strictEqual(rows[0]!['site_id'], siteAId);
++
++    // The custody event is its own domain event on the order's stream, with server-derived
++    // variance fields written back before the insert.
++    const ev = await getAdminPool().query(
++      `SELECT event_id, payload FROM domain_events
++        WHERE stream_type = 'jobwork' AND stream_id = $1 AND event_type = 'jobwork.material_received'`,
++      [orderId],
++    );
++    assert.strictEqual(ev.rows.length, 1);
++    const payload = ev.rows[0]!['payload'] as Record<string, unknown>;
++    assert.strictEqual(payload['variance_qty'], '0.000');
++    assert.strictEqual(payload['variance_flagged'], false);
++    assert.strictEqual(payload['grn_line_id'], first.grnLineId);
++    assert.strictEqual(rows[0]!['source_event_id'], ev.rows[0]!['event_id']);
++
++    const second = await receive({
++      serviceOrderId: orderId,
++      lotId: `${lot}-B`,
++      receivedQty: '500',
++      challanQty: '500',
++    });
++    assert.strictEqual(second.status, 201, JSON.stringify(second.body));
++    const after2 = await orderRow(orderId);
++    assert.strictEqual(after2['status'], 'in_process');
++    assert.strictEqual(String(after2['in_process_at']), firstInProcessAt, 'no second transition');
++    assert.strictEqual((await receiptRows(orderId)).length, 2);
++
++    // Task 6.1: the read route lists both, oldest first, with the variance fields.
++    const list = await makeRequest(
++      port,
++      'GET',
++      `/api/v1/service-orders/${orderId}/receipts`,
++      undefined,
++      storeHeaders,
++    );
++    assert.strictEqual(list.status, 200, JSON.stringify(list.body));
++    const receipts = list.body['receipts'] as Array<Record<string, unknown>>;
++    assert.strictEqual(receipts.length, 2);
++    assert.strictEqual(receipts[0]!['grn_line_id'], first.grnLineId);
++    assert.strictEqual(receipts[1]!['grn_line_id'], second.grnLineId);
++    assert.strictEqual(receipts[0]!['challan_date'], '2026-09-01');
++    assert.strictEqual(receipts[1]!['variance_qty'], '0.000');
++    assert.strictEqual(receipts[1]!['variance_flagged'], false);
++  });
++
++  it('AC2 read route: a site-B-only reader gets the same 404 as a missing order (no info leak)', async () => {
++    const orderId = await confirmedOrder();
++    const denied = await makeRequest(
++      port,
++      'GET',
++      `/api/v1/service-orders/${orderId}/receipts`,
++      undefined,
++      siteBReaderHeaders,
++    );
++    assert.strictEqual(denied.status, 404, JSON.stringify(denied.body));
++    assert.strictEqual(denied.body['error_code'], 'SERVICE_ORDER_NOT_FOUND');
++    const missing = await makeRequest(
++      port,
++      'GET',
++      `/api/v1/service-orders/${randomUUID()}/receipts`,
++      undefined,
++      storeHeaders,
++    );
++    assert.strictEqual(missing.status, 404);
++    assert.strictEqual(missing.body['error_code'], 'SERVICE_ORDER_NOT_FOUND');
++    const bad = await makeRequest(
++      port,
++      'GET',
++      `/api/v1/service-orders/not-a-uuid/receipts`,
++      undefined,
++      storeHeaders,
++    );
++    assert.strictEqual(bad.status, 400);
++    assert.strictEqual(bad.body['error_code'], 'INVALID_PARAMS');
++  });
++
++  // -------------------------------------------------------------------------
++  // AC 3: tolerance variance
++  // -------------------------------------------------------------------------
++
++  it('AC3: an over-tolerance deviation is flagged and attributed to the receiving user; a within-tolerance one is stored unflagged (default 0.5 percent)', async () => {
++    const orderId = await confirmedOrder();
++    // 0.5 percent of 1000 is 5.000: 1006 is over, 996 (short) is over, 1004 is within, 1005 is at.
++    const over = await receive({
++      serviceOrderId: orderId,
++      receivedQty: '1006',
++      challanQty: '1000',
++    });
++    assert.strictEqual(over.status, 201, JSON.stringify(over.body));
++    const short = await receive({
++      serviceOrderId: orderId,
++      receivedQty: '994.5',
++      challanQty: '1000',
++    });
++    assert.strictEqual(short.status, 201, JSON.stringify(short.body));
++    const within = await receive({
++      serviceOrderId: orderId,
++      receivedQty: '1004',
++      challanQty: '1000',
++    });
++    assert.strictEqual(within.status, 201, JSON.stringify(within.body));
++    const atBand = await receive({
++      serviceOrderId: orderId,
++      receivedQty: '1005',
++      challanQty: '1000',
++    });
++    assert.strictEqual(atBand.status, 201, JSON.stringify(atBand.body));
++
++    const rows = await receiptRows(orderId);
++    const byLine = new Map(rows.map((r) => [r['grn_line_id'], r]));
++    const o = byLine.get(over.grnLineId)!;
++    assert.strictEqual(o['variance_qty'], '6.000');
++    assert.strictEqual(o['variance_flagged'], true);
++    assert.strictEqual(o['received_by'], storeUserId);
++    const s = byLine.get(short.grnLineId)!;
++    assert.strictEqual(s['variance_qty'], '-5.500');
++    assert.strictEqual(s['variance_flagged'], true);
++    const w = byLine.get(within.grnLineId)!;
++    assert.strictEqual(w['variance_qty'], '4.000');
++    assert.strictEqual(w['variance_flagged'], false);
++    const a = byLine.get(atBand.grnLineId)!;
++    assert.strictEqual(a['variance_qty'], '5.000');
++    assert.strictEqual(a['variance_flagged'], false, 'exactly at tolerance does not flag');
++  });
++
++  // -------------------------------------------------------------------------
++  // AC 4: non-valuated segregated stock
++  // -------------------------------------------------------------------------
++
++  it('AC4: the balance row is job_work class at the dock; no owned availability, no valuation, no cross-dock, invisible to pick and transfer', async () => {
++    const sku = `SKU-AC4-${RUN}`;
++    await seedItem(sku);
++    const orderId = await confirmedOrder();
++    const lot = `LOT-JW-AC4-${run}`;
++    const res = await receive({
++      serviceOrderId: orderId,
++      sku,
++      lotId: lot,
++      receivedQty: '100',
++      challanQty: '100',
++      extra: { cross_dock: true, staging_zone_code: DOCK_CODE },
++    });
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++    assert.strictEqual(res.body['cross_dock_nonqualification_reason'], 'non_owned_stock');
++    assert.strictEqual(res.body['cross_dock_task'], null);
++
++    const rows = await balances(sku);
++    assert.strictEqual(rows.length, 1);
++    assert.strictEqual(rows[0]!['stock_class'], 'job_work');
++    assert.strictEqual(rows[0]!['location_id'], dockId);
++    assert.strictEqual(rows[0]!['lot_id'], lot);
++    assert.strictEqual(Number(rows[0]!['on_hand']), 100);
++
++    // Valuation: non-owned quantities are reported and carry no value.
++    assert.strictEqual(await countRows('inventory_valuation', 'sku = $1', [sku]), 0);
++    const valuation = await makeRequest(
++      port,
++      'GET',
++      `/api/v1/stock/${sku}/valuation`,
++      undefined,
++      managerHeaders,
++    );
++    if (valuation.status === 200) {
++      const nonOwned = valuation.body['non_owned_quantities'] as Array<Record<string, unknown>>;
++      assert.ok(
++        nonOwned.some((n) => n['stock_class'] === 'job_work'),
++        `job_work reported as non-owned: ${JSON.stringify(valuation.body)}`,
++      );
++    }
++
++    // Pick generation (hard-filtered stock_class = 'owned') sees no stock for the lot.
++    const so = await getAdminPool().query(
++      `INSERT INTO erp_sales_order (so_number_ext, line_no, sku, quantity, ship_from_site_id, ship_from_site_code_ext, status, source_system, last_synced_at)
++       VALUES ($1, 1, $2, 10, $3, 'site-A-9-2', 'open', 'ERP', now()) RETURNING id`,
++      [`SO-JW-${run}`, sku, siteAId],
++    );
++    const pick = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/pick-tasks/generate',
++      { dispatchOrderLineIds: [so.rows[0]!['id']], strategy: 'single' },
++      managerHeaders,
++    );
++    assert.notStrictEqual(
++      pick.status,
++      201,
++      `pick must not allocate job_work stock: ${JSON.stringify(pick.body)}`,
++    );
++    assert.strictEqual(Number((await balances(sku))[0]!['allocated']), 0);
++
++    // A transfer request (owned-only source query) sees no stock either.
++    const transfer = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/transfer-requests',
++      {
++        sku_id: sku,
++        from_location_id: dockId,
++        to_location_id: siteBId,
++        quantity: 10,
++        lot_id: lot,
++        business_stream: 'job_work',
++      },
++      managerHeaders,
++    );
++    assert.notStrictEqual(
++      transfer.status,
++      201,
++      `transfer must not allocate job_work stock: ${JSON.stringify(transfer.body)}`,
++    );
++    assert.strictEqual(Number((await balances(sku))[0]!['allocated']), 0);
++  });
++
++  it('AC4 / Task 4.3: a quarantine-required item lands in ZONE-QC-HOLD with a held putaway AND the custody row exists at receipt', async () => {
++    const orderId = await confirmedOrder();
++    const lot = `LOT-JW-Q-${run}`;
++    const res = await receive({
++      serviceOrderId: orderId,
++      sku: SKU_Q,
++      lotId: lot,
++      receivedQty: '50',
++      challanQty: '50',
++    });
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++    const line = res.body['grn_line'] as Record<string, unknown>;
++    assert.strictEqual(line['qc_hold'], true);
++    assert.strictEqual(line['target_location_id'], qcZoneId);
++    assert.strictEqual(line['stock_class'], 'job_work');
++    const putaway = res.body['putaway_task'] as Record<string, unknown>;
++    assert.strictEqual(putaway['status'], 'held');
++    const rows = await balances(SKU_Q);
++    assert.strictEqual(rows.length, 1);
++    assert.strictEqual(rows[0]!['location_id'], qcZoneId);
++    assert.strictEqual(rows[0]!['stock_class'], 'job_work');
++    const custody = await receiptRows(orderId);
++    assert.strictEqual(custody.length, 1);
++    assert.strictEqual(custody[0]!['grn_line_id'], res.grnLineId);
++    assert.strictEqual((await orderRow(orderId))['status'], 'in_process');
++  });
++
++  // -------------------------------------------------------------------------
++  // AC 5: cross-issue blocked (total bar)
++  // -------------------------------------------------------------------------
++
++  it('AC5: any allocation or issue naming job_work stock is refused CROSS_ISSUE_BLOCKED with the demand context; no audit row (BSD-12 carve-out)', async () => {
++    const sku = `SKU-AC5-${RUN}`;
++    await seedItem(sku);
++    const orderId = await confirmedOrder();
++    const lot = `LOT-JW-AC5-${run}`;
++    const res = await receive({
++      serviceOrderId: orderId,
++      sku,
++      lotId: lot,
++      receivedQty: '100',
++      challanQty: '100',
++    });
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++    const auditBefore = await auditCount('CROSS_ISSUE_BLOCKED');
++
++    const allocation = await postEvent(
++      stockEnvelope('stock.allocated', {
++        sku,
++        target_location_id: dockId,
++        quantity: 10,
++        lot_id: lot,
++        stock_class: 'job_work',
++        allocation_ref: `SO-${run}`,
++      }),
++    );
++    assert.strictEqual(allocation.status, 400, JSON.stringify(allocation.body));
++    assert.strictEqual(allocation.body['error_code'], 'CROSS_ISSUE_BLOCKED');
++    let d = detailsOf(allocation.body);
++    assert.strictEqual(d['sku'], sku);
++    assert.strictEqual(d['stock_class'], 'job_work');
++    assert.strictEqual(d['lot_id'], lot);
++    assert.strictEqual(d['location_id'], dockId);
++    assert.strictEqual(d['demand_kind'], 'allocation');
++
++    const issue = await postEvent(
++      stockEnvelope('stock.issued', {
++        sku,
++        target_location_id: dockId,
++        quantity: 10,
++        lot_id: lot,
++        stock_class: 'job_work',
++      }),
++    );
++    assert.strictEqual(issue.status, 400, JSON.stringify(issue.body));
++    assert.strictEqual(issue.body['error_code'], 'CROSS_ISSUE_BLOCKED');
++    d = detailsOf(issue.body);
++    assert.strictEqual(d['demand_kind'], 'issue');
++
++    // A classless drain defaults to 'owned' and never sees the customer material.
++    const classless = await postEvent(
++      stockEnvelope('stock.issued', { sku, target_location_id: dockId, quantity: 10, lot_id: lot }),
++    );
++    assert.strictEqual(classless.status, 409, JSON.stringify(classless.body));
++    assert.strictEqual(classless.body['error_code'], 'INSUFFICIENT_STOCK');
++
++    const rows = await balances(sku);
++    assert.strictEqual(rows.length, 1);
++    assert.strictEqual(Number(rows[0]!['on_hand']), 100);
++    assert.strictEqual(Number(rows[0]!['allocated']), 0);
++    assert.strictEqual(
++      await auditCount('CROSS_ISSUE_BLOCKED'),
++      auditBefore,
++      'stock surface writes no audit row',
++    );
++    assert.strictEqual(
++      await countRows(
++        'domain_events',
++        "event_type IN ('stock.allocated','stock.issued') AND payload->>'sku' = $1",
++        [sku],
++      ),
++      0,
++      'no demand event consumed an idempotency key',
++    );
++  });
++
++  it('AC5 seam point (mutation guard): applyStockBalanceProjection itself refuses a job_work allocation before any balance read', async () => {
++    const sku = `SKU-AC5S-${RUN}`;
++    await seedItem(sku);
++    const orderId = await confirmedOrder();
++    const lot = `LOT-JW-AC5S-${run}`;
++    const res = await receive({
++      serviceOrderId: orderId,
++      sku,
++      lotId: lot,
++      receivedQty: '100',
++      challanQty: '100',
++    });
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++    for (const eventType of ['stock.allocated', 'stock.issued']) {
++      const envelope = stockEnvelope(eventType, {
++        sku,
++        target_location_id: dockId,
++        quantity: 1,
++        lot_id: lot,
++        stock_class: 'job_work',
++      }) as unknown as EventEnvelope;
++      await withRolledBackClient(async (client) => {
++        await assert.rejects(
++          applyStockBalanceProjection(envelope, client),
++          (err: unknown) =>
++            err instanceof AppError &&
++            err.errorCode === 'CROSS_ISSUE_BLOCKED' &&
++            err.statusCode === 400 &&
++            (err.details as Record<string, unknown>)['demand_kind'] ===
++              (eventType === 'stock.allocated' ? 'allocation' : 'issue'),
++        );
++      });
++    }
++  });
++
++  // -------------------------------------------------------------------------
++  // AC 6: lot-level segregation, both directions, plus the cycle-count path
++  // -------------------------------------------------------------------------
++
++  it('AC6: an owned receipt into a job_work lot, a job_work receipt into an owned lot, and a prototype receipt into a job_work lot all refuse', async () => {
++    const sku = `SKU-AC6-${RUN}`;
++    await seedItem(sku);
++    const orderId = await confirmedOrder();
++    const jwLot = `LOT-JW-AC6-${run}`;
++    const res = await receive({
++      serviceOrderId: orderId,
++      sku,
++      lotId: jwLot,
++      receivedQty: '100',
++      challanQty: '100',
++    });
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++
++    // owned -> job_work lot (direct stock.received, the Story 8.8 laundering pair idiom)
++    const ownedIn = await postEvent(
++      stockEnvelope('stock.received', {
++        sku,
++        target_location_id: dockId,
++        quantity: 5,
++        lot_id: jwLot,
++      }),
++    );
++    assert.strictEqual(ownedIn.status, 400, JSON.stringify(ownedIn.body));
++    assert.strictEqual(ownedIn.body['error_code'], 'CROSS_ISSUE_BLOCKED');
++    assert.strictEqual(detailsOf(ownedIn.body)['existing_stock_class'], 'job_work');
++
++    // owned -> job_work lot at ANOTHER location (lot-level bar)
++    const ownedElsewhere = await postEvent(
++      stockEnvelope('stock.received', {
++        sku,
++        target_location_id: qcZoneId,
++        quantity: 5,
++        lot_id: jwLot,
++      }),
++    );
++    assert.strictEqual(ownedElsewhere.status, 400, JSON.stringify(ownedElsewhere.body));
++    assert.strictEqual(ownedElsewhere.body['error_code'], 'CROSS_ISSUE_BLOCKED');
++
++    // prototype -> job_work lot
++    const protoIn = await postEvent(
++      stockEnvelope('stock.received', {
++        sku,
++        target_location_id: dockId,
++        quantity: 5,
++        lot_id: jwLot,
++        stock_class: 'prototype',
++      }),
++    );
++    assert.strictEqual(protoIn.status, 400, JSON.stringify(protoIn.body));
++    assert.strictEqual(protoIn.body['error_code'], 'CROSS_ISSUE_BLOCKED');
++
++    // job_work -> owned lot, through the only legitimate job_work receipt path (the GRN flow)
++    const ownedLot = `LOT-OWNED-AC6-${run}`;
++    const ownedSeed = await postEvent(
++      stockEnvelope('stock.received', {
++        sku,
++        target_location_id: dockId,
++        quantity: 5,
++        lot_id: ownedLot,
++      }),
++    );
++    assert.strictEqual(ownedSeed.status, 201, JSON.stringify(ownedSeed.body));
++    const jwIntoOwned = await receive({
++      serviceOrderId: orderId,
++      sku,
++      lotId: ownedLot,
++      receivedQty: '10',
++      challanQty: '10',
++    });
++    assert.strictEqual(jwIntoOwned.status, 400, JSON.stringify(jwIntoOwned.body));
++    assert.strictEqual(jwIntoOwned.body['error_code'], 'CROSS_ISSUE_BLOCKED');
++    assert.strictEqual(detailsOf(jwIntoOwned.body)['existing_stock_class'], 'owned');
++    assert.strictEqual(await countRows('grn_line', 'grn_line_id = $1', [jwIntoOwned.grnLineId]), 0);
++    assert.strictEqual(
++      await countRows('jobwork_material_receipt', 'grn_line_id = $1', [jwIntoOwned.grnLineId]),
++      0,
++    );
++
++    const rows = await balances(sku);
++    assert.deepStrictEqual(
++      rows.map((r) => [r['stock_class'], r['lot_id'], Number(r['on_hand'])]),
++      [
++        ['job_work', jwLot, 100],
++        ['owned', ownedLot, 5],
++      ],
++    );
++  });
++
++  it('AC6: a cycle-count adjustment cannot create an owned balance for a lot holding customer material', async () => {
++    const sku = `SKU-AC6C-${RUN}`;
++    await seedItem(sku);
++    const orderId = await confirmedOrder();
++    const jwLot = `LOT-JW-AC6C-${run}`;
++    const res = await receive({
++      serviceOrderId: orderId,
++      sku,
++      lotId: jwLot,
++      receivedQty: '100',
++      challanQty: '100',
++    });
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++
++    const create = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/cycle-counts',
++      {
++        location_id: dockId,
++        sku_scope: [sku],
++        count_type: 'cycle',
++        business_date: '2026-09-03',
++        business_stream: 'job_work',
++      },
++      storeHeaders,
++    );
++    assert.strictEqual(create.status, 201, JSON.stringify(create.body));
++    const countId = create.body['cycle_count_id'] as string;
++    // Counting 7 units of OWNED stock for the customer lot (book 0) is a +7 owned inflow. The
++    // clerk submits; the DOA-resolved warehouse manager approves (a submitter cannot self-approve).
++    const submit = await makeRequest(
++      port,
++      'POST',
++      `/api/v1/cycle-counts/${countId}/submit`,
++      { lines: [{ sku, lot_id: jwLot, stock_class: 'owned', counted_quantity: 7 }] },
++      storeHeaders,
++    );
++    assert.strictEqual(submit.status, 201, JSON.stringify(submit.body));
++    const line = (submit.body['lines'] as Array<Record<string, unknown>>)[0]!;
++    assert.strictEqual(line['adjustment_status'], 'pending_approval', JSON.stringify(line));
++    const approve = await makeRequest(
++      port,
++      'PATCH',
++      `/api/v1/cycle-counts/${countId}/adjustments/${line['adjustment_id'] as string}/approve`,
++      { reason_code: 'found_stock' },
++      managerHeaders,
++    );
++    assert.strictEqual(approve.status, 400, JSON.stringify(approve.body));
++    assert.strictEqual(approve.body['error_code'], 'CROSS_ISSUE_BLOCKED');
++    assert.strictEqual(detailsOf(approve.body)['existing_stock_class'], 'job_work');
++    const rows = await balances(sku);
++    assert.strictEqual(rows.length, 1);
++    assert.strictEqual(rows[0]!['stock_class'], 'job_work');
++    assert.strictEqual(Number(rows[0]!['on_hand']), 100);
++  });
++
++  // -------------------------------------------------------------------------
++  // AC 7: ownership binding fail-closed on every write path
++  // -------------------------------------------------------------------------
++
++  it('AC7: a supplied owner_party_code that does not match the order customer refuses OWNER_PARTY_MISMATCH, nothing written', async () => {
++    const orderId = await confirmedOrder();
++    const res = await receive({
++      serviceOrderId: orderId,
++      extra: { owner_party_code: 'SOMEONE-ELSE' },
++    });
++    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
++    assert.strictEqual(res.body['error_code'], 'OWNER_PARTY_MISMATCH');
++    assert.strictEqual(detailsOf(res.body)['service_order_id'], orderId);
++    assert.strictEqual(await countRows('grn_line', 'grn_line_id = $1', [res.grnLineId]), 0);
++    assert.strictEqual((await orderRow(orderId))['status'], 'confirmed');
++  });
++
++  it('AC7: a direct stock.received in the job_work class via POST /api/v1/events is refused even with a valid order binding', async () => {
++    const sku = `SKU-AC7-${RUN}`;
++    await seedItem(sku);
++    const orderId = await confirmedOrder();
++    for (const payload of [
++      // no binding at all
++      {
++        sku,
++        target_location_id: dockId,
++        quantity: 5,
++        lot_id: `LOT-D1-${run}`,
++        stock_class: 'job_work',
++      },
++      // full, correct binding - still not the receiving flow
++      {
++        sku,
++        target_location_id: dockId,
++        quantity: 5,
++        lot_id: `LOT-D2-${run}`,
++        stock_class: 'job_work',
++        service_order_id: orderId,
++        owner_party_code: CUSTOMER,
++      },
++    ]) {
++      const res = await postEvent(stockEnvelope('stock.received', payload));
++      assert.strictEqual(res.status, 409, JSON.stringify(res.body));
++      assert.strictEqual(res.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++    }
++    assert.strictEqual(await countRows('stock_balance', 'sku = $1', [sku]), 0);
++    assert.strictEqual((await orderRow(orderId))['status'], 'confirmed');
++  });
++
++  it('AC7: a direct jobwork.material_received via POST /api/v1/events cannot mint custody or flip the order without its posted job_work GRN line', async () => {
++    const orderId = await confirmedOrder();
++    const receiptEnvelope = (grnLineId: string): Record<string, unknown> => ({
++      stream_type: 'jobwork',
++      stream_id: orderId,
++      event_type: 'jobwork.material_received',
++      payload: {
++        service_order_id: orderId,
++        receipt_id: randomUUID(),
++        grn_line_id: grnLineId,
++        challan_number_ext: 'CH-DIRECT',
++        challan_date: '2026-09-01',
++        sku: SKU,
++        lot_id: `LOT-DIRECT-${run}`,
++        received_qty: '10.000',
++        challan_qty: '10.000',
++        uom: 'KG',
++        site_id: siteAId,
++        received_by: storeUserId,
++      },
++      metadata: {
++        correlation_id: randomUUID(),
++        actor: { user_id: coordinatorUserId, role: 'jobwork_coordinator', location_id: siteAId },
++        occurred_at: new Date().toISOString(),
++      },
++    });
++    // Invented GRN line.
++    const invented = await postEvent(receiptEnvelope(randomUUID()), coordinatorHeaders);
++    assert.strictEqual(invented.status, 409, JSON.stringify(invented.body));
++    assert.strictEqual(invented.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++    assert.strictEqual(detailsOf(invented.body)['grn_line_found'], false);
++
++    // A real OWNED GRN line borrowed from another receipt.
++    const ownedPo = await seedPo(SKU_OWNED);
++    const ownedToken = await seedToken(ownedPo);
++    const ownedLineId = randomUUID();
++    const ownedGrn = await makeRequest(
++      port,
++      'POST',
++      '/api/v1/grn-lines',
++      {
++        grn_id: randomUUID(),
++        grn_line_id: ownedLineId,
++        correlation_id: ownedToken,
++        po_ref_ext: ownedPo,
++        line_no: 1,
++        source_document: 'PO',
++        sku: SKU_OWNED,
++        target_location_code: DOCK_CODE,
++        received_qty: '10',
++        lot_id: `LOT-OWNED-${run}`,
++      },
++      storeHeaders,
++    );
++    assert.strictEqual(ownedGrn.status, 201, JSON.stringify(ownedGrn.body));
++    const borrowed = await postEvent(receiptEnvelope(ownedLineId), coordinatorHeaders);
++    assert.strictEqual(borrowed.status, 409, JSON.stringify(borrowed.body));
++    assert.strictEqual(borrowed.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
++    assert.strictEqual(detailsOf(borrowed.body)['grn_line_stock_class'], 'owned');
++
++    // Shape: the derived fields and an unknown key refuse pre-DB.
++    const withDerived = receiptEnvelope(randomUUID());
++    (withDerived['payload'] as Record<string, unknown>)['variance_flagged'] = false;
++    const derived = await postEvent(withDerived, coordinatorHeaders);
++    assert.strictEqual(derived.status, 400, JSON.stringify(derived.body));
++    assert.strictEqual(derived.body['error_code'], 'INVALID_PARAMS');
++
++    assert.strictEqual((await receiptRows(orderId)).length, 0);
++    assert.strictEqual((await orderRow(orderId))['status'], 'confirmed');
++    assert.strictEqual(
++      await countRows(
++        'domain_events',
++        "event_type = 'jobwork.material_received' AND stream_id = $1",
++        [orderId],
++      ),
++      0,
++    );
++  });
++
++  it('AC7: a second custody receipt for the same GRN line refuses DUPLICATE_EVENT naming the constraint', async () => {
++    const orderId = await confirmedOrder();
++    const res = await receive({ serviceOrderId: orderId, receivedQty: '10', challanQty: '10' });
++    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
++    const lot = (res.body['grn_line'] as Record<string, unknown>)['lot_id'] as string;
++    const dup = await postEvent(
++      {
++        stream_type: 'jobwork',
++        stream_id: orderId,
++        event_type: 'jobwork.material_received',
++        payload: {
++          service_order_id: orderId,
++          receipt_id: randomUUID(),
++          grn_line_id: res.grnLineId,
++          challan_number_ext: 'CH-DUP',
++          challan_date: '2026-09-01',
++          sku: SKU,
++          lot_id: lot,
++          received_qty: '10.000',
++          challan_qty: '10.000',
++          uom: 'KG',
++          site_id: siteAId,
++          received_by: storeUserId,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: coordinatorUserId, role: 'jobwork_coordinator', location_id: siteAId },
++          occurred_at: new Date().toISOString(),
++        },
++      },
++      coordinatorHeaders,
++    );
++    assert.strictEqual(dup.status, 409, JSON.stringify(dup.body));
++    assert.strictEqual(dup.body['error_code'], 'DUPLICATE_EVENT');
++    assert.strictEqual(detailsOf(dup.body)['constraint'], 'uq_jobwork_receipt_grn_line');
++    assert.strictEqual((await receiptRows(orderId)).length, 1);
++  });
++
++  // -------------------------------------------------------------------------
++  // Task 7.4: idempotent replay
++  // -------------------------------------------------------------------------
++
++  it('Task 7.4: replaying jobwork.material_received with its idempotency key returns the stored event (200), one custody row, no double transition', async () => {
++    const orderId = await confirmedOrder();
++    const sku = `SKU-REPLAY-${RUN}`;
++    await seedItem(sku);
++    const lot = `LOT-REPLAY-${run}`;
++    const first = await receive({
++      serviceOrderId: orderId,
++      sku,
++      lotId: lot,
++      receivedQty: '20',
++      challanQty: '20',
++    });
++    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
++    const inProcessAt = String((await orderRow(orderId))['in_process_at']);
++    const stored = await getAdminPool().query(
++      `SELECT event_id, idempotency_key, payload FROM domain_events
++        WHERE event_type = 'jobwork.material_received' AND stream_id = $1`,
++      [orderId],
++    );
++    assert.strictEqual(stored.rows.length, 1);
++    const storedEventId = stored.rows[0]!['event_id'] as string;
++    const idempotencyKey = stored.rows[0]!['idempotency_key'] as string;
++    assert.strictEqual(idempotencyKey, `jobwork.material_received:${first.grnLineId}`);
++
++    // The replay: the same custody event, same key, through the generic events route (the
++    // findEventByIdempotencyKey lesson: persistEvent's short-circuit is the authority).
++    const replay = await postEvent(
++      {
++        stream_type: 'jobwork',
++        stream_id: orderId,
++        event_type: 'jobwork.material_received',
++        payload: {
++          service_order_id: orderId,
++          receipt_id: randomUUID(),
++          grn_line_id: first.grnLineId,
++          challan_number_ext: 'CH-REPLAY',
++          challan_date: '2026-09-01',
++          sku,
++          lot_id: lot,
++          received_qty: '20.000',
++          challan_qty: '20.000',
++          uom: 'KG',
++          site_id: siteAId,
++          received_by: storeUserId,
++        },
++        metadata: {
++          correlation_id: randomUUID(),
++          actor: { user_id: coordinatorUserId, role: 'jobwork_coordinator', location_id: siteAId },
++          occurred_at: new Date().toISOString(),
++        },
++        idempotency_key: idempotencyKey,
++      },
++      coordinatorHeaders,
++    );
++    assert.ok(replay.status === 200 || replay.status === 201, JSON.stringify(replay.body));
++    const replayed = (replay.body['event'] as Record<string, unknown> | undefined) ?? replay.body;
++    assert.strictEqual(replayed['event_id'], storedEventId, JSON.stringify(replay.body));
++
++    assert.strictEqual((await receiptRows(orderId)).length, 1);
++    assert.strictEqual(String((await orderRow(orderId))['in_process_at']), inProcessAt);
++    assert.strictEqual(Number((await balances(sku))[0]!['on_hand']), 20);
++    assert.strictEqual(
++      await countRows(
++        'domain_events',
++        "event_type = 'jobwork.material_received' AND stream_id = $1",
++        [orderId],
++      ),
++      1,
++    );
++  });
++});
+diff --git a/test/unit/jobwork-receipt-config.test.ts b/test/unit/jobwork-receipt-config.test.ts
+new file mode 100644
+index 0000000..90ad367
+--- /dev/null
++++ b/test/unit/jobwork-receipt-config.test.ts
+@@ -0,0 +1,97 @@
++import { describe, it } from 'node:test';
++import assert from 'node:assert/strict';
++import { spawnSync } from 'node:child_process';
++import { resolve, dirname } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { config } from '../../src/config/index.js';
++
++/**
++ * Story 9.2 (FR-JW-05, Binding Scope Decision 6): JOBWORK_RECEIPT_TOLERANCE_PCT is BOOT-TIME
++ * configuration with no admin API, so the only fail-closed moment is startup. Proved by loading
++ * src/config/index.ts in a CHILD process with the offending environment (the Story 6.3
++ * production-completion-config pattern); every accepting run prints the RESOLVED value and the
++ * assertions compare it with a LITERAL, never with the config object itself (the 8.4 lesson).
++ */
++
++const __dirname = dirname(fileURLToPath(import.meta.url));
++const root = resolve(__dirname, '../..');
++
++interface ChildResult {
++  status: number | null;
++  output: string;
++}
++
++function loadConfigWith(env: Record<string, string>, expression: string): ChildResult {
++  const result = spawnSync(
++    process.execPath,
++    [
++      '--env-file=.env.test',
++      '--import',
++      'tsx',
++      '-e',
++      `import('./src/config/index.ts').then((m) => console.log('RESOLVED=' + ${expression}));`,
++    ],
++    {
++      cwd: root,
++      env: { ...process.env, ...env },
++      encoding: 'utf-8',
++      timeout: 60_000,
++      killSignal: 'SIGKILL',
++    },
++  );
++  return { status: result.status, output: `${result.stderr}${result.stdout}` };
++}
++
++const EXPR = 'm.config.jobwork.receiptTolerancePercent';
++
++describe('Story 9.2 receipt tolerance configuration (JOBWORK_RECEIPT_TOLERANCE_PCT)', () => {
++  it('the ambient default is the documented literal 0.5 percent, kept as a string', () => {
++    assert.strictEqual(config.jobwork.receiptTolerancePercent, '0.5');
++    assert.strictEqual(typeof config.jobwork.receiptTolerancePercent, 'string');
++  });
++
++  it('an explicit tolerance is taken verbatim, decimals included', () => {
++    const run = loadConfigWith({ JOBWORK_RECEIPT_TOLERANCE_PCT: '1.25' }, EXPR);
++    assert.strictEqual(run.status, 0, run.output);
++    assert.match(run.output, /^RESOLVED=1\.25$/m, run.output);
++  });
++
++  it('zero is legal (flag every deviation) and 10 is legal (the inclusive cap)', () => {
++    const zero = loadConfigWith({ JOBWORK_RECEIPT_TOLERANCE_PCT: '0' }, EXPR);
++    assert.strictEqual(zero.status, 0, zero.output);
++    assert.match(zero.output, /^RESOLVED=0$/m, zero.output);
++    const cap = loadConfigWith({ JOBWORK_RECEIPT_TOLERANCE_PCT: '10' }, EXPR);
++    assert.strictEqual(cap.status, 0, cap.output);
++    assert.match(cap.output, /^RESOLVED=10$/m, cap.output);
++  });
++
++  it('a present-but-blank value fails closed rather than silently taking the default', () => {
++    const run = loadConfigWith({ JOBWORK_RECEIPT_TOLERANCE_PCT: '' }, EXPR);
++    assert.notStrictEqual(run.status, 0, run.output);
++    assert.match(run.output, /JOBWORK_RECEIPT_TOLERANCE_PCT/);
++  });
++
++  it('above the cap refuses to boot', () => {
++    const run = loadConfigWith({ JOBWORK_RECEIPT_TOLERANCE_PCT: '10.0001' }, EXPR);
++    assert.notStrictEqual(run.status, 0, run.output);
++    assert.match(run.output, /JOBWORK_RECEIPT_TOLERANCE_PCT/);
++  });
++
++  it('a negative tolerance refuses to boot', () => {
++    const run = loadConfigWith({ JOBWORK_RECEIPT_TOLERANCE_PCT: '-0.5' }, EXPR);
++    assert.notStrictEqual(run.status, 0, run.output);
++    assert.match(run.output, /JOBWORK_RECEIPT_TOLERANCE_PCT/);
++  });
++
++  it('a non-numeric tolerance refuses to boot', () => {
++    const run = loadConfigWith({ JOBWORK_RECEIPT_TOLERANCE_PCT: 'half' }, EXPR);
++    assert.notStrictEqual(run.status, 0, run.output);
++    assert.match(run.output, /JOBWORK_RECEIPT_TOLERANCE_PCT/);
++  });
++
++  it('more than four decimal places refuses to boot (the predicate scale is exact to 4 dp)', () => {
++    const run = loadConfigWith({ JOBWORK_RECEIPT_TOLERANCE_PCT: '0.00001' }, EXPR);
++    assert.notStrictEqual(run.status, 0, run.output);
++    assert.match(run.output, /JOBWORK_RECEIPT_TOLERANCE_PCT/);
++  });
++});
+diff --git a/test/unit/jobwork-receipt-predicates.test.ts b/test/unit/jobwork-receipt-predicates.test.ts
+new file mode 100644
+index 0000000..efcf8fb
+--- /dev/null
++++ b/test/unit/jobwork-receipt-predicates.test.ts
+@@ -0,0 +1,258 @@
++import { describe, it } from 'node:test';
++import assert from 'node:assert/strict';
++import { randomUUID } from 'node:crypto';
++import {
++  receiptVarianceQty,
++  receiptVarianceFlagged,
++  firstReceiptTransitionRequired,
++  orderAcceptsReceipt,
++  isPositiveQtyString,
++  assertJobworkMaterialReceivedShape,
++  JOBWORK_MATERIAL_RECEIVED,
++} from '../../src/compliance/jobwork-receipt.js';
++import type { EventEnvelope } from '../../src/events/store.js';
++import { AppError } from '../../src/middleware/error.js';
++
++/**
++ * Story 9.2 (Task 7.3): the tolerance predicate takes the tolerance as a PARAMETER (the 8.4
++ * tautological-config lesson), so these tests exercise real boundaries with literal expectations,
++ * never the config against itself. The transition and receivability predicates are the two arms
++ * the custody applier consults; the shape assert is the closed-shape pre-DB gate.
++ */
++
++describe('Story 9.2 receipt variance arithmetic', () => {
++  it('computes the signed variance received - challan as a 3-decimal NUMERIC string', () => {
++    assert.strictEqual(receiptVarianceQty('100.000', '100.000'), '0.000');
++    assert.strictEqual(receiptVarianceQty('102.5', '100'), '2.500');
++    assert.strictEqual(receiptVarianceQty('99.25', '100.000'), '-0.750');
++    assert.strictEqual(receiptVarianceQty('0.001', '0.002'), '-0.001');
++    assert.strictEqual(receiptVarianceQty('123456789012345', '1'), '123456789012344.000');
++  });
++
++  it('accepts only strictly positive NUMERIC(18,3) strings', () => {
++    for (const ok of ['1', '0.001', '100.5', '123456789012345.999']) {
++      assert.strictEqual(isPositiveQtyString(ok), true, ok);
++    }
++    for (const bad of ['0', '0.000', '-1', '1.0000', '1e3', ' 1', '', 1, null, undefined, '.5']) {
++      assert.strictEqual(isPositiveQtyString(bad), false, String(bad));
++    }
++  });
++});
++
++describe('Story 9.2 receipt tolerance predicate (FR-JW-05)', () => {
++  it('flags a deviation strictly above the band, on both signs', () => {
++    // 0.5 percent of 1000 is 5.000
++    assert.strictEqual(receiptVarianceFlagged('5.001', '1000', '0.5'), true);
++    assert.strictEqual(receiptVarianceFlagged('-5.001', '1000', '0.5'), true);
++    assert.strictEqual(receiptVarianceFlagged('50', '1000', '0.5'), true);
++  });
++
++  it('does not flag a deviation inside the band, on both signs', () => {
++    assert.strictEqual(receiptVarianceFlagged('4.999', '1000', '0.5'), false);
++    assert.strictEqual(receiptVarianceFlagged('-4.999', '1000', '0.5'), false);
++    assert.strictEqual(receiptVarianceFlagged('0.000', '1000', '0.5'), false);
++  });
++
++  it('does not flag exactly at the band (strict comparison)', () => {
++    assert.strictEqual(receiptVarianceFlagged('5.000', '1000', '0.5'), false);
++    assert.strictEqual(receiptVarianceFlagged('-5.000', '1000', '0.5'), false);
++    // 2.5 percent of 40 is exactly 1.000
++    assert.strictEqual(receiptVarianceFlagged('1.000', '40', '2.5'), false);
++    assert.strictEqual(receiptVarianceFlagged('1.001', '40', '2.5'), true);
++  });
++
++  it('a zero tolerance flags ANY non-zero deviation and never a zero one', () => {
++    assert.strictEqual(receiptVarianceFlagged('0.001', '1000', '0'), true);
++    assert.strictEqual(receiptVarianceFlagged('-0.001', '1000', '0'), true);
++    assert.strictEqual(receiptVarianceFlagged('0.000', '1000', '0'), false);
++  });
++
++  it('settles in exact decimal arithmetic where a float comparison would be wrong', () => {
++    // 0.1 percent of 3 is 0.003; a float product gives 0.0030000000000000005
++    assert.strictEqual(receiptVarianceFlagged('0.003', '3', '0.1'), false);
++    assert.strictEqual(receiptVarianceFlagged('0.004', '3', '0.1'), true);
++    // four-decimal tolerance times three-decimal quantity: 0.0001% of 1234.567 = 0.001234567
++    assert.strictEqual(receiptVarianceFlagged('0.001', '1234.567', '0.0001'), false);
++    assert.strictEqual(receiptVarianceFlagged('0.002', '1234.567', '0.0001'), true);
++  });
++
++  it('is a function of the tolerance argument, not of any ambient value', () => {
++    const variance = '7.000';
++    assert.strictEqual(receiptVarianceFlagged(variance, '1000', '0.5'), true);
++    assert.strictEqual(receiptVarianceFlagged(variance, '1000', '1'), false);
++  });
++});
++
++describe('Story 9.2 order receivability and first-receipt transition predicates', () => {
++  it('a receipt may post only against a confirmed or in_process order', () => {
++    assert.strictEqual(orderAcceptsReceipt('confirmed'), true);
++    assert.strictEqual(orderAcceptsReceipt('in_process'), true);
++    assert.strictEqual(orderAcceptsReceipt('draft'), false);
++    assert.strictEqual(orderAcceptsReceipt('closed'), false);
++  });
++
++  it('only the FIRST receipt (order still confirmed) fires the in_process transition', () => {
++    assert.strictEqual(firstReceiptTransitionRequired('confirmed'), true);
++    assert.strictEqual(firstReceiptTransitionRequired('in_process'), false);
++    assert.strictEqual(firstReceiptTransitionRequired('draft'), false);
++    assert.strictEqual(firstReceiptTransitionRequired('closed'), false);
++  });
++});
++
++describe('Story 9.2 jobwork.material_received closed-shape assert', () => {
++  const serviceOrderId = randomUUID();
++
++  function envelopeWith(
++    payload: Record<string, unknown>,
++    streamType = 'jobwork',
++    streamId: string = serviceOrderId,
++  ): EventEnvelope {
++    return {
++      stream_type: streamType,
++      stream_id: streamId,
++      event_type: JOBWORK_MATERIAL_RECEIVED,
++      payload,
++      metadata: {
++        correlation_id: randomUUID(),
++        actor: { user_id: randomUUID(), role: 'store_assistant', location_id: randomUUID() },
++        occurred_at: new Date().toISOString(),
++      },
++    } as unknown as EventEnvelope;
++  }
++
++  function validPayload(): Record<string, unknown> {
++    return {
++      service_order_id: serviceOrderId,
++      receipt_id: randomUUID(),
++      grn_line_id: randomUUID(),
++      challan_number_ext: 'CH-2026-0001',
++      challan_date: '2026-09-03',
++      sku: 'SKU-CUST-1',
++      lot_id: 'LOT-CUST-1',
++      received_qty: '100.000',
++      challan_qty: '100.000',
++      uom: 'KG',
++      site_id: randomUUID(),
++      received_by: randomUUID(),
++    };
++  }
++
++  function codeOf(fn: () => void): string {
++    try {
++      fn();
++    } catch (err) {
++      if (err instanceof AppError) return err.errorCode;
++      throw err;
++    }
++    return 'NO_ERROR';
++  }
++
++  it('accepts the documented payload and trims text fields', () => {
++    const env = envelopeWith({ ...validPayload(), sku: '  SKU-CUST-1 ' });
++    assertJobworkMaterialReceivedShape(env);
++    assert.strictEqual(env.payload['sku'], 'SKU-CUST-1');
++  });
++
++  it('is a no-op for other event types', () => {
++    const env = envelopeWith({ anything: true });
++    env.event_type = 'jobwork.order_confirmed';
++    assertJobworkMaterialReceivedShape(env);
++  });
++
++  it('rejects an unknown key (closed shape) and the two server-derived fields', () => {
++    assert.strictEqual(
++      codeOf(() => assertJobworkMaterialReceivedShape(envelopeWith({ ...validPayload(), foo: 1 }))),
++      'INVALID_PARAMS',
++    );
++    assert.strictEqual(
++      codeOf(() =>
++        assertJobworkMaterialReceivedShape(envelopeWith({ ...validPayload(), variance_qty: '0' })),
++      ),
++      'INVALID_PARAMS',
++    );
++    assert.strictEqual(
++      codeOf(() =>
++        assertJobworkMaterialReceivedShape(
++          envelopeWith({ ...validPayload(), variance_flagged: false }),
++        ),
++      ),
++      'INVALID_PARAMS',
++    );
++  });
++
++  it('rejects the event name on a foreign stream and a stream_id that is not the order', () => {
++    assert.strictEqual(
++      codeOf(() => assertJobworkMaterialReceivedShape(envelopeWith(validPayload(), 'inventory'))),
++      'INVALID_EVENT_ENVELOPE',
++    );
++    assert.strictEqual(
++      codeOf(() =>
++        assertJobworkMaterialReceivedShape(envelopeWith(validPayload(), 'jobwork', randomUUID())),
++      ),
++      'INVALID_EVENT_ENVELOPE',
++    );
++  });
++
++  it('rejects a zero, negative, numeric-typed, or over-precise challan_qty (division-by-zero closure)', () => {
++    for (const bad of ['0', '0.000', '-5', 5, '1.0000', '']) {
++      assert.strictEqual(
++        codeOf(() =>
++          assertJobworkMaterialReceivedShape(envelopeWith({ ...validPayload(), challan_qty: bad })),
++        ),
++        'INVALID_PARAMS',
++        `challan_qty ${String(bad)}`,
++      );
++    }
++    assert.strictEqual(
++      codeOf(() =>
++        assertJobworkMaterialReceivedShape(envelopeWith({ ...validPayload(), received_qty: '0' })),
++      ),
++      'INVALID_PARAMS',
++    );
++  });
++
++  it('rejects a missing challan reference or a non-calendar challan_date', () => {
++    for (const field of ['challan_number_ext', 'challan_date', 'sku', 'uom']) {
++      const p = validPayload();
++      delete p[field];
++      assert.strictEqual(
++        codeOf(() => assertJobworkMaterialReceivedShape(envelopeWith(p))),
++        'INVALID_PARAMS',
++        field,
++      );
++    }
++    for (const bad of ['2026-02-30', '2026-13-01', '03-09-2026', 20260903]) {
++      assert.strictEqual(
++        codeOf(() =>
++          assertJobworkMaterialReceivedShape(
++            envelopeWith({ ...validPayload(), challan_date: bad }),
++          ),
++        ),
++        'INVALID_PARAMS',
++        String(bad),
++      );
++    }
++  });
++
++  it('rejects malformed UUID identifiers', () => {
++    for (const field of [
++      'service_order_id',
++      'receipt_id',
++      'grn_line_id',
++      'site_id',
++      'received_by',
++    ]) {
++      const p = { ...validPayload(), [field]: 'not-a-uuid' };
++      const env = envelopeWith(
++        p,
++        'jobwork',
++        field === 'service_order_id' ? 'not-a-uuid' : undefined,
++      );
++      assert.strictEqual(
++        codeOf(() => assertJobworkMaterialReceivedShape(env)),
++        'INVALID_PARAMS',
++        field,
++      );
++    }
++  });
++});

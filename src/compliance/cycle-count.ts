@@ -61,8 +61,14 @@ const CYCLE_COUNT_EVENT_TYPES = new Set([
 // counting it is legitimate, only allocating or laundering it into 'owned' is barred, and that bar
 // lives at the stock-balance applier choke point.
 const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work', 'prototype']);
-/** FR-Q-12 (Story 8.8): mirrors stock-balance.ts - prototype stock can never become saleable. */
-const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
+/**
+ * Story 9.2 (FR-JW-04): mirrors stock-balance.ts SEGREGATED_STOCK_CLASSES verbatim - the classes
+ * the lot-level laundering bar segregates ('prototype' with its FR-Q-12 PROTOTYPE_NOT_SALEABLE
+ * code from Story 8.8, 'job_work' customer-owned material with CROSS_ISSUE_BLOCKED). The two
+ * files move together.
+ */
+const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work']);
+const JOB_WORK_STOCK_CLASS = 'job_work';
 const COUNT_ADJUSTMENT_DOA_TYPE = 'inventory.count_adjustment';
 const SIGNOFF_ROLES = new Set([
   'inventory_controller',
@@ -1003,39 +1009,49 @@ async function applyStockAdjusted(
   // (or the lot-less grain) holds a non-saleable balance, and a non-saleable inflow is refused
   // when a saleable-class balance exists. Serialize on the SAME advisory-lock key the receipt
   // guard uses (seed 8808) so the two paths cannot race each other past the check.
-  if (delta > 0 && (stockClass === 'owned' || NON_SALEABLE_STOCK_CLASSES.has(stockClass))) {
+  // Story 9.2 (FR-JW-04, AC6): the conflict set is SEGREGATED_STOCK_CLASSES, so an owned inflow
+  // is refused when the lot holds prototype OR job_work material, and a segregated-class inflow
+  // is refused when the lot holds a balance in ANY other class (job_work covered both directions).
+  if (delta > 0 && (stockClass === 'owned' || SEGREGATED_STOCK_CLASSES.has(stockClass))) {
     const guardKey =
       lotId !== null
         ? `stock_class_guard:${sku}:lot:${lotId}`
         : `stock_class_guard:${sku}:loc:${locationId}`;
     await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 8808))`, [guardKey]);
-    const conflictIsNonSaleable = stockClass === 'owned';
+    const inflowIsOwned = stockClass === 'owned';
     const conflicting = await client.query(
       lotId !== null
         ? `SELECT stock_class FROM stock_balance
             WHERE sku = $1 AND lot_id = $2
-              AND ${conflictIsNonSaleable ? '' : 'NOT '}(stock_class = ANY($3::text[]))
+              AND ${inflowIsOwned ? 'stock_class = ANY($3::text[])' : 'stock_class <> $3'}
             LIMIT 1`
         : `SELECT stock_class FROM stock_balance
             WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL
-              AND ${conflictIsNonSaleable ? '' : 'NOT '}(stock_class = ANY($3::text[]))
+              AND ${inflowIsOwned ? 'stock_class = ANY($3::text[])' : 'stock_class <> $3'}
             LIMIT 1`,
       lotId !== null
-        ? [sku, lotId, [...NON_SALEABLE_STOCK_CLASSES]]
-        : [sku, locationId, [...NON_SALEABLE_STOCK_CLASSES]],
+        ? [sku, lotId, inflowIsOwned ? [...SEGREGATED_STOCK_CLASSES] : stockClass]
+        : [sku, locationId, inflowIsOwned ? [...SEGREGATED_STOCK_CLASSES] : stockClass],
     );
     if (conflicting.rows.length > 0) {
+      const existingClass = (conflicting.rows[0] as { stock_class: string }).stock_class;
+      const jobWorkConflict =
+        stockClass === JOB_WORK_STOCK_CLASS || existingClass === JOB_WORK_STOCK_CLASS;
       throw new AppError(
         400,
-        'PROTOTYPE_NOT_SALEABLE',
-        conflictIsNonSaleable
-          ? 'This lot already holds a non-saleable prototype balance; an owned count adjustment cannot create saleable stock for it'
-          : 'This lot already holds a saleable-class balance and cannot gain prototype stock by count adjustment',
+        jobWorkConflict ? 'CROSS_ISSUE_BLOCKED' : 'PROTOTYPE_NOT_SALEABLE',
+        jobWorkConflict
+          ? `This lot already holds a ${existingClass} balance; a ${stockClass} count adjustment would cross customer-owned material with another class`
+          : inflowIsOwned
+            ? 'This lot already holds a non-saleable prototype balance; an owned count adjustment cannot create saleable stock for it'
+            : 'This lot already holds a saleable-class balance and cannot gain prototype stock by count adjustment',
         {
           sku,
+          stock_class: stockClass,
           lot_id: lotId,
           location_id: locationId,
-          existing_stock_class: (conflicting.rows[0] as { stock_class: string }).stock_class,
+          existing_stock_class: existingClass,
+          ...(jobWorkConflict ? { demand_kind: 'count_adjustment' } : {}),
         },
       );
     }

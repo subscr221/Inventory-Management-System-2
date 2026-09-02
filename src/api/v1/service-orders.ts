@@ -13,6 +13,7 @@ import {
 } from '../../compliance/service-order.js';
 import { getServiceOrderById, listServiceOrders } from '../../read/projections/service_order.js';
 import type { ServiceOrderRow } from '../../read/projections/service_order.js';
+import { listJobworkMaterialReceiptsByOrder } from '../../read/projections/jobwork_material_receipt.js';
 
 /**
  * Story 9.1 REST surface for job-work service orders (FR-JW-01, FR-JW-02, FR-B-16, FR-AC-13).
@@ -366,6 +367,41 @@ const getServiceOrderBase: RouteHandler = async (req, res, params) => {
   }
 };
 
+/**
+ * Story 9.2 (AC2, AC3): the customer-material receipts recorded against an order, with the
+ * challan and variance fields the Story 9.3 custody statement will render. Same 404-vs-403
+ * ordering as GET-by-id (the 9.1 info-leak fix): an order at a site the caller cannot read is
+ * indistinguishable from a missing order.
+ */
+const listServiceOrderReceiptsBase: RouteHandler = async (req, res, params) => {
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    const order = await getServiceOrderById(serviceOrderId);
+    let accessDenied = false;
+    if (order) {
+      try {
+        assertSiteReadAccess(req, order.site_id);
+      } catch (err) {
+        if (err instanceof AppError && err.errorCode === 'LOCATION_ACCESS_DENIED') {
+          accessDenied = true;
+        } else {
+          throw err;
+        }
+      }
+    }
+    if (!order || accessDenied) {
+      sendRequestError(req, res, 404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+      return;
+    }
+    const receipts = await listJobworkMaterialReceiptsByOrder(serviceOrderId);
+    sendJson(res, 200, { service_order_id: serviceOrderId, receipts });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
 const listServiceOrdersBase: RouteHandler = async (req, res, _params) => {
   try {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -453,3 +489,8 @@ export const listServiceOrdersHandler = requireRole({
   module: 'jobwork',
   functionScope: 'read',
 })(listServiceOrdersBase);
+
+export const listServiceOrderReceiptsHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'read',
+})(listServiceOrderReceiptsBase);

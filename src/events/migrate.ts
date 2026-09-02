@@ -237,6 +237,9 @@ const MIGRATIONS = [
   // Story 9.1: job-work service order read model on the new 'jobwork' stream (tail-append,
   // BSD-8). References bom (Story 5.6) and location_register, both created above.
   '../../read/projections/service_order.sql',
+  // Story 9.2: customer-material receipt custody record (tail-append). FK-shaped reference to
+  // service_order above and to grn_line (Story 3.4), no declared FK.
+  '../../read/projections/jobwork_material_receipt.sql',
 ];
 
 async function migrate(): Promise<void> {

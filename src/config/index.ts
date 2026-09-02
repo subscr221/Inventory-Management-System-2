@@ -650,6 +650,28 @@ export const config = {
       true,
     ),
   },
+  jobwork: {
+    // Story 9.2 (FR-JW-03, FR-JW-05; Binding Scope Decision 6): the customer-material receipt
+    // tolerance, in percent of the inbound challan quantity. A receipt whose ABSOLUTE variance
+    // (received_qty - challan_qty) STRICTLY exceeds challan_qty * (t / 100) is flagged as an
+    // exception attributed to the receiving user; exactly-at-tolerance does NOT flag. Default 0.5
+    // (weighbridge class-III instrument accuracy is 0.2-0.5 percent): a zero default would flag
+    // every routine weighbridge wobble and train clerks to ignore the flag, which fails ignored,
+    // not closed. variance_qty is stored on every receipt regardless, so nothing is hidden.
+    // Kept as an exact decimal STRING (the completionTolerancePercent precedent) so the predicate
+    // settles in scaled integer arithmetic, never through a JS float. Only an ABSENT variable
+    // takes the default; present-but-blank, non-numeric, negative, or above 10 refuses to boot.
+    receiptTolerancePercent: (() => {
+      const raw = process.env['JOBWORK_RECEIPT_TOLERANCE_PCT'];
+      const value = raw === undefined ? '0.5' : raw.trim();
+      if (!/^\d{1,2}(\.\d{1,4})?$/.test(value) || Number(value) > 10) {
+        throw new Error(
+          `Invalid JOBWORK_RECEIPT_TOLERANCE_PCT "${raw}": must be a decimal percentage from 0 to 10 inclusive, with at most four decimal places.`,
+        );
+      }
+      return value;
+    })(),
+  },
   qc: {
     // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -
     // per-site catalogues are incompatible with the enterprise-wide repeat count in Decision 12

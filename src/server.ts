@@ -361,6 +361,7 @@ import {
   confirmServiceOrderHandler,
   getServiceOrderHandler as getJobworkServiceOrderHandler,
   listServiceOrdersHandler,
+  listServiceOrderReceiptsHandler,
 } from './api/v1/service-orders.js';
 import {
   createProductionOrderHandler,
@@ -1035,6 +1036,9 @@ export function createAppRouter(): Router {
   router.get('/api/v1/service-orders/:serviceOrderId', getJobworkServiceOrderHandler);
   router.patch('/api/v1/service-orders/:serviceOrderId', updateServiceOrderHandler);
   router.post('/api/v1/service-orders/:serviceOrderId/confirm', confirmServiceOrderHandler);
+  // Story 9.2: customer-material receipts recorded against an order (FR-JW-03, FR-JW-05). The
+  // receipt itself rides POST /api/v1/grn-lines with stock_class 'job_work'; this is read-only.
+  router.get('/api/v1/service-orders/:serviceOrderId/receipts', listServiceOrderReceiptsHandler);
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
   // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP

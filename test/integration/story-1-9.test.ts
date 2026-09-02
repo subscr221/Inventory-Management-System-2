@@ -538,6 +538,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/service-orders/:serviceOrderId',
       'PATCH /api/v1/service-orders/:serviceOrderId',
       'POST /api/v1/service-orders/:serviceOrderId/confirm',
+      // Story 9.2: customer-material receipts against an order (FR-JW-03, FR-JW-05).
+      'GET /api/v1/service-orders/:serviceOrderId/receipts',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

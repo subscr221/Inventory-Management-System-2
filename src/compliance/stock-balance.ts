@@ -13,6 +13,7 @@ import {
   SUPPLIER_OWNED_STOCK_CLASSES,
   OWNER_PARTY_CODE_REGEX,
 } from './ownership.js';
+import { assertJobworkReceiptOwnership } from './jobwork-receipt.js';
 
 /**
  * Central stock-balance seam (Story 2.2), split in two because the two halves run at different
@@ -67,6 +68,22 @@ const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work', 
 
 /** FR-Q-12: prototype stock can never be allocated, nor laundered into an owned balance row. */
 const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
+
+/**
+ * Story 9.2 (FR-JW-04): the classes the LOT-level laundering bar below segregates. A lot born in
+ * one of these classes can never later gain a balance in any other class, and vice versa.
+ * 'prototype' keeps its FR-Q-12 non-saleable semantics and error code; 'job_work' (customer-owned
+ * material, Epic 9) is segregated for custody, not for saleability, and refuses with
+ * CROSS_ISSUE_BLOCKED. Kept OUT of NON_SALEABLE_STOCK_CLASSES: that set's semantics are
+ * prototype-specific. Duplicated in cycle-count.ts - the two files move together.
+ */
+const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work']);
+const JOB_WORK_STOCK_CLASS = 'job_work';
+
+/** The laundering-bar refusal code for a conflict involving `conflictClass` (see SEGREGATED_STOCK_CLASSES). */
+function segregationErrorCode(conflictClass: string): string {
+  return conflictClass === JOB_WORK_STOCK_CLASS ? 'CROSS_ISSUE_BLOCKED' : 'PROTOTYPE_NOT_SALEABLE';
+}
 
 /** ponytail: NUMERIC(18,6) ceiling, prevents Postgres overflow on insert/update */
 const MAX_QUANTITY = 1e12;
@@ -303,6 +320,12 @@ export async function applyStockBalanceProjection(
   // this code is raised from the Story 2.2/2.8 stock surface, which carries no audit machinery -
   // the same carve-out already documented there for QUALITY_HOLD_GOVERNED. The omission is a
   // decision, not the Story 8.3 NCR_EXISTS lesson repeating.
+  //
+  // Story 9.2 extends the same carve-out to CROSS_ISSUE_BLOCKED (below): a seam refusal aborts
+  // its transaction, so no audit row can be written from here; the attempting user and demand
+  // source are captured by the Story 1.3 statutory request middleware instead (the disclosed
+  // AC5-letter deviation). Do NOT add the code to any AUDITED_REJECTIONS set unless a
+  // quality-surface route gains a path that emits it.
   if (NON_SALEABLE_STOCK_CLASSES.has(stockClass) && kind === 'allocation') {
     throw new AppError(
       400,
@@ -311,15 +334,32 @@ export async function applyStockBalanceProjection(
       { sku, stock_class: stockClass, lot_id: lotId, location_id: location.location_id },
     );
   }
+  // Story 9.2 AC5 (FR-JW-04): a TOTAL bar on customer-owned stock, not a demand classifier. In
+  // 9.2 no legitimate demand path for 'job_work' stock exists at all - consumption arrives only
+  // with the Story 9.3 custody-consumption seam, which opens its own gated door - so ANY
+  // allocation or issue naming the class is refused. One arm, mutation-testable; a classifier
+  // would lie green. CROSS_ISSUE_BLOCKED is a pre-registered stable code shared with Epic 10:
+  // the semantics stay generic (attempted class-crossing demand), never job-work-specific.
+  if (stockClass === JOB_WORK_STOCK_CLASS && (kind === 'allocation' || kind === 'issue')) {
+    throw new AppError(
+      400,
+      'CROSS_ISSUE_BLOCKED',
+      `Stock in the ${stockClass} class is segregated and cannot be issued, allocated, or picked by any demand`,
+      {
+        sku,
+        stock_class: stockClass,
+        lot_id: lotId,
+        location_id: location.location_id,
+        demand_kind: kind,
+      },
+    );
+  }
   // Code review 2026-09-02: the check below is check-then-act, so both sides of a laundering pair
-  // (a prototype receipt and an owned receipt) must serialize on the same transaction-scoped
+  // (a segregated receipt and an owned receipt) must serialize on the same transaction-scoped
   // advisory lock - a plain SELECT under READ COMMITTED lets two concurrent transactions each see
   // no conflicting row and both commit. Key on (sku, lot_id) - the lot-level grain the guard now
   // enforces - falling back to (sku, location_id) for lot-less balances.
-  if (
-    kind === 'receipt' &&
-    (stockClass === 'owned' || NON_SALEABLE_STOCK_CLASSES.has(stockClass))
-  ) {
+  if (kind === 'receipt' && (stockClass === 'owned' || SEGREGATED_STOCK_CLASSES.has(stockClass))) {
     const guardKey =
       lotId !== null
         ? `stock_class_guard:${sku}:lot:${lotId}`
@@ -328,11 +368,13 @@ export async function applyStockBalanceProjection(
   }
   // Code review 2026-09-02 (widening BSD-11 per review decision): the laundering bar is LOT-level,
   // not one (sku, location, lot) row - transferring the prototype stock away and receiving 'owned'
-  // for the same lot anywhere must still refuse. Lot-less prototype balances stay grain-scoped by
+  // for the same lot anywhere must still refuse. Lot-less segregated balances stay grain-scoped by
   // (sku, location). The arm applies to receipts only (inflows): issues and allocations of a
-  // legitimately coexisting owned balance must not be frozen by a neighbouring prototype row.
+  // legitimately coexisting owned balance must not be frozen by a neighbouring segregated row.
+  // Story 9.2 widens the conflict set from NON_SALEABLE to SEGREGATED_STOCK_CLASSES so an owned
+  // receipt can no more launder customer-owned job_work material than prototype stock.
   if (stockClass === 'owned' && kind === 'receipt') {
-    const prototypeBalance = await client.query(
+    const segregatedBalance = await client.query(
       lotId !== null
         ? `SELECT stock_class FROM stock_balance
             WHERE sku = $1 AND lot_id = $2 AND stock_class = ANY($3::text[])
@@ -342,51 +384,67 @@ export async function applyStockBalanceProjection(
               AND stock_class = ANY($3::text[])
             LIMIT 1`,
       lotId !== null
-        ? [sku, lotId, [...NON_SALEABLE_STOCK_CLASSES]]
-        : [sku, location.location_id, [...NON_SALEABLE_STOCK_CLASSES]],
+        ? [sku, lotId, [...SEGREGATED_STOCK_CLASSES]]
+        : [sku, location.location_id, [...SEGREGATED_STOCK_CLASSES]],
     );
-    if (prototypeBalance.rows.length > 0) {
+    if (segregatedBalance.rows.length > 0) {
+      const existingClass = (segregatedBalance.rows[0] as { stock_class: string }).stock_class;
       throw new AppError(
         400,
-        'PROTOTYPE_NOT_SALEABLE',
-        'This lot already holds a non-saleable prototype balance and cannot be moved to owned stock',
+        segregationErrorCode(existingClass),
+        existingClass === JOB_WORK_STOCK_CLASS
+          ? 'This lot already holds segregated customer-owned (job_work) material and cannot gain an owned balance'
+          : 'This lot already holds a non-saleable prototype balance and cannot be moved to owned stock',
         {
           sku,
+          stock_class: stockClass,
           lot_id: lotId,
           location_id: location.location_id,
-          existing_stock_class: (prototypeBalance.rows[0] as { stock_class: string }).stock_class,
+          existing_stock_class: existingClass,
+          ...(existingClass === JOB_WORK_STOCK_CLASS ? { demand_kind: kind } : {}),
         },
       );
     }
   }
   // Code review 2026-09-02 round 2: the symmetric arm. Without it the bar is order-dependent -
   // owned-then-prototype receipt ordering commits the same coexisting owned+prototype state that
-  // prototype-then-owned refuses. A lot is prototype from birth or it is not; a prototype receipt
-  // into a lot already carrying a saleable-class balance is refused with the same code.
-  if (NON_SALEABLE_STOCK_CLASSES.has(stockClass) && kind === 'receipt') {
-    const saleableBalance = await client.query(
+  // prototype-then-owned refuses. A lot is segregated from birth or it is not; a segregated-class
+  // receipt into a lot already carrying ANY other class's balance is refused. Story 9.2: the arm
+  // now covers job_work in both directions (a job_work receipt into an owned or prototype lot,
+  // a prototype receipt into a job_work lot).
+  if (SEGREGATED_STOCK_CLASSES.has(stockClass) && kind === 'receipt') {
+    const otherClassBalance = await client.query(
       lotId !== null
         ? `SELECT stock_class FROM stock_balance
-            WHERE sku = $1 AND lot_id = $2 AND NOT (stock_class = ANY($3::text[]))
+            WHERE sku = $1 AND lot_id = $2 AND stock_class <> $3
             LIMIT 1`
         : `SELECT stock_class FROM stock_balance
             WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL
-              AND NOT (stock_class = ANY($3::text[]))
+              AND stock_class <> $3
             LIMIT 1`,
-      lotId !== null
-        ? [sku, lotId, [...NON_SALEABLE_STOCK_CLASSES]]
-        : [sku, location.location_id, [...NON_SALEABLE_STOCK_CLASSES]],
+      lotId !== null ? [sku, lotId, stockClass] : [sku, location.location_id, stockClass],
     );
-    if (saleableBalance.rows.length > 0) {
+    if (otherClassBalance.rows.length > 0) {
+      const existingClass = (otherClassBalance.rows[0] as { stock_class: string }).stock_class;
+      // A job_work conflict on either side is a custody-segregation breach (CROSS_ISSUE_BLOCKED);
+      // a prototype-vs-owned conflict keeps its FR-Q-12 code.
+      const conflictClass =
+        stockClass === JOB_WORK_STOCK_CLASS || existingClass === JOB_WORK_STOCK_CLASS
+          ? JOB_WORK_STOCK_CLASS
+          : stockClass;
       throw new AppError(
         400,
-        'PROTOTYPE_NOT_SALEABLE',
-        'This lot already holds a saleable-class balance and cannot receive prototype stock',
+        segregationErrorCode(conflictClass),
+        conflictClass === JOB_WORK_STOCK_CLASS
+          ? `This lot already holds a ${existingClass} balance and cannot receive ${stockClass} stock (customer-owned material is segregated at lot level)`
+          : 'This lot already holds a saleable-class balance and cannot receive prototype stock',
         {
           sku,
+          stock_class: stockClass,
           lot_id: lotId,
           location_id: location.location_id,
-          existing_stock_class: (saleableBalance.rows[0] as { stock_class: string }).stock_class,
+          existing_stock_class: existingClass,
+          ...(conflictClass === JOB_WORK_STOCK_CLASS ? { demand_kind: kind } : {}),
         },
       );
     }
@@ -403,6 +461,10 @@ export async function applyStockBalanceProjection(
       location.location_id,
       client,
     );
+    // Story 9.2 AC7: a job_work receipt must name a receivable service order and an
+    // owner_party_code equal to that order's customer_party_code - the same choke point, so a
+    // direct stock.received cannot mint unattributed customer stock either.
+    await assertJobworkReceiptOwnership(envelope, stockClass, sku, location.location_id, client);
     await applyStockReceipt(
       {
         sku,

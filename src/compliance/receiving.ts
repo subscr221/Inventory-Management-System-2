@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
+import { persistEvent } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
+import { getServiceOrderById } from '../read/projections/service_order.js';
+import {
+  JOBWORK_MATERIAL_RECEIVED,
+  JOB_WORK_STOCK_CLASS,
+  RECEIVING_HANDOFF,
+} from './jobwork-receipt.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import { getItemBySku } from '../read/projections/item_master.js';
 import { getLocationById, getLocationByCode } from '../read/projections/location_register.js';
@@ -359,6 +366,47 @@ export async function applyGoodsReceivedProjection(
     : null;
   const stockClass = isNonEmptyString(p['stock_class']) ? (p['stock_class'] as string) : 'owned';
 
+  // 2b. Story 9.2 (FR-JW-03): customer material rides THIS flow, never a parallel receipt route.
+  //     A job_work receipt REQUIRES the confirmed service order and the inbound challan
+  //     (number, date, quantity); absence is 409 SOURCE_DOCUMENT_REQUIRED. Existence, status,
+  //     site, and customer binding are re-derived under lock by the seam gates below
+  //     (assertJobworkReceiptOwnership on the stock hand-off, then the custody applier) - this
+  //     block only shapes the hand-off.
+  const jobWork = stockClass === JOB_WORK_STOCK_CLASS;
+  if (jobWork) {
+    if (!isUuid(p['service_order_id'])) {
+      throw new AppError(
+        409,
+        'SOURCE_DOCUMENT_REQUIRED',
+        'Customer material can only be received against a confirmed service order (service_order_id is required)',
+        { sku, stock_class: stockClass },
+      );
+    }
+    if (!isNonEmptyString(p['challan_number_ext']) || !isNonEmptyString(p['challan_date'])) {
+      throw new AppError(
+        409,
+        'SOURCE_DOCUMENT_REQUIRED',
+        'Customer material can only be received with the inbound challan (challan_number_ext and challan_date are required)',
+        { sku, service_order_id: p['service_order_id'] },
+      );
+    }
+    if (normalizeQty(p['challan_qty']) === null) {
+      throw new AppError(
+        409,
+        'SOURCE_DOCUMENT_REQUIRED',
+        'Customer material can only be received with the inbound challan quantity (challan_qty must be a positive NUMERIC value)',
+        { sku, service_order_id: p['service_order_id'] },
+      );
+    }
+    // The customer binding travels on the stock view as owner_party_code (the consignment idiom)
+    // so the stock-surface gate verifies it against the order under lock. Derived from the order
+    // when the clerk did not supply one; a supplied value must still match (AC7).
+    if (!isNonEmptyString(p['owner_party_code'])) {
+      const order = await getServiceOrderById(p['service_order_id'] as string, client);
+      if (order) p['owner_party_code'] = order.customer_party_code;
+    }
+  }
+
   // 3. Tolerance band (AC5/AC6) computed entirely in PostgreSQL NUMERIC against the Story 2.9 PO line.
   //    Serialize concurrent receipts on the same PO line BEFORE reading the cumulative sum so two
   //    lines cannot both pass the band and over-receive.
@@ -560,9 +608,17 @@ export async function applyGoodsReceivedProjection(
       ...(p['unit_cost'] !== undefined && p['unit_cost'] !== null
         ? { unit_cost: Number(p['unit_cost']) }
         : {}),
+      // Story 9.2 AC7: the stock-surface ownership gate binds a job_work receipt to its order.
+      ...(jobWork ? { service_order_id: p['service_order_id'] } : {}),
       business_stream: item.business_stream,
     },
   };
+  // Story 9.2 (FR-JW-03): only THIS hand-off may post job_work stock. A Symbol key cannot arrive
+  // in a JSON body, so the stock-surface gate distinguishes the receiving flow from a direct
+  // stock.received without trusting any payload field.
+  if (jobWork) {
+    (stockView as unknown as Record<symbol, unknown>)[RECEIVING_HANDOFF] = true;
+  }
   await applyLotSerialValidation(stockView, client, eventId);
   await applyStockBalanceProjection(stockView, client);
 
@@ -647,6 +703,49 @@ export async function applyGoodsReceivedProjection(
     },
     client,
   );
+
+  // 7b. Story 9.2 (FR-JW-03, FR-JW-05): the order-linked custody record, persisted as its own
+  //     jobwork.material_received domain event INSIDE this transaction (the bis-licence-expiry
+  //     nested-persistEvent precedent). The custody applier re-derives the order under lock,
+  //     computes the challan variance, and fires confirmed -> in_process on the first receipt.
+  //     QC hold and custody COMPOSE: this row is written at receipt, not at putaway release, so a
+  //     quarantined customer lot is in custody from the moment it enters the building.
+  if (jobWork) {
+    const receiptId = isUuid(p['receipt_id']) ? (p['receipt_id'] as string) : randomUUID();
+    await persistEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: p['service_order_id'] as string,
+        event_type: JOBWORK_MATERIAL_RECEIVED,
+        payload: {
+          service_order_id: p['service_order_id'],
+          receipt_id: receiptId,
+          grn_line_id: p['grn_line_id'],
+          challan_number_ext: (p['challan_number_ext'] as string).trim(),
+          challan_date: p['challan_date'],
+          sku,
+          lot_id: resolvedLotId,
+          received_qty: receivedQty,
+          challan_qty: normalizeQty(p['challan_qty']) as string,
+          uom,
+          site_id: siteId,
+          received_by: receivedBy,
+        },
+        metadata: {
+          ...envelope.metadata,
+          correlation_id: correlationId,
+          causation_id: eventId,
+        },
+        // Natural idempotency key: one custody record per GRN line. A replay of the custody
+        // event with this key returns the stored event from persistEvent's short-circuit
+        // (no second row, no second transition attempt).
+        idempotency_key: `${JOBWORK_MATERIAL_RECEIVED}:${p['grn_line_id'] as string}`,
+      },
+      undefined,
+      client,
+    );
+  }
+
   if (qualifiedCrossDock) {
     await insertCrossDockTask(
       {

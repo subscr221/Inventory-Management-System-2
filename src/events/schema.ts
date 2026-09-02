@@ -4467,6 +4467,36 @@ export interface JobworkOrderConfirmedEnvelope extends Omit<EventEnvelope, 'payl
   payload: JobworkOrderConfirmedPayload;
 }
 
+/**
+ * Story 9.2 (FR-JW-03, FR-JW-04, FR-JW-05): the order-linked custody record written in the SAME
+ * transaction as the GRN line that received customer material. receipt_id is minted client-side
+ * (the 9.1 BSD-10 idiom). challan_date is an IST business DATE - the Story 9.5 Rule 45 return
+ * clock counts from it. variance_qty (received_qty - challan_qty, signed) and variance_flagged
+ * are SERVER-DERIVED: the seam refuses them on input and rewrites the payload before the
+ * domain_events insert, so the stored event carries what this process computed.
+ */
+export interface JobworkMaterialReceivedPayload {
+  service_order_id: string;
+  receipt_id: string;
+  grn_line_id: string;
+  challan_number_ext: string;
+  challan_date: string;
+  sku: string;
+  lot_id: string | null;
+  received_qty: string;
+  challan_qty: string;
+  uom: string;
+  variance_qty?: string;
+  variance_flagged?: boolean;
+  site_id: string;
+  received_by: string;
+}
+
+export interface JobworkMaterialReceivedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.material_received';
+  payload: JobworkMaterialReceivedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
@@ -5370,6 +5400,12 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'jobwork.order_confirmed': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  // Story 9.2: the customer-material receipt custody record rides the order's stream
+  // (stream_id = service_order_id); the order row already carries business_stream = 'job_work'.
+  'jobwork.material_received': {
     streamType: 'jobwork',
     requiresBusinessStream: false,
   },

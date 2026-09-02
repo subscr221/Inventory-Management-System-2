@@ -379,7 +379,11 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
     assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
   });
 
-  it('job_work receipts stay outside the ownership gate (Epic 9 flow untouched)', async () => {
+  it('job_work receipts stay outside the ownership-agreement gate; Story 9.2 owns the class and refuses a direct receipt', async () => {
+    // Story 9.2 (FR-JW-03, AC7): customer material enters only through the gate and receiving
+    // flows against a confirmed service order. The consignment/vmi agreement gate still does not
+    // apply to job_work (no OWNERSHIP_AGREEMENT_NOT_FOUND); the Story 9.2 receiving-flow gate
+    // refuses the direct stock.received instead, and no balance row is written.
     const sku = 'RM-0099-JW';
     await seedItem(sku);
     const res = await postStockEvent('stock.received', {
@@ -388,9 +392,10 @@ describe('Story 2.8 Consignment and VMI Stock Segregation', () => {
       quantity: 5,
       stock_class: 'job_work',
     });
-    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
     const stock = await getStock(sku);
-    assert.strictEqual(classEntry(stock, locAId, 'job_work')!['on_hand'], 5);
+    assert.strictEqual(classEntry(stock, locAId, 'job_work'), undefined);
   });
 
   // --- AC2: classless issues draw owned only ------------------------------

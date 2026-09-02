@@ -1703,6 +1703,19 @@ const EXPECTED = [
     ],
     indexBodies: ['ON service_order (order_number_ext, site_id)'],
   },
+  // Story 9.2: customer-material receipt custody record (one row per GRN line).
+  {
+    canonical: 'read/projections/jobwork_material_receipt.sql',
+    table: 'jobwork_material_receipt',
+    constraints: ['chk_jobwork_receipt_received_positive', 'chk_jobwork_receipt_challan_positive'],
+    indexes: [
+      'uq_jobwork_receipt_grn_line',
+      'idx_jobwork_receipt_order',
+      'idx_jobwork_receipt_site',
+    ],
+    indexBodies: ['ON jobwork_material_receipt (grn_line_id)'],
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
