@@ -1686,6 +1686,23 @@ const EXPECTED = [
     indexBodies: ['ON qc_witness_notice (hold_point_id, notice_date)'],
     appUserGrant: 'SELECT, INSERT',
   },
+  // Story 9.1: job-work service order read model (BSD-8).
+  {
+    canonical: 'read/projections/service_order.sql',
+    table: 'service_order',
+    constraints: [
+      'chk_service_order_status',
+      'chk_service_order_offcut_election',
+      'chk_service_order_customer_party_code',
+    ],
+    indexes: [
+      'uq_service_order_number_site',
+      'idx_service_order_status',
+      'idx_service_order_customer',
+      'idx_service_order_site',
+    ],
+    indexBodies: ['ON service_order (order_number_ext, site_id)'],
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

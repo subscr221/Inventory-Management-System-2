@@ -4403,6 +4403,71 @@ export interface QcWitnessedInspectionWaivedEnvelope extends Omit<EventEnvelope,
 }
 
 // ---------------------------------------------------------------------------
+// Story 9.1: job-work service order lifecycle (FR-JW-01, FR-JW-02, FR-B-16) on a NEW 'jobwork'
+// stream type (BSD-1; the custody ledger later gets its own stream type per AD-6 - the order
+// document anchors 'jobwork'). stream_id is service_order_id, minted client-side of the
+// transaction (BSD-10). External references carry the _ext suffix. There is no customer master
+// table (BSD-4): the order carries a governed customer_party_code short code plus customer_name.
+// price_basis is {basis_type, rate, currency} with basis_type in
+// per_piece|per_kg|per_hour|lumpsum (Story 9.1 open question 1 default). The four-state machine
+// (draft -> confirmed -> in_process -> closed) lives in src/compliance/service-order.ts; only
+// create/update/confirm have events in 9.1 - in_process is fired by Story 9.2's first
+// customer-material receipt and closed only by the Story 9.5 closure gate (BSD-2).
+// ---------------------------------------------------------------------------
+
+export interface ServiceOrderPriceBasisPayload {
+  basis_type: 'per_piece' | 'per_kg' | 'per_hour' | 'lumpsum';
+  rate: number;
+  currency: string;
+}
+
+export interface JobworkOrderCreatedPayload {
+  service_order_id: string;
+  customer_party_code: string;
+  customer_name: string;
+  spec_reference_ext?: string;
+  promised_start_date?: string;
+  promised_delivery_date?: string;
+  price_basis?: ServiceOrderPriceBasisPayload;
+  kit_bom_id?: string;
+  site_id: string;
+  business_stream: string;
+}
+
+export interface JobworkOrderCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.order_created';
+  payload: JobworkOrderCreatedPayload;
+}
+
+/** Draft-only field edits; every present field is a changed field (BSD-9 attribution). */
+export interface JobworkOrderUpdatedPayload {
+  service_order_id: string;
+  customer_party_code?: string;
+  customer_name?: string;
+  spec_reference_ext?: string | null;
+  promised_start_date?: string | null;
+  promised_delivery_date?: string | null;
+  price_basis?: ServiceOrderPriceBasisPayload | null;
+  kit_bom_id?: string | null;
+}
+
+export interface JobworkOrderUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.order_updated';
+  payload: JobworkOrderUpdatedPayload;
+}
+
+/** BSD-6: offcut_election is OPTIONAL in 9.1 (persisted, no behavior); Story 9.4 makes it mandatory. */
+export interface JobworkOrderConfirmedPayload {
+  service_order_id: string;
+  offcut_election?: 'return' | 'retain_and_buy' | 'retain_free';
+}
+
+export interface JobworkOrderConfirmedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.order_confirmed';
+  payload: JobworkOrderConfirmedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -5290,6 +5355,22 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'compliance.label_version_approved': {
     streamType: 'compliance',
+    requiresBusinessStream: false,
+  },
+  // Story 9.1: job-work service orders on the NEW 'jobwork' stream (BSD-1, BSD-7). The order
+  // create is itself a tagged business transaction under FR-AC-01 (requiresBusinessStream true,
+  // the indent.raised precedent); update/confirm act on a row that already holds the tag, so they
+  // ride requiresBusinessStream false (the purchase_order.approved precedent).
+  'jobwork.order_created': {
+    streamType: 'jobwork',
+    requiresBusinessStream: true,
+  },
+  'jobwork.order_updated': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  'jobwork.order_confirmed': {
+    streamType: 'jobwork',
     requiresBusinessStream: false,
   },
 } as const;

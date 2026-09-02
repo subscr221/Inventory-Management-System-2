@@ -532,6 +532,12 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/qc/witness-hold-points/:holdPointId/notices',
       'POST /api/v1/qc/witness-hold-points/:holdPointId/sign-off',
       'POST /api/v1/qc/witness-hold-points/:holdPointId/waive',
+      // Story 9.1: job-work service orders (FR-JW-01, FR-JW-02).
+      'POST /api/v1/service-orders',
+      'GET /api/v1/service-orders',
+      'GET /api/v1/service-orders/:serviceOrderId',
+      'PATCH /api/v1/service-orders/:serviceOrderId',
+      'POST /api/v1/service-orders/:serviceOrderId/confirm',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

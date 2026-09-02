@@ -356,6 +356,13 @@ import {
   approveLabelMasterHandler,
 } from './api/v1/compliance.js';
 import {
+  createServiceOrderHandler,
+  updateServiceOrderHandler,
+  confirmServiceOrderHandler,
+  getServiceOrderHandler as getJobworkServiceOrderHandler,
+  listServiceOrdersHandler,
+} from './api/v1/service-orders.js';
+import {
   createProductionOrderHandler,
   listProductionOrdersHandler,
   getProductionOrderHandler,
@@ -1019,6 +1026,15 @@ export function createAppRouter(): Router {
   router.get('/api/v1/compliance/label-masters', listLabelMastersHandler);
   router.get('/api/v1/compliance/label-masters/:labelId', getLabelMasterHandler);
   router.post('/api/v1/compliance/label-masters/:labelId/approve', approveLabelMasterHandler);
+
+  // Story 9.1: job-work service orders (FR-JW-01, FR-JW-02, FR-B-16). Create/update/confirm only
+  // (BSD-2): in_process is fired by Story 9.2's first customer-material receipt; closed is
+  // reachable only through the Story 9.5 closure gate.
+  router.post('/api/v1/service-orders', createServiceOrderHandler);
+  router.get('/api/v1/service-orders', listServiceOrdersHandler);
+  router.get('/api/v1/service-orders/:serviceOrderId', getJobworkServiceOrderHandler);
+  router.patch('/api/v1/service-orders/:serviceOrderId', updateServiceOrderHandler);
+  router.post('/api/v1/service-orders/:serviceOrderId/confirm', confirmServiceOrderHandler);
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
   // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP

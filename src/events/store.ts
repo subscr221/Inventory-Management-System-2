@@ -219,6 +219,10 @@ import {
 } from '../compliance/master-data.js';
 import { assertQcWitnessShape, applyQcWitnessProjection } from '../compliance/qc-witness.js';
 import {
+  assertServiceOrderShape,
+  applyServiceOrderProjection,
+} from '../compliance/service-order.js';
+import {
   assertProductionMaterialShape,
   applyProductionMaterialProjection,
 } from '../compliance/production-material.js';
@@ -712,6 +716,12 @@ export async function persistEvent(
   // SERVER-CAPTURED waiver quartet, the declared-derived rejections) is non-DB and runs here with
   // the other pre-transaction asserts.
   assertQcWitnessShape(envelope);
+  // Story 9.1: job-work service order shape validation (strict UUIDs, the governed
+  // customer_party_code short code, calendar dates, the price-basis contract, the
+  // declared-derived-field rejections) is non-DB and runs with the other pre-transaction
+  // asserts, so a malformed jobwork event never consumes an idempotency key. It also rejects a
+  // jobwork.* event name on any other stream (the Story 8.1 stream-mismatch closure).
+  assertServiceOrderShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -1062,6 +1072,11 @@ export async function persistEvent(
     // hold-point record, the notice ledger, and the sign-off/waiver closures - run inside this same
     // transaction, so the enforcement flag and the record commit or roll back together (AD-12).
     await applyQcWitnessProjection(envelope, client, eventId);
+    // Story 9.1: job-work service order lifecycle (create/update/confirm) runs inside this same
+    // transaction; the four-state machine re-derives current status under an advisory lock plus
+    // FOR UPDATE inside the applier (the Epic 8 hold-bypass lesson), so the projection row and
+    // the domain event commit or roll back together.
+    await applyServiceOrderProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's

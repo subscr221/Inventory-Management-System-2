@@ -234,6 +234,9 @@ const MIGRATIONS = [
   // the order between them is logical (hold point first, then its notice ledger).
   '../../read/projections/qc_witness_hold_point.sql',
   '../../read/projections/qc_witness_notice.sql',
+  // Story 9.1: job-work service order read model on the new 'jobwork' stream (tail-append,
+  // BSD-8). References bom (Story 5.6) and location_register, both created above.
+  '../../read/projections/service_order.sql',
 ];
 
 async function migrate(): Promise<void> {
