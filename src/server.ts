@@ -328,6 +328,12 @@ import {
   getQcReleaseHandler,
   getQcRetentionSampleHandler,
   placeQcHoldHandler,
+  raiseWitnessHoldPointHandler,
+  recordWitnessNoticeHandler,
+  signOffWitnessHoldPointHandler,
+  waiveWitnessHoldPointHandler,
+  listWitnessHoldPointsHandler,
+  getWitnessHoldPointHandler,
   releaseQcHoldHandler,
   listQcHoldsHandler,
   getQcHoldHandler,
@@ -923,6 +929,19 @@ export function createAppRouter(): Router {
   router.get('/api/v1/qc/capas', listQcCapasHandler);
   router.get('/api/v1/qc/capas/:capaId', getQcCapaHandler);
   router.post('/api/v1/qc/capas/:capaId/close', closeQcCapaHandler);
+  // Story 8.8: witnessed / third-party inspection hold points. Same route-order discipline:
+  // '/qc/witness-hold-points' is its own static segment, unreachable from '/qc/tasks/:taskId',
+  // '/qc/holds/:holdId' or '/qc/capas/:capaId', and the list route is registered before its
+  // parameterised sibling so ':holdPointId' cannot swallow it.
+  router.post('/api/v1/qc/witness-hold-points', raiseWitnessHoldPointHandler);
+  router.get('/api/v1/qc/witness-hold-points', listWitnessHoldPointsHandler);
+  router.get('/api/v1/qc/witness-hold-points/:holdPointId', getWitnessHoldPointHandler);
+  router.post('/api/v1/qc/witness-hold-points/:holdPointId/notices', recordWitnessNoticeHandler);
+  router.post(
+    '/api/v1/qc/witness-hold-points/:holdPointId/sign-off',
+    signOffWitnessHoldPointHandler,
+  );
+  router.post('/api/v1/qc/witness-hold-points/:holdPointId/waive', waiveWitnessHoldPointHandler);
 
   // Story 6.1: Production Order Creation and Release Gate (FR-MO-01/02/03). ROUTE ORDER MATTERS:
   // '/production-orders' (both verbs) is registered BEFORE any '/production-orders/:orderId' route,

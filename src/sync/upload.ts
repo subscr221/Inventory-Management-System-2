@@ -23,6 +23,8 @@ const PERMANENT_ERROR_CODES = new Set([
   'INSUFFICIENT_STOCK',
   'LOT_EXPIRED',
   'LOT_ON_HOLD',
+  // Story 8.8 (FR-Q-12): a structural bar, so an offline edge retry can never clear it.
+  'PROTOTYPE_NOT_SALEABLE',
   'DUPLICATE_LOT',
   'DUPLICATE_SERIAL',
   'SERIAL_REQUIRED',

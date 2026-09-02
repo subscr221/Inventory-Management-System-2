@@ -48,8 +48,25 @@ const STOCK_BALANCE_EVENT_KINDS: Record<string, StockBalanceEventKind> = {
   'stock.issued': 'issue',
 };
 
-/** ponytail: known set, extend when new stock classes are introduced (Story 2.8, etc.) */
-const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work']);
+/**
+ * ponytail: known set, extend when new stock classes are introduced (Story 2.8, etc.)
+ *
+ * DUPLICATED in src/compliance/cycle-count.ts - the two sets must be extended together, and the
+ * duplication is the trap: a class added here alone is refused INVALID_PARAMS by every count path.
+ *
+ * Story 8.8 BSD-9: 'prototype' is an ORIGIN class, not a quality state. A prior binding decision
+ * ruled that this platform has NO separate blocked-stock class - blocked stock is
+ * gate_status = 'rejected' plus lot_master.quality_hold_status = 'held', which is a QUALITY STATE
+ * and correctly belongs on the lot and the gate. 'prototype' is a different kind of thing: it
+ * describes where the stock came from and what it may ever become, exactly like 'consignment',
+ * 'vmi' and 'job_work'. Prototype stock is never "released" into 'owned'; non-saleability is a
+ * permanent property of that balance row, which is why the bar below is structural rather than a
+ * clearable flag.
+ */
+const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work', 'prototype']);
+
+/** FR-Q-12: prototype stock can never be allocated, nor laundered into an owned balance row. */
+const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
 
 /** ponytail: NUMERIC(18,6) ceiling, prevents Postgres overflow on insert/update */
 const MAX_QUANTITY = 1e12;
@@ -263,6 +280,117 @@ export async function applyStockBalanceProjection(
 
   const stockClass =
     typeof envelope.payload['stock_class'] === 'string' ? envelope.payload['stock_class'] : 'owned';
+
+  // ---------------------------------------------------------------------------
+  // Story 8.8 AC 3 (FR-Q-12): prototype stock is structurally barred from sellable status.
+  //
+  // This is the SINGLE choke point every stock write path funnels through - the HTTP handler,
+  // POST /api/v1/events, and the edge upload - which is the same rationale documented for the
+  // Story 2.8 ownership gate above. A guard placed in a route instead would be bypassable by two
+  // of those three paths (AD-12).
+  //
+  // BSD-11: there is no reclassification event in the system today and this story does not mint
+  // one, so both halves of "move to sellable status or allocate to a dispatch" are expressed
+  // against the transactions that DO exist:
+  //   1. an allocation of prototype-class stock is refused outright, and
+  //   2. an 'owned'-class write for a (sku, location_id, lot_id) that already holds a prototype
+  //      balance is refused - without this arm a plain receipt into 'owned' for the same lot
+  //      silently launders prototype stock into saleable stock.
+  // A future reclassification event must route through this same guard.
+  //
+  // BSD-12: PROTOTYPE_NOT_SALEABLE is deliberately NOT in AUDITED_REJECTIONS. That set is the
+  // Epic 8 convention for refused quality DECISIONS raised by routes in src/api/v1/quality.ts;
+  // this code is raised from the Story 2.2/2.8 stock surface, which carries no audit machinery -
+  // the same carve-out already documented there for QUALITY_HOLD_GOVERNED. The omission is a
+  // decision, not the Story 8.3 NCR_EXISTS lesson repeating.
+  if (NON_SALEABLE_STOCK_CLASSES.has(stockClass) && kind === 'allocation') {
+    throw new AppError(
+      400,
+      'PROTOTYPE_NOT_SALEABLE',
+      `Stock in the ${stockClass} class can never be allocated to a dispatch`,
+      { sku, stock_class: stockClass, lot_id: lotId, location_id: location.location_id },
+    );
+  }
+  // Code review 2026-09-02: the check below is check-then-act, so both sides of a laundering pair
+  // (a prototype receipt and an owned receipt) must serialize on the same transaction-scoped
+  // advisory lock - a plain SELECT under READ COMMITTED lets two concurrent transactions each see
+  // no conflicting row and both commit. Key on (sku, lot_id) - the lot-level grain the guard now
+  // enforces - falling back to (sku, location_id) for lot-less balances.
+  if (
+    kind === 'receipt' &&
+    (stockClass === 'owned' || NON_SALEABLE_STOCK_CLASSES.has(stockClass))
+  ) {
+    const guardKey =
+      lotId !== null
+        ? `stock_class_guard:${sku}:lot:${lotId}`
+        : `stock_class_guard:${sku}:loc:${location.location_id}`;
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 8808))`, [guardKey]);
+  }
+  // Code review 2026-09-02 (widening BSD-11 per review decision): the laundering bar is LOT-level,
+  // not one (sku, location, lot) row - transferring the prototype stock away and receiving 'owned'
+  // for the same lot anywhere must still refuse. Lot-less prototype balances stay grain-scoped by
+  // (sku, location). The arm applies to receipts only (inflows): issues and allocations of a
+  // legitimately coexisting owned balance must not be frozen by a neighbouring prototype row.
+  if (stockClass === 'owned' && kind === 'receipt') {
+    const prototypeBalance = await client.query(
+      lotId !== null
+        ? `SELECT stock_class FROM stock_balance
+            WHERE sku = $1 AND lot_id = $2 AND stock_class = ANY($3::text[])
+            LIMIT 1`
+        : `SELECT stock_class FROM stock_balance
+            WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL
+              AND stock_class = ANY($3::text[])
+            LIMIT 1`,
+      lotId !== null
+        ? [sku, lotId, [...NON_SALEABLE_STOCK_CLASSES]]
+        : [sku, location.location_id, [...NON_SALEABLE_STOCK_CLASSES]],
+    );
+    if (prototypeBalance.rows.length > 0) {
+      throw new AppError(
+        400,
+        'PROTOTYPE_NOT_SALEABLE',
+        'This lot already holds a non-saleable prototype balance and cannot be moved to owned stock',
+        {
+          sku,
+          lot_id: lotId,
+          location_id: location.location_id,
+          existing_stock_class: (prototypeBalance.rows[0] as { stock_class: string }).stock_class,
+        },
+      );
+    }
+  }
+  // Code review 2026-09-02 round 2: the symmetric arm. Without it the bar is order-dependent -
+  // owned-then-prototype receipt ordering commits the same coexisting owned+prototype state that
+  // prototype-then-owned refuses. A lot is prototype from birth or it is not; a prototype receipt
+  // into a lot already carrying a saleable-class balance is refused with the same code.
+  if (NON_SALEABLE_STOCK_CLASSES.has(stockClass) && kind === 'receipt') {
+    const saleableBalance = await client.query(
+      lotId !== null
+        ? `SELECT stock_class FROM stock_balance
+            WHERE sku = $1 AND lot_id = $2 AND NOT (stock_class = ANY($3::text[]))
+            LIMIT 1`
+        : `SELECT stock_class FROM stock_balance
+            WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL
+              AND NOT (stock_class = ANY($3::text[]))
+            LIMIT 1`,
+      lotId !== null
+        ? [sku, lotId, [...NON_SALEABLE_STOCK_CLASSES]]
+        : [sku, location.location_id, [...NON_SALEABLE_STOCK_CLASSES]],
+    );
+    if (saleableBalance.rows.length > 0) {
+      throw new AppError(
+        400,
+        'PROTOTYPE_NOT_SALEABLE',
+        'This lot already holds a saleable-class balance and cannot receive prototype stock',
+        {
+          sku,
+          lot_id: lotId,
+          location_id: location.location_id,
+          existing_stock_class: (saleableBalance.rows[0] as { stock_class: string }).stock_class,
+        },
+      );
+    }
+  }
 
   if (kind === 'receipt') {
     // Story 2.8: consignment/vmi receipts must match the single active ownership agreement for

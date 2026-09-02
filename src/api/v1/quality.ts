@@ -87,7 +87,7 @@ import type { QcNcrOutcome } from '../../read/projections/qc_ncr.js';
 import { listQcLotSplitsByParent } from '../../read/projections/qc_lot_split.js';
 import { getQcBatchReleaseByLotId } from '../../read/projections/qc_batch_release.js';
 import { getQcRetentionSampleByLotId } from '../../read/projections/qc_retention_sample.js';
-import { getLotById } from '../../read/projections/lot_master.js';
+import { getLotById, getLotByNumberAndSku } from '../../read/projections/lot_master.js';
 import { getQcInspectionTaskByLotId } from '../../read/projections/qc_inspection_task.js';
 import {
   getOpenQcQualityHoldByLotId,
@@ -96,6 +96,26 @@ import {
 } from '../../read/projections/qc_quality_hold.js';
 import type { QcHoldStatus } from '../../read/projections/qc_quality_hold.js';
 import { getQcCapaById, listQcCapas } from '../../read/projections/qc_capa.js';
+import {
+  getWitnessHoldPointById,
+  listWitnessHoldPoints,
+  WITNESS_HOLD_POINT_STATUSES,
+  WITNESS_INSPECTION_TYPES,
+  type WitnessHoldPointStatus,
+  type WitnessInspectionType,
+} from '../../read/projections/qc_witness_hold_point.js';
+import {
+  listNoticesForHoldPoint,
+  WITNESS_NOTICE_METHODS,
+  type WitnessNoticeMethod,
+} from '../../read/projections/qc_witness_notice.js';
+import {
+  WITNESS_HOLD_POINT_RAISED,
+  WITNESS_NOTICE_RECORDED,
+  WITNESSED_INSPECTION_SIGNED_OFF,
+  WITNESSED_INSPECTION_WAIVED,
+  WITNESS_WAIVER_DOA_TYPE,
+} from '../../compliance/qc-witness.js';
 import type { QcCapaStatus } from '../../read/projections/qc_capa.js';
 import { assembleRecallTrace } from '../../quality/recall-trace.js';
 
@@ -286,6 +306,19 @@ const AUDITED_REJECTIONS = new Set([
   // approved Legal Metrology label) is a statutory record of a refused quality decision.
   'BIS_LICENCE_INVALID',
   'LABEL_VERSION_MISSING',
+  // Story 8.8 (FR-Q-15): a refused witness hold point, notice, sign-off or waiver is a statutory
+  // record of a refused quality decision. APPROVAL_AUTHORITY_MISMATCH joins the family here; the
+  // pre-existing APPROVAL_REQUIRED / APPROVAL_UNRESOLVED / SOD_VIOLATION / QC_DERIVATION_MISMATCH /
+  // LOT_ON_HOLD / HOLD_EXISTS entries above already cover the rest of this story's contract.
+  // PROTOTYPE_NOT_SALEABLE is deliberately ABSENT (BSD-12): it is raised from the Story 2.2/2.8
+  // stock surface, which carries no audit machinery - the same carve-out documented for
+  // QUALITY_HOLD_GOVERNED above. A code listed here that no route in THIS file throws is exactly
+  // the drift the 8.4 review flagged.
+  'WITNESS_HOLD_POINT_EXISTS',
+  'WITNESS_HOLD_POINT_NOT_OPEN',
+  'WITNESS_HOLD_POINT_NOT_FOUND',
+  'WITNESS_NOTICE_REQUIRED',
+  'APPROVAL_AUTHORITY_MISMATCH',
 ]);
 
 function requireBody(
@@ -2709,6 +2742,460 @@ const getQcCapaBase: RouteHandler = async (req, res, params) => {
     sendAppError(req, res, err);
   }
 };
+
+// ---------------------------------------------------------------------------
+// Story 8.8: witnessed and third-party inspection hold points (FR-Q-15)
+//
+// These routes reuse this file's AUDITED_REJECTIONS, actorContext, auditCtxFor,
+// auditRejectedAttempt and replayIdOrReject rather than exporting a second copy: the QC surface
+// already owns them, and a duplicate audit table is how the two drift apart.
+// ---------------------------------------------------------------------------
+
+/**
+ * Story 8.7 code review (D8): state-changing routes REQUIRE a client-supplied idempotency key.
+ * Auto-minting one per request is not idempotency - a dropped response followed by a retry would
+ * mint a second key and raise a second hold point.
+ */
+function requireIdempotencyKey(body: Record<string, unknown>): string {
+  const key = body['idempotency_key'];
+  if (typeof key !== 'string' || key.trim() === '') {
+    throw new AppError(400, 'INVALID_PARAMS', 'idempotency_key is required', {
+      field: 'idempotency_key',
+    });
+  }
+  return key.trim();
+}
+
+/** Rejects fields the route does not accept, so a silently-ignored field never returns 2xx. */
+function rejectUnacceptedFields(body: Record<string, unknown>, fields: string[]): void {
+  for (const field of fields) {
+    if (body[field] !== undefined) {
+      throw new AppError(400, 'INVALID_PARAMS', `${field} is not accepted on this route`, {
+        field,
+      });
+    }
+  }
+}
+
+/** A hold point's site is nullable (an ungoverned lot is still holdable); null skips the check. */
+function assertWriteSiteAccessWhenScoped(req: IncomingMessage, siteId: string | null): void {
+  if (siteId !== null) assertWriteSiteAccess(req, siteId);
+}
+
+function assertReadSiteAccessWhenScoped(req: IncomingMessage, siteId: string | null): void {
+  if (siteId !== null) assertReadSiteAccess(req, siteId);
+}
+
+const raiseWitnessHoldPointBase: RouteHandler = async (req, res, _params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let lotId: string | null = null;
+  let siteId: string | undefined;
+  try {
+    // lot_id, site_id and qc_hold_id are SERVER-DERIVED: the client names the lot by
+    // (lot_number, sku), the applier resolves the rest under the transaction.
+    rejectUnacceptedFields(body, [
+      'hold_point_id',
+      'lot_id',
+      'site_id',
+      'qc_hold_id',
+      'status',
+      'raised_by',
+      'raised_at',
+    ]);
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (typeof body['lot_number'] !== 'string' || body['lot_number'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'lot_number must be a non-empty string');
+    }
+    if (typeof body['sku'] !== 'string' || body['sku'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'sku must be a non-empty string');
+    }
+    if (!WITNESS_INSPECTION_TYPES.includes(body['inspection_type'] as WitnessInspectionType)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `inspection_type must be one of: ${WITNESS_INSPECTION_TYPES.join(', ')}`,
+      );
+    }
+    if (typeof body['hold_reason'] !== 'string' || body['hold_reason'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'hold_reason must be a non-empty string');
+    }
+    const lotNumber = (body['lot_number'] as string).trim();
+    const sku = (body['sku'] as string).trim();
+    const lot = await getLotByNumberAndSku(lotNumber, sku);
+    if (!lot) {
+      throw new AppError(404, 'LOT_NOT_FOUND', 'The lot does not resolve', {
+        lot_number: lotNumber,
+        sku,
+      });
+    }
+    lotId = lot.lot_id;
+    // Site scoping rides the lot's inspection task when one exists; an ungoverned lot is still
+    // holdable (containment must not wait on governance) and is scoped by the write role alone.
+    const task = await getQcInspectionTaskByLotId(lot.lot_id);
+    if (task) {
+      siteId = task.site_id;
+      assertWriteSiteAccess(req, task.site_id);
+    } else {
+      // Code review 2026-09-02: the applier stamps actor.location_id as the row's site_id when no
+      // inspection task exists - assert the writer's scope against that same value so the stored
+      // site is never one the write role was not checked for. A wildcard-scoped actor carries the
+      // NO_LOCATION_UUID sentinel, which must resolve to NULL here (round 2): stamping the
+      // sentinel would create a phantom "site" no scoped reader can ever match.
+      const actorSite = actor.eventLocationId === NO_LOCATION_UUID ? null : actor.eventLocationId;
+      siteId = actorSite ?? undefined;
+      assertWriteSiteAccessWhenScoped(req, actorSite);
+    }
+    const holdPointId = randomUUID();
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: holdPointId,
+        event_type: WITNESS_HOLD_POINT_RAISED,
+        payload: {
+          hold_point_id: holdPointId,
+          lot_number: lotNumber,
+          sku,
+          inspection_type: body['inspection_type'],
+          hold_reason: (body['hold_reason'] as string).trim(),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedId = replayIdOrReject(persisted, WITNESS_HOLD_POINT_RAISED, 'hold_point_id');
+    const replayed = persistedId !== holdPointId;
+    const holdPoint = await getWitnessHoldPointById(persistedId);
+    sendJson(res, replayed ? 200 : 201, { event_id: persisted.event_id, hold_point: holdPoint });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { lot_id: lotId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const recordWitnessNoticeBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let holdPointId = '';
+  let siteId: string | undefined;
+  try {
+    holdPointId = requireUuidParam(params, 'holdPointId');
+    rejectUnacceptedFields(body, ['notice_id', 'hold_point_id', 'recorded_by', 'recorded_at']);
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (typeof body['recipient'] !== 'string' || body['recipient'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'recipient must be a non-empty string');
+    }
+    if (typeof body['notice_date'] !== 'string' || !isValidCalendarDate(body['notice_date'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'notice_date must be a calendar date (YYYY-MM-DD)');
+    }
+    if (!WITNESS_NOTICE_METHODS.includes(body['method'] as WitnessNoticeMethod)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `method must be one of: ${WITNESS_NOTICE_METHODS.join(', ')}`,
+      );
+    }
+    const holdPoint = await getWitnessHoldPointById(holdPointId);
+    if (!holdPoint) {
+      throw new AppError(
+        404,
+        'WITNESS_HOLD_POINT_NOT_FOUND',
+        'The named witness hold point does not resolve',
+        { hold_point_id: holdPointId },
+      );
+    }
+    siteId = holdPoint.site_id ?? undefined;
+    assertWriteSiteAccessWhenScoped(req, holdPoint.site_id);
+    const noticeId = randomUUID();
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: holdPointId,
+        event_type: WITNESS_NOTICE_RECORDED,
+        payload: {
+          notice_id: noticeId,
+          hold_point_id: holdPointId,
+          recipient: (body['recipient'] as string).trim(),
+          notice_date: body['notice_date'],
+          method: body['method'],
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedNoticeId = replayIdOrReject(persisted, WITNESS_NOTICE_RECORDED, 'notice_id');
+    const replayed = persistedNoticeId !== noticeId;
+    const notices = await listNoticesForHoldPoint(holdPointId);
+    sendJson(res, replayed ? 200 : 201, { event_id: persisted.event_id, notices });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { hold_point_id: holdPointId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const signOffWitnessHoldPointBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let holdPointId = '';
+  let siteId: string | undefined;
+  try {
+    holdPointId = requireUuidParam(params, 'holdPointId');
+    rejectUnacceptedFields(body, [
+      'hold_point_id',
+      'status',
+      'closed_by',
+      'closed_at',
+      'close_event_id',
+      // Round-2 review: waiver-arm fields silently dropped here would return 2xx while ignoring
+      // what the client plainly meant - the exact failure this helper exists to prevent.
+      'waiver_reason',
+      'waiver_doa_entry_id',
+      'approved_by',
+      'doa_entry_id',
+    ]);
+    const idempotencyKey = requireIdempotencyKey(body);
+    const signOffNote = optionalNullableString(body, 'sign_off_note');
+    const holdPoint = await getWitnessHoldPointById(holdPointId);
+    if (!holdPoint) {
+      throw new AppError(
+        404,
+        'WITNESS_HOLD_POINT_NOT_FOUND',
+        'The named witness hold point does not resolve',
+        { hold_point_id: holdPointId },
+      );
+    }
+    siteId = holdPoint.site_id ?? undefined;
+    assertWriteSiteAccessWhenScoped(req, holdPoint.site_id);
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: holdPointId,
+        event_type: WITNESSED_INSPECTION_SIGNED_OFF,
+        payload: {
+          hold_point_id: holdPointId,
+          ...(signOffNote !== null ? { sign_off_note: signOffNote } : {}),
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, WITNESSED_INSPECTION_SIGNED_OFF, 'hold_point_id');
+    const refreshed = await getWitnessHoldPointById(holdPointId);
+    // The hold point read BEFORE the write is the replay signal: a first sign-off can only run
+    // against an open hold point (the applier refuses WITNESS_HOLD_POINT_NOT_OPEN otherwise), so
+    // reaching here with an already-closed pre-read means persistEvent returned the earlier event.
+    // Comparing close_event_id to persisted.event_id would NOT work - a replay returns the
+    // original event, whose id IS the stored close_event_id. 200 on a replay, never 201.
+    const replayed = holdPoint.status !== 'open';
+    sendJson(res, replayed ? 200 : 201, {
+      event_id: persisted.event_id,
+      hold_point: refreshed,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { hold_point_id: holdPointId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const waiveWitnessHoldPointBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  let holdPointId = '';
+  let siteId: string | undefined;
+  try {
+    holdPointId = requireUuidParam(params, 'holdPointId');
+    rejectUnacceptedFields(body, [
+      'hold_point_id',
+      'approved_by',
+      'doa_entry_id',
+      'governing_role',
+      'delegation_applied',
+      'status',
+      'closed_by',
+      'closed_at',
+      'close_event_id',
+      // Round-2 review: the sign-off arm's field, symmetric with the sign-off route's rejection
+      // of the waiver fields.
+      'sign_off_note',
+    ]);
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (typeof body['waiver_reason'] !== 'string' || body['waiver_reason'].trim() === '') {
+      throw new AppError(400, 'INVALID_PARAMS', 'waiver_reason must be a non-empty string');
+    }
+    const holdPoint = await getWitnessHoldPointById(holdPointId);
+    if (!holdPoint) {
+      throw new AppError(
+        404,
+        'WITNESS_HOLD_POINT_NOT_FOUND',
+        'The named witness hold point does not resolve',
+        { hold_point_id: holdPointId },
+      );
+    }
+    siteId = holdPoint.site_id ?? undefined;
+    assertWriteSiteAccessWhenScoped(req, holdPoint.site_id);
+
+    // BSD-7 pre-check: the applier re-derives the SAME authority under the transaction and is the
+    // real guard. This pre-check only makes the audited 403 cheap; it can produce a false positive
+    // the applier would not raise (a delegation activating in between), never a false negative.
+    const authority = await resolveQcAuthority(WITNESS_WAIVER_DOA_TYPE, { requireQcHead: true });
+    if (authority.approver_user_id !== actor.userId) {
+      throw new AppError(
+        403,
+        'APPROVAL_REQUIRED',
+        'Waiving a witnessed inspection requires the resolved DOA approver',
+        {
+          hold_point_id: holdPointId,
+          resolved_approver_user_id: authority.approver_user_id,
+          governing_role: authority.governing_role,
+        },
+      );
+    }
+    const persisted = await persistEvent(
+      {
+        stream_type: 'qc',
+        stream_id: holdPointId,
+        event_type: WITNESSED_INSPECTION_WAIVED,
+        // BSD-7: the payload carries the SERVER-resolved approver quartet so a rebuild after DOA
+        // drift reproduces the ORIGINAL authority. The applier compares it against a fresh
+        // resolution and refuses a mismatch on first apply (AD-12).
+        payload: {
+          hold_point_id: holdPointId,
+          waiver_reason: (body['waiver_reason'] as string).trim(),
+          approved_by: authority.approver_user_id,
+          doa_entry_id: authority.doa_entry_id,
+          governing_role: authority.governing_role,
+          delegation_applied: authority.delegation_applied,
+        },
+        metadata: qcMetadata(actor, now),
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    replayIdOrReject(persisted, WITNESSED_INSPECTION_WAIVED, 'hold_point_id');
+    const refreshed = await getWitnessHoldPointById(holdPointId);
+    // Same replay signal as the sign-off route above, for the same reason.
+    const replayed = holdPoint.status !== 'open';
+    sendJson(res, replayed ? 200 : 201, {
+      event_id: persisted.event_id,
+      hold_point: refreshed,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditRejectedAttempt(req, actor, err, { hold_point_id: holdPointId }, siteId);
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const listWitnessHoldPointsBase: RouteHandler = async (req, res, _params) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const siteId = url.searchParams.get('site_id');
+  const status = url.searchParams.get('status');
+  const lotId = url.searchParams.get('lot_id');
+  const limitRaw = url.searchParams.get('limit');
+  const offsetRaw = url.searchParams.get('offset');
+  try {
+    if (siteId !== null && !isUuid(siteId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'site_id must be a UUID');
+    }
+    if (
+      status !== null &&
+      !WITNESS_HOLD_POINT_STATUSES.includes(status as WitnessHoldPointStatus)
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `status must be one of: ${WITNESS_HOLD_POINT_STATUSES.join(', ')}`,
+      );
+    }
+    if (lotId !== null && !isUuid(lotId)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'lot_id must be a UUID');
+    }
+    if (
+      (limitRaw !== null && !/^\d+$/.test(limitRaw)) ||
+      (offsetRaw !== null && !/^\d+$/.test(offsetRaw))
+    ) {
+      throw new AppError(400, 'INVALID_PARAMS', 'limit and offset must be non-negative integers');
+    }
+    const scoped = scopedSiteIds(req, siteId);
+    if (scoped === null) {
+      sendJson(res, 200, { hold_points: [] });
+      return;
+    }
+    const holdPoints = await listWitnessHoldPoints({
+      ...scoped,
+      ...(status === null ? {} : { status: status as WitnessHoldPointStatus }),
+      ...(lotId === null ? {} : { lot_id: lotId }),
+      limit: limitRaw === null ? undefined : Number(limitRaw),
+      offset: offsetRaw === null ? undefined : Number(offsetRaw),
+    });
+    sendJson(res, 200, { hold_points: holdPoints });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const getWitnessHoldPointBase: RouteHandler = async (req, res, params) => {
+  try {
+    const holdPointId = requireUuidParam(params, 'holdPointId');
+    const holdPoint = await getWitnessHoldPointById(holdPointId);
+    if (!holdPoint) {
+      throw new AppError(
+        404,
+        'WITNESS_HOLD_POINT_NOT_FOUND',
+        'The named witness hold point does not resolve',
+        { hold_point_id: holdPointId },
+      );
+    }
+    assertReadSiteAccessWhenScoped(req, holdPoint.site_id);
+    // AC 2 evidence reads back with the hold point: recipient, date and method per notice.
+    const notices = await listNoticesForHoldPoint(holdPointId);
+    sendJson(res, 200, { hold_point: holdPoint, notices });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+// Story 8.8
+export const raiseWitnessHoldPointHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  raiseWitnessHoldPointBase,
+);
+export const recordWitnessNoticeHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  recordWitnessNoticeBase,
+);
+export const signOffWitnessHoldPointHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  signOffWitnessHoldPointBase,
+);
+export const waiveWitnessHoldPointHandler = requireRole({ module: 'qc', functionScope: 'write' })(
+  waiveWitnessHoldPointBase,
+);
+export const listWitnessHoldPointsHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  listWitnessHoldPointsBase,
+);
+export const getWitnessHoldPointHandler = requireRole({ module: 'qc', functionScope: 'read' })(
+  getWitnessHoldPointBase,
+);
 
 // Story 8.5
 export const placeQcHoldHandler = requireRole({ module: 'qc', functionScope: 'write' })(

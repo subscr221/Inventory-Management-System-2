@@ -1647,6 +1647,45 @@ const EXPECTED = [
     // the (licence_id, valid_to, stage_days) key means renewal re-arms without erasing anything.
     appUserGrant: 'SELECT, INSERT',
   },
+  // Story 8.8 (FR-Q-15, AC 1/AC 2): the witnessed / third-party inspection hold point. The partial
+  // unique index IS the one-open-hold-point-per-lot contract, and the closure pairing CHECK is the
+  // FULL biconditional the Story 8.4 lesson requires, so both are pinned here.
+  {
+    canonical: 'read/projections/qc_witness_hold_point.sql',
+    table: 'qc_witness_hold_point',
+    constraints: [
+      'uq_qc_witness_hold_point_event',
+      'chk_qc_witness_hold_point_type',
+      'chk_qc_witness_hold_point_status',
+      'chk_qc_witness_hold_point_waiver_reason',
+      'chk_qc_witness_hold_point_closure_pairing',
+    ],
+    indexes: [
+      'uq_qc_witness_hold_point_open',
+      'idx_qc_witness_hold_point_lot',
+      'idx_qc_witness_hold_point_site',
+    ],
+    indexBodies: [
+      "ON qc_witness_hold_point (lot_id) WHERE status = 'open'",
+      'ON qc_witness_hold_point (lot_id);',
+      'ON qc_witness_hold_point (site_id, raised_at, hold_point_id)',
+    ],
+    appUserGrant: 'SELECT, INSERT, UPDATE',
+  },
+  // Story 8.8 (FR-Q-15, AC 2): the notice ledger. APPEND-ONLY - a notice that was served is a
+  // posted contractual fact - so the grant is SELECT, INSERT with no UPDATE and no DELETE.
+  {
+    canonical: 'read/projections/qc_witness_notice.sql',
+    table: 'qc_witness_notice',
+    constraints: [
+      'uq_qc_witness_notice_event',
+      'chk_qc_witness_notice_recipient',
+      'chk_qc_witness_notice_method',
+    ],
+    indexes: ['idx_qc_witness_notice_hold_point'],
+    indexBodies: ['ON qc_witness_notice (hold_point_id, notice_date)'],
+    appUserGrant: 'SELECT, INSERT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

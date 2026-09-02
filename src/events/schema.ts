@@ -4324,6 +4324,85 @@ export interface ComplianceLabelVersionApprovedEnvelope extends Omit<EventEnvelo
 }
 
 // ---------------------------------------------------------------------------
+// Story 8.8: witnessed and third-party inspection hold points (FR-Q-15)
+// ---------------------------------------------------------------------------
+
+export interface QcWitnessHoldPointRaisedPayload {
+  hold_point_id: string;
+  lot_number: string;
+  sku: string;
+  inspection_type: 'customer_witnessed' | 'third_party';
+  hold_reason: string;
+  /** SERVER-DERIVED: the lot identity, the governed hold row and every timestamp are resolved by
+   * the applier under the transaction; the status is always 'open' on a raise. */
+  lot_id?: never;
+  site_id?: never;
+  qc_hold_id?: never;
+  status?: never;
+  raised_by?: never;
+  raised_at?: never;
+}
+
+export interface QcWitnessHoldPointRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.witness_hold_point_raised';
+  payload: QcWitnessHoldPointRaisedPayload;
+}
+
+export interface QcWitnessNoticeRecordedPayload {
+  notice_id: string;
+  hold_point_id: string;
+  recipient: string;
+  /** IST calendar date the notice was served, YYYY-MM-DD. */
+  notice_date: string;
+  method: 'email' | 'letter' | 'portal' | 'in_person';
+  /** SERVER-DERIVED: the recorder and the recording timestamp come from the envelope. */
+  recorded_by?: never;
+  recorded_at?: never;
+}
+
+export interface QcWitnessNoticeRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.witness_notice_recorded';
+  payload: QcWitnessNoticeRecordedPayload;
+}
+
+export interface QcWitnessedInspectionSignedOffPayload {
+  hold_point_id: string;
+  /** Free-text record of who witnessed and what was observed. */
+  sign_off_note?: string;
+  /** SERVER-DERIVED: closure identity and the resulting status are stamped by the applier. */
+  status?: never;
+  closed_by?: never;
+  closed_at?: never;
+  close_event_id?: never;
+}
+
+export interface QcWitnessedInspectionSignedOffEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.witnessed_inspection_signed_off';
+  payload: QcWitnessedInspectionSignedOffPayload;
+}
+
+export interface QcWitnessedInspectionWaivedPayload {
+  hold_point_id: string;
+  waiver_reason: string;
+  /** SERVER-CAPTURED (BSD-7): resolved by the route from the DOA registry, then re-derived and
+   * compared by the applier under the transaction. */
+  approved_by: string;
+  doa_entry_id: string;
+  governing_role: string;
+  delegation_applied: boolean;
+  /** SERVER-DERIVED: closure identity and the resulting status are stamped by the applier. */
+  status?: never;
+  closed_by?: never;
+  closed_at?: never;
+  close_event_id?: never;
+}
+
+export interface QcWitnessedInspectionWaivedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'qc.witnessed_inspection_waived';
+  payload: QcWitnessedInspectionWaivedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -5164,6 +5243,28 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'qc.capa_linked': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  // Story 8.8: witnessed / third-party inspection hold points (FR-Q-15). Per-lot operational
+  // quality, not enterprise master data, so these ride the 'qc' stream like every other qc.* type
+  // (BSD-1) rather than the 'compliance' stream, which is reserved for the non-site-tenanted
+  // registers. None carries a business stream: a hold point is a decision about a lot, and the
+  // lot_trace entry the raise applier writes derives its business stream from the item master
+  // (AD-14).
+  'qc.witness_hold_point_raised': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.witness_notice_recorded': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.witnessed_inspection_signed_off': {
+    streamType: 'qc',
+    requiresBusinessStream: false,
+  },
+  'qc.witnessed_inspection_waived': {
     streamType: 'qc',
     requiresBusinessStream: false,
   },

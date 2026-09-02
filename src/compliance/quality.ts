@@ -128,6 +128,7 @@ import {
   insertQcCapa,
 } from '../read/projections/qc_capa.js';
 import { insertQcLotSplit } from '../read/projections/qc_lot_split.js';
+import { getOpenWitnessHoldPointByQcHoldId } from '../read/projections/qc_witness_hold_point.js';
 import {
   appendRelabelTrace,
   availableScaled,
@@ -222,6 +223,16 @@ export const QUALITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   QC_CAPA_OPENED,
   QC_CAPA_CLOSED,
   QC_CAPA_LINKED,
+  // Story 8.8 (FR-Q-15): the witness hold-point family. Its shape asserts and appliers live in
+  // src/compliance/qc-witness.ts, but every `qc.*` registry entry must appear in THIS set - the
+  // Story 8.2 registry-drift guard asserts the two are equal, and membership is also what makes
+  // these events central-only on the edge route (QC_CENTRAL_ONLY_EVENT_TYPES below). The literals
+  // are repeated rather than imported because qc-witness.ts imports resolveQcAuthority from this
+  // module; test/unit/qc-witness-predicates.test.ts pins the two spellings together.
+  'qc.witness_hold_point_raised',
+  'qc.witness_notice_recorded',
+  'qc.witnessed_inspection_signed_off',
+  'qc.witnessed_inspection_waived',
 ]);
 /**
  * Story 8.1 Binding Scope Decision 9 / Story 8.2 Binding Scope Decision 8: every QC command is
@@ -5234,6 +5245,20 @@ async function applyHoldReleased(
       'HOLD_ALREADY_RELEASED',
       'The hold is no longer open',
       { hold_id: holdId, status: hold.status },
+      409,
+    );
+  }
+  // Code review 2026-09-02 (Story 8.8): releasing a witness-governed hold here would clear the
+  // lot flag and enable dispatch while the hold point stays 'open' - the hold-bypass class the
+  // 8.3/8.4/8.5 reviews each found. Closure must go through sign-off or a DOA-approved waiver.
+  // Checked BEFORE SoD (round 2): a raiser self-releasing must hear "nobody may release this",
+  // not "get someone else to". Lookup is by the qc_hold_id COLUMN, not the id-minting convention.
+  const witnessHoldPoint = await getOpenWitnessHoldPointByQcHoldId(holdId, client);
+  if (witnessHoldPoint) {
+    reject(
+      'QUALITY_HOLD_GOVERNED',
+      'This hold is governed by an open witness hold point; close it via sign-off or waiver',
+      { hold_id: holdId, hold_point_id: witnessHoldPoint.hold_point_id },
       409,
     );
   }

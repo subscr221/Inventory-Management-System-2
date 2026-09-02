@@ -525,6 +525,13 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/qc/capas',
       'GET /api/v1/qc/capas/:capaId',
       'POST /api/v1/qc/capas/:capaId/close',
+      // Story 8.8: witnessed and third-party inspection hold points (FR-Q-15).
+      'POST /api/v1/qc/witness-hold-points',
+      'GET /api/v1/qc/witness-hold-points',
+      'GET /api/v1/qc/witness-hold-points/:holdPointId',
+      'POST /api/v1/qc/witness-hold-points/:holdPointId/notices',
+      'POST /api/v1/qc/witness-hold-points/:holdPointId/sign-off',
+      'POST /api/v1/qc/witness-hold-points/:holdPointId/waive',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

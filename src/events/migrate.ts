@@ -227,6 +227,13 @@ const MIGRATIONS = [
   // rebuildable projection in the same style as production_scrap_declaration - so its position
   // relative to the Epic 8 files above is logical only.
   '../../read/projections/production_consumption_variance.sql',
+  // Story 8.8: witnessed / third-party inspection hold points and their notice ledger (FR-Q-15).
+  // The hold-point applier places a normal governed qc_quality_hold row and sets the lot_master
+  // flag, so both files are appended after qc_quality_hold.sql and lot_master.sql. Neither carries
+  // an FK - they are derived, rebuildable projections in the same style as qc_quality_hold - so
+  // the order between them is logical (hold point first, then its notice ledger).
+  '../../read/projections/qc_witness_hold_point.sql',
+  '../../read/projections/qc_witness_notice.sql',
 ];
 
 async function migrate(): Promise<void> {

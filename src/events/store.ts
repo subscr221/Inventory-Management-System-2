@@ -217,6 +217,7 @@ import {
   resolveBisLicenceExistsDuplicateConflict,
   resolveLabelVersionExistsDuplicateConflict,
 } from '../compliance/master-data.js';
+import { assertQcWitnessShape, applyQcWitnessProjection } from '../compliance/qc-witness.js';
 import {
   assertProductionMaterialShape,
   applyProductionMaterialProjection,
@@ -707,6 +708,10 @@ export async function persistEvent(
   // runs with the other pre-transaction asserts, so a malformed compliance event never consumes an
   // idempotency key.
   assertComplianceMasterDataShape(envelope);
+  // Story 8.8: witness hold-point shape validation (inspection_type/method vocabularies, the
+  // SERVER-CAPTURED waiver quartet, the declared-derived rejections) is non-DB and runs here with
+  // the other pre-transaction asserts.
+  assertQcWitnessShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -1053,6 +1058,10 @@ export async function persistEvent(
     // commits or rolls back with the domain_events insert. Every guard lives here, never only in
     // the HTTP handler (AD-12).
     await applyComplianceMasterDataProjection(envelope, client, eventId);
+    // Story 8.8: witnessed / third-party inspection hold points - the governed hold plus the
+    // hold-point record, the notice ledger, and the sign-off/waiver closures - run inside this same
+    // transaction, so the enforcement flag and the record commit or roll back together (AD-12).
+    await applyQcWitnessProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's

@@ -55,7 +55,14 @@ const CYCLE_COUNT_EVENT_TYPES = new Set([
   'physical_verification.signed_off',
 ]);
 
-const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work']);
+// DUPLICATED from src/compliance/stock-balance.ts - the two sets must be extended together, and
+// the duplication is the trap: a class present there but missing here is refused INVALID_PARAMS by
+// every count path before it can be counted. 'prototype' is a Story 8.8 ORIGIN class (BSD-9);
+// counting it is legitimate, only allocating or laundering it into 'owned' is barred, and that bar
+// lives at the stock-balance applier choke point.
+const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work', 'prototype']);
+/** FR-Q-12 (Story 8.8): mirrors stock-balance.ts - prototype stock can never become saleable. */
+const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
 const COUNT_ADJUSTMENT_DOA_TYPE = 'inventory.count_adjustment';
 const SIGNOFF_ROLES = new Set([
   'inventory_controller',
@@ -989,6 +996,50 @@ async function applyStockAdjusted(
   await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
     `${sku}|${locationId}|${lotId ?? ''}|${stockClass}`,
   ]);
+
+  // Code review 2026-09-02 round 2 (Story 8.8, FR-Q-12): a positive count adjustment is an
+  // inflow, and this INSERT..ON CONFLICT was the one write path that bypassed the stock-class
+  // laundering bar in stock-balance.ts. Mirror it here: an 'owned' inflow is refused when the lot
+  // (or the lot-less grain) holds a non-saleable balance, and a non-saleable inflow is refused
+  // when a saleable-class balance exists. Serialize on the SAME advisory-lock key the receipt
+  // guard uses (seed 8808) so the two paths cannot race each other past the check.
+  if (delta > 0 && (stockClass === 'owned' || NON_SALEABLE_STOCK_CLASSES.has(stockClass))) {
+    const guardKey =
+      lotId !== null
+        ? `stock_class_guard:${sku}:lot:${lotId}`
+        : `stock_class_guard:${sku}:loc:${locationId}`;
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 8808))`, [guardKey]);
+    const conflictIsNonSaleable = stockClass === 'owned';
+    const conflicting = await client.query(
+      lotId !== null
+        ? `SELECT stock_class FROM stock_balance
+            WHERE sku = $1 AND lot_id = $2
+              AND ${conflictIsNonSaleable ? '' : 'NOT '}(stock_class = ANY($3::text[]))
+            LIMIT 1`
+        : `SELECT stock_class FROM stock_balance
+            WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL
+              AND ${conflictIsNonSaleable ? '' : 'NOT '}(stock_class = ANY($3::text[]))
+            LIMIT 1`,
+      lotId !== null
+        ? [sku, lotId, [...NON_SALEABLE_STOCK_CLASSES]]
+        : [sku, locationId, [...NON_SALEABLE_STOCK_CLASSES]],
+    );
+    if (conflicting.rows.length > 0) {
+      throw new AppError(
+        400,
+        'PROTOTYPE_NOT_SALEABLE',
+        conflictIsNonSaleable
+          ? 'This lot already holds a non-saleable prototype balance; an owned count adjustment cannot create saleable stock for it'
+          : 'This lot already holds a saleable-class balance and cannot gain prototype stock by count adjustment',
+        {
+          sku,
+          lot_id: lotId,
+          location_id: locationId,
+          existing_stock_class: (conflicting.rows[0] as { stock_class: string }).stock_class,
+        },
+      );
+    }
+  }
 
   // Lock the target balance grain and apply the signed delta.
   await client.query(
