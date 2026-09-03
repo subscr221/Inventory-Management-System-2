@@ -194,6 +194,9 @@ const PERMANENT_ERROR_CODES = new Set([
   // Story 9.3: an off-kit custody consumption is permanent - a retry can never match a kit line
   // that the order's current revision does not carry (the INVALID_STATE_TRANSITION precedent).
   'KIT_LINE_MISMATCH',
+  // Story 9.4: the reason code is checked against a fixed configured list, so an offline edge
+  // retry of the same declaration can never clear it (the KIT_LINE_MISMATCH precedent).
+  'JOBWORK_LOSS_REASON_CODE_INVALID',
   'UNREVERSED_TRANSACTIONS',
   'BOM_REVISION_DRIFT',
   'MATERIAL_REQUIREMENT_SET_TRUNCATED',

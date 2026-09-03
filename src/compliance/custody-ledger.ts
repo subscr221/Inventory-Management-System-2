@@ -22,7 +22,13 @@ import {
 import { toIstCalendarDate } from '../lib/business-days.js';
 import { applyStockBalanceProjection } from './stock-balance.js';
 import { isPositiveQtyString, JOB_WORK_STOCK_CLASS } from './jobwork-receipt.js';
-import { qtyAdd, qtyCompare, qtyNegate, qtyToScaled } from './custody-statement.js';
+import {
+  qtyAdd,
+  qtyCompare,
+  qtyFromScaled,
+  qtyNegate,
+  qtyToScaled,
+} from './custody-statement.js';
 import { resolveApprover } from '../api/v1/indents.js';
 
 /**
@@ -769,21 +775,42 @@ async function cumulativeConsumedForLossNorm(
   serviceOrderId: string,
   sku: string,
   client: PoolClient,
-): Promise<string> {
+): Promise<{ consumed: string; priorLoss: string }> {
+  // The norm basis is CONSUMPTION ONLY. Including prior 'loss' rows in the denominator would let
+  // each accepted loss enlarge the basis for the next one - a ratchet that loosens the gate the
+  // more material is lost (code review 2026-09-03, decision 1).
   const result = await client.query(
-    `SELECT COALESCE(-SUM(quantity_delta), 0)::numeric(18,3)::text AS consumed
+    `SELECT COALESCE(-SUM(quantity_delta) FILTER (WHERE movement_category = 'consumption'), 0)
+              ::numeric(18,3)::text AS consumed,
+            COALESCE(-SUM(quantity_delta) FILTER (WHERE movement_category = 'loss'), 0)
+              ::numeric(18,3)::text AS prior_loss
        FROM custody_ledger_entry
       WHERE service_order_id = $1 AND sku = $2 AND movement_category IN ('consumption', 'loss')`,
     [serviceOrderId, sku],
   );
-  return result.rows[0]!['consumed'] as string;
+  return {
+    consumed: result.rows[0]!['consumed'] as string,
+    priorLoss: result.rows[0]!['prior_loss'] as string,
+  };
+}
+
+/** declared / consumed as a percent, to 3 decimals - for refusal details only, never for the gate. */
+export function lossPercentOf(declaredQuantity: string, cumulativeConsumed: string): string {
+  const consumed = qtyToScaled(cumulativeConsumed);
+  const declared = qtyToScaled(declaredQuantity);
+  if (consumed <= 0n) return declared > 0n ? '100.000' : '0.000';
+  return qtyFromScaled((declared * 100_000n) / consumed);
 }
 
 /**
- * True when declared / cumulative-consumed (as a percent) STRICTLY exceeds the norm (the 9.2
+ * True when loss / cumulative-consumed (as a percent) STRICTLY exceeds the norm (the 9.2
  * "exactly-at-boundary does not flag" convention). A zero cumulative-consumed basis with a
- * positive declared loss is treated as over-norm (any loss against nothing consumed cannot be
- * within a percentage norm). Exact scaled-integer arithmetic - never Number().
+ * positive loss is treated as over-norm (any loss against nothing consumed cannot be within a
+ * percentage norm). Exact scaled-integer arithmetic - never Number().
+ *
+ * `declaredQuantity` is the CUMULATIVE loss (prior loss on this order/sku plus the new
+ * declaration): a per-declaration test would let ten 4-unit losses each pass a 5% norm against
+ * 100 consumed, yielding 40% unapproved loss (code review 2026-09-03, decision 1).
  */
 export function lossExceedsNorm(
   declaredQuantity: string,
@@ -823,13 +850,49 @@ export async function applyCustodyLossProjection(
     );
   }
 
-  const cumulativeConsumed = await cumulativeConsumedForLossNorm(
+  // The loss must be declared in the unit the sku is already carried in on this order's ledger, or
+  // quantities in two different units get summed into one balance.
+  const existingUomResult = await client.query(
+    `SELECT uom FROM custody_ledger_entry
+      WHERE service_order_id = $1 AND sku = $2 ORDER BY occurred_at ASC LIMIT 1`,
+    [order.service_order_id, p.sku],
+  );
+  const existingUom = existingUomResult.rows[0]?.['uom'] as string | undefined;
+  if (existingUom && p.uom !== existingUom) {
+    reject(
+      'INVALID_PARAMS',
+      'The loss uom must match the uom this sku is carried in on the custody ledger',
+      { service_order_id: order.service_order_id, sku: p.sku, uom: p.uom, ledger_uom: existingUom },
+      400,
+    );
+  }
+
+  // Gate: the declared loss must be covered by the customer custody balance for this sku, exactly
+  // as the consumption path is (applyCustodyConsumptionProjection gate 5). Without it a 10,000-unit
+  // loss against 10 units received is accepted and the Rule 45 statement reports a negative balance.
+  const custodyBalance = await customerCustodyBalance(order.service_order_id, p.sku, client);
+  if (!custodyBalanceCovers(custodyBalance, p.quantity)) {
+    reject(
+      'INSUFFICIENT_STOCK',
+      'The declared loss exceeds the customer-owned custody balance for this sku',
+      {
+        service_order_id: order.service_order_id,
+        sku: p.sku,
+        declared_quantity: p.quantity,
+        custody_balance_qty: custodyBalance,
+      },
+      409,
+    );
+  }
+
+  const { consumed: cumulativeConsumed, priorLoss } = await cumulativeConsumedForLossNorm(
     order.service_order_id,
     p.sku,
     client,
   );
   const normPercent = config.jobwork.processLossNormPercent;
-  const overNorm = lossExceedsNorm(p.quantity, cumulativeConsumed, normPercent);
+  const cumulativeLoss = qtyFromScaled(qtyToScaled(priorLoss) + qtyToScaled(p.quantity));
+  const overNorm = lossExceedsNorm(cumulativeLoss, cumulativeConsumed, normPercent);
 
   const approvalClaimed = p.over_norm_approved === true;
   let approvedBy: string | null = null;
@@ -843,14 +906,22 @@ export async function applyCustodyLossProjection(
           sku: p.sku,
           declared_quantity: p.quantity,
           cumulative_consumed: cumulativeConsumed,
+          cumulative_loss: cumulativeLoss,
+          loss_percent: lossPercentOf(cumulativeLoss, cumulativeConsumed),
           norm_percent: normPercent,
         },
         403,
       );
     }
     // The Story 6.1/6.3 release-override chain verbatim (AD-12): the override authority is the
-    // DOA registry, never a hard-coded role, and a forged approved_by cannot bypass it.
-    const approval = await resolveApprover(JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE, 0);
+    // DOA registry, never a hard-coded role, and a forged approved_by cannot bypass it. The
+    // CUMULATIVE loss is the banding value - findMatchingDoaEntry bands on `$2 > value_min`, so a
+    // hard-coded 0 can only ever match the value_min IS NULL band and every over-norm loss, of any
+    // size, would need only the lowest authority (code review 2026-09-03).
+    const approval = await resolveApprover(
+      JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE,
+      cumulativeLoss,
+    );
     if (!approval.requiresApproval || approval.approverActorId === null) {
       reject(
         'APPROVAL_UNRESOLVED',
@@ -883,6 +954,22 @@ export async function applyCustodyLossProjection(
       );
     }
     approvedBy = approval.approverActorId;
+  }
+  if (!overNorm && (approvalClaimed || p.approved_by !== undefined)) {
+    // Refuse rather than discard: a silently dropped claim would have the 201 echo an approver the
+    // ledger never recorded.
+    reject(
+      'INVALID_PARAMS',
+      'The declared loss is within the process-loss norm and cannot carry an approval claim',
+      {
+        service_order_id: order.service_order_id,
+        sku: p.sku,
+        cumulative_loss: cumulativeLoss,
+        cumulative_consumed: cumulativeConsumed,
+        norm_percent: normPercent,
+      },
+      400,
+    );
   }
   const overNormApproved = overNorm && approvalClaimed;
 

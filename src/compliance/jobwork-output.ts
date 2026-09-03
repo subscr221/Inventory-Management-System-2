@@ -39,14 +39,18 @@ const MAX_TEXT_LENGTH = 200;
 const OUTPUT_FIELDS = new Set([
   'service_order_id',
   'output_id',
-  'lot_id',
   'quantity',
   'uom',
   'site_id',
   'recorded_by',
 ]);
-/** Server-derived: the lot NUMBER is minted here, mirroring Story 6.3's postOutput closure. */
-const OUTPUT_DERIVED_FIELDS = ['lot_number'] as const;
+/**
+ * Server-derived, mirroring Story 6.3's postOutput closure: the lot NUMBER is minted here, and so
+ * is the lot identity itself. lot_id was previously accepted, validated and then silently ignored
+ * (every write used the minted number), so a caller supplying its own lot identifier got a 201 and
+ * a different lot than it asked for - refuse it instead (code review 2026-09-03).
+ */
+const OUTPUT_DERIVED_FIELDS = ['lot_number', 'lot_id'] as const;
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
@@ -105,10 +109,6 @@ export function assertJobworkOutputShape(envelope: EventEnvelope): void {
       service_order_id: p['service_order_id'],
     });
   }
-  if (!isNonEmptyString(p['lot_id']) || (p['lot_id'] as string).trim().length > MAX_TEXT_LENGTH) {
-    reject('INVALID_PARAMS', 'lot_id is required and must be a non-empty string');
-  }
-  p['lot_id'] = (p['lot_id'] as string).trim();
   if (!isNonEmptyString(p['uom']) || (p['uom'] as string).trim().length > MAX_TEXT_LENGTH) {
     reject('INVALID_PARAMS', 'uom is required and must be a non-empty string');
   }
@@ -207,6 +207,18 @@ export async function applyJobworkOutputProjection(
     );
   }
 
+  // The output is stocked and QC-gated as the BOM parent item, so it must be recorded in the unit
+  // that item is stocked in - otherwise stock_balance and the QC task carry a quantity in a unit
+  // the item is not held in.
+  if (bom.parent_uom && p.uom !== bom.parent_uom) {
+    reject(
+      'INVALID_PARAMS',
+      'uom must match the kit BOM parent uom',
+      { uom: p.uom, parent_uom: bom.parent_uom, sku: bom.parent_sku },
+      400,
+    );
+  }
+
   // Sequence under the order lock already held above - no race on the lot number.
   const seqResult = await client.query(
     `SELECT COUNT(*)::int AS n FROM job_work_output WHERE service_order_id = $1`,
@@ -214,7 +226,12 @@ export async function applyJobworkOutputProjection(
   );
   const sequence = (seqResult.rows[0]!['n'] as number) + 1;
   // Binding Decision 5 precedent (Story 6.3): the lot number is server-minted and immutable.
-  const lotNumber = `${order.order_number_ext}-L${sequence}`;
+  // order_number_ext is unique only PER SITE (uq_service_order_number_site) while
+  // uq_lot_master_lot_number is GLOBAL, so the site discriminator is what keeps two sites running
+  // the same external order number from colliding on the first output and 500ing out of createLot
+  // (code review 2026-09-03).
+  const siteDiscriminator = order.site_id.slice(0, 8);
+  const lotNumber = `${order.order_number_ext}-${siteDiscriminator}-L${sequence}`;
 
   const lot = await createLot(
     {

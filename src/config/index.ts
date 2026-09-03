@@ -682,9 +682,12 @@ export const config = {
     processLossNormPercent: (() => {
       const raw = process.env['PROCESS_LOSS_NORM_PERCENT'];
       const value = raw === undefined ? '5' : raw.trim();
-      if (!/^\d{1,3}(\.\d{1,4})?$/.test(value) || Number(value) > 100) {
+      // At most THREE decimals: the comparator scales the norm with qtyToScaled, which pads and
+      // slices to 3 places, so a 4-decimal value would boot and then behave as its truncation
+      // (0.0005 becoming 0, which makes every loss over-norm). Fail closed at boot instead.
+      if (!/^\d{1,3}(\.\d{1,3})?$/.test(value) || Number(value) > 100) {
         throw new Error(
-          `Invalid PROCESS_LOSS_NORM_PERCENT "${raw}": must be a decimal percentage from 0 to 100 inclusive, with at most four decimal places.`,
+          `Invalid PROCESS_LOSS_NORM_PERCENT "${raw}": must be a decimal percentage from 0 to 100 inclusive, with at most three decimal places.`,
         );
       }
       return value;

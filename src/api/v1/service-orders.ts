@@ -669,11 +669,16 @@ const postServiceOrderLossBase: RouteHandler = (req, res, params) =>
   postCustodyEvent(req, res, params, {
     eventType: CUSTODY_LOSS_RECORDED,
     idField: 'loss_id',
+    // over_norm_approved and approved_by are CLAIMS the applier verifies against the DOA registry
+    // and then overwrites with what it derived - they are caller fields, not derived ones. The
+    // applier refuses a claim on an under-norm loss rather than discarding it silently.
     extraFields: ['reason_code', 'over_norm_approved', 'approved_by'],
     derivedFields: [],
   });
 
-const OUTPUT_FIELDS = ['lot_id', 'quantity', 'uom'] as const;
+// lot_id is NOT accepted: the lot identity is server-minted (see jobwork-output.ts
+// OUTPUT_DERIVED_FIELDS).
+const OUTPUT_FIELDS = ['quantity', 'uom'] as const;
 
 const postServiceOrderOutputBase: RouteHandler = async (req, res, params) => {
   const body = requireBody(req, res);
@@ -682,7 +687,7 @@ const postServiceOrderOutputBase: RouteHandler = async (req, res, params) => {
   const now = new Date().toISOString();
   try {
     const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
-    rejectUnacceptedFields(body, ['service_order_id', 'recorded_by', 'lot_number']);
+    rejectUnacceptedFields(body, ['service_order_id', 'recorded_by', 'lot_number', 'lot_id']);
     if (body['service_order_id'] !== undefined && body['service_order_id'] !== serviceOrderId) {
       throw new AppError(400, 'INVALID_PARAMS', 'service_order_id must equal the path id', {
         service_order_id: body['service_order_id'],

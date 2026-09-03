@@ -15,6 +15,8 @@ export interface JobWorkOutputRow {
   sku: string;
   quantity: string;
   dispatched_quantity: string;
+  /** quantity - dispatched_quantity: the open-to-dispatch balance AC5 tracks (Task 4.6). */
+  remaining_quantity: string;
   uom: string;
   site_id: string;
   recorded_by: string;
@@ -32,8 +34,9 @@ function runner(client?: PoolClient): Queryable {
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const COLUMNS = `output_id, service_order_id, lot_id, lot_number, sku, quantity::text AS quantity,
-  dispatched_quantity::text AS dispatched_quantity, uom, site_id, recorded_by, source_event_id,
-  created_at, updated_at`;
+  dispatched_quantity::text AS dispatched_quantity,
+  (quantity - dispatched_quantity)::numeric(18,3)::text AS remaining_quantity,
+  uom, site_id, recorded_by, source_event_id, created_at, updated_at`;
 
 export interface InsertJobWorkOutputInput {
   output_id: string;
@@ -97,16 +100,66 @@ export async function listJobWorkOutputsByOrder(
   return result.rows as JobWorkOutputRow[];
 }
 
-/** Bounded by chk_job_work_output_dispatched_bounds; the caller has already gated the amount. */
+/**
+ * Guarded increment: the bound is re-asserted IN the UPDATE predicate, not left to
+ * chk_job_work_output_dispatched_bounds, so a dispatch that raced past the caller's remaining-qty
+ * check loses the race with a domain refusal instead of an unclassified 23514 500.
+ * Returns false when the increment would exceed the recorded output quantity.
+ */
 export async function incrementJobWorkOutputDispatched(
   outputId: string,
   dispatchedDelta: string,
   client: PoolClient,
-): Promise<void> {
-  await client.query(
+): Promise<boolean> {
+  const result = await client.query(
     `UPDATE job_work_output
         SET dispatched_quantity = dispatched_quantity + $2::numeric, updated_at = now()
-      WHERE output_id = $1`,
+      WHERE output_id = $1
+        AND dispatched_quantity + $2::numeric <= quantity`,
     [outputId, dispatchedDelta],
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
+export interface InsertJobWorkDispatchInput {
+  dispatch_id: string;
+  service_order_id: string;
+  output_id: string;
+  lot_number: string;
+  sku: string;
+  dispatched_quantity: string;
+  uom: string;
+  site_id: string;
+  dispatched_by: string;
+  dispatched_at: string;
+  source_event_id: string;
+}
+
+/**
+ * The dispatch_id the caller minted is the primary key, so a replayed or re-keyed dispatch of the
+ * same shipment collides here (23505) rather than incrementing dispatched_quantity twice.
+ */
+export async function insertJobWorkDispatch(
+  input: InsertJobWorkDispatchInput,
+  client: PoolClient,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO job_work_dispatch (
+       dispatch_id, service_order_id, output_id, lot_number, sku, dispatched_quantity, uom,
+       site_id, dispatched_by, dispatched_at, source_event_id
+     ) VALUES ($1, $2, $3, $4, $5, $6::numeric, $7, $8, $9, $10, $11)`,
+    [
+      input.dispatch_id,
+      input.service_order_id,
+      input.output_id,
+      input.lot_number,
+      input.sku,
+      input.dispatched_quantity,
+      input.uom,
+      input.site_id,
+      input.dispatched_by,
+      input.dispatched_at,
+      input.source_event_id,
+    ],
   );
 }

@@ -12377,3 +12377,49 @@ BEGIN
     GRANT SELECT ON job_work_output TO readonly_user;
   END IF;
 END $$;
+
+-- One row per jobwork.output_dispatched event: the dispatch_id the caller minted is the projection
+-- anchor, so a replay (or a retry that re-mints the idempotency key) collides here instead of
+-- silently incrementing dispatched_quantity a second time, and a physical shipment can be traced
+-- back to its dispatch_id.
+CREATE TABLE IF NOT EXISTS job_work_dispatch (
+  dispatch_id          UUID PRIMARY KEY,
+  service_order_id     UUID NOT NULL,
+  output_id            UUID NOT NULL,
+  lot_number           TEXT NOT NULL,
+  sku                  TEXT NOT NULL,
+  dispatched_quantity  NUMERIC(18,3) NOT NULL,
+  uom                  TEXT NOT NULL,
+  site_id              UUID NOT NULL,
+  dispatched_by        UUID NOT NULL,
+  dispatched_at        TIMESTAMPTZ NOT NULL,
+  source_event_id      UUID NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_job_work_dispatch_qty_positive CHECK (dispatched_quantity > 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_dispatch_source_event ON job_work_dispatch (source_event_id);
+CREATE INDEX IF NOT EXISTS idx_job_work_dispatch_order ON job_work_dispatch (service_order_id);
+CREATE INDEX IF NOT EXISTS idx_job_work_dispatch_output ON job_work_dispatch (output_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_job_work_dispatch_qty_positive'
+      AND conrelid = 'job_work_dispatch'::regclass
+  ) THEN
+    ALTER TABLE job_work_dispatch
+      ADD CONSTRAINT chk_job_work_dispatch_qty_positive CHECK (dispatched_quantity > 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON job_work_dispatch TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON job_work_dispatch TO readonly_user;
+  END IF;
+END $$;

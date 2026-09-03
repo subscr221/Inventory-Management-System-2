@@ -255,7 +255,10 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
         })();
   }
 
-  async function receive(serviceOrderId: string, sku: string = SKU, qty = '1000'): Promise<string> {
+  // Story 9.4 fix-patch: declared loss is now gated by the customer custody balance
+  // (INSUFFICIENT_STOCK if the loss would exceed it), so fixtures must receive MORE than they
+  // consume to leave balance headroom for loss declarations up to 200 units.
+  async function receive(serviceOrderId: string, sku: string = SKU, qty = '5000'): Promise<string> {
     const poRef = await seedPo(sku);
     const token = await seedToken(poRef);
     const lot = `LOT-JW-9-4-${run}-${randomUUID().slice(0, 6)}`;
@@ -334,16 +337,13 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
     );
   }
 
-  async function recordOutput(
-    orderId: string,
-    lotId: string,
-    quantity = '50',
-  ): Promise<HttpResult> {
+  // Story 9.4 fix-patch: lot_id is server-minted now (no longer accepted on the route).
+  async function recordOutput(orderId: string, quantity = '50'): Promise<HttpResult> {
     return makeRequest(
       port,
       'POST',
       `/api/v1/service-orders/${orderId}/outputs`,
-      { lot_id: lotId, quantity, uom: 'KG', idempotency_key: randomUUID() },
+      { quantity, uom: 'KG', idempotency_key: randomUUID() },
       coordinatorHeaders,
     );
   }
@@ -788,6 +788,11 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
       coordinatorHeaders,
     );
     assert.strictEqual(confirmWithElection.status, 200, JSON.stringify(confirmWithElection.body));
+    const row = await getAdminPool().query(
+      `SELECT offcut_election FROM service_order WHERE service_order_id = $1`,
+      [orderId],
+    );
+    assert.strictEqual(row.rows[0]!['offcut_election'], 'retain_and_buy');
   });
 
   it('AC3: an order with no contractual offcut arrangement confirms without an election (9.1 regression)', async () => {
@@ -806,8 +811,7 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
 
   it('AC4: output recording creates a qc_hold inspection task; dispatch before release refuses LOT_ON_HOLD', async () => {
     const orderId = await inProcessOrderWithConsumption('500');
-    const lotId = randomUUID();
-    const output = await recordOutput(orderId, lotId, '50');
+    const output = await recordOutput(orderId, '50');
     assert.strictEqual(output.status, 201, JSON.stringify(output.body));
     const outputRow = output.body['output'] as Record<string, unknown>;
     const lotNumber = outputRow['lot_number'] as string;
@@ -821,12 +825,13 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
     const blocked = await dispatch(orderId, { lot_id: lotNumber, dispatched_quantity: '10' });
     assert.strictEqual(blocked.status, 409, JSON.stringify(blocked.body));
     assert.strictEqual(blocked.body['error_code'], 'LOT_ON_HOLD');
+    const details = blocked.body['details'] as Record<string, unknown> | undefined;
+    assert.deepStrictEqual(details?.['held_lot_ids'], [lotNumber]);
   });
 
   it('AC5: dispatch after QC release decrements open-to-dispatch, posts a custody dispatch row, and generates documents', async () => {
     const orderId = await inProcessOrderWithConsumption('500');
-    const lotId = randomUUID();
-    const output = await recordOutput(orderId, lotId, '50');
+    const output = await recordOutput(orderId, '50');
     assert.strictEqual(output.status, 201, JSON.stringify(output.body));
     const outputRow = output.body['output'] as Record<string, unknown>;
     const lotNumber = outputRow['lot_number'] as string;
@@ -852,7 +857,9 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
     );
     assert.strictEqual(ledger.rows.length, 1, JSON.stringify(ledger.rows));
     assert.strictEqual(ledger.rows[0]!['ownership'], 'customer');
-    assert.ok(Number(ledger.rows[0]!['quantity_delta']) < 0);
+    // apportioned = skuConsumed(500) * dispatchedQuantity(20) / orderOutputTotal(50) = 200 (not the
+    // final dispatch, so pro-rata, not the exact-remaining true-up).
+    assert.strictEqual(ledger.rows[0]!['quantity_delta'], '-200.000');
 
     const docs = await getAdminPool().query(
       `SELECT document_type FROM dispatch_document WHERE dispatch_order_id = $1 ORDER BY document_type`,
@@ -869,11 +876,73 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
     assert.strictEqual(over.body['error_code'], 'INSUFFICIENT_STOCK');
   });
 
+  it('AC4: a direct POST /api/v1/events cannot bypass the QC gate on jobwork.output_dispatched', async () => {
+    const orderId = await inProcessOrderWithConsumption('500');
+    const output = await recordOutput(orderId, '50');
+    assert.strictEqual(output.status, 201, JSON.stringify(output.body));
+    const lotNumber = (output.body['output'] as Record<string, unknown>)['lot_number'] as string;
+
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'jobwork',
+        stream_id: orderId,
+        event_type: 'jobwork.output_dispatched',
+        payload: {
+          service_order_id: orderId,
+          dispatch_id: randomUUID(),
+          lot_id: lotNumber,
+          dispatched_quantity: '10',
+          uom: 'KG',
+          site_id: siteAId,
+          dispatched_by: coordinatorUserId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: coordinatorUserId, role: 'jobwork_coordinator', location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      coordinatorHeaders,
+    );
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'LOT_ON_HOLD');
+  });
+
+  it('replay: the same idempotency key on output recording returns 200 with no second lot or row', async () => {
+    const orderId = await inProcessOrderWithConsumption('500');
+    const idempotencyKey = randomUUID();
+    const first = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/service-orders/${orderId}/outputs`,
+      { quantity: '50', uom: 'KG', idempotency_key: idempotencyKey },
+      coordinatorHeaders,
+    );
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+    const replay = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/service-orders/${orderId}/outputs`,
+      { quantity: '50', uom: 'KG', idempotency_key: idempotencyKey },
+      coordinatorHeaders,
+    );
+    assert.strictEqual(replay.status, 200, JSON.stringify(replay.body));
+    assert.strictEqual(replay.body['event_id'], first.body['event_id']);
+    const count = await getAdminPool().query(
+      `SELECT count(*)::int AS n FROM job_work_output WHERE service_order_id = $1`,
+      [orderId],
+    );
+    assert.strictEqual(count.rows[0]!['n'], 1);
+  });
+
   it('AC4: dispatching a lot from another order refuses CROSS_ISSUE_BLOCKED', async () => {
     const orderA = await inProcessOrderWithConsumption('500');
     const orderB = await inProcessOrderWithConsumption('500');
-    const lotId = randomUUID();
-    const output = await recordOutput(orderA, lotId, '50');
+    const output = await recordOutput(orderA, '50');
+    assert.strictEqual(output.status, 201, JSON.stringify(output.body));
     const lotNumber = (output.body['output'] as Record<string, unknown>)['lot_number'] as string;
 
     const res = await dispatch(orderB, { lot_id: lotNumber, dispatched_quantity: '10' });

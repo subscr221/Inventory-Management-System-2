@@ -295,8 +295,18 @@ describe('Story 9.1 Job-Work Service Order Creation', () => {
     deniedHeaders = await authFor(port, `jw-denied-9-1-${run}@example.com`);
 
     await provisionUser(port, `jw-sitea-writer-9-1-${run}@example.com`, [
-      { role: 'jobwork_coordinator', module: 'jobwork', functionScope: 'write', locationId: siteAId },
-      { role: 'jobwork_coordinator', module: 'jobwork', functionScope: 'read', locationId: siteAId },
+      {
+        role: 'jobwork_coordinator',
+        module: 'jobwork',
+        functionScope: 'write',
+        locationId: siteAId,
+      },
+      {
+        role: 'jobwork_coordinator',
+        module: 'jobwork',
+        functionScope: 'read',
+        locationId: siteAId,
+      },
     ]);
     siteAWriteHeaders = await authFor(port, `jw-sitea-writer-9-1-${run}@example.com`);
 
@@ -629,7 +639,11 @@ describe('Story 9.1 Job-Work Service Order Creation', () => {
   });
 
   it('AC2: optional offcut_election is persisted on confirm (BSD-6), and its vocabulary is enforced', async () => {
-    const orderId = await createdOrderId();
+    // Story 9.4 decision 2 (code review 2026-09-03): offcut_election is meaningless without a
+    // contractual offcut arrangement, so a non-contractual order now refuses to carry one
+    // (symmetric with the mandatory-when-contractual gate) - has_contractual_offcut: true here
+    // exercises BSD-6's original "optional, vocabulary enforced" claim on an order it now applies to.
+    const orderId = await createdOrderId({ has_contractual_offcut: true });
     const bad = await confirmOrder(orderId, { offcut_election: 'sell_it' });
     assert.strictEqual(bad.status, 400);
 
@@ -637,6 +651,13 @@ describe('Story 9.1 Job-Work Service Order Creation', () => {
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(orderOf(res).offcut_election, 'retain_and_buy');
     assert.strictEqual((await rowOf(orderId))['offcut_election'], 'retain_and_buy');
+  });
+
+  it('Story 9.4: a non-contractual order refuses to carry an offcut election at confirm', async () => {
+    const orderId = await createdOrderId();
+    const res = await confirmOrder(orderId, { offcut_election: 'retain_and_buy' });
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'INVALID_STATE_TRANSITION');
   });
 
   it('AC2: idempotent replay of confirm - same key returns the stored result, no second transition', async () => {

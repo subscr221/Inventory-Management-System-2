@@ -1755,6 +1755,24 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 9.4 (code review 2026-09-03): the dispatch_id anchor that makes a replayed dispatch
+  // collide instead of double-incrementing dispatched_quantity.
+  {
+    canonical: 'read/projections/job_work_output.sql',
+    table: 'job_work_dispatch',
+    constraints: ['chk_job_work_dispatch_qty_positive'],
+    indexes: [
+      'uq_job_work_dispatch_source_event',
+      'idx_job_work_dispatch_order',
+      'idx_job_work_dispatch_output',
+    ],
+    indexBodies: [
+      'ON job_work_dispatch (source_event_id)',
+      'ON job_work_dispatch (service_order_id)',
+      'ON job_work_dispatch (output_id)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

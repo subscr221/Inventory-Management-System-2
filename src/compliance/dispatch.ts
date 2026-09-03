@@ -33,7 +33,7 @@ const DOCUMENT_TYPES = ['bol', 'packing_slip', 'commercial_invoice', 'label'];
  * or conditionally released without the Story 8.4 batch release record) blocks shipping-document
  * generation and final dispatch, independently of the manual or recall hold.
  */
-async function qcGatedLotIds(lotIds: string[], client: PoolClient): Promise<string[]> {
+export async function qcGatedLotIds(lotIds: string[], client: PoolClient): Promise<string[]> {
   if (lotIds.length === 0) return [];
   const result = await client.query(
     `SELECT lot_id FROM qc_inspection_task WHERE lot_id = ANY($1::uuid[]) AND gate_status = ANY($2::text[])
@@ -41,6 +41,38 @@ async function qcGatedLotIds(lotIds: string[], client: PoolClient): Promise<stri
     [lotIds, [...QC_GATE_BLOCKED_STATUSES]],
   );
   return result.rows.map((r: Record<string, unknown>) => r['lot_id'] as string);
+}
+
+/**
+ * The COMPLETE dispatch lot gate, in the fixed order every caller must use: lock every candidate
+ * lot_master row FIRST (so a concurrent hold placement on a not-yet-held lot serializes against
+ * this transaction instead of racing past it), then the manual/recall hold half, then the QC-gate
+ * half. The two halves are independent facts about the same lot - an accepted QC gate says nothing
+ * about a recall hold placed afterwards - and forgetting either one has shipped as a hold-bypass
+ * defect five times (Stories 8.3, 8.4, 8.5, 8.8, 9.4). Every dispatch surface calls THIS, never
+ * one half of it.
+ *
+ * Returns the blocking lot ids by reason; an empty pair means the lots are dispatchable. Callers
+ * raise their own error shape (the code is always LOT_ON_HOLD).
+ */
+export async function dispatchGateBlockedLots(
+  lotIds: string[],
+  client: PoolClient,
+): Promise<{ heldLotIds: string[]; qcGatedLotIds: string[] }> {
+  if (lotIds.length === 0) return { heldLotIds: [], qcGatedLotIds: [] };
+  const lockResult = await client.query(
+    `SELECT lot_id, quality_hold_status FROM lot_master
+      WHERE lot_id = ANY($1::uuid[]) ORDER BY lot_id FOR UPDATE`,
+    [lotIds],
+  );
+  const heldLotIds = lockResult.rows
+    .filter((r: Record<string, unknown>) => r['quality_hold_status'] !== 'none')
+    .map((r: Record<string, unknown>) => r['lot_id'] as string);
+  const gated = await qcGatedLotIds(
+    lockResult.rows.map((r: Record<string, unknown>) => r['lot_id'] as string),
+    client,
+  );
+  return { heldLotIds, qcGatedLotIds: gated };
 }
 
 function isUuid(value: unknown): value is string {
@@ -259,20 +291,19 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
     );
   }
 
-  // LOT_ON_HOLD check: lock every candidate lot for this order FIRST (before filtering by hold
-  // status), so a concurrent hold placement on a not-yet-held lot is serialized against this
-  // transaction rather than racing past it (Task 4.9).
-  const holdResult = await client.query(
-    `SELECT lm.lot_id, lm.lot_number, lm.quality_hold_status
-     FROM packing_record pr
-     JOIN lot_master lm ON lm.lot_id = pr.lot_id
-     WHERE pr.dispatch_order_id = $1
-     FOR UPDATE OF lm`,
+  // LOT_ON_HOLD check: both halves, through the shared gate (lock every candidate lot FIRST, then
+  // the manual/recall hold, then the QC gate) - see dispatchGateBlockedLots (Task 4.9).
+  const candidateResult = await client.query(
+    `SELECT pr.lot_id FROM packing_record pr WHERE pr.dispatch_order_id = $1`,
     [p.dispatch_order_id],
   );
-  const heldLots = holdResult.rows
-    .filter((r: Record<string, unknown>) => r['quality_hold_status'] !== 'none')
-    .map((r: Record<string, unknown>) => r['lot_id'] as string);
+  const candidateLotIds = candidateResult.rows.map(
+    (r: Record<string, unknown>) => r['lot_id'] as string,
+  );
+  const { heldLotIds: heldLots, qcGatedLotIds: qcGatedLots } = await dispatchGateBlockedLots(
+    candidateLotIds,
+    client,
+  );
   if (heldLots.length > 0) {
     throw new AppError(
       400,
@@ -283,10 +314,6 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
   }
   // Story 8.1 (Task 6): the QC gate blocks shipping-document generation until Story 8.4 supplies
   // the batch release record; a conditional release alone never enables it.
-  const qcGatedLots = await qcGatedLotIds(
-    holdResult.rows.map((r: Record<string, unknown>) => r['lot_id'] as string),
-    client,
-  );
   if (qcGatedLots.length > 0) {
     throw new AppError(
       400,

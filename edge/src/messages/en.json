@@ -34,6 +34,7 @@
   "errors.INSUFFICIENT_STOCK": "Not enough available stock at that location for this allocation.",
   "errors.LOT_EXPIRED": "The selected lot has expired and cannot be issued without an override.",
   "errors.LOT_ON_HOLD": "The selected lot is on quality hold and cannot be issued.",
+  "errors.JOBWORK_LOSS_REASON_CODE_INVALID": "That process-loss reason code is not one of the codes configured for job work.",
   "errors.DUPLICATE_LOT": "This lot already exists in the system.",
   "errors.DUPLICATE_SERIAL": "This serial number already exists in the system for this item.",
   "errors.SERIAL_REQUIRED": "This item requires serial numbers to be specified.",

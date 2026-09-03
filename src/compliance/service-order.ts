@@ -60,6 +60,10 @@ const CREATE_FIELDS = new Set([
   'kit_bom_id',
   'has_contractual_offcut',
 ]);
+// has_contractual_offcut is deliberately NOT updatable: it is set at creation and is the sole
+// predicate of the FR-JW-09/10 confirm gate, so an updatable flag would let the same actor blocked
+// at confirm simply clear it and confirm anyway, with no distinct audit event (code review
+// 2026-09-03, decision 2). A genuinely wrong flag is corrected by voiding and re-raising the order.
 const UPDATE_FIELDS = new Set([
   'service_order_id',
   'customer_party_code',
@@ -69,7 +73,6 @@ const UPDATE_FIELDS = new Set([
   'promised_delivery_date',
   'price_basis',
   'kit_bom_id',
-  'has_contractual_offcut',
 ]);
 
 export type ServiceOrderStatus = 'draft' | 'confirmed' | 'in_process' | 'closed';
@@ -522,9 +525,6 @@ async function applyOrderUpdated(envelope: EventEnvelope, client: PoolClient): P
       }),
       ...(p.price_basis !== undefined && { price_basis: p.price_basis }),
       ...(p.kit_bom_id !== undefined && { kit_bom_id: p.kit_bom_id }),
-      ...(p.has_contractual_offcut !== undefined && {
-        has_contractual_offcut: p.has_contractual_offcut,
-      }),
     },
     client,
   );
@@ -579,6 +579,16 @@ async function applyOrderConfirmed(envelope: EventEnvelope, client: PoolClient):
       'INVALID_STATE_TRANSITION',
       'A service order with a contractual offcut arrangement requires an offcut election to confirm',
       { service_order_id: p.service_order_id, has_contractual_offcut: true },
+      409,
+    );
+  }
+  // Symmetric refusal: an election is meaningless without the contractual arrangement it elects
+  // under, and silently storing one would misreport the order's offcut obligation to 9.6 billing.
+  if (order.has_contractual_offcut !== true && p.offcut_election !== undefined) {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      'A service order without a contractual offcut arrangement cannot carry an offcut election',
+      { service_order_id: p.service_order_id, has_contractual_offcut: false },
       409,
     );
   }

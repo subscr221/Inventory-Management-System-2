@@ -8,12 +8,17 @@ import type { ServiceOrderRow } from '../read/projections/service_order.js';
 import {
   getJobWorkOutputByLotId,
   incrementJobWorkOutputDispatched,
+  insertJobWorkDispatch,
 } from '../read/projections/job_work_output.js';
 import type { JobWorkOutputRow } from '../read/projections/job_work_output.js';
 import { getLotByNumberAndSku } from '../read/projections/lot_master.js';
-import { QC_GATE_BLOCKED_STATUSES } from '../read/projections/qc_inspection_task.js';
 import { insertCustodyLedgerEntry } from '../read/projections/custody_ledger_entry.js';
-import { createDispatchDocument } from '../read/projections/dispatch_document.js';
+import {
+  createDispatchDocument,
+  clearDocumentsByDispatchOrder,
+} from '../read/projections/dispatch_document.js';
+import { dispatchGateBlockedLots } from './dispatch.js';
+import { applyStockIssue } from '../read/projections/stock_balance.js';
 import { toIstCalendarDate } from '../lib/business-days.js';
 import { isPositiveQtyString } from './jobwork-receipt.js';
 import { qtyCompare, qtyNegate, qtyToScaled, qtyFromScaled } from './custody-statement.js';
@@ -31,8 +36,9 @@ import { qtyCompare, qtyNegate, qtyToScaled, qtyFromScaled } from './custody-sta
  * SAME generic dispatch_document table (whose schema carries a bare UUID dispatch_order_id with
  * no FK - verified in read/projections/dispatch_document.sql:9), keyed by service_order_id.
  *
- * Only qcGatedLotIds (src/compliance/dispatch.ts) is reused directly - it is lot-based with no
- * sales-order dependency.
+ * The lot gate IS reused, not reimplemented: dispatchGateBlockedLots (src/compliance/dispatch.ts)
+ * is imported and called, so the manual/recall hold half and the QC-gate half stay in one place
+ * and cannot drift apart per call site (the hold-bypass class, code-reviewed 2026-09-03).
  *
  * LOCK ORDER (the 7.4 rule): advisory lock, order row FOR UPDATE, then the job_work_output row
  * FOR UPDATE (Postgres row lock via SELECT ... FOR UPDATE inside getJobWorkOutputByLotId).
@@ -172,15 +178,54 @@ async function requireInProcessOrder(
   return order;
 }
 
-/** Reused directly - lot-based, no sales-order dependency (src/compliance/dispatch.ts:36). */
-async function qcGatedLotIds(lotIds: string[], client: PoolClient): Promise<string[]> {
-  if (lotIds.length === 0) return [];
-  const result = await client.query(
-    `SELECT lot_id FROM qc_inspection_task WHERE lot_id = ANY($1::uuid[]) AND gate_status = ANY($2::text[])
-      ORDER BY lot_id FOR UPDATE`,
-    [lotIds, [...QC_GATE_BLOCKED_STATUSES]],
-  );
-  return result.rows.map((r: Record<string, unknown>) => r['lot_id'] as string);
+/**
+ * The custody apportionment for ONE sku on ONE dispatch, as exact scaled integers (Task 4.4).
+ *
+ * Pro-rata by dispatched_quantity over the ORDER's total output quantity; on the dispatch that
+ * closes out that total, the exact remaining balance instead, so scaled-integer truncation can
+ * never strand a residual that blocks the Story 9.5 CUSTODY_NOT_ZERO closure gate. Never releases
+ * more than the sku's outstanding balance.
+ *
+ * All arguments and the result are scaled integers (quantity * 1000).
+ */
+export function apportionDispatchScaled(input: {
+  skuConsumed: bigint;
+  alreadyReleased: bigint;
+  dispatchedQuantity: bigint;
+  orderOutputTotal: bigint;
+  isFinalDispatch: boolean;
+}): bigint {
+  const outstanding = input.skuConsumed - input.alreadyReleased;
+  if (outstanding <= 0n || input.skuConsumed <= 0n || input.orderOutputTotal <= 0n) return 0n;
+  const share = input.isFinalDispatch
+    ? outstanding
+    : (input.skuConsumed * input.dispatchedQuantity) / input.orderOutputTotal;
+  if (share <= 0n) return 0n;
+  return share > outstanding ? outstanding : share;
+}
+
+/** Both job_work_dispatch keys are 409 DUPLICATE_EVENT; the details name which one collided. */
+function classifyDispatchDuplicate(err: unknown, dispatchId: string, eventId: string): never {
+  if (err instanceof Error && 'code' in err && (err as { code: string }).code === '23505') {
+    const constraint = (err as { constraint?: string }).constraint;
+    if (constraint === 'uq_job_work_dispatch_source_event') {
+      reject(
+        'DUPLICATE_EVENT',
+        'A job-work dispatch row already exists for this event',
+        { source_event_id: eventId, constraint },
+        409,
+      );
+    }
+    if (constraint === 'job_work_dispatch_pkey') {
+      reject(
+        'DUPLICATE_EVENT',
+        'A job-work dispatch with this id already exists',
+        { dispatch_id: dispatchId, constraint },
+        409,
+      );
+    }
+  }
+  throw err;
 }
 
 function renderJobWorkDispatchDocuments(
@@ -188,12 +233,18 @@ function renderJobWorkDispatchDocuments(
   output: JobWorkOutputRow,
   dispatchedQuantity: string,
   dispatchedAt: string,
+  dispatchId: string,
+  dispatchedToDate: string,
 ): { document_type: 'bol' | 'packing_slip' | 'commercial_invoice' | 'label'; content: string }[] {
+  // Each partial dispatch renders its OWN document set; the dispatch id and the running
+  // dispatched-to-date total are what tell two partial shipments apart on paper.
   const header = [
     `Order            : ${order.order_number_ext}  (${order.service_order_id})`,
+    `Dispatch         : ${dispatchId}`,
     `Customer         : ${order.customer_party_code}  ${order.customer_name}`,
     `SKU / Lot        : ${output.sku} / ${output.lot_number}`,
     `Dispatched Qty   : ${dispatchedQuantity} ${output.uom}`,
+    `Dispatched To Date: ${dispatchedToDate} of ${output.quantity} ${output.uom}`,
     `Dispatched At    : ${dispatchedAt}`,
   ].join('\n');
   return [
@@ -246,13 +297,42 @@ export async function applyJobworkDispatchProjection(
       409,
     );
   }
-  const gated = await qcGatedLotIds([lot.lot_id], client);
+  // BOTH halves of the lot gate, through the shared helper: the manual/recall hold and the QC
+  // gate are independent facts, and the lock is taken before either is read.
+  const { heldLotIds, qcGatedLotIds: gated } = await dispatchGateBlockedLots([lot.lot_id], client);
+  if (heldLotIds.length > 0) {
+    reject(
+      'LOT_ON_HOLD',
+      'The lot is on a quality hold and cannot be dispatched',
+      {
+        service_order_id: order.service_order_id,
+        lot_id: output.lot_number,
+        held_lot_ids: [output.lot_number],
+        reason: 'quality_hold',
+      },
+      409,
+    );
+  }
   if (gated.length > 0) {
     reject(
       'LOT_ON_HOLD',
       'The lot has not passed the FG QC gate and cannot be dispatched',
-      { service_order_id: order.service_order_id, lot_id: output.lot_number },
+      {
+        service_order_id: order.service_order_id,
+        lot_id: output.lot_number,
+        held_lot_ids: [output.lot_number],
+        reason: 'qc_gate',
+      },
       409,
+    );
+  }
+
+  if (p.uom !== output.uom) {
+    reject(
+      'INVALID_PARAMS',
+      'The dispatched uom must match the output lot uom',
+      { lot_id: output.lot_number, uom: p.uom, output_uom: output.uom },
+      400,
     );
   }
 
@@ -273,29 +353,72 @@ export async function applyJobworkDispatchProjection(
     );
   }
 
-  await incrementJobWorkOutputDispatched(output.output_id, p.dispatched_quantity, client);
+  const incremented = await incrementJobWorkOutputDispatched(
+    output.output_id,
+    p.dispatched_quantity,
+    client,
+  );
+  if (!incremented) {
+    reject(
+      'INSUFFICIENT_STOCK',
+      'The dispatched quantity exceeds the remaining open-to-dispatch quantity for this lot',
+      {
+        service_order_id: order.service_order_id,
+        lot_id: output.lot_number,
+        requested_qty: p.dispatched_quantity,
+        remaining_qty: remaining,
+      },
+      409,
+    );
+  }
 
-  // Custody-ledger dispatch apportionment (disclosed judgment call, not spec-defined): pro-rata by
-  // dispatched_quantity / this lot's OWN quantity against the order's total customer consumption
-  // (consumption + loss) to date, per customer-supplied sku, weighted by each sku's own share of
-  // that consumption. Simplest defensible rule; the closure-gate correctness this must satisfy is
-  // only that the ledger balance reaches zero (Story 9.5 CUSTODY_NOT_ZERO), which any consistent
-  // apportionment rule achieves.
+  // Custody-ledger dispatch apportionment (Task 4.4): pro-rata by dispatched_quantity over the
+  // ORDER's total output quantity - never this lot's own quantity, which would release ~100% of
+  // consumption once per output lot and drive the balance to -100% on a two-lot order.
+  //
+  // The closure gate (Story 9.5 CUSTODY_NOT_ZERO) requires the balance to reach EXACTLY zero, and
+  // scaled-integer division truncates, so pro-rata alone strands a residual (100.000 over three
+  // 1.000 dispatches of a 3.000 lot releases 99.999 and the order can never close). The dispatch
+  // that closes out the order's total output therefore posts the exact REMAINING balance per sku
+  // instead of its pro-rata share.
   const lotShare = qtyToScaled(p.dispatched_quantity);
-  const lotTotal = qtyToScaled(output.quantity);
-  if (lotTotal > 0n) {
+  const outputTotals = await client.query(
+    `SELECT COALESCE(SUM(quantity), 0)::numeric(18,3)::text AS total,
+            COALESCE(SUM(dispatched_quantity), 0)::numeric(18,3)::text AS dispatched
+       FROM job_work_output WHERE service_order_id = $1`,
+    [order.service_order_id],
+  );
+  const orderOutputTotal = qtyToScaled(String(outputTotals.rows[0]!['total']));
+  // dispatched_quantity was already incremented above, so this total INCLUDES the current dispatch.
+  const orderDispatchedTotal = qtyToScaled(String(outputTotals.rows[0]!['dispatched']));
+  const isFinalDispatch = orderDispatchedTotal >= orderOutputTotal;
+  if (orderOutputTotal > 0n) {
+    // Consumption/loss to date per sku, and what dispatch has already released against it, so the
+    // final true-up is exact regardless of when consumption was posted relative to a dispatch.
     const consumedRows = await client.query(
-      `SELECT sku, -SUM(quantity_delta) AS consumed
+      `SELECT sku,
+              -SUM(quantity_delta) FILTER (WHERE movement_category IN ('consumption', 'loss'))
+                AS consumed,
+              COALESCE(-SUM(quantity_delta) FILTER (WHERE movement_category = 'dispatch'), 0)
+                AS released
          FROM custody_ledger_entry
-        WHERE service_order_id = $1 AND movement_category IN ('consumption', 'loss')
+        WHERE service_order_id = $1
+          AND movement_category IN ('consumption', 'loss', 'dispatch')
         GROUP BY sku`,
       [order.service_order_id],
     );
-    for (const row of consumedRows.rows as { sku: string; consumed: string }[]) {
-      const skuConsumed = qtyToScaled(String(row.consumed));
-      if (skuConsumed <= 0n) continue;
-      // apportioned = skuConsumed * (lotShare / lotTotal), computed in scaled integers.
-      const apportioned = (skuConsumed * lotShare) / lotTotal;
+    for (const row of consumedRows.rows as {
+      sku: string;
+      consumed: string | null;
+      released: string;
+    }[]) {
+      const apportioned = apportionDispatchScaled({
+        skuConsumed: qtyToScaled(String(row.consumed ?? '0')),
+        alreadyReleased: qtyToScaled(String(row.released)),
+        dispatchedQuantity: lotShare,
+        orderOutputTotal,
+        isFinalDispatch,
+      });
       if (apportioned <= 0n) continue;
       const apportionedQty = qtyFromScaled(apportioned);
       await insertCustodyLedgerEntry(
@@ -329,11 +452,52 @@ export async function applyJobworkDispatchProjection(
     }
   }
 
+  try {
+    await insertJobWorkDispatch(
+      {
+        dispatch_id: p.dispatch_id,
+        service_order_id: order.service_order_id,
+        output_id: output.output_id,
+        lot_number: output.lot_number,
+        sku: output.sku,
+        dispatched_quantity: p.dispatched_quantity,
+        uom: output.uom,
+        site_id: order.site_id,
+        dispatched_by: p.dispatched_by,
+        dispatched_at: occurredAt,
+        source_event_id: eventId,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    classifyDispatchDuplicate(err, p.dispatch_id, eventId);
+  }
+
+  // The output lot was received into ordinary owned stock at the order's site when it was recorded
+  // (jobwork-output.ts applyStockReceipt); dispatching it MUST take it back out, or the shipped
+  // finished goods stay on hand and remain pickable/allocatable forever. qc_gate_cleared: the full
+  // lot gate above already ran and passed.
+  await applyStockIssue(
+    {
+      sku: output.sku,
+      location_id: order.site_id,
+      lot_id: output.lot_number,
+      quantity: p.dispatched_quantity,
+      qc_gate_cleared: true,
+    },
+    client,
+  );
+
+  // Each dispatch supersedes the order's document set (the dispatch.ts clear-and-regenerate idiom),
+  // so a partial-dispatch order never accumulates several indistinguishable BOLs.
+  await clearDocumentsByDispatchOrder(order.service_order_id, client);
   const documents = renderJobWorkDispatchDocuments(
     order,
     output,
     p.dispatched_quantity,
     occurredAt,
+    p.dispatch_id,
+    qtyFromScaled(orderDispatchedTotal),
   );
   for (const doc of documents) {
     await createDispatchDocument(

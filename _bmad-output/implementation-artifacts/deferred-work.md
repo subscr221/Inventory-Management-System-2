@@ -736,3 +736,12 @@ Closed by this story: the four Story 6.2 deferrals for FR-MO-07 (completions, co
 - `stock_balance.stock_class` still has no CHECK constraint; the vocabulary lives in two application-code sets (`src/compliance/stock-balance.ts`, `src/compliance/cycle-count.ts`) that must be edited together. Adding the CHECK needs a migration against live rows for a value set Epics 9 and 10 will extend again, so it was a considered non-change here.
 - A witness hold point and a Story 8.5 governed hold cannot coexist on one lot: both insert into `qc_quality_hold`, and `uq_qc_quality_hold_open` allows one open row per lot. Raising a hold point on an already-held lot therefore returns `HOLD_EXISTS` rather than `WITNESS_HOLD_POINT_EXISTS`. Correct-by-containment for the pilot, but a lot that legitimately needs a witnessed inspection while under an unrelated governed hold has no path today.
 - The three pre-existing `schema-drift` failures in this working tree (`compliance_bis_licence`, `label_master`, `gate_dwell_metric`) are line-ending artifacts: the canonical `read/projections/*.sql` files are LF while `deploy/compose/init-db.sql` is CRLF. They pass in a fresh checkout and fail here with Story 8.8 stashed, so they are environmental, not schema drift. Wants a `.gitattributes` decision for `*.sql`.
+
+## Deferred from: code review of story-9-4 (2026-09-03)
+
+- Loss is always booked as customer ownership; processor-owned material cannot be declared lost (src/compliance/custody-ledger.ts:897). Own-material loss is outside the AC set.
+- Output quantity is unbounded relative to material consumed; no yield reconciliation (src/compliance/jobwork-output.ts:243). Story 9.6 scope.
+- job_work_output has no FK to service_order and no site-consistency CHECK (read/projections/job_work_output.sql). Matches the existing projection convention.
+- Direct-event path takes posted_by from the payload rather than the actor for a statutory attribution field (src/compliance/custody-ledger.ts:897). Consistent with the Story 9.3 convention.
+- The story-9-4 regression arm re-asserts a fixture rather than regressing anything (test/integration/story-9-4.test.ts:884). Task 6.3 requirement is the separate suite run.
+- Idempotent-retry path builds a null site_id when the order row is unreadable, returning 400 instead of replaying (src/api/v1/service-orders.ts:695). Pre-existing route idiom.
