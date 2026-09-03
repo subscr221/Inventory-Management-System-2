@@ -714,6 +714,26 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
     assert.strictEqual(rows.rows[0]!['quantity_delta'], '-200.000');
   });
 
+  it('AC1: a correctly-named approved_by posted by a DIFFERENT acting user still refuses APPROVAL_REQUIRED', async () => {
+    // Distinct from the forged-approved_by arm above: the claimed approver id is the REAL resolved
+    // approver this time, but the request is posted by someone else. The acting-user-is-the-approver
+    // check (custody-ledger.ts, the 6.1/6.3 DOA chain's second guard) is otherwise unreached by this
+    // suite - forging the value trips the first guard before the second is ever exercised.
+    const orderId = await inProcessOrderWithConsumption('1000');
+    const approver = await resolvedApprover('jobwork.over_norm_loss');
+    const res = await postLoss(orderId, {
+      quantity: '200',
+      over_norm_approved: true,
+      approved_by: approver.userId,
+    });
+    assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'APPROVAL_REQUIRED');
+    assert.strictEqual(
+      (res.body['details'] as Record<string, unknown>)['acting_user_id'],
+      coordinatorUserId,
+    );
+  });
+
   it('AC1: direct POST /api/v1/events cannot bypass the over-norm approval gate', async () => {
     const orderId = await inProcessOrderWithConsumption('1000');
     const res = await makeRequest(
