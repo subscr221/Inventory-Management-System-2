@@ -1716,6 +1716,28 @@ const EXPECTED = [
     indexBodies: ['ON jobwork_material_receipt (grn_line_id)'],
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 9.3: per-order custody ledger (signed deltas, forward-declared categories).
+  {
+    canonical: 'read/projections/custody_ledger_entry.sql',
+    table: 'custody_ledger_entry',
+    constraints: [
+      'chk_custody_ledger_category',
+      'chk_custody_ledger_ownership_vocab',
+      'chk_custody_ledger_sign',
+      'chk_custody_ledger_ownership',
+    ],
+    indexes: [
+      'uq_custody_ledger_source_event',
+      'idx_custody_ledger_order_time',
+      'idx_custody_ledger_order_sku',
+    ],
+    indexBodies: [
+      'ON custody_ledger_entry (source_event_id)',
+      'ON custody_ledger_entry (service_order_id, occurred_at, created_at)',
+      'ON custody_ledger_entry (service_order_id, ownership, sku)',
+    ],
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

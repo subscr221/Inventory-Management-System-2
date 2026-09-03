@@ -4497,6 +4497,61 @@ export interface JobworkMaterialReceivedEnvelope extends Omit<EventEnvelope, 'pa
   payload: JobworkMaterialReceivedPayload;
 }
 
+/**
+ * Story 9.3 (FR-JW-06): customer-material consumption against an in_process job-work order on the
+ * NEW 'custody' stream (AD-6; stream_id = service_order_id). consumption_id is minted client-side
+ * (the 9.1 BSD-10 idiom). lot_id is the lot_master.lot_number business key received under this
+ * order. bom_line_id, kit_bom_revision_id, custody_balance_after and supply_source_untagged are
+ * SERVER-DERIVED: the seam refuses them on input and writes them back before the domain_events
+ * insert, so the stored event carries the kit line and balance THIS process resolved.
+ */
+export interface CustodyConsumptionPostedPayload {
+  service_order_id: string;
+  consumption_id: string;
+  sku: string;
+  lot_id: string;
+  location_id: string;
+  quantity: string;
+  uom: string;
+  site_id: string;
+  posted_by: string;
+  reason_note?: string | null;
+  bom_line_id?: string;
+  kit_bom_revision_id?: string;
+  custody_balance_after?: string;
+  supply_source_untagged?: boolean;
+}
+
+export interface CustodyConsumptionPostedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'custody.consumption_posted';
+  payload: CustodyConsumptionPostedPayload;
+}
+
+/**
+ * Story 9.3 (FR-JW-07): the processor's OWN material added to a job-work order - drained from
+ * owned stock, ledgered as processor-owned and billable, never in the customer balance. bom_line_id
+ * is OPTIONAL (own material may legitimately be off the customer's kit); when supplied it must be
+ * a processor-supplied kit line and kit_bom_revision_id is written back server-side.
+ */
+export interface CustodyOwnMaterialAddedPayload {
+  service_order_id: string;
+  own_material_id: string;
+  sku: string;
+  lot_id?: string | null;
+  location_id: string;
+  quantity: string;
+  uom: string;
+  site_id: string;
+  posted_by: string;
+  bom_line_id?: string | null;
+  kit_bom_revision_id?: string;
+}
+
+export interface CustodyOwnMaterialAddedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'custody.own_material_added';
+  payload: CustodyOwnMaterialAddedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
@@ -5407,6 +5462,18 @@ export const SUPPORTED_EVENT_TYPES = {
   // (stream_id = service_order_id); the order row already carries business_stream = 'job_work'.
   'jobwork.material_received': {
     streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  // Story 9.3: the custody ledger is a SEPARATE stream type (AD-6), stream_id = service_order_id.
+  // Consumption and own-material postings act on an order row that already carries the
+  // business_stream tag, so they ride requiresBusinessStream false (the 9.2 receipt precedent).
+  // Receipts stay on the jobwork stream and feed the ledger from the 9.2 applier (decision 2).
+  'custody.consumption_posted': {
+    streamType: 'custody',
+    requiresBusinessStream: false,
+  },
+  'custody.own_material_added': {
+    streamType: 'custody',
     requiresBusinessStream: false,
   },
 } as const;

@@ -14,6 +14,7 @@ import {
   OWNER_PARTY_CODE_REGEX,
 } from './ownership.js';
 import { assertJobworkReceiptOwnership } from './jobwork-receipt.js';
+import { isCustodyConsumptionHandoff } from './custody-ledger.js';
 
 /**
  * Central stock-balance seam (Story 2.2), split in two because the two halves run at different
@@ -340,7 +341,17 @@ export async function applyStockBalanceProjection(
   // allocation or issue naming the class is refused. One arm, mutation-testable; a classifier
   // would lie green. CROSS_ISSUE_BLOCKED is a pre-registered stable code shared with Epic 10:
   // the semantics stay generic (attempted class-crossing demand), never job-work-specific.
-  if (stockClass === JOB_WORK_STOCK_CLASS && (kind === 'allocation' || kind === 'issue')) {
+  //
+  // Story 9.3 (FR-JW-06): the ONE gated door. The custody-consumption seam (custody-ledger.ts)
+  // stamps its synthetic stock.issued view with the CUSTODY_CONSUMPTION Symbol after re-deriving
+  // the order, the lot-under-order, the kit line and the custody balance under the order lock. A
+  // JSON body (POST /api/v1/events, edge upload) can never carry a Symbol key, so the bar stays
+  // TOTAL for every other caller - no classifier, no payload field trusted.
+  if (
+    stockClass === JOB_WORK_STOCK_CLASS &&
+    (kind === 'allocation' || kind === 'issue') &&
+    !(kind === 'issue' && isCustodyConsumptionHandoff(envelope))
+  ) {
     throw new AppError(
       400,
       'CROSS_ISSUE_BLOCKED',

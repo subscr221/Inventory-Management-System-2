@@ -540,6 +540,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/service-orders/:serviceOrderId/confirm',
       // Story 9.2: customer-material receipts against an order (FR-JW-03, FR-JW-05).
       'GET /api/v1/service-orders/:serviceOrderId/receipts',
+      // Story 9.3: custody ledger, consumption and own-material postings (FR-JW-05, 06, 07).
+      'POST /api/v1/service-orders/:serviceOrderId/consumptions',
+      'POST /api/v1/service-orders/:serviceOrderId/own-material',
+      'GET /api/v1/service-orders/:serviceOrderId/custody-ledger',
+      'GET /api/v1/service-orders/:serviceOrderId/custody-statement',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

@@ -191,6 +191,9 @@ const PERMANENT_ERROR_CODES = new Set([
   'PRODUCTION_MATERIAL_DERIVATION_MISMATCH',
   'PRODUCTION_COMPLETION_DERIVATION_MISMATCH',
   'INVALID_STATE_TRANSITION',
+  // Story 9.3: an off-kit custody consumption is permanent - a retry can never match a kit line
+  // that the order's current revision does not carry (the INVALID_STATE_TRANSITION precedent).
+  'KIT_LINE_MISMATCH',
   'UNREVERSED_TRANSACTIONS',
   'BOM_REVISION_DRIFT',
   'MATERIAL_REQUIREMENT_SET_TRUNCATED',

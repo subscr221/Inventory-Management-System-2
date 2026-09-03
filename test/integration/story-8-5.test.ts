@@ -962,7 +962,11 @@ describe('Story 8.5 Quality Holds and Recall Trace', () => {
 
     // The declared coverage limit (Binding Scope Decision 7 makes the budget observable too).
     const coverage = trace.body['coverage'] as Record<string, unknown>;
-    assert.strictEqual((coverage['not_yet_covered'] as string[]).length, 2);
+    // Story 9.3 moved job-work consumption into where_used; only production genealogy remains.
+    assert.strictEqual((coverage['not_yet_covered'] as string[]).length, 1);
+    assert.ok(
+      (coverage['where_used'] as string[]).some((c) => c.includes('custody.consumption_posted')),
+    );
     assert.strictEqual(trace.body['propagation_budget_minutes'], 15);
     assert.strictEqual(typeof trace.body['elapsed_minutes'], 'number');
     assert.strictEqual(trace.body['propagation_budget_breached'], false);

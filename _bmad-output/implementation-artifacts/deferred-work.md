@@ -1,5 +1,39 @@
 # Deferred Work
 
+## Deferred from: code review of story-9-3 (2026-09-03), group 4
+
+- Own-material path has no over-balance, replay, or concurrency integration arm (only consumption has all three) [test/integration/story-9-3.test.ts] — deferred, own-material drains ordinary owned stock through the pre-existing, already-covered `applyStockIssue` path
+- Concurrency test only races two full-balance consumers (10 vs 10), not a partial-overlap case (6 vs 6) — deferred, same code path, lower marginal value
+- No test drives two racing requests on the same idempotency key to force the `uq_custody_ledger_source_event` 23505-to-409 classification path itself (Task 4.6) — deferred, real gap, needs a same-idempotency-key concurrent-POST arm as a follow-up
+- `qtyToScaled`'s more-than-3-decimal-places behavior isn't pinned by a dedicated unit test — deferred, low risk, all real inputs are DB-cast strings
+- `expectReject`'s field-hint check is a substring match, not exact — deferred, low risk given the current field-name set has no collisions
+- Unit UUID-shape validation loop only covers the consumption shape, not own-material's id fields — deferred, coverage-symmetry gap only, underlying logic is shared and already exercised
+- `story-8-5.test.ts` asserts `not_yet_covered` count shrank but never asserts what the remaining item is — deferred, minor test-robustness gap
+
+## Deferred from: code review of story-9-3 (2026-09-03), group 3
+
+- `total_customer_balance` sums closing balances across all SKUs regardless of UOM into one number [src/compliance/custody-statement.ts:135] — deferred, matches spec's literal AC 2 wording; business-meaningfulness question for the PO
+- `where_used` array not globally chronologically sorted across production and custody sources [src/quality/recall-trace.ts] — deferred, minor readability gap
+- `qtyToScaled` silently truncates input beyond 3 decimals rather than rounding/rejecting [src/compliance/custody-statement.ts:28] — deferred, low risk, all real inputs are DB NUMERIC(18,3) casts
+- `padLeft` truncates from the wrong end for overflowing numeric columns in the text renderer — deferred, only reachable at ~10^13+ magnitude quantities
+- `buildCustodyStatement` trusts caller-supplied row order with no runtime verification — deferred, matches documented design
+
+## Deferred from: code review of story-9-3 (2026-09-03), group 2
+
+- `custody_balance_after` advertised as a derived field for own-material but never written back [src/compliance/custody-ledger.ts:666] — deferred, own-material is excluded from the customer running balance so the field has no clear meaning here; dead promise only, no crash
+- Replay path skips `assertSiteWriteAccess` when the order no longer exists but the idempotency key was already used [src/api/v1/service-orders.ts:571,576] — deferred, requires an order row to vanish after a successful posting, theoretical in this domain
+- Two different drain paths for consumption (gated `applyStockBalanceProjection`) vs own-material (`applyStockIssue` directly) [src/compliance/custody-ledger.ts:507,607] — deferred, matches decision 6 by design, confirmed QC-hold exclusion still applies
+- `entry_id` provenance differs between receipt (server-minted) and consumption/own-material (client-minted) write paths — deferred, already disclosed in Debug Log Table 3
+- `format` query param on statement route is case-sensitive — deferred, minor usability gap
+- `postCustodyEvent` re-fetches and linear-scans the full ledger to find the just-inserted row [src/api/v1/service-orders.ts:606-607] — deferred, minor inefficiency at low row counts
+
+## Deferred from: code review of story-9-3 (2026-09-03), group 1
+
+- Unconditional applier calls with no visible event_type guard [src/events/store.ts:259-260] — deferred, re-check in Group 2 (`custody-ledger.ts` body not yet reviewed)
+- `business_date` correctness depends entirely on applier-side IST conversion, no DB constraint ties it to `occurred_at` [read/projections/custody_ledger_entry.sql] — deferred, Group 2 scope
+- `MIN(uom)` masks a cross-row UOM mismatch per sku in closing balances [src/read/projections/custody_ledger_entry.ts:199] — deferred, theoretical, no current caller produces mixed UOM
+- Two DDL files synced only by comment, no automated drift check [deploy/compose/init-db.sql, read/projections/custody_ledger_entry.sql] — deferred, pre-existing project-wide pattern since Story 9.2
+
 ## Deferred from: code review of 8-8-witnessed-inspections-and-prototype-stock-rules.md (2026-09-02)
 
 - Round 2: `WITNESS_HOLD_POINT_NOT_FOUND` (a 404) sits in AUDITED_REJECTIONS while `LOT_NOT_FOUND` on the raise route does not - probing unknown hold-point ids writes audit rows, probing unknown lots does not [src/api/v1/quality.ts:292-296] — deferred, a 404-audit policy question for the whole QC surface, not an 8.8-local fix

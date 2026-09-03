@@ -14,6 +14,18 @@ import {
 import { getServiceOrderById, listServiceOrders } from '../../read/projections/service_order.js';
 import type { ServiceOrderRow } from '../../read/projections/service_order.js';
 import { listJobworkMaterialReceiptsByOrder } from '../../read/projections/jobwork_material_receipt.js';
+import {
+  listCustodyLedgerByOrder,
+  customerCustodyBalancesByOrder,
+} from '../../read/projections/custody_ledger_entry.js';
+import {
+  CUSTODY_CONSUMPTION_POSTED,
+  CUSTODY_OWN_MATERIAL_ADDED,
+} from '../../compliance/custody-ledger.js';
+import {
+  buildCustodyStatement,
+  renderCustodyStatementText,
+} from '../../compliance/custody-statement.js';
 
 /**
  * Story 9.1 REST surface for job-work service orders (FR-JW-01, FR-JW-02, FR-B-16, FR-AC-13).
@@ -39,6 +51,13 @@ const AUDITED_REJECTIONS = new Set([
   'DUPLICATE_EVENT',
   'INVALID_PARAMS',
   'LOCATION_ACCESS_DENIED',
+  // Story 9.3: every refusal the custody consumption / own-material seam can raise. KIT_LINE_MISMATCH
+  // is this story's NEW stable error code; the rest are pre-registered (spine line 337).
+  'KIT_LINE_MISMATCH',
+  'INSUFFICIENT_STOCK',
+  'CROSS_ISSUE_BLOCKED',
+  'SOURCE_DOCUMENT_REQUIRED',
+  'LOT_NOT_FOUND',
 ]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -465,6 +484,218 @@ const listServiceOrdersBase: RouteHandler = async (req, res, _params) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Story 9.3: custody ledger and consumption (FR-JW-05, FR-JW-06, FR-JW-07)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves the order for a read route with the 404-versus-403 collapse of GET-by-id: an order at a
+ * site the caller cannot read is indistinguishable from a missing order. Returns null after
+ * sending the 404.
+ */
+async function readableOrderOr404(
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+  serviceOrderId: string,
+): Promise<ServiceOrderRow | null> {
+  const order = await getServiceOrderById(serviceOrderId);
+  let accessDenied = false;
+  if (order) {
+    try {
+      assertSiteReadAccess(req, order.site_id);
+    } catch (err) {
+      if (err instanceof AppError && err.errorCode === 'LOCATION_ACCESS_DENIED') {
+        accessDenied = true;
+      } else {
+        throw err;
+      }
+    }
+  }
+  if (!order || accessDenied) {
+    sendRequestError(req, res, 404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+      service_order_id: serviceOrderId,
+    });
+    return null;
+  }
+  return order;
+}
+
+/** The posting fields a custody write route forwards verbatim; the seam owns deep validation. */
+const CUSTODY_POSTING_FIELDS = ['sku', 'lot_id', 'location_id', 'quantity', 'uom'] as const;
+
+/**
+ * Shared shape of the two custody write routes: idempotency key required (#AD-16), path id must
+ * equal the body's service_order_id, server-derived fields refused, site write access asserted
+ * against the ORDER's site, the posting site defaulting to the order's site, posted_by stamped
+ * from the authenticated actor. The seam re-derives every gate under the order lock.
+ */
+async function postCustodyEvent(
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+  params: Record<string, string> | undefined,
+  spec: {
+    eventType: string;
+    idField: 'consumption_id' | 'own_material_id';
+    extraFields: readonly string[];
+    derivedFields: readonly string[];
+  },
+): Promise<void> {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    rejectUnacceptedFields(body, ['posted_by', 'business_stream', ...spec.derivedFields]);
+    if (body['service_order_id'] !== undefined && body['service_order_id'] !== serviceOrderId) {
+      throw new AppError(400, 'INVALID_PARAMS', 'service_order_id must equal the path id', {
+        service_order_id: body['service_order_id'],
+        path_service_order_id: serviceOrderId,
+      });
+    }
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (body[spec.idField] !== undefined && !isUuid(body[spec.idField])) {
+      throw new AppError(400, 'INVALID_PARAMS', `${spec.idField} must be a UUID when supplied`, {
+        field: spec.idField,
+      });
+    }
+    if (body['site_id'] !== undefined && !isUuid(body['site_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'site_id must be a UUID when supplied');
+    }
+
+    // A retry of a SUCCESSFUL posting must replay, not trip the 404 pre-check afresh; persistEvent
+    // is the idempotency authority (the 8.7 findEventByIdempotencyKey lesson). Site write access
+    // is always re-checked against the order's site when the order is readable.
+    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const existing = await getServiceOrderById(serviceOrderId);
+    if (!existing && !isRetry) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+    }
+    if (existing) assertSiteWriteAccess(req, existing.site_id);
+
+    const postingId = (body[spec.idField] as string | undefined) ?? randomUUID();
+    const payload: Record<string, unknown> = {
+      service_order_id: serviceOrderId,
+      [spec.idField]: postingId,
+      site_id: body['site_id'] ?? existing?.site_id ?? null,
+      posted_by: actor.userId,
+    };
+    for (const field of [...CUSTODY_POSTING_FIELDS, ...spec.extraFields]) {
+      if (body[field] !== undefined) payload[field] = body[field];
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'custody',
+        stream_id: serviceOrderId,
+        event_type: spec.eventType,
+        payload,
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedId = replayIdOrReject(persisted, spec.eventType, spec.idField);
+    const entries = await listCustodyLedgerByOrder(serviceOrderId);
+    const entry = entries.find((row) => row.entry_id === persistedId) ?? null;
+    // A replay is not a posting: 200 with the same event_id, the house idiom.
+    sendJson(res, persistedId === postingId ? 201 : 200, {
+      event_id: persisted.event_id,
+      [spec.idField]: persistedId,
+      entry,
+      ...(typeof persisted.payload['custody_balance_after'] === 'string'
+        ? { custody_balance_after: persisted.payload['custody_balance_after'] }
+        : {}),
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditFailSafe(req, actor, err, {
+        service_order_id: params?.['serviceOrderId'] ?? null,
+        event_type: spec.eventType,
+      });
+    }
+    sendAppError(req, res, err);
+  }
+}
+
+const postServiceOrderConsumptionBase: RouteHandler = (req, res, params) =>
+  postCustodyEvent(req, res, params, {
+    eventType: CUSTODY_CONSUMPTION_POSTED,
+    idField: 'consumption_id',
+    extraFields: ['reason_note'],
+    derivedFields: [
+      'bom_line_id',
+      'kit_bom_revision_id',
+      'custody_balance_after',
+      'supply_source_untagged',
+    ],
+  });
+
+const postServiceOrderOwnMaterialBase: RouteHandler = (req, res, params) =>
+  postCustodyEvent(req, res, params, {
+    eventType: CUSTODY_OWN_MATERIAL_ADDED,
+    idField: 'own_material_id',
+    extraFields: ['bom_line_id'],
+    derivedFields: ['kit_bom_revision_id', 'custody_balance_after'],
+  });
+
+/** Raw ledger rows in statement order (JSON only). */
+const getServiceOrderCustodyLedgerBase: RouteHandler = async (req, res, params) => {
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    const order = await readableOrderOr404(req, res, serviceOrderId);
+    if (!order) return;
+    const entries = await listCustodyLedgerByOrder(serviceOrderId);
+    const closing_balances = await customerCustodyBalancesByOrder(serviceOrderId);
+    sendJson(res, 200, {
+      service_order_id: serviceOrderId,
+      customer_party_code: order.customer_party_code,
+      entries,
+      closing_balances,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+/**
+ * AC 2: the custody statement on demand - JSON canonical, `?format=text` the fixed-width
+ * printable rendering (decision 8: a read resource, nothing persisted, no PDF machinery).
+ */
+const getServiceOrderCustodyStatementBase: RouteHandler = async (req, res, params) => {
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const format = url.searchParams.get('format') ?? 'json';
+    if (format !== 'json' && format !== 'text') {
+      throw new AppError(400, 'INVALID_PARAMS', 'format must be json or text', { format });
+    }
+    const order = await readableOrderOr404(req, res, serviceOrderId);
+    if (!order) return;
+    const entries = await listCustodyLedgerByOrder(serviceOrderId);
+    const statement = buildCustodyStatement(order, entries, new Date().toISOString());
+    if (format === 'text') {
+      const text = renderCustodyStatementText(statement);
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Length': Buffer.byteLength(text, 'utf-8'),
+      });
+      res.end(text);
+      return;
+    }
+    sendJson(res, 200, { statement });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
 export const createServiceOrderHandler = requireRole({
   module: 'jobwork',
   functionScope: 'write',
@@ -494,3 +725,23 @@ export const listServiceOrderReceiptsHandler = requireRole({
   module: 'jobwork',
   functionScope: 'read',
 })(listServiceOrderReceiptsBase);
+
+export const postServiceOrderConsumptionHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderConsumptionBase);
+
+export const postServiceOrderOwnMaterialHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderOwnMaterialBase);
+
+export const getServiceOrderCustodyLedgerHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'read',
+})(getServiceOrderCustodyLedgerBase);
+
+export const getServiceOrderCustodyStatementHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'read',
+})(getServiceOrderCustodyStatementBase);

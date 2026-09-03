@@ -13,10 +13,12 @@ import type { QcQualityHoldRow } from '../read/projections/qc_quality_hold.js';
  *
  * COVERAGE LIMIT, declared rather than implied: where_used runs over the consumption event types
  * that exist at this baseline - production issue (Story 6.2, production_order.material_issued,
- * projected into production_wip_ledger's directed_issue/backflush postings). Job-work consumption
- * (Story 9.3) and production genealogy (Story 6.4) are NOT yet in the codebase, so the trace is
- * complete only with respect to what exists; the response carries an explicit `coverage` field so
- * a caller can never read an incomplete trace as a complete one.
+ * projected into production_wip_ledger's directed_issue/backflush postings) and job-work custody
+ * consumption (Story 9.3, custody.consumption_posted, read from lot_trace joined to the custody
+ * ledger and its service order). Production genealogy (Story 6.4) is NOT yet in this query, so the
+ * trace is complete only with respect to what exists; the response carries an explicit `coverage`
+ * field so a caller can never read an incomplete trace as a complete one. The coverage list and
+ * the queries below MUST change together (a coverage list that lies is worse than none).
  *
  * Binding Scope Decision 7: the 15-minute contract is a MEASURED, recorded latency. The envelope
  * reports now() - placed_at against qc.holdPropagationBudgetMinutes as
@@ -25,6 +27,7 @@ import type { QcQualityHoldRow } from '../read/projections/qc_quality_hold.js';
 
 export interface WhereUsedEntry {
   posting_id: string;
+  /** production_order_id for production postings; service_order_id for job-work consumption. */
   production_order_id: string;
   order_number_ext: string;
   output_sku: string;
@@ -32,6 +35,8 @@ export interface WhereUsedEntry {
   component_sku: string;
   quantity: string;
   occurred_at: string;
+  /** Story 9.3: which consumption family produced this entry. */
+  source: 'production_order.material_issued' | 'custody.consumption_posted';
 }
 
 export interface WhereShippedEntry {
@@ -96,7 +101,39 @@ export async function assembleRecallTrace(
     component_sku: row['component_sku'] as string,
     quantity: String(row['quantity']),
     occurred_at: toIso(row['occurred_at']),
+    source: 'production_order.material_issued',
   }));
+
+  // Story 9.3: job-work custody consumption. lot_trace.lot_id is the lot_master UUID; the ledger
+  // row for the same event carries the order, and the order carries the customer-facing number.
+  // output_sku is the kit BOM parent sku (what the customer material was consumed INTO).
+  const custodyResult = await runner(client).query(
+    `SELECT c.entry_id AS posting_id, c.service_order_id, o.order_number_ext,
+            COALESCE(b.parent_sku, '') AS output_sku, c.movement_category AS posting_type,
+            c.sku AS component_sku, (-c.quantity_delta)::text AS quantity, c.occurred_at
+       FROM lot_trace t
+       JOIN custody_ledger_entry c ON c.source_event_id = t.event_id
+       JOIN service_order o ON o.service_order_id = c.service_order_id
+       LEFT JOIN bom b ON b.bom_id = o.kit_bom_id
+      WHERE t.lot_id = $1
+        AND t.event_type = 'custody.consumption_posted'
+        AND c.movement_category = 'consumption'
+      ORDER BY c.occurred_at ASC, c.entry_id`,
+    [hold.lot_id],
+  );
+  for (const row of custodyResult.rows as Array<Record<string, unknown>>) {
+    whereUsed.push({
+      posting_id: row['posting_id'] as string,
+      production_order_id: row['service_order_id'] as string,
+      order_number_ext: row['order_number_ext'] as string,
+      output_sku: row['output_sku'] as string,
+      posting_type: row['posting_type'] as string,
+      component_sku: row['component_sku'] as string,
+      quantity: String(row['quantity']),
+      occurred_at: toIso(row['occurred_at']),
+      source: 'custody.consumption_posted',
+    });
+  }
 
   // packing_record.lot_id holds the lot_master.lot_id UUID (the dispatch seam joins on it).
   const shippedResult = await runner(client).query(
@@ -149,11 +186,11 @@ export async function assembleRecallTrace(
     propagation_budget_minutes: budget,
     propagation_budget_breached: elapsedMinutes > budget,
     coverage: {
-      where_used: ['production_order.material_issued (Story 6.2 directed_issue/backflush)'],
-      not_yet_covered: [
-        'job-work consumption (Story 9.3, not in this codebase yet)',
-        'production genealogy (Story 6.4, not in this codebase yet)',
+      where_used: [
+        'production_order.material_issued (Story 6.2 directed_issue/backflush)',
+        'custody.consumption_posted (Story 9.3)',
       ],
+      not_yet_covered: ['production genealogy (Story 6.4, not in this query)'],
     },
     movements,
     where_used: whereUsed,

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import type { JobworkMaterialReceivedPayload } from '../events/schema.js';
@@ -6,6 +7,8 @@ import { config } from '../config/index.js';
 import { getServiceOrderById } from '../read/projections/service_order.js';
 import type { ServiceOrderRow } from '../read/projections/service_order.js';
 import { insertJobworkMaterialReceipt } from '../read/projections/jobwork_material_receipt.js';
+import { insertCustodyLedgerEntry } from '../read/projections/custody_ledger_entry.js';
+import { toIstCalendarDate } from '../lib/business-days.js';
 import { transitionServiceOrder } from './service-order.js';
 import { OWNERSHIP_ERROR_CODES } from './ownership.js';
 
@@ -466,6 +469,55 @@ export async function applyJobworkMaterialReceivedProjection(
           'DUPLICATE_EVENT',
           'A custody receipt with this receipt_id already exists',
           { receipt_id: p.receipt_id, constraint },
+          409,
+        );
+      }
+    }
+    throw err;
+  }
+
+  // Story 9.3 (FR-JW-05, decision 2): the receipt is the ledger's opening movement. Written in
+  // the SAME transaction from this applier - no second event for the same fact - keyed by this
+  // jobwork.material_received event id (uq_custody_ledger_source_event makes replay safe). The
+  // receipt stays on the jobwork stream; the ledger is a shared projection fed by two streams.
+  const occurredAt = envelope.metadata.occurred_at ?? new Date().toISOString();
+  try {
+    await insertCustodyLedgerEntry(
+      {
+        entry_id: randomUUID(),
+        service_order_id: order.service_order_id,
+        customer_party_code: order.customer_party_code,
+        movement_category: 'receipt',
+        ownership: 'customer',
+        sku: p.sku,
+        lot_id: p.lot_id ?? null,
+        location_id: null,
+        quantity_delta: p.received_qty,
+        uom: p.uom,
+        billable: false,
+        bom_line_id: null,
+        kit_bom_revision_id: null,
+        receipt_id: p.receipt_id,
+        variance_qty: varianceQty,
+        variance_flagged: varianceFlagged,
+        site_id: order.site_id,
+        posted_by: p.received_by,
+        occurred_at: occurredAt,
+        business_date: toIstCalendarDate(new Date(occurredAt)),
+        source_event_id: eventId,
+        source_event_type: JOBWORK_MATERIAL_RECEIVED,
+        correlation_id: envelope.metadata.correlation_id ?? null,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && (err as { code: string }).code === '23505') {
+      const constraint = (err as { constraint?: string }).constraint;
+      if (constraint === 'uq_custody_ledger_source_event') {
+        reject(
+          'DUPLICATE_EVENT',
+          'A custody ledger row already exists for this receipt event',
+          { source_event_id: eventId, constraint },
           409,
         );
       }

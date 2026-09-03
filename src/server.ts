@@ -362,6 +362,10 @@ import {
   getServiceOrderHandler as getJobworkServiceOrderHandler,
   listServiceOrdersHandler,
   listServiceOrderReceiptsHandler,
+  postServiceOrderConsumptionHandler,
+  postServiceOrderOwnMaterialHandler,
+  getServiceOrderCustodyLedgerHandler,
+  getServiceOrderCustodyStatementHandler,
 } from './api/v1/service-orders.js';
 import {
   createProductionOrderHandler,
@@ -1039,6 +1043,24 @@ export function createAppRouter(): Router {
   // Story 9.2: customer-material receipts recorded against an order (FR-JW-03, FR-JW-05). The
   // receipt itself rides POST /api/v1/grn-lines with stock_class 'job_work'; this is read-only.
   router.get('/api/v1/service-orders/:serviceOrderId/receipts', listServiceOrderReceiptsHandler);
+  // Story 9.3: custody ledger and consumption (FR-JW-05, FR-JW-06, FR-JW-07). Consumption and
+  // own-material postings ride the NEW custody stream; the ledger and statement are read-only.
+  router.post(
+    '/api/v1/service-orders/:serviceOrderId/consumptions',
+    postServiceOrderConsumptionHandler,
+  );
+  router.post(
+    '/api/v1/service-orders/:serviceOrderId/own-material',
+    postServiceOrderOwnMaterialHandler,
+  );
+  router.get(
+    '/api/v1/service-orders/:serviceOrderId/custody-ledger',
+    getServiceOrderCustodyLedgerHandler,
+  );
+  router.get(
+    '/api/v1/service-orders/:serviceOrderId/custody-statement',
+    getServiceOrderCustodyStatementHandler,
+  );
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
   // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP

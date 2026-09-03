@@ -227,6 +227,12 @@ import {
   applyJobworkMaterialReceivedProjection,
 } from '../compliance/jobwork-receipt.js';
 import {
+  assertCustodyConsumptionShape,
+  assertCustodyOwnMaterialShape,
+  applyCustodyConsumptionProjection,
+  applyCustodyOwnMaterialProjection,
+} from '../compliance/custody-ledger.js';
+import {
   assertProductionMaterialShape,
   applyProductionMaterialProjection,
 } from '../compliance/production-material.js';
@@ -730,6 +736,11 @@ export async function persistEvent(
   // challan_date, strictly positive NUMERIC-string quantities, the derived variance fields
   // refused on input) is non-DB and runs with the other pre-transaction asserts.
   assertJobworkMaterialReceivedShape(envelope);
+  // Story 9.3: custody consumption / own-material shape validation (closed shape, strict UUIDs,
+  // strictly positive NUMERIC-string quantity, the server-derived kit-line and balance fields
+  // refused on input, custody.* names refused off the custody stream) is non-DB and runs here.
+  assertCustodyConsumptionShape(envelope);
+  assertCustodyOwnMaterialShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -1092,6 +1103,13 @@ export async function persistEvent(
     // the 9.1 transitionServiceOrder seam, so the custody row, the order flip, and the domain
     // event commit or roll back together.
     await applyJobworkMaterialReceivedProjection(envelope, client, eventId);
+    // Story 9.3: custody consumption and own-material postings run inside this same transaction:
+    // the order state, site, lot-under-order, kit-line match and custody balance are re-derived
+    // under the order advisory lock plus FOR UPDATE, the physical drain, the ledger row and the
+    // lot_trace entry commit or roll back with the domain event, and the server-derived kit line
+    // and balance are written back onto the payload before the insert below.
+    await applyCustodyConsumptionProjection(envelope, client, eventId);
+    await applyCustodyOwnMaterialProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's

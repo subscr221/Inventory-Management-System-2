@@ -240,6 +240,9 @@ const MIGRATIONS = [
   // Story 9.2: customer-material receipt custody record (tail-append). FK-shaped reference to
   // service_order above and to grn_line (Story 3.4), no declared FK.
   '../../read/projections/jobwork_material_receipt.sql',
+  // Story 9.3: per-order custody ledger (tail-append). Fed by the 9.2 receipt applier and the
+  // custody.* appliers; FK-shaped reference to service_order above, no declared FK.
+  '../../read/projections/custody_ledger_entry.sql',
 ];
 
 async function migrate(): Promise<void> {
