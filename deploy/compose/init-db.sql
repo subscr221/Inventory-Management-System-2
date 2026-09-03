@@ -12061,6 +12061,7 @@ CREATE TABLE IF NOT EXISTS service_order (
   kit_bom_id             UUID,
   status                 TEXT NOT NULL DEFAULT 'draft',
   offcut_election        TEXT,
+  has_contractual_offcut BOOLEAN NOT NULL DEFAULT false,
   site_id                UUID NOT NULL,
   business_stream        TEXT NOT NULL,
   created_by             UUID NOT NULL,
@@ -12080,6 +12081,8 @@ CREATE TABLE IF NOT EXISTS service_order (
   ),
   CONSTRAINT chk_service_order_customer_party_code CHECK (customer_party_code ~ '^[A-Z0-9][A-Z0-9-]{1,31}$')
 );
+
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS has_contractual_offcut BOOLEAN NOT NULL DEFAULT false;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_service_order_number_site ON service_order (order_number_ext, site_id);
 CREATE INDEX IF NOT EXISTS idx_service_order_status ON service_order (status);
@@ -12316,5 +12319,61 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON custody_ledger_entry TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS job_work_output (
+  output_id            UUID PRIMARY KEY,
+  service_order_id     UUID NOT NULL,
+  lot_id               TEXT NOT NULL,
+  lot_number           TEXT NOT NULL,
+  sku                  TEXT NOT NULL,
+  quantity             NUMERIC(18,3) NOT NULL,
+  dispatched_quantity  NUMERIC(18,3) NOT NULL DEFAULT 0,
+  uom                  TEXT NOT NULL,
+  site_id              UUID NOT NULL,
+  recorded_by          UUID NOT NULL,
+  source_event_id      UUID NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_job_work_output_quantity_positive CHECK (quantity > 0),
+  CONSTRAINT chk_job_work_output_dispatched_bounds CHECK (
+    dispatched_quantity >= 0 AND dispatched_quantity <= quantity
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_output_source_event ON job_work_output (source_event_id);
+CREATE INDEX IF NOT EXISTS idx_job_work_output_order ON job_work_output (service_order_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_output_lot ON job_work_output (lot_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_job_work_output_quantity_positive'
+      AND conrelid = 'job_work_output'::regclass
+  ) THEN
+    ALTER TABLE job_work_output
+      ADD CONSTRAINT chk_job_work_output_quantity_positive CHECK (quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_job_work_output_dispatched_bounds'
+      AND conrelid = 'job_work_output'::regclass
+  ) THEN
+    ALTER TABLE job_work_output
+      ADD CONSTRAINT chk_job_work_output_dispatched_bounds CHECK (
+        dispatched_quantity >= 0 AND dispatched_quantity <= quantity
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON job_work_output TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON job_work_output TO readonly_user;
   END IF;
 END $$;

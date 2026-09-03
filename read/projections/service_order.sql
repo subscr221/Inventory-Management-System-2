@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS service_order (
   kit_bom_id             UUID,
   status                 TEXT NOT NULL DEFAULT 'draft',
   offcut_election        TEXT,
+  has_contractual_offcut BOOLEAN NOT NULL DEFAULT false,
   site_id                UUID NOT NULL,
   business_stream        TEXT NOT NULL,
   created_by             UUID NOT NULL,
@@ -48,6 +49,10 @@ CREATE TABLE IF NOT EXISTS service_order (
   ),
   CONSTRAINT chk_service_order_customer_party_code CHECK (customer_party_code ~ '^[A-Z0-9][A-Z0-9-]{1,31}$')
 );
+
+-- Story 9.4 (FR-JW-09/10): additive column for a database that ran CREATE TABLE before this column
+-- existed. Guarded so a live re-apply is safe.
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS has_contractual_offcut BOOLEAN NOT NULL DEFAULT false;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_service_order_number_site ON service_order (order_number_ext, site_id);
 CREATE INDEX IF NOT EXISTS idx_service_order_status ON service_order (status);

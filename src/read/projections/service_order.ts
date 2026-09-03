@@ -19,6 +19,7 @@ export interface ServiceOrderRow {
   kit_bom_id: string | null;
   status: 'draft' | 'confirmed' | 'in_process' | 'closed';
   offcut_election: 'return' | 'retain_and_buy' | 'retain_free' | null;
+  has_contractual_offcut: boolean;
   site_id: string;
   business_stream: string;
   created_by: string;
@@ -115,6 +116,7 @@ export interface InsertServiceOrderInput {
   promised_delivery_date: string | null;
   price_basis: ServiceOrderPriceBasis | null;
   kit_bom_id: string | null;
+  has_contractual_offcut: boolean;
   site_id: string;
   business_stream: string;
   created_by: string;
@@ -130,8 +132,9 @@ export async function insertServiceOrder(
     `INSERT INTO service_order (
       service_order_id, order_number_ext, customer_party_code, customer_name,
       spec_reference_ext, promised_start_date, promised_delivery_date, price_basis,
-      kit_bom_id, status, site_id, business_stream, created_by, correlation_id, source_event_id
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,'draft',$10,$11,$12,$13,$14)`,
+      kit_bom_id, has_contractual_offcut, status, site_id, business_stream, created_by,
+      correlation_id, source_event_id
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'draft',$11,$12,$13,$14,$15)`,
     [
       row.service_order_id,
       row.order_number_ext,
@@ -142,6 +145,7 @@ export async function insertServiceOrder(
       row.promised_delivery_date,
       row.price_basis === null ? null : JSON.stringify(row.price_basis),
       row.kit_bom_id,
+      row.has_contractual_offcut,
       row.site_id,
       row.business_stream,
       row.created_by,
@@ -160,6 +164,7 @@ export interface UpdateServiceOrderFieldsInput {
   promised_delivery_date?: string | null;
   price_basis?: ServiceOrderPriceBasis | null;
   kit_bom_id?: string | null;
+  has_contractual_offcut?: boolean;
 }
 
 export async function updateServiceOrderFields(
@@ -198,6 +203,10 @@ export async function updateServiceOrderFields(
   if (fields.kit_bom_id !== undefined) {
     sets.push(`kit_bom_id = $${idx++}::uuid`);
     values.push(fields.kit_bom_id);
+  }
+  if (fields.has_contractual_offcut !== undefined) {
+    sets.push(`has_contractual_offcut = $${idx++}`);
+    values.push(fields.has_contractual_offcut);
   }
 
   await client.query(

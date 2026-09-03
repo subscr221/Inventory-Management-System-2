@@ -3,8 +3,10 @@ import type { EventEnvelope } from '../events/store.js';
 import type {
   CustodyConsumptionPostedPayload,
   CustodyOwnMaterialAddedPayload,
+  CustodyLossRecordedPayload,
 } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
+import { config } from '../config/index.js';
 import { getServiceOrderById } from '../read/projections/service_order.js';
 import type { ServiceOrderRow } from '../read/projections/service_order.js';
 import { getBomById, getBomLines } from '../read/projections/bom.js';
@@ -20,7 +22,8 @@ import {
 import { toIstCalendarDate } from '../lib/business-days.js';
 import { applyStockBalanceProjection } from './stock-balance.js';
 import { isPositiveQtyString, JOB_WORK_STOCK_CLASS } from './jobwork-receipt.js';
-import { qtyAdd, qtyCompare, qtyNegate } from './custody-statement.js';
+import { qtyAdd, qtyCompare, qtyNegate, qtyToScaled } from './custody-statement.js';
+import { resolveApprover } from '../api/v1/indents.js';
 
 /**
  * Story 9.3: custody ledger consumption and own-material seam (FR-JW-05, FR-JW-06, FR-JW-07).
@@ -44,6 +47,13 @@ import { qtyAdd, qtyCompare, qtyNegate } from './custody-statement.js';
 const CUSTODY_STREAM_TYPES = new Set(['custody']);
 export const CUSTODY_CONSUMPTION_POSTED = 'custody.consumption_posted';
 export const CUSTODY_OWN_MATERIAL_ADDED = 'custody.own_material_added';
+/** Story 9.4 (FR-JW-08): declared process loss, on the SAME custody stream (9.3 forward-declared it). */
+export const CUSTODY_LOSS_RECORDED = 'custody.loss_recorded';
+/** Story 9.4 (FR-JW-08): the DOA transaction type governing over-norm loss approval, the Story
+ * 6.1/6.3 release-override chain verbatim (resolveApprover, forged-approver rejection, acting-user
+ * check). Must be seeded in the DOA registry before the approval path is reachable - no code seeds
+ * DOA entries, consistent with every other resolveApprover caller. */
+export const JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE = 'jobwork.over_norm_loss';
 /** The 9.1 governed business stream code carried on every job-work lot_trace row. */
 const JOB_WORK_BUSINESS_STREAM = 'job_work';
 
@@ -96,6 +106,20 @@ const OWN_MATERIAL_FIELDS = new Set([
   'bom_line_id',
 ]);
 const OWN_MATERIAL_DERIVED_FIELDS = ['kit_bom_revision_id', 'custody_balance_after'] as const;
+
+const LOSS_FIELDS = new Set([
+  'service_order_id',
+  'loss_id',
+  'sku',
+  'quantity',
+  'uom',
+  'site_id',
+  'reason_code',
+  'posted_by',
+  'over_norm_approved',
+  'approved_by',
+]);
+const MAX_REASON_CODE_LENGTH = 200;
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
@@ -256,6 +280,71 @@ export function assertCustodyOwnMaterialShape(envelope: EventEnvelope): void {
   }
   if (p['bom_line_id'] !== undefined && p['bom_line_id'] !== null && !isUuid(p['bom_line_id'])) {
     reject('INVALID_PARAMS', 'bom_line_id must be a UUID when supplied');
+  }
+}
+
+/**
+ * Story 9.4 (FR-JW-08): declared process loss. No lot/location is drained here (decision: loss is
+ * inputs already consumed that never became output - the custody-ledger entry IS the full
+ * accounting effect), so this does NOT reuse assertCommonShape (which requires location_id).
+ * over_norm_approved / approved_by are claims, re-derived and overwritten by the applier under the
+ * DOA chain (the 6.3 over-completion precedent) - accepted here only so the shape check does not
+ * reject them outright.
+ */
+export function assertCustodyLossShape(envelope: EventEnvelope): void {
+  if (envelope.event_type !== CUSTODY_LOSS_RECORDED) return;
+  if (!CUSTODY_STREAM_TYPES.has(envelope.stream_type)) {
+    reject('INVALID_EVENT_ENVELOPE', 'custody.* events must ride the custody stream', {
+      event_type: envelope.event_type,
+      stream_type: envelope.stream_type,
+    });
+  }
+  const p = envelope.payload as Record<string, unknown>;
+  for (const key of Object.keys(p)) {
+    if (!LOSS_FIELDS.has(key)) {
+      reject('INVALID_PARAMS', `${key} is not a recognized field on this event`, { field: key });
+    }
+  }
+  for (const field of ['service_order_id', 'loss_id', 'site_id', 'posted_by']) {
+    if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
+  }
+  if (envelope.stream_id !== p['service_order_id']) {
+    reject('INVALID_EVENT_ENVELOPE', 'stream_id must equal service_order_id', {
+      stream_id: envelope.stream_id,
+      service_order_id: p['service_order_id'],
+    });
+  }
+  for (const field of ['sku', 'uom']) {
+    if (!isNonEmptyString(p[field]) || (p[field] as string).trim().length > MAX_TEXT_LENGTH) {
+      reject(
+        'INVALID_PARAMS',
+        `${field} is required and must be a non-empty string of at most ${MAX_TEXT_LENGTH} characters`,
+      );
+    }
+    p[field] = (p[field] as string).trim();
+  }
+  if (!isPositiveQtyString(p['quantity'])) {
+    reject(
+      'INVALID_PARAMS',
+      'quantity is required and must be a strictly positive NUMERIC string with at most 3 decimals',
+      { field: 'quantity', value: p['quantity'] ?? null },
+    );
+  }
+  if (
+    typeof p['reason_code'] !== 'string' ||
+    p['reason_code'].trim().length === 0 ||
+    (p['reason_code'] as string).length > MAX_REASON_CODE_LENGTH
+  ) {
+    reject(
+      'REASON_CODE_REQUIRED',
+      `reason_code is required, non-blank, and at most ${MAX_REASON_CODE_LENGTH} characters`,
+    );
+  }
+  if (p['over_norm_approved'] !== undefined && typeof p['over_norm_approved'] !== 'boolean') {
+    reject('INVALID_PARAMS', 'over_norm_approved must be a boolean when supplied');
+  }
+  if (p['approved_by'] !== undefined && p['approved_by'] !== null && !isUuid(p['approved_by'])) {
+    reject('INVALID_PARAMS', 'approved_by must be a UUID when supplied');
   }
 }
 
@@ -664,4 +753,174 @@ export async function applyCustodyOwnMaterialProjection(
   }
 
   if (kitRevisionId !== null) envelope.payload['kit_bom_revision_id'] = kitRevisionId;
+}
+
+// ---------------------------------------------------------------------------
+// Loss (AC 1, 2 - FR-JW-08)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cumulative customer material consumed on this order/sku to date: the sum of the ABSOLUTE value
+ * of every 'consumption' and 'loss' ledger delta (both strictly negative). Exact SQL SUM, never
+ * JS float (the 9.2/9.3 rule). Called under the order lock so the norm check and the insert below
+ * are one serialized step.
+ */
+async function cumulativeConsumedForLossNorm(
+  serviceOrderId: string,
+  sku: string,
+  client: PoolClient,
+): Promise<string> {
+  const result = await client.query(
+    `SELECT COALESCE(-SUM(quantity_delta), 0)::numeric(18,3)::text AS consumed
+       FROM custody_ledger_entry
+      WHERE service_order_id = $1 AND sku = $2 AND movement_category IN ('consumption', 'loss')`,
+    [serviceOrderId, sku],
+  );
+  return result.rows[0]!['consumed'] as string;
+}
+
+/**
+ * True when declared / cumulative-consumed (as a percent) STRICTLY exceeds the norm (the 9.2
+ * "exactly-at-boundary does not flag" convention). A zero cumulative-consumed basis with a
+ * positive declared loss is treated as over-norm (any loss against nothing consumed cannot be
+ * within a percentage norm). Exact scaled-integer arithmetic - never Number().
+ */
+export function lossExceedsNorm(
+  declaredQuantity: string,
+  cumulativeConsumed: string,
+  normPercent: string,
+): boolean {
+  const consumed = qtyToScaled(cumulativeConsumed);
+  const declared = qtyToScaled(declaredQuantity);
+  if (consumed <= 0n) return declared > 0n;
+  // declared/consumed*100 > norm  <=>  declared*100*1000 > consumed*norm  (norm is qtyToScaled'd
+  // at the SAME x1000 fixed-point as declared/consumed, so the extra x1000 on the left cancels
+  // the implicit x1000 baked into `norm` - see the worked derivation in the story's Dev Notes).
+  const norm = qtyToScaled(normPercent);
+  return declared * 100_000n > consumed * norm;
+}
+
+export async function applyCustodyLossProjection(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  if (envelope.event_type !== CUSTODY_LOSS_RECORDED) return;
+  if (!CUSTODY_STREAM_TYPES.has(envelope.stream_type)) return;
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as CustodyLossRecordedPayload;
+  const occurredAt = envelope.metadata.occurred_at ?? new Date().toISOString();
+
+  const order = await requireInProcessOrder(p.service_order_id, p.site_id, client);
+
+  if (!config.jobwork.lossReasonCodes.includes(p.reason_code)) {
+    reject(
+      'JOBWORK_LOSS_REASON_CODE_INVALID',
+      'The process-loss reason code is not in the configured list',
+      { reason_code: p.reason_code, allowed: config.jobwork.lossReasonCodes },
+      422,
+    );
+  }
+
+  const cumulativeConsumed = await cumulativeConsumedForLossNorm(
+    order.service_order_id,
+    p.sku,
+    client,
+  );
+  const normPercent = config.jobwork.processLossNormPercent;
+  const overNorm = lossExceedsNorm(p.quantity, cumulativeConsumed, normPercent);
+
+  const approvalClaimed = p.over_norm_approved === true;
+  let approvedBy: string | null = null;
+  if (overNorm) {
+    if (!approvalClaimed) {
+      reject(
+        'APPROVAL_REQUIRED',
+        'The declared loss exceeds the configured process-loss norm and needs supervisor approval',
+        {
+          service_order_id: order.service_order_id,
+          sku: p.sku,
+          declared_quantity: p.quantity,
+          cumulative_consumed: cumulativeConsumed,
+          norm_percent: normPercent,
+        },
+        403,
+      );
+    }
+    // The Story 6.1/6.3 release-override chain verbatim (AD-12): the override authority is the
+    // DOA registry, never a hard-coded role, and a forged approved_by cannot bypass it.
+    const approval = await resolveApprover(JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE, 0);
+    if (!approval.requiresApproval || approval.approverActorId === null) {
+      reject(
+        'APPROVAL_UNRESOLVED',
+        `No DOA entry governs ${JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE}`,
+        { transaction_type: JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE },
+        404,
+      );
+    }
+    if (p.approved_by !== approval.approverActorId) {
+      reject(
+        'APPROVAL_REQUIRED',
+        'An over-norm loss declaration requires the resolved DOA approver',
+        {
+          service_order_id: order.service_order_id,
+          resolved_approver_user_id: approval.approverActorId,
+        },
+        403,
+      );
+    }
+    if (envelope.metadata.actor.user_id !== approval.approverActorId) {
+      reject(
+        'APPROVAL_REQUIRED',
+        'An over-norm loss declaration requires the acting user to be the resolved DOA approver',
+        {
+          service_order_id: order.service_order_id,
+          acting_user_id: envelope.metadata.actor.user_id,
+          resolved_approver_user_id: approval.approverActorId,
+        },
+        403,
+      );
+    }
+    approvedBy = approval.approverActorId;
+  }
+  const overNormApproved = overNorm && approvalClaimed;
+
+  const quantityDelta = qtyNegate(p.quantity);
+  try {
+    await insertCustodyLedgerEntry(
+      {
+        entry_id: p.loss_id,
+        service_order_id: order.service_order_id,
+        customer_party_code: order.customer_party_code,
+        movement_category: 'loss',
+        ownership: 'customer',
+        sku: p.sku,
+        lot_id: null,
+        location_id: null,
+        quantity_delta: quantityDelta,
+        uom: p.uom,
+        billable: false,
+        bom_line_id: null,
+        kit_bom_revision_id: null,
+        receipt_id: null,
+        variance_qty: null,
+        variance_flagged: null,
+        site_id: order.site_id,
+        posted_by: p.posted_by,
+        occurred_at: occurredAt,
+        business_date: toIstCalendarDate(new Date(occurredAt)),
+        source_event_id: eventId,
+        source_event_type: CUSTODY_LOSS_RECORDED,
+        correlation_id: envelope.metadata.correlation_id ?? null,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    classifyDuplicate(err, p.loss_id, eventId);
+  }
+
+  // The stored event carries what THIS process derived, never what the caller asserted.
+  envelope.payload['over_norm_approved'] = overNormApproved;
+  envelope.payload['approved_by'] = approvedBy;
 }

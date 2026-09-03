@@ -58,6 +58,7 @@ const CREATE_FIELDS = new Set([
   'promised_delivery_date',
   'price_basis',
   'kit_bom_id',
+  'has_contractual_offcut',
 ]);
 const UPDATE_FIELDS = new Set([
   'service_order_id',
@@ -68,6 +69,7 @@ const UPDATE_FIELDS = new Set([
   'promised_delivery_date',
   'price_basis',
   'kit_bom_id',
+  'has_contractual_offcut',
 ]);
 
 export type ServiceOrderStatus = 'draft' | 'confirmed' | 'in_process' | 'closed';
@@ -258,6 +260,14 @@ function assertCommonFieldShapes(p: Record<string, unknown>, required: boolean):
   if (p['kit_bom_id'] !== undefined && p['kit_bom_id'] !== null && !isUuid(p['kit_bom_id'])) {
     reject('INVALID_PARAMS', 'kit_bom_id must be a UUID when supplied');
   }
+  // Story 9.4 (FR-JW-09/10): a plain boolean, no existing field distinguishes a contractual
+  // offcut arrangement from none.
+  if (
+    p['has_contractual_offcut'] !== undefined &&
+    typeof p['has_contractual_offcut'] !== 'boolean'
+  ) {
+    reject('INVALID_PARAMS', 'has_contractual_offcut must be a boolean when supplied');
+  }
 }
 
 function assertNoExtraKeys(p: Record<string, unknown>, allowed: Set<string>): void {
@@ -301,6 +311,7 @@ function assertOrderUpdatedShape(p: Record<string, unknown>): void {
     'promised_delivery_date',
     'price_basis',
     'kit_bom_id',
+    'has_contractual_offcut',
   ];
   const changed = changeable.filter((f) => p[f] !== undefined);
   if (changed.length === 0) {
@@ -431,6 +442,7 @@ async function applyOrderCreated(
         promised_delivery_date: p.promised_delivery_date ?? null,
         price_basis: p.price_basis ?? null,
         kit_bom_id: p.kit_bom_id ?? null,
+        has_contractual_offcut: p.has_contractual_offcut ?? false,
         site_id: p.site_id,
         business_stream: p.business_stream,
         created_by: envelope.metadata.actor.user_id,
@@ -485,7 +497,9 @@ async function applyOrderUpdated(envelope: EventEnvelope, client: PoolClient): P
   const effectiveStart =
     p.promised_start_date !== undefined ? p.promised_start_date : order.promised_start_date;
   const effectiveDelivery =
-    p.promised_delivery_date !== undefined ? p.promised_delivery_date : order.promised_delivery_date;
+    p.promised_delivery_date !== undefined
+      ? p.promised_delivery_date
+      : order.promised_delivery_date;
   if (
     effectiveStart != null &&
     effectiveDelivery != null &&
@@ -508,6 +522,9 @@ async function applyOrderUpdated(envelope: EventEnvelope, client: PoolClient): P
       }),
       ...(p.price_basis !== undefined && { price_basis: p.price_basis }),
       ...(p.kit_bom_id !== undefined && { kit_bom_id: p.kit_bom_id }),
+      ...(p.has_contractual_offcut !== undefined && {
+        has_contractual_offcut: p.has_contractual_offcut,
+      }),
     },
     client,
   );
@@ -549,6 +566,22 @@ async function applyOrderConfirmed(envelope: EventEnvelope, client: PoolClient):
   }
   // The link may have been recorded before the BOM row changed type; re-verify at the gate.
   await requireKitBom(order.kit_bom_id as string, client);
+
+  // Story 9.4 (FR-JW-09/10): a contractual offcut arrangement makes the ALREADY-forward-declared
+  // (BSD-6) offcut_election mandatory at confirm. Mirrors the kit-BOM/price-basis gate shape
+  // exactly - same code, same status, same 409.
+  if (
+    order.has_contractual_offcut === true &&
+    p.offcut_election === undefined &&
+    order.offcut_election === null
+  ) {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      'A service order with a contractual offcut arrangement requires an offcut election to confirm',
+      { service_order_id: p.service_order_id, has_contractual_offcut: true },
+      409,
+    );
+  }
 
   await updateServiceOrderStatus(
     p.service_order_id,

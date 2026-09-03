@@ -21,11 +21,15 @@ import {
 import {
   CUSTODY_CONSUMPTION_POSTED,
   CUSTODY_OWN_MATERIAL_ADDED,
+  CUSTODY_LOSS_RECORDED,
 } from '../../compliance/custody-ledger.js';
 import {
   buildCustodyStatement,
   renderCustodyStatementText,
 } from '../../compliance/custody-statement.js';
+import { JOBWORK_OUTPUT_RECORDED } from '../../compliance/jobwork-output.js';
+import { JOBWORK_OUTPUT_DISPATCHED } from '../../compliance/jobwork-dispatch.js';
+import { listJobWorkOutputsByOrder } from '../../read/projections/job_work_output.js';
 
 /**
  * Story 9.1 REST surface for job-work service orders (FR-JW-01, FR-JW-02, FR-B-16, FR-AC-13).
@@ -58,6 +62,16 @@ const AUDITED_REJECTIONS = new Set([
   'CROSS_ISSUE_BLOCKED',
   'SOURCE_DOCUMENT_REQUIRED',
   'LOT_NOT_FOUND',
+  // Story 9.4: every refusal the loss / output / dispatch seams can raise. LOT_ON_HOLD and
+  // JOBWORK_LOSS_REASON_CODE_INVALID are this story's NEW stable error codes; the rest are
+  // pre-registered elsewhere in the codebase (APPROVAL_REQUIRED/APPROVAL_UNRESOLVED: Story 6.1/6.3;
+  // BOM_NOT_FOUND: Story 9.1; REASON_CODE_REQUIRED: Story 6.3; QC_TASK_MISSING: Story 6.3).
+  'APPROVAL_REQUIRED',
+  'APPROVAL_UNRESOLVED',
+  'LOT_ON_HOLD',
+  'JOBWORK_LOSS_REASON_CODE_INVALID',
+  'REASON_CODE_REQUIRED',
+  'QC_TASK_MISSING',
 ]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -160,6 +174,7 @@ const ORDER_FIELDS = [
   'promised_delivery_date',
   'price_basis',
   'kit_bom_id',
+  'has_contractual_offcut',
 ] as const;
 
 // BSD-7 / FR-AC-01: order events carry the governed job-work business stream code.
@@ -535,7 +550,7 @@ async function postCustodyEvent(
   params: Record<string, string> | undefined,
   spec: {
     eventType: string;
-    idField: 'consumption_id' | 'own_material_id';
+    idField: 'consumption_id' | 'own_material_id' | 'loss_id';
     extraFields: readonly string[];
     derivedFields: readonly string[];
   },
@@ -646,6 +661,185 @@ const postServiceOrderOwnMaterialBase: RouteHandler = (req, res, params) =>
     derivedFields: ['kit_bom_revision_id', 'custody_balance_after'],
   });
 
+// ---------------------------------------------------------------------------
+// Story 9.4: process loss, job-work output, and QC-gated dispatch (FR-JW-08, FR-JW-11)
+// ---------------------------------------------------------------------------
+
+const postServiceOrderLossBase: RouteHandler = (req, res, params) =>
+  postCustodyEvent(req, res, params, {
+    eventType: CUSTODY_LOSS_RECORDED,
+    idField: 'loss_id',
+    extraFields: ['reason_code', 'over_norm_approved', 'approved_by'],
+    derivedFields: [],
+  });
+
+const OUTPUT_FIELDS = ['lot_id', 'quantity', 'uom'] as const;
+
+const postServiceOrderOutputBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    rejectUnacceptedFields(body, ['service_order_id', 'recorded_by', 'lot_number']);
+    if (body['service_order_id'] !== undefined && body['service_order_id'] !== serviceOrderId) {
+      throw new AppError(400, 'INVALID_PARAMS', 'service_order_id must equal the path id', {
+        service_order_id: body['service_order_id'],
+        path_service_order_id: serviceOrderId,
+      });
+    }
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (body['output_id'] !== undefined && !isUuid(body['output_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'output_id must be a UUID when supplied');
+    }
+    if (body['site_id'] !== undefined && !isUuid(body['site_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'site_id must be a UUID when supplied');
+    }
+
+    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const existing = await getServiceOrderById(serviceOrderId);
+    if (!existing && !isRetry) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+    }
+    if (existing) assertSiteWriteAccess(req, existing.site_id);
+
+    const outputId = (body['output_id'] as string | undefined) ?? randomUUID();
+    const payload: Record<string, unknown> = {
+      service_order_id: serviceOrderId,
+      output_id: outputId,
+      site_id: body['site_id'] ?? existing?.site_id ?? null,
+      recorded_by: actor.userId,
+    };
+    for (const field of OUTPUT_FIELDS) {
+      if (body[field] !== undefined) payload[field] = body[field];
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: serviceOrderId,
+        event_type: JOBWORK_OUTPUT_RECORDED,
+        payload,
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedId = replayIdOrReject(persisted, JOBWORK_OUTPUT_RECORDED, 'output_id');
+    const outputs = await listJobWorkOutputsByOrder(serviceOrderId);
+    const output = outputs.find((row) => row.output_id === persistedId) ?? null;
+    sendJson(res, persistedId === outputId ? 201 : 200, {
+      event_id: persisted.event_id,
+      output_id: persistedId,
+      output,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditFailSafe(req, actor, err, {
+        service_order_id: params?.['serviceOrderId'] ?? null,
+        event_type: JOBWORK_OUTPUT_RECORDED,
+      });
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const listServiceOrderOutputsBase: RouteHandler = async (req, res, params) => {
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    const order = await readableOrderOr404(req, res, serviceOrderId);
+    if (!order) return;
+    const outputs = await listJobWorkOutputsByOrder(serviceOrderId);
+    sendJson(res, 200, { service_order_id: serviceOrderId, outputs });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+const DISPATCH_FIELDS = ['lot_id', 'dispatched_quantity', 'uom'] as const;
+
+const postServiceOrderDispatchBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    rejectUnacceptedFields(body, ['service_order_id', 'dispatched_by']);
+    if (body['service_order_id'] !== undefined && body['service_order_id'] !== serviceOrderId) {
+      throw new AppError(400, 'INVALID_PARAMS', 'service_order_id must equal the path id', {
+        service_order_id: body['service_order_id'],
+        path_service_order_id: serviceOrderId,
+      });
+    }
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (body['dispatch_id'] !== undefined && !isUuid(body['dispatch_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'dispatch_id must be a UUID when supplied');
+    }
+    if (body['site_id'] !== undefined && !isUuid(body['site_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'site_id must be a UUID when supplied');
+    }
+
+    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const existing = await getServiceOrderById(serviceOrderId);
+    if (!existing && !isRetry) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+    }
+    if (existing) assertSiteWriteAccess(req, existing.site_id);
+
+    const dispatchId = (body['dispatch_id'] as string | undefined) ?? randomUUID();
+    const payload: Record<string, unknown> = {
+      service_order_id: serviceOrderId,
+      dispatch_id: dispatchId,
+      site_id: body['site_id'] ?? existing?.site_id ?? null,
+      dispatched_by: actor.userId,
+    };
+    for (const field of DISPATCH_FIELDS) {
+      if (body[field] !== undefined) payload[field] = body[field];
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: serviceOrderId,
+        event_type: JOBWORK_OUTPUT_DISPATCHED,
+        payload,
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedId = replayIdOrReject(persisted, JOBWORK_OUTPUT_DISPATCHED, 'dispatch_id');
+    sendJson(res, persistedId === dispatchId ? 201 : 200, {
+      event_id: persisted.event_id,
+      dispatch_id: persistedId,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditFailSafe(req, actor, err, {
+        service_order_id: params?.['serviceOrderId'] ?? null,
+        event_type: JOBWORK_OUTPUT_DISPATCHED,
+      });
+    }
+    sendAppError(req, res, err);
+  }
+};
+
 /** Raw ledger rows in statement order (JSON only). */
 const getServiceOrderCustodyLedgerBase: RouteHandler = async (req, res, params) => {
   try {
@@ -745,3 +939,23 @@ export const getServiceOrderCustodyStatementHandler = requireRole({
   module: 'jobwork',
   functionScope: 'read',
 })(getServiceOrderCustodyStatementBase);
+
+export const postServiceOrderLossHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderLossBase);
+
+export const postServiceOrderOutputHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderOutputBase);
+
+export const listServiceOrderOutputsHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'read',
+})(listServiceOrderOutputsBase);
+
+export const postServiceOrderDispatchHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderDispatchBase);

@@ -243,6 +243,9 @@ const MIGRATIONS = [
   // Story 9.3: per-order custody ledger (tail-append). Fed by the 9.2 receipt applier and the
   // custody.* appliers; FK-shaped reference to service_order above, no declared FK.
   '../../read/projections/custody_ledger_entry.sql',
+  // Story 9.4: job-work output tracking (tail-append). FK-shaped reference to service_order
+  // above, no declared FK - the Epic 9 house convention.
+  '../../read/projections/job_work_output.sql',
 ];
 
 async function migrate(): Promise<void> {

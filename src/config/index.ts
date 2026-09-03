@@ -671,6 +671,30 @@ export const config = {
       }
       return value;
     })(),
+    // Story 9.4 (FR-JW-08): the process-loss norm, in percent of cumulative customer material
+    // consumed on the order/sku to date. Declared loss STRICTLY exceeding this percent requires
+    // supervisor DOA approval (the 9.2 receipt-tolerance "exactly-at-boundary does not flag"
+    // convention, applied here as "exactly-at-norm does not require approval"). Default 5 is a
+    // placeholder pilot figure, not a researched contractual norm - disclosed for PO/compliance
+    // confirmation before go-live, same disclosure pattern as the 9.2 receipt-tolerance default.
+    // Only an ABSENT variable takes the default; present-but-blank, non-numeric, negative, or
+    // above 100 refuses to boot.
+    processLossNormPercent: (() => {
+      const raw = process.env['PROCESS_LOSS_NORM_PERCENT'];
+      const value = raw === undefined ? '5' : raw.trim();
+      if (!/^\d{1,3}(\.\d{1,4})?$/.test(value) || Number(value) > 100) {
+        throw new Error(
+          `Invalid PROCESS_LOSS_NORM_PERCENT "${raw}": must be a decimal percentage from 0 to 100 inclusive, with at most four decimal places.`,
+        );
+      }
+      return value;
+    })(),
+    // Story 9.4 (FR-JW-08): the reason codes a process-loss declaration may cite (the 6.3
+    // scrapReasonCodes precedent, same parseReasonCodeList fail-closed contract).
+    lossReasonCodes: parseReasonCodeList(
+      'JOBWORK_LOSS_REASON_CODES',
+      'TRIM_LOSS,PROCESS_YIELD,MATERIAL_DEFECT,OPERATOR_ERROR,MACHINE_FAULT',
+    ),
   },
   qc: {
     // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -

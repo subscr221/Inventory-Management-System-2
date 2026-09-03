@@ -545,6 +545,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/service-orders/:serviceOrderId/own-material',
       'GET /api/v1/service-orders/:serviceOrderId/custody-ledger',
       'GET /api/v1/service-orders/:serviceOrderId/custody-statement',
+      // Story 9.4: process loss, job-work output recording and QC-gated dispatch (FR-JW-08, 11).
+      'POST /api/v1/service-orders/:serviceOrderId/loss',
+      'POST /api/v1/service-orders/:serviceOrderId/outputs',
+      'GET /api/v1/service-orders/:serviceOrderId/outputs',
+      'POST /api/v1/service-orders/:serviceOrderId/dispatches',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

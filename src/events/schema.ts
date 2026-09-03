@@ -4430,6 +4430,8 @@ export interface JobworkOrderCreatedPayload {
   promised_delivery_date?: string;
   price_basis?: ServiceOrderPriceBasisPayload;
   kit_bom_id?: string;
+  /** Story 9.4 (FR-JW-09/10): when true, confirmation requires an offcut_election. */
+  has_contractual_offcut?: boolean;
   site_id: string;
   business_stream: string;
 }
@@ -4449,6 +4451,7 @@ export interface JobworkOrderUpdatedPayload {
   promised_delivery_date?: string | null;
   price_basis?: ServiceOrderPriceBasisPayload | null;
   kit_bom_id?: string | null;
+  has_contractual_offcut?: boolean;
 }
 
 export interface JobworkOrderUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -4550,6 +4553,71 @@ export interface CustodyOwnMaterialAddedPayload {
 export interface CustodyOwnMaterialAddedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'custody.own_material_added';
   payload: CustodyOwnMaterialAddedPayload;
+}
+
+/**
+ * Story 9.4 (FR-JW-11): the job-work output (the kit BOM's PARENT item) recorded against an
+ * in_process order, on the existing 'jobwork' stream (stream_id = service_order_id). output_id
+ * and lot_id are minted client-side (the 9.1 BSD-10 idiom); the lot_number is server-minted
+ * (mirrors Story 6.3 production completions) and refused on input.
+ */
+export interface JobworkOutputRecordedPayload {
+  service_order_id: string;
+  output_id: string;
+  lot_id: string;
+  quantity: string;
+  uom: string;
+  site_id: string;
+  recorded_by: string;
+  lot_number?: string;
+}
+
+export interface JobworkOutputRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.output_recorded';
+  payload: JobworkOutputRecordedPayload;
+}
+
+/**
+ * Story 9.4 (FR-JW-11): a partial or full dispatch of QC-released job-work output, on the
+ * existing 'jobwork' stream. dispatch_id minted client-side.
+ */
+export interface JobworkOutputDispatchedPayload {
+  service_order_id: string;
+  dispatch_id: string;
+  lot_id: string;
+  dispatched_quantity: string;
+  uom: string;
+  site_id: string;
+  dispatched_by: string;
+}
+
+export interface JobworkOutputDispatchedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.output_dispatched';
+  payload: JobworkOutputDispatchedPayload;
+}
+
+/**
+ * Story 9.4 (FR-JW-08): a declared process-loss on an in_process order, on the EXISTING 'custody'
+ * stream (Story 9.3 already forward-declared the `loss` movement category). loss_id minted
+ * client-side. over_norm_approved / approved_by are re-derived by the seam under the DOA chain,
+ * never trusted from input (the 6.3 over-completion precedent).
+ */
+export interface CustodyLossRecordedPayload {
+  service_order_id: string;
+  loss_id: string;
+  sku: string;
+  quantity: string;
+  uom: string;
+  site_id: string;
+  reason_code: string;
+  posted_by: string;
+  over_norm_approved?: boolean;
+  approved_by?: string | null;
+}
+
+export interface CustodyLossRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'custody.loss_recorded';
+  payload: CustodyLossRecordedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -5473,6 +5541,21 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'custody.own_material_added': {
+    streamType: 'custody',
+    requiresBusinessStream: false,
+  },
+  // Story 9.4: job-work output recording and dispatch stay on the 'jobwork' stream (the order
+  // already carries the business_stream tag); loss stays on the 'custody' stream (Story 9.3
+  // forward-declared the 'loss' movement category for this story).
+  'jobwork.output_recorded': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  'jobwork.output_dispatched': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  'custody.loss_recorded': {
     streamType: 'custody',
     requiresBusinessStream: false,
   },

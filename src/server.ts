@@ -366,6 +366,10 @@ import {
   postServiceOrderOwnMaterialHandler,
   getServiceOrderCustodyLedgerHandler,
   getServiceOrderCustodyStatementHandler,
+  postServiceOrderLossHandler,
+  postServiceOrderOutputHandler,
+  listServiceOrderOutputsHandler,
+  postServiceOrderDispatchHandler,
 } from './api/v1/service-orders.js';
 import {
   createProductionOrderHandler,
@@ -1061,6 +1065,12 @@ export function createAppRouter(): Router {
     '/api/v1/service-orders/:serviceOrderId/custody-statement',
     getServiceOrderCustodyStatementHandler,
   );
+  // Story 9.4: process loss (FR-JW-08), job-work output recording and QC-gated dispatch
+  // (FR-JW-11). Loss rides the custody stream; output/dispatch ride the jobwork stream.
+  router.post('/api/v1/service-orders/:serviceOrderId/loss', postServiceOrderLossHandler);
+  router.post('/api/v1/service-orders/:serviceOrderId/outputs', postServiceOrderOutputHandler);
+  router.get('/api/v1/service-orders/:serviceOrderId/outputs', listServiceOrderOutputsHandler);
+  router.post('/api/v1/service-orders/:serviceOrderId/dispatches', postServiceOrderDispatchHandler);
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
   // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP

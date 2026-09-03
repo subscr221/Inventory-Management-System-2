@@ -1738,6 +1738,23 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 9.4: job-work output tracking (open-to-dispatch quantity per lot).
+  {
+    canonical: 'read/projections/job_work_output.sql',
+    table: 'job_work_output',
+    constraints: ['chk_job_work_output_quantity_positive', 'chk_job_work_output_dispatched_bounds'],
+    indexes: [
+      'uq_job_work_output_source_event',
+      'idx_job_work_output_order',
+      'uq_job_work_output_lot',
+    ],
+    indexBodies: [
+      'ON job_work_output (source_event_id)',
+      'ON job_work_output (service_order_id)',
+      'ON job_work_output (lot_id)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
