@@ -367,7 +367,7 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
       {
         transaction_type: 'stock.counted',
         cost_centre_required: true,
-        effective_from: '2099-01-01',
+        effective_from: '2020-01-01',
       },
       complianceHeaders,
     );
@@ -380,7 +380,7 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
       { business_stream: 'production' },
       'stock.counted',
     );
-    beforeRule.metadata.occurred_at = '2098-12-31T23:30:00+05:30';
+    beforeRule.metadata.occurred_at = '2019-12-31T23:30:00+05:30';
     const beforeRes = await makeRequest(
       TEST_PORT,
       'POST',
@@ -397,7 +397,7 @@ describe('Story 1.5 Business-Stream Tagging Enforcement Integration Tests', () =
       { business_stream: 'production' },
       'stock.counted',
     );
-    afterRule.metadata.occurred_at = '2099-01-01T00:00:00+05:30';
+    afterRule.metadata.occurred_at = '2020-01-01T00:00:00+05:30';
     const afterRes = await makeRequest(
       TEST_PORT,
       'POST',

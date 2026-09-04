@@ -22,6 +22,7 @@ import {
 } from '../../read/projections/production_order.js';
 import { evaluateReleaseGate, type ReleaseGateResult } from '../../production/release-gate.js';
 import { resolveApprover } from './indents.js';
+import { isActiveRoleHolderForEntry } from '../../read/projections/doa_registry.js';
 // Story 6.4: the genealogy service and the closure-written variance report (FR-MO-11, FR-B-08).
 import { getLotGenealogy } from '../../production/lot-genealogy.js';
 import { getCompletionByLotId } from '../../read/projections/production_completion.js';
@@ -651,13 +652,16 @@ const releaseProductionOrderBase: RouteHandler = async (req, res, params) => {
       const approval = await resolveApprover('production_order.release_override', 0);
       if (!approval.requiresApproval || approval.approverActorId === null) {
         throw new AppError(
-          404,
+          409,
           'APPROVAL_UNRESOLVED',
           'No DOA entry governs production_order.release_override',
           { transaction_type: 'production_order.release_override' },
         );
       }
-      if (approval.approverActorId !== actor.userId) {
+      if (
+        approval.approverActorId !== actor.userId &&
+        !(await isActiveRoleHolderForEntry(approval.doaEntryId, actor.userId))
+      ) {
         // AC7: the rejected attempt never reaches persistEvent, so its audit write cannot cover it.
         // Write the explicit edit-log row on a dedicated pool client (the gate.ts precedent) before
         // throwing.
@@ -682,7 +686,7 @@ const releaseProductionOrderBase: RouteHandler = async (req, res, params) => {
           { production_order_id: orderId, resolved_approver_user_id: approval.approverActorId },
         );
       }
-      approverActorId = approval.approverActorId;
+      approverActorId = actor.userId;
     }
 
     // The handler pre-runs the gate so the release payload can declare the derived

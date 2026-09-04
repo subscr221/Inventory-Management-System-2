@@ -370,6 +370,11 @@ import {
   postServiceOrderOutputHandler,
   listServiceOrderOutputsHandler,
   postServiceOrderDispatchHandler,
+  postServiceOrderReturnHandler,
+  postServiceOrderClosureHandler,
+  patchReturnClockClassificationHandler,
+  getJobworkItc04ReportHandler,
+  getJobworkAgingReportHandler,
 } from './api/v1/service-orders.js';
 import {
   createProductionOrderHandler,
@@ -467,6 +472,7 @@ import { runEscalationCycle } from './notify/escalate.js';
 import { runExpiryCycle } from './notify/expire.js';
 import { runRetentionExpiryCycle } from './notify/retention-expiry.js';
 import { runBisLicenceExpiryCycle } from './compliance/bis-licence-expiry.js';
+import { runJobworkClockSweepCycle } from './notify/jobwork-clock-sweep.js';
 
 export function createAppRouter(): Router {
   const router = new Router();
@@ -1036,6 +1042,17 @@ export function createAppRouter(): Router {
   router.get('/api/v1/compliance/label-masters/:labelId', getLabelMasterHandler);
   router.post('/api/v1/compliance/label-masters/:labelId/approve', approveLabelMasterHandler);
 
+  // Story 9.5: ITC-04 and job-work aging reports (FR-AC-11, FR-JW-14). ROUTE ORDER MATTERS: the
+  // static '/jobwork/reports/...' segments are registered BEFORE every parameterised
+  // '/service-orders/:serviceOrderId/...' route (the quality.ts dashboard-route discipline), so no
+  // parameter segment can ever swallow them. Both read ONLY the jobwork_return_clock projection
+  // and its joins (AD-14).
+  router.patch(
+    '/api/v1/jobwork/clocks/:clockId/classification',
+    patchReturnClockClassificationHandler,
+  );
+  router.get('/api/v1/jobwork/reports/itc-04', getJobworkItc04ReportHandler);
+  router.get('/api/v1/jobwork/reports/aging', getJobworkAgingReportHandler);
   // Story 9.1: job-work service orders (FR-JW-01, FR-JW-02, FR-B-16). Create/update/confirm only
   // (BSD-2): in_process is fired by Story 9.2's first customer-material receipt; closed is
   // reachable only through the Story 9.5 closure gate.
@@ -1071,6 +1088,10 @@ export function createAppRouter(): Router {
   router.post('/api/v1/service-orders/:serviceOrderId/outputs', postServiceOrderOutputHandler);
   router.get('/api/v1/service-orders/:serviceOrderId/outputs', listServiceOrderOutputsHandler);
   router.post('/api/v1/service-orders/:serviceOrderId/dispatches', postServiceOrderDispatchHandler);
+  // Story 9.5: the return of unconsumed customer material (custody stream, FR-AC-11) and the
+  // AD-6 closure gate (jobwork stream, FR-JW-15) - the only way an order reaches 'closed'.
+  router.post('/api/v1/service-orders/:serviceOrderId/returns', postServiceOrderReturnHandler);
+  router.post('/api/v1/service-orders/:serviceOrderId/closure', postServiceOrderClosureHandler);
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
   // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP
@@ -1219,11 +1240,11 @@ export interface BackgroundCycle {
 }
 
 /**
- * THE registry of in-process background cycles. This exists as a value rather than as five inline
+ * THE registry of in-process background cycles. This exists as a value rather than as six inline
  * setInterval calls so the schedule itself is assertable: before this seam, deleting a
  * registration from startServer left the entire test suite green while the cycle silently never
- * ran in production - and two of these five (retention expiry, BIS licence expiry) drive statutory
- * obligations. test/unit/background-cycles.test.ts pins this list.
+ * ran in production - and three of these six (retention expiry, BIS licence expiry, the job-work
+ * return-clock sweep) drive statutory obligations. test/unit/background-cycles.test.ts pins this list.
  *
  * Every cycle is wrapped in `guarded` at scheduling time, so a run slower than its own interval
  * drops the overlapping tick rather than double-processing.
@@ -1254,6 +1275,13 @@ export function backgroundCycles(): BackgroundCycle[] {
       name: 'bis licence expiry',
       intervalMs: config.quality.bisLicenceExpiryIntervalMs,
       cycle: () => runBisLicenceExpiryCycle(),
+    },
+    // Story 9.5 (AC 3-5): the CGST Section 143 return-clock sweep - 90/30-day breach-window alerts
+    // and the deemed-supply flip on expiry. Statutory, like the two above it.
+    {
+      name: 'jobwork clock breach',
+      intervalMs: config.jobwork.clockSweepIntervalMs,
+      cycle: () => runJobworkClockSweepCycle(),
     },
   ];
 }

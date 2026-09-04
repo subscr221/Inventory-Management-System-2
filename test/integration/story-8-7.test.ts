@@ -1447,7 +1447,7 @@ describe('Story 8.7 Compliance Master Data - BIS Licence Register and Label Mast
         { idempotency_key: randomUUID() },
         complianceAdminHeaders,
       );
-      assert.strictEqual(res.status, 404, JSON.stringify(res.body));
+      assert.strictEqual(res.status, 409, JSON.stringify(res.body));
       assert.strictEqual(res.body['error_code'], 'APPROVAL_UNRESOLVED');
     } finally {
       for (const row of removed.rows) {

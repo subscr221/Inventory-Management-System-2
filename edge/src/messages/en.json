@@ -35,6 +35,8 @@
   "errors.LOT_EXPIRED": "The selected lot has expired and cannot be issued without an override.",
   "errors.LOT_ON_HOLD": "The selected lot is on quality hold and cannot be issued.",
   "errors.JOBWORK_LOSS_REASON_CODE_INVALID": "That process-loss reason code is not one of the codes configured for job work.",
+  "errors.NOT_FOUND": "The requested record was not found.",
+  "errors.CUSTODY_NOT_ZERO": "This job-work order still holds customer material on its custody ledger and cannot be closed until the balance is reconciled to zero.",
   "errors.DUPLICATE_LOT": "This lot already exists in the system.",
   "errors.DUPLICATE_SERIAL": "This serial number already exists in the system for this item.",
   "errors.SERIAL_REQUIRED": "This item requires serial numbers to be specified.",

@@ -136,8 +136,9 @@ function addMonths(isoDate: string, months: number): string {
  */
 const ANCHOR = '2026-06-01';
 // A scan date strictly AFTER ANCHOR + 12 months (2027-06-01), so an examination recorded at ANCHOR
-// with the default 12-month interval is genuinely overdue at scan time.
-const OVERDUE_SCAN_DATE = '2027-06-15';
+// with the default 12-month interval is genuinely overdue at scan time. Derived from today (not a
+// fixed literal) so the suite cannot go stale once the wall clock passes the anchor's window.
+const OVERDUE_SCAN_DATE = addDays(new Date().toISOString().slice(0, 10), 300);
 
 describe('Story 7.6 Statutory Examinations, Cost Accumulation, and Machine Status Broadcast', () => {
   let server: Server;
@@ -1206,7 +1207,7 @@ describe('Story 7.6 Statutory Examinations, Cost Accumulation, and Machine Statu
     );
   });
 
-  it('AC5: return to service without a DOA entry is rejected 404 APPROVAL_UNRESOLVED', async () => {
+  it('AC5: return to service without a DOA entry is rejected 409 APPROVAL_UNRESOLVED', async () => {
     // ORDER-COUPLED, and asserted rather than left to a comment: this test is only meaningful while
     // no maintenance.return_to_service DOA entry exists, and the next test creates one permanently.
     // Without this precondition check, running the suite under a name filter or after a reorder
@@ -1225,7 +1226,7 @@ describe('Story 7.6 Statutory Examinations, Cost Accumulation, and Machine Statu
     assert.strictEqual((await setStatus(assetId, 'idle')).status, 200);
     assert.strictEqual((await setStatus(assetId, 'breakdown')).status, 200);
     const res = await setStatus(assetId, 'running', {}, supervisorHeaders);
-    assert.strictEqual(res.status, 404, JSON.stringify(res.body));
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'APPROVAL_UNRESOLVED');
     // AC5: the asset remains out of service.
     assert.strictEqual(

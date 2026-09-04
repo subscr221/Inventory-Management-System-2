@@ -134,6 +134,7 @@ export async function assembleRecallTrace(
       source: 'custody.consumption_posted',
     });
   }
+  whereUsed.sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
 
   // packing_record.lot_id holds the lot_master.lot_id UUID (the dispatch seam joins on it).
   const shippedResult = await runner(client).query(

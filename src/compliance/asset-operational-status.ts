@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { resolveApprover } from '../api/v1/indents.js';
+import { isActiveRoleHolderForEntry } from '../read/projections/doa_registry.js';
 import { lockAssetById } from '../read/projections/asset.js';
 import {
   getAssetOperationalStatus,
@@ -258,7 +259,7 @@ export async function applyAssetOperationalStatusProjection(
         'APPROVAL_UNRESOLVED',
         'No DOA entry governs maintenance.return_to_service',
         { transaction_type: RETURN_TO_SERVICE_DOA_TYPE },
-        404,
+        409,
       );
     }
     // No sign-off at all is the AC5 case: 403 APPROVAL_REQUIRED, the same code the handler raises.
@@ -275,7 +276,10 @@ export async function applyAssetOperationalStatusProjection(
         403,
       );
     }
-    if (declaredSignOffBy !== approval.approverActorId) {
+    if (
+      declaredSignOffBy !== approval.approverActorId &&
+      !(await isActiveRoleHolderForEntry(approval.doaEntryId, declaredSignOffBy, client))
+    ) {
       reject(
         'COST_DERIVATION_MISMATCH',
         'Declared sign_off_by does not match the resolved return-to-service approver',

@@ -225,6 +225,19 @@ export function renderCustodyStatementText(statement: CustodyStatement): string 
         }  received_by ${line.posted_by}`,
       );
     }
+    // Story 9.5 code review (chunk 2): a return names the delivery challan it left under. Rule 45
+    // is the reason the number is mandatory on the event; a statement that omits it cannot evidence
+    // the movement it reports.
+    if (line.movement_category === 'return' && line.reference_ext) {
+      out.push(`           return challan ${line.reference_ext}  returned_by ${line.posted_by}`);
+    }
+    // Story 9.5 (FR-JW-13, AC 7): a physical-verification variance reconciled onto the ledger is
+    // attributed to the verifying user on the statement, the way a receipt names its receiver.
+    if (line.movement_category === 'count_adjustment') {
+      out.push(
+        `           physical verification variance ${line.variance_qty ?? line.quantity_delta}  verified_by ${line.posted_by}`,
+      );
+    }
   }
   out.push(rule());
   out.push('CLOSING CUSTOMER-OWNED BALANCES');

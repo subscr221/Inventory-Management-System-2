@@ -514,9 +514,9 @@ describe('Story 6.1 Production Order Creation and Release Gate', () => {
   // AC6 / AC7: the DOA-resolved override
   // -------------------------------------------------------------------------
 
-  it('AC6/AC7: an override without a DOA entry is rejected 404 APPROVAL_UNRESOLVED, and this test seeds the entry for the suite', async () => {
+  it('AC6/AC7: an override without a DOA entry is rejected 409 APPROVAL_UNRESOLVED, and this test seeds the entry for the suite', async () => {
     // ORDER-COUPLED precondition: this test MUST run first (it is declared first). No release
-    // override entry may exist yet; the assert keeps a future reorder from turning a real 404 into
+    // override entry may exist yet; the assert keeps a future reorder from turning a real 409 into
     // a 403 that reads as a puzzle.
     const doaRows = await getAdminPool().query(
       `SELECT count(*)::int AS n FROM doa_registry_entries
@@ -534,7 +534,7 @@ describe('Story 6.1 Production Order Creation and Release Gate', () => {
     const order = await createOrder({ output_item_id: itemOut, bom_id: bom.bomId });
     const orderId = order.body['production_order_id'] as string;
     const res = await releaseOrder(orderId, { override: { reason: 'Expedite' } });
-    assert.strictEqual(res.status, 404, JSON.stringify(res.body));
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'APPROVAL_UNRESOLVED');
     await assertOrderStatus(orderId, 'planned');
 

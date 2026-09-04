@@ -14,7 +14,7 @@ import {
   OWNER_PARTY_CODE_REGEX,
 } from './ownership.js';
 import { assertJobworkReceiptOwnership } from './jobwork-receipt.js';
-import { isCustodyConsumptionHandoff } from './custody-ledger.js';
+import { isCustodyConsumptionHandoff, isCustodyReturnHandoff } from './custody-ledger.js';
 
 /**
  * Central stock-balance seam (Story 2.2), split in two because the two halves run at different
@@ -347,10 +347,17 @@ export async function applyStockBalanceProjection(
   // the order, the lot-under-order, the kit line and the custody balance under the order lock. A
   // JSON body (POST /api/v1/events, edge upload) can never carry a Symbol key, so the bar stays
   // TOTAL for every other caller - no classifier, no payload field trusted.
+  //
+  // Story 9.5 (FR-AC-11): the SECOND and only other door, CUSTODY_RETURN - unconsumed customer
+  // material going back to the principal under a return challan, stamped by
+  // applyCustodyReturnProjection on the identical mechanism. Still two Symbols, still no classifier.
   if (
     stockClass === JOB_WORK_STOCK_CLASS &&
     (kind === 'allocation' || kind === 'issue') &&
-    !(kind === 'issue' && isCustodyConsumptionHandoff(envelope))
+    !(
+      kind === 'issue' &&
+      (isCustodyConsumptionHandoff(envelope) || isCustodyReturnHandoff(envelope))
+    )
   ) {
     throw new AppError(
       400,

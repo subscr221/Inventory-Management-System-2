@@ -81,6 +81,8 @@ export function assertGateEnteredShape(envelope: EventEnvelope): void {
       'INVALID_PARAMS',
       'entered_at is required and must be an ISO timestamp',
     );
+  if (Date.parse(p['entered_at']) > Date.now() + 5 * 60_000)
+    throw new AppError(400, 'INVALID_PARAMS', 'entered_at is in the future');
   if (p['driver_name'] !== undefined && p['driver_name'] !== null)
     p['driver_name'] = trimmed(p['driver_name']);
   if (p['challan_number_ext'] !== undefined && p['challan_number_ext'] !== null)

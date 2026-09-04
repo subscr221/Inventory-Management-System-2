@@ -8,7 +8,7 @@ import {
   getAuthorizedAssignment,
   getTraceId,
 } from '../../middleware/context.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { requireRole, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
 import { persistEvent } from '../../events/store.js';
 import type { PersistedEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
@@ -102,7 +102,11 @@ import {
 } from '../../compliance/asset-operational-status.js';
 import { resolveApprover } from './indents.js';
 import { getLocationById } from '../../read/projections/location_register.js';
-import { findFirstActiveDoaEntry, findRoleHolder } from '../../read/projections/doa_registry.js';
+import {
+  findFirstActiveDoaEntry,
+  findRoleHolder,
+  isActiveRoleHolderForEntry,
+} from '../../read/projections/doa_registry.js';
 import {
   getInstrumentRecordById,
   listInstrumentRecords,
@@ -3642,13 +3646,16 @@ const setAssetStatusBase: RouteHandler = async (req, res, params) => {
       const approval = await resolveApprover(RETURN_TO_SERVICE_DOA_TYPE, 0);
       if (!approval.requiresApproval || approval.approverActorId === null) {
         throw new AppError(
-          404,
+          409,
           'APPROVAL_UNRESOLVED',
           'No DOA entry governs maintenance.return_to_service',
           { transaction_type: RETURN_TO_SERVICE_DOA_TYPE },
         );
       }
-      if (approval.approverActorId !== actor.userId) {
+      if (
+        approval.approverActorId !== actor.userId &&
+        !(await isActiveRoleHolderForEntry(approval.doaEntryId, actor.userId))
+      ) {
         throw new AppError(
           403,
           'APPROVAL_REQUIRED',
@@ -3659,7 +3666,7 @@ const setAssetStatusBase: RouteHandler = async (req, res, params) => {
           },
         );
       }
-      signOffBy = approval.approverActorId;
+      signOffBy = actor.userId;
       signOffAt = now;
     }
 
@@ -4007,6 +4014,11 @@ function coverageStatusFilter(
   res: Parameters<RouteHandler>[1],
   url: URL,
 ): { ok: true; status: string | undefined; businessDate: string | undefined } | { ok: false } {
+  const businessDateRaw = url.searchParams.get('business_date');
+  if (businessDateRaw !== null && !isValidCalendarDate(businessDateRaw)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_date must be YYYY-MM-DD');
+    return { ok: false };
+  }
   const status = url.searchParams.get('status');
   if (status === null) return { ok: true, status: undefined, businessDate: undefined };
   if (!['active', 'expired', 'future'].includes(status)) {
@@ -4017,11 +4029,6 @@ function coverageStatusFilter(
       'INVALID_PARAMS',
       'status must be one of: active, expired, future',
     );
-    return { ok: false };
-  }
-  const businessDateRaw = url.searchParams.get('business_date');
-  if (businessDateRaw !== null && !isValidCalendarDate(businessDateRaw)) {
-    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'business_date must be YYYY-MM-DD');
     return { ok: false };
   }
   return {
@@ -4493,13 +4500,29 @@ const listSyncConflictsBase: RouteHandler = async (req, res) => {
     }
     const paging = parseListPaging(req, res, url);
     if (!paging) return;
-    const conflicts = await listSyncConflicts({
+    // Location scoping (the other list routes' pattern): a wildcard read assignment keeps the
+    // company-wide view; otherwise a location filter outside the permitted set is 403 and an
+    // unfiltered list is narrowed to the caller's permitted locations.
+    const authContext = getAuthContext(req);
+    if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+    const permitted = permittedLocationsForModuleScope(authContext.roles, 'maintenance', 'read');
+    if (!permitted.wildcard && locationRaw !== null && !permitted.locations.has(locationRaw)) {
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `No read assignment grants access to location "${locationRaw}"`,
+      );
+    }
+    const rows = await listSyncConflicts({
       status: statusRaw === null ? undefined : (statusRaw as 'open' | 'resolved'),
       location_id: locationRaw ?? undefined,
       stream_id: streamRaw ?? undefined,
       limit: paging.limit,
       offset: paging.offset,
     });
+    const conflicts = permitted.wildcard
+      ? rows
+      : rows.filter((c) => c.location_id !== null && permitted.locations.has(c.location_id));
     sendJson(res, 200, { conflicts });
   } catch (err: unknown) {
     sendAppError(req, res, err);

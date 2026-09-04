@@ -36,12 +36,11 @@ export const auditConfig: { enabled: boolean; retentionYears: number } = {
 /**
  * Computes the archival cutoff: entries with created_at strictly BEFORE the returned instant have
  * aged past the retention window and are eligible for archival export. Entries created exactly
- * `years` ago (to the millisecond) are NOT yet eligible (strict `<` comparison in the CLI query).
- * NOTE: calendar-year subtraction, not financial-year boundaries - the FY start date is an open
- * spec question (see the story's Open Questions; tracked in deferred-work.md).
+ * on the cutoff instant are NOT yet eligible (strict `<` comparison in the CLI query).
+ * Retention counts in Indian financial years (1 April - 31 March, UTC): the cutoff is 1 April of
+ * the FY `years` before the FY containing `now`; a date before 1 April belongs to the previous FY.
  */
 export function retentionCutoff(now: Date, years: number): Date {
-  const cutoff = new Date(now.getTime());
-  cutoff.setFullYear(cutoff.getFullYear() - years);
-  return cutoff;
+  const fyStart = now.getUTCMonth() >= 3 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
+  return new Date(Date.UTC(fyStart - years, 3, 1));
 }

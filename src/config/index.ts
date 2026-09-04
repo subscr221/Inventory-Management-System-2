@@ -321,15 +321,19 @@ export const config = {
     vapidPublicKey: process.env['VAPID_PUBLIC_KEY'] ?? '',
     vapidPrivateKey: process.env['VAPID_PRIVATE_KEY'] ?? '',
     vapidSubject: process.env['VAPID_SUBJECT'] ?? 'mailto:platform@example.com',
-    dispatchIntervalMs: parsePositiveIntEnv('NOTIFY_DISPATCH_INTERVAL_MS', 5000),
+    dispatchIntervalMs: parsePositiveIntEnv('NOTIFY_DISPATCH_INTERVAL_MS', 5000, MAX_INTERVAL_MS),
     // Dispatch attempts before an event is dead-lettered (excluded from dispatch and surfaced to
     // operators) instead of retrying forever at the front of the oldest-first queue - a single
     // permanently-failing event must never starve the events behind it.
     dispatchMaxAttempts: parsePositiveIntEnv('NOTIFY_DISPATCH_MAX_ATTEMPTS', 5),
-    escalationIntervalMs: parsePositiveIntEnv('NOTIFY_ESCALATION_INTERVAL_MS', 15000),
+    escalationIntervalMs: parsePositiveIntEnv(
+      'NOTIFY_ESCALATION_INTERVAL_MS',
+      15000,
+      MAX_INTERVAL_MS,
+    ),
     // The stale-notification expiry sweep runs far less often than dispatch/escalation - default
     // hourly - since the Expired transition is a 30-day lifecycle boundary, not a real-time one.
-    expiryIntervalMs: parsePositiveIntEnv('NOTIFY_EXPIRY_INTERVAL_MS', 3_600_000),
+    expiryIntervalMs: parsePositiveIntEnv('NOTIFY_EXPIRY_INTERVAL_MS', 3_600_000, MAX_INTERVAL_MS),
     notificationRetentionDays: parsePositiveIntEnv('NOTIFY_RETENTION_DAYS', 30),
     // Terminal escalation tier (AC2 "no alert expires silently"): when an escalation target has no
     // active holder, or an escalated alert is itself never acknowledged, the chain escalates once
@@ -698,6 +702,38 @@ export const config = {
       'JOBWORK_LOSS_REASON_CODES',
       'TRIM_LOSS,PROCESS_YIELD,MATERIAL_DEFECT,OPERATOR_ERROR,MACHINE_FAULT',
     ),
+    // Story 9.5 (FR-JW-14, Open question 4/5): the two GLOBAL breach-window lead times, in calendar
+    // days before the CGST Section 143 expiry date, at which the deemed-supply warning fires. AC3's
+    // "per challan class" is narrowed for the pilot to two global knobs, named so per-class knobs
+    // slot in beside them later (disclosed). Stage 1 is the outer (earlier) window, stage 2 the
+    // inner; the boot guard below refuses an inverted pair. Bounded to 364 days, one short of the
+    // ONE-YEAR 'input' clock (the default challan class, and the only class the 9.2 kit-BOM receipt
+    // path can currently produce): a lead of 365 or more would put every input clock inside its
+    // window from the moment its receipt lands, which is the misconfiguration this bound exists to
+    // refuse. Raising it to the 1095-day capital-goods clock is only safe once the leads are
+    // per-class (Story 9.5 code review, chunk 1).
+    clockLeadDays1: parsePositiveIntEnv('JOBWORK_CLOCK_LEAD_DAYS_1', 90, 364, true),
+    clockLeadDays2: parsePositiveIntEnv('JOBWORK_CLOCK_LEAD_DAYS_2', 30, 364, true),
+    // Story 9.5 (FR-JW-14, AC 4): how long the compliance officer's copy of a breach-window alert may
+    // sit unacknowledged before the Story 1.11 escalation clock hops it to the site head. Default
+    // three days is a placeholder pilot figure (the 9.4 loss-norm 5% disclosure pattern), bounded to
+    // a year.
+    clockEscalationWindowSeconds: parsePositiveIntEnv(
+      'JOBWORK_CLOCK_ESCALATION_WINDOW_SECONDS',
+      259_200,
+      31_536_000,
+      true,
+    ),
+    // Story 9.5 (Task 2.1): the return-clock sweep interval and batch size, on the exact
+    // bisLicenceExpiryIntervalMs/BatchSize pattern (hourly, calendar-boundary alerts, fail-closed on
+    // a present-but-blank value).
+    clockSweepIntervalMs: parsePositiveIntEnv(
+      'JOBWORK_CLOCK_SWEEP_INTERVAL_MS',
+      3_600_000,
+      MAX_INTERVAL_MS,
+      true,
+    ),
+    clockSweepBatchSize: parsePositiveIntEnv('JOBWORK_CLOCK_SWEEP_BATCH_SIZE', 500, 10_000, true),
   },
   qc: {
     // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -
@@ -726,6 +762,15 @@ export const config = {
     ),
   },
 } as const;
+
+// Story 9.5 (Task 2.1): the two breach-window lead days must be ordered outer > inner, or the
+// tightest-stage-wins sweep would stamp the "30-day" stage before the "90-day" one and the single
+// alert a clock gets would name the wrong window. Refused at boot, like every other knob guard here.
+if (config.jobwork.clockLeadDays2 >= config.jobwork.clockLeadDays1) {
+  throw new Error(
+    `Invalid JOBWORK_CLOCK_LEAD_DAYS_2 (${config.jobwork.clockLeadDays2}): must be strictly less than JOBWORK_CLOCK_LEAD_DAYS_1 (${config.jobwork.clockLeadDays1}).`,
+  );
+}
 
 // Story 8.4 (AC 2): RETENTION_FLOOR_VIOLATION. Validated at boot, beside the config object it
 // guards, in the same throw-at-startup style as the quality/production catalogue parsers above -

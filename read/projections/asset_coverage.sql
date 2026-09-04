@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS asset_coverage (
   CONSTRAINT chk_asset_coverage_type CHECK (coverage_type IN ('amc', 'warranty', 'insurance')),
   CONSTRAINT chk_asset_coverage_provider_name CHECK (btrim(provider_name) <> ''),
   CONSTRAINT chk_asset_coverage_reference_ext CHECK (btrim(reference_number_ext) <> ''),
-  CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date > start_date),
+  CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date >= start_date),
   CONSTRAINT chk_asset_coverage_value_non_negative CHECK (contract_value IS NULL OR contract_value >= 0)
 );
 
@@ -90,7 +90,7 @@ BEGIN
       AND conrelid = 'asset_coverage'::regclass
   ) THEN
     ALTER TABLE asset_coverage
-      ADD CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date > start_date);
+      ADD CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date >= start_date);
   END IF;
 END $$;
 

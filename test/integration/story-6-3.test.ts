@@ -2364,7 +2364,7 @@ describe('Story 6.3 Production Completions and QC Hand-off', () => {
         },
         supervisorHeaders,
       );
-      assert.strictEqual(blocked.status, 404, JSON.stringify(blocked.body));
+      assert.strictEqual(blocked.status, 409, JSON.stringify(blocked.body));
       assert.strictEqual(blocked.body['error_code'], 'APPROVAL_UNRESOLVED');
       assert.strictEqual((await completionRows(orderId)).length, 0);
     } finally {

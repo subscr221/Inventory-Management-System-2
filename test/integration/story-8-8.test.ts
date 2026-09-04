@@ -942,7 +942,7 @@ describe('Story 8.8 Witnessed Inspections and Prototype Stock Rules', () => {
     );
     try {
       const res = await waive(holdPointId);
-      assert.ok([404, 409].includes(res.status), JSON.stringify(res.body));
+      assert.strictEqual(res.status, 409, JSON.stringify(res.body));
       assert.strictEqual(res.body['error_code'], 'APPROVAL_UNRESOLVED');
     } finally {
       await getAdminPool().query(

@@ -964,6 +964,7 @@ describe('Story 8.5 Quality Holds and Recall Trace', () => {
     const coverage = trace.body['coverage'] as Record<string, unknown>;
     // Story 9.3 moved job-work consumption into where_used; only production genealogy remains.
     assert.strictEqual((coverage['not_yet_covered'] as string[]).length, 1);
+    assert.ok((coverage['not_yet_covered'] as string[])[0]!.includes('production genealogy'));
     assert.ok(
       (coverage['where_used'] as string[]).some((c) => c.includes('custody.consumption_posted')),
     );

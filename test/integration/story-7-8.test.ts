@@ -1349,7 +1349,7 @@ describe('Story 7.8 Offline Technician Workflow and Closure Codes', () => {
         { resolution_code: 'discarded' },
         supervisorHeaders,
       );
-      assert.strictEqual(unresolved.status, 404, JSON.stringify(unresolved.body));
+      assert.strictEqual(unresolved.status, 409, JSON.stringify(unresolved.body));
       assert.strictEqual(unresolved.body['error_code'], 'APPROVAL_UNRESOLVED');
       assert.strictEqual(
         detailsOf(unresolved.body)['transaction_type'],

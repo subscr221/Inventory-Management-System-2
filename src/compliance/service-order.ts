@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import type {
+  JobworkOrderClosureRequestedPayload,
   JobworkOrderConfirmedPayload,
   JobworkOrderCreatedPayload,
   JobworkOrderUpdatedPayload,
@@ -16,6 +17,8 @@ import {
   updateServiceOrderStatus,
 } from '../read/projections/service_order.js';
 import { getBomById } from '../read/projections/bom.js';
+import { customerCustodyBalancesByOrder } from '../read/projections/custody_ledger_entry.js';
+import { qtyToScaled } from './custody-statement.js';
 
 /**
  * Story 9.1: job-work service order seam (FR-JW-01, FR-JW-02, FR-B-16).
@@ -33,10 +36,13 @@ const JOBWORK_STREAM_TYPES = new Set(['jobwork']);
 export const JOBWORK_ORDER_CREATED = 'jobwork.order_created';
 export const JOBWORK_ORDER_UPDATED = 'jobwork.order_updated';
 export const JOBWORK_ORDER_CONFIRMED = 'jobwork.order_confirmed';
+/** Story 9.5 (FR-JW-15, AD-6): the closure request that activates the reserved BSD-2 closure seam. */
+export const JOBWORK_ORDER_CLOSURE_REQUESTED = 'jobwork.order_closure_requested';
 const SERVICE_ORDER_EVENT_TYPES = new Set([
   JOBWORK_ORDER_CREATED,
   JOBWORK_ORDER_UPDATED,
   JOBWORK_ORDER_CONFIRMED,
+  JOBWORK_ORDER_CLOSURE_REQUESTED,
 ]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -215,6 +221,32 @@ export function assertServiceOrderShape(envelope: EventEnvelope): void {
         );
       }
       break;
+    case JOBWORK_ORDER_CLOSURE_REQUESTED:
+      assertNoExtraKeys(p, new Set(['service_order_id', 'requested_by', 'site_id']));
+      if (!isUuid(p['service_order_id']))
+        reject('INVALID_PARAMS', 'service_order_id is required and must be a UUID');
+      if (!isUuid(p['requested_by']))
+        reject('INVALID_PARAMS', 'requested_by is required and must be a UUID');
+      // Story 9.5 code review (chunk 2): site_id is what the applier re-derives the site gate from.
+      if (!isUuid(p['site_id'])) reject('INVALID_PARAMS', 'site_id is required and must be a UUID');
+      // The requester named in the payload must BE the authenticated actor. Without this a direct
+      // POST /api/v1/events could name any UUID as the closure requester while closed_by recorded
+      // someone else - the forged-actor pattern applyPhysicalVerificationSignedOff already refuses.
+      if (p['requested_by'] !== envelope.metadata.actor.user_id) {
+        reject(
+          'FUNCTION_ACCESS_DENIED',
+          'requested_by must be the authenticated actor requesting the closure',
+          { requested_by: p['requested_by'], actor_user_id: envelope.metadata.actor.user_id },
+          403,
+        );
+      }
+      if (envelope.stream_id !== p['service_order_id']) {
+        reject('INVALID_EVENT_ENVELOPE', 'stream_id must equal service_order_id', {
+          stream_id: envelope.stream_id,
+          service_order_id: p['service_order_id'],
+        });
+      }
+      break;
   }
 }
 
@@ -377,6 +409,9 @@ export async function applyServiceOrderProjection(
       break;
     case JOBWORK_ORDER_CONFIRMED:
       await applyOrderConfirmed(envelope, client);
+      break;
+    case JOBWORK_ORDER_CLOSURE_REQUESTED:
+      await applyOrderClosureRequested(envelope, client);
       break;
   }
 }
@@ -600,6 +635,87 @@ async function applyOrderConfirmed(envelope: EventEnvelope, client: PoolClient):
       confirmed_at: envelope.metadata.occurred_at,
       confirmed_by: envelope.metadata.actor.user_id,
       ...(p.offcut_election !== undefined && { offcut_election: p.offcut_election }),
+    },
+    client,
+  );
+}
+
+/**
+ * Story 9.5 (FR-JW-15, FR-AC-11; AD-6 literally): "no job-work order can close while its custody
+ * ledger balance is non-zero". Same structure as applyOrderConfirmed: advisory lock, order row FOR
+ * UPDATE, then the gate input re-derived HERE - every per-sku customer-owned balance summed in SQL
+ * under the same lock, compared as exact scaled integers - never trusted from a route pre-check
+ * (the 8.x/9.x hold-bypass class). A direct POST /api/v1/events meets the identical wall.
+ *
+ * The gate is the custody balance ALONE (Binding decision 6). jobwork_return_clock.status is
+ * deliberately NOT a second closure key: two keys that should agree can disagree, and then nothing
+ * says which wins. A breached clock with a deemed supply is a tax consequence on the principal, not
+ * an operational blocker; the order still closes and the ITC-04 still shows the breach.
+ */
+async function applyOrderClosureRequested(
+  envelope: EventEnvelope,
+  client: PoolClient,
+): Promise<void> {
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as JobworkOrderClosureRequestedPayload;
+  await advisoryLock(p.service_order_id, client);
+
+  const order = await getServiceOrderById(p.service_order_id, client, true);
+  if (!order) {
+    reject(
+      'SERVICE_ORDER_NOT_FOUND',
+      'Service order not found',
+      { service_order_id: p.service_order_id },
+      404,
+    );
+  }
+
+  // Story 9.5 code review (chunk 2): the site gate is re-derived HERE, under the same advisory lock
+  // as the balance, not trusted from the route's assertSiteWriteAccess. A gate that only a route
+  // enforces is one a direct POST /api/v1/events does not meet - the hold-bypass defect class this
+  // project has now closed five times. Same code and shape as requireInProcessOrder's site arm.
+  if (order.site_id !== p.site_id) {
+    reject(
+      'SOURCE_DOCUMENT_REQUIRED',
+      'The service order belongs to a different site than the closure request',
+      {
+        service_order_id: order.service_order_id,
+        order_site_id: order.site_id,
+        site_id: p.site_id,
+      },
+      409,
+    );
+  }
+
+  const balances = await customerCustodyBalancesByOrder(order.service_order_id, client);
+  const nonZero = balances.filter((row) => qtyToScaled(row.balance) !== 0n);
+  if (nonZero.length > 0) {
+    reject(
+      'CUSTODY_NOT_ZERO',
+      'Service order cannot close with a non-zero custody balance',
+      {
+        service_order_id: order.service_order_id,
+        non_zero_skus: nonZero.map((row) => row.sku),
+        non_zero_balances: nonZero.map((row) => ({
+          sku: row.sku,
+          uom: row.uom,
+          balance: row.balance,
+        })),
+      },
+      409,
+    );
+  }
+
+  // The RESERVED 9.1 seam, not a reimplementation: it re-checks in_process under the same lock and
+  // stamps closed_at / closed_by.
+  await transitionServiceOrder(
+    order.service_order_id,
+    'closed',
+    {
+      occurredAt: envelope.metadata.occurred_at ?? new Date().toISOString(),
+      actorUserId: envelope.metadata.actor.user_id,
+      closureGatePassed: true,
     },
     client,
   );

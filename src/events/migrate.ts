@@ -246,6 +246,11 @@ const MIGRATIONS = [
   // Story 9.4: job-work output tracking (tail-append). FK-shaped reference to service_order
   // above, no declared FK - the Epic 9 house convention.
   '../../read/projections/job_work_output.sql',
+  // Story 9.5: the statutory return clock (one row per 9.2 receipt). Appended after the 9.4 file;
+  // the edited jobwork_material_receipt.sql and custody_ledger_entry.sql keep their positions above
+  // and their new guarded blocks (challan_class column, widened uq_custody_ledger_source_event)
+  // re-apply harmlessly. FK-shaped receipt_id, no declared FK (the Epic 9 house convention).
+  '../../read/projections/jobwork_return_clock.sql',
 ];
 
 async function migrate(): Promise<void> {

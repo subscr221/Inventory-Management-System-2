@@ -47,6 +47,11 @@ describe('in-process background cycle registry', () => {
       intervalMs: () => config.quality.bisLicenceExpiryIntervalMs,
       why: 'BIS licences never alert at 90/60/30 days and never flip to expired (Story 8.7 AC 2)',
     },
+    {
+      name: 'jobwork clock breach',
+      intervalMs: () => config.jobwork.clockSweepIntervalMs,
+      why: 'Section 143 return clocks never alert at 90/30 days and never flip to breached / deemed supply (Story 9.5 AC 3-5)',
+    },
   ];
 
   it('registers exactly the expected cycles, in order', () => {
@@ -104,6 +109,7 @@ describe('in-process background cycle registry', () => {
       NOTIFY_EXPIRY_INTERVAL_MS: '13000',
       QC_RETENTION_EXPIRY_INTERVAL_MS: '14000',
       QC_BIS_LICENCE_EXPIRY_INTERVAL_MS: '15000',
+      JOBWORK_CLOCK_SWEEP_INTERVAL_MS: '16000',
     };
     const result = spawnSync(
       process.execPath,
@@ -135,6 +141,7 @@ describe('in-process background cycle registry', () => {
       ['expiry', 13000],
       ['qc retention expiry', 14000],
       ['bis licence expiry', 15000],
+      ['jobwork clock breach', 16000],
     ]);
   });
 });

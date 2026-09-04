@@ -14,7 +14,12 @@
 -- rebuildable independently (the Story 9.1 BSD-8 idiom). challan_date is the IST business date
 -- the Story 9.5 Rule 45 return clock counts from. variance_qty is SIGNED (received - challan);
 -- variance_flagged records whether its absolute value exceeded the configured receipt tolerance
--- (JOBWORK_RECEIPT_TOLERANCE_PCT) at receipt time, attributed to received_by.
+-- (JOBWORK_RECEIPT_TOLERANCE_PCT) at receipt time, attributed to received_by. challan_class
+-- (Story 9.5, Binding decision 7) classifies the challan for the CGST Section 143 return clock:
+-- 'input' (one year) or 'capital_goods' (three years); it defaults to 'input' so a misclassified
+-- capital good alerts early, never late. Section 143(1)'s proviso exempts moulds, dies, jigs,
+-- tools and fixtures from any return clock; that third value is deliberately absent in the pilot
+-- (nothing on the kit-BOM receipt path can receive an asset) and the CHECK is where it slots in.
 
 CREATE TABLE IF NOT EXISTS jobwork_material_receipt (
   receipt_id         UUID PRIMARY KEY,
@@ -34,9 +39,14 @@ CREATE TABLE IF NOT EXISTS jobwork_material_receipt (
   correlation_id     UUID,
   source_event_id    UUID NOT NULL,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  challan_class      TEXT NOT NULL DEFAULT 'input',
   CONSTRAINT chk_jobwork_receipt_received_positive CHECK (received_qty > 0),
-  CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0)
+  CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0),
+  CONSTRAINT chk_jobwork_receipt_challan_class CHECK (challan_class IN ('input','capital_goods'))
 );
+
+-- Story 9.5: additive on a live 9.2 table; every existing receipt is an 'input' challan.
+ALTER TABLE jobwork_material_receipt ADD COLUMN IF NOT EXISTS challan_class TEXT NOT NULL DEFAULT 'input';
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_jobwork_receipt_grn_line ON jobwork_material_receipt (grn_line_id);
 CREATE INDEX IF NOT EXISTS idx_jobwork_receipt_order ON jobwork_material_receipt (service_order_id, created_at);
@@ -59,6 +69,14 @@ BEGIN
   ) THEN
     ALTER TABLE jobwork_material_receipt
       ADD CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_jobwork_receipt_challan_class'
+      AND conrelid = 'jobwork_material_receipt'::regclass
+  ) THEN
+    ALTER TABLE jobwork_material_receipt
+      ADD CONSTRAINT chk_jobwork_receipt_challan_class CHECK (challan_class IN ('input','capital_goods'));
   END IF;
 END $$;
 

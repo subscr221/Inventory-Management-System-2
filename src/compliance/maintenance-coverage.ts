@@ -176,8 +176,8 @@ function assertCoverageRecordedShape(envelope: EventEnvelope): void {
     reject('INVALID_PAYLOAD', 'business_date must be a valid calendar date in YYYY-MM-DD');
   }
   // Both are validated YYYY-MM-DD strings, so a lexical comparison IS the calendar comparison.
-  if ((p['expiry_date'] as string) <= (p['start_date'] as string)) {
-    reject('INVALID_PAYLOAD', 'expiry_date must be after start_date', {
+  if ((p['expiry_date'] as string) < (p['start_date'] as string)) {
+    reject('INVALID_PAYLOAD', 'expiry_date must be on or after start_date', {
       start_date: p['start_date'],
       expiry_date: p['expiry_date'],
     });
@@ -593,7 +593,7 @@ async function applyWarrantyOverrideRecorded(
       'APPROVAL_UNRESOLVED',
       'No DOA entry governs maintenance.warranty_override',
       { transaction_type: WARRANTY_OVERRIDE_DOA_TYPE },
-      404,
+      409,
     );
   }
   if (declaredOverriddenBy !== approval.approverActorId) {

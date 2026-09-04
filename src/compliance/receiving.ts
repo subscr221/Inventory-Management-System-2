@@ -727,6 +727,9 @@ export async function applyGoodsReceivedProjection(
           lot_id: resolvedLotId,
           received_qty: receivedQty,
           challan_qty: normalizeQty(p['challan_qty']) as string,
+          // Story 9.5 (Binding decision 7): the Section 143 challan class rides the GRN body when
+          // the clerk supplies it; the 9.2 receipt applier defaults an absent value to 'input'.
+          ...(p['challan_class'] !== undefined ? { challan_class: p['challan_class'] } : {}),
           uom,
           site_id: siteId,
           received_by: receivedBy,

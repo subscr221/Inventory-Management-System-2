@@ -452,6 +452,7 @@ export async function applyDispatchDispatchedProjection(
      FROM packing_record pr
      JOIN lot_master lm ON lm.lot_id = pr.lot_id
      WHERE pr.dispatch_order_id = $1
+     ORDER BY lm.lot_id
      FOR UPDATE OF lm`,
     [p.dispatch_order_id],
   );

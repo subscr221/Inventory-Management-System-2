@@ -200,6 +200,8 @@ function assertLegacyKitMigratedShape(p: Record<string, unknown>): void {
   if (!isUuid(p['bom_id'])) reject('INVALID_PARAMS', 'bom_id is required and must be a UUID');
   if (!isUuid(p['parent_item_id']))
     reject('INVALID_PARAMS', 'parent_item_id is required and must be a UUID');
+  if (p['correlation_id'] != null && !isUuid(p['correlation_id']))
+    reject('INVALID_PARAMS', 'correlation_id must be a UUID');
   if (!isNonEmptyString(p['kit_ref']))
     reject('INVALID_PARAMS', 'kit_ref is required and must be a non-empty string');
   if (!isNonEmptyString(p['revision_code']))
@@ -230,6 +232,8 @@ function assertBomDraftedShape(p: Record<string, unknown>): void {
   if (!isUuid(p['bom_id'])) reject('INVALID_PARAMS', 'bom_id is required and must be a UUID');
   if (!isUuid(p['parent_item_id']))
     reject('INVALID_PARAMS', 'parent_item_id is required and must be a UUID');
+  if (p['correlation_id'] != null && !isUuid(p['correlation_id']))
+    reject('INVALID_PARAMS', 'correlation_id must be a UUID');
   if (!isNonEmptyString(p['revision_code']))
     reject('INVALID_PARAMS', 'revision_code is required and must be a non-empty string');
 

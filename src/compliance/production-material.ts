@@ -219,6 +219,9 @@ function assertMaterialStagedShape(p: Record<string, unknown>): void {
   if (!Array.isArray(lines) || lines.length === 0) {
     reject('INVALID_PAYLOAD', 'material_staged requires a non-empty lines array');
   }
+  if (lines.length > 500) {
+    reject('INVALID_PAYLOAD', 'lines is capped at 500 entries');
+  }
   for (const raw of lines) {
     const line = raw as Record<string, unknown>;
     // stage_id is server-minted write-back: a declared value is rejected in the applier, so the

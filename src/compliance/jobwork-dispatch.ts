@@ -22,6 +22,7 @@ import { applyStockIssue } from '../read/projections/stock_balance.js';
 import { toIstCalendarDate } from '../lib/business-days.js';
 import { isPositiveQtyString } from './jobwork-receipt.js';
 import { qtyCompare, qtyNegate, qtyToScaled, qtyFromScaled } from './custody-statement.js';
+import { reconcileReturnClocks } from './jobwork-return-clock.js';
 
 /**
  * Story 9.4 (FR-JW-11): QC-gated job-work dispatch on the EXISTING 'jobwork' stream.
@@ -393,17 +394,27 @@ export async function applyJobworkDispatchProjection(
   const orderDispatchedTotal = qtyToScaled(String(outputTotals.rows[0]!['dispatched']));
   const isFinalDispatch = orderDispatchedTotal >= orderOutputTotal;
   if (orderOutputTotal > 0n) {
-    // Consumption/loss to date per sku, and what dispatch has already released against it, so the
-    // final true-up is exact regardless of when consumption was posted relative to a dispatch.
+    // Consumption to date per sku, and what dispatch has already released against it, so the final
+    // true-up is exact regardless of when consumption was posted relative to a dispatch.
+    //
+    // Story 9.5 code review (chunk 2): 'loss' was REMOVED from this base. Declared loss already
+    // posts its own negative custody row AND its own return-clock movement onto the separate
+    // loss_qty counter (custody-ledger.ts, Binding decision 6 - Section 143(5) accounted waste gets
+    // its own ITC-04 column and is never deemed supply). Leaving it in the apportionment base made
+    // dispatch release the same physical units a SECOND time as reconciled_qty, and since
+    // capacityOf subtracts both counters a 5-unit loss consumed 10 units of clock capacity: the
+    // deemed supply was understated by exactly the loss quantity and the clock flipped to
+    // 'reconciled' while material was still on the job worker's floor. Dispatch releases what
+    // processed output embodies - consumption - and nothing else.
     const consumedRows = await client.query(
       `SELECT sku,
-              -SUM(quantity_delta) FILTER (WHERE movement_category IN ('consumption', 'loss'))
+              -SUM(quantity_delta) FILTER (WHERE movement_category = 'consumption')
                 AS consumed,
               COALESCE(-SUM(quantity_delta) FILTER (WHERE movement_category = 'dispatch'), 0)
                 AS released
          FROM custody_ledger_entry
         WHERE service_order_id = $1
-          AND movement_category IN ('consumption', 'loss', 'dispatch')
+          AND movement_category IN ('consumption', 'dispatch')
         GROUP BY sku`,
       [order.service_order_id],
     );
@@ -449,6 +460,30 @@ export async function applyJobworkDispatchProjection(
         },
         client,
       );
+      // Story 9.5 (FR-AC-11, Binding decision 6): processed output leaving the job worker stops the
+      // Section 143 clock for the INPUT quantity it embodies - exactly the apportioned input-sku
+      // unit the challan is in. Non-strict: the apportionment is derived from the RECEIVED balance,
+      // which may exceed the challan on an over-tolerance receipt; the clock absorbs up to its
+      // challan capacity and the physical dispatch is never blocked by clock accounting.
+      const reconciled = await reconcileReturnClocks(
+        {
+          serviceOrderId: order.service_order_id,
+          sku: row.sku,
+          quantity: apportionedQty,
+          counter: 'reconciled_qty',
+          category: 'dispatch',
+          strict: false,
+        },
+        client,
+      );
+      // Story 9.5 code review (chunk 2): the non-strict remainder is no longer dropped. Debug Log 3
+      // justifies capped mode on the grounds that the shortfall is reported; without this it left
+      // an unexplained outstanding quantity on ITC-04 with no trace of the movement behind it.
+      if (qtyToScaled(reconciled.unallocated) > 0n) {
+        console.warn(
+          `jobwork dispatch ${p.dispatch_id}: ${reconciled.unallocated} of ${apportionedQty} ${row.sku} had no return-clock capacity on order ${order.service_order_id} (over-tolerance receipt); custody ledger posted in full, clock accounting short by that amount`,
+        );
+      }
     }
   }
 

@@ -9,6 +9,7 @@ import {
   deriveReworkOrder,
 } from '../production/rework-order.js';
 import { resolveApprover } from '../api/v1/indents.js';
+import { isActiveRoleHolderForEntry } from '../read/projections/doa_registry.js';
 import { isReleasedItemMaster } from './bom.js';
 import { evaluateReleaseGate } from '../production/release-gate.js';
 import {
@@ -821,10 +822,15 @@ async function applyReleased(envelope: EventEnvelope, client: PoolClient): Promi
         'APPROVAL_UNRESOLVED',
         'No DOA entry governs production_order.release_override',
         { transaction_type: 'production_order.release_override' },
-        404,
+        409,
       );
     }
-    if (declaredOverrideBy !== approval.approverActorId) {
+    // Any active holder of the governing DOA role may sign (deferred-work triage 2026-09-04).
+    const actingUserId = envelope.metadata.actor.user_id;
+    const isHolder = async (userId: string | null): Promise<boolean> =>
+      userId === approval.approverActorId ||
+      (await isActiveRoleHolderForEntry(approval.doaEntryId, userId, client));
+    if (!(await isHolder(declaredOverrideBy))) {
       reject(
         'APPROVAL_REQUIRED',
         'A release override requires the resolved DOA approver',
@@ -838,19 +844,19 @@ async function applyReleased(envelope: EventEnvelope, client: PoolClient): Promi
     // AC7: the ACTING user must be the resolved approver, not merely a payload field that names
     // them. A non-approver with production stream write could otherwise forge an expedited release
     // on the direct-event path by declaring override_by = the approver's UUID.
-    if (envelope.metadata.actor.user_id !== approval.approverActorId) {
+    if (!(await isHolder(actingUserId))) {
       reject(
         'APPROVAL_REQUIRED',
         'A release override requires the acting user to be the resolved DOA approver',
         {
           production_order_id: productionOrderId,
-          acting_user_id: envelope.metadata.actor.user_id,
+          acting_user_id: actingUserId,
           resolved_approver_user_id: approval.approverActorId,
         },
         403,
       );
     }
-    overrideBy = approval.approverActorId;
+    overrideBy = actingUserId;
     overrideReason = (p['override_reason'] as string).trim();
     p['override_by'] = overrideBy;
     p['override_reason'] = overrideReason;

@@ -49,10 +49,8 @@ const AUDITED_REJECTIONS = new Set([
   'LOCATION_NOT_FOUND',
   'BIS_LICENCE_OVERLAP',
   'BIS_LICENCE_EXISTS',
-  'BIS_LICENCE_NOT_FOUND',
   'LABEL_VERSION_EXISTS',
   'LABEL_VERSION_NOT_DRAFT',
-  'LABEL_MASTER_NOT_FOUND',
   'COMPLIANCE_DERIVATION_MISMATCH',
   // Story 8.7 code review: every applier-raised refusal on these routes belongs here, or a
   // refused statutory decision leaves no audit row (the 8.3 NCR_EXISTS omission lesson).

@@ -550,6 +550,12 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/service-orders/:serviceOrderId/outputs',
       'GET /api/v1/service-orders/:serviceOrderId/outputs',
       'POST /api/v1/service-orders/:serviceOrderId/dispatches',
+      // Story 9.5: statutory return clocks and the closure gate (FR-AC-11, FR-JW-13/14/15).
+      'POST /api/v1/service-orders/:serviceOrderId/returns',
+      'POST /api/v1/service-orders/:serviceOrderId/closure',
+      'GET /api/v1/jobwork/reports/itc-04',
+      'GET /api/v1/jobwork/reports/aging',
+      'PATCH /api/v1/jobwork/clocks/:clockId/classification',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

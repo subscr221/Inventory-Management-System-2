@@ -4493,6 +4493,12 @@ export interface JobworkMaterialReceivedPayload {
   variance_flagged?: boolean;
   site_id: string;
   received_by: string;
+  /**
+   * Story 9.5 (Binding decision 7): the CGST Section 143 challan class - 'input' (one-year return
+   * clock) or 'capital_goods' (three years). OPTIONAL; the applier defaults an absent value to
+   * 'input' so every 9.2 caller keeps working and a misclassified capital good alerts early, never late.
+   */
+  challan_class?: 'input' | 'capital_goods';
 }
 
 export interface JobworkMaterialReceivedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -4618,6 +4624,57 @@ export interface CustodyLossRecordedPayload {
 export interface CustodyLossRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'custody.loss_recorded';
   payload: CustodyLossRecordedPayload;
+}
+
+/**
+ * Story 9.5 (FR-AC-11, Binding decision 2): unconsumed customer material RETURNED to the principal
+ * from an in_process order, on the EXISTING 'custody' stream (Story 9.3 forward-declared the
+ * `return` movement category; no prior story used it). return_id minted client-side. lot_id is the
+ * lot_master.lot_number received under this order; location_id is the bin the material physically
+ * leaves (the drain runs through the Story 9.2 total bar's CUSTODY_RETURN door, which needs the
+ * grain). return_challan_number_ext is MANDATORY and non-blank: goods leaving the job worker without
+ * a delivery challan is a GST offence, not a paperwork nit. custody_balance_after is SERVER-DERIVED.
+ */
+export interface CustodyReturnRecordedPayload {
+  service_order_id: string;
+  return_id: string;
+  sku: string;
+  lot_id: string;
+  location_id: string;
+  quantity: string;
+  uom: string;
+  site_id: string;
+  return_challan_number_ext: string;
+  posted_by: string;
+  custody_balance_after?: string;
+}
+
+export interface CustodyReturnRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'custody.return_recorded';
+  payload: CustodyReturnRecordedPayload;
+}
+
+/**
+ * Story 9.5 (FR-JW-15, AD-6): a request to close an in_process job-work order, on the existing
+ * 'jobwork' stream. The applier re-derives every per-sku customer custody balance under the order
+ * advisory lock and refuses CUSTODY_NOT_ZERO unless all are exactly zero, then fires the RESERVED
+ * Story 9.1 closure seam (transitionServiceOrder with closureGatePassed).
+ */
+export interface JobworkOrderClosureRequestedPayload {
+  service_order_id: string;
+  requested_by: string;
+  /**
+   * Story 9.5 code review (chunk 2): the site the closure is requested from. Every other Epic 9
+   * custody payload carries one, and the applier compares it to the order under the advisory lock -
+   * without it the only site check was the route's pre-check, which a direct POST /api/v1/events
+   * walks straight past (the hold-bypass defect class).
+   */
+  site_id: string;
+}
+
+export interface JobworkOrderClosureRequestedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.order_closure_requested';
+  payload: JobworkOrderClosureRequestedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -5557,6 +5614,17 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'custody.loss_recorded': {
     streamType: 'custody',
+    requiresBusinessStream: false,
+  },
+  // Story 9.5: the return of unconsumed customer material stays on the 'custody' stream (the
+  // `return` category was forward-declared by 9.3); the closure request rides the order's own
+  // 'jobwork' stream. Both act on an order row that already carries the business_stream tag.
+  'custody.return_recorded': {
+    streamType: 'custody',
+    requiresBusinessStream: false,
+  },
+  'jobwork.order_closure_requested': {
+    streamType: 'jobwork',
     requiresBusinessStream: false,
   },
 } as const;

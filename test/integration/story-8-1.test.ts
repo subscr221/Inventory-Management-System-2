@@ -906,10 +906,10 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
   // AC1: DOA-gated approval
   // -------------------------------------------------------------------------
 
-  it('AC1: approval with no DOA entry is 404 APPROVAL_UNRESOLVED and audited; a non-QC-Head governing role fails closed', async () => {
+  it('AC1: approval with no DOA entry is 409 APPROVAL_UNRESOLVED and audited; a non-QC-Head governing role fails closed', async () => {
     await clearDoa('qc.inspection_plan_approval');
     const none = await approveVersion(standardPlanId, standardV1Id, qcHeadHeaders);
-    assert.strictEqual(none.status, 404, JSON.stringify(none.body));
+    assert.strictEqual(none.status, 409, JSON.stringify(none.body));
     assert.strictEqual(none.body['error_code'], 'APPROVAL_UNRESOLVED');
     assert.strictEqual(
       await countRows(
@@ -922,7 +922,7 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
 
     await seedDoa('qc.inspection_plan_approval', 'qc_inspector');
     const wrongRole = await approveVersion(standardPlanId, standardV1Id, inspectorHeaders);
-    assert.strictEqual(wrongRole.status, 404, JSON.stringify(wrongRole.body));
+    assert.strictEqual(wrongRole.status, 409, JSON.stringify(wrongRole.body));
     assert.strictEqual(wrongRole.body['error_code'], 'APPROVAL_UNRESOLVED');
     assert.strictEqual(detailsOf(wrongRole.body)['reason'], 'governing_role_not_qc_head');
     await clearDoa('qc.inspection_plan_approval');
@@ -1753,7 +1753,7 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
     await clearDoa('qc.conditional_release');
     const held = await heldLot();
     const unresolved = await conditionalRelease(held.taskId, qcHeadHeaders);
-    assert.strictEqual(unresolved.status, 404, JSON.stringify(unresolved.body));
+    assert.strictEqual(unresolved.status, 409, JSON.stringify(unresolved.body));
     assert.strictEqual(unresolved.body['error_code'], 'APPROVAL_UNRESOLVED');
 
     await seedDoa('qc.conditional_release', 'qc_head');

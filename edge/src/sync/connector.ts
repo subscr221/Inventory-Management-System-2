@@ -201,6 +201,12 @@ const PERMANENT_ERROR_CODES = new Set([
   'REASON_CODE_REQUIRED',
   'WIP_COST_UNRESOLVED',
   'QC_HOLD_REQUIRED',
+  // Story 9.5 code review (chunks 3/4): the twin set had drifted from the server's
+  // PERMANENT_ERROR_CODES (src/sync/upload.ts), whose comment asserts the two carry the
+  // identical block. The outcome was already equivalent for a 409, but the invariant that
+  // comment relies on had stopped holding for both of these.
+  'JOBWORK_LOSS_REASON_CODE_INVALID',
+  'CUSTODY_NOT_ZERO',
 ]);
 
 const TRANSIENT_STATUS_CODES = new Set([408, 425, 429]);

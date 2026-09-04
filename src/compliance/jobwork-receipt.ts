@@ -11,6 +11,11 @@ import { insertCustodyLedgerEntry } from '../read/projections/custody_ledger_ent
 import { toIstCalendarDate } from '../lib/business-days.js';
 import { transitionServiceOrder } from './service-order.js';
 import { OWNERSHIP_ERROR_CODES } from './ownership.js';
+import {
+  DEFAULT_CHALLAN_CLASS,
+  isChallanClass,
+  openReturnClockForReceipt,
+} from './jobwork-return-clock.js';
 
 /**
  * Story 9.2: customer-material receipt seam (FR-JW-03, FR-JW-04, FR-JW-05).
@@ -71,6 +76,8 @@ const RECEIPT_FIELDS = new Set([
   'uom',
   'site_id',
   'received_by',
+  // Story 9.5 (Binding decision 7): OPTIONAL Section 143 challan class, defaulting to 'input'.
+  'challan_class',
 ]);
 /** Server-derived fields: refused on input, rewritten by the applier (the 8.1 declared-derived idiom). */
 const DERIVED_FIELDS = ['variance_qty', 'variance_flagged'] as const;
@@ -215,6 +222,12 @@ export function assertJobworkMaterialReceivedShape(envelope: EventEnvelope): voi
   }
   if (!isCalendarDate(p['challan_date'])) {
     reject('INVALID_PARAMS', 'challan_date is required and must be a YYYY-MM-DD calendar date');
+  }
+  if (p['challan_class'] !== undefined && !isChallanClass(p['challan_class'])) {
+    reject('INVALID_PARAMS', 'challan_class must be input or capital_goods when supplied', {
+      field: 'challan_class',
+      value: p['challan_class'],
+    });
   }
   if (p['lot_id'] !== undefined && p['lot_id'] !== null) {
     if (!isNonEmptyString(p['lot_id']) || (p['lot_id'] as string).trim().length > MAX_TEXT_LENGTH) {
@@ -427,6 +440,9 @@ export async function applyJobworkMaterialReceivedProjection(
 
   const varianceQty = receiptVarianceQty(p.received_qty, p.challan_qty);
   const varianceFlagged = receiptVarianceFlagged(varianceQty, p.challan_qty);
+  // Story 9.5 (Binding decision 7): an absent class is an 'input' challan - the SHORTER clock, so a
+  // misclassified capital good alerts two years early (nagging), never late (breach).
+  const challanClass = isChallanClass(p.challan_class) ? p.challan_class : DEFAULT_CHALLAN_CLASS;
 
   try {
     await insertJobworkMaterialReceipt(
@@ -447,6 +463,7 @@ export async function applyJobworkMaterialReceivedProjection(
         site_id: order.site_id,
         correlation_id: envelope.metadata.correlation_id ?? null,
         source_event_id: eventId,
+        challan_class: challanClass,
       },
       client,
     );
@@ -525,9 +542,42 @@ export async function applyJobworkMaterialReceivedProjection(
     throw err;
   }
 
+  // Story 9.5 (FR-AC-11, Binding decision 1): the Section 143 return clock opens in the SAME
+  // transaction as the receipt it counts from - one clock row per receipt row, expiry computed in
+  // SQL from challan_date by challan_class. Additive alongside the receipt insert, never a
+  // replacement for it.
+  try {
+    await openReturnClockForReceipt(
+      {
+        receipt_id: p.receipt_id,
+        service_order_id: order.service_order_id,
+        sku: p.sku,
+        challan_qty: p.challan_qty,
+        challan_class: challanClass,
+        challan_date: p.challan_date,
+        site_id: order.site_id,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && (err as { code: string }).code === '23505') {
+      const constraint = (err as { constraint?: string }).constraint;
+      if (constraint === 'uq_jobwork_return_clock_receipt') {
+        reject(
+          'DUPLICATE_EVENT',
+          'A return clock already exists for this receipt',
+          { receipt_id: p.receipt_id, constraint },
+          409,
+        );
+      }
+    }
+    throw err;
+  }
+
   // The stored event carries what THIS process derived, never what the caller asserted.
   envelope.payload['variance_qty'] = varianceQty;
   envelope.payload['variance_flagged'] = varianceFlagged;
+  envelope.payload['challan_class'] = challanClass;
 
   if (firstReceiptTransitionRequired(order.status)) {
     await transitionServiceOrder(

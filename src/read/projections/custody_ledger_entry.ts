@@ -45,6 +45,8 @@ export interface CustodyLedgerEntryRow {
   source_event_id: string;
   source_event_type: string;
   correlation_id: string | null;
+  /** Story 9.5 code review (chunk 2): the external document number this movement cites. */
+  reference_ext: string | null;
   created_at: string;
 }
 
@@ -72,6 +74,12 @@ export interface InsertCustodyLedgerEntryInput {
   source_event_id: string;
   source_event_type: string;
   correlation_id: string | null;
+  /**
+   * Story 9.5 code review (chunk 2): the external document number this movement cites. Optional on
+   * input - only `return` populates it today (the mandatory return_challan_number_ext) and every
+   * other category leaves it null.
+   */
+  reference_ext?: string | null;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -96,7 +104,7 @@ const SELECT_COLUMNS = `entry_id, service_order_id, customer_party_code, movemen
   sku, lot_id, location_id, quantity_delta::text AS quantity_delta, uom, billable, bom_line_id,
   kit_bom_revision_id, receipt_id, variance_qty::text AS variance_qty, variance_flagged, site_id,
   posted_by, occurred_at, to_char(business_date, 'YYYY-MM-DD') AS business_date, source_event_id,
-  source_event_type, correlation_id, created_at`;
+  source_event_type, correlation_id, reference_ext, created_at`;
 
 const toIso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
 
@@ -118,9 +126,9 @@ export async function insertCustodyLedgerEntry(
        entry_id, service_order_id, customer_party_code, movement_category, ownership, sku, lot_id,
        location_id, quantity_delta, uom, billable, bom_line_id, kit_bom_revision_id, receipt_id,
        variance_qty, variance_flagged, site_id, posted_by, occurred_at, business_date,
-       source_event_id, source_event_type, correlation_id
+       source_event_id, source_event_type, correlation_id, reference_ext
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10, $11, $12, $13, $14, $15::numeric,
-               $16, $17, $18, $19::timestamptz, $20::date, $21, $22, $23)`,
+               $16, $17, $18, $19::timestamptz, $20::date, $21, $22, $23, $24)`,
     [
       input.entry_id,
       input.service_order_id,
@@ -145,6 +153,7 @@ export async function insertCustodyLedgerEntry(
       input.source_event_id,
       input.source_event_type,
       input.correlation_id,
+      input.reference_ext ?? null,
     ],
   );
 }

@@ -313,6 +313,28 @@ export async function findRoleHolder(
   return { user_id: row['user_id'] as string, external_id: row['external_id'] as string };
 }
 
+/**
+ * Membership test: does `userId` actively hold the role on DOA entry `entryId`? Any active holder
+ * of the governing role may sign, not only the earliest one findRoleHolder happens to return.
+ */
+export async function isActiveRoleHolderForEntry(
+  entryId: string | null,
+  userId: string | null,
+  client?: PoolClient,
+): Promise<boolean> {
+  if (!entryId || !userId) return false;
+  const result = await runner(client).query(
+    `SELECT 1
+     FROM doa_registry_entries e
+     JOIN user_role_assignments a ON a.role = e.role
+     JOIN users u ON u.user_id = a.user_id
+     WHERE e.entry_id = $1 AND a.user_id = $2 AND u.active = true
+     LIMIT 1`,
+    [entryId, userId],
+  );
+  return result.rows.length > 0;
+}
+
 /** Returns the external_id for a user_id, or null. Used to enrich a resolved approver. */
 export async function getExternalIdByUserId(
   userId: string,

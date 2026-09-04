@@ -197,6 +197,9 @@ const PERMANENT_ERROR_CODES = new Set([
   // Story 9.4: the reason code is checked against a fixed configured list, so an offline edge
   // retry of the same declaration can never clear it (the KIT_LINE_MISMATCH precedent).
   'JOBWORK_LOSS_REASON_CODE_INVALID',
+  // Story 9.5 (FR-JW-15, AD-6): closure refused on a non-zero custody balance - a retry of the same
+  // closure request can never clear it; the ledger has to be reconciled first (the 9.4 precedent).
+  'CUSTODY_NOT_ZERO',
   'UNREVERSED_TRANSACTIONS',
   'BOM_REVISION_DRIFT',
   'MATERIAL_REQUIREMENT_SET_TRUNCATED',

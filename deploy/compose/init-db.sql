@@ -7969,7 +7969,7 @@ CREATE TABLE IF NOT EXISTS asset_coverage (
   CONSTRAINT chk_asset_coverage_type CHECK (coverage_type IN ('amc', 'warranty', 'insurance')),
   CONSTRAINT chk_asset_coverage_provider_name CHECK (btrim(provider_name) <> ''),
   CONSTRAINT chk_asset_coverage_reference_ext CHECK (btrim(reference_number_ext) <> ''),
-  CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date > start_date),
+  CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date >= start_date),
   CONSTRAINT chk_asset_coverage_value_non_negative CHECK (contract_value IS NULL OR contract_value >= 0)
 );
 
@@ -8021,7 +8021,7 @@ BEGIN
       AND conrelid = 'asset_coverage'::regclass
   ) THEN
     ALTER TABLE asset_coverage
-      ADD CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date > start_date);
+      ADD CONSTRAINT chk_asset_coverage_dates CHECK (expiry_date >= start_date);
   END IF;
 END $$;
 
@@ -12149,7 +12149,12 @@ END $$;
 -- rebuildable independently (the Story 9.1 BSD-8 idiom). challan_date is the IST business date
 -- the Story 9.5 Rule 45 return clock counts from. variance_qty is SIGNED (received - challan);
 -- variance_flagged records whether its absolute value exceeded the configured receipt tolerance
--- (JOBWORK_RECEIPT_TOLERANCE_PCT) at receipt time, attributed to received_by.
+-- (JOBWORK_RECEIPT_TOLERANCE_PCT) at receipt time, attributed to received_by. challan_class
+-- (Story 9.5, Binding decision 7) classifies the challan for the CGST Section 143 return clock:
+-- 'input' (one year) or 'capital_goods' (three years); it defaults to 'input' so a misclassified
+-- capital good alerts early, never late. Section 143(1)'s proviso exempts moulds, dies, jigs,
+-- tools and fixtures from any return clock; that third value is deliberately absent in the pilot
+-- (nothing on the kit-BOM receipt path can receive an asset) and the CHECK is where it slots in.
 
 CREATE TABLE IF NOT EXISTS jobwork_material_receipt (
   receipt_id         UUID PRIMARY KEY,
@@ -12169,9 +12174,14 @@ CREATE TABLE IF NOT EXISTS jobwork_material_receipt (
   correlation_id     UUID,
   source_event_id    UUID NOT NULL,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  challan_class      TEXT NOT NULL DEFAULT 'input',
   CONSTRAINT chk_jobwork_receipt_received_positive CHECK (received_qty > 0),
-  CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0)
+  CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0),
+  CONSTRAINT chk_jobwork_receipt_challan_class CHECK (challan_class IN ('input','capital_goods'))
 );
+
+-- Story 9.5: additive on a live 9.2 table; every existing receipt is an 'input' challan.
+ALTER TABLE jobwork_material_receipt ADD COLUMN IF NOT EXISTS challan_class TEXT NOT NULL DEFAULT 'input';
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_jobwork_receipt_grn_line ON jobwork_material_receipt (grn_line_id);
 CREATE INDEX IF NOT EXISTS idx_jobwork_receipt_order ON jobwork_material_receipt (service_order_id, created_at);
@@ -12194,6 +12204,14 @@ BEGIN
   ) THEN
     ALTER TABLE jobwork_material_receipt
       ADD CONSTRAINT chk_jobwork_receipt_challan_positive CHECK (challan_qty > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_jobwork_receipt_challan_class'
+      AND conrelid = 'jobwork_material_receipt'::regclass
+  ) THEN
+    ALTER TABLE jobwork_material_receipt
+      ADD CONSTRAINT chk_jobwork_receipt_challan_class CHECK (challan_class IN ('input','capital_goods'));
   END IF;
 END $$;
 
@@ -12224,8 +12242,12 @@ END $$;
 -- return, loss, offcut, dispatch and count_adjustment are forward-declared for Stories 9.4-9.6 so
 -- they post into this table without a migration; no 9.3 path produces them. own_material is the
 -- processor's own addition: ownership = 'processor', billable = true, never in the customer
--- balance (FR-JW-07). One ledger row per source event (uq_custody_ledger_source_event) makes
--- replay safe. business_date is the IST calendar date of occurred_at (9.5 aging and ITC-04).
+-- balance (FR-JW-07). One ledger row per source event PER (sku, lot) - uq_custody_ledger_source_event
+-- on (source_event_id, sku, lot_id) NULLS NOT DISTINCT - makes replay safe while letting one event
+-- post several rows: a Story 9.4 dispatch apportions across every customer-supplied sku, and a
+-- Story 9.5 physical-verification sign-off posts one count_adjustment per verified line (Story 9.5
+-- Task 0 widened the original single-column index; the name is kept so the 23505 classification
+-- arms still resolve). business_date is the IST calendar date of occurred_at (9.5 aging and ITC-04).
 
 CREATE TABLE IF NOT EXISTS custody_ledger_entry (
   entry_id             UUID PRIMARY KEY,
@@ -12251,6 +12273,12 @@ CREATE TABLE IF NOT EXISTS custody_ledger_entry (
   source_event_id      UUID NOT NULL,
   source_event_type    TEXT NOT NULL,
   correlation_id       UUID,
+  -- Story 9.5 code review (chunk 2): the external document number a movement cites. Populated
+  -- for `return` with the mandatory return_challan_number_ext the shape assert already demands
+  -- (goods leaving the job worker without a delivery challan is a GST offence), which was
+  -- otherwise validated and then discarded into the raw event payload where no read model
+  -- could see it. Nullable and free for other categories to adopt.
+  reference_ext        TEXT,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_custody_ledger_category CHECK (movement_category IN ('receipt','consumption','return','loss','offcut','dispatch','count_adjustment','own_material')),
   CONSTRAINT chk_custody_ledger_ownership_vocab CHECK (ownership IN ('customer','processor')),
@@ -12265,7 +12293,24 @@ CREATE TABLE IF NOT EXISTS custody_ledger_entry (
   )
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_custody_ledger_source_event ON custody_ledger_entry (source_event_id);
+-- Story 9.5 code review (chunk 2): additive upgrade path for a live database.
+ALTER TABLE custody_ledger_entry ADD COLUMN IF NOT EXISTS reference_ext TEXT;
+-- Story 9.5 Task 0: widen the replay key from (source_event_id) to (source_event_id, sku, lot_id).
+-- Guarded: the DROP only fires while the OLD single-column definition is in place, so a re-apply
+-- on an already-widened database is a no-op (migrate-twice idempotency).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename = 'custody_ledger_entry'
+      AND indexname = 'uq_custody_ledger_source_event'
+      AND indexdef NOT LIKE '%(source_event_id, sku, lot_id)%'
+  ) THEN
+    DROP INDEX IF EXISTS uq_custody_ledger_source_event;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_custody_ledger_source_event ON custody_ledger_entry (source_event_id, sku, lot_id) NULLS NOT DISTINCT;
 CREATE INDEX IF NOT EXISTS idx_custody_ledger_order_time ON custody_ledger_entry (service_order_id, occurred_at, created_at);
 CREATE INDEX IF NOT EXISTS idx_custody_ledger_order_sku ON custody_ledger_entry (service_order_id, ownership, sku);
 
@@ -12421,5 +12466,144 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON job_work_dispatch TO readonly_user;
+  END IF;
+END $$;
+
+-- Job-work statutory return clock read model (Story 9.5, FR-AC-11, FR-JW-14). This file is the
+-- CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned
+-- database can serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Derived state ONLY: exactly one clock row per jobwork_material_receipt row (1:1, receipt_id is
+-- FK-shaped, not an FK - the Story 9.1 BSD-8 rebuildable-projection idiom), inserted by the Story
+-- 9.2 receipt applier in the SAME transaction as the receipt (Binding decision 1: the receipt is
+-- 9.2's immutable capture of what arrived; the clock is the mutable statutory lifecycle row).
+--
+-- CGST Section 143(1): inputs sent to a job worker must come back (or be supplied from the job
+-- worker's premises) within ONE year of the challan date, capital goods within THREE years;
+-- otherwise the original dispatch is deemed a supply on the day the goods went out. expiry_date is
+-- computed in SQL as challan_date + 365 / 1095 calendar days by challan_class, never by JS Date
+-- arithmetic across DST/timezone (the 9.1 DATE-vs-timezone gotcha).
+--
+-- Two counters on purpose (Binding decision 6): reconciled_qty is material that went BACK to the
+-- principal (dispatch, return, forward-declared offcut); loss_qty is waste and scrap accounted
+-- under Section 143(5) - reported in its own ITC-04 column, never deemed supply. Consumption into
+-- WIP moves NEITHER counter: the bracket is still on the job worker's floor and the clock is still
+-- running. deemed_supply_qty is frozen at breach time (challan - reconciled - loss on the day the
+-- limit passed); a late reconciliation against a breached clock reduces the outstanding capacity
+-- but never rewrites the recorded deemed supply.
+--
+-- alert_90_sent_at / alert_30_sent_at are the two GLOBAL lead-day stage stamps (Story 9.5 Open
+-- question 5): the sweep is single-pass, tightest-stage-wins, so a clock first seen inside the
+-- 30-day window fires ONE alert and sets BOTH stamps. Named so per-class knobs slot in later.
+
+CREATE TABLE IF NOT EXISTS jobwork_return_clock (
+  clock_id                  UUID PRIMARY KEY,
+  receipt_id                UUID NOT NULL,
+  service_order_id          UUID NOT NULL,
+  sku                       TEXT NOT NULL,
+  challan_qty               NUMERIC(18,3) NOT NULL,
+  reconciled_qty            NUMERIC(18,3) NOT NULL DEFAULT 0,
+  loss_qty                  NUMERIC(18,3) NOT NULL DEFAULT 0,
+  challan_class             TEXT NOT NULL,
+  challan_date              DATE NOT NULL,
+  expiry_date               DATE NOT NULL,
+  status                    TEXT NOT NULL DEFAULT 'open',
+  deemed_supply_qty         NUMERIC(18,3) NOT NULL DEFAULT 0,
+  deemed_supply_recorded_at TIMESTAMPTZ,
+  alert_90_sent_at          TIMESTAMPTZ,
+  alert_30_sent_at          TIMESTAMPTZ,
+  site_id                   UUID NOT NULL,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_jobwork_return_clock_class CHECK (challan_class IN ('input','capital_goods')),
+  CONSTRAINT chk_jobwork_return_clock_status CHECK (status IN ('open','partially_reconciled','reconciled','breached')),
+  CONSTRAINT chk_jobwork_return_clock_counters CHECK (
+    reconciled_qty >= 0 AND loss_qty >= 0 AND deemed_supply_qty >= 0
+    AND reconciled_qty + loss_qty <= challan_qty
+  ),
+  CONSTRAINT chk_jobwork_return_clock_expiry CHECK (expiry_date > challan_date)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_jobwork_return_clock_receipt ON jobwork_return_clock (receipt_id);
+CREATE INDEX IF NOT EXISTS idx_jobwork_return_clock_order_sku ON jobwork_return_clock (service_order_id, sku, challan_date, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobwork_return_clock_sweep ON jobwork_return_clock (status, expiry_date);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_jobwork_return_clock_class'
+      AND conrelid = 'jobwork_return_clock'::regclass
+  ) THEN
+    ALTER TABLE jobwork_return_clock
+      ADD CONSTRAINT chk_jobwork_return_clock_class CHECK (challan_class IN ('input','capital_goods'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_jobwork_return_clock_status'
+      AND conrelid = 'jobwork_return_clock'::regclass
+  ) THEN
+    ALTER TABLE jobwork_return_clock
+      ADD CONSTRAINT chk_jobwork_return_clock_status CHECK (status IN ('open','partially_reconciled','reconciled','breached'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_jobwork_return_clock_counters'
+      AND conrelid = 'jobwork_return_clock'::regclass
+  ) THEN
+    ALTER TABLE jobwork_return_clock
+      ADD CONSTRAINT chk_jobwork_return_clock_counters CHECK (
+        reconciled_qty >= 0 AND loss_qty >= 0 AND deemed_supply_qty >= 0
+        AND reconciled_qty + loss_qty <= challan_qty
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_jobwork_return_clock_expiry'
+      AND conrelid = 'jobwork_return_clock'::regclass
+  ) THEN
+    ALTER TABLE jobwork_return_clock
+      ADD CONSTRAINT chk_jobwork_return_clock_expiry CHECK (expiry_date > challan_date);
+  END IF;
+END $$;
+
+-- Story 9.5 code review (chunk 1): BACKFILL. The 1:1 invariant above holds only for receipts taken
+-- after this file first ran. On a database already carrying Story 9.2 or 9.4 receipts those challans
+-- would be invisible to the sweep, to ITC-04 and to the aging report, and a return posted against one
+-- would be refused by reconcileReturnClocks's strict mode for want of clock capacity - and they are
+-- the OLDEST challans, the ones nearest their Section 143 limit. challan_class is read from the
+-- receipt (which defaults it to 'input'), and expiry is computed by the same SQL date arithmetic the
+-- insert path uses. NOT EXISTS on receipt_id makes every later apply a no-op (migrate-twice
+-- idempotency), and this file runs after jobwork_material_receipt.sql in src/events/migrate.ts, so
+-- challan_class is always present by the time this statement executes.
+INSERT INTO jobwork_return_clock (
+  clock_id, receipt_id, service_order_id, sku, challan_qty, challan_class, challan_date, expiry_date,
+  site_id
+)
+SELECT gen_random_uuid(),
+       r.receipt_id,
+       r.service_order_id,
+       r.sku,
+       r.challan_qty,
+       r.challan_class,
+       r.challan_date,
+       (r.challan_date + make_interval(days => CASE WHEN r.challan_class = 'capital_goods' THEN 1095 ELSE 365 END))::date,
+       r.site_id
+  FROM jobwork_material_receipt r
+ WHERE NOT EXISTS (
+   SELECT 1 FROM jobwork_return_clock c WHERE c.receipt_id = r.receipt_id
+ );
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON jobwork_return_clock TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON jobwork_return_clock TO readonly_user;
   END IF;
 END $$;

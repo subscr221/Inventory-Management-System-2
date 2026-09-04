@@ -29,6 +29,7 @@ function row(
     entry_id: randomUUID(),
     service_order_id: ORDER_ID,
     customer_party_code: 'CUST-1',
+    reference_ext: null,
     ownership: processor ? 'processor' : 'customer',
     sku: 'SKU-A',
     lot_id: 'LOT-1',

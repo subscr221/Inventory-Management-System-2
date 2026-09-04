@@ -100,7 +100,7 @@ const getPurchaseOrderBase: RouteHandler = async (req, res, params) => {
     await raiseErpSyncStale(
       'purchase_orders',
       'ERP purchase-order projection is stale (served past the freshness threshold)',
-    ).catch(() => undefined);
+    ).catch((err) => console.warn('erp.sync_stale (purchase_orders) emit failed', err));
   }
   sendJson(res, 200, {
     po_number_ext: po.po_number_ext,
@@ -183,7 +183,7 @@ const listSalesOrdersBase: RouteHandler = async (req, res) => {
         await raiseErpSyncStale(
           'sales_orders',
           'ERP sales-order projection is stale (served past the freshness threshold)',
-        ).catch(() => undefined);
+        ).catch((err) => console.warn('erp.sync_stale (sales_orders) emit failed', err));
       }
       sendJson(res, 200, {
         sales_orders: [],
@@ -204,7 +204,7 @@ const listSalesOrdersBase: RouteHandler = async (req, res) => {
     await raiseErpSyncStale(
       'sales_orders',
       'ERP sales-order projection is stale (served past the freshness threshold)',
-    ).catch(() => undefined);
+    ).catch((err) => console.warn('erp.sync_stale (sales_orders) emit failed', err));
   }
   sendJson(res, 200, {
     sales_orders: rows.map((row) => ({
@@ -332,7 +332,7 @@ async function emitBomSyncConflictEvents(
         method: req.method ?? 'POST',
         http_status: 200,
       },
-    ).catch(() => undefined);
+    ).catch((err) => console.warn('bom.sync_conflict_raised emit failed', err));
   }
 }
 

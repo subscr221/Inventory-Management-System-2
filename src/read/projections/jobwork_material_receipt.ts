@@ -20,6 +20,8 @@ export interface JobworkMaterialReceiptRow {
   correlation_id: string | null;
   source_event_id: string;
   created_at: string;
+  /** Story 9.5 (Binding decision 7): the Section 143 challan class; defaults to 'input'. */
+  challan_class: 'input' | 'capital_goods';
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -36,7 +38,7 @@ const SELECT_COLUMNS = `receipt_id, service_order_id, grn_line_id, challan_numbe
   to_char(challan_date, 'YYYY-MM-DD') AS challan_date, sku, lot_id,
   received_qty::text AS received_qty, challan_qty::text AS challan_qty, uom,
   variance_qty::text AS variance_qty, variance_flagged, received_by, site_id, correlation_id,
-  source_event_id, created_at`;
+  source_event_id, created_at, challan_class`;
 
 export interface InsertJobworkMaterialReceiptInput {
   receipt_id: string;
@@ -55,6 +57,7 @@ export interface InsertJobworkMaterialReceiptInput {
   site_id: string;
   correlation_id: string | null;
   source_event_id: string;
+  challan_class: 'input' | 'capital_goods';
 }
 
 /** Plain INSERT: a duplicate receipt_id or grn_line_id surfaces as 23505 for the seam to classify. */
@@ -66,8 +69,8 @@ export async function insertJobworkMaterialReceipt(
     `INSERT INTO jobwork_material_receipt (
        receipt_id, service_order_id, grn_line_id, challan_number_ext, challan_date, sku, lot_id,
        received_qty, challan_qty, uom, variance_qty, variance_flagged, received_by, site_id,
-       correlation_id, source_event_id
-     ) VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8::numeric, $9::numeric, $10, $11::numeric, $12, $13, $14, $15, $16)`,
+       correlation_id, source_event_id, challan_class
+     ) VALUES ($1, $2, $3, $4, $5::date, $6, $7, $8::numeric, $9::numeric, $10, $11::numeric, $12, $13, $14, $15, $16, $17)`,
     [
       input.receipt_id,
       input.service_order_id,
@@ -85,6 +88,7 @@ export async function insertJobworkMaterialReceipt(
       input.site_id,
       input.correlation_id,
       input.source_event_id,
+      input.challan_class,
     ],
   );
 }

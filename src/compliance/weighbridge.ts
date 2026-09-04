@@ -30,10 +30,10 @@ function trimmed(value: unknown): string | null {
 }
 
 function localYmd(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // IST = UTC+5:30. Shift the instant, then read back with UTC getters so the result is
+  // host-timezone independent (local getters would double-apply the offset on an IST host).
+  const ist = new Date(date.getTime() + 5.5 * 60 * 60 * 1000);
+  return `${ist.getUTCFullYear()}-${String(ist.getUTCMonth() + 1).padStart(2, '0')}-${String(ist.getUTCDate()).padStart(2, '0')}`;
 }
 
 function weighbridgeEventType(envelope: EventEnvelope): string | null {

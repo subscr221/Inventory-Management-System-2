@@ -230,9 +230,11 @@ import {
   assertCustodyConsumptionShape,
   assertCustodyOwnMaterialShape,
   assertCustodyLossShape,
+  assertCustodyReturnShape,
   applyCustodyConsumptionProjection,
   applyCustodyOwnMaterialProjection,
   applyCustodyLossProjection,
+  applyCustodyReturnProjection,
 } from '../compliance/custody-ledger.js';
 import {
   assertJobworkOutputShape,
@@ -442,6 +444,14 @@ export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
       400,
       'INVALID_EVENT_ENVELOPE',
       'metadata.occurred_at is required and must be a valid ISO-8601 timestamp',
+    );
+  }
+  // Upper bound only: offline uploads are legitimately old, but nothing happens in the future.
+  if (Date.parse(meta['occurred_at']) > Date.now() + 5 * 60_000) {
+    throw new AppError(
+      400,
+      'INVALID_EVENT_ENVELOPE',
+      'metadata.occurred_at must not be more than 5 minutes in the future',
     );
   }
 
@@ -757,6 +767,10 @@ export async function persistEvent(
   assertCustodyLossShape(envelope);
   assertJobworkOutputShape(envelope);
   assertJobworkDispatchShape(envelope);
+  // Story 9.5: return shape validation (closed shape, strict UUIDs, lot and location named, the
+  // MANDATORY non-blank return_challan_number_ext, the server-derived balance refused on input) is
+  // non-DB and runs here. The closure-request shape rides assertServiceOrderShape above.
+  assertCustodyReturnShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -1132,6 +1146,14 @@ export async function persistEvent(
     await applyCustodyLossProjection(envelope, client, eventId);
     await applyJobworkOutputProjection(envelope, client, eventId, auditCtx);
     await applyJobworkDispatchProjection(envelope, client, eventId);
+    // Story 9.5: the return of unconsumed customer material (order/site/lot/uom/balance gates under
+    // the order lock, the CUSTODY_RETURN drain, the `return` ledger row, the lot_trace entry and the
+    // STRICT Section 143 clock reconciliation) runs inside this same transaction, so every write
+    // commits or rolls back with the domain event. The closure gate (jobwork.order_closure_requested,
+    // CUSTODY_NOT_ZERO re-derived under the order lock, then the reserved 9.1 transition seam) is
+    // dispatched by applyServiceOrderProjection above, alongside the other order-lifecycle events;
+    // the 9.4 dispatch and loss appliers above additionally reconcile the return clocks in-line.
+    await applyCustodyReturnProjection(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's
@@ -2162,6 +2184,16 @@ export async function persistEvent(
             typeof envelope.payload['asset_id'] === 'string' ? envelope.payload['asset_id'] : null,
         },
       );
+    }
+    // 22021 (character_not_in_repertoire) / 22P05 (untranslatable_character): a NUL byte or
+    // invalid UTF-8 in a text column is a client input problem, not a server fault.
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err.code === '22021' || err.code === '22P05')
+    ) {
+      throw new AppError(400, 'INVALID_PARAMS', 'text contains a NUL byte or invalid encoding');
     }
     throw err;
   } finally {

@@ -174,38 +174,3 @@ export async function listCostRollupsByBom(
     offset,
   };
 }
-
-/**
- * The release-gate predicate's accessor (AC 3): the newest snapshot for the exact
- * (bom_id, revision_id) that has NO missing rates. Staleness is a separate part of the gate
- * condition and is evaluated against bom_line.updated_at by the caller.
- */
-export async function getLatestCompleteRollup(
-  bomId: string,
-  revisionId: string,
-  client?: PoolClient,
-): Promise<BomCostRollupRow | null> {
-  if (!UUID_REGEX.test(bomId) || !UUID_REGEX.test(revisionId)) return null;
-  const result = await runner(client).query(
-    `SELECT ${HEADER_COLUMNS} FROM bom_cost_rollup
-      WHERE bom_id = $1 AND revision_id = $2 AND missing_rate_count = 0
-      ORDER BY created_at DESC LIMIT 1`,
-    [bomId, revisionId],
-  );
-  return (result.rows[0] as BomCostRollupRow) ?? null;
-}
-
-/** The newest snapshot for a revision regardless of completeness - reject details only. */
-export async function getLatestRollup(
-  bomId: string,
-  revisionId: string,
-  client?: PoolClient,
-): Promise<BomCostRollupRow | null> {
-  if (!UUID_REGEX.test(bomId) || !UUID_REGEX.test(revisionId)) return null;
-  const result = await runner(client).query(
-    `SELECT ${HEADER_COLUMNS} FROM bom_cost_rollup
-      WHERE bom_id = $1 AND revision_id = $2 ORDER BY created_at DESC LIMIT 1`,
-    [bomId, revisionId],
-  );
-  return (result.rows[0] as BomCostRollupRow) ?? null;
-}

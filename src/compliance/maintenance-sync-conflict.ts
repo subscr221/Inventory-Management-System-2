@@ -336,7 +336,7 @@ async function applySyncConflictResolved(
       'APPROVAL_UNRESOLVED',
       'No DOA entry governs maintenance.sync_conflict_resolution',
       { transaction_type: SYNC_CONFLICT_RESOLUTION_DOA_TYPE },
-      404,
+      409,
     );
   }
   if (declaredResolvedBy !== approval.approverActorId) {

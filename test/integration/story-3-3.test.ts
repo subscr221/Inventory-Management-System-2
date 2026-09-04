@@ -25,10 +25,9 @@ interface Role {
 }
 
 function localYmd(date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // IST = UTC+5:30. Shift the instant, then read back with UTC getters (host-timezone independent).
+  const ist = new Date(date.getTime() + 5.5 * 60 * 60 * 1000);
+  return `${ist.getUTCFullYear()}-${String(ist.getUTCMonth() + 1).padStart(2, '0')}-${String(ist.getUTCDate()).padStart(2, '0')}`;
 }
 
 function makeRequest(

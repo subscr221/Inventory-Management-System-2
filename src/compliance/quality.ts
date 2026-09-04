@@ -1507,7 +1507,7 @@ export async function resolveQcAuthority(
       'APPROVAL_UNRESOLVED',
       `No DOA entry governs ${transactionType}`,
       { transaction_type: transactionType },
-      404,
+      409,
     );
   }
   if (options.requireQcHead && !qcHeadRoles.includes(entry.role)) {
@@ -1519,7 +1519,7 @@ export async function resolveQcAuthority(
         governing_role: entry.role,
         reason: 'governing_role_not_qc_head',
       },
-      404,
+      409,
     );
   }
   const today = toIstCalendarDate(new Date());

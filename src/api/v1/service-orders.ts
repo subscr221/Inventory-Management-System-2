@@ -10,6 +10,7 @@ import {
   JOBWORK_ORDER_CREATED,
   JOBWORK_ORDER_UPDATED,
   JOBWORK_ORDER_CONFIRMED,
+  JOBWORK_ORDER_CLOSURE_REQUESTED,
 } from '../../compliance/service-order.js';
 import { getServiceOrderById, listServiceOrders } from '../../read/projections/service_order.js';
 import type { ServiceOrderRow } from '../../read/projections/service_order.js';
@@ -22,7 +23,22 @@ import {
   CUSTODY_CONSUMPTION_POSTED,
   CUSTODY_OWN_MATERIAL_ADDED,
   CUSTODY_LOSS_RECORDED,
+  CUSTODY_RETURN_RECORDED,
 } from '../../compliance/custody-ledger.js';
+import {
+  listReturnClocksForItc04,
+  listDeemedSuppliesForItc04,
+  listReturnClocksForAging,
+} from '../../read/projections/jobwork_return_clock.js';
+import type { JobworkReturnClockReportRow } from '../../read/projections/jobwork_return_clock.js';
+import { qtyFromScaled, qtyToScaled } from '../../compliance/custody-statement.js';
+import {
+  deemedSupplyQty,
+  correctChallanClassification,
+  isChallanClass,
+  CHALLAN_RECLASSIFICATION_ROLES,
+} from '../../compliance/jobwork-return-clock.js';
+import { toIstCalendarDate, isValidCalendarDate } from '../../lib/business-days.js';
 import {
   buildCustodyStatement,
   renderCustodyStatementText,
@@ -72,6 +88,13 @@ const AUDITED_REJECTIONS = new Set([
   'JOBWORK_LOSS_REASON_CODE_INVALID',
   'REASON_CODE_REQUIRED',
   'QC_TASK_MISSING',
+  // Story 9.5: CUSTODY_NOT_ZERO is this story's NEW stable error code (the AD-6 closure gate); the
+  // return route's refusals are all pre-registered above.
+  'CUSTODY_NOT_ZERO',
+  // Story 9.5 code review (chunks 3/4): the challan-classification correction route's refusals. A
+  // coordinator attempting to push its own breach deadline out by two years is the exact attack the
+  // segregation-of-duties gate exists to stop, and it previously left no record it was attempted.
+  'FUNCTION_ACCESS_DENIED',
 ]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -550,7 +573,7 @@ async function postCustodyEvent(
   params: Record<string, string> | undefined,
   spec: {
     eventType: string;
-    idField: 'consumption_id' | 'own_material_id' | 'loss_id';
+    idField: 'consumption_id' | 'own_material_id' | 'loss_id' | 'return_id';
     extraFields: readonly string[];
     derivedFields: readonly string[];
   },
@@ -845,6 +868,406 @@ const postServiceOrderDispatchBase: RouteHandler = async (req, res, params) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Story 9.5: return of customer material, the closure gate, ITC-04 and aging (FR-AC-11, FR-JW-13/14/15)
+// ---------------------------------------------------------------------------
+
+const postServiceOrderReturnBase: RouteHandler = (req, res, params) =>
+  postCustodyEvent(req, res, params, {
+    eventType: CUSTODY_RETURN_RECORDED,
+    idField: 'return_id',
+    // The delivery challan the material leaves under - mandatory, enforced in the seam's assert.
+    extraFields: ['return_challan_number_ext'],
+    derivedFields: ['custody_balance_after'],
+  });
+
+/**
+ * AC 8: the closure request. Shape-only pre-checks here; the seam re-derives every per-sku custody
+ * balance under the order advisory lock and refuses CUSTODY_NOT_ZERO (the hold-bypass lesson), then
+ * fires the reserved 9.1 closure transition. requested_by is stamped from the authenticated actor.
+ */
+const postServiceOrderClosureBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    rejectUnacceptedFields(body, [
+      'service_order_id',
+      'order_number_ext',
+      'status',
+      'business_stream',
+      'site_id',
+      'requested_by',
+      'offcut_election',
+      'closed_at',
+      'closed_by',
+      ...ORDER_FIELDS,
+    ]);
+    const idempotencyKey = requireIdempotencyKey(body);
+
+    // Story 9.5 code review (chunk 2): the order's site now rides the payload so the applier can
+    // re-derive the site gate under its own advisory lock. It is read from the ORDER, never from
+    // the request body, which still refuses a caller-supplied site_id above.
+    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const existing = await getServiceOrderById(serviceOrderId);
+    if (!existing && !isRetry) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+    }
+    // Story 9.5 code review (chunks 3/4): site write access is re-checked whenever the order is
+    // readable, retry or not - the shape postCustodyEvent uses. Guarding it with `if (!isRetry)` let
+    // any jobwork writer replay an idempotency key they already owned to set isRetry, skip the site
+    // gate entirely, and receive the order body below. The applier's own site check cannot catch it,
+    // because the route feeds the applier the site it just read off that same order row.
+    if (existing) assertSiteWriteAccess(req, existing.site_id);
+    if (!existing) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+    }
+    const closureSiteId = existing.site_id;
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: serviceOrderId,
+        event_type: JOBWORK_ORDER_CLOSURE_REQUESTED,
+        payload: {
+          service_order_id: serviceOrderId,
+          requested_by: actor.userId,
+          site_id: closureSiteId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+    // The id comes from the PERSISTED payload, never the path: on a replayed key the stored event is
+    // the authority for which order this response describes (the createServiceOrderBase shape).
+    // Reading the path id here returned a different order's full body on a cross-order key replay.
+    const replayedOrderId = replayIdOrReject(
+      persisted,
+      JOBWORK_ORDER_CLOSURE_REQUESTED,
+      'service_order_id',
+    );
+    const order = await getServiceOrderById(replayedOrderId);
+    if (order) assertSiteWriteAccess(req, order.site_id);
+    sendJson(res, 200, { event_id: persisted.event_id, service_order: order });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditFailSafe(req, actor, err, {
+        service_order_id: params?.['serviceOrderId'] ?? null,
+        event_type: JOBWORK_ORDER_CLOSURE_REQUESTED,
+      });
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+/**
+ * Site scope for the two report routes: wildcard readers see every site; everyone else sees only
+ * their permitted sites, and an explicit ?site_id outside that scope is a 403 (never a silent
+ * empty report).
+ */
+function reportSiteScope(req: IncomingMessage, url: URL): string[] | null {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  const scope = permittedLocationsForModuleScope(authContext.roles, 'jobwork', 'read');
+  const requested = url.searchParams.get('site_id');
+  if (requested !== null) {
+    if (!isUuid(requested)) {
+      throw new AppError(400, 'INVALID_PARAMS', 'site_id must be a UUID when supplied', {
+        site_id: requested,
+      });
+    }
+    if (!scope.wildcard && !scope.locations.has(requested)) {
+      throw new AppError(
+        403,
+        'LOCATION_ACCESS_DENIED',
+        `No read assignment grants access to site "${requested}"`,
+      );
+    }
+    return [requested];
+  }
+  if (!scope.wildcard && scope.locations.size === 0) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      'No read assignment grants access to any site',
+    );
+  }
+  return scope.wildcard ? null : [...scope.locations];
+}
+
+function requireDateParam(url: URL, name: string): string {
+  const value = url.searchParams.get(name);
+  if (value === null || !isValidCalendarDate(value)) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `${name} is required and must be a real YYYY-MM-DD calendar date`,
+      { [name]: value },
+    );
+  }
+  return value;
+}
+
+function outstandingOf(row: JobworkReturnClockReportRow): string {
+  return deemedSupplyQty(row.challan_qty, row.reconciled_qty, row.loss_qty);
+}
+
+function reportRow(row: JobworkReturnClockReportRow): Record<string, unknown> {
+  return {
+    clock_id: row.clock_id,
+    service_order_id: row.service_order_id,
+    order_number_ext: row.order_number_ext,
+    order_status: row.order_status,
+    customer_party_code: row.customer_party_code,
+    customer_name: row.customer_name,
+    site_id: row.site_id,
+    receipt_id: row.receipt_id,
+    challan_number_ext: row.challan_number_ext,
+    challan_date: row.challan_date,
+    challan_class: row.challan_class,
+    sku: row.sku,
+    uom: row.uom,
+    challan_qty: row.challan_qty,
+    received_qty: row.received_qty,
+    reconciled_qty: row.reconciled_qty,
+    loss_qty: row.loss_qty,
+    outstanding_qty: outstandingOf(row),
+    status: row.status,
+    expiry_date: row.expiry_date,
+    days_to_expiry: row.days_to_expiry,
+    deemed_supply_qty: row.deemed_supply_qty,
+    deemed_supply_recorded_at: row.deemed_supply_recorded_at,
+    alert_90_sent_at: row.alert_90_sent_at,
+    alert_30_sent_at: row.alert_30_sent_at,
+  };
+}
+
+function sumQty(
+  rows: JobworkReturnClockReportRow[],
+  pick: (r: JobworkReturnClockReportRow) => string,
+): string {
+  return qtyFromScaled(rows.reduce((acc, r) => acc + qtyToScaled(pick(r)), 0n));
+}
+
+/**
+ * AC 6 (FR-AC-11): the ITC-04 data set for a period, in TWO period-scoped legs. `rows` and `totals`
+ * cover every challan DATED in [from, to] with its return-clock accounting (returned or dispatched
+ * versus Section 143(5) accounted loss). `deemed_supply_records` and `deemed_supply_totals` cover
+ * every deemed supply RECORDED in [from, to], whatever period its challan belongs to (Debug Log 7).
+ * The two legs overlap only by coincidence and are never summed together - see
+ * listReturnClocksForItc04 for what the single-union version filed twice. Reads ONLY the projection
+ * (AD-14).
+ */
+const getJobworkItc04ReportBase: RouteHandler = async (req, res, _params) => {
+  try {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const from = requireDateParam(url, 'from');
+    const to = requireDateParam(url, 'to');
+    if (to < from) {
+      throw new AppError(400, 'INVALID_PARAMS', 'to must be on or after from', { from, to });
+    }
+    const siteIds = reportSiteScope(req, url);
+    const generatedAt = new Date().toISOString();
+    const today = toIstCalendarDate(new Date(generatedAt));
+    const rows = await listReturnClocksForItc04({ today, from, to, siteIds });
+    const deemed = await listDeemedSuppliesForItc04({ today, from, to, siteIds });
+    sendJson(res, 200, {
+      report: 'ITC-04',
+      period: { from, to },
+      generated_at: generatedAt,
+      business_date: today,
+      rows: rows.map(reportRow),
+      deemed_supply_records: deemed.map(reportRow),
+      totals: {
+        challans: new Set(rows.map((r) => `${r.service_order_id}|${r.challan_number_ext}`)).size,
+        challan_qty: sumQty(rows, (r) => r.challan_qty),
+        reconciled_qty: sumQty(rows, (r) => r.reconciled_qty),
+        loss_qty: sumQty(rows, (r) => r.loss_qty),
+        outstanding_qty: sumQty(rows, outstandingOf),
+      },
+      // Kept separate from `totals` on purpose: these rows are selected on when the deemed supply
+      // AROSE, so their challan quantities belong to whatever period issued them.
+      deemed_supply_totals: {
+        records: deemed.length,
+        deemed_supply_qty: sumQty(deemed, (r) => r.deemed_supply_qty),
+      },
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
+/**
+ * Story 9.5 code review (chunk 1): correct the challan class of ONE return clock. `challan_class` is
+ * optional on the 9.2 receipt payload and defaults to 'input' (Binding decision 7 - fail toward the
+ * shorter clock, so a misclassified capital good alerts early rather than late), the receipt is
+ * immutable, and no other path can move the clock. Without this route a capital good received
+ * without the field would breach at day 365 instead of day 1095 and freeze a deemed supply into
+ * ITC-04 two years early, permanently.
+ *
+ * DISCLOSED DEVIATION: this is a projection-only write with no domain event, so a projection rebuild
+ * from the event log would lose the correction - the same shape as the sweep's own alert stamps and
+ * breach flip (jobwork_return_clock.sql header). The event-sourced alternative (a
+ * jobwork.challan_reclassified event with an applier that also unwinds a premature breach) was
+ * weighed and deferred as Story 9.6 scope.
+ */
+const patchReturnClockClassificationBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  try {
+    const clockId = requireUuidParam(params, 'clockId');
+    // The list is the SERVER-OWNED field set this route refuses, not an allowlist: challan_class is
+    // the one field a caller supplies, everything derived stays derived.
+    rejectUnacceptedFields(body, [
+      'clock_id',
+      'receipt_id',
+      'service_order_id',
+      'challan_date',
+      'expiry_date',
+      'status',
+      'reconciled_qty',
+      'loss_qty',
+      'deemed_supply_qty',
+      'deemed_supply_recorded_at',
+      'site_id',
+      // Story 9.5 code review (chunks 3/4): the alert stamps are cleared by this route as a side
+      // effect of moving the expiry; a caller supplying them was silently ignored with a 200.
+      'alert_90_sent_at',
+      'alert_30_sent_at',
+      'challan_qty',
+      'sku',
+      'created_at',
+      'updated_at',
+    ]);
+    // AD-16: a state-changing route requires a client-supplied idempotency key. This one moves a
+    // statutory expiry by up to 730 days and clears both alert stamps; a retried request must be
+    // identifiable as a retry rather than a second correction.
+    requireIdempotencyKey(body);
+    const challanClass = (body as Record<string, unknown>)['challan_class'];
+    if (!isChallanClass(challanClass)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        "challan_class must be 'input' or 'capital_goods'",
+        { challan_class: challanClass ?? null },
+      );
+    }
+    const authContext = getAuthContext(req);
+    if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+    // The jobwork/write RBAC gate is necessary but not sufficient: reclassifying a statutory clock
+    // is a compliance correction, and the coordinator the breach alerts are addressed to must not be
+    // able to push its own deadline out by two years.
+    // Story 9.5 code review (chunks 3/4): privilege AND scope are both derived from the SAME
+    // assignments. Deriving `permitted` from any reclassifying role while taking the site scope from
+    // the union of every jobwork/write assignment let a user who is site_head at site A and
+    // jobwork_coordinator at site B reclassify site B's clocks - the coordinator pushing out its own
+    // deadline, which is precisely what this gate exists to prevent.
+    const reclassifyingRoles = authContext.roles.filter(
+      (r) =>
+        (r.module === 'jobwork' || r.module === '*') &&
+        r.functionScope === 'write' &&
+        CHALLAN_RECLASSIFICATION_ROLES.has(r.role),
+    );
+    if (reclassifyingRoles.length === 0) {
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        'Correcting a challan classification requires the compliance officer or site head role',
+        { required_roles: [...CHALLAN_RECLASSIFICATION_ROLES] },
+      );
+    }
+    const wildcard = reclassifyingRoles.some((r) => r.locationId === '*');
+    const permittedSiteIds = wildcard
+      ? null
+      : [...new Set(reclassifyingRoles.map((r) => r.locationId))];
+    const clock = await correctChallanClassification({
+      clockId,
+      challanClass,
+      permittedSiteIds,
+      today: toIstCalendarDate(new Date()),
+    });
+    sendJson(res, 200, { return_clock: clock });
+  } catch (err: unknown) {
+    // BSD-5: a refused statutory correction leaves an audit row, like every other route here.
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditFailSafe(req, actor, err, {
+        clock_id: params?.['clockId'] ?? null,
+        challan_class: (body as Record<string, unknown>)['challan_class'] ?? null,
+      });
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+const AGING_BUCKETS = ['breached', 'due_within_30', 'due_within_90', 'beyond_90'] as const;
+type AgingBucket = (typeof AGING_BUCKETS)[number];
+
+/** Bucket by days to expiry; a breached clock is past due regardless of the day count. */
+export function agingBucketFor(status: string, daysToExpiry: number): AgingBucket {
+  if (status === 'breached' || daysToExpiry < 0) return 'breached';
+  if (daysToExpiry <= 30) return 'due_within_30';
+  if (daysToExpiry <= 90) return 'due_within_90';
+  return 'beyond_90';
+}
+
+/**
+ * AC 6 (FR-JW-14, SM-34): every clock still carrying exposure, bucketed by days to expiry (or past
+ * due), with exact outstanding quantities per bucket. Reads ONLY the projection (AD-14).
+ */
+const getJobworkAgingReportBase: RouteHandler = async (req, res, _params) => {
+  try {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const siteIds = reportSiteScope(req, url);
+    const generatedAt = new Date().toISOString();
+    const today = toIstCalendarDate(new Date(generatedAt));
+    const rows = await listReturnClocksForAging({ today, siteIds });
+    const buckets: Record<AgingBucket, { count: number; outstanding_qty: string }> = {
+      breached: { count: 0, outstanding_qty: '0.000' },
+      due_within_30: { count: 0, outstanding_qty: '0.000' },
+      due_within_90: { count: 0, outstanding_qty: '0.000' },
+      beyond_90: { count: 0, outstanding_qty: '0.000' },
+    };
+    const scaled: Record<AgingBucket, bigint> = {
+      breached: 0n,
+      due_within_30: 0n,
+      due_within_90: 0n,
+      beyond_90: 0n,
+    };
+    const out = rows.map((row) => {
+      const bucket = agingBucketFor(row.status, row.days_to_expiry);
+      buckets[bucket].count += 1;
+      scaled[bucket] += qtyToScaled(outstandingOf(row));
+      return { ...reportRow(row), bucket };
+    });
+    for (const bucket of AGING_BUCKETS) {
+      buckets[bucket].outstanding_qty = qtyFromScaled(scaled[bucket]);
+    }
+    sendJson(res, 200, {
+      report: 'job-work aging',
+      generated_at: generatedAt,
+      business_date: today,
+      buckets,
+      rows: out,
+      total_outstanding_qty: sumQty(rows, outstandingOf),
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
 /** Raw ledger rows in statement order (JSON only). */
 const getServiceOrderCustodyLedgerBase: RouteHandler = async (req, res, params) => {
   try {
@@ -964,3 +1387,28 @@ export const postServiceOrderDispatchHandler = requireRole({
   module: 'jobwork',
   functionScope: 'write',
 })(postServiceOrderDispatchBase);
+
+export const postServiceOrderReturnHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderReturnBase);
+
+export const postServiceOrderClosureHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderClosureBase);
+
+export const patchReturnClockClassificationHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(patchReturnClockClassificationBase);
+
+export const getJobworkItc04ReportHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'read',
+})(getJobworkItc04ReportBase);
+
+export const getJobworkAgingReportHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'read',
+})(getJobworkAgingReportBase);

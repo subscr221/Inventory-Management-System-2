@@ -1707,7 +1707,12 @@ const EXPECTED = [
   {
     canonical: 'read/projections/jobwork_material_receipt.sql',
     table: 'jobwork_material_receipt',
-    constraints: ['chk_jobwork_receipt_received_positive', 'chk_jobwork_receipt_challan_positive'],
+    constraints: [
+      'chk_jobwork_receipt_received_positive',
+      'chk_jobwork_receipt_challan_positive',
+      // Story 9.5: the Section 143 challan class (input / capital_goods).
+      'chk_jobwork_receipt_challan_class',
+    ],
     indexes: [
       'uq_jobwork_receipt_grn_line',
       'idx_jobwork_receipt_order',
@@ -1732,7 +1737,8 @@ const EXPECTED = [
       'idx_custody_ledger_order_sku',
     ],
     indexBodies: [
-      'ON custody_ledger_entry (source_event_id)',
+      // Story 9.5 Task 0: widened from (source_event_id) so one event may post one row per sku/lot.
+      'ON custody_ledger_entry (source_event_id, sku, lot_id) NULLS NOT DISTINCT',
       'ON custody_ledger_entry (service_order_id, occurred_at, created_at)',
       'ON custody_ledger_entry (service_order_id, ownership, sku)',
     ],
@@ -1773,11 +1779,116 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 9.5: the Section 143 return clock, one row per customer-material receipt.
+  {
+    canonical: 'read/projections/jobwork_return_clock.sql',
+    table: 'jobwork_return_clock',
+    constraints: [
+      'chk_jobwork_return_clock_class',
+      'chk_jobwork_return_clock_status',
+      'chk_jobwork_return_clock_counters',
+      'chk_jobwork_return_clock_expiry',
+    ],
+    indexes: [
+      'uq_jobwork_return_clock_receipt',
+      'idx_jobwork_return_clock_order_sku',
+      'idx_jobwork_return_clock_sweep',
+    ],
+    indexBodies: [
+      'ON jobwork_return_clock (receipt_id)',
+      'ON jobwork_return_clock (service_order_id, sku, challan_date, created_at)',
+      'ON jobwork_return_clock (status, expiry_date)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Notification projections (read/projections/notification.sql), previously unpinned. The uq_*
+  // UNIQUE constraints are inline in CREATE TABLE (no guarded DO block), so the table-body
+  // comparison covers them.
+  {
+    canonical: 'read/projections/notification.sql',
+    table: 'notifications',
+    constraints: ['chk_notifications_status'],
+    indexes: ['idx_notifications_target_user', 'idx_notifications_event_type'],
+  },
+  {
+    canonical: 'read/projections/notification.sql',
+    table: 'notification_deliveries',
+    constraints: ['chk_notification_deliveries_channel', 'chk_notification_deliveries_outcome'],
+    indexes: ['idx_notification_deliveries_notification'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/notification.sql',
+    table: 'push_subscriptions',
+    indexes: ['idx_push_subscriptions_user'],
+    appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
   const migrateSource = read('src/events/migrate.ts');
   const initDb = read('deploy/compose/init-db.sql');
+
+  // Story 9.5 code review (chunk 1): the challan_class ADD COLUMN and the return-clock backfill are
+  // standalone statements, so the generic CREATE TABLE body comparison above does not see them. They
+  // are the two statements that upgrade a database already carrying Story 9.2 or 9.4 data - the one
+  // case where a missing mirror is silent and the damage (challans with no clock, invisible to the
+  // sweep and to ITC-04) shows up only as a statutory miss.
+  it('Story 9.5 mirrors the challan_class additive column and the return-clock backfill into init-db.sql', () => {
+    const receiptSql = read('read/projections/jobwork_material_receipt.sql');
+    const clockSql = read('read/projections/jobwork_return_clock.sql');
+    const challanClassColumn =
+      "ADD COLUMN IF NOT EXISTS challan_class TEXT NOT NULL DEFAULT 'input'";
+    assert.ok(
+      receiptSql.includes(challanClassColumn),
+      'jobwork_material_receipt.sql missing the challan_class ADD COLUMN upgrade path',
+    );
+    assert.ok(
+      initDb.includes(challanClassColumn),
+      'init-db.sql missing the challan_class ADD COLUMN upgrade path',
+    );
+    // Story 9.5 code review (chunk 2): custody_ledger_entry.reference_ext carries the mandatory
+    // return challan number, and has the same silent-mirror risk as challan_class above.
+    const custodySql = read('read/projections/custody_ledger_entry.sql');
+    const referenceExt = 'ADD COLUMN IF NOT EXISTS reference_ext TEXT';
+    assert.ok(
+      custodySql.includes(referenceExt),
+      'custody_ledger_entry.sql missing the reference_ext ADD COLUMN upgrade path',
+    );
+    assert.ok(
+      initDb.includes(referenceExt),
+      'init-db.sql missing the reference_ext ADD COLUMN upgrade path',
+    );
+    for (const fragment of [
+      'INSERT INTO jobwork_return_clock (',
+      'FROM jobwork_material_receipt r',
+      'WHERE NOT EXISTS (',
+    ]) {
+      assert.ok(
+        clockSql.includes(fragment),
+        `jobwork_return_clock.sql backfill missing: ${fragment}`,
+      );
+      assert.ok(initDb.includes(fragment), `init-db.sql backfill mirror missing: ${fragment}`);
+    }
+  });
+
+  // Story 9.5 code review (chunk 1): the Task 0 widening guard must discriminate on the COLUMN LIST.
+  // Keyed on the NULLS NOT DISTINCT clause instead, a single-column index carrying that clause (legal
+  // on PG15+) would never be dropped, CREATE UNIQUE INDEX IF NOT EXISTS would match by name and
+  // no-op, and every multi-row custody post would fail with 23505 forever.
+  it('Story 9.5 Task 0 index guard discriminates on the widened column list', () => {
+    const custodySql = read('read/projections/custody_ledger_entry.sql');
+    const guard = "indexdef NOT LIKE '%(source_event_id, sku, lot_id)%'";
+    assert.ok(
+      custodySql.includes(guard),
+      'custody_ledger_entry.sql guard must test the column list',
+    );
+    assert.ok(initDb.includes(guard), 'init-db.sql guard must test the column list');
+    assert.ok(
+      !custodySql.includes("indexdef NOT LIKE '%NULLS NOT DISTINCT%'"),
+      'the null-handling clause is not a column-list discriminator',
+    );
+  });
 
   it('Story 4.6 mirrors every MSME additive column into init-db.sql and registers msme_ageing_feed in MIGRATIONS', () => {
     const supplierSql = read('read/projections/supplier.sql');

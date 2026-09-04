@@ -4,6 +4,7 @@ import type {
   CustodyConsumptionPostedPayload,
   CustodyOwnMaterialAddedPayload,
   CustodyLossRecordedPayload,
+  CustodyReturnRecordedPayload,
 } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
 import { config } from '../config/index.js';
@@ -22,14 +23,9 @@ import {
 import { toIstCalendarDate } from '../lib/business-days.js';
 import { applyStockBalanceProjection } from './stock-balance.js';
 import { isPositiveQtyString, JOB_WORK_STOCK_CLASS } from './jobwork-receipt.js';
-import {
-  qtyAdd,
-  qtyCompare,
-  qtyFromScaled,
-  qtyNegate,
-  qtyToScaled,
-} from './custody-statement.js';
+import { qtyAdd, qtyCompare, qtyFromScaled, qtyNegate, qtyToScaled } from './custody-statement.js';
 import { resolveApprover } from '../api/v1/indents.js';
+import { reconcileReturnClocks } from './jobwork-return-clock.js';
 
 /**
  * Story 9.3: custody ledger consumption and own-material seam (FR-JW-05, FR-JW-06, FR-JW-07).
@@ -55,6 +51,11 @@ export const CUSTODY_CONSUMPTION_POSTED = 'custody.consumption_posted';
 export const CUSTODY_OWN_MATERIAL_ADDED = 'custody.own_material_added';
 /** Story 9.4 (FR-JW-08): declared process loss, on the SAME custody stream (9.3 forward-declared it). */
 export const CUSTODY_LOSS_RECORDED = 'custody.loss_recorded';
+/**
+ * Story 9.5 (FR-AC-11, Binding decision 2): unconsumed customer material returned to the principal,
+ * on the SAME custody stream (9.3 forward-declared the `return` category; this story builds it).
+ */
+export const CUSTODY_RETURN_RECORDED = 'custody.return_recorded';
 /** Story 9.4 (FR-JW-08): the DOA transaction type governing over-norm loss approval, the Story
  * 6.1/6.3 release-override chain verbatim (resolveApprover, forged-approver rejection, acting-user
  * check). Must be seeded in the DOA registry before the approval path is reachable - no code seeds
@@ -73,6 +74,17 @@ export const CUSTODY_CONSUMPTION = Symbol('custody.consumption_handoff');
 
 export function isCustodyConsumptionHandoff(envelope: EventEnvelope): boolean {
   return (envelope as unknown as Record<symbol, unknown>)[CUSTODY_CONSUMPTION] === true;
+}
+
+/**
+ * Story 9.5 (FR-AC-11): the SECOND gated door through the 9.2 total bar, on the identical Symbol
+ * mechanism, opened only by applyCustodyReturnProjection after the order, the lot-under-order, the
+ * custody balance and the mandatory return challan number are re-derived under the order lock.
+ */
+export const CUSTODY_RETURN = Symbol('custody.return_handoff');
+
+export function isCustodyReturnHandoff(envelope: EventEnvelope): boolean {
+  return (envelope as unknown as Record<symbol, unknown>)[CUSTODY_RETURN] === true;
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -127,6 +139,21 @@ const LOSS_FIELDS = new Set([
 ]);
 const MAX_REASON_CODE_LENGTH = 200;
 
+/** Story 9.5: the closed return shape. return_challan_number_ext is MANDATORY (see the assert). */
+const RETURN_FIELDS = new Set([
+  'service_order_id',
+  'return_id',
+  'sku',
+  'lot_id',
+  'location_id',
+  'quantity',
+  'uom',
+  'site_id',
+  'return_challan_number_ext',
+  'posted_by',
+]);
+const RETURN_DERIVED_FIELDS = ['custody_balance_after'] as const;
+
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
 }
@@ -151,6 +178,25 @@ function reject(
 /** The order states a custody posting may act on (AC 7): in_process only. */
 export function orderAcceptsCustodyPosting(status: ServiceOrderRow['status']): boolean {
   return status === 'in_process';
+}
+
+/**
+ * Story 9.5 code review (chunk 2): the states a RETURN may act on. Identical to
+ * `orderAcceptsCustodyPosting` today, and deliberately kept as its own predicate.
+ *
+ * The review asked for this to be widened so a cancelled order could drain its leftover customer
+ * material instead of being forced to book it as `loss` - the case the applier's own docstring used
+ * to cite as its motivation. There is no such state to widen to: `chk_service_order_status` admits
+ * only draft, confirmed, in_process and closed (`read/projections/service_order.sql:45`), and the
+ * Story 9.1 transition matrix has no cancellation path, so a cancelled job-work order cannot exist.
+ * `closed` stays barred on its own merits - it passed the AC8 zero-balance gate, so it has nothing
+ * left to return, and re-opening its balance would strand it with no route to re-close.
+ *
+ * This predicate is the seam where a future cancellation state plugs in without loosening the gate
+ * for consumption, own-material or loss.
+ */
+export function orderAcceptsCustodyReturn(status: ServiceOrderRow['status']): boolean {
+  return orderAcceptsCustodyPosting(status);
 }
 
 /**
@@ -354,6 +400,41 @@ export function assertCustodyLossShape(envelope: EventEnvelope): void {
   }
 }
 
+/**
+ * Story 9.5 (FR-AC-11, Binding decision 2): a return of unconsumed customer material. Same closed
+ * shape discipline as consumption (lot NAMED, location NAMED - the drain needs the grain). The
+ * return challan number is mandatory and non-blank: goods leaving the job worker without a
+ * delivery challan is a GST offence, not a paperwork nit, and the field is named `challan`, not
+ * `reference`, so nobody reads it as optional decoration. Rendering is Story 9.6's return-challan
+ * renderer by name; 9.5 records the number of the paper challan that already exists.
+ */
+export function assertCustodyReturnShape(envelope: EventEnvelope): void {
+  if (envelope.event_type !== CUSTODY_RETURN_RECORDED) return;
+  if (!CUSTODY_STREAM_TYPES.has(envelope.stream_type)) {
+    reject('INVALID_EVENT_ENVELOPE', 'custody.* events must ride the custody stream', {
+      event_type: envelope.event_type,
+      stream_type: envelope.stream_type,
+    });
+  }
+  const p = envelope.payload as Record<string, unknown>;
+  assertCommonShape(envelope, p, 'return_id', RETURN_FIELDS, RETURN_DERIVED_FIELDS);
+  if (!isNonEmptyString(p['lot_id']) || (p['lot_id'] as string).trim().length > MAX_TEXT_LENGTH) {
+    reject('INVALID_PARAMS', 'lot_id is required and must be a non-empty string');
+  }
+  p['lot_id'] = (p['lot_id'] as string).trim();
+  if (
+    !isNonEmptyString(p['return_challan_number_ext']) ||
+    (p['return_challan_number_ext'] as string).trim().length > MAX_TEXT_LENGTH
+  ) {
+    reject(
+      'INVALID_PARAMS',
+      `return_challan_number_ext is required and must be the non-blank delivery challan number the material leaves under (at most ${MAX_TEXT_LENGTH} characters)`,
+      { field: 'return_challan_number_ext' },
+    );
+  }
+  p['return_challan_number_ext'] = (p['return_challan_number_ext'] as string).trim();
+}
+
 // ---------------------------------------------------------------------------
 // In-transaction gates (DB access)
 // ---------------------------------------------------------------------------
@@ -381,6 +462,9 @@ async function requireInProcessOrder(
   serviceOrderId: string,
   siteId: string,
   client: PoolClient,
+  // Story 9.5 code review (chunk 2): the state predicate is a parameter so the return path can
+  // widen it (orderAcceptsCustodyReturn) without loosening the gate for every other category.
+  acceptsState: (status: ServiceOrderRow['status']) => boolean = orderAcceptsCustodyPosting,
 ): Promise<ServiceOrderRow> {
   await lockOrder(serviceOrderId, client);
   const order = await getServiceOrderById(serviceOrderId, client, true);
@@ -392,7 +476,7 @@ async function requireInProcessOrder(
       409,
     );
   }
-  if (!orderAcceptsCustodyPosting(order.status)) {
+  if (!acceptsState(order.status)) {
     reject(
       'SOURCE_DOCUMENT_REQUIRED',
       `A custody posting requires an in_process service order; this order is ${order.status}`,
@@ -854,7 +938,8 @@ export async function applyCustodyLossProjection(
   // quantities in two different units get summed into one balance.
   const existingUomResult = await client.query(
     `SELECT uom FROM custody_ledger_entry
-      WHERE service_order_id = $1 AND sku = $2 ORDER BY occurred_at ASC LIMIT 1`,
+      WHERE service_order_id = $1 AND sku = $2 AND ownership = 'customer'
+      ORDER BY occurred_at ASC LIMIT 1`,
     [order.service_order_id, p.sku],
   );
   const existingUom = existingUomResult.rows[0]?.['uom'] as string | undefined;
@@ -918,16 +1003,13 @@ export async function applyCustodyLossProjection(
     // CUMULATIVE loss is the banding value - findMatchingDoaEntry bands on `$2 > value_min`, so a
     // hard-coded 0 can only ever match the value_min IS NULL band and every over-norm loss, of any
     // size, would need only the lowest authority (code review 2026-09-03).
-    const approval = await resolveApprover(
-      JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE,
-      cumulativeLoss,
-    );
+    const approval = await resolveApprover(JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE, cumulativeLoss);
     if (!approval.requiresApproval || approval.approverActorId === null) {
       reject(
         'APPROVAL_UNRESOLVED',
         `No DOA entry governs ${JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE}`,
         { transaction_type: JOBWORK_OVER_NORM_LOSS_TRANSACTION_TYPE },
-        404,
+        409,
       );
     }
     if (p.approved_by !== approval.approverActorId) {
@@ -1007,7 +1089,219 @@ export async function applyCustodyLossProjection(
     classifyDuplicate(err, p.loss_id, eventId);
   }
 
+  // Story 9.5 (Binding decision 6): loss is Section 143(5) accounted waste - it moves the clock's
+  // SEPARATE loss_qty counter (reported in its own ITC-04 column), never reconciled_qty and never
+  // deemed supply. Non-strict for the same reason dispatch is: the loss is bounded by the RECEIVED
+  // balance, which may exceed the challan.
+  const lossReconciled = await reconcileReturnClocks(
+    {
+      serviceOrderId: order.service_order_id,
+      sku: p.sku,
+      quantity: p.quantity,
+      counter: 'loss_qty',
+      category: 'loss',
+      strict: false,
+    },
+    client,
+  );
+  if (qtyToScaled(lossReconciled.unallocated) > 0n) {
+    console.warn(
+      `custody loss ${p.loss_id}: ${lossReconciled.unallocated} of ${p.quantity} ${p.sku} had no return-clock capacity on order ${order.service_order_id} (over-tolerance receipt); the loss is recorded in full and the clock accounting is short by that amount`,
+    );
+  }
+
   // The stored event carries what THIS process derived, never what the caller asserted.
   envelope.payload['over_norm_approved'] = overNormApproved;
   envelope.payload['approved_by'] = approvedBy;
+}
+
+// ---------------------------------------------------------------------------
+// Return (Story 9.5, FR-AC-11 - the honest drain for unconsumed customer material)
+// ---------------------------------------------------------------------------
+
+/**
+ * Story 9.5 Task 1.4. Same lock order as every custody applier: order advisory lock, order row FOR
+ * UPDATE, plain reads, stock_balance rows inside applyStockBalanceProjection, clock rows LAST.
+ * Gates, all re-derived here so a direct POST /api/v1/events meets the identical wall: order
+ * in_process at this site (SOURCE_DOCUMENT_REQUIRED), the lot was received under THIS order for
+ * this sku (CROSS_ISSUE_BLOCKED), the uom matches the sku's ledger uom (INVALID_PARAMS), and the
+ * customer custody balance covers the quantity (INSUFFICIENT_STOCK). Then the physical drain through
+ * the CUSTODY_RETURN door, the negative `return` ledger row, the lot_trace entry, and the CAPPED
+ * clock reconciliation, CAPPED at the outstanding challan capacity (Story 9.5 code review chunk 2 -
+ * see the call site for why strict mode was fail-open on the ledger). Without this path a short
+ * order could only drain leftover customer material by booking it as `loss` with an invented reason
+ * code (the Story 7.8 lesson). The earlier wording here also named the CANCELLED order as the
+ * motivating case; there is no cancellation state in the Story 9.1 status model, so that claim was
+ * never true - see `orderAcceptsCustodyReturn`.
+ */
+export async function applyCustodyReturnProjection(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  if (envelope.event_type !== CUSTODY_RETURN_RECORDED) return;
+  if (!CUSTODY_STREAM_TYPES.has(envelope.stream_type)) return;
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as CustodyReturnRecordedPayload;
+  const occurredAt = envelope.metadata.occurred_at ?? new Date().toISOString();
+
+  const order = await requireInProcessOrder(
+    p.service_order_id,
+    p.site_id,
+    client,
+    orderAcceptsCustodyReturn,
+  );
+
+  const received = await client.query(
+    `SELECT 1 FROM jobwork_material_receipt
+      WHERE service_order_id = $1 AND sku = $2 AND lot_id = $3 LIMIT 1`,
+    [order.service_order_id, p.sku, p.lot_id],
+  );
+  if (received.rows.length === 0) {
+    reject(
+      'CROSS_ISSUE_BLOCKED',
+      'The named lot was not received under this service order for this sku',
+      {
+        service_order_id: order.service_order_id,
+        sku: p.sku,
+        lot_id: p.lot_id,
+        demand_kind: 'custody_return',
+      },
+      409,
+    );
+  }
+
+  const existingUomResult = await client.query(
+    `SELECT uom FROM custody_ledger_entry
+      WHERE service_order_id = $1 AND sku = $2 AND ownership = 'customer'
+      ORDER BY occurred_at ASC LIMIT 1`,
+    [order.service_order_id, p.sku],
+  );
+  const existingUom = existingUomResult.rows[0]?.['uom'] as string | undefined;
+  if (existingUom && p.uom !== existingUom) {
+    reject(
+      'INVALID_PARAMS',
+      'The return uom must match the uom this sku is carried in on the custody ledger',
+      { service_order_id: order.service_order_id, sku: p.sku, uom: p.uom, ledger_uom: existingUom },
+      400,
+    );
+  }
+
+  const balance = await customerCustodyBalance(order.service_order_id, p.sku, client);
+  if (!custodyBalanceCovers(balance, p.quantity)) {
+    reject(
+      'INSUFFICIENT_STOCK',
+      'The returned quantity exceeds the customer-owned custody balance for this sku',
+      {
+        service_order_id: order.service_order_id,
+        sku: p.sku,
+        requested_qty: p.quantity,
+        custody_balance_qty: balance,
+      },
+      409,
+    );
+  }
+
+  // Physical drain through the SECOND gated door: the 9.2 total bar opens only for a view carrying
+  // CUSTODY_RETURN. applyStockIssue's own INSUFFICIENT_STOCK propagates for a physical shortfall.
+  const location = await resolveLocation(p.location_id, client);
+  const stockView: EventEnvelope = {
+    ...envelope,
+    event_id: eventId,
+    stream_type: 'inventory',
+    event_type: 'stock.issued',
+    payload: {
+      sku: p.sku,
+      target_location_id: location.location_id,
+      lot_id: p.lot_id,
+      quantity: p.quantity,
+      stock_class: JOB_WORK_STOCK_CLASS,
+      business_stream: JOB_WORK_BUSINESS_STREAM,
+    },
+  };
+  (stockView as unknown as Record<symbol, unknown>)[CUSTODY_RETURN] = true;
+  await applyStockBalanceProjection(stockView, client);
+
+  const quantityDelta = qtyNegate(p.quantity);
+  try {
+    await insertCustodyLedgerEntry(
+      {
+        entry_id: p.return_id,
+        service_order_id: order.service_order_id,
+        customer_party_code: order.customer_party_code,
+        movement_category: 'return',
+        ownership: 'customer',
+        sku: p.sku,
+        lot_id: p.lot_id,
+        location_id: location.location_id,
+        quantity_delta: quantityDelta,
+        uom: p.uom,
+        billable: false,
+        bom_line_id: null,
+        kit_bom_revision_id: null,
+        receipt_id: null,
+        variance_qty: null,
+        variance_flagged: null,
+        site_id: order.site_id,
+        posted_by: p.posted_by,
+        occurred_at: occurredAt,
+        business_date: toIstCalendarDate(new Date(occurredAt)),
+        source_event_id: eventId,
+        source_event_type: CUSTODY_RETURN_RECORDED,
+        correlation_id: envelope.metadata.correlation_id ?? null,
+        // Story 9.5 code review (chunk 2): the delivery challan number is PERSISTED, not just
+        // asserted. The shape assert calls it mandatory because goods leaving the job worker
+        // without one is a GST offence, but until now it lived only in the raw event payload,
+        // where the Rule 45 statement and every read model were blind to it.
+        reference_ext: p.return_challan_number_ext,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    classifyDuplicate(err, p.return_id, eventId);
+  }
+
+  await appendCustodyTrace(
+    {
+      sku: p.sku,
+      lotNumber: p.lot_id,
+      quantityChange: quantityDelta,
+      eventType: CUSTODY_RETURN_RECORDED,
+      eventId,
+      occurredAt,
+      location,
+    },
+    client,
+  );
+
+  // Section 143: goods back with the principal stop the clock.
+  //
+  // Story 9.5 code review (chunk 2): CAPPED, not strict. Clock capacity is `challan_qty` while the
+  // custody balance this path drains is built from `received_qty`, so on an over-tolerance receipt
+  // (105 received against a challan of 100 - the case dispatch and loss are already non-strict for)
+  // the excess had NO legal drain: the return was refused INVALID_PARAMS, the only remaining route
+  // was booking it as `loss` with an invented reason code, and CUSTODY_NOT_ZERO blocked closure
+  // until someone did. Fail-closed on the clock was turning into fail-open on the ledger. The
+  // physical movement is already fully gated upstream - lot-under-order, uom, custody balance and
+  // the CUSTODY_RETURN stock door - so the clock absorbs what capacity it has and reports the rest.
+  const reconciled = await reconcileReturnClocks(
+    {
+      serviceOrderId: order.service_order_id,
+      sku: p.sku,
+      quantity: p.quantity,
+      counter: 'reconciled_qty',
+      category: 'return',
+      strict: false,
+    },
+    client,
+  );
+  if (qtyToScaled(reconciled.unallocated) > 0n) {
+    console.warn(
+      `custody return ${p.return_id}: ${reconciled.unallocated} of ${p.quantity} ${p.sku} exceeded the outstanding return-clock capacity on order ${order.service_order_id} (over-tolerance receipt); the return is recorded in full and the clock accounting is short by that amount`,
+    );
+  }
+
+  // The stored event carries what THIS process derived, never what the caller asserted.
+  envelope.payload['custody_balance_after'] = qtyAdd(balance, quantityDelta);
 }

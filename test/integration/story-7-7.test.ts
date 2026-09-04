@@ -1503,7 +1503,7 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
   // AC4: the reason-coded override and its DOA authority
   // -------------------------------------------------------------------------
 
-  it('AC4: an override with no governing DOA entry is rejected 404 APPROVAL_UNRESOLVED', async () => {
+  it('AC4: an override with no governing DOA entry is rejected 409 APPROVAL_UNRESOLVED', async () => {
     // Order-independent: the registry is cleared HERE rather than relying on this test running
     // before any sibling seeds the entry. Every test needing the resolved-approver path calls
     // seedWarrantyOverrideDoa itself, which re-creates the entry lazily.
@@ -1520,7 +1520,7 @@ describe('Story 7.7 AMC, Warranty, and Insurance Tracking', () => {
     });
     const workOrder = await breakdownWorkOrder(assetId);
     const res = await recordOverride(workOrder['work_order_id'] as string);
-    assert.strictEqual(res.status, 404, JSON.stringify(res.body));
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'APPROVAL_UNRESOLVED');
   });
 

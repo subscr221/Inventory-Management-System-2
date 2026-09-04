@@ -15,8 +15,12 @@
 -- return, loss, offcut, dispatch and count_adjustment are forward-declared for Stories 9.4-9.6 so
 -- they post into this table without a migration; no 9.3 path produces them. own_material is the
 -- processor's own addition: ownership = 'processor', billable = true, never in the customer
--- balance (FR-JW-07). One ledger row per source event (uq_custody_ledger_source_event) makes
--- replay safe. business_date is the IST calendar date of occurred_at (9.5 aging and ITC-04).
+-- balance (FR-JW-07). One ledger row per source event PER (sku, lot) - uq_custody_ledger_source_event
+-- on (source_event_id, sku, lot_id) NULLS NOT DISTINCT - makes replay safe while letting one event
+-- post several rows: a Story 9.4 dispatch apportions across every customer-supplied sku, and a
+-- Story 9.5 physical-verification sign-off posts one count_adjustment per verified line (Story 9.5
+-- Task 0 widened the original single-column index; the name is kept so the 23505 classification
+-- arms still resolve). business_date is the IST calendar date of occurred_at (9.5 aging and ITC-04).
 
 CREATE TABLE IF NOT EXISTS custody_ledger_entry (
   entry_id             UUID PRIMARY KEY,
@@ -42,6 +46,12 @@ CREATE TABLE IF NOT EXISTS custody_ledger_entry (
   source_event_id      UUID NOT NULL,
   source_event_type    TEXT NOT NULL,
   correlation_id       UUID,
+  -- Story 9.5 code review (chunk 2): the external document number a movement cites. Populated
+  -- for `return` with the mandatory return_challan_number_ext the shape assert already demands
+  -- (goods leaving the job worker without a delivery challan is a GST offence), which was
+  -- otherwise validated and then discarded into the raw event payload where no read model
+  -- could see it. Nullable and free for other categories to adopt.
+  reference_ext        TEXT,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_custody_ledger_category CHECK (movement_category IN ('receipt','consumption','return','loss','offcut','dispatch','count_adjustment','own_material')),
   CONSTRAINT chk_custody_ledger_ownership_vocab CHECK (ownership IN ('customer','processor')),
@@ -56,7 +66,25 @@ CREATE TABLE IF NOT EXISTS custody_ledger_entry (
   )
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_custody_ledger_source_event ON custody_ledger_entry (source_event_id);
+-- Story 9.5 code review (chunk 2): additive upgrade path for a live database.
+ALTER TABLE custody_ledger_entry ADD COLUMN IF NOT EXISTS reference_ext TEXT;
+
+-- Story 9.5 Task 0: widen the replay key from (source_event_id) to (source_event_id, sku, lot_id).
+-- Guarded: the DROP only fires while the OLD single-column definition is in place, so a re-apply
+-- on an already-widened database is a no-op (migrate-twice idempotency).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename = 'custody_ledger_entry'
+      AND indexname = 'uq_custody_ledger_source_event'
+      AND indexdef NOT LIKE '%(source_event_id, sku, lot_id)%'
+  ) THEN
+    DROP INDEX IF EXISTS uq_custody_ledger_source_event;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_custody_ledger_source_event ON custody_ledger_entry (source_event_id, sku, lot_id) NULLS NOT DISTINCT;
 CREATE INDEX IF NOT EXISTS idx_custody_ledger_order_time ON custody_ledger_entry (service_order_id, occurred_at, created_at);
 CREATE INDEX IF NOT EXISTS idx_custody_ledger_order_sku ON custody_ledger_entry (service_order_id, ownership, sku);
 

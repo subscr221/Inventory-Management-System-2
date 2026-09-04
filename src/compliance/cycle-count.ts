@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
@@ -26,6 +27,14 @@ import {
   insertPhysicalVerificationLine,
   markPhysicalVerificationSignedOff,
 } from '../read/projections/physical_verification.js';
+import { toIstCalendarDate } from '../lib/business-days.js';
+import { insertCustodyLedgerEntry } from '../read/projections/custody_ledger_entry.js';
+import { getServiceOrderById } from '../read/projections/service_order.js';
+// Story 9.5 code review (chunk 2): the scaled-integer helpers, so the NUMERIC(18,6) verification
+// variance is rounded to the ledger's NUMERIC(18,3) scale here rather than by an unclassified
+// Postgres CHECK violation at insert time. Imported from custody-statement (a leaf module) rather
+// than custody-ledger, to keep this file free of a compliance-to-compliance import cycle.
+import { qtyFromScaled, qtyToScaled } from './custody-statement.js';
 import { getCycleCountLines } from '../read/projections/cycle_count.js';
 
 /**
@@ -619,7 +628,7 @@ export async function applyCycleCountProjection(
   }
 
   if (type === 'physical_verification.signed_off') {
-    await applyPhysicalVerificationSignedOff(envelope, client);
+    await applyPhysicalVerificationSignedOff(envelope, client, eventId);
     return;
   }
 }
@@ -1299,6 +1308,7 @@ async function applyPhysicalVerificationCompleted(
 async function applyPhysicalVerificationSignedOff(
   envelope: EventEnvelope,
   client: PoolClient,
+  eventId: string,
 ): Promise<void> {
   const p = envelope.payload as Record<string, unknown>;
   const pvId = p['physical_verification_id'] as string;
@@ -1341,4 +1351,228 @@ async function applyPhysicalVerificationSignedOff(
   }
 
   await markPhysicalVerificationSignedOff(pvId, signoffActor, signedOffAt, client);
+
+  // Story 9.5 (FR-JW-13, AC 7): customer-material variances reconciled onto the custody ledger in
+  // the SAME transaction as the sign-off (AD-12), so the two commit or roll back together.
+  await reconcileJobWorkVerificationVariances(
+    pvId,
+    header.location_id,
+    signoffActor,
+    signedOffAt,
+    envelope,
+    eventId,
+    client,
+  );
+}
+
+/**
+ * Story 9.5 Task 5.2: for every signed-off verification line in the job_work class with a non-zero
+ * variance, one `count_adjustment` custody-ledger row (the category Story 9.3 forward-declared and
+ * no prior story produced), quantity_delta = variance (counted minus book, non-zero by the CHECK),
+ * posted_by = the verifying user (the counter, falling back to the line approver, then the sign-off
+ * actor), source_event_id = THIS sign-off event. Several lines share that event id - exactly why
+ * Story 9.5 Task 0 widened uq_custody_ledger_source_event to (source_event_id, sku, lot_id).
+ *
+ * The owning order is resolved from the most recent customer-owned receipt row for (sku, lot):
+ * job-work lots are order-scoped by construction (the 9.3 lot-under-order gate refuses a lot not
+ * received under the order), so a single lookup is sound; a lot-less line has no custody grain to
+ * resolve and is skipped with a log line (disclosed). A count_adjustment never reconciles a return
+ * clock - a verification discrepancy is not a movement out of the job worker's premises.
+ *
+ * Lock order: the PV row is already locked by the caller; the order advisory lock is taken here
+ * before the ledger insert (order appliers never touch PV rows, so no cycle), matching every other
+ * custody write.
+ */
+async function reconcileJobWorkVerificationVariances(
+  pvId: string,
+  verificationLocationId: string,
+  signoffActor: string,
+  signedOffAt: string,
+  envelope: EventEnvelope,
+  eventId: string,
+  client: PoolClient,
+): Promise<void> {
+  // Story 9.5 code review (chunk 2), P1: SUM per (sku, lot). physical_verification_line has no
+  // uniqueness constraint and its grain includes cycle_count_id (physical_verification.sql:35-51),
+  // so a verification rolling up two cycle counts that both counted the same sku and lot produces
+  // two rows. One ledger row per line then collided on the Task 0 widened key
+  // (source_event_id, sku, lot_id) and turned a legitimate sign-off into a permanent 409 that no
+  // retry could clear. Aggregating first is also the honest custody answer: the customer's position
+  // in one lot moved by the NET of what every count found, not by two competing deltas.
+  const lines = await client.query(
+    `SELECT sku, lot_id,
+            SUM(variance_quantity)::text AS variance_quantity,
+            MIN(counter_actor_id::text) AS counter_actor_id,
+            MIN(approver_actor_id::text) AS approver_actor_id
+       FROM physical_verification_line
+      WHERE physical_verification_id = $1 AND stock_class = $2 AND variance_quantity <> 0
+      GROUP BY sku, lot_id
+      ORDER BY sku ASC, lot_id ASC NULLS FIRST`,
+    [pvId, JOB_WORK_STOCK_CLASS],
+  );
+
+  // P3/P4: resolve every owning order BEFORE taking any lock, then take the advisory locks in
+  // service_order_id order. Locking inside the loop in sku order let two concurrent sign-offs that
+  // touch the same pair of orders acquire them in opposite sequence and deadlock.
+  interface PendingAdjustment {
+    sku: string;
+    lot_id: string;
+    variance: string;
+    posted_by: string;
+    owner: {
+      service_order_id: string;
+      customer_party_code: string;
+      uom: string;
+      site_id: string;
+    };
+  }
+  const pending: PendingAdjustment[] = [];
+
+  for (const line of lines.rows as {
+    sku: string;
+    lot_id: string | null;
+    variance_quantity: string;
+    counter_actor_id: string | null;
+    approver_actor_id: string | null;
+  }[]) {
+    if (line.lot_id === null) {
+      console.warn(
+        `physical verification ${pvId}: job_work line for ${line.sku} has no lot; custody reconciliation skipped (no custody grain)`,
+      );
+      continue;
+    }
+    // P2: variance_quantity is NUMERIC(18,6) and quantity_delta is NUMERIC(18,3). A variance of
+    // 0.0004 passes the `<> 0` row filter, rounds to 0.000 on insert and violates
+    // chk_custody_ledger_sign with a 23514 the catch below does not classify - an unclassified 500
+    // that made the whole sign-off unapplicable. Round to the ledger's own scale here and skip a
+    // line that is zero at that scale: a sub-milligram discrepancy is not a custody movement.
+    const variance = qtyFromScaled(qtyToScaled(line.variance_quantity));
+    if (qtyToScaled(variance) === 0n) {
+      console.warn(
+        `physical verification ${pvId}: job_work line ${line.sku} / ${line.lot_id} has a variance of ${line.variance_quantity}, which is zero at the custody ledger's three-decimal scale; reconciliation skipped`,
+      );
+      continue;
+    }
+    const receipt = await client.query(
+      `SELECT service_order_id, customer_party_code, uom, site_id
+         FROM custody_ledger_entry
+        WHERE sku = $1 AND lot_id = $2 AND movement_category = 'receipt'
+        ORDER BY occurred_at DESC, created_at DESC LIMIT 1`,
+      [line.sku, line.lot_id],
+    );
+    const owner = receipt.rows[0] as
+      | { service_order_id: string; customer_party_code: string; uom: string; site_id: string }
+      | undefined;
+    if (!owner) {
+      console.warn(
+        `physical verification ${pvId}: job_work lot ${line.lot_id} (${line.sku}) has no custody receipt; reconciliation skipped`,
+      );
+      continue;
+    }
+    pending.push({
+      sku: line.sku,
+      lot_id: line.lot_id,
+      variance,
+      posted_by: line.counter_actor_id ?? line.approver_actor_id ?? signoffActor,
+      owner,
+    });
+  }
+
+  pending.sort(
+    (a, b) =>
+      a.owner.service_order_id.localeCompare(b.owner.service_order_id) ||
+      a.sku.localeCompare(b.sku) ||
+      a.lot_id.localeCompare(b.lot_id),
+  );
+
+  const lockedOrders = new Set<string>();
+  for (const line of pending) {
+    const owner = line.owner;
+    const variance = line.variance;
+    if (!lockedOrders.has(owner.service_order_id)) {
+      await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+        owner.service_order_id,
+      ]);
+      lockedOrders.add(owner.service_order_id);
+      // P3: re-derive the order under the lock, exactly as every other custody write does through
+      // requireInProcessOrder. Without it a sign-off could move the custody balance of an order
+      // that had already passed the AC8 zero-balance gate and closed, leaving it non-zero with no
+      // route to re-close; and an owner resolved by (sku, lot) alone could belong to another site.
+      const order = await getServiceOrderById(owner.service_order_id, client, true);
+      // The same predicate custody-ledger's orderAcceptsCustodyPosting applies, inlined to keep
+      // this file's imports one-directional (projections only, never another compliance module).
+      if (!order || order.status !== 'in_process') {
+        throw new AppError(
+          409,
+          'SOURCE_DOCUMENT_REQUIRED',
+          `A custody count adjustment requires an in_process service order; this order is ${order?.status ?? 'missing'}`,
+          {
+            physical_verification_id: pvId,
+            service_order_id: owner.service_order_id,
+            status: order?.status ?? null,
+            sku: line.sku,
+            lot_id: line.lot_id,
+          },
+        );
+      }
+      if (order.site_id !== owner.site_id) {
+        throw new AppError(
+          409,
+          'SOURCE_DOCUMENT_REQUIRED',
+          'The resolved custody owner belongs to a different site than its service order',
+          {
+            physical_verification_id: pvId,
+            service_order_id: owner.service_order_id,
+            order_site_id: order.site_id,
+            receipt_site_id: owner.site_id,
+          },
+        );
+      }
+    }
+    try {
+      await insertCustodyLedgerEntry(
+        {
+          entry_id: randomUUID(),
+          service_order_id: owner.service_order_id,
+          customer_party_code: owner.customer_party_code,
+          movement_category: 'count_adjustment',
+          ownership: 'customer',
+          sku: line.sku,
+          lot_id: line.lot_id,
+          location_id: verificationLocationId,
+          quantity_delta: variance,
+          uom: owner.uom,
+          billable: false,
+          bom_line_id: null,
+          kit_bom_revision_id: null,
+          receipt_id: null,
+          variance_qty: variance,
+          variance_flagged: true,
+          site_id: owner.site_id,
+          posted_by: line.posted_by,
+          occurred_at: signedOffAt,
+          business_date: toIstCalendarDate(new Date(signedOffAt)),
+          source_event_id: eventId,
+          source_event_type: 'physical_verification.signed_off',
+          correlation_id: envelope.metadata.correlation_id ?? null,
+        },
+        client,
+      );
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && (err as { code: string }).code === '23505') {
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'A custody ledger count_adjustment already exists for this verification line',
+          {
+            physical_verification_id: pvId,
+            sku: line.sku,
+            lot_id: line.lot_id,
+            constraint: (err as { constraint?: string }).constraint,
+          },
+        );
+      }
+      throw err;
+    }
+  }
 }

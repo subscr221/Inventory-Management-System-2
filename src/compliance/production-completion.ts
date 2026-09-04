@@ -454,7 +454,7 @@ async function applyCompletionPosted(
         'APPROVAL_UNRESOLVED',
         `No DOA entry governs ${OVER_COMPLETION_TRANSACTION_TYPE}`,
         { transaction_type: OVER_COMPLETION_TRANSACTION_TYPE },
-        404,
+        409,
       );
     }
     if (p['approved_by'] !== approval.approverActorId) {
@@ -933,7 +933,7 @@ async function applyShortCloseRecorded(
       'APPROVAL_UNRESOLVED',
       `No DOA entry governs ${SHORT_CLOSE_TRANSACTION_TYPE}`,
       { transaction_type: SHORT_CLOSE_TRANSACTION_TYPE },
-      404,
+      409,
     );
   }
   if (envelope.metadata.actor.user_id !== approval.approverActorId) {

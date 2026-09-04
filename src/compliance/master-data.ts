@@ -172,7 +172,7 @@ export async function resolveComplianceAuthority(
       'APPROVAL_UNRESOLVED',
       `No DOA entry governs ${transactionType}`,
       { transaction_type: transactionType },
-      404,
+      409,
     );
   }
   const today = toIstCalendarDate(new Date());
@@ -399,6 +399,7 @@ async function applyBisLicenceRecorded(envelope: EventEnvelope, client: PoolClie
 
   await requireItemExists(sku, client);
   await requireLocationExists(siteId, client);
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sku + '|' + (siteId ?? '')]);
   await requireNoOverlap(sku, siteId, validFrom, validTo, null, client);
 
   try {
@@ -449,6 +450,9 @@ async function applyBisLicenceUpdated(envelope: EventEnvelope, client: PoolClien
   if (validTo < validFrom) {
     reject('INVALID_PARAMS', 'valid_to must be on or after valid_from', { field: 'valid_to' });
   }
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+    existing.sku + '|' + (existing.site_id ?? ''),
+  ]);
   await requireNoOverlap(existing.sku, existing.site_id, validFrom, validTo, licenceId, client);
   // BSD-3: renewal is an in-place window update, so status is recomputed from the new window (a
   // licence the sweep already flipped to 'expired' comes back into service). The alert ledger is
