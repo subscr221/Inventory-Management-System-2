@@ -147,6 +147,73 @@ describe('Story 8.2 determineSampling', () => {
       ),
       'INSPECTION_LEVEL_INVALID',
     );
+    // Deferred-work ledger ref 534: the tightest AQL columns resolve into supplementary code
+    // letter S at its own sample size (3150 normal and tightened, 1250 reduced), not into letter
+    // R's n = 2000. A smaller sample at the same acceptance number accepts lots the standard
+    // rejects, and the whole column is one down-arrow chain, so every lot size was affected.
+    const tiny = determineSampling({
+      ...base,
+      quantity: '100',
+      aql: '0.010',
+      inspection_level: 'I',
+    });
+    assert.deepStrictEqual(
+      [tiny.code_letter, tiny.resolved_code_letter, tiny.sample_size, tiny.acceptance_number],
+      // sample_size is capped at the lot size: a 100-unit lot under an n = 3150 plan is 100 % inspected.
+      ['D', 'S', 100, 0],
+    );
+    const big = determineSampling({
+      ...base,
+      quantity: '1000000',
+      aql: '0.010',
+      inspection_level: 'III',
+    });
+    assert.deepStrictEqual(
+      [big.code_letter, big.resolved_code_letter, big.sample_size, big.acceptance_number],
+      ['R', 'S', 3150, 0],
+    );
+    const reduced = determineSampling({
+      characteristics: chars,
+      severity: 'reduced',
+      quantity: '1000000',
+      aql: '0.010',
+      inspection_level: 'III',
+    });
+    assert.strictEqual(reduced.sample_size, 1250);
+    assert.strictEqual(reduced.resolved_code_letter, 'S');
+    // Tightened runs one letter lower, so AQL 0.015 resolves to S and AQL 0.010 has no plan at any
+    // row: the standard's tables end at S. That combination is refused, not silently substituted.
+    const tightened = determineSampling({
+      characteristics: chars,
+      severity: 'tightened',
+      quantity: '1000000',
+      aql: '0.015',
+      inspection_level: 'III',
+    });
+    assert.deepStrictEqual(
+      [tightened.resolved_code_letter, tightened.sample_size, tightened.acceptance_number],
+      ['S', 3150, 0],
+    );
+    assert.strictEqual(
+      code(() =>
+        determineSampling({
+          characteristics: chars,
+          severity: 'tightened',
+          quantity: '1000000',
+          aql: '0.010',
+          inspection_level: 'III',
+        }),
+      ),
+      'AQL_NOT_IN_STANDARD',
+    );
+    // The cells that were already on the diagonal are unchanged: R at its own n = 2000.
+    const onDiagonal = determineSampling({
+      ...base,
+      quantity: '1000000',
+      aql: '0.015',
+      inspection_level: 'III',
+    });
+    assert.deepStrictEqual([onDiagonal.resolved_code_letter, onDiagonal.sample_size], ['R', 2000]);
     const full = determineSampling({
       ...base,
       quantity: '37.000000',

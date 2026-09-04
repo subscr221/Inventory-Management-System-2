@@ -64,6 +64,7 @@ Table 3: Decisions taken
 
 | Ref | Story | Item | Decision |
 | --- | --- | --- | --- |
+| 534 | 8-2 | Letter R at the tightest AQLs was served from a substituted Ac 0 / Re 1 at n = 2000 where the standard prints supplementary code letter S at n = 3150 | RESOLVED IN CODE 2026-09-04 without the QC head, by implementing letter S rather than by refusing the cells. The substitution was a SMALLER sample at the same acceptance number, so it accepted lots the standard rejects while the task certified against STANDARD_REF: it failed OPEN, and because the 0.010 and 0.015 columns are one unbroken down-arrow chain terminating at R, EVERY lot size was affected, not only the 500,001-plus lots that reach letter R directly. S is now the last row of all three tables (n = 3150 normal and tightened, 1250 reduced), an arrow target only: Table I never assigns it, codeLetterFor cannot return it and isCodeLetter does not accept it. Four cells corrected: II-A R at 0.010, II-C R at 0.010 and II-B R at 0.015 now resolve down to S; II-B R at 0.010 falls off the end because the tightened Ac 0 diagonal runs one letter lower than normal and no plan exists at any row, so that one combination is refused AQL_NOT_IN_STANDARD. R at 0.015 on II-A and II-C and R at 0.025 on II-B were already on the diagonal and are unchanged. No migration: resolved_code_letter is plain TEXT with no vocabulary CHECK. 480/480 unit, story-8-1 through 8-4 integration 97/97 | 
 | 15 | 9-3 | `total_customer_balance` sums closing balances across all SKUs regardless of UOM into one number [src/compliance/custody-statement.ts:135] - deferred, matche... | Statement total becomes one line per UOM; the unit-less grand total is dropped. Ravi: kg plus pieces is not a number. |
 | 138 | 2-9 | Dropped PO lines persist as phantoms: soft-close is header-only; erp_purchase_order_line has no status column and the app role has no DELETE grant on it (del... | Add a line status column (dropped) on erp_purchase_order lines; no DELETE grant. Small story alongside the next ERP inbound change. |
 | 151 | 3-4 | Under-receipt below the lower tolerance bound is unenforced (`under_receipt_tolerance_pct` fetched but unused). A symmetric-reject patch was attempted and re... | Under-receipt check fires when the ERP PO status arrives as closed. Wire it when the 2-9 closure feed exists. |
@@ -88,6 +89,7 @@ Table 4: Open deferred items
 
 | Ref | Story | Item | Trigger or note |
 | --- | --- | --- | --- |
+| 534a | 8-2 | Supplementary code letter S's row is a ONE-ROW inference, not a transcription: n = 3150 comes from the original transcriber's own recorded note, and its Ac 0 / Re 1 placement is this file's Ac 0 diagonal extended by exactly one column (the pattern the transcribed cells demonstrate over five consecutive columns); reduced n = 1250 follows the tables' own reduced-equals-normal-two-letters-up relation. The Annex forbids computing plans by formula, so this row is still owed a read against a physical copy of IS 2500 (Part 1):2000 | Trigger: next time a copy of the standard is in the building. This is now a one-row verification, not a blocker on the capability - the fail-open it replaced was worse than the inference |
 | 7 | 9-3 | No test drives two racing requests on the same idempotency key to force the `uq_custody_ledger_source_event` 23505-to-409 classification path itself (Task 4.... | Only `Promise.all` in story-9-3.test.ts is line 1278 (last-unit race, different keys). Classification path lives at custody-ledger.ts:536 (`{ entry_id, constraint }`). Trigger: any change to persistEvent's 23505 handling or to `uq_custody_ledger_source_event`. |
 | 42 | 8-8 | Replay detection on the witness sign-off/waive/notice routes is a pre-read (`holdPoint.status !== 'open'` before `persistEvent`), not a persisted-event signa... | quality.ts:3005 and :3098 `const replayed = holdPoint.status !== 'open';` unchanged. House pattern across Epic 8; fixing means comparing `persisted.event_id` against the refreshed row on three routes. Trigger: a reported wrong 201/403 on a witness retry. |
 | 47 | 6-4 | Genealogy over-reports for orders with multiple sequential completions on the same order (consumed-material window is order-scoped by `completed_at` cutoff, ... | src/production/lot-genealogy.ts:35,144 still cuts by `completed_at` per order. Architecturally deep, deferred per explicit user decision. Trigger: a customer running multi-completion orders needing per-completion recall precision. |
@@ -195,13 +197,15 @@ Table 4: Open deferred items
 
 ## Awaiting decision
 
-Table 5 lists what the room could not decide.
+Table 5 lists what the room could not decide. It is empty: ref 534, the last entry, was closed on
+2026-09-04 by implementing supplementary code letter S rather than by waiting to verify the
+transcription (see Table 3, ref 534). The one-row residual is tracked in Table 4 as ref 534a.
 
 Table 5: Awaiting a human decision
 
 | Ref | Story | Item | Question and owner |
 | --- | --- | --- | --- |
-| 534 | 8-2 | Table II-A / II-B / II-C are transcribed from the standard's band structure (eleven plan diagonals on normal and reduced, ten on tightened, with the Ac 0 dia... | Ravi brings the QC head with IS 2500 (Part 1):2000 to verify the four corner cells in src/quality/aql-tables.ts. |
+| - | - | None outstanding | - |
 
 ## Closed this pass
 

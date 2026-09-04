@@ -6,7 +6,13 @@ import {
   isInspectionLevel,
   singleSamplingPlan,
 } from './aql-tables.js';
-import type { CodeLetter, InspectionLevel, PreferredAql, Severity } from './aql-tables.js';
+import type {
+  CodeLetter,
+  InspectionLevel,
+  PreferredAql,
+  ResolvedCodeLetter,
+  Severity,
+} from './aql-tables.js';
 
 /**
  * Story 8.2 (FR-Q-03, AC 1): the PURE sampling determination. Given the task's finished quantity,
@@ -17,6 +23,11 @@ import type { CodeLetter, InspectionLevel, PreferredAql, Severity } from './aql-
  * - Lot size is the task's finished quantity and must be a whole positive number of units
  *   (Annex requirement 5): a fractional quantity is 400 SAMPLING_LOT_SIZE_INVALID.
  * - Only the standard's preferred AQLs are valid (Annex requirement 2): 400 AQL_NOT_IN_STANDARD.
+ * - Arrow chains resolve into supplementary code letter S (n = 3150 normal and tightened, 1250
+ *   reduced) where the standard's Ac 0 diagonal runs past the 16 Table I letters. Where no plan
+ *   exists at any letter - Table II-B's AQL 0.010 column, whose tightened diagonal runs one letter
+ *   lower than normal and falls off the end of the tables - the combination is refused 400
+ *   AQL_NOT_IN_STANDARD (deferred-work ledger ref 534).
  * - A null level resolves to General Inspection Level II; anything outside the vocabulary is
  *   400 INSPECTION_LEVEL_INVALID (Annex requirement 3).
  * - A version with no AQL (both aql and inspection_level null) is full_inspection: every unit of
@@ -40,7 +51,7 @@ export interface DeterminedSampling {
   inspection_level: InspectionLevel | null;
   severity: Severity;
   code_letter: CodeLetter | null;
-  resolved_code_letter: CodeLetter | null;
+  resolved_code_letter: ResolvedCodeLetter | null;
   sample_size: number;
   acceptance_number: number | null;
   rejection_number: number | null;

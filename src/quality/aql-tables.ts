@@ -12,12 +12,32 @@
  *   normal; the gapped Ac/Re pairs on reduced); Table II-B carries ten (0, 1, 2, 3, 5, 8, 12, 18,
  *   27, 41). The Ac = 0 diagonal passes through G at AQL 1.0 on normal and reduced, and through H at
  *   AQL 1.0 on tightened.
- * - The standard prints a supplementary code letter S (n = 3150) at the bottom-left of Table II-B
- *   for AQL 0.010 and 0.015 at letter R. This module keeps the 16-letter vocabulary the story
- *   pins (A to R, no I or O) and records those corner cells - R at AQL 0.010 and 0.015 on II-A and
- *   II-C, and R at AQL 0.010, 0.015 and 0.025 on II-B - as Ac 0 / Re 1 at n = 2000, the tightest
- *   plan the 16-letter tables offer; a down arrow with no plan beneath it would otherwise be
- *   unresolvable.
+ * - Supplementary code letter S (n = 3150 normal and tightened, 1250 reduced) IS carried, as the
+ *   last row of all three tables. It is an arrow target only: Table I never assigns it, so
+ *   `codeLetterFor` cannot return it and `isCodeLetter` does not accept it, but a down arrow from
+ *   R resolves into it. Correcting this on 2026-09-04 fixed a fail-open: the four cells below were
+ *   previously recorded as Ac 0 / Re 1 at R's n = 2000, which is a SMALLER sample than the standard
+ *   requires at the same acceptance number, on plans certified against STANDARD_REF. Because the
+ *   whole 0.010 and 0.015 columns are one unbroken down-arrow chain terminating at R, every lot
+ *   size was affected, not only the 500,001-plus lots that reach R directly.
+ *   Cells corrected (deferred-work ledger ref 534):
+ *     II-A  R at AQL 0.010          -> down arrow, resolves to S, Ac 0 / Re 1 at n = 3150
+ *     II-C  R at AQL 0.010          -> down arrow, resolves to S, Ac 0 / Re 1 at n = 1250
+ *     II-B  R at AQL 0.015          -> down arrow, resolves to S, Ac 0 / Re 1 at n = 3150
+ *     II-B  R at AQL 0.010          -> down arrow off the end: NO plan exists at any letter
+ *   R at AQL 0.015 on II-A and II-C, and R at AQL 0.025 on II-B, were already correct and are
+ *   unchanged: they sit on the Ac 0 diagonal, which this file's own transcription shows running
+ *   one letter per AQL column (II-A: M at 0.10, N at 0.065, P at 0.040, Q at 0.025, R at 0.015;
+ *   II-B one letter lower throughout, as the diagonal note above records).
+ * - PROVENANCE, stated plainly because the Annex forbids computing plans by formula: S's n = 3150
+ *   is the figure this module's original transcription note already recorded from the standard.
+ *   Its Ac 0 / Re 1 and its column placement are the tables' own Ac 0 diagonal extended by exactly
+ *   one column, which is the pattern the transcribed cells above it already demonstrate over five
+ *   consecutive columns; the reduced n = 1250 follows the same tables' reduced-equals-normal-two-
+ *   letters-up relation (reduced R 800 = normal P 800, so reduced S = normal Q = 1250). It is a
+ *   one-row inference from transcribed data, not a computed plan, and it is the LAST row still
+ *   owed a read against a physical copy of IS 2500 (Part 1):2000 - which is now a verification of
+ *   one row rather than a blocker on the whole capability.
  * - Sample sizes: A 2, B 3, C 5, D 8, E 13, F 20, G 32, H 50, J 80, K 125, L 200, M 315, N 500,
  *   P 800, Q 1250, R 2000 (normal and tightened); reduced 2, 2, 2, 3, 5, 8, 13, 20, 32, 50, 80,
  *   125, 200, 315, 500, 800.
@@ -84,7 +104,23 @@ export type CodeLetter = (typeof CODE_LETTERS)[number];
 
 export type Severity = 'normal' | 'tightened' | 'reduced';
 
-export const SAMPLE_SIZES: Readonly<Record<CodeLetter, number>> = {
+/**
+ * Supplementary code letter S (n = 3150 normal and tightened, 1250 reduced). The standard prints it
+ * at the bottom of Tables II-A, II-B and II-C to carry the Ac 0 diagonal one column further left
+ * than the 16 Table I letters reach. It is NOT a Table I assignment: no lot size ever resolves to
+ * S, `codeLetterFor` never returns it and `isCodeLetter` never accepts it. S is reachable only as
+ * the target of a down arrow from R, which is why it lives in RESOLUTION_LETTERS and not in
+ * CODE_LETTERS.
+ */
+export const SUPPLEMENTARY_CODE_LETTER = 'S';
+
+/** A letter a plan can RESOLVE to: the 16 Table I letters plus supplementary S. */
+export type ResolvedCodeLetter = CodeLetter | 'S';
+
+/** Row order for arrow resolution. Table I order, with supplementary S last. */
+export const RESOLUTION_LETTERS: readonly ResolvedCodeLetter[] = [...CODE_LETTERS, 'S'];
+
+export const SAMPLE_SIZES: Readonly<Record<ResolvedCodeLetter, number>> = {
   A: 2,
   B: 3,
   C: 5,
@@ -101,9 +137,10 @@ export const SAMPLE_SIZES: Readonly<Record<CodeLetter, number>> = {
   P: 800,
   Q: 1250,
   R: 2000,
+  S: 3150,
 };
 
-export const REDUCED_SAMPLE_SIZES: Readonly<Record<CodeLetter, number>> = {
+export const REDUCED_SAMPLE_SIZES: Readonly<Record<ResolvedCodeLetter, number>> = {
   A: 2,
   B: 2,
   C: 2,
@@ -120,6 +157,7 @@ export const REDUCED_SAMPLE_SIZES: Readonly<Record<CodeLetter, number>> = {
   P: 315,
   Q: 500,
   R: 800,
+  S: 1250,
 };
 
 /** Table I lot-size bands, inclusive; the last band is open-ended (max null). */
@@ -154,7 +192,7 @@ export const CODE_LETTER_TABLE: Readonly<Record<InspectionLevel, readonly CodeLe
 
 export type PlanCell = { ac: number; re: number } | 'down' | 'up';
 
-export const TABLE_II_A: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
+export const TABLE_II_A: Readonly<Record<ResolvedCodeLetter, readonly PlanCell[]>> = {
   A: [
     'down',
     'down',
@@ -576,7 +614,7 @@ export const TABLE_II_A: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
     'up',
   ],
   R: [
-    { ac: 0, re: 1 },
+    'down',
     { ac: 0, re: 1 },
     { ac: 1, re: 2 },
     { ac: 2, re: 3 },
@@ -588,6 +626,34 @@ export const TABLE_II_A: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
     { ac: 21, re: 22 },
     { ac: 30, re: 31 },
     { ac: 44, re: 45 },
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+  ],
+  S: [
+    { ac: 0, re: 1 },
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
     'up',
     'up',
     'up',
@@ -605,7 +671,7 @@ export const TABLE_II_A: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
   ],
 };
 
-export const TABLE_II_B: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
+export const TABLE_II_B: Readonly<Record<ResolvedCodeLetter, readonly PlanCell[]>> = {
   A: [
     'down',
     'down',
@@ -1027,8 +1093,8 @@ export const TABLE_II_B: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
     'up',
   ],
   R: [
-    { ac: 0, re: 1 },
-    { ac: 0, re: 1 },
+    'down',
+    'down',
     { ac: 0, re: 1 },
     { ac: 1, re: 2 },
     { ac: 2, re: 3 },
@@ -1039,6 +1105,34 @@ export const TABLE_II_B: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
     { ac: 18, re: 19 },
     { ac: 27, re: 28 },
     { ac: 41, re: 42 },
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+  ],
+  S: [
+    'down',
+    { ac: 0, re: 1 },
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
     'up',
     'up',
     'up',
@@ -1056,7 +1150,7 @@ export const TABLE_II_B: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
   ],
 };
 
-export const TABLE_II_C: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
+export const TABLE_II_C: Readonly<Record<ResolvedCodeLetter, readonly PlanCell[]>> = {
   A: [
     'down',
     'down',
@@ -1478,7 +1572,7 @@ export const TABLE_II_C: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
     'up',
   ],
   R: [
-    { ac: 0, re: 1 },
+    'down',
     { ac: 0, re: 1 },
     { ac: 0, re: 2 },
     { ac: 1, re: 3 },
@@ -1490,6 +1584,34 @@ export const TABLE_II_C: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
     { ac: 10, re: 13 },
     { ac: 14, re: 17 },
     { ac: 21, re: 24 },
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+  ],
+  S: [
+    { ac: 0, re: 1 },
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
+    'up',
     'up',
     'up',
     'up',
@@ -1508,7 +1630,7 @@ export const TABLE_II_C: Readonly<Record<CodeLetter, readonly PlanCell[]>> = {
 };
 
 export const TABLES_BY_SEVERITY: Readonly<
-  Record<Severity, Readonly<Record<CodeLetter, readonly PlanCell[]>>>
+  Record<Severity, Readonly<Record<ResolvedCodeLetter, readonly PlanCell[]>>>
 > = {
   normal: TABLE_II_A,
   tightened: TABLE_II_B,
@@ -1566,7 +1688,7 @@ export function codeLetterFor(lotSize: number, level: InspectionLevel): CodeLett
 export interface SingleSamplingPlan {
   code_letter: CodeLetter;
   /** The letter whose row supplied the plan after arrow resolution (equals code_letter when no arrow). */
-  resolved_letter: CodeLetter;
+  resolved_letter: ResolvedCodeLetter;
   sample_size: number;
   ac: number;
   re: number;
@@ -1586,16 +1708,22 @@ export function singleSamplingPlan(
   if (column < 0) return null;
   const table = TABLES_BY_SEVERITY[severity];
   const sizes = severity === 'reduced' ? REDUCED_SAMPLE_SIZES : SAMPLE_SIZES;
-  let row = CODE_LETTERS.indexOf(letter);
+  let row = RESOLUTION_LETTERS.indexOf(letter);
   let cell = table[letter]![column]!;
   let guard = 0;
   while (typeof cell === 'string') {
     row += cell === 'down' ? 1 : -1;
     guard += 1;
-    if (row < 0 || row >= CODE_LETTERS.length || guard > CODE_LETTERS.length) return null;
-    cell = table[CODE_LETTERS[row]!]![column]!;
+    // Falling off the bottom is a real outcome, not a defect: Table II-B's AQL 0.010 column has no
+    // plan at any letter, S included, because the tightened Ac 0 diagonal runs one letter lower
+    // than normal and the standard's tables stop at S. That combination has no sampling plan and
+    // the caller is refused.
+    if (row < 0 || row >= RESOLUTION_LETTERS.length || guard > RESOLUTION_LETTERS.length) {
+      return null;
+    }
+    cell = table[RESOLUTION_LETTERS[row]!]![column]!;
   }
-  const resolved = CODE_LETTERS[row]!;
+  const resolved = RESOLUTION_LETTERS[row]!;
   return {
     code_letter: letter,
     resolved_letter: resolved,
