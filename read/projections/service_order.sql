@@ -15,7 +15,8 @@
 -- customer_party_code short code plus customer_name. price_basis is JSONB
 -- ({basis_type, rate, currency}); basis_type vocabulary is enforced in the seam, not a CHECK,
 -- because FR-JW-01 does not close the vocabulary. offcut_election is captured optionally at
--- confirm for Story 9.4 (BSD-6), no behavior attached in 9.1.
+-- confirm (Story 9.1 BSD-6, gated on has_contractual_offcut by Story 9.4); Story 9.6 attaches the
+-- settlement and billing behavior to it, so it is no longer an inert capture.
 
 CREATE TABLE IF NOT EXISTS service_order (
   service_order_id       UUID PRIMARY KEY,
@@ -54,6 +55,22 @@ CREATE TABLE IF NOT EXISTS service_order (
 -- existed. Guarded so a live re-apply is safe.
 ALTER TABLE service_order ADD COLUMN IF NOT EXISTS has_contractual_offcut BOOLEAN NOT NULL DEFAULT false;
 
+-- Story 9.6 Task 0 (Binding decision 16): the CONTRACTED offcut rate lives on the order, captured at
+-- confirmation beside offcut_election and mandatory whenever has_contractual_offcut is true. It is
+-- money per unit of the customer material in offcut_currency (which must equal the price-basis
+-- currency), NOT the service price basis. Guarded additive columns, the reference_ext precedent.
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_rate NUMERIC(18,4);
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_currency TEXT;
+-- Story 9.6 Task 6.4 (Binding decisions 9 and 15): "invoiced" and "offcut settled" are column pairs,
+-- never a fifth status - the four-state machine and the reserved closure seam stay untouched.
+-- invoiced_at/invoiced_feed_id are stamped only by jobwork.billing_feed_acknowledged;
+-- offcut_settled_at/offcut_settled_by by the custody.offcut_recorded posting that declares
+-- settles_offcut, after which no further offcut may post and billing may generate.
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS invoiced_at TIMESTAMPTZ;
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS invoiced_feed_id UUID;
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_settled_at TIMESTAMPTZ;
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_settled_by UUID;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_service_order_number_site ON service_order (order_number_ext, site_id);
 CREATE INDEX IF NOT EXISTS idx_service_order_status ON service_order (status);
 CREATE INDEX IF NOT EXISTS idx_service_order_customer ON service_order (customer_party_code);
@@ -88,6 +105,32 @@ BEGIN
     ALTER TABLE service_order
       ADD CONSTRAINT chk_service_order_customer_party_code CHECK (customer_party_code ~ '^[A-Z0-9][A-Z0-9-]{1,31}$');
   END IF;
+END $$;
+
+-- Story 9.6 code review 2026-09-05: the column PAIRS this file's comments describe are now enforced
+-- in the database, not only at the confirm seam and the appliers. offcut_rate and offcut_currency
+-- travel together and the rate is money, so it must be strictly positive; invoiced_at is meaningless
+-- without the feed that caused it; offcut_settled_at without offcut_settled_by is an unattributed
+-- settlement that gates billing. DROP-then-ADD, the bom_line precedent, so a later widening is not
+-- silently skipped on an already-migrated database.
+DO $$
+BEGIN
+  ALTER TABLE service_order DROP CONSTRAINT IF EXISTS chk_service_order_offcut_rate_pair;
+  ALTER TABLE service_order
+    ADD CONSTRAINT chk_service_order_offcut_rate_pair CHECK (
+      (offcut_rate IS NULL) = (offcut_currency IS NULL)
+      AND (offcut_rate IS NULL OR offcut_rate > 0)
+    );
+  ALTER TABLE service_order DROP CONSTRAINT IF EXISTS chk_service_order_invoiced_pair;
+  ALTER TABLE service_order
+    ADD CONSTRAINT chk_service_order_invoiced_pair CHECK (
+      (invoiced_at IS NULL) = (invoiced_feed_id IS NULL)
+    );
+  ALTER TABLE service_order DROP CONSTRAINT IF EXISTS chk_service_order_offcut_settled_pair;
+  ALTER TABLE service_order
+    ADD CONSTRAINT chk_service_order_offcut_settled_pair CHECK (
+      (offcut_settled_at IS NULL) = (offcut_settled_by IS NULL)
+    );
 END $$;
 
 CREATE SEQUENCE IF NOT EXISTS service_order_number_seq;

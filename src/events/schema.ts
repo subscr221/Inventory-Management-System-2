@@ -4432,6 +4432,13 @@ export interface JobworkOrderCreatedPayload {
   kit_bom_id?: string;
   /** Story 9.4 (FR-JW-09/10): when true, confirmation requires an offcut_election. */
   has_contractual_offcut?: boolean;
+  /**
+   * Story 9.6 Task 0 (Binding decision 16): the CONTRACTED offcut rate, an exact decimal STRING
+   * (at most four decimals) per unit of customer material in offcut_currency. Optional here and on
+   * update; mandatory at confirm when has_contractual_offcut is true. The pair travels together.
+   */
+  offcut_rate?: string | null;
+  offcut_currency?: string | null;
   site_id: string;
   business_stream: string;
 }
@@ -4452,6 +4459,8 @@ export interface JobworkOrderUpdatedPayload {
   price_basis?: ServiceOrderPriceBasisPayload | null;
   kit_bom_id?: string | null;
   has_contractual_offcut?: boolean;
+  offcut_rate?: string | null;
+  offcut_currency?: string | null;
 }
 
 export interface JobworkOrderUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -4463,6 +4472,9 @@ export interface JobworkOrderUpdatedEnvelope extends Omit<EventEnvelope, 'payloa
 export interface JobworkOrderConfirmedPayload {
   service_order_id: string;
   offcut_election?: 'return' | 'retain_and_buy' | 'retain_free';
+  /** Story 9.6 Task 0: mandatory (here or already on the row) when has_contractual_offcut. */
+  offcut_rate?: string | null;
+  offcut_currency?: string | null;
 }
 
 export interface JobworkOrderConfirmedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -4652,6 +4664,94 @@ export interface CustodyReturnRecordedPayload {
 export interface CustodyReturnRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'custody.return_recorded';
   payload: CustodyReturnRecordedPayload;
+}
+
+/**
+ * Story 9.6 (FR-JW-09/10, Binding decision 1): the execution of the offcut election captured at
+ * confirm, ONE event on the EXISTING 'custody' stream with three branches. The caller never names
+ * the branch: the applier re-reads service_order.offcut_election under the order advisory lock and
+ * branches on what it finds (`return` drains and renders documents; `retain_and_buy` and
+ * `retain_free` drain and mint a NEW owned lot held for QC). return_challan_number_ext is mandatory
+ * on the `return` branch only. offcut_rate_estimate is the real-time settlement rate (retain_and_buy
+ * only; PO ruling 2026-09-05 on open question 6): billed at the estimate when supplied, else at the
+ * order's contracted rate, with the contracted rate stamped beside it as contracted_offcut_rate.
+ * settles_offcut is the caller's declaration that this posting closes the contractual offcut
+ * (Binding decision 15): it stamps offcut_settled_at on the order, after which billing may
+ * generate and no further offcut may post. Every field below the caller block is SERVER-DERIVED.
+ */
+export interface CustodyOffcutRecordedPayload {
+  service_order_id: string;
+  offcut_id: string;
+  sku: string;
+  lot_id: string;
+  location_id: string;
+  quantity: string;
+  uom: string;
+  site_id: string;
+  posted_by: string;
+  return_challan_number_ext?: string;
+  offcut_rate_estimate?: string;
+  settles_offcut?: boolean;
+  election?: 'return' | 'retain_and_buy' | 'retain_free';
+  custody_balance_after?: string;
+  converted_lot_id?: string | null;
+  converted_lot_number?: string | null;
+  billable_value?: string | null;
+  effective_offcut_rate?: string | null;
+  contracted_offcut_rate?: string | null;
+  /** The Story 8.5 governed hold placed on the converted owned lot (retention branches only). */
+  converted_lot_hold_id?: string | null;
+}
+
+export interface CustodyOffcutRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'custody.offcut_recorded';
+  payload: CustodyOffcutRecordedPayload;
+}
+
+/**
+ * Story 9.6 (FR-JW-12, Binding decisions 6, 7, 14, 15, 18): generation of the ONE measured billing
+ * feed an order may carry, on the existing 'jobwork' stream (never `erp.*` / stream `erp`, which
+ * assertErpReadOnly refuses). feed_id minted client-side. measured_hours is caller-supplied and
+ * required only for a per_hour price basis (Binding decision 12). Preconditions re-derived under
+ * the order lock: at least one dispatch, and offcut settlement stamped when contractual. The
+ * payload snapshot, measured basis/quantity, total and open_to_dispatch_qty are SERVER-DERIVED.
+ */
+export interface JobworkBillingFeedGeneratedPayload {
+  service_order_id: string;
+  feed_id: string;
+  site_id: string;
+  generated_by: string;
+  measured_hours?: string;
+  idempotency_key?: string;
+  measured_basis?: 'per_piece' | 'per_kg' | 'per_hour' | 'lumpsum';
+  measured_quantity?: string;
+  total_value?: string;
+  currency?: string;
+  open_to_dispatch_qty?: string;
+}
+
+export interface JobworkBillingFeedGeneratedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.billing_feed_generated';
+  payload: JobworkBillingFeedGeneratedPayload;
+}
+
+/**
+ * Story 9.6 (FR-JW-12, Binding decisions 8, 9, 17): ERP acknowledgment of a billing feed, an
+ * INBOUND command on this platform's own API (no transmitter exists). acknowledged_ref_ext is the
+ * ERP document number and is mandatory. The applier flips the feed to `acknowledged` and stamps
+ * invoiced_at / invoiced_feed_id on the order; it refuses SOD_VIOLATION when the acknowledging
+ * actor is the feed's generated_by.
+ */
+export interface JobworkBillingFeedAcknowledgedPayload {
+  feed_id: string;
+  service_order_id: string;
+  acknowledged_ref_ext: string;
+  acknowledged_by: string;
+}
+
+export interface JobworkBillingFeedAcknowledgedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.billing_feed_acknowledged';
+  payload: JobworkBillingFeedAcknowledgedPayload;
 }
 
 /**
@@ -5624,6 +5724,23 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'jobwork.order_closure_requested': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  // Story 9.6: the offcut settlement stays on the 'custody' stream (the `offcut` movement category
+  // was forward-declared by 9.3 and the posting moves customer material off the custody balance);
+  // both billing-feed events ride the order's own 'jobwork' stream. Event types deliberately avoid
+  // the `erp.` prefix and the 'erp' stream_type, both of which assertErpReadOnly 405s (Binding
+  // decision 7). All three act on an order row that already carries the business_stream tag.
+  'custody.offcut_recorded': {
+    streamType: 'custody',
+    requiresBusinessStream: false,
+  },
+  'jobwork.billing_feed_generated': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  'jobwork.billing_feed_acknowledged': {
     streamType: 'jobwork',
     requiresBusinessStream: false,
   },

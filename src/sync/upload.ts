@@ -200,6 +200,15 @@ const PERMANENT_ERROR_CODES = new Set([
   // Story 9.5 (FR-JW-15, AD-6): closure refused on a non-zero custody balance - a retry of the same
   // closure request can never clear it; the ledger has to be reconciled first (the 9.4 precedent).
   'CUSTODY_NOT_ZERO',
+  // Story 9.6 (FR-JW-09/10, FR-JW-12): an offcut posting against an order with no election, or one
+  // already settled, and a billing feed generated before its preconditions - none clears on a retry
+  // of the same request (the 9.5 precedent). Office actions, registered defensively.
+  'OFFCUT_ELECTION_MISSING',
+  'BILLING_NOT_READY',
+  // Story 9.6 code review 2026-09-05: a rate outside the governed band never clears on a retry of
+  // the same posting - the rate has to change, or the contract has to.
+  'OFFCUT_RATE_OUT_OF_BAND',
+  'SOD_VIOLATION',
   'UNREVERSED_TRANSACTIONS',
   'BOM_REVISION_DRIFT',
   'MATERIAL_REQUIREMENT_SET_TRUNCATED',

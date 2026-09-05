@@ -1694,6 +1694,10 @@ const EXPECTED = [
       'chk_service_order_status',
       'chk_service_order_offcut_election',
       'chk_service_order_customer_party_code',
+      // Story 9.6 code review: the three additive column PAIRS are enforced in the database.
+      'chk_service_order_offcut_rate_pair',
+      'chk_service_order_invoiced_pair',
+      'chk_service_order_offcut_settled_pair',
     ],
     indexes: [
       'uq_service_order_number_site',
@@ -1801,6 +1805,36 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 9.6: the one-per-order ERP billing feed with a lifecycle. uq_job_work_billing_feed_order
+  // is the AC5 no-duplicate-billable-events rule expressed in the schema.
+  {
+    canonical: 'read/projections/job_work_billing_feed.sql',
+    table: 'job_work_billing_feed',
+    constraints: [
+      'chk_job_work_billing_feed_status',
+      'chk_job_work_billing_feed_basis',
+      'chk_job_work_billing_feed_amounts',
+      'chk_job_work_billing_feed_lifecycle',
+    ],
+    indexes: [
+      'uq_job_work_billing_feed_order',
+      'uq_job_work_billing_feed_source_event',
+      'idx_job_work_billing_feed_sweep',
+      'idx_job_work_billing_feed_ack_ref',
+      'idx_job_work_billing_feed_site',
+    ],
+    // Story 9.6 code review: the FULL statement, not just the ON clause. Name-only matching stays
+    // green if the UNIQUE keyword is dropped, and UNIQUE on service_order_id is the entire semantic
+    // content of the AC5 rule (the uq_production_order_source_rework_event precedent above).
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_billing_feed_order ON job_work_billing_feed (service_order_id)',
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_billing_feed_source_event ON job_work_billing_feed (source_event_id)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_billing_feed_sweep ON job_work_billing_feed (status, first_sent_at)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_billing_feed_ack_ref ON job_work_billing_feed (acknowledged_ref_ext)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_billing_feed_site ON job_work_billing_feed (site_id)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
   // Notification projections (read/projections/notification.sql), previously unpinned. The uq_*
   // UNIQUE constraints are inline in CREATE TABLE (no guarded DO block), so the table-body
   // comparison covers them.
@@ -1869,6 +1903,27 @@ describe('Story 2.1 schema drift guard', () => {
         `jobwork_return_clock.sql backfill missing: ${fragment}`,
       );
       assert.ok(initDb.includes(fragment), `init-db.sql backfill mirror missing: ${fragment}`);
+    }
+  });
+
+  // Story 9.6 code review (group A): six standalone ADD COLUMN statements on service_order, invisible
+  // to the generic CREATE TABLE body comparison for the same reason challan_class was. These are the
+  // statements that upgrade a database already carrying Story 9.1 to 9.5 orders, and a missing mirror
+  // is silent: a container booted from init-db.sql alone would have no offcut rate to bill against and
+  // nowhere to stamp invoiced, so every retain-and-buy settlement and every acknowledgment would fail
+  // at runtime on a column that does not exist.
+  it('Story 9.6 mirrors the six service_order additive columns into init-db.sql', () => {
+    const orderSql = read('read/projections/service_order.sql');
+    for (const column of [
+      'ADD COLUMN IF NOT EXISTS offcut_rate NUMERIC(18,4)',
+      'ADD COLUMN IF NOT EXISTS offcut_currency TEXT',
+      'ADD COLUMN IF NOT EXISTS invoiced_at TIMESTAMPTZ',
+      'ADD COLUMN IF NOT EXISTS invoiced_feed_id UUID',
+      'ADD COLUMN IF NOT EXISTS offcut_settled_at TIMESTAMPTZ',
+      'ADD COLUMN IF NOT EXISTS offcut_settled_by UUID',
+    ]) {
+      assert.ok(orderSql.includes(column), `service_order.sql missing the upgrade path: ${column}`);
+      assert.ok(initDb.includes(column), `init-db.sql missing the upgrade path: ${column}`);
     }
   });
 

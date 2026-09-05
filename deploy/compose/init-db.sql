@@ -12047,7 +12047,8 @@ END $$;
 -- customer_party_code short code plus customer_name. price_basis is JSONB
 -- ({basis_type, rate, currency}); basis_type vocabulary is enforced in the seam, not a CHECK,
 -- because FR-JW-01 does not close the vocabulary. offcut_election is captured optionally at
--- confirm for Story 9.4 (BSD-6), no behavior attached in 9.1.
+-- confirm (Story 9.1 BSD-6, gated on has_contractual_offcut by Story 9.4); Story 9.6 attaches the
+-- settlement and billing behavior to it, so it is no longer an inert capture.
 
 CREATE TABLE IF NOT EXISTS service_order (
   service_order_id       UUID PRIMARY KEY,
@@ -12084,6 +12085,22 @@ CREATE TABLE IF NOT EXISTS service_order (
 
 ALTER TABLE service_order ADD COLUMN IF NOT EXISTS has_contractual_offcut BOOLEAN NOT NULL DEFAULT false;
 
+-- Story 9.6 Task 0 (Binding decision 16): the CONTRACTED offcut rate lives on the order, captured at
+-- confirmation beside offcut_election and mandatory whenever has_contractual_offcut is true. It is
+-- money per unit of the customer material in offcut_currency (which must equal the price-basis
+-- currency), NOT the service price basis. Guarded additive columns, the reference_ext precedent.
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_rate NUMERIC(18,4);
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_currency TEXT;
+-- Story 9.6 Task 6.4 (Binding decisions 9 and 15): "invoiced" and "offcut settled" are column pairs,
+-- never a fifth status - the four-state machine and the reserved closure seam stay untouched.
+-- invoiced_at/invoiced_feed_id are stamped only by jobwork.billing_feed_acknowledged;
+-- offcut_settled_at/offcut_settled_by by the custody.offcut_recorded posting that declares
+-- settles_offcut, after which no further offcut may post and billing may generate.
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS invoiced_at TIMESTAMPTZ;
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS invoiced_feed_id UUID;
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_settled_at TIMESTAMPTZ;
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_settled_by UUID;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_service_order_number_site ON service_order (order_number_ext, site_id);
 CREATE INDEX IF NOT EXISTS idx_service_order_status ON service_order (status);
 CREATE INDEX IF NOT EXISTS idx_service_order_customer ON service_order (customer_party_code);
@@ -12118,6 +12135,32 @@ BEGIN
     ALTER TABLE service_order
       ADD CONSTRAINT chk_service_order_customer_party_code CHECK (customer_party_code ~ '^[A-Z0-9][A-Z0-9-]{1,31}$');
   END IF;
+END $$;
+
+-- Story 9.6 code review 2026-09-05: the column PAIRS this file's comments describe are now enforced
+-- in the database, not only at the confirm seam and the appliers. offcut_rate and offcut_currency
+-- travel together and the rate is money, so it must be strictly positive; invoiced_at is meaningless
+-- without the feed that caused it; offcut_settled_at without offcut_settled_by is an unattributed
+-- settlement that gates billing. DROP-then-ADD, the bom_line precedent, so a later widening is not
+-- silently skipped on an already-migrated database.
+DO $$
+BEGIN
+  ALTER TABLE service_order DROP CONSTRAINT IF EXISTS chk_service_order_offcut_rate_pair;
+  ALTER TABLE service_order
+    ADD CONSTRAINT chk_service_order_offcut_rate_pair CHECK (
+      (offcut_rate IS NULL) = (offcut_currency IS NULL)
+      AND (offcut_rate IS NULL OR offcut_rate > 0)
+    );
+  ALTER TABLE service_order DROP CONSTRAINT IF EXISTS chk_service_order_invoiced_pair;
+  ALTER TABLE service_order
+    ADD CONSTRAINT chk_service_order_invoiced_pair CHECK (
+      (invoiced_at IS NULL) = (invoiced_feed_id IS NULL)
+    );
+  ALTER TABLE service_order DROP CONSTRAINT IF EXISTS chk_service_order_offcut_settled_pair;
+  ALTER TABLE service_order
+    ADD CONSTRAINT chk_service_order_offcut_settled_pair CHECK (
+      (offcut_settled_at IS NULL) = (offcut_settled_by IS NULL)
+    );
 END $$;
 
 CREATE SEQUENCE IF NOT EXISTS service_order_number_seq;
@@ -12605,5 +12648,126 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON jobwork_return_clock TO readonly_user;
+  END IF;
+END $$;
+
+-- Job-work ERP billing feed read model (Story 9.6, FR-JW-12). MIRROR COPY for first-boot container
+-- init: the CANONICAL definition is read/projections/job_work_billing_feed.sql, applied by
+-- src/events/migrate.ts (npm run db:migrate) and the integration-test harness. Change both files
+-- together; test/unit/schema-drift.test.ts fails the build when they diverge.
+--
+-- The FIRST outbound interface in this codebase with a LIFECYCLE (Binding decision 6): the
+-- po_outbound_message / msme_ageing_feed / payment_clearance_feed shapes are append-only records,
+-- but AC4 and AC5 demand acknowledgment, a retry window, an exception queue and a reconciliation
+-- report, which need mutable status columns. One row per order: uq_job_work_billing_feed_order is
+-- AC5's "retries never create duplicate billable events" expressed in the schema (Binding
+-- decision 14) - a retry re-sends the SAME row and a second generation collides into 409
+-- DUPLICATE_EVENT. The row is created by jobwork.billing_feed_generated, flipped to `acknowledged`
+-- by jobwork.billing_feed_acknowledged (the INBOUND command that stamps the order invoiced, Binding
+-- decisions 8 and 9), and flipped to `exception` by the retry-window sweep (plain projection UPDATE,
+-- the 8.4 retention precedent). There is deliberately NO attempt_count or last_attempt_at: no
+-- transmitter exists in this codebase, so nothing would ever write them and a reader would take an
+-- always-zero counter for a real retry count. open_to_dispatch_qty is a REPORTING fact captured at
+-- generation (Binding decision 18), never a refusal. Money columns are NUMERIC(18,4) in the order's
+-- price-basis currency; quantities are NUMERIC(18,3) like every other Epic 9 projection.
+--
+-- `exception` IS NOT TERMINAL, and that is the correction path (Story 9.6 code review 2026-09-05).
+-- The acknowledgment UPDATE guards on `status <> 'acknowledged'`, not on `status = 'pending'`, so a
+-- late ERP acknowledgment still rescues a swept feed. There is deliberately NO void or supersede
+-- column: void-and-regenerate would mint a SECOND billable line after ERP had already ingested the
+-- first, with no void approver anywhere in the acknowledgment SoD chain and a dangling
+-- service_order.invoiced_feed_id. A wrong feed is corrected in ERP as a credit note, never by
+-- regenerating here. The only reachable transitions are absent to pending, pending to acknowledged,
+-- pending to exception, and exception to acknowledged; the sweep filters on status = 'pending'
+-- twice, so acknowledged never returns to exception and nothing returns to pending.
+--
+-- THIS TABLE IS NOT REBUILDABLE by a truncate-and-replay (Story 9.6 code review 2026-09-05, the 8.4
+-- retention-sample precedent). The generation applier short-circuits on alreadyPersisted(), which is
+-- true for any event already in domain_events, so a replay inserts ZERO rows; and the payload is
+-- derived from LIVE projections at generation time, so even a forced replay would re-derive figures
+-- against today's dispatch and custody state rather than reproducing the numbers ERP was sent. Treat
+-- the rows as durable outbound records: back them up, do not rebuild them.
+
+CREATE TABLE IF NOT EXISTS job_work_billing_feed (
+  feed_id               UUID PRIMARY KEY,
+  service_order_id      UUID NOT NULL,
+  idempotency_key       TEXT NOT NULL,
+  payload               JSONB NOT NULL,
+  measured_basis        TEXT NOT NULL,
+  measured_quantity     NUMERIC(18,3) NOT NULL,
+  currency              TEXT NOT NULL,
+  total_value           NUMERIC(18,4) NOT NULL,
+  status                TEXT NOT NULL DEFAULT 'pending',
+  open_to_dispatch_qty  NUMERIC(18,3) NOT NULL DEFAULT 0,
+  first_sent_at         TIMESTAMPTZ NOT NULL,
+  acknowledged_at       TIMESTAMPTZ,
+  acknowledged_by       UUID,
+  acknowledged_ref_ext  TEXT,
+  exception_raised_at   TIMESTAMPTZ,
+  alert_sent_at         TIMESTAMPTZ,
+  site_id               UUID NOT NULL,
+  generated_by          UUID NOT NULL,
+  source_event_id       UUID NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_job_work_billing_feed_status CHECK (status IN ('pending','acknowledged','exception')),
+  CONSTRAINT chk_job_work_billing_feed_basis CHECK (measured_basis IN ('per_piece','per_kg','per_hour','lumpsum')),
+  CONSTRAINT chk_job_work_billing_feed_amounts CHECK (
+    measured_quantity >= 0 AND total_value >= 0 AND open_to_dispatch_qty >= 0
+  ),
+  CONSTRAINT chk_job_work_billing_feed_lifecycle CHECK (
+    (status = 'acknowledged') = (
+      acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledged_ref_ext IS NOT NULL
+    )
+    AND (status <> 'exception' OR exception_raised_at IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_billing_feed_order ON job_work_billing_feed (service_order_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_billing_feed_source_event ON job_work_billing_feed (source_event_id);
+CREATE INDEX IF NOT EXISTS idx_job_work_billing_feed_sweep ON job_work_billing_feed (status, first_sent_at);
+-- Story 9.6 code review 2026-09-05: acknowledged_ref_ext is a CITATION of an ERP document, not the
+-- identity of this row, so it follows the plainly-indexed reference_ext / grn.invoice_number_ext
+-- precedent and is deliberately NOT unique - one consolidated ERP invoice may legitimately
+-- acknowledge several job-work orders. The index serves the reconciliation report's duplicate-ref
+-- lookup. site_id is indexed because both the AC4 reconciliation report and the coordinator alert
+-- are site-scoped reads.
+CREATE INDEX IF NOT EXISTS idx_job_work_billing_feed_ack_ref ON job_work_billing_feed (acknowledged_ref_ext);
+CREATE INDEX IF NOT EXISTS idx_job_work_billing_feed_site ON job_work_billing_feed (site_id);
+
+-- Story 9.6 code review 2026-09-05: DROP-then-ADD, not add-if-absent (the bom_line
+-- chk_bom_line_supply_method precedent). An add-if-absent guard sees the OLD constraint present and
+-- silently skips the ALTER, so a future fourth status or fifth measured_basis would keep being
+-- rejected on every already-migrated database while this file claimed otherwise.
+DO $$
+BEGIN
+  ALTER TABLE job_work_billing_feed DROP CONSTRAINT IF EXISTS chk_job_work_billing_feed_status;
+  ALTER TABLE job_work_billing_feed
+    ADD CONSTRAINT chk_job_work_billing_feed_status CHECK (status IN ('pending','acknowledged','exception'));
+  ALTER TABLE job_work_billing_feed DROP CONSTRAINT IF EXISTS chk_job_work_billing_feed_basis;
+  ALTER TABLE job_work_billing_feed
+    ADD CONSTRAINT chk_job_work_billing_feed_basis CHECK (measured_basis IN ('per_piece','per_kg','per_hour','lumpsum'));
+  ALTER TABLE job_work_billing_feed DROP CONSTRAINT IF EXISTS chk_job_work_billing_feed_amounts;
+  ALTER TABLE job_work_billing_feed
+    ADD CONSTRAINT chk_job_work_billing_feed_amounts CHECK (
+      measured_quantity >= 0 AND total_value >= 0 AND open_to_dispatch_qty >= 0
+    );
+  ALTER TABLE job_work_billing_feed DROP CONSTRAINT IF EXISTS chk_job_work_billing_feed_lifecycle;
+  ALTER TABLE job_work_billing_feed
+    ADD CONSTRAINT chk_job_work_billing_feed_lifecycle CHECK (
+      (status = 'acknowledged') = (
+        acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledged_ref_ext IS NOT NULL
+      )
+      AND (status <> 'exception' OR exception_raised_at IS NOT NULL)
+    );
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON job_work_billing_feed TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON job_work_billing_feed TO readonly_user;
   END IF;
 END $$;

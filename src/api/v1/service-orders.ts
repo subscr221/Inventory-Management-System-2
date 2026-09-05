@@ -24,7 +24,20 @@ import {
   CUSTODY_OWN_MATERIAL_ADDED,
   CUSTODY_LOSS_RECORDED,
   CUSTODY_RETURN_RECORDED,
+  CUSTODY_OFFCUT_RECORDED,
+  OFFCUT_DERIVED_FIELDS,
 } from '../../compliance/custody-ledger.js';
+import {
+  JOBWORK_BILLING_FEED_GENERATED,
+  JOBWORK_BILLING_FEED_ACKNOWLEDGED,
+  GENERATED_DERIVED_FIELDS,
+} from '../../compliance/jobwork-billing.js';
+import {
+  getBillingFeedById,
+  listUnacknowledgedBillingFeeds,
+} from '../../read/projections/job_work_billing_feed.js';
+import { billingFeedRetryWindowElapsed } from '../../adapters/erp/job-work-billing-feed.js';
+import { config } from '../../config/index.js';
 import {
   listReturnClocksForItc04,
   listDeemedSuppliesForItc04,
@@ -95,6 +108,19 @@ const AUDITED_REJECTIONS = new Set([
   // coordinator attempting to push its own breach deadline out by two years is the exact attack the
   // segregation-of-duties gate exists to stop, and it previously left no record it was attempted.
   'FUNCTION_ACCESS_DENIED',
+  // Story 9.6: OFFCUT_ELECTION_MISSING and BILLING_NOT_READY are this story's NEW stable error
+  // codes; SOD_VIOLATION (Story 8.2, quality.ts) is reused for the self-acknowledgment refusal, and
+  // a refused self-acknowledgment MUST leave an audit row (Binding decision 17). ITEM_NOT_FOUND and
+  // the QC-gate codes reach this file through the retention conversion's QC hand-off.
+  'OFFCUT_ELECTION_MISSING',
+  'BILLING_NOT_READY',
+  // Story 9.6 code review 2026-09-05: a settlement priced outside the governed band around the
+  // order's contracted rate is exactly the attempt the removed BSD-16 approval chain would have
+  // caught, so a refusal MUST leave an audit row naming who tried it and at what rate.
+  'OFFCUT_RATE_OUT_OF_BAND',
+  'SOD_VIOLATION',
+  'ITEM_NOT_FOUND',
+  'NOT_FOUND',
 ]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -198,7 +224,14 @@ const ORDER_FIELDS = [
   'price_basis',
   'kit_bom_id',
   'has_contractual_offcut',
+  // Story 9.6 Task 0 (Binding decision 16): the contracted offcut rate pair reaches the seam on
+  // create and update (optional) and on confirm (mandatory when contractual - the seam's gate).
+  'offcut_rate',
+  'offcut_currency',
 ] as const;
+
+/** Story 9.6 Task 0.4: the ORDER_FIELDS the confirm route ALSO accepts (the rest stay refused). */
+const CONFIRM_FIELDS: readonly string[] = ['offcut_rate', 'offcut_currency'];
 
 // BSD-7 / FR-AC-01: order events carry the governed job-work business stream code.
 const JOB_WORK_BUSINESS_STREAM = 'job_work';
@@ -345,7 +378,7 @@ const confirmServiceOrderBase: RouteHandler = async (req, res, params) => {
       'status',
       'business_stream',
       'site_id',
-      ...ORDER_FIELDS,
+      ...ORDER_FIELDS.filter((f) => !CONFIRM_FIELDS.includes(f)),
     ]);
     const idempotencyKey = requireIdempotencyKey(body);
 
@@ -361,9 +394,13 @@ const confirmServiceOrderBase: RouteHandler = async (req, res, params) => {
     }
 
     // BSD-6: offcut_election is OPTIONAL in 9.1, persisted with no behavior; 9.4 makes it
-    // mandatory and acts on it. Vocabulary is enforced in the seam's shape assert.
+    // mandatory and acts on it. Vocabulary is enforced in the seam's shape assert. Story 9.6 Task 0
+    // adds the contracted offcut rate pair beside it, gated identically by the seam.
     const payload: Record<string, unknown> = { service_order_id: serviceOrderId };
     if (body['offcut_election'] !== undefined) payload['offcut_election'] = body['offcut_election'];
+    for (const field of CONFIRM_FIELDS) {
+      if (body[field] !== undefined) payload[field] = body[field];
+    }
 
     const persisted = await persistEvent(
       {
@@ -573,7 +610,7 @@ async function postCustodyEvent(
   params: Record<string, string> | undefined,
   spec: {
     eventType: string;
-    idField: 'consumption_id' | 'own_material_id' | 'loss_id' | 'return_id';
+    idField: 'consumption_id' | 'own_material_id' | 'loss_id' | 'return_id' | 'offcut_id';
     extraFields: readonly string[];
     derivedFields: readonly string[];
   },
@@ -879,6 +916,21 @@ const postServiceOrderReturnBase: RouteHandler = (req, res, params) =>
     // The delivery challan the material leaves under - mandatory, enforced in the seam's assert.
     extraFields: ['return_challan_number_ext'],
     derivedFields: ['custody_balance_after'],
+  });
+
+// ---------------------------------------------------------------------------
+// Story 9.6: offcut election execution (FR-JW-09/10) through the EXISTING custody helper. The
+// caller never names the branch; the seam re-reads service_order.offcut_election under the order
+// lock (Binding decision 1). The challan number, the real-time rate estimate and the settlement
+// declaration are caller fields the seam checks per branch; every derived field is refused here.
+// ---------------------------------------------------------------------------
+
+const postServiceOrderOffcutBase: RouteHandler = (req, res, params) =>
+  postCustodyEvent(req, res, params, {
+    eventType: CUSTODY_OFFCUT_RECORDED,
+    idField: 'offcut_id',
+    extraFields: ['return_challan_number_ext', 'offcut_rate_estimate', 'settles_offcut'],
+    derivedFields: [...OFFCUT_DERIVED_FIELDS],
   });
 
 /**
@@ -1318,6 +1370,270 @@ const getServiceOrderCustodyStatementBase: RouteHandler = async (req, res, param
   }
 };
 
+// ---------------------------------------------------------------------------
+// Story 9.6: the ERP billing feed (FR-JW-12). Generation and acknowledgment are closed-shape
+// commands with a required idempotency key (#AD-16); the seam re-derives the two BILLING_NOT_READY
+// preconditions, the one-feed-per-order collision and the segregation-of-duties check under the
+// order advisory lock (the hold-bypass lesson). The reconciliation report is projection-only.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /service-orders/:serviceOrderId/billing-feed - generate the ONE feed an order may carry.
+ * measured_hours is the only caller field (per_hour price basis, Binding decision 12).
+ */
+const postServiceOrderBillingFeedBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    rejectUnacceptedFields(body, [
+      'service_order_id',
+      'site_id',
+      'generated_by',
+      'status',
+      'payload',
+      ...GENERATED_DERIVED_FIELDS,
+    ]);
+    if (body['service_order_id'] !== undefined && body['service_order_id'] !== serviceOrderId) {
+      throw new AppError(400, 'INVALID_PARAMS', 'service_order_id must equal the path id');
+    }
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (body['feed_id'] !== undefined && !isUuid(body['feed_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'feed_id must be a UUID when supplied');
+    }
+    if (body['measured_hours'] !== undefined && typeof body['measured_hours'] !== 'string') {
+      throw new AppError(400, 'INVALID_PARAMS', 'measured_hours must be a NUMERIC string', {
+        field: 'measured_hours',
+      });
+    }
+
+    // The 9.5 closure-route shape: a retry of a SUCCESSFUL generation must replay, site write
+    // access is re-checked whenever the order is readable, and the order's site rides the payload
+    // so the seam can re-derive the site gate under its own lock.
+    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const existing = await getServiceOrderById(serviceOrderId);
+    if (!existing && !isRetry) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+    }
+    if (existing) assertSiteWriteAccess(req, existing.site_id);
+    if (!existing) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+    }
+
+    const feedId = (body['feed_id'] as string | undefined) ?? randomUUID();
+    const payload: Record<string, unknown> = {
+      service_order_id: serviceOrderId,
+      feed_id: feedId,
+      site_id: existing.site_id,
+      generated_by: actor.userId,
+      idempotency_key: idempotencyKey,
+    };
+    if (body['measured_hours'] !== undefined) payload['measured_hours'] = body['measured_hours'];
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: serviceOrderId,
+        event_type: JOBWORK_BILLING_FEED_GENERATED,
+        payload,
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedFeedId = replayIdOrReject(persisted, JOBWORK_BILLING_FEED_GENERATED, 'feed_id');
+    const feed = await getBillingFeedById(persistedFeedId);
+    if (feed) assertSiteReadAccess(req, feed.site_id);
+    // A replay is not a generation: 200 with the same event_id, the house idiom.
+    sendJson(res, persistedFeedId === feedId ? 201 : 200, {
+      event_id: persisted.event_id,
+      feed_id: persistedFeedId,
+      feed,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditFailSafe(req, actor, err, {
+        service_order_id: params?.['serviceOrderId'] ?? null,
+        event_type: JOBWORK_BILLING_FEED_GENERATED,
+      });
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+/**
+ * POST /jobwork/billing-feeds/:feedId/acknowledgment - the INBOUND ERP acknowledgment (Binding
+ * decision 8). acknowledged_ref_ext is the ERP document number; acknowledged_by is stamped from the
+ * authenticated actor and the seam refuses SOD_VIOLATION when it equals the feed's generated_by.
+ */
+const postBillingFeedAcknowledgmentBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const feedId = requireUuidParam(params, 'feedId');
+    rejectUnacceptedFields(body, [
+      'feed_id',
+      'service_order_id',
+      'acknowledged_by',
+      'acknowledged_at',
+      'status',
+      'invoiced_at',
+    ]);
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (
+      typeof body['acknowledged_ref_ext'] !== 'string' ||
+      body['acknowledged_ref_ext'].trim() === ''
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'acknowledged_ref_ext (the ERP document number) is required',
+        { field: 'acknowledged_ref_ext' },
+      );
+    }
+
+    // 404-versus-403 collapse: a feed at a site the caller cannot write is indistinguishable from a
+    // missing feed. A retry of a SUCCESSFUL acknowledgment must still replay.
+    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const feed = await getBillingFeedById(feedId);
+    let accessDenied = false;
+    if (feed) {
+      try {
+        assertSiteWriteAccess(req, feed.site_id);
+      } catch (err) {
+        if (err instanceof AppError && err.errorCode === 'LOCATION_ACCESS_DENIED') {
+          accessDenied = true;
+        } else {
+          throw err;
+        }
+      }
+    }
+    if ((!feed || accessDenied) && !isRetry) {
+      throw new AppError(404, 'NOT_FOUND', 'Billing feed not found', { feed_id: feedId });
+    }
+    if (!feed) {
+      throw new AppError(404, 'NOT_FOUND', 'Billing feed not found', { feed_id: feedId });
+    }
+    if (accessDenied) {
+      throw new AppError(404, 'NOT_FOUND', 'Billing feed not found', { feed_id: feedId });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: feed.service_order_id,
+        event_type: JOBWORK_BILLING_FEED_ACKNOWLEDGED,
+        payload: {
+          feed_id: feedId,
+          service_order_id: feed.service_order_id,
+          acknowledged_ref_ext: (body['acknowledged_ref_ext'] as string).trim(),
+          acknowledged_by: actor.userId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+    const persistedFeedId = replayIdOrReject(
+      persisted,
+      JOBWORK_BILLING_FEED_ACKNOWLEDGED,
+      'feed_id',
+    );
+    const updated = await getBillingFeedById(persistedFeedId);
+    if (updated) assertSiteWriteAccess(req, updated.site_id);
+    const order = updated ? await getServiceOrderById(updated.service_order_id) : null;
+    sendJson(res, 200, {
+      event_id: persisted.event_id,
+      feed_id: persistedFeedId,
+      feed: updated,
+      invoiced_at: order?.invoiced_at ?? null,
+      invoiced_feed_id: order?.invoiced_feed_id ?? null,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditFailSafe(req, actor, err, {
+        feed_id: params?.['feedId'] ?? null,
+        event_type: JOBWORK_BILLING_FEED_ACKNOWLEDGED,
+      });
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+/** Task 8.3: every feed not yet acknowledged, its age against the retry window, its exception flag. */
+const getJobworkBillingReconciliationReportBase: RouteHandler = async (req, res, _params) => {
+  try {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const siteIds = reportSiteScope(req, url);
+    const generatedAt = new Date().toISOString();
+    const retryWindowMs = config.jobwork.billingRetryWindowMs;
+    const rows = await listUnacknowledgedBillingFeeds({ siteIds });
+    const out = rows.map((row) => {
+      const ageMs = new Date(generatedAt).getTime() - new Date(row.first_sent_at).getTime();
+      return {
+        feed_id: row.feed_id,
+        service_order_id: row.service_order_id,
+        order_number_ext: row.order_number_ext,
+        customer_party_code: row.customer_party_code,
+        site_id: row.site_id,
+        status: row.status,
+        exception: row.status === 'exception',
+        exception_raised_at: row.exception_raised_at,
+        alert_sent_at: row.alert_sent_at,
+        first_sent_at: row.first_sent_at,
+        age_ms: ageMs,
+        retry_window_ms: retryWindowMs,
+        retry_window_elapsed: billingFeedRetryWindowElapsed({
+          firstSentAt: row.first_sent_at,
+          now: generatedAt,
+          retryWindowMs,
+        }),
+        measured_basis: row.measured_basis,
+        measured_quantity: row.measured_quantity,
+        total_value: row.total_value,
+        currency: row.currency,
+        // Binding decision 18: billed while output is still open to dispatch is a REPORTING
+        // exception, never a blocked write.
+        open_to_dispatch_qty: row.open_to_dispatch_qty,
+        open_to_dispatch: qtyToScaled(row.open_to_dispatch_qty) > 0n,
+        idempotency_key: row.idempotency_key,
+        generated_by: row.generated_by,
+      };
+    });
+    sendJson(res, 200, {
+      report: 'job-work billing reconciliation',
+      generated_at: generatedAt,
+      retry_window_ms: retryWindowMs,
+      counts: {
+        pending: out.filter((r) => r.status === 'pending').length,
+        exception: out.filter((r) => r.status === 'exception').length,
+        open_to_dispatch: out.filter((r) => r.open_to_dispatch).length,
+      },
+      rows: out,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
 export const createServiceOrderHandler = requireRole({
   module: 'jobwork',
   functionScope: 'write',
@@ -1412,3 +1728,23 @@ export const getJobworkAgingReportHandler = requireRole({
   module: 'jobwork',
   functionScope: 'read',
 })(getJobworkAgingReportBase);
+
+export const postServiceOrderOffcutHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderOffcutBase);
+
+export const postServiceOrderBillingFeedHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderBillingFeedBase);
+
+export const postBillingFeedAcknowledgmentHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postBillingFeedAcknowledgmentBase);
+
+export const getJobworkBillingReconciliationReportHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'read',
+})(getJobworkBillingReconciliationReportBase);

@@ -65,6 +65,10 @@ const CREATE_FIELDS = new Set([
   'price_basis',
   'kit_bom_id',
   'has_contractual_offcut',
+  // Story 9.6 Task 0 (Binding decision 16): the contracted offcut rate pair, optional here and on
+  // update, MANDATORY at confirm when has_contractual_offcut is true.
+  'offcut_rate',
+  'offcut_currency',
 ]);
 // has_contractual_offcut is deliberately NOT updatable: it is set at creation and is the sole
 // predicate of the FR-JW-09/10 confirm gate, so an updatable flag would let the same actor blocked
@@ -79,7 +83,13 @@ const UPDATE_FIELDS = new Set([
   'promised_delivery_date',
   'price_basis',
   'kit_bom_id',
+  'offcut_rate',
+  'offcut_currency',
 ]);
+// Story 9.6 Task 0: at most FOUR decimals (the NUMERIC(18,4) column), strictly positive, and an
+// exact decimal STRING at the event boundary - the receiptTolerancePercent convention, never a
+// number literal, so the billing line settles in scaled-integer arithmetic.
+const OFFCUT_RATE_REGEX = /^\d{1,14}(\.\d{1,4})?$/;
 
 export type ServiceOrderStatus = 'draft' | 'confirmed' | 'in_process' | 'closed';
 
@@ -111,6 +121,15 @@ function reject(
   status: number = 400,
 ): never {
   throw new AppError(status, code, message, details);
+}
+
+/**
+ * Story 9.6 Task 0.3: the contracted offcut rate shape. Exported so a unit test can fail it (the
+ * 8.4 tautological-config lesson): a positive exact decimal string with at most four decimals.
+ */
+export function isOffcutRateString(value: unknown): value is string {
+  if (typeof value !== 'string' || !OFFCUT_RATE_REGEX.test(value)) return false;
+  return /[1-9]/.test(value);
 }
 
 export function isValidPriceBasis(value: unknown): value is ServiceOrderPriceBasisPayload {
@@ -207,7 +226,10 @@ export function assertServiceOrderShape(envelope: EventEnvelope): void {
       assertOrderUpdatedShape(p);
       break;
     case JOBWORK_ORDER_CONFIRMED:
-      assertNoExtraKeys(p, new Set(['service_order_id', 'offcut_election']));
+      assertNoExtraKeys(
+        p,
+        new Set(['service_order_id', 'offcut_election', 'offcut_rate', 'offcut_currency']),
+      );
       if (!isUuid(p['service_order_id']))
         reject('INVALID_PARAMS', 'service_order_id is required and must be a UUID');
       if (
@@ -220,6 +242,7 @@ export function assertServiceOrderShape(envelope: EventEnvelope): void {
           'offcut_election must be return, retain_and_buy, or retain_free when supplied',
         );
       }
+      assertOffcutRateShape(p);
       break;
     case JOBWORK_ORDER_CLOSURE_REQUESTED:
       assertNoExtraKeys(p, new Set(['service_order_id', 'requested_by', 'site_id']));
@@ -303,6 +326,69 @@ function assertCommonFieldShapes(p: Record<string, unknown>, required: boolean):
   ) {
     reject('INVALID_PARAMS', 'has_contractual_offcut must be a boolean when supplied');
   }
+  assertOffcutRateShape(p);
+}
+
+/**
+ * Story 9.6 Task 0.2/0.3: the contracted offcut rate pair rides created, updated and confirmed as
+ * an optional pair. Shape only here; the currency-versus-price-basis and contractual-arrangement
+ * gates are re-derived against the ROW under the order lock in the appliers.
+ */
+function assertOffcutRateShape(p: Record<string, unknown>): void {
+  if (p['offcut_rate'] !== undefined && p['offcut_rate'] !== null) {
+    if (!isOffcutRateString(p['offcut_rate'])) {
+      reject(
+        'INVALID_PARAMS',
+        'offcut_rate must be a strictly positive exact decimal string with at most four decimals',
+        { field: 'offcut_rate', value: p['offcut_rate'] },
+      );
+    }
+  }
+  if (p['offcut_currency'] !== undefined && p['offcut_currency'] !== null) {
+    if (typeof p['offcut_currency'] !== 'string' || !CURRENCY_REGEX.test(p['offcut_currency'])) {
+      reject(
+        'INVALID_PARAMS',
+        'offcut_currency must be a three-letter ISO 4217 code when supplied',
+        { field: 'offcut_currency' },
+      );
+    }
+  }
+  // The pair travels together: a rate with no currency is an unbounded number on an invoice line,
+  // and a null clear must clear both.
+  const rateState =
+    p['offcut_rate'] === undefined ? 'absent' : p['offcut_rate'] === null ? 'null' : 'set';
+  const currencyState =
+    p['offcut_currency'] === undefined ? 'absent' : p['offcut_currency'] === null ? 'null' : 'set';
+  if (rateState !== currencyState) {
+    reject('INVALID_PARAMS', 'offcut_rate and offcut_currency must be supplied together', {
+      offcut_rate: p['offcut_rate'] ?? null,
+      offcut_currency: p['offcut_currency'] ?? null,
+    });
+  }
+}
+
+/**
+ * Story 9.6 Task 0.3: offcut_currency must equal the price-basis currency whenever a price basis is
+ * present. Re-derived against the effective (row plus payload) values under the order lock.
+ */
+function assertOffcutCurrencyMatchesPriceBasis(
+  serviceOrderId: string,
+  offcutCurrency: string | null | undefined,
+  priceBasis: ServiceOrderPriceBasisPayload | null | undefined,
+): void {
+  if (offcutCurrency == null || priceBasis == null) return;
+  if (offcutCurrency !== priceBasis.currency) {
+    reject(
+      'INVALID_PARAMS',
+      'offcut_currency must equal the price_basis currency',
+      {
+        service_order_id: serviceOrderId,
+        offcut_currency: offcutCurrency,
+        price_basis_currency: priceBasis.currency,
+      },
+      400,
+    );
+  }
 }
 
 function assertNoExtraKeys(p: Record<string, unknown>, allowed: Set<string>): void {
@@ -347,6 +433,8 @@ function assertOrderUpdatedShape(p: Record<string, unknown>): void {
     'price_basis',
     'kit_bom_id',
     'has_contractual_offcut',
+    'offcut_rate',
+    'offcut_currency',
   ];
   const changed = changeable.filter((f) => p[f] !== undefined);
   if (changed.length === 0) {
@@ -467,6 +555,17 @@ async function applyOrderCreated(
   // only format-checked, not bounded) - the printed year must not be spoofable.
   const year = new Date().getUTCFullYear();
   const orderNumber = await allocateServiceOrderNumber(year, client);
+  // Story 9.6 Task 0: the rate pair is optional at creation, but a rate on an order with no
+  // contractual arrangement is refused exactly as an election is (the confirm gate's mirror).
+  if (p.offcut_rate != null && p.has_contractual_offcut !== true) {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      'A service order without a contractual offcut arrangement cannot carry an offcut rate',
+      { service_order_id: p.service_order_id, has_contractual_offcut: false },
+      409,
+    );
+  }
+  assertOffcutCurrencyMatchesPriceBasis(p.service_order_id, p.offcut_currency, p.price_basis);
 
   try {
     await insertServiceOrder(
@@ -481,6 +580,8 @@ async function applyOrderCreated(
         price_basis: p.price_basis ?? null,
         kit_bom_id: p.kit_bom_id ?? null,
         has_contractual_offcut: p.has_contractual_offcut ?? false,
+        offcut_rate: p.offcut_rate ?? null,
+        offcut_currency: p.offcut_currency ?? null,
         site_id: p.site_id,
         business_stream: p.business_stream,
         created_by: envelope.metadata.actor.user_id,
@@ -546,6 +647,24 @@ async function applyOrderUpdated(envelope: EventEnvelope, client: PoolClient): P
     reject('INVALID_PARAMS', 'promised_delivery_date must be on or after promised_start_date');
   }
 
+  // Story 9.6 Task 0: same two gates as creation, re-derived against the row under the lock.
+  if (p.offcut_rate != null && order.has_contractual_offcut !== true) {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      'A service order without a contractual offcut arrangement cannot carry an offcut rate',
+      { service_order_id: p.service_order_id, has_contractual_offcut: false },
+      409,
+    );
+  }
+  const effectiveOffcutCurrency =
+    p.offcut_currency !== undefined ? p.offcut_currency : order.offcut_currency;
+  const effectivePriceBasis = p.price_basis !== undefined ? p.price_basis : order.price_basis;
+  assertOffcutCurrencyMatchesPriceBasis(
+    p.service_order_id,
+    effectiveOffcutCurrency,
+    effectivePriceBasis,
+  );
+
   await updateServiceOrderFields(
     p.service_order_id,
     {
@@ -560,6 +679,8 @@ async function applyOrderUpdated(envelope: EventEnvelope, client: PoolClient): P
       }),
       ...(p.price_basis !== undefined && { price_basis: p.price_basis }),
       ...(p.kit_bom_id !== undefined && { kit_bom_id: p.kit_bom_id }),
+      ...(p.offcut_rate !== undefined && { offcut_rate: p.offcut_rate }),
+      ...(p.offcut_currency !== undefined && { offcut_currency: p.offcut_currency }),
     },
     client,
   );
@@ -625,6 +746,52 @@ async function applyOrderConfirmed(envelope: EventEnvelope, client: PoolClient):
       'A service order without a contractual offcut arrangement cannot carry an offcut election',
       { service_order_id: p.service_order_id, has_contractual_offcut: false },
       409,
+    );
+  }
+  // Story 9.6 Task 0 (Binding decision 16): the THIRD confirm gate, a verbatim copy of the
+  // offcut_election pair above. The contracted offcut rate is agreed when the contract is, so a
+  // contractual arrangement makes the rate MANDATORY at confirm - without it AC2's "contracted
+  // rate" has no source and the number would be typed at settlement by the person who benefits.
+  if (
+    order.has_contractual_offcut === true &&
+    p.offcut_rate === undefined &&
+    order.offcut_rate === null
+  ) {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      'A service order with a contractual offcut arrangement requires a contracted offcut rate to confirm',
+      { service_order_id: p.service_order_id, has_contractual_offcut: true, field: 'offcut_rate' },
+      409,
+    );
+  }
+  // Mirror refusal: a rate without the arrangement it prices is refused exactly as an election is.
+  if (order.has_contractual_offcut !== true && p.offcut_rate !== undefined) {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      'A service order without a contractual offcut arrangement cannot carry an offcut rate',
+      { service_order_id: p.service_order_id, has_contractual_offcut: false, field: 'offcut_rate' },
+      409,
+    );
+  }
+  // A null clear at confirm would confirm a contractual order with no rate through the back door.
+  if (order.has_contractual_offcut === true && p.offcut_rate === null) {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      'A service order with a contractual offcut arrangement cannot clear its offcut rate at confirm',
+      { service_order_id: p.service_order_id, has_contractual_offcut: true, field: 'offcut_rate' },
+      409,
+    );
+  }
+  assertOffcutCurrencyMatchesPriceBasis(
+    p.service_order_id,
+    p.offcut_currency !== undefined ? p.offcut_currency : order.offcut_currency,
+    order.price_basis,
+  );
+  if (p.offcut_rate !== undefined) {
+    await updateServiceOrderFields(
+      p.service_order_id,
+      { offcut_rate: p.offcut_rate, offcut_currency: p.offcut_currency ?? null },
+      client,
     );
   }
 

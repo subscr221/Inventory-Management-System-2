@@ -56,6 +56,13 @@ export const CUSTODY_LOSS_RECORDED = 'custody.loss_recorded';
  * on the SAME custody stream (9.3 forward-declared the `return` category; this story builds it).
  */
 export const CUSTODY_RETURN_RECORDED = 'custody.return_recorded';
+/**
+ * Story 9.6 (FR-JW-09/10, Binding decision 1): execution of the offcut election, ONE event with
+ * three branches switched on service_order.offcut_election under the order lock. The constant and
+ * the shape assert live here so every custody.* name stays in one place; the applier lives in
+ * jobwork-offcut.ts (this file already carries four appliers).
+ */
+export const CUSTODY_OFFCUT_RECORDED = 'custody.offcut_recorded';
 /** Story 9.4 (FR-JW-08): the DOA transaction type governing over-norm loss approval, the Story
  * 6.1/6.3 release-override chain verbatim (resolveApprover, forged-approver rejection, acting-user
  * check). Must be seeded in the DOA registry before the approval path is reachable - no code seeds
@@ -153,6 +160,42 @@ const RETURN_FIELDS = new Set([
   'posted_by',
 ]);
 const RETURN_DERIVED_FIELDS = ['custody_balance_after'] as const;
+
+/**
+ * Story 9.6: the closed offcut shape. return_challan_number_ext is mandatory on the `return`
+ * branch ONLY, offcut_rate_estimate is the real-time settlement rate on `retain_and_buy` only
+ * (PO ruling 2026-09-05 on open question 6: the estimate IS the settlement rate, no DOA gate; the
+ * order's contracted rate is the reference stamped beside it), settles_offcut is the settlement
+ * declaration (Binding decision 15) - all three are branch-checked by the applier, which alone
+ * knows the election.
+ */
+const OFFCUT_FIELDS = new Set([
+  'service_order_id',
+  'offcut_id',
+  'sku',
+  'lot_id',
+  'location_id',
+  'quantity',
+  'uom',
+  'site_id',
+  'posted_by',
+  'return_challan_number_ext',
+  'offcut_rate_estimate',
+  'settles_offcut',
+]);
+/** Server-derived on an offcut: the election is never named by the caller (Binding decision 1). */
+export const OFFCUT_DERIVED_FIELDS = [
+  'election',
+  'custody_balance_after',
+  'converted_lot_id',
+  'converted_lot_number',
+  'billable_value',
+  'effective_offcut_rate',
+  'contracted_offcut_rate',
+  'converted_lot_hold_id',
+] as const;
+// The 9.6 Task 0 rate shape (service-order.ts OFFCUT_RATE_REGEX): at most four decimals.
+const OFFCUT_RATE_ESTIMATE_REGEX = /^\d{1,14}(\.\d{1,4})?$/;
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
@@ -435,11 +478,72 @@ export function assertCustodyReturnShape(envelope: EventEnvelope): void {
   p['return_challan_number_ext'] = (p['return_challan_number_ext'] as string).trim();
 }
 
+/**
+ * Story 9.6 Task 1.3 (FR-JW-09/10): the offcut posting, modelled line for line on the return shape.
+ * The lot and location are NAMED (the drain needs the grain). Nothing here knows the election:
+ * whether the challan number is required, whether an override is even permitted, is the applier's
+ * call under the order lock. Every derived field is refused on input.
+ */
+export function assertCustodyOffcutShape(envelope: EventEnvelope): void {
+  if (envelope.event_type !== CUSTODY_OFFCUT_RECORDED) return;
+  if (!CUSTODY_STREAM_TYPES.has(envelope.stream_type)) {
+    reject('INVALID_EVENT_ENVELOPE', 'custody.* events must ride the custody stream', {
+      event_type: envelope.event_type,
+      stream_type: envelope.stream_type,
+    });
+  }
+  const p = envelope.payload as Record<string, unknown>;
+  assertCommonShape(envelope, p, 'offcut_id', OFFCUT_FIELDS, OFFCUT_DERIVED_FIELDS);
+  if (!isNonEmptyString(p['lot_id']) || (p['lot_id'] as string).trim().length > MAX_TEXT_LENGTH) {
+    reject('INVALID_PARAMS', 'lot_id is required and must be a non-empty string');
+  }
+  p['lot_id'] = (p['lot_id'] as string).trim();
+  if (p['return_challan_number_ext'] !== undefined && p['return_challan_number_ext'] !== null) {
+    if (
+      !isNonEmptyString(p['return_challan_number_ext']) ||
+      (p['return_challan_number_ext'] as string).trim().length > MAX_TEXT_LENGTH
+    ) {
+      reject(
+        'INVALID_PARAMS',
+        `return_challan_number_ext must be a non-blank delivery challan number of at most ${MAX_TEXT_LENGTH} characters when supplied`,
+        { field: 'return_challan_number_ext' },
+      );
+    }
+    p['return_challan_number_ext'] = (p['return_challan_number_ext'] as string).trim();
+  }
+  if (p['offcut_rate_estimate'] !== undefined && p['offcut_rate_estimate'] !== null) {
+    // An exact decimal STRING, never a number literal (the receiptTolerancePercent convention), so
+    // the billable value settles in scaled-integer arithmetic.
+    if (
+      typeof p['offcut_rate_estimate'] !== 'string' ||
+      !OFFCUT_RATE_ESTIMATE_REGEX.test(p['offcut_rate_estimate']) ||
+      !/[1-9]/.test(p['offcut_rate_estimate'])
+    ) {
+      reject(
+        'INVALID_PARAMS',
+        'offcut_rate_estimate must be a strictly positive exact decimal string with at most four decimals',
+        { field: 'offcut_rate_estimate', value: p['offcut_rate_estimate'] },
+      );
+    }
+  }
+  if (p['settles_offcut'] !== undefined && typeof p['settles_offcut'] !== 'boolean') {
+    reject('INVALID_PARAMS', 'settles_offcut must be a boolean when supplied');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // In-transaction gates (DB access)
 // ---------------------------------------------------------------------------
 
-async function alreadyPersisted(envelope: EventEnvelope, client: PoolClient): Promise<boolean> {
+/**
+ * Story 9.6: the in-transaction helpers below are EXPORTED so jobwork-offcut.ts can reuse the
+ * exact gates the return applier runs (order-under-lock, duplicate classification, location
+ * resolution, the lot_trace append) instead of carrying a second copy of each.
+ */
+export async function alreadyPersisted(
+  envelope: EventEnvelope,
+  client: PoolClient,
+): Promise<boolean> {
   if (!envelope.idempotency_key && !envelope.event_id) return false;
   const existing = await client.query(
     `SELECT 1 FROM domain_events WHERE ($1::text IS NOT NULL AND idempotency_key = $1) OR event_id = $2 LIMIT 1`,
@@ -458,7 +562,7 @@ async function lockOrder(serviceOrderId: string, client: PoolClient): Promise<vo
  * posting site (AC 7). SOURCE_DOCUMENT_REQUIRED for both arms (the 9.2 precedent for
  * order-not-receivable; decision 7).
  */
-async function requireInProcessOrder(
+export async function requireInProcessOrder(
   serviceOrderId: string,
   siteId: string,
   client: PoolClient,
@@ -516,7 +620,7 @@ async function currentKitRevision(
   };
 }
 
-function classifyDuplicate(err: unknown, entryId: string, eventId: string): never {
+export function classifyDuplicate(err: unknown, entryId: string, eventId: string): never {
   // Check WHICH constraint fired (the 9.1 review patch 7 lesson) - both are 409 DUPLICATE_EVENT
   // but the details name the colliding key.
   if (err instanceof Error && 'code' in err && (err as { code: string }).code === '23505') {
@@ -541,7 +645,7 @@ function classifyDuplicate(err: unknown, entryId: string, eventId: string): neve
   throw err;
 }
 
-async function resolveLocation(
+export async function resolveLocation(
   locationId: string,
   client: PoolClient,
 ): Promise<{ location_id: string; location_code: string | null }> {
@@ -554,7 +658,7 @@ async function resolveLocation(
   return { location_id: location.location_id, location_code: location.location_code };
 }
 
-async function appendCustodyTrace(
+export async function appendCustodyTrace(
   input: {
     sku: string;
     lotNumber: string;

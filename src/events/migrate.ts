@@ -251,6 +251,12 @@ const MIGRATIONS = [
   // and their new guarded blocks (challan_class column, widened uq_custody_ledger_source_event)
   // re-apply harmlessly. FK-shaped receipt_id, no declared FK (the Epic 9 house convention).
   '../../read/projections/jobwork_return_clock.sql',
+  // Story 9.6: the ONE-per-order ERP billing feed with a lifecycle (pending / acknowledged /
+  // exception) - the first outbound interface with mutable status. Appended after the 9.5 file;
+  // the edited service_order.sql keeps its position above and its new guarded ADD COLUMN lines
+  // (offcut rate pair, invoiced and offcut-settled stamps) re-apply harmlessly. FK-shaped
+  // service_order_id, no declared FK (the Epic 9 house convention).
+  '../../read/projections/job_work_billing_feed.sql',
 ];
 
 async function migrate(): Promise<void> {

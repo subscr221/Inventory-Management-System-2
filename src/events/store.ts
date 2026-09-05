@@ -244,6 +244,14 @@ import {
   assertJobworkDispatchShape,
   applyJobworkDispatchProjection,
 } from '../compliance/jobwork-dispatch.js';
+// Story 9.6: offcut election execution (custody stream) and the ERP billing feed (jobwork stream).
+import { assertCustodyOffcutShape } from '../compliance/custody-ledger.js';
+import { applyCustodyOffcutProjection } from '../compliance/jobwork-offcut.js';
+import {
+  assertJobworkBillingShape,
+  applyJobworkBillingFeedGenerated,
+  applyJobworkBillingFeedAcknowledged,
+} from '../compliance/jobwork-billing.js';
 import {
   assertProductionMaterialShape,
   applyProductionMaterialProjection,
@@ -771,6 +779,12 @@ export async function persistEvent(
   // MANDATORY non-blank return_challan_number_ext, the server-derived balance refused on input) is
   // non-DB and runs here. The closure-request shape rides assertServiceOrderShape above.
   assertCustodyReturnShape(envelope);
+  // Story 9.6: offcut shape validation (closed shape, lot and location named, the optional
+  // challan number / rate override / settlement flag typed, every server-derived field including
+  // `election` refused on input) and the two billing shapes (closed, generated_by / acknowledged_by
+  // pinned to the authenticated actor, the mandatory ERP document number) are non-DB and run here.
+  assertCustodyOffcutShape(envelope);
+  assertJobworkBillingShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -1154,6 +1168,14 @@ export async function persistEvent(
     // dispatched by applyServiceOrderProjection above, alongside the other order-lifecycle events;
     // the 9.4 dispatch and loss appliers above additionally reconcile the return clocks in-line.
     await applyCustodyReturnProjection(envelope, client, eventId);
+    // Story 9.6: the offcut election execution (election re-read under the order lock, the shared
+    // CUSTODY_RETURN drain, the `offcut` ledger row, lot_trace, the capped clock reconciliation,
+    // the owned-lot mint plus QC hand-off on retention, the return documents, the settlement
+    // stamp) and the billing feed generation / acknowledgment (preconditions and the SoD check
+    // re-derived under the order lock) run inside this same transaction.
+    await applyCustodyOffcutProjection(envelope, client, eventId, auditCtx);
+    await applyJobworkBillingFeedGenerated(envelope, client, eventId);
+    await applyJobworkBillingFeedAcknowledged(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's

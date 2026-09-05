@@ -800,11 +800,17 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
     assert.strictEqual(confirm.status, 409, JSON.stringify(confirm.body));
     assert.strictEqual(confirm.body['error_code'], 'INVALID_STATE_TRANSITION');
 
+    // Story 9.6 Task 0: a contractual order also carries its contracted offcut rate at confirm.
     const confirmWithElection = await makeRequest(
       port,
       'POST',
       `/api/v1/service-orders/${orderId}/confirm`,
-      { idempotency_key: randomUUID(), offcut_election: 'retain_and_buy' },
+      {
+        idempotency_key: randomUUID(),
+        offcut_election: 'retain_and_buy',
+        offcut_rate: '18.5000',
+        offcut_currency: 'INR',
+      },
       coordinatorHeaders,
     );
     assert.strictEqual(confirmWithElection.status, 200, JSON.stringify(confirmWithElection.body));

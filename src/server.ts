@@ -372,6 +372,10 @@ import {
   postServiceOrderDispatchHandler,
   postServiceOrderReturnHandler,
   postServiceOrderClosureHandler,
+  postServiceOrderOffcutHandler,
+  postServiceOrderBillingFeedHandler,
+  postBillingFeedAcknowledgmentHandler,
+  getJobworkBillingReconciliationReportHandler,
   patchReturnClockClassificationHandler,
   getJobworkItc04ReportHandler,
   getJobworkAgingReportHandler,
@@ -473,6 +477,7 @@ import { runExpiryCycle } from './notify/expire.js';
 import { runRetentionExpiryCycle } from './notify/retention-expiry.js';
 import { runBisLicenceExpiryCycle } from './compliance/bis-licence-expiry.js';
 import { runJobworkClockSweepCycle } from './notify/jobwork-clock-sweep.js';
+import { runJobWorkBillingFeedSweepCycle } from './notify/jobwork-billing-sweep.js';
 
 export function createAppRouter(): Router {
   const router = new Router();
@@ -1053,6 +1058,17 @@ export function createAppRouter(): Router {
   );
   router.get('/api/v1/jobwork/reports/itc-04', getJobworkItc04ReportHandler);
   router.get('/api/v1/jobwork/reports/aging', getJobworkAgingReportHandler);
+  // Story 9.6: the billing-reconciliation report and the feed acknowledgment command. Same rule:
+  // static '/jobwork/...' segments BEFORE every parameterised '/service-orders/:serviceOrderId/...'
+  // route, or the report path is swallowed as a :serviceOrderId segment.
+  router.get(
+    '/api/v1/jobwork/reports/billing-reconciliation',
+    getJobworkBillingReconciliationReportHandler,
+  );
+  router.post(
+    '/api/v1/jobwork/billing-feeds/:feedId/acknowledgment',
+    postBillingFeedAcknowledgmentHandler,
+  );
   // Story 9.1: job-work service orders (FR-JW-01, FR-JW-02, FR-B-16). Create/update/confirm only
   // (BSD-2): in_process is fired by Story 9.2's first customer-material receipt; closed is
   // reachable only through the Story 9.5 closure gate.
@@ -1092,6 +1108,13 @@ export function createAppRouter(): Router {
   // AD-6 closure gate (jobwork stream, FR-JW-15) - the only way an order reaches 'closed'.
   router.post('/api/v1/service-orders/:serviceOrderId/returns', postServiceOrderReturnHandler);
   router.post('/api/v1/service-orders/:serviceOrderId/closure', postServiceOrderClosureHandler);
+  // Story 9.6: offcut election execution (custody stream, FR-JW-09/10) and the ERP billing feed
+  // generation (jobwork stream, FR-JW-12).
+  router.post('/api/v1/service-orders/:serviceOrderId/offcuts', postServiceOrderOffcutHandler);
+  router.post(
+    '/api/v1/service-orders/:serviceOrderId/billing-feed',
+    postServiceOrderBillingFeedHandler,
+  );
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
   // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP
@@ -1282,6 +1305,14 @@ export function backgroundCycles(): BackgroundCycle[] {
       name: 'jobwork clock breach',
       intervalMs: config.jobwork.clockSweepIntervalMs,
       cycle: () => runJobworkClockSweepCycle(),
+    },
+    // Story 9.6 (AC 5): unacknowledged ERP billing feeds past the retry window enter the exception
+    // queue and alert the job-work coordinator. Commercial, not statutory - but an invoice that
+    // never reaches ERP is revenue nobody is chasing.
+    {
+      name: 'jobwork billing feed retry',
+      intervalMs: config.jobwork.billingSweepIntervalMs,
+      cycle: () => runJobWorkBillingFeedSweepCycle(),
     },
   ];
 }

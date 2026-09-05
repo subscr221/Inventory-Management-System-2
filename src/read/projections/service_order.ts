@@ -20,6 +20,19 @@ export interface ServiceOrderRow {
   status: 'draft' | 'confirmed' | 'in_process' | 'closed';
   offcut_election: 'return' | 'retain_and_buy' | 'retain_free' | null;
   has_contractual_offcut: boolean;
+  /**
+   * Story 9.6 Task 0 (Binding decision 16): the CONTRACTED offcut rate, money per unit of customer
+   * material in offcut_currency, mandatory at confirm when has_contractual_offcut is true. Read back
+   * as a NUMERIC(18,4) text so no caller ever floats it.
+   */
+  offcut_rate: string | null;
+  offcut_currency: string | null;
+  /** Story 9.6 (Binding decision 9): stamped by jobwork.billing_feed_acknowledged, never a status. */
+  invoiced_at: string | null;
+  invoiced_feed_id: string | null;
+  /** Story 9.6 (Binding decision 15): stamped by the custody.offcut_recorded posting that settles. */
+  offcut_settled_at: string | null;
+  offcut_settled_by: string | null;
   site_id: string;
   business_stream: string;
   created_by: string;
@@ -51,7 +64,7 @@ export async function getServiceOrderById(
   const r = runner(client);
   const lockClause = forUpdate ? ' FOR UPDATE' : '';
   const result = await r.query(
-    `SELECT * FROM service_order WHERE service_order_id = $1${lockClause}`,
+    `SELECT *, offcut_rate::text AS offcut_rate FROM service_order WHERE service_order_id = $1${lockClause}`,
     [serviceOrderId],
   );
   return (result.rows[0] as ServiceOrderRow) ?? null;
@@ -100,7 +113,7 @@ export async function listServiceOrders(
     Number.isInteger(params.limit) && params.limit! > 0 ? Math.min(params.limit!, 200) : 50;
   const offset = Number.isInteger(params.offset) && params.offset! >= 0 ? params.offset! : 0;
   const result = await r.query(
-    `SELECT * FROM service_order ${where} ORDER BY created_at DESC, service_order_id ASC LIMIT $${idx} OFFSET $${idx + 1}`,
+    `SELECT *, offcut_rate::text AS offcut_rate FROM service_order ${where} ORDER BY created_at DESC, service_order_id ASC LIMIT $${idx} OFFSET $${idx + 1}`,
     [...values, limit, offset],
   );
   return result.rows as ServiceOrderRow[];
@@ -117,6 +130,9 @@ export interface InsertServiceOrderInput {
   price_basis: ServiceOrderPriceBasis | null;
   kit_bom_id: string | null;
   has_contractual_offcut: boolean;
+  /** Story 9.6 Task 0: optional at creation; the confirm gate makes them mandatory when contractual. */
+  offcut_rate: string | null;
+  offcut_currency: string | null;
   site_id: string;
   business_stream: string;
   created_by: string;
@@ -133,8 +149,8 @@ export async function insertServiceOrder(
       service_order_id, order_number_ext, customer_party_code, customer_name,
       spec_reference_ext, promised_start_date, promised_delivery_date, price_basis,
       kit_bom_id, has_contractual_offcut, status, site_id, business_stream, created_by,
-      correlation_id, source_event_id
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'draft',$11,$12,$13,$14,$15)`,
+      correlation_id, source_event_id, offcut_rate, offcut_currency
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'draft',$11,$12,$13,$14,$15,$16::numeric,$17)`,
     [
       row.service_order_id,
       row.order_number_ext,
@@ -151,11 +167,18 @@ export async function insertServiceOrder(
       row.created_by,
       row.correlation_id,
       row.source_event_id,
+      row.offcut_rate,
+      row.offcut_currency,
     ],
   );
 }
 
-/** Draft-only field edits (jobwork.order_updated). Status is never changed here. */
+/**
+ * Draft-only field edits (jobwork.order_updated). Status is never changed here. Story 9.6 adds the
+ * order-level offcut rate pair (Task 0, also written at confirm) and the two orthogonal stamp pairs
+ * (Task 2.7 settlement, Task 6.2 invoicing), which the custody and billing appliers write under the
+ * order advisory lock - they are NOT lifecycle state and never touch `status`.
+ */
 export interface UpdateServiceOrderFieldsInput {
   customer_party_code?: string;
   customer_name?: string;
@@ -165,6 +188,12 @@ export interface UpdateServiceOrderFieldsInput {
   price_basis?: ServiceOrderPriceBasis | null;
   kit_bom_id?: string | null;
   has_contractual_offcut?: boolean;
+  offcut_rate?: string | null;
+  offcut_currency?: string | null;
+  offcut_settled_at?: string;
+  offcut_settled_by?: string;
+  invoiced_at?: string;
+  invoiced_feed_id?: string;
 }
 
 export async function updateServiceOrderFields(
@@ -207,6 +236,30 @@ export async function updateServiceOrderFields(
   if (fields.has_contractual_offcut !== undefined) {
     sets.push(`has_contractual_offcut = $${idx++}`);
     values.push(fields.has_contractual_offcut);
+  }
+  if (fields.offcut_rate !== undefined) {
+    sets.push(`offcut_rate = $${idx++}::numeric`);
+    values.push(fields.offcut_rate);
+  }
+  if (fields.offcut_currency !== undefined) {
+    sets.push(`offcut_currency = $${idx++}`);
+    values.push(fields.offcut_currency);
+  }
+  if (fields.offcut_settled_at !== undefined) {
+    sets.push(`offcut_settled_at = $${idx++}::timestamptz`);
+    values.push(fields.offcut_settled_at);
+  }
+  if (fields.offcut_settled_by !== undefined) {
+    sets.push(`offcut_settled_by = $${idx++}::uuid`);
+    values.push(fields.offcut_settled_by);
+  }
+  if (fields.invoiced_at !== undefined) {
+    sets.push(`invoiced_at = $${idx++}::timestamptz`);
+    values.push(fields.invoiced_at);
+  }
+  if (fields.invoiced_feed_id !== undefined) {
+    sets.push(`invoiced_feed_id = $${idx++}::uuid`);
+    values.push(fields.invoiced_feed_id);
   }
 
   await client.query(

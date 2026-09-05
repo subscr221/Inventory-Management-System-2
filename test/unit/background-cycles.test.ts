@@ -52,6 +52,11 @@ describe('in-process background cycle registry', () => {
       intervalMs: () => config.jobwork.clockSweepIntervalMs,
       why: 'Section 143 return clocks never alert at 90/30 days and never flip to breached / deemed supply (Story 9.5 AC 3-5)',
     },
+    {
+      name: 'jobwork billing feed retry',
+      intervalMs: () => config.jobwork.billingSweepIntervalMs,
+      why: 'unacknowledged job-work billing feeds never enter the exception queue and never alert the coordinator (Story 9.6 AC 5)',
+    },
   ];
 
   it('registers exactly the expected cycles, in order', () => {
@@ -110,6 +115,7 @@ describe('in-process background cycle registry', () => {
       QC_RETENTION_EXPIRY_INTERVAL_MS: '14000',
       QC_BIS_LICENCE_EXPIRY_INTERVAL_MS: '15000',
       JOBWORK_CLOCK_SWEEP_INTERVAL_MS: '16000',
+      JOBWORK_BILLING_SWEEP_INTERVAL_MS: '17000',
     };
     const result = spawnSync(
       process.execPath,
@@ -142,6 +148,7 @@ describe('in-process background cycle registry', () => {
       ['qc retention expiry', 14000],
       ['bis licence expiry', 15000],
       ['jobwork clock breach', 16000],
+      ['jobwork billing feed retry', 17000],
     ]);
   });
 });

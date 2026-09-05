@@ -556,6 +556,11 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/jobwork/reports/itc-04',
       'GET /api/v1/jobwork/reports/aging',
       'PATCH /api/v1/jobwork/clocks/:clockId/classification',
+      // Story 9.6: offcut election execution and the ERP billing feed (FR-JW-09/10, FR-JW-12).
+      'POST /api/v1/service-orders/:serviceOrderId/offcuts',
+      'POST /api/v1/service-orders/:serviceOrderId/billing-feed',
+      'POST /api/v1/jobwork/billing-feeds/:feedId/acknowledgment',
+      'GET /api/v1/jobwork/reports/billing-reconciliation',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

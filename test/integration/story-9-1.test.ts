@@ -647,10 +647,49 @@ describe('Story 9.1 Job-Work Service Order Creation', () => {
     const bad = await confirmOrder(orderId, { offcut_election: 'sell_it' });
     assert.strictEqual(bad.status, 400);
 
-    const res = await confirmOrder(orderId, { offcut_election: 'retain_and_buy' });
+    // Story 9.6 Task 0 (Binding decision 16): a contractual order also needs its contracted offcut
+    // rate at confirm; the election alone is now refused at the third confirm gate.
+    const noRate = await confirmOrder(orderId, { offcut_election: 'retain_and_buy' });
+    assert.strictEqual(noRate.status, 409, JSON.stringify(noRate.body));
+    assert.strictEqual(noRate.body['error_code'], 'INVALID_STATE_TRANSITION');
+    assert.strictEqual(detailsOf(noRate.body)['field'], 'offcut_rate');
+
+    const res = await confirmOrder(orderId, {
+      offcut_election: 'retain_and_buy',
+      offcut_rate: '18.5000',
+      offcut_currency: 'INR',
+    });
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(orderOf(res).offcut_election, 'retain_and_buy');
     assert.strictEqual((await rowOf(orderId))['offcut_election'], 'retain_and_buy');
+    assert.strictEqual((await rowOf(orderId))['offcut_rate'], '18.5000');
+    assert.strictEqual((await rowOf(orderId))['offcut_currency'], 'INR');
+  });
+
+  it('Story 9.6 Task 0: a non-contractual order refuses to carry an offcut rate at confirm (mirror gate)', async () => {
+    const orderId = await createdOrderId();
+    const res = await confirmOrder(orderId, { offcut_rate: '18.5000', offcut_currency: 'INR' });
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'INVALID_STATE_TRANSITION');
+    assert.strictEqual(detailsOf(res.body)['field'], 'offcut_rate');
+  });
+
+  it('Story 9.6 Task 0: offcut_rate is an exact decimal string and offcut_currency must match the price basis', async () => {
+    const orderId = await createdOrderId({ has_contractual_offcut: true });
+    const numeric = await confirmOrder(orderId, {
+      offcut_election: 'retain_and_buy',
+      offcut_rate: 18.5,
+      offcut_currency: 'INR',
+    });
+    assert.strictEqual(numeric.status, 400, JSON.stringify(numeric.body));
+    const wrongCurrency = await confirmOrder(orderId, {
+      offcut_election: 'retain_and_buy',
+      offcut_rate: '18.5000',
+      offcut_currency: 'USD',
+    });
+    assert.strictEqual(wrongCurrency.status, 400, JSON.stringify(wrongCurrency.body));
+    assert.strictEqual(wrongCurrency.body['error_code'], 'INVALID_PARAMS');
+    assert.strictEqual((await rowOf(orderId))['status'], 'draft');
   });
 
   it('Story 9.4: a non-contractual order refuses to carry an offcut election at confirm', async () => {

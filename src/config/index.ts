@@ -734,6 +734,40 @@ export const config = {
       true,
     ),
     clockSweepBatchSize: parsePositiveIntEnv('JOBWORK_CLOCK_SWEEP_BATCH_SIZE', 500, 10_000, true),
+    // Story 9.6 (FR-JW-12, AC 5; Open question 4): how long a `pending` billing feed may sit without
+    // ERP acknowledgment before it enters the exception queue and alerts the coordinator. Default
+    // 24 hours is a DISCLOSED placeholder in the 9.2 receipt-tolerance / 9.4 loss-norm style (no
+    // transmitter exists in this codebase, so the window is the acknowledgment SLA, not a retry
+    // cadence). The sweep predicate takes it as a PARAMETER (the 8.4 tautological-config lesson).
+    // Bounded to 30 days; fail-closed on a present-but-blank value like the clock knobs above.
+    billingRetryWindowMs: parsePositiveIntEnv(
+      'JOBWORK_BILLING_RETRY_WINDOW_MS',
+      86_400_000,
+      2_592_000_000,
+      true,
+    ),
+    // Story 9.6 (Task 7.1): the billing-feed sweep interval and batch size, on the exact
+    // clockSweepIntervalMs/clockSweepBatchSize pattern.
+    billingSweepIntervalMs: parsePositiveIntEnv(
+      'JOBWORK_BILLING_SWEEP_INTERVAL_MS',
+      3_600_000,
+      MAX_INTERVAL_MS,
+      true,
+    ),
+    billingSweepBatchSize: parsePositiveIntEnv(
+      'JOBWORK_BILLING_SWEEP_BATCH_SIZE',
+      500,
+      10_000,
+      true,
+    ),
+    // Story 9.6 code review 2026-09-05: how far a settlement's real-time offcut rate estimate may
+    // deviate from the order's CONTRACTED rate before the posting is refused OFFCUT_RATE_OUT_OF_BAND.
+    // The PO ruling on open question 6 replaced BSD-16's DOA approval chain with a plain estimate,
+    // which left the settling actor free to name any strictly positive rate on money that bills the
+    // customer; this band is the fail-closed replacement. Percent, bounded to 100 (a band wider than
+    // the contracted rate itself is no band at all). A zero-deviation policy is deliberately not
+    // expressible here: the estimate exists because measured scrap differs from the contract.
+    offcutRateTolerancePct: parsePositiveIntEnv('JOBWORK_OFFCUT_RATE_TOLERANCE_PCT', 10, 100, true),
   },
   qc: {
     // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -
