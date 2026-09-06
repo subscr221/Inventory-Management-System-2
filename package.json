@@ -17,6 +17,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "db:migrate": "node --import tsx src/events/migrate.ts",
+    "verify:roles": "node --import tsx src/cli/verify-segregated-roles.ts",
     "edge:build": "npm --workspace @inventory/edge run build",
     "edge:typecheck": "npm --workspace @inventory/edge run typecheck",
     "edge:lint": "npm --workspace @inventory/edge run lint",
