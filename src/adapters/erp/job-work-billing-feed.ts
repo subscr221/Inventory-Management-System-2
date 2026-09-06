@@ -14,6 +14,12 @@
  * Money arithmetic is scaled-integer BigInt at FOUR decimals (the NUMERIC(18,4) rate columns);
  * quantities stay at the three-decimal custody-statement scale. Never `Number()` on a NUMERIC
  * string - the repeated 9.2 / 9.3 / 9.4 finding.
+ *
+ * Own-material lines (FR-JW-07) are QUANTITY references only: they carry no rate and no value,
+ * and total_value is the measured service value alone (decision 2026-09-06). ERP prices the
+ * processor's own material from its own masters - this platform is the subledger (AD-11) and
+ * holds no own-material price source; an own-material value on this feed would be a second,
+ * competing price for the same material.
  */
 
 import { AppError } from '../../middleware/error.js';
@@ -196,10 +202,12 @@ export interface JobWorkBillingFeedPayload {
   /** measured_quantity x price_basis.rate, at the money scale. */
   service_value: string;
   dispatch_lines: JobWorkBillingDispatchLine[];
+  /** Quantity references for ERP to price from its own masters (decision 2026-09-06). */
   own_material_lines: JobWorkBillingOwnMaterialLine[];
   // Story 9.6 revised 2026-09-05: no retain-and-buy lines. Offcut is captured unvalued and disposed
   // of later (Story 9.7); its buyback reaches ERP as a CREDIT NOTE against this invoice, never as a
   // line on the feed that raised it.
+  /** Equal to service_value: total_value excludes the own-material lines (see the module header). */
   total_value: string;
   currency: string;
   /** Binding decision 18: summed (quantity - dispatched_quantity) over the order's outputs. */

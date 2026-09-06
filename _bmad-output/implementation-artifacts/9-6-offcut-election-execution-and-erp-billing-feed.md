@@ -4,7 +4,7 @@ baseline_commit: 8ccd2e6651fd16bed3167b7d2219dc131a7631ba
 
 # Story 9.6: Offcut Election Execution and ERP Billing Feed
 
-Status: review
+Status: done
 
 > **REVERSED AND REBUILT 2026-09-05** per `_bmad-output/planning-artifacts/sprint-change-proposal-2026-09-05.md`
 > (APPROVED). The offcut half of this story was reversed and rebuilt against the ruled model; the
@@ -264,6 +264,93 @@ reversal withdrew.
 - [x] [Review][Defer] `jobwork-billing.ts` carries a second private copy of `alreadyPersisted` - deferred, the two idempotency definitions can drift.
 - [x] [Review][Defer] The holding table's `lot_id` and `source_lot_id` are unindexed - deferred, cheap to add with the Story 9.7 migration.
 - [x] [Review][Defer] The events-door sweep for payloads carrying no `site_id` across other epics - deferred, and it is the residual of the security fix rather than a 9.6 item.
+
+### Review Findings, group C (full 32-file surface), 2026-09-06 - CLOSED 2026-09-06
+
+Three fresh adversarial layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor) over the net
+story surface 8ccd2e6 to HEAD at commit 502b664, excluding the interleaved 2.5 transfer fix, the
+cross-site events-door security fix (9ecebc1) and the role and 9.7 doc commits. This pass re-covers
+the seam layer that group B closed, then the full read, API, sweep, adapter and test surface.
+Findings were verified against HEAD blobs because the working tree is concurrently mid-Story 9.7,
+which edits several of these files. Group B's closed and deferred items were not re-opened.
+
+All nine patch findings were applied 2026-09-06. Two deferrals remain (below); five candidate
+findings were dismissed with reasons. The story-9-6 suite is 22/22 (two new regression arms added
+for the capture receipt gate and the confirm contract reference); tsc, eslint and prettier are
+clean.
+
+Applied 2026-09-06 (all nine; story-9-6 suite 22/22, tsc, eslint and prettier clean):
+
+- [x] [Review][Patch] HIGH, decision 2026-09-06 "settable at confirm only": `offcut_contract_ref_ext`
+  is unrecordable at confirm and after draft. The 2026-09-06 "plumbed end to end" fix added the
+  route field and create and update persistence, but the confirm seam gate still allows only
+  `service_order_id`, `offcut_election`, `offcut_rate` and `offcut_currency`
+  (src/compliance/service-order.ts:231-234) while the confirm route forwards the ref
+  (src/api/v1/service-orders.ts:428-430), so every confirm carrying the field refuses
+  INVALID_PARAMS. Ruling: add the ref to the confirm allowed keys and persist it in
+  `applyOrderConfirmed`, mirroring `offcut_rate`; contracts agreed strictly after confirm are
+  recorded by Story 9.7 at disposal.
+- [x] [Review][Patch] MEDIUM, decision 2026-09-06 "document ERP-side pricing": the billing feed's
+  `total_value` excludes the own-material lines and those lines carry no rate or value
+  (src/adapters/erp/job-work-billing-feed.ts:292-300). Ruling: ERP prices processor-supplied
+  material from its own masters (AD-11); keep `total_value` as the measured service value and
+  document that convention on the feed payload shape and the adapter module header.
+
+- [x] [Review][Patch] HIGH: offcut-class receipts are ungated on every external surface. The
+  `stock.received` direct-events door, the GRN and `goods.received` flow and the edge upload all
+  mint an offcut-class balance when `stock_class` is supplied, with no custody drain, no holding
+  row and no analog of `assertJobworkReceiptOwnership`, which returns for any class other than
+  job_work (src/compliance/jobwork-receipt.ts:331). Phantom customer offcut can be recorded that
+  no Story 9.7 disposal will ever see. Gate offcut receipts on a capture handoff symbol stamped by
+  `applyCustodyOffcutProjection`, or refuse offcut on the open receipt surfaces
+  [src/compliance/stock-balance.ts].
+- [x] [Review][Patch] HIGH: `price_basis.rate` is validated only as a finite non-negative JSON
+  number with no integer-digit bound (src/compliance/service-order.ts:143) and no exponent, so a
+  rate at or above 1e14 with a billable quantity of 10 or more overflows NUMERIC(18,4) at feed
+  insert and dies as a raw 22003 500, since `classifyFeedDuplicate` maps 23505 only
+  (src/compliance/jobwork-billing.ts:280-314). Bound the rate to 14 integer digits at create and
+  update (the offcut-rate precedent) or classify the numeric overflow.
+- [x] [Review][Patch] MEDIUM: three edge en.json messages still describe withdrawn gates.
+  BILLING_NOT_READY names a "settled offcut election" the seam no longer requires,
+  SOD_VIOLATION names an offcut-settling step, and OFFCUT_ELECTION_MISSING implies an election to
+  execute (edge/src/messages/en.json:40-42). Reword to the actual gates.
+- [x] [Review][Patch] LOW: comment residue teaching the withdrawn three-branch model. The
+  `CUSTODY_OFFCUT_RECORDED` constant and OFFCUT_FIELDS docstrings (src/compliance/custody-ledger.ts:60-63
+  and :165-185), the CustodyOffcutRecordedPayload and JobworkBillingFeedGeneratedPayload docstrings
+  in src/events/schema.ts (still naming three branches and the offcut-settlement precondition),
+  the "mandatory at confirm" claims at src/compliance/service-order.ts:68-69, the capture-route
+  comment at src/api/v1/service-orders.ts:927-932 (challan, rate estimate, settlement
+  declaration) and the src/sync/upload.ts:200-203 comment all describe the reversed model.
+- [x] [Review][Patch] LOW: the laundering-refusal message strings still call offcut material a
+  prototype even though the codes now refuse CROSS_ISSUE_BLOCKED. An owned receipt into an offcut
+  lot reports "non-saleable prototype balance" and an offcut receipt into a saleable lot reports
+  "cannot receive prototype stock" (src/compliance/stock-balance.ts:450-452 and :490-500). Fix the
+  message ternaries to name customer-owned offcut material.
+- [x] [Review][Patch] LOW: the mixed-UOM refusal raises INVALID_PARAMS with an explicit HTTP 409
+  (src/compliance/jobwork-billing.ts:343-349), breaking the codebase convention that
+  INVALID_PARAMS defaults to 400. A malformed request is not a conflict.
+- [x] [Review][Patch] LOW: a negative (quantity minus dispatched_quantity) sum would violate the
+  open_to_dispatch_qty CHECK and die as an unclassified 23514 500
+  (src/compliance/jobwork-billing.ts:416-421, read/projections/job_work_billing_feed.sql:65-67).
+  Defensive: classify numeric and check violations alongside the 23505 mapping.
+
+Deferred:
+
+- [x] [Review][Defer] The reconciliation report does not surface duplicate acknowledged_ref_ext
+  entries although the ack-ref index exists to serve that lookup
+  (read/projections/job_work_billing_feed.sql:79-85, src/read/projections/job_work_billing_feed.ts:199-229)
+  - deferred, a consciously deferred reconciliation follow-up.
+- [x] [Review][Defer] Cycle-count variance adjustments can mutate an offcut-class balance and
+  silently desync `job_work_offcut_holding` - deferred, mirrors the pre-existing job_work count
+  behavior and needs the Story 9.7 disposal reconciliation ruling.
+
+Dismissed this pass with reasons: the sweep per-row savepoint "re-alert" (the flip and the
+notification are one transaction, so a failed tick delivers nothing and retry is correct); the
+caller-supplied `feed_id` (consistent with the client-minted event-id convention, replay-safe); the
+acknowledgment route's dead `isRetry` term (fails closed, cosmetic); the single-location capture
+drain and the astronomically unlikely offcut lot-number collision (mirrors the 9.5 return
+precedent, safe retry); and the holding-row contract-ref snapshot having no refresh path (a
+consequence of the first decision, not a separate defect).
 
 ## Dev Notes
 

@@ -253,6 +253,13 @@ import {
   applyJobworkBillingFeedGenerated,
   applyJobworkBillingFeedAcknowledged,
 } from '../compliance/jobwork-billing.js';
+// Story 9.7: offcut disposal, revaluation and credit-note acknowledgment, all on the jobwork stream.
+import {
+  assertJobworkOffcutDisposalShape,
+  applyJobworkOffcutDisposed,
+  applyJobworkOffcutRevalued,
+  applyJobworkCreditNoteAcknowledged,
+} from '../compliance/jobwork-offcut-disposal.js';
 import {
   assertProductionMaterialShape,
   applyProductionMaterialProjection,
@@ -786,6 +793,7 @@ export async function persistEvent(
   // pinned to the authenticated actor, the mandatory ERP document number) are non-DB and run here.
   assertCustodyOffcutShape(envelope);
   assertJobworkBillingShape(envelope);
+  assertJobworkOffcutDisposalShape(envelope);
   assertThreeWayMatchShape(envelope);
   // Story 2.9: ERP reference projections are read-only to the platform (INT-ERP-01). Reject any
   // `erp` stream_type or `erp.*` event_type here, on the central write path, so a direct event POST
@@ -1180,6 +1188,12 @@ export async function persistEvent(
     await applyCustodyOffcutProjection(envelope, client, eventId, auditCtx);
     await applyJobworkBillingFeedGenerated(envelope, client, eventId);
     await applyJobworkBillingFeedAcknowledged(envelope, client, eventId);
+    // Story 9.7: the offcut's disposal, its later revaluation and the ERP acknowledgment of the
+    // credit notes both raise. Chained after the billing feed because the disposal CITES the
+    // acknowledged feed's ERP document reference.
+    await applyJobworkOffcutDisposed(envelope, client, eventId, auditCtx);
+    await applyJobworkOffcutRevalued(envelope, client, eventId);
+    await applyJobworkCreditNoteAcknowledged(envelope, client, eventId);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's

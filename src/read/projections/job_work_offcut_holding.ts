@@ -37,6 +37,20 @@ export interface JobWorkOffcutHoldingRow {
   disposed_at: string | null;
   disposition: JobWorkOffcutDisposition | null;
   disposal_event_id: string | null;
+  /** Story 9.7 disposal facts. All NULL while status = 'retained'. */
+  disposed_by: string | null;
+  /** The NEGOTIATED acquisition rate, NUMERIC(18,4) text. NULL on a `returned` disposal. */
+  disposal_rate: string | null;
+  /** The offcut contract's indicative rate, copied off the order so the variance stays visible. */
+  indicative_rate: string | null;
+  disposal_currency: string | null;
+  /** quantity x disposal_rate at the money scale. Exactly "0.0000" on a free retention. */
+  disposal_value: string | null;
+  approved_by: string | null;
+  doa_entry_id: string | null;
+  return_challan_number_ext: string | null;
+  /** The owned lot minted on an `acquired` disposal; NULL on `returned`. */
+  owned_lot_id: string | null;
   site_id: string;
   captured_by: string;
   source_event_id: string;
@@ -67,7 +81,10 @@ export interface InsertOffcutHoldingInput {
 const SELECT_COLUMNS = `holding_id, service_order_id, customer_party_code, offcut_contract_ref_ext,
   sku, lot_id, source_lot_id, location_id, quantity::text AS quantity, uom, status, captured_at,
   to_char(business_date, 'YYYY-MM-DD') AS business_date,
-  disposed_at, disposition, disposal_event_id, site_id, captured_by, source_event_id,
+  disposed_at, disposition, disposal_event_id, disposed_by,
+  disposal_rate::text AS disposal_rate, indicative_rate::text AS indicative_rate,
+  disposal_currency, disposal_value::text AS disposal_value, approved_by, doa_entry_id,
+  return_challan_number_ext, owned_lot_id, site_id, captured_by, source_event_id,
   correlation_id, created_at, updated_at`;
 
 function toIso(value: unknown): string | null {
@@ -154,6 +171,156 @@ export async function listOffcutHoldingsByOrder(
       WHERE service_order_id = $1 ${retainedOnly ? `AND status = 'retained'` : ''}
       ORDER BY captured_at DESC, holding_id ASC`,
     [serviceOrderId],
+  );
+  return (result.rows as Record<string, unknown>[]).map(mapRow);
+}
+
+// ---------------------------------------------------------------------------
+// Story 9.7 (FR-JW-09/10, FR-JW-12): disposal accessors
+// ---------------------------------------------------------------------------
+
+/**
+ * The holding row under FOR UPDATE, for the disposal and revaluation appliers. Returns the row
+ * whatever its status: the applier decides, and refuses OFFCUT_NOT_RETAINED with the status it
+ * actually found rather than a bare "not found".
+ */
+export async function getRetainedHoldingForUpdate(
+  holdingId: string,
+  client: PoolClient,
+): Promise<JobWorkOffcutHoldingRow | null> {
+  if (!UUID_REGEX.test(holdingId)) return null;
+  const result = await client.query(
+    `SELECT ${SELECT_COLUMNS} FROM job_work_offcut_holding WHERE holding_id = $1 FOR UPDATE`,
+    [holdingId],
+  );
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  return row ? mapRow(row) : null;
+}
+
+export interface MarkOffcutHoldingDisposedInput {
+  holding_id: string;
+  disposed_at: string;
+  disposition: JobWorkOffcutDisposition;
+  disposal_event_id: string;
+  disposed_by: string;
+  disposal_rate: string | null;
+  indicative_rate: string | null;
+  disposal_currency: string | null;
+  disposal_value: string | null;
+  approved_by: string | null;
+  doa_entry_id: string | null;
+  return_challan_number_ext: string | null;
+  owned_lot_id: string | null;
+}
+
+/**
+ * GUARDED update: matches only while the row is still `retained`. A false return is a RACE (a
+ * concurrent disposal won), never a success - the 9.5 sweep's skippedRaced lesson applied to a
+ * write path, and the reason a second disposal of the same row can never double-post.
+ */
+export async function markOffcutHoldingDisposed(
+  input: MarkOffcutHoldingDisposedInput,
+  client: PoolClient,
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE job_work_offcut_holding
+        SET status = 'disposed', disposed_at = $2::timestamptz, disposition = $3,
+            disposal_event_id = $4::uuid, disposed_by = $5::uuid, disposal_rate = $6::numeric,
+            indicative_rate = $7::numeric, disposal_currency = $8, disposal_value = $9::numeric,
+            approved_by = $10::uuid, doa_entry_id = $11::uuid, return_challan_number_ext = $12,
+            owned_lot_id = $13, updated_at = now()
+      WHERE holding_id = $1 AND status = 'retained'`,
+    [
+      input.holding_id,
+      input.disposed_at,
+      input.disposition,
+      input.disposal_event_id,
+      input.disposed_by,
+      input.disposal_rate,
+      input.indicative_rate,
+      input.disposal_currency,
+      input.disposal_value,
+      input.approved_by,
+      input.doa_entry_id,
+      input.return_challan_number_ext,
+      input.owned_lot_id,
+    ],
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
+/** Revaluation (AC 5) moves the CURRENT commercial value; indicative_rate is never touched. */
+export async function updateOffcutHoldingValuation(
+  holdingId: string,
+  valuation: {
+    disposal_rate: string;
+    disposal_value: string;
+    approved_by: string | null;
+    doa_entry_id: string | null;
+  },
+  client: PoolClient,
+): Promise<boolean> {
+  const result = await client.query(
+    `UPDATE job_work_offcut_holding
+        SET disposal_rate = $2::numeric, disposal_value = $3::numeric, approved_by = $4::uuid,
+            doa_entry_id = $5::uuid, updated_at = now()
+      WHERE holding_id = $1 AND status = 'disposed' AND disposition = 'acquired'`,
+    [
+      holdingId,
+      valuation.disposal_rate,
+      valuation.disposal_value,
+      valuation.approved_by,
+      valuation.doa_entry_id,
+    ],
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
+/**
+ * AC 8 / AC 9: every still-`retained` holding row, site-scoped, oldest first, with its age in days
+ * against the caller's IST business date. `siteIds` null means a wildcard read assignment.
+ *
+ * Retained rows are the whole of AC 9's second half: once a row is `acquired` it has left customer
+ * ownership and is carried as ordinary owned stock, so it must NOT appear on a job-work exposure
+ * report; once it is `returned` there is nothing left to age.
+ */
+export async function listRetainedOffcutHoldings(
+  input: { siteIds: string[] | null; today: string },
+  client?: PoolClient,
+): Promise<(JobWorkOffcutHoldingRow & { age_days: number })[]> {
+  const runner = client ?? getPool();
+  const params: unknown[] = [input.today];
+  let where = `status = 'retained'`;
+  if (input.siteIds !== null) {
+    if (input.siteIds.length === 0) return [];
+    params.push(input.siteIds);
+    where += ` AND site_id = ANY($${params.length}::uuid[])`;
+  }
+  const result = await runner.query(
+    `SELECT ${SELECT_COLUMNS},
+            ($1::date - business_date)::int AS age_days
+       FROM job_work_offcut_holding
+      WHERE ${where}
+      ORDER BY captured_at ASC, holding_id ASC`,
+    params,
+  );
+  return (result.rows as Record<string, unknown>[]).map((row) => ({
+    ...mapRow(row),
+    age_days: Number(row['age_days'] ?? 0),
+  }));
+}
+
+/** The retained rows on one (order, sku) - what the Story 9.5 clock sweep names in its alert. */
+export async function listRetainedOffcutHoldingsForOrderSku(
+  serviceOrderId: string,
+  sku: string,
+  client: PoolClient,
+): Promise<JobWorkOffcutHoldingRow[]> {
+  const result = await client.query(
+    `SELECT ${SELECT_COLUMNS} FROM job_work_offcut_holding
+      WHERE service_order_id = $1 AND sku = $2 AND status = 'retained'
+      ORDER BY captured_at ASC, holding_id ASC`,
+    [serviceOrderId, sku],
   );
   return (result.rows as Record<string, unknown>[]).map(mapRow);
 }

@@ -80,6 +80,27 @@ CREATE INDEX IF NOT EXISTS idx_job_work_offcut_holding_site ON job_work_offcut_h
 -- add-if-absent guard sees the OLD constraint present and silently skips the ALTER, so widening the
 -- disposition vocabulary later would keep being rejected on every already-migrated database while
 -- this file claimed otherwise.
+-- Story 9.7 (FR-JW-09/10, FR-JW-12): the DISPOSAL facts. Every one of these is NULL for as long as
+-- status = 'retained'; they are written together, once, by the disposal applier
+-- (src/compliance/jobwork-offcut-disposal.ts) and the acquisition value is later CORRECTED in place
+-- by a revaluation while the immutable document trail lives in job_work_credit_note. Money is
+-- NUMERIC(18,4) like every other Epic 9 money column; quantities stay NUMERIC(18,3).
+--
+-- `indicative_rate` is the offcut contract's rate copied off the order at disposal, stored BESIDE
+-- the negotiated `disposal_rate` so the variance is visible on the credit note and the reports. No
+-- tolerance is applied to that variance and nothing is refused on rate (the 2026-09-05 ruling that
+-- withdrew the 9.6 band): the control over the rate is the segregation of duties on the credit
+-- note's acknowledgment plus the DOA second signature above the band, not an arithmetic bound.
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS disposed_by UUID;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS disposal_rate NUMERIC(18,4);
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS indicative_rate NUMERIC(18,4);
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS disposal_currency TEXT;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS disposal_value NUMERIC(18,4);
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS approved_by UUID;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS doa_entry_id UUID;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS return_challan_number_ext TEXT;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS owned_lot_id TEXT;
+
 DO $$
 BEGIN
   ALTER TABLE job_work_offcut_holding DROP CONSTRAINT IF EXISTS chk_job_work_offcut_holding_status;
@@ -93,11 +114,29 @@ BEGIN
     ADD CONSTRAINT chk_job_work_offcut_holding_disposition CHECK (
       disposition IS NULL OR disposition IN ('returned','acquired')
     );
+  -- Story 9.7: widened by DROP-then-ADD, this file's own stated rule. `disposed_by` joins the
+  -- biconditional (a disposed row that names nobody is an unattributable statutory decision), and
+  -- each disposition now carries its own mandatory shape: `acquired` is a purchase and must price
+  -- itself, `returned` is a movement back to the customer under a challan and must never carry a
+  -- price. A free retention is `acquired` at a rate of exactly zero, which satisfies the non-null
+  -- money legs - it is not a third disposition (BSD-5).
   ALTER TABLE job_work_offcut_holding DROP CONSTRAINT IF EXISTS chk_job_work_offcut_holding_lifecycle;
   ALTER TABLE job_work_offcut_holding
     ADD CONSTRAINT chk_job_work_offcut_holding_lifecycle CHECK (
       (status = 'disposed') = (
         disposed_at IS NOT NULL AND disposition IS NOT NULL AND disposal_event_id IS NOT NULL
+          AND disposed_by IS NOT NULL
+      )
+      AND (
+        disposition IS DISTINCT FROM 'acquired'
+        OR (disposal_rate IS NOT NULL AND disposal_currency IS NOT NULL AND disposal_value IS NOT NULL)
+      )
+      AND (
+        disposition IS DISTINCT FROM 'returned'
+        OR (
+          disposal_rate IS NULL AND disposal_currency IS NULL AND disposal_value IS NULL
+            AND return_challan_number_ext IS NOT NULL
+        )
       )
     );
 END $$;

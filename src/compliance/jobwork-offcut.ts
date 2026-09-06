@@ -15,6 +15,7 @@ import { applyStockBalanceProjection } from './stock-balance.js';
 import { JOB_WORK_STOCK_CLASS } from './jobwork-receipt.js';
 import { qtyAdd, qtyNegate } from './custody-statement.js';
 import {
+  CUSTODY_OFFCUT_CAPTURE,
   CUSTODY_OFFCUT_RECORDED,
   CUSTODY_RETURN,
   alreadyPersisted,
@@ -276,6 +277,11 @@ export async function applyCustodyOffcutProjection(
       business_stream: JOB_WORK_BUSINESS_STREAM,
     },
   };
+  // The CUSTODY_OFFCUT_CAPTURE Symbol is what makes this receipt legal: the stock-balance seam
+  // refuses every other offcut-class receipt (added 2026-09-06 code review). A JSON body cannot
+  // carry a Symbol key, so only this applier, running after the custody drain and the holding-row
+  // write in the same transaction, can open the door.
+  (receiptView as unknown as Record<symbol, unknown>)[CUSTODY_OFFCUT_CAPTURE] = true;
   await applyStockBalanceProjection(receiptView, client);
 
   // 4. The custody drain row, then the holding row.

@@ -258,6 +258,11 @@ const MIGRATIONS = [
   // service_order_id, no declared FK (the Epic 9 house convention).
   '../../read/projections/job_work_billing_feed.sql',
   '../../read/projections/job_work_offcut_holding.sql',
+  // Story 9.7: the offcut credit note (original / delta chain plus an acknowledgment lifecycle).
+  // Appended after the 9.6 files; the edited job_work_offcut_holding.sql keeps its position above
+  // and its new guarded ADD COLUMN lines (the disposal facts) re-apply harmlessly. FK-shaped
+  // service_order_id / holding_id, no declared FK (the Epic 9 house convention).
+  '../../read/projections/job_work_credit_note.sql',
 ];
 
 async function migrate(): Promise<void> {

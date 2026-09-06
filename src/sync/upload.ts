@@ -200,12 +200,20 @@ const PERMANENT_ERROR_CODES = new Set([
   // Story 9.5 (FR-JW-15, AD-6): closure refused on a non-zero custody balance - a retry of the same
   // closure request can never clear it; the ledger has to be reconciled first (the 9.4 precedent).
   'CUSTODY_NOT_ZERO',
-  // Story 9.6 (FR-JW-09/10, FR-JW-12): an offcut posting against an order with no election, or one
-  // already settled, and a billing feed generated before its preconditions - none clears on a retry
-  // of the same request (the 9.5 precedent). Office actions, registered defensively.
+  // Story 9.6 REVISED (FR-JW-09/10, FR-JW-12): an offcut capture against an order with no
+  // contractual offcut arrangement, and a billing feed generated before its preconditions - none
+  // clears on a retry of the same request (the 9.5 precedent). Office actions, registered
+  // defensively.
   'OFFCUT_ELECTION_MISSING',
   'BILLING_NOT_READY',
   'SOD_VIOLATION',
+  // Story 9.7 (FR-JW-09/10, FR-JW-12): a disposal against a holding row that is no longer retained,
+  // a revaluation with no document to supersede, and an acquisition with no acknowledged service
+  // invoice to cite - none clears on a retry of the same request. Disposal and valuation are office
+  // actions with no edge scope; registered defensively, the 9.4 through 9.6 precedent.
+  'OFFCUT_NOT_RETAINED',
+  'CREDIT_NOTE_MISSING',
+  'CREDIT_NOTE_UNCITABLE',
   'UNREVERSED_TRANSACTIONS',
   'BOM_REVISION_DRIFT',
   'MATERIAL_REQUIREMENT_SET_TRUNCATED',

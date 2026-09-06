@@ -66,7 +66,9 @@ const CREATE_FIELDS = new Set([
   'kit_bom_id',
   'has_contractual_offcut',
   // Story 9.6 Task 0 (Binding decision 16): the contracted offcut rate pair, optional here and on
-  // update, MANDATORY at confirm when has_contractual_offcut is true.
+  // update and at confirm since the 2026-09-05 reversal withdrew the confirm-time mandate - the
+  // seam only shape-gates the value when supplied (no order without a contractual offcut
+  // arrangement may carry it).
   'offcut_rate',
   'offcut_currency',
   'offcut_contract_ref_ext',
@@ -141,6 +143,13 @@ export function isValidPriceBasis(value: unknown): value is ServiceOrderPriceBas
   if (keys.length !== 3) return false;
   if (typeof p['basis_type'] !== 'string' || !PRICE_BASIS_TYPES.has(p['basis_type'])) return false;
   if (typeof p['rate'] !== 'number' || !Number.isFinite(p['rate']) || p['rate'] < 0) return false;
+  // Story 9.6 code review (2026-09-06): the rate must be representable in the money columns that
+  // bill it (NUMERIC(18,4), 14 integer digits, 4 decimals). The offcut-rate regex bounds the
+  // string form; a JSON number needs the same bound or a large quoted rate sails through order
+  // creation and overflows the feed's total_value at generation (raw 22003 500 - only 23505 was
+  // classified). String() of any finite number below 1e21 is plain decimal notation, so the same
+  // pattern works on the number form.
+  if (!/^\d{1,14}(\.\d{1,4})?$/.test(String(p['rate']))) return false;
   if (typeof p['currency'] !== 'string' || !CURRENCY_REGEX.test(p['currency'])) return false;
   return true;
 }
@@ -230,7 +239,16 @@ export function assertServiceOrderShape(envelope: EventEnvelope): void {
     case JOBWORK_ORDER_CONFIRMED:
       assertNoExtraKeys(
         p,
-        new Set(['service_order_id', 'offcut_election', 'offcut_rate', 'offcut_currency']),
+        new Set([
+          'service_order_id',
+          'offcut_election',
+          'offcut_rate',
+          'offcut_currency',
+          // Story 9.6 code review (2026-09-06, decision): the offcut contract reference is
+          // recordable at confirm, mirroring the offcut_rate pair - the confirm route has always
+          // forwarded it while this gate refused every confirm that carried it.
+          'offcut_contract_ref_ext',
+        ]),
       );
       if (!isUuid(p['service_order_id']))
         reject('INVALID_PARAMS', 'service_order_id is required and must be a UUID');
@@ -763,6 +781,22 @@ async function applyOrderConfirmed(envelope: EventEnvelope, client: PoolClient):
       409,
     );
   }
+  // Story 9.6 code review (2026-09-06, decision "settable at confirm only"): the offcut contract
+  // reference rides confirm exactly like the rate pair - persisted when supplied, and refused on an
+  // order with no contractual offcut arrangement, where it would be meaningless. Agreements reached
+  // strictly after confirm are recorded by Story 9.7 at disposal.
+  if (order.has_contractual_offcut !== true && p.offcut_contract_ref_ext !== undefined) {
+    reject(
+      'INVALID_STATE_TRANSITION',
+      'A service order without a contractual offcut arrangement cannot carry an offcut contract reference',
+      {
+        service_order_id: p.service_order_id,
+        has_contractual_offcut: false,
+        field: 'offcut_contract_ref_ext',
+      },
+      409,
+    );
+  }
   assertOffcutCurrencyMatchesPriceBasis(
     p.service_order_id,
     p.offcut_currency !== undefined ? p.offcut_currency : order.offcut_currency,
@@ -772,6 +806,13 @@ async function applyOrderConfirmed(envelope: EventEnvelope, client: PoolClient):
     await updateServiceOrderFields(
       p.service_order_id,
       { offcut_rate: p.offcut_rate, offcut_currency: p.offcut_currency ?? null },
+      client,
+    );
+  }
+  if (p.offcut_contract_ref_ext !== undefined) {
+    await updateServiceOrderFields(
+      p.service_order_id,
+      { offcut_contract_ref_ext: p.offcut_contract_ref_ext ?? null },
       client,
     );
   }

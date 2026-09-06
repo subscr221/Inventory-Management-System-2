@@ -9,6 +9,7 @@ import {
 } from '../read/projections/jobwork_return_clock.js';
 import type { JobworkReturnClockReportRow } from '../read/projections/jobwork_return_clock.js';
 import { deemedSupplyQty, dueClockSweepStage } from '../compliance/jobwork-return-clock.js';
+import { listRetainedOffcutHoldingsForOrderSku } from '../read/projections/job_work_offcut_holding.js';
 import type { ClockSweepStage } from '../compliance/jobwork-return-clock.js';
 import { emitNotificationInTransaction } from './emit.js';
 
@@ -64,6 +65,11 @@ export interface JobworkClockSweepResult {
    * ones deferred behind clocks that have already breached.
    */
   truncated: boolean;
+  /**
+   * Story 9.7 AC 8: clocks whose alert or breach notice named retained contractual offcut on the
+   * same (order, sku). Counted, never added to any quantity - see the comment at the call site.
+   */
+  offcutRetained: number;
 }
 
 function describeClock(row: JobworkReturnClockReportRow): string {
@@ -106,6 +112,7 @@ export async function runJobworkClockSweepCycle(
   let breached = 0;
   let failed = 0;
   let skippedRaced = 0;
+  let offcutRetained = 0;
   try {
     await client.query('BEGIN');
     const lock = await client.query('SELECT pg_try_advisory_xact_lock($1) AS acquired', [
@@ -121,6 +128,7 @@ export async function runJobworkClockSweepCycle(
         skippedLocked: true,
         skippedRaced: 0,
         truncated: false,
+        offcutRetained: 0,
       };
     }
 
@@ -148,11 +156,36 @@ export async function runJobworkClockSweepCycle(
 
       await client.query('SAVEPOINT jobwork_clock_stage');
       try {
+        // Story 9.7 AC 8: contractual offcut retained on this (order, sku) is STILL the customer's
+        // material and its Section 143 exposure is still open, so every notice this sweep sends
+        // names it. It reaches the coordinator whether or not the order has CLOSED, because closure
+        // does not end a clock and capture drained the custody balance precisely so closure could
+        // happen.
+        //
+        // CRITICAL (BSD-11, Task 8.3): the retained quantity is SURFACED, never added to the
+        // arithmetic. Capture deliberately does not call reconcileReturnClocks, so this quantity is
+        // still outstanding on the clock and already counts toward deemed_supply_qty below. Adding
+        // it again would overstate the Section 143 exposure on every ITC-04 extract. The clock is
+        // the single accounting authority; this is a pointer to where the material physically is.
+        const retainedOffcut = await listRetainedOffcutHoldingsForOrderSku(
+          clock.service_order_id,
+          clock.sku,
+          client,
+        );
+        const offcutNote =
+          retainedOffcut.length === 0
+            ? ''
+            : ` Retained contractual offcut on this sku: ${retainedOffcut
+                .map((row) => `${row.quantity} ${row.uom} in lot ${row.lot_id}`)
+                .join(
+                  ', ',
+                )} - already counted on this clock, dispose of it (return or acquire) to close the exposure.`;
+        if (retainedOffcut.length > 0) offcutRetained += 1;
         if (stage === 'breached') {
           const deemed = deemedSupplyQty(clock.challan_qty, clock.reconciled_qty, clock.loss_qty);
           const flipped = await markReturnClockBreached(clock.clock_id, deemed, now, client);
           if (flipped) {
-            const nextStep = `Deemed supply of ${deemed} ${clock.uom} ${clock.sku} under CGST s.143: report in ITC-04 for ${describeClock(clock)}; clock expired ${clock.expiry_date}`;
+            const nextStep = `Deemed supply of ${deemed} ${clock.uom} ${clock.sku} under CGST s.143: report in ITC-04 for ${describeClock(clock)}; clock expired ${clock.expiry_date}.${offcutNote}`;
             // Story 9.5 code review (chunks 3/4): every copy is scoped to the clock's site. A null
             // location_id targets every holder of the role in the enterprise (src/notify/emit.ts:8),
             // so the compliance copy was carrying this order's number, external challan number, sku
@@ -198,7 +231,7 @@ export async function runJobworkClockSweepCycle(
             clock.reconciled_qty,
             clock.loss_qty,
           );
-          const nextStep = `Return or dispatch ${outstanding} ${clock.uom} ${clock.sku} before ${clock.expiry_date} for ${describeClock(clock)}, or it becomes a deemed supply under CGST s.143 (${windowDays}-day warning)`;
+          const nextStep = `Return or dispatch ${outstanding} ${clock.uom} ${clock.sku} before ${clock.expiry_date} for ${describeClock(clock)}, or it becomes a deemed supply under CGST s.143 (${windowDays}-day warning).${offcutNote}`;
           const shared = {
             event_type: JOBWORK_CLOCK_BREACH_WINDOW_EVENT_TYPE,
             status_verb: `Return clock expires in ${windowDays} days or less`,
@@ -272,6 +305,7 @@ export async function runJobworkClockSweepCycle(
       skippedLocked: false,
       skippedRaced,
       truncated,
+      offcutRetained,
     };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined);
@@ -287,6 +321,7 @@ export async function runJobworkClockSweepCycle(
       skippedLocked: false,
       skippedRaced: 0,
       truncated: false,
+      offcutRetained: 0,
     };
   } finally {
     client.release();

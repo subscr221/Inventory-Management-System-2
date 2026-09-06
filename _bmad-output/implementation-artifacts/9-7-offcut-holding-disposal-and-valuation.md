@@ -1,6 +1,9 @@
+---
+baseline_commit: 502b66473221ffbbc6ebbcf4ed868ed8f0040355
+---
 # Story 9.7: Offcut Holding, Disposal and Valuation
 
-Status: ready-for-dev
+Status: review
 
 Epic: 9 (Job Work and Subcontracting)
 Story key: `9-7-offcut-holding-disposal-and-valuation`
@@ -32,12 +35,12 @@ so that customer offcut is never valued at a guessed rate and never sits unaccou
   - [x] 0.2 `src/cli/verify-segregated-roles.ts` plus `npm run verify:roles`: read-only, exits 1 on any violation so a deployment pipeline can gate on it. Verified against the test database, where it currently reports `ROLE_UNHELD` for `cfo` and `DOA_BAND_MISSING` and exits 1.
   - [x] 0.3 `test/integration/segregated-roles.test.ts`, 7/7 green: the happy pair, both roles on one user, an inactive approver, no band, a second role banded on the same transaction type, and a delegation collapse that is clean outside its window. Role names and the transaction type are run-scoped so the suite cannot see or disturb real assignments.
   - [ ] 0.4 REMAINS OPERATIONAL and cannot be done from the repository: an administrator must provision a real `cfo` user through SCIM, grant `finance_controller` to a DIFFERENT real user, and register the `jobwork.offcut_acquisition` band for `cfo` through the Story 1.4 DOA registry API. Run `npm run verify:roles` against the target environment until it exits 0; until then every above-band acquisition refuses `APPROVAL_UNRESOLVED` and disposal refuses `FUNCTION_ACCESS_DENIED`, which is intended fail-closed behaviour, not a defect.
-  - [ ] 0.5 The integration suite for this story seeds its own two fixture users the same way; never the same user, never the acting coordinator.
-  - [ ] 0.6 Add both roles to `_bmad-output/planning-artifacts/access-matrix-frontline-draft-2026-07-11.md` rows only if the file still lacks them; do not restate rulings already recorded there.
+  - [x] 0.5 The integration suite for this story seeds its own two fixture users the same way; never the same user, never the acting coordinator.
+  - [x] 0.6 Add both roles to `_bmad-output/planning-artifacts/access-matrix-frontline-draft-2026-07-11.md` rows only if the file still lacks them; do not restate rulings already recorded there.
 
-- [ ] **Task 1: close the offcut issue hole in the segregation bar (AC 1, AC 2, AC 3; PREREQUISITE, do first after Task 0)**
-  - [ ] 1.1 `src/compliance/stock-balance.ts:373-392`: the segregated-class issue/allocation bar keys on `stockClass === JOB_WORK_STOCK_CLASS` ONLY. `offcut` is in `SEGREGATED_STOCK_CLASSES` (so the laundering bar covers receipts) but is NOT barred from issue or allocation, so customer-owned retained offcut can today be picked into any sales dispatch. Widen the arm to `stockClass === JOB_WORK_STOCK_CLASS || stockClass === OFFCUT_STOCK_CLASS`.
-  - [ ] 1.2 Mint ONE new Symbol door, `CUSTODY_OFFCUT_DISPOSAL`, exported from `src/compliance/custody-ledger.ts` beside `CUSTODY_CONSUMPTION` (`:73`) and `CUSTODY_RETURN` (`:84`), with an `isCustodyOffcutDisposalHandoff` predicate matching the two existing ones. The `offcut` arm admits ONLY that Symbol; `CUSTODY_RETURN` must NOT open the offcut class (that door belongs to `job_work` material returning under a Rule 45 challan, a different physical fact).
+- [x] **Task 1: close the offcut issue hole in the segregation bar (AC 1, AC 2, AC 3; PREREQUISITE, do first after Task 0)**
+  - [x] 1.1 `src/compliance/stock-balance.ts:373-392`: the segregated-class issue/allocation bar keys on `stockClass === JOB_WORK_STOCK_CLASS` ONLY. `offcut` is in `SEGREGATED_STOCK_CLASSES` (so the laundering bar covers receipts) but is NOT barred from issue or allocation, so customer-owned retained offcut can today be picked into any sales dispatch. Widen the arm to `stockClass === JOB_WORK_STOCK_CLASS || stockClass === OFFCUT_STOCK_CLASS`.
+  - [x] 1.2 Mint ONE new Symbol door, `CUSTODY_OFFCUT_DISPOSAL`, exported from `src/compliance/custody-ledger.ts` beside `CUSTODY_CONSUMPTION` (`:73`) and `CUSTODY_RETURN` (`:84`), with an `isCustodyOffcutDisposalHandoff` predicate matching the two existing ones. The `offcut` arm admits ONLY that Symbol; `CUSTODY_RETURN` must NOT open the offcut class (that door belongs to `job_work` material returning under a Rule 45 challan, a different physical fact).
   - [x] 1.3 DONE 2026-09-06, PULLED FORWARD out of this story and fixed on master rather than left
         live: `offcut` now carries the same TOTAL demand bar as `job_work` in
         `src/compliance/stock-balance.ts`, with NO Symbol door, because nothing in Story 9.6 issues
@@ -53,74 +56,74 @@ so that customer offcut is never valued at a guessed rate and never sits unaccou
         reconciled onto NOTHING. Offcut has left the custody ledger by then, so the adjustment
         belongs on the HOLDING ledger, which has no adjustment path until this story builds one.
         Until it does, a physical count of retained offcut cannot be reconciled anywhere.
-  - [ ] 1.4 `src/compliance/cycle-count.ts:91` duplicates `SEGREGATED_STOCK_CLASSES` verbatim and already lists `offcut`; confirm no change is needed and say so in the Debug Log.
+  - [x] 1.4 `src/compliance/cycle-count.ts:91` duplicates `SEGREGATED_STOCK_CLASSES` verbatim and already lists `offcut`; confirm no change is needed and say so in the Debug Log.
 
-- [ ] **Task 2: schema (AC 1, AC 3, AC 4, AC 5, AC 6)**
-  - [ ] 2.1 `read/projections/job_work_offcut_holding.sql`: `ADD COLUMN IF NOT EXISTS` the disposal facts - `disposed_by UUID`, `disposal_rate NUMERIC(18,4)`, `indicative_rate NUMERIC(18,4)`, `disposal_currency TEXT`, `disposal_value NUMERIC(18,4)`, `approved_by UUID`, `doa_entry_id UUID`, `return_challan_number_ext TEXT`. Every one is NULL while `status = 'retained'`.
-  - [ ] 2.2 Widen `chk_job_work_offcut_holding_lifecycle` with DROP-then-ADD (the file's own stated rule, never add-if-absent) so that `status = 'disposed'` also requires `disposed_by`, and so that `disposition = 'acquired'` requires `disposal_rate`, `disposal_currency` and `disposal_value` non-null while `disposition = 'returned'` requires all three NULL and `return_challan_number_ext` non-null.
-  - [ ] 2.3 NEW `read/projections/job_work_credit_note.sql` following the `job_work_billing_feed.sql` lifecycle shape: `credit_note_id UUID PK`, `service_order_id`, `holding_id`, `document_kind TEXT CHECK IN ('original','delta')`, `supersedes_credit_note_id UUID` (NULL on `original`, mandatory on `delta`), `cited_invoice_ref_ext TEXT NOT NULL` (the feed's `acknowledged_ref_ext`), `rate NUMERIC(18,4)`, `indicative_rate NUMERIC(18,4)`, `currency`, `value NUMERIC(18,4)`, `delta_value NUMERIC(18,4)` (NULL on `original`), `status TEXT CHECK IN ('pending','acknowledged')`, `acknowledged_at`, `acknowledged_by`, `acknowledged_ref_ext`, `valued_by UUID NOT NULL`, `site_id`, `source_event_id UUID NOT NULL`, `created_at`, `updated_at`. Unique on `source_event_id`; plain (NOT unique) index on `cited_invoice_ref_ext` and on `acknowledged_ref_ext` - both are citations, not identities (the group-A ruling that this story is the first consumer of).
-  - [ ] 2.4 Lifecycle CHECK on the credit note: `(status = 'acknowledged') = (acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledged_ref_ext IS NOT NULL)`. There is deliberately no `void` or `exception` state: a wrong value is corrected by a `delta` row, never by mutating or voiding (the 9.6 feed-header ruling, carried forward).
-  - [ ] 2.5 Own grants in guarded `DO` blocks (`app_user`: INSERT, SELECT, UPDATE; `readonly_user`: SELECT), every statement idempotent, register the new file in `src/events/migrate.ts` beside `job_work_offcut_holding.sql` (`:260`), and mirror BOTH files into `deploy/compose/init-db.sql` with CRLF in the same commit.
-  - [ ] 2.6 `src/read/projections/job_work_offcut_holding.ts`: extend `JobWorkOffcutHoldingRow`, add `getRetainedHoldingForUpdate(holdingId, client)` (SELECT ... FOR UPDATE) and `markOffcutHoldingDisposed(input, client)` as a GUARDED UPDATE (`WHERE holding_id = $1 AND status = 'retained'`) returning whether it matched. Add `listRetainedOffcutHoldings({ siteIds, today })` for the sweep and the report.
-  - [ ] 2.7 NEW `src/read/projections/job_work_credit_note.ts` with `insertCreditNote`, `getCreditNoteById` (malformed UUID returns null, the `getBillingFeedById` precedent), `listCreditNotesByOrder`, `markCreditNoteAcknowledged` (guarded on `status <> 'acknowledged'`).
-  - [ ] 2.8 Pin every new table, column and FULL index statement in `test/unit/schema-drift.test.ts`. Do not "fix" the pre-existing CRLF pins.
+- [x] **Task 2: schema (AC 1, AC 3, AC 4, AC 5, AC 6)**
+  - [x] 2.1 `read/projections/job_work_offcut_holding.sql`: `ADD COLUMN IF NOT EXISTS` the disposal facts - `disposed_by UUID`, `disposal_rate NUMERIC(18,4)`, `indicative_rate NUMERIC(18,4)`, `disposal_currency TEXT`, `disposal_value NUMERIC(18,4)`, `approved_by UUID`, `doa_entry_id UUID`, `return_challan_number_ext TEXT`. Every one is NULL while `status = 'retained'`.
+  - [x] 2.2 Widen `chk_job_work_offcut_holding_lifecycle` with DROP-then-ADD (the file's own stated rule, never add-if-absent) so that `status = 'disposed'` also requires `disposed_by`, and so that `disposition = 'acquired'` requires `disposal_rate`, `disposal_currency` and `disposal_value` non-null while `disposition = 'returned'` requires all three NULL and `return_challan_number_ext` non-null.
+  - [x] 2.3 NEW `read/projections/job_work_credit_note.sql` following the `job_work_billing_feed.sql` lifecycle shape: `credit_note_id UUID PK`, `service_order_id`, `holding_id`, `document_kind TEXT CHECK IN ('original','delta')`, `supersedes_credit_note_id UUID` (NULL on `original`, mandatory on `delta`), `cited_invoice_ref_ext TEXT NOT NULL` (the feed's `acknowledged_ref_ext`), `rate NUMERIC(18,4)`, `indicative_rate NUMERIC(18,4)`, `currency`, `value NUMERIC(18,4)`, `delta_value NUMERIC(18,4)` (NULL on `original`), `status TEXT CHECK IN ('pending','acknowledged')`, `acknowledged_at`, `acknowledged_by`, `acknowledged_ref_ext`, `valued_by UUID NOT NULL`, `site_id`, `source_event_id UUID NOT NULL`, `created_at`, `updated_at`. Unique on `source_event_id`; plain (NOT unique) index on `cited_invoice_ref_ext` and on `acknowledged_ref_ext` - both are citations, not identities (the group-A ruling that this story is the first consumer of).
+  - [x] 2.4 Lifecycle CHECK on the credit note: `(status = 'acknowledged') = (acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledged_ref_ext IS NOT NULL)`. There is deliberately no `void` or `exception` state: a wrong value is corrected by a `delta` row, never by mutating or voiding (the 9.6 feed-header ruling, carried forward).
+  - [x] 2.5 Own grants in guarded `DO` blocks (`app_user`: INSERT, SELECT, UPDATE; `readonly_user`: SELECT), every statement idempotent, register the new file in `src/events/migrate.ts` beside `job_work_offcut_holding.sql` (`:260`), and mirror BOTH files into `deploy/compose/init-db.sql` with CRLF in the same commit.
+  - [x] 2.6 `src/read/projections/job_work_offcut_holding.ts`: extend `JobWorkOffcutHoldingRow`, add `getRetainedHoldingForUpdate(holdingId, client)` (SELECT ... FOR UPDATE) and `markOffcutHoldingDisposed(input, client)` as a GUARDED UPDATE (`WHERE holding_id = $1 AND status = 'retained'`) returning whether it matched. Add `listRetainedOffcutHoldings({ siteIds, today })` for the sweep and the report.
+  - [x] 2.7 NEW `src/read/projections/job_work_credit_note.ts` with `insertCreditNote`, `getCreditNoteById` (malformed UUID returns null, the `getBillingFeedById` precedent), `listCreditNotesByOrder`, `markCreditNoteAcknowledged` (guarded on `status <> 'acknowledged'`).
+  - [x] 2.8 Pin every new table, column and FULL index statement in `test/unit/schema-drift.test.ts`. Do not "fix" the pre-existing CRLF pins.
 
-- [ ] **Task 3: event contract (AC 1, AC 3, AC 5, AC 6)**
-  - [ ] 3.1 `src/events/schema.ts`: three new payload interfaces on the `jobwork` stream (BSD-2), `JobworkOffcutDisposedPayload`, `JobworkOffcutRevaluedPayload`, `JobworkCreditNoteAcknowledgedPayload`, each with its `...Envelope` type, each documenting which fields are caller-supplied and which are server-derived.
+- [x] **Task 3: event contract (AC 1, AC 3, AC 5, AC 6)**
+  - [x] 3.1 `src/events/schema.ts`: three new payload interfaces on the `jobwork` stream (BSD-2), `JobworkOffcutDisposedPayload`, `JobworkOffcutRevaluedPayload`, `JobworkCreditNoteAcknowledgedPayload`, each with its `...Envelope` type, each documenting which fields are caller-supplied and which are server-derived.
     - `jobwork.offcut_disposed`: caller supplies `service_order_id`, `disposal_id`, `holding_id`, `site_id`, `disposition`, and on `acquired` `rate` plus `currency` and optionally `approved_by`; on `returned` `return_challan_number_ext` and `location_id`. Server-derived and REFUSED on input: `disposal_value`, `indicative_rate`, `credit_note_id`, `owned_lot_number`, `clock_reconciled_qty`.
     - `jobwork.offcut_revalued`: `service_order_id`, `revaluation_id`, `holding_id`, `site_id`, `rate`, `currency`, optional `approved_by`; server-derives `delta_value`, `credit_note_id`, `supersedes_credit_note_id`.
     - `jobwork.credit_note_acknowledged`: `service_order_id`, `credit_note_id`, `site_id`, `acknowledged_ref_ext` (mandatory), `acknowledged_by`.
-  - [ ] 3.2 Register all three in `SUPPORTED_EVENT_TYPES` and wire the three appliers into the `src/events/store.ts` transaction chain in existing chain order.
-  - [ ] 3.3 While in `schema.ts`, correct the STALE doc comments the reversal left behind: the `CustodyOffcutRecordedPayload` header (`:4680-4690`) still describes three branches, `offcut_rate_estimate` and `settles_offcut`, and the `JobworkBillingFeedGeneratedPayload` header still names an offcut-settlement precondition. Both describe code that no longer exists. Comment-only edit, no behaviour change.
+  - [x] 3.2 Register all three in `SUPPORTED_EVENT_TYPES` and wire the three appliers into the `src/events/store.ts` transaction chain in existing chain order.
+  - [x] 3.3 While in `schema.ts`, correct the STALE doc comments the reversal left behind: the `CustodyOffcutRecordedPayload` header (`:4680-4690`) still describes three branches, `offcut_rate_estimate` and `settles_offcut`, and the `JobworkBillingFeedGeneratedPayload` header still names an offcut-settlement precondition. Both describe code that no longer exists. Comment-only edit, no behaviour change.
 
-- [ ] **Task 4: disposal applier, NEW file `src/compliance/jobwork-offcut-disposal.ts` (AC 1, AC 2, AC 3, AC 4, AC 7)**
-  - [ ] 4.1 Header comment stating the lock order verbatim (advisory lock on the order, order row FOR UPDATE, holding row FOR UPDATE, then stock, then clocks, then the holding and credit-note rows LAST) and why the order accepts `closed` (BSD-3).
-  - [ ] 4.2 Pure predicate `offcutDisposalOpen(holding, disposition)` returning the first failing reason, parameterised so unit tests can fail it (the 8.4 lesson). Refuses a non-`retained` row with the NEW code `OFFCUT_NOT_RETAINED` (409).
-  - [ ] 4.3 Order gate: re-read the order under the advisory lock; accept `in_process` OR `closed` (BSD-3). Do NOT call `requireInProcessOrder` - it would make every offcut undisposable the moment the order closed, which is exactly the lifecycle the holding ledger exists to support.
-  - [ ] 4.4 Branch `returned`: issue the offcut-class stock through the new `CUSTODY_OFFCUT_DISPOSAL` Symbol door (Task 1), require `return_challan_number_ext`, render documents (Task 4.8), write NO credit note, write NO owned receipt.
-  - [ ] 4.5 Branch `acquired`: DOA check (Task 4.7) first, then issue the offcut-class stock through the same Symbol door, then MINT A NEW LOT and post an ordinary `owned` receipt through the compliance seam - never `applyStockReceipt` directly, the 2026-09-06 fix in `jobwork-offcut.ts`. Lot number `${order.order_number_ext}-${order.site_id.slice(0,8)}-OA${sequence}`; wrap `createLot` in `classifyDuplicate` for the global-uniqueness collision. A new lot is mandatory: the laundering bar is lot-ROW based and refuses an `owned` receipt on any lot that has ever held an `offcut` row, regardless of `on_hand`.
-  - [ ] 4.6 QC hold on the minted owned lot (AC 3), delegated to `receiveQcCompletion` on the SAME transaction, copying `src/compliance/jobwork-output.ts:230-300`. `source_completion_type: 'job_work_order'` is already in `SOURCE_COMPLETION_TYPES` (`quality.ts:675-680`); do not add a vocabulary value. The material was only ever inspected as the customer's, against the customer's specification.
-  - [ ] 4.7 DOA second signature (AC 7): `resolveApprover('jobwork.offcut_acquisition', disposalValue)` from `src/api/v1/indents.ts:66`. If `requiresApproval` and `approverActorId === null`, refuse `APPROVAL_UNRESOLVED` (409). If `p.approved_by !== approval.approverActorId`, refuse `APPROVAL_REQUIRED` (403). Then refuse `APPROVAL_REQUIRED` when `approved_by === envelope.metadata.actor.user_id`: this is DUAL CONTROL, so the acting user must NOT be the approver. This INVERTS the 9.4 over-norm-loss acting-user check (`custody-ledger.ts:1093`), which requires them to be the same person - copy the shape, invert the comparison, and say so in a comment or the next reviewer will read it as a transcription bug. When the value is below every band `findMatchingDoaEntry` returns no entry and the disposal proceeds unapproved; a claimed `approved_by` in that case is refused `INVALID_PARAMS` rather than silently dropped (the 9.4 symmetric refusal).
-  - [ ] 4.8 Documents (AC 2): render plain text in this module and store through the generic `dispatch_document` table keyed by `service_order_id`, copying `renderJobWorkDispatchDocuments` (`jobwork-dispatch.ts:232-265`). Use ONLY the four allowed `document_type` values (`bol`, `packing_slip`, `commercial_invoice`, `label`) - the return challan is the `commercial_invoice` slot, exactly as 9.4 does it. Do NOT widen `chk_dispatch_document_type` and do NOT import the Story 3.7 renderers (BSD-6).
-  - [ ] 4.9 Stop the clock (AC 1) on BOTH branches: `reconcileReturnClocks({ category: 'offcut', counter: 'reconciled_qty', strict: false })`, the forward-declared and still-unused path at `jobwork-return-clock.ts:167`. Non-strict for the reason the 9.5 chunk-2 review settled: clock capacity is `challan_qty` while the holding quantity derives from the received balance, which an over-tolerance receipt may exceed.
-  - [ ] 4.10 Credit note (AC 3, AC 4): on `acquired` with `rate > 0`, insert ONE `original` credit note citing the order's acknowledged billing-feed reference. A rate of exactly zero is a contractual free retention: mint the lot, write NO credit note, and record the zero rate on the holding row (BSD-5). Store `indicative_rate` from `service_order.offcut_rate` beside the negotiated rate; apply NO tolerance and refuse NOTHING on rate (AC 4, the final 2026-09-05 ruling).
-  - [ ] 4.11 Credit note precondition: the order must have an acknowledged billing feed carrying `acknowledged_ref_ext`, or there is no invoice to credit. Refuse the NEW code `CREDIT_NOTE_UNCITABLE` (409, with `details.reason`) rather than inventing a placeholder reference.
-  - [ ] 4.12 Close the holding row through the guarded UPDATE; a zero-row result means a concurrent disposal won, so refuse `DUPLICATE_EVENT` rather than reporting success (the 9.5 sweep's `skippedRaced` lesson, applied to a write path).
-  - [ ] 4.13 Every money figure settles through the scaled-decimal helpers in `src/compliance/custody-statement.ts:20-59`. No `Number()` on a NUMERIC string anywhere.
+- [x] **Task 4: disposal applier, NEW file `src/compliance/jobwork-offcut-disposal.ts` (AC 1, AC 2, AC 3, AC 4, AC 7)**
+  - [x] 4.1 Header comment stating the lock order verbatim (advisory lock on the order, order row FOR UPDATE, holding row FOR UPDATE, then stock, then clocks, then the holding and credit-note rows LAST) and why the order accepts `closed` (BSD-3).
+  - [x] 4.2 Pure predicate `offcutDisposalOpen(holding, disposition)` returning the first failing reason, parameterised so unit tests can fail it (the 8.4 lesson). Refuses a non-`retained` row with the NEW code `OFFCUT_NOT_RETAINED` (409).
+  - [x] 4.3 Order gate: re-read the order under the advisory lock; accept `in_process` OR `closed` (BSD-3). Do NOT call `requireInProcessOrder` - it would make every offcut undisposable the moment the order closed, which is exactly the lifecycle the holding ledger exists to support.
+  - [x] 4.4 Branch `returned`: issue the offcut-class stock through the new `CUSTODY_OFFCUT_DISPOSAL` Symbol door (Task 1), require `return_challan_number_ext`, render documents (Task 4.8), write NO credit note, write NO owned receipt.
+  - [x] 4.5 Branch `acquired`: DOA check (Task 4.7) first, then issue the offcut-class stock through the same Symbol door, then MINT A NEW LOT and post an ordinary `owned` receipt through the compliance seam - never `applyStockReceipt` directly, the 2026-09-06 fix in `jobwork-offcut.ts`. Lot number `${order.order_number_ext}-${order.site_id.slice(0,8)}-OA${sequence}`; wrap `createLot` in `classifyDuplicate` for the global-uniqueness collision. A new lot is mandatory: the laundering bar is lot-ROW based and refuses an `owned` receipt on any lot that has ever held an `offcut` row, regardless of `on_hand`.
+  - [x] 4.6 QC hold on the minted owned lot (AC 3), delegated to `receiveQcCompletion` on the SAME transaction, copying `src/compliance/jobwork-output.ts:230-300`. `source_completion_type: 'job_work_order'` is already in `SOURCE_COMPLETION_TYPES` (`quality.ts:675-680`); do not add a vocabulary value. The material was only ever inspected as the customer's, against the customer's specification.
+  - [x] 4.7 DOA second signature (AC 7): `resolveApprover('jobwork.offcut_acquisition', disposalValue)` from `src/api/v1/indents.ts:66`. If `requiresApproval` and `approverActorId === null`, refuse `APPROVAL_UNRESOLVED` (409). If `p.approved_by !== approval.approverActorId`, refuse `APPROVAL_REQUIRED` (403). Then refuse `APPROVAL_REQUIRED` when `approved_by === envelope.metadata.actor.user_id`: this is DUAL CONTROL, so the acting user must NOT be the approver. This INVERTS the 9.4 over-norm-loss acting-user check (`custody-ledger.ts:1093`), which requires them to be the same person - copy the shape, invert the comparison, and say so in a comment or the next reviewer will read it as a transcription bug. When the value is below every band `findMatchingDoaEntry` returns no entry and the disposal proceeds unapproved; a claimed `approved_by` in that case is refused `INVALID_PARAMS` rather than silently dropped (the 9.4 symmetric refusal).
+  - [x] 4.8 Documents (AC 2): render plain text in this module and store through the generic `dispatch_document` table keyed by `service_order_id`, copying `renderJobWorkDispatchDocuments` (`jobwork-dispatch.ts:232-265`). Use ONLY the four allowed `document_type` values (`bol`, `packing_slip`, `commercial_invoice`, `label`) - the return challan is the `commercial_invoice` slot, exactly as 9.4 does it. Do NOT widen `chk_dispatch_document_type` and do NOT import the Story 3.7 renderers (BSD-6).
+  - [x] 4.9 Stop the clock (AC 1) on BOTH branches: `reconcileReturnClocks({ category: 'offcut', counter: 'reconciled_qty', strict: false })`, the forward-declared and still-unused path at `jobwork-return-clock.ts:167`. Non-strict for the reason the 9.5 chunk-2 review settled: clock capacity is `challan_qty` while the holding quantity derives from the received balance, which an over-tolerance receipt may exceed.
+  - [x] 4.10 Credit note (AC 3, AC 4): on `acquired` with `rate > 0`, insert ONE `original` credit note citing the order's acknowledged billing-feed reference. A rate of exactly zero is a contractual free retention: mint the lot, write NO credit note, and record the zero rate on the holding row (BSD-5). Store `indicative_rate` from `service_order.offcut_rate` beside the negotiated rate; apply NO tolerance and refuse NOTHING on rate (AC 4, the final 2026-09-05 ruling).
+  - [x] 4.11 Credit note precondition: the order must have an acknowledged billing feed carrying `acknowledged_ref_ext`, or there is no invoice to credit. Refuse the NEW code `CREDIT_NOTE_UNCITABLE` (409, with `details.reason`) rather than inventing a placeholder reference.
+  - [x] 4.12 Close the holding row through the guarded UPDATE; a zero-row result means a concurrent disposal won, so refuse `DUPLICATE_EVENT` rather than reporting success (the 9.5 sweep's `skippedRaced` lesson, applied to a write path).
+  - [x] 4.13 Every money figure settles through the scaled-decimal helpers in `src/compliance/custody-statement.ts:20-59`. No `Number()` on a NUMERIC string anywhere.
 
-- [ ] **Task 5: revaluation applier (AC 5)**
-  - [ ] 5.1 `jobwork.offcut_revalued` on a `disposed` + `acquired` holding row. Refuses `OFFCUT_NOT_RETAINED`'s sibling condition with `INVALID_PARAMS` when the row is still retained or was `returned`.
-  - [ ] 5.2 Requires an existing `original` credit note for the holding; refuses the NEW code `CREDIT_NOTE_MISSING` (409) otherwise.
-  - [ ] 5.3 Inserts a `delta` credit note with `supersedes_credit_note_id` set and `delta_value = new_value - latest_value` (signed, may be negative). NEVER updates the original row and NEVER updates a previously acknowledged delta. A second revaluation chains off the latest delta.
-  - [ ] 5.4 Updates the holding row's `disposal_rate` and `disposal_value` to the current commercial value, leaving `indicative_rate` untouched. State plainly in the header that the DOCUMENT trail is immutable while the holding row carries the current value; that is the distinction AC 5 draws.
-  - [ ] 5.5 The DOA band applies to the revalued acquisition value on the same terms as Task 4.7.
+- [x] **Task 5: revaluation applier (AC 5)**
+  - [x] 5.1 `jobwork.offcut_revalued` on a `disposed` + `acquired` holding row. Refuses `OFFCUT_NOT_RETAINED`'s sibling condition with `INVALID_PARAMS` when the row is still retained or was `returned`.
+  - [x] 5.2 Requires an existing `original` credit note for the holding; refuses the NEW code `CREDIT_NOTE_MISSING` (409) otherwise.
+  - [x] 5.3 Inserts a `delta` credit note with `supersedes_credit_note_id` set and `delta_value = new_value - latest_value` (signed, may be negative). NEVER updates the original row and NEVER updates a previously acknowledged delta. A second revaluation chains off the latest delta.
+  - [x] 5.4 Updates the holding row's `disposal_rate` and `disposal_value` to the current commercial value, leaving `indicative_rate` untouched. State plainly in the header that the DOCUMENT trail is immutable while the holding row carries the current value; that is the distinction AC 5 draws.
+  - [x] 5.5 The DOA band applies to the revalued acquisition value on the same terms as Task 4.7.
 
-- [ ] **Task 6: credit-note acknowledgment applier (AC 6)**
-  - [ ] 6.1 `jobwork.credit_note_acknowledged` flips `status` to `acknowledged` and stamps `acknowledged_at`, `acknowledged_by`, `acknowledged_ref_ext` (mandatory, non-empty, `MAX_TEXT_LENGTH` 200).
-  - [ ] 6.2 SoD (AC 6): refuse `SOD_VIOLATION` (403) when `acknowledged_by` or the acting user equals the credit note's `valued_by`. Copy `jobwork-billing.ts:531`. With no rate band anywhere (the 2026-09-05 ruling removed it), this guard carries the ENTIRE control over the acquisition rate. Do not weaken it, do not make it configurable.
-  - [ ] 6.3 Guarded UPDATE on `status <> 'acknowledged'`; a second acknowledgment is `DUPLICATE_EVENT`.
+- [x] **Task 6: credit-note acknowledgment applier (AC 6)**
+  - [x] 6.1 `jobwork.credit_note_acknowledged` flips `status` to `acknowledged` and stamps `acknowledged_at`, `acknowledged_by`, `acknowledged_ref_ext` (mandatory, non-empty, `MAX_TEXT_LENGTH` 200).
+  - [x] 6.2 SoD (AC 6): refuse `SOD_VIOLATION` (403) when `acknowledged_by` or the acting user equals the credit note's `valued_by`. Copy `jobwork-billing.ts:531`. With no rate band anywhere (the 2026-09-05 ruling removed it), this guard carries the ENTIRE control over the acquisition rate. Do not weaken it, do not make it configurable.
+  - [x] 6.3 Guarded UPDATE on `status <> 'acknowledged'`; a second acknowledgment is `DUPLICATE_EVENT`.
 
-- [ ] **Task 7: routes, RBAC, registration (AC 1, AC 3, AC 5, AC 6, AC 7)**
-  - [ ] 7.1 `POST /api/v1/service-orders/:serviceOrderId/offcut-disposals`, `POST /api/v1/service-orders/:serviceOrderId/offcut-revaluations`, `POST /api/v1/jobwork/credit-notes/:creditNoteId/acknowledgment`, `GET /api/v1/service-orders/:serviceOrderId/offcut-holdings`. All in `src/api/v1/service-orders.ts`, all `requireRole({ module: 'jobwork', functionScope: ... })`, all with `requireIdempotencyKey`, `rejectUnacceptedFields` symmetric on server-derived fields, path-id equals body-id, `assertSiteWriteAccess` against the ORDER's site re-checked on retries as well (the 9.5 chunk-3 fix).
-  - [ ] 7.2 Role gate above RBAC on the two write routes that set value: posting a disposal or a revaluation requires the `finance_controller` role, derived from the SAME assignment that supplies the site scope (the `CHALLAN_RECLASSIFICATION_ROLES` shape at `service-orders.ts:1240`, including its privilege-and-scope-from-one-assignment fix). Refuse `FUNCTION_ACCESS_DENIED` (403).
-  - [ ] 7.3 Register the STATIC `/api/v1/jobwork/credit-notes/...` segment BEFORE every parameterised `/service-orders/:serviceOrderId/...` route in `src/server.ts:1051-1073`, the recorded lesson at that comment.
-  - [ ] 7.4 Add the new codes to `AUDITED_REJECTIONS` (`service-orders.ts:79`): `OFFCUT_NOT_RETAINED`, `CREDIT_NOTE_MISSING`, `CREDIT_NOTE_UNCITABLE`. `SOD_VIOLATION`, `APPROVAL_REQUIRED`, `APPROVAL_UNRESOLVED` and `FUNCTION_ACCESS_DENIED` are already there.
-  - [ ] 7.5 Add the three new codes to `src/sync/upload.ts` `PERMANENT_ERROR_CODES` and `edge/src/messages/en.json`, defensively (no edge scope in this story - disposal and valuation are office actions), the 9.4 through 9.6 precedent.
-  - [ ] 7.6 Add all four routes to the Story 1.9 spine allowlist in `test/integration/story-1-9.test.ts`.
+- [x] **Task 7: routes, RBAC, registration (AC 1, AC 3, AC 5, AC 6, AC 7)**
+  - [x] 7.1 `POST /api/v1/service-orders/:serviceOrderId/offcut-disposals`, `POST /api/v1/service-orders/:serviceOrderId/offcut-revaluations`, `POST /api/v1/jobwork/credit-notes/:creditNoteId/acknowledgment`, `GET /api/v1/service-orders/:serviceOrderId/offcut-holdings`. All in `src/api/v1/service-orders.ts`, all `requireRole({ module: 'jobwork', functionScope: ... })`, all with `requireIdempotencyKey`, `rejectUnacceptedFields` symmetric on server-derived fields, path-id equals body-id, `assertSiteWriteAccess` against the ORDER's site re-checked on retries as well (the 9.5 chunk-3 fix).
+  - [x] 7.2 Role gate above RBAC on the two write routes that set value: posting a disposal or a revaluation requires the `finance_controller` role, derived from the SAME assignment that supplies the site scope (the `CHALLAN_RECLASSIFICATION_ROLES` shape at `service-orders.ts:1240`, including its privilege-and-scope-from-one-assignment fix). Refuse `FUNCTION_ACCESS_DENIED` (403).
+  - [x] 7.3 Register the STATIC `/api/v1/jobwork/credit-notes/...` segment BEFORE every parameterised `/service-orders/:serviceOrderId/...` route in `src/server.ts:1051-1073`, the recorded lesson at that comment.
+  - [x] 7.4 Add the new codes to `AUDITED_REJECTIONS` (`service-orders.ts:79`): `OFFCUT_NOT_RETAINED`, `CREDIT_NOTE_MISSING`, `CREDIT_NOTE_UNCITABLE`. `SOD_VIOLATION`, `APPROVAL_REQUIRED`, `APPROVAL_UNRESOLVED` and `FUNCTION_ACCESS_DENIED` are already there.
+  - [x] 7.5 Add the three new codes to `src/sync/upload.ts` `PERMANENT_ERROR_CODES` and `edge/src/messages/en.json`, defensively (no edge scope in this story - disposal and valuation are office actions), the 9.4 through 9.6 precedent.
+  - [x] 7.6 Add all four routes to the Story 1.9 spine allowlist in `test/integration/story-1-9.test.ts`.
 
-- [ ] **Task 8: sweep and reports (AC 8, AC 9)**
-  - [ ] 8.1 Widen the ageing report `GET /api/v1/jobwork/reports/aging` (`service-orders.ts:1290`) with an `offcut_holdings` section: every `status = 'retained'` row, site-scoped through the existing `reportSiteScope`, bucketed by age since `captured_at` using the SAME `agingBucketFor` thresholds, carrying `service_order_id`, `offcut_contract_ref_ext`, `sku`, `lot_id`, `quantity`, `uom`, `captured_at`. Acquired and returned rows are excluded by the `retained` filter, which is the whole of AC 9's second half.
-  - [ ] 8.2 Widen `runJobworkClockSweepCycle` (`src/notify/jobwork-clock-sweep.ts`) so that a clock's alert and breach `next_step` text names any retained offcut on the same (order, sku), and so that retained offcut whose order has CLOSED still reaches the coordinator. Add `offcutRetained` to `JobworkClockSweepResult`.
-  - [ ] 8.3 CRITICAL, do not get this wrong: capture deliberately does NOT reconcile the clock, so the retained quantity is STILL outstanding on `jobwork_return_clock` and already counts toward `deemed_supply_qty`. The clock stays the single accounting authority. The sweep must SURFACE retained offcut, never add it to the deemed-supply arithmetic - double-counting it would overstate the Section 143 exposure on every ITC-04 extract. Assert non-double-counting in a test.
-  - [ ] 8.4 No new background cycle and no new advisory key: this rides the existing 6th cycle (`jobwork clock breach`, key 9505). `test/unit/background-cycles.test.ts` pins seven cycles after 9.6 and must stay at seven.
+- [x] **Task 8: sweep and reports (AC 8, AC 9)**
+  - [x] 8.1 Widen the ageing report `GET /api/v1/jobwork/reports/aging` (`service-orders.ts:1290`) with an `offcut_holdings` section: every `status = 'retained'` row, site-scoped through the existing `reportSiteScope`, bucketed by age since `captured_at` using the SAME `agingBucketFor` thresholds, carrying `service_order_id`, `offcut_contract_ref_ext`, `sku`, `lot_id`, `quantity`, `uom`, `captured_at`. Acquired and returned rows are excluded by the `retained` filter, which is the whole of AC 9's second half.
+  - [x] 8.2 Widen `runJobworkClockSweepCycle` (`src/notify/jobwork-clock-sweep.ts`) so that a clock's alert and breach `next_step` text names any retained offcut on the same (order, sku), and so that retained offcut whose order has CLOSED still reaches the coordinator. Add `offcutRetained` to `JobworkClockSweepResult`.
+  - [x] 8.3 CRITICAL, do not get this wrong: capture deliberately does NOT reconcile the clock, so the retained quantity is STILL outstanding on `jobwork_return_clock` and already counts toward `deemed_supply_qty`. The clock stays the single accounting authority. The sweep must SURFACE retained offcut, never add it to the deemed-supply arithmetic - double-counting it would overstate the Section 143 exposure on every ITC-04 extract. Assert non-double-counting in a test.
+  - [x] 8.4 No new background cycle and no new advisory key: this rides the existing 6th cycle (`jobwork clock breach`, key 9505). `test/unit/background-cycles.test.ts` pins seven cycles after 9.6 and must stay at seven.
 
-- [ ] **Task 9: tests**
-  - [ ] 9.1 NEW `test/integration/story-9-7.test.ts`, serial, run-scoped random suffix, local fixture closures, admin pool for seeding (`app_user` has no DELETE), against the docker container `ims-postgres-test` on port 5442.
-  - [ ] 9.2 Arms, one per AC: retained-to-returned with documents and clock stop; retained-to-acquired with owned lot, QC hold, credit note and clock stop; acquired at rate zero minting a lot and raising NO credit note; negotiated rate differing from indicative accepted with both stored; revaluation raising a delta with the original untouched; self-acknowledgment refused `SOD_VIOLATION`; above-band acquisition refused `APPROVAL_REQUIRED` and audited, then accepted with the resolved `cfo`; approver equal to the acting user refused; disposal on a CLOSED order accepted; ageing report showing retained then not showing acquired; sweep surfacing retained offcut without double-counting deemed supply.
-  - [ ] 9.3 Two-point mutation verification (the 9.3 through 9.6 standard) on the three load-bearing gates: the SoD refusal, the DOA dual-control refusal, and the Task 1 offcut issue bar. Each mutant must be killed by BOTH a route arm and a direct `POST /api/v1/events` arm.
-  - [ ] 9.4 A direct-event bypass arm for each of the three new event types (the hold-bypass class).
-  - [ ] 9.5 NEW `test/unit/jobwork-offcut-disposal-predicates.test.ts` for `offcutDisposalOpen`, the delta arithmetic, and the zero-rate branch.
-  - [ ] 9.6 Gates before handing over: `tsc`, `eslint`, `prettier`, `npm run db:migrate` twice (idempotent), schema-drift, story-9-1 through story-9-6 and story-1-9 regressions, then the full suite compared against the baseline. The noise floor was ELIMINATED on 2026-09-05: the suite is expected GREEN, and any failure is yours until proven otherwise. Do not reintroduce a tolerated floor.
+- [x] **Task 9: tests**
+  - [x] 9.1 NEW `test/integration/story-9-7.test.ts`, serial, run-scoped random suffix, local fixture closures, admin pool for seeding (`app_user` has no DELETE), against the docker container `ims-postgres-test` on port 5442.
+  - [x] 9.2 Arms, one per AC: retained-to-returned with documents and clock stop; retained-to-acquired with owned lot, QC hold, credit note and clock stop; acquired at rate zero minting a lot and raising NO credit note; negotiated rate differing from indicative accepted with both stored; revaluation raising a delta with the original untouched; self-acknowledgment refused `SOD_VIOLATION`; above-band acquisition refused `APPROVAL_REQUIRED` and audited, then accepted with the resolved `cfo`; approver equal to the acting user refused; disposal on a CLOSED order accepted; ageing report showing retained then not showing acquired; sweep surfacing retained offcut without double-counting deemed supply.
+  - [x] 9.3 Two-point mutation verification (the 9.3 through 9.6 standard) on the three load-bearing gates: the SoD refusal, the DOA dual-control refusal, and the Task 1 offcut issue bar. Each mutant must be killed by BOTH a route arm and a direct `POST /api/v1/events` arm.
+  - [x] 9.4 A direct-event bypass arm for each of the three new event types (the hold-bypass class).
+  - [x] 9.5 NEW `test/unit/jobwork-offcut-disposal-predicates.test.ts` for `offcutDisposalOpen`, the delta arithmetic, and the zero-rate branch.
+  - [x] 9.6 Gates before handing over: `tsc`, `eslint`, `prettier`, `npm run db:migrate` twice (idempotent), schema-drift, story-9-1 through story-9-6 and story-1-9 regressions, then the full suite compared against the baseline. The noise floor was ELIMINATED on 2026-09-05: the suite is expected GREEN, and any failure is yours until proven otherwise. Do not reintroduce a tolerated floor.
 
 ## Dev Notes
 
@@ -225,15 +228,139 @@ Table 3 records the questions this story answers by ruling rather than by asking
 
 ### Agent Model Used
 
+Claude Opus 5 (1M context), bmad-dev-story workflow, 2026-09-06.
+
 ### Debug Log References
+
+Baseline `502b664` on branch `chore/9-6-reversal-and-noise-floor` (Task 0 and Task 1.3 were already
+committed there). Every gate below was run against the docker container `ims-postgres-test` on port
+5442; integration files were run serially.
+
+Ten disclosures, each a place where the shipped code differs from the story text or where a finding
+came out of execution rather than reasoning:
+
+1. **Task 1.1 was already closed before this story started.** `offcut` is in
+   `CUSTOMER_OWNED_STOCK_CLASSES` as of commit `502b664`, so the issue/allocation bar already
+   covered it. This story added only the door: the new `CUSTODY_OFFCUT_DISPOSAL` Symbol and its
+   `offcut`-only arm, which is what Task 1.3 said this story had to do on that same mechanism.
+2. **Task 4.6 DEVIATION, the load-bearing one: `receiveQcCompletion` cannot gate this lot, so the
+   QC hold is the Story 8.5 GOVERNED hold instead.** The hand-off is plan-bound - it refuses
+   `INVALID_PAYLOAD` without a UUID `bom_revision_id`, and `quality.ts` then requires that
+   revision's BOM parent to BE the item being gated. The acquired lot carries the customer's RAW
+   MATERIAL sku, which has no BOM at all (the order's kit revision has the OUTPUT item as its
+   parent), so the hand-off is refused outright. This was found by EXECUTION, not by reading: the
+   first run of the AC 3 arm failed with `bom_revision_id must be a UUID`. It is the Story 9.6
+   BSD-19 finding repeating for the same material for the same reason, so the fix is the same one
+   9.6 settled on: `insertQcQualityHold` plus `placeQualityHold`, which is what
+   `dispatchGateBlockedLots` and every allocation and pick gate actually read. AC 3's "minted under
+   a QC hold" is satisfied, and the integration arm asserts the hold through the codebase's own
+   predicate rather than through a task row.
+3. **AC 8 needed a change the tasks did not name: `listReturnClocksDueForSweep` excluded closed
+   orders outright** (`AND o.status <> 'closed'`). Widening the alert text alone would have left
+   retained offcut on a closed order invisible, which is precisely the exposure AC 8 exists to
+   close. The candidate query now also admits a clock whose order is closed when retained offcut
+   exists on that (order, sku). Story 9.5's own behaviour is otherwise untouched.
+4. **The ageing report's offcut buckets are AGE bands, not an expiry.** The holding row has no
+   statutory deadline of its own - the deadline lives on `jobwork_return_clock` - so the section
+   reuses `agingBucketFor` against a 90-day reporting horizon (`OFFCUT_AGING_HORIZON_DAYS`) so the
+   30/90-day boundaries stay the report's, and it carries `counted_in_deemed_supply: false` on the
+   payload so no consumer folds the two figures together.
+5. **One column beyond Task 2.1's eight: `owned_lot_id`.** The acquisition mints a lot and nothing
+   else recorded which one; it is also what the `OA` sequence counts, so a second acquisition on
+   the same order cannot collide on the global `uq_lot_master_lot_number`.
+6. **Task 1.4 (the second one) confirmed, no change needed**: `cycle-count.ts:91` already lists
+   `offcut` in its duplicated `SEGREGATED_STOCK_CLASSES`.
+7. **Task 1.4 (the first one) REMAINS OPEN, as the story says it does.** Physical-verification
+   variance reconciliation still filters lines to `JOB_WORK_STOCK_CLASS`
+   (`cycle-count.ts:1423`), so a variance counted against `offcut` stock reconciles onto nothing.
+   Closing it needs an adjustment path on the holding ledger, which no task in this story
+   commissions. Left open deliberately rather than half-built.
+8. **A concurrent Story 9.6 code-review session was writing to this repository during this run** and
+   added `CUSTODY_OFFCUT_CAPTURE`, a receive-side Symbol gate on the `offcut` class in the same
+   `stock-balance.ts` arm region. The two doors coexist and were verified together: capture opens
+   the receipt, disposal opens the issue, and neither opens the other's direction.
+9. **`deploy/compose/init-db.sql` is LF in this repository**, not CRLF as the story text assumes.
+   Both new blocks were mirrored with the file's existing endings; `schema-drift` is green at
+   158/158, which is the check that actually governs the mirror.
+10. **The DOA band and the `cfo` holder are resolved in the test the way the seam resolves them**,
+    never assumed to be this run's fixture user: `doa_registry_entries` and role assignments are
+    global and outlive a run, so a reran suite would otherwise assert against a previous run's CFO.
+
+Mutation verification (Task 9.3), three load-bearing gates, each killed:
+
+| **Mutant** | **Change** | **Result** |
+| --- | --- | --- |
+| Offcut issue bar | `offcut` removed from `CUSTOMER_OWNED_STOCK_CLASSES` | Task 1 arm fails (route AND direct-event probes are both in it) |
+| Credit-note SoD | `selfAcknowledged` forced to `false` | AC 6 arm fails (route self-acknowledgment AND the forged-`acknowledged_by` direct event) |
+| Dual control | acting-user comparison inverted back to the 9.4 same-person form | 2 of 3 AC 7 arms fail, including the direct-event probe past the route's role gate |
+
+Gates: `tsc` clean; `eslint src/ test/` clean; `prettier` clean on every touched file (the repo's
+50 pre-existing unformatted files were left alone); `npm run db:migrate` run twice, idempotent;
+`schema-drift` 158/158; story-9-7 22/22; unit suite 509/509; story-9-1 27, 9-2 19, 9-3 12, 9-4 13,
+9-5 34, 9-6 20, 1-9 6 - all green; FULL SUITE 1966/1966, zero failures. The noise floor stays
+eliminated.
 
 ### Completion Notes List
 
+- Disposal, revaluation and credit-note acknowledgment ride the `jobwork` stream (BSD-2) and work on
+  a CLOSED order (BSD-3), through `requireInProcessOrder(..., orderAcceptsBilling)`.
+- `returned` issues the offcut stock through the new Symbol door, renders four documents into the
+  generic `dispatch_document` table (return challan in the `commercial_invoice` slot, BSD-6), and
+  writes no credit note. `acquired` transfers title, mints a new owned lot under a governed QC hold,
+  and raises one `original` credit note citing the acknowledged service invoice; a free retention is
+  the same branch at rate zero and raises none (BSD-5).
+- No tolerance is applied to the negotiated rate (AC 4): the indicative rate is stored beside it and
+  the variance is visible on the credit note and the reports. The control over the rate is the DOA
+  second signature above the band plus the acknowledgment SoD, never arithmetic.
+- Dual control inverts the Story 9.4 acting-user check (BSD-10) and says so at the comparison.
+- Revaluation chains deltas off the LATEST document and never mutates one; the holding row carries
+  the current commercial value while the document trail stays immutable (AC 5).
+- Retained offcut is surfaced in the breach sweep and the ageing report and is never added to
+  `deemed_supply_qty` (BSD-11, asserted directly in the AC 8 arm: a 100 KG challan with 40 KG of
+  retained offcut reports 100 KG of deemed supply, not 140).
+- No new background cycle and no new advisory key; the sweep still rides key 9505.
+- Task 0.4 stays operational and is NOT closed by this story: an administrator must provision a real
+  `cfo` and a DIFFERENT real `finance_controller` and register the `jobwork.offcut_acquisition` band
+  before go-live. `npm run verify:roles` must exit 0 against the target environment. Until then
+  above-band acquisitions refuse `APPROVAL_UNRESOLVED` and disposal refuses `FUNCTION_ACCESS_DENIED`,
+  which is intended fail-closed behaviour.
+- Task 0.6 needed no change: the `cfo` and `finance_controller` rows and the two-people ruling are
+  already in the access-matrix draft.
+
 ### File List
+
+New:
+
+- `read/projections/job_work_credit_note.sql`
+- `src/read/projections/job_work_credit_note.ts`
+- `src/compliance/jobwork-offcut-disposal.ts`
+- `test/integration/story-9-7.test.ts`
+- `test/unit/jobwork-offcut-disposal-predicates.test.ts`
+
+Modified:
+
+- `read/projections/job_work_offcut_holding.sql`
+- `deploy/compose/init-db.sql`
+- `src/read/projections/job_work_offcut_holding.ts`
+- `src/read/projections/jobwork_return_clock.ts`
+- `src/compliance/custody-ledger.ts`
+- `src/compliance/stock-balance.ts`
+- `src/events/schema.ts`
+- `src/events/store.ts`
+- `src/events/migrate.ts`
+- `src/notify/jobwork-clock-sweep.ts`
+- `src/api/v1/service-orders.ts`
+- `src/server.ts`
+- `src/sync/upload.ts`
+- `edge/src/messages/en.json`
+- `test/integration/story-1-9.test.ts`
+- `test/unit/schema-drift.test.ts`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
 ## Change Log
 
 | **Date** | **Change** | **By** |
 | --- | --- | --- |
+| 2026-09-06 | Tasks 1-9 implemented from baseline `502b664`. New offcut credit-note projection with an original/delta chain, eight disposal columns plus `owned_lot_id` on the holding ledger, three `jobwork`-stream events, the disposal/revaluation/acknowledgment appliers, a third Symbol door for the `offcut` class, four routes behind a finance-controller gate, the ageing-report offcut section and the sweep widening. Ten disclosures in the Debug Log, of which two are load-bearing: the QC gate on an acquired lot is the Story 8.5 governed hold because `receiveQcCompletion` is plan-bound and refuses customer raw material, and the sweep's candidate query had to be widened because it excluded closed orders entirely. Three gates mutation-verified at both the route and the direct-event door. Full suite 1966/1966 | dev |
 | 2026-09-06 | Task 0 implemented ahead of the rest of the story: `verifySegregatedRoles` plus `npm run verify:roles` and a 7-arm integration suite. Five violation codes, including two hazards the acceptance criteria do not name - a second role banded on the same DOA transaction type (approver resolution falls back across roles) and an active vacation delegation that hands both halves of the pair to one person. Provisioning the real users and the band remains an administrative act against the target environment | dev |
 | 2026-09-06 | Story created, status ready-for-dev. Twelve binding scope decisions, six rulings in place of open questions, and one live defect found during analysis and folded in as prerequisite Task 1: the `offcut` stock class is segregated for receipts but not barred from issue or allocation, so customer-owned retained offcut can currently be picked into any sales dispatch | create-story workflow |

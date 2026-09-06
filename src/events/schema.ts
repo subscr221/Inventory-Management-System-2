@@ -4438,8 +4438,9 @@ export interface JobworkOrderCreatedPayload {
   has_contractual_offcut?: boolean;
   /**
    * Story 9.6 Task 0 (Binding decision 16): the CONTRACTED offcut rate, an exact decimal STRING
-   * (at most four decimals) per unit of customer material in offcut_currency. Optional here and on
-   * update; mandatory at confirm when has_contractual_offcut is true. The pair travels together.
+   * (at most four decimals) per unit of customer material in offcut_currency. Optional here, on
+   * update and at confirm since the 2026-09-05 reversal withdrew the confirm-time mandate. The
+   * pair travels together.
    */
   offcut_rate?: string | null;
   offcut_currency?: string | null;
@@ -4480,7 +4481,8 @@ export interface JobworkOrderUpdatedEnvelope extends Omit<EventEnvelope, 'payloa
 export interface JobworkOrderConfirmedPayload {
   service_order_id: string;
   offcut_election?: 'return' | 'retain_and_buy' | 'retain_free';
-  /** Story 9.6 Task 0: mandatory (here or already on the row) when has_contractual_offcut. */
+  // Story 9.6 REVISED 2026-09-05: the rate pair and the contract reference are optional at confirm
+  // since the reversal withdrew the confirm-time mandate; the seam shape-gates any value supplied.
   offcut_rate?: string | null;
   offcut_currency?: string | null;
   /** Story 9.6 revised: the offcut contract's own reference number (the offcut may be resold under it). */
@@ -4677,17 +4679,15 @@ export interface CustodyReturnRecordedEnvelope extends Omit<EventEnvelope, 'payl
 }
 
 /**
- * Story 9.6 (FR-JW-09/10, Binding decision 1): the execution of the offcut election captured at
- * confirm, ONE event on the EXISTING 'custody' stream with three branches. The caller never names
- * the branch: the applier re-reads service_order.offcut_election under the order advisory lock and
- * branches on what it finds (`return` drains and renders documents; `retain_and_buy` and
- * `retain_free` drain and mint a NEW owned lot held for QC). return_challan_number_ext is mandatory
- * on the `return` branch only. offcut_rate_estimate is the real-time settlement rate (retain_and_buy
- * only; PO ruling 2026-09-05 on open question 6): billed at the estimate when supplied, else at the
- * order's contracted rate, with the contracted rate stamped beside it as contracted_offcut_rate.
- * settles_offcut is the caller's declaration that this posting closes the contractual offcut
- * (Binding decision 15): it stamps offcut_settled_at on the order, after which billing may
- * generate and no further offcut may post. Every field below the caller block is SERVER-DERIVED.
+ * Story 9.6 REVISED (FR-JW-09/10): CAPTURE of contractual offcut, ONE event on the EXISTING
+ * 'custody' stream. The 2026-09-05 sprint change proposal reversed the original three-branch
+ * settlement model, and this header described it for a while after the code had stopped doing it
+ * (corrected in Story 9.7): there is NO election, NO branch, NO rate and NO settlement declaration
+ * on this event. Capture drains the customer's custody balance into the UNVALUED offcut holding
+ * ledger, mints a lot in the segregated `offcut` stock class, and deliberately does not stop the
+ * Section 143 clock. The disposition, the rate, the documents and the billing are decided later by
+ * the finance controller through the Story 9.7 jobwork.offcut_disposed event. Every field below the
+ * caller block is SERVER-DERIVED.
  */
 export interface CustodyOffcutRecordedPayload {
   service_order_id: string;
@@ -4722,12 +4722,15 @@ export interface CustodyOffcutRecordedEnvelope extends Omit<EventEnvelope, 'payl
 }
 
 /**
- * Story 9.6 (FR-JW-12, Binding decisions 6, 7, 14, 15, 18): generation of the ONE measured billing
+ * Story 9.6 (FR-JW-12, Binding decisions 6, 7, 14, 18): generation of the ONE measured billing
  * feed an order may carry, on the existing 'jobwork' stream (never `erp.*` / stream `erp`, which
  * assertErpReadOnly refuses). feed_id minted client-side. measured_hours is caller-supplied and
- * required only for a per_hour price basis (Binding decision 12). Preconditions re-derived under
- * the order lock: at least one dispatch, and offcut settlement stamped when contractual. The
- * payload snapshot, measured basis/quantity, total and open_to_dispatch_qty are SERVER-DERIVED.
+ * required only for a per_hour price basis (Binding decision 12). There is exactly ONE precondition
+ * re-derived under the order lock: at least one dispatch. The offcut-settlement precondition this
+ * header used to name was withdrawn by the 2026-09-05 reversal and no longer exists in the code
+ * (corrected in Story 9.7) - offcut buyback reaches ERP as a job_work_credit_note against THIS
+ * invoice, so the service invoice never waits on a disposal that may be months away. The payload
+ * snapshot, measured basis/quantity, total and open_to_dispatch_qty are SERVER-DERIVED.
  */
 export interface JobworkBillingFeedGeneratedPayload {
   service_order_id: string;
@@ -4795,6 +4798,105 @@ export interface JobworkOrderClosureRequestedPayload {
 export interface JobworkOrderClosureRequestedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'jobwork.order_closure_requested';
   payload: JobworkOrderClosureRequestedPayload;
+}
+
+/**
+ * Story 9.7 (FR-JW-09/10, FR-JW-12; BSD-2): DISPOSAL of retained contractual offcut, on the
+ * `jobwork` stream rather than `custody`. Capture was a custody movement; disposal is not - the
+ * custody balance is already zero by then and the order may already be CLOSED, which this event
+ * must work on (BSD-3). Event types must never begin with `erp.` and must never use stream_type
+ * `erp`: assertErpReadOnly 405s both before any write.
+ *
+ * TWO dispositions, and the vocabulary is closed at two (BSD-4). `returned` sends the offcut back to
+ * the customer under a return challan and mints nothing; `acquired` transfers title to the
+ * processor, mints a NEW owned lot held for QC, and raises a credit note against the order's service
+ * invoice. A contractual FREE retention is `acquired` at a rate of exactly zero (BSD-5), which mints
+ * the lot and raises no credit note - never a third disposition.
+ */
+export interface JobworkOffcutDisposedPayload {
+  service_order_id: string;
+  disposal_id: string;
+  holding_id: string;
+  site_id: string;
+  disposition: 'returned' | 'acquired';
+  /** `acquired` only: the NEGOTIATED rate, a NUMERIC(18,4) string. Zero is a free retention. */
+  rate?: string;
+  /** `acquired` only, and mandatory with `rate`. */
+  currency?: string;
+  /** `acquired` only, above the DOA band: the resolved `cfo` approver, who must NOT be the poster. */
+  approved_by?: string;
+  /** `returned` only, mandatory: the challan the material goes back under. */
+  return_challan_number_ext?: string;
+  /** `returned` only, mandatory: the location the offcut stock is issued from. */
+  location_id?: string;
+  posted_by: string;
+  // Server-derived below. Refused on input, written back by the applier (the 9.2 idiom).
+  /** quantity x rate at the money scale; "0.0000" on a free retention. */
+  disposal_value?: string;
+  /** service_order.offcut_rate at the moment of disposal, stored beside the negotiated rate. */
+  indicative_rate?: string;
+  /** The `original` credit note raised, when one was (never on `returned` or at rate zero). */
+  credit_note_id?: string | null;
+  /** The lot minted to carry the acquired material as ordinary owned stock. */
+  owned_lot_number?: string | null;
+  /** How much of the Section 143 clock this disposal actually absorbed (non-strict reconcile). */
+  clock_reconciled_qty?: string;
+}
+
+export interface JobworkOffcutDisposedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.offcut_disposed';
+  payload: JobworkOffcutDisposedPayload;
+}
+
+/**
+ * Story 9.7 (FR-JW-12; AC 5): REVALUATION of an already-acquired offcut. The original credit note is
+ * NEVER mutated and neither is an already-acknowledged delta: a correction raises a further `delta`
+ * document carrying the signed difference, and the holding row carries the current commercial value.
+ * That split - immutable documents, current value on the ledger row - is the distinction AC 5 draws.
+ * The DOA band applies to the REVALUED value on the same terms as the disposal (open question 5),
+ * or a below-band disposal followed by a revaluation would be an unsigned route to any value.
+ */
+export interface JobworkOffcutRevaluedPayload {
+  service_order_id: string;
+  revaluation_id: string;
+  holding_id: string;
+  site_id: string;
+  rate: string;
+  currency: string;
+  approved_by?: string;
+  posted_by: string;
+  // Server-derived below.
+  /** new value minus the value of the document being superseded; signed, may be negative. */
+  delta_value?: string;
+  credit_note_id?: string;
+  supersedes_credit_note_id?: string;
+  disposal_value?: string;
+}
+
+export interface JobworkOffcutRevaluedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.offcut_revalued';
+  payload: JobworkOffcutRevaluedPayload;
+}
+
+/**
+ * Story 9.7 (FR-JW-12; AC 6): ERP acknowledgment of a credit note, an INBOUND command on this
+ * platform's own API (no transmitter exists anywhere), the 9.6 billing-feed precedent. The applier
+ * refuses SOD_VIOLATION when the acknowledging actor is the document's `valued_by`. With the rate
+ * tolerance band withdrawn on 2026-09-05, that refusal is the ENTIRE control over the acquisition
+ * rate: whoever prices the customer's offcut may not also sign off the document that bills it.
+ */
+export interface JobworkCreditNoteAcknowledgedPayload {
+  service_order_id: string;
+  credit_note_id: string;
+  site_id: string;
+  /** The ERP document number. Mandatory - a citation with no reference is not an acknowledgment. */
+  acknowledged_ref_ext: string;
+  acknowledged_by: string;
+}
+
+export interface JobworkCreditNoteAcknowledgedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.credit_note_acknowledged';
+  payload: JobworkCreditNoteAcknowledgedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -5761,6 +5863,22 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'jobwork.billing_feed_acknowledged': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  // Story 9.7: offcut disposal, revaluation and credit-note acknowledgment. All three ride the
+  // order's own 'jobwork' stream rather than 'custody' (BSD-2): the custody balance is already zero
+  // by the time offcut is disposed of, and the order may already be closed. Same `erp.`-prefix and
+  // 'erp' stream_type avoidance as the billing feed above.
+  'jobwork.offcut_disposed': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  'jobwork.offcut_revalued': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  'jobwork.credit_note_acknowledged': {
     streamType: 'jobwork',
     requiresBusinessStream: false,
   },

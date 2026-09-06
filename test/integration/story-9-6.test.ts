@@ -948,6 +948,29 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     assert.strictEqual(row['offcut_currency'], 'INR');
   });
 
+  it('code review: the offcut contract reference records at confirm on a contractual order only', async () => {
+    // Code review 2026-09-06: the confirm seam gate once refused every confirm carrying the
+    // contract reference while the route forwarded it, so "the offcut may be agreed after the
+    // service order is confirmed" was unrecordable. It now mirrors the rate pair: persisted at
+    // confirm, refused on an order with no contractual offcut arrangement.
+    const contractual = await createDraftOrder({ contractual: true });
+    const confirm = await confirmOrder(contractual, {
+      offcut_election: 'retain_free',
+      offcut_contract_ref_ext: 'OFC-CONTRACT-1',
+    });
+    assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
+    const refRow = await getAdminPool().query(
+      `SELECT offcut_contract_ref_ext FROM service_order WHERE service_order_id = $1`,
+      [contractual],
+    );
+    assert.strictEqual(refRow.rows[0]!['offcut_contract_ref_ext'], 'OFC-CONTRACT-1');
+
+    const plain = await createDraftOrder();
+    const refused = await confirmOrder(plain, { offcut_contract_ref_ext: 'OFC-CONTRACT-2' });
+    assert.strictEqual(refused.status, 409, JSON.stringify(refused.body));
+    assert.strictEqual(refused.body['error_code'], 'INVALID_STATE_TRANSITION');
+  });
+
   it('Task 0: a non-contractual order refuses a rate at confirm, and the currency must match the price basis', async () => {
     const plain = await createDraftOrder();
     const mirror = await confirmOrder(plain, { offcut_rate: '1.0000', offcut_currency: 'INR' });
@@ -1519,6 +1542,44 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     );
     assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
     assert.strictEqual((await holdingRows(contractual.orderId)).length, 1);
+  });
+
+  it('SECURITY: the direct events door cannot mint offcut-class stock outside the capture seam', async () => {
+    // Code review 2026-09-06: widening the stock vocabulary to `offcut` opened a second free mint -
+    // a bare stock.received (or a GRN line) carrying stock_class offcut created a segregated
+    // balance with no custody drain and no holding row, invisible to Story 9.7 disposal. The
+    // capture seam now stamps its CUSTODY_OFFCUT_CAPTURE Symbol on the receipt; a JSON body cannot
+    // carry a Symbol key, so the events door must be refused.
+    const { orderId, lot } = await inProcessOrder({ contractual: true });
+    const captured = await postOffcut(orderId, lot, { quantity: '5' });
+    assert.strictEqual(captured.status, 201, JSON.stringify(captured.body));
+    const stored = await storedPayload(captured.body['event_id'] as string);
+    const offcutLot = stored['offcut_lot_number'] as string;
+    const phantom = await postEvent({
+      stream_type: 'inventory',
+      stream_id: randomUUID(),
+      event_type: 'stock.received',
+      payload: {
+        sku: SKU,
+        target_location_id: dockId,
+        lot_id: offcutLot,
+        quantity: '5',
+        stock_class: 'offcut',
+        business_stream: 'job_work',
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: { user_id: coordinatorUserId, role: COORDINATOR_ROLE, location_id: siteAId },
+        occurred_at: new Date().toISOString(),
+      },
+    });
+    assert.strictEqual(phantom.status, 409, JSON.stringify(phantom.body));
+    assert.strictEqual(phantom.body['error_code'], 'SOURCE_DOCUMENT_REQUIRED');
+    assert.strictEqual(
+      await stockOnHand(SKU, offcutLot, 'offcut'),
+      '5.000',
+      'no phantom offcut-class stock may be added through the events door',
+    );
   });
 
   it('direct POST /api/v1/events: jobwork.billing_feed_generated meets the BILLING_NOT_READY wall; acknowledgment meets SOD_VIOLATION', async () => {

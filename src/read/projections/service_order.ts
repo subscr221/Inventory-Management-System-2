@@ -253,6 +253,14 @@ export async function updateServiceOrderFields(
     sets.push(`offcut_currency = $${idx++}`);
     values.push(fields.offcut_currency);
   }
+  // Story 9.6 code review (2026-09-06): the arm was missing entirely, so the seam wrote the
+  // contract reference into fields and this UPDATE silently dropped it - the column stayed null no
+  // matter what the route, the shape gates and the appliers did (the "could never be populated"
+  // defect the 2026-09-06 fix claimed to close but did not).
+  if (fields.offcut_contract_ref_ext !== undefined) {
+    sets.push(`offcut_contract_ref_ext = $${idx++}`);
+    values.push(fields.offcut_contract_ref_ext);
+  }
   if (fields.offcut_settled_at !== undefined) {
     sets.push(`offcut_settled_at = $${idx++}::timestamptz`);
     values.push(fields.offcut_settled_at);

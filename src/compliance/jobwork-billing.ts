@@ -310,6 +310,33 @@ function classifyFeedDuplicate(
       );
     }
   }
+  // Story 9.6 code review (2026-09-06): a computed amount that exceeds the NUMERIC(18,4) feed
+  // columns dies here as SQLSTATE 22003. Order-creation now bounds the rate to 14 integer digits,
+  // so this is a second belt for pathological combinations (huge measured quantity x large rate);
+  // classify it as a clean refusal rather than a raw 500. 23505 remains the only classified state.
+  if (err instanceof Error && 'code' in err && (err as { code: string }).code === '22003') {
+    reject(
+      'INVALID_PARAMS',
+      'The computed billing value exceeds the feed amount range; check the order rate and the measured quantity',
+      { feed_id: feedId, service_order_id: orderId },
+      400,
+    );
+  }
+  // Story 9.6 code review (2026-09-06): the row CHECKs (open_to_dispatch_qty >= 0 and the money
+  // columns' non-negativity) fail as SQLSTATE 23514. Only reachable if an upstream invariant has
+  // already broken (over-dispatch), so the refusal must name the feed rather than die as a 500.
+  if (err instanceof Error && 'code' in err && (err as { code: string }).code === '23514') {
+    reject(
+      'INVALID_PARAMS',
+      'A computed feed value violates the billing feed row constraints; reconcile the order dispatches before billing',
+      {
+        feed_id: feedId,
+        service_order_id: orderId,
+        constraint: (err as { constraint?: string }).constraint ?? null,
+      },
+      400,
+    );
+  }
   throw err;
 }
 
@@ -345,7 +372,6 @@ export async function applyJobworkBillingFeedGenerated(
       'INVALID_PARAMS',
       'This order has dispatches in more than one unit of measure and cannot be billed on a single measured quantity',
       { service_order_id: order.service_order_id, uoms: [...dispatchUoms].sort() },
-      409,
     );
   }
   const dispatches: JobWorkBillingDispatchLine[] = dispatchResult.rows.map((row) => ({

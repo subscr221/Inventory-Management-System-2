@@ -57,10 +57,11 @@ export const CUSTODY_LOSS_RECORDED = 'custody.loss_recorded';
  */
 export const CUSTODY_RETURN_RECORDED = 'custody.return_recorded';
 /**
- * Story 9.6 (FR-JW-09/10, Binding decision 1): execution of the offcut election, ONE event with
- * three branches switched on service_order.offcut_election under the order lock. The constant and
- * the shape assert live here so every custody.* name stays in one place; the applier lives in
- * jobwork-offcut.ts (this file already carries four appliers).
+ * Story 9.6 REVISED (FR-JW-09/10, sprint change proposal 2026-09-05): offcut CAPTURE, ONE event
+ * that drains the custody ledger and mints an unvalued `offcut`-class lot held in
+ * job_work_offcut_holding pending disposal. No disposition, no rate, no settlement - all of that
+ * is Story 9.7 disposal. The constant and the shape assert live here so every custody.* name stays
+ * in one place; the applier lives in jobwork-offcut.ts (this file already carries four appliers).
  */
 export const CUSTODY_OFFCUT_RECORDED = 'custody.offcut_recorded';
 /** Story 9.4 (FR-JW-08): the DOA transaction type governing over-norm loss approval, the Story
@@ -92,6 +93,38 @@ export const CUSTODY_RETURN = Symbol('custody.return_handoff');
 
 export function isCustodyReturnHandoff(envelope: EventEnvelope): boolean {
   return (envelope as unknown as Record<symbol, unknown>)[CUSTODY_RETURN] === true;
+}
+
+/**
+ * Story 9.7 (FR-JW-09/10): the THIRD gated door, and the ONLY one that opens the `offcut` stock
+ * class. Stamped by the disposal applier in jobwork-offcut-disposal.ts after the order, the holding
+ * row, the disposition and (on `acquired`) the DOA second signature have all been re-derived under
+ * the order advisory lock.
+ *
+ * CUSTODY_RETURN deliberately does NOT open the offcut class: that door belongs to `job_work`
+ * material going back to the principal under a Rule 45 challan, a different physical fact from
+ * disposing of contractual offcut. One Symbol per physical fact, so a mutant that swaps them is
+ * killed by a test rather than silently widening a statutory door.
+ */
+export const CUSTODY_OFFCUT_DISPOSAL = Symbol('custody.offcut_disposal_handoff');
+
+export function isCustodyOffcutDisposalHandoff(envelope: EventEnvelope): boolean {
+  return (envelope as unknown as Record<symbol, unknown>)[CUSTODY_OFFCUT_DISPOSAL] === true;
+}
+
+/**
+ * Story 9.6 code review (2026-09-06): the ONLY minting door for `offcut`-class stock. The capture
+ * applier in jobwork-offcut.ts stamps it on its synthetic stock.received view after draining the
+ * custody ledger, writing the holding row and minting the lot, all under the order advisory lock.
+ * It exists because widening the stock vocabulary to `offcut` opened a second free mint: a bare
+ * stock.received, a GRN line or an edge upload carrying stock_class 'offcut' used to create a
+ * balance with no custody provenance and no holding row. The stock-balance seam refuses every
+ * offcut-class receipt that does not carry this Symbol; a JSON body can never carry a Symbol key.
+ */
+export const CUSTODY_OFFCUT_CAPTURE = Symbol('custody.offcut_capture_handoff');
+
+export function isCustodyOffcutCaptureHandoff(envelope: EventEnvelope): boolean {
+  return (envelope as unknown as Record<symbol, unknown>)[CUSTODY_OFFCUT_CAPTURE] === true;
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -162,12 +195,10 @@ const RETURN_FIELDS = new Set([
 const RETURN_DERIVED_FIELDS = ['custody_balance_after'] as const;
 
 /**
- * Story 9.6: the closed offcut shape. return_challan_number_ext is mandatory on the `return`
- * branch ONLY, offcut_rate_estimate is the real-time settlement rate on `retain_and_buy` only
- * (PO ruling 2026-09-05 on open question 6: the estimate IS the settlement rate, no DOA gate; the
- * order's contracted rate is the reference stamped beside it), settles_offcut is the settlement
- * declaration (Binding decision 15) - all three are branch-checked by the applier, which alone
- * knows the election.
+ * Story 9.6 REVISED (2026-09-05): the closed offcut CAPTURE shape. Capture is unvalued and carries
+ * no disposition: no election, no return challan, no rate, no billable value and no settlement
+ * declaration. The applier re-derives the order's contractual-offcut flag and location under the
+ * order advisory lock; every branch field from the pre-reversal model is refused on input.
  */
 const OFFCUT_FIELDS = new Set([
   'service_order_id',

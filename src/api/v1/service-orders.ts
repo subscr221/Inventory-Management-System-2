@@ -58,6 +58,21 @@ import {
 } from '../../compliance/custody-statement.js';
 import { JOBWORK_OUTPUT_RECORDED } from '../../compliance/jobwork-output.js';
 import { JOBWORK_OUTPUT_DISPATCHED } from '../../compliance/jobwork-dispatch.js';
+import {
+  JOBWORK_OFFCUT_DISPOSED,
+  JOBWORK_OFFCUT_REVALUED,
+  JOBWORK_CREDIT_NOTE_ACKNOWLEDGED,
+  DISPOSAL_DERIVED_FIELDS,
+  REVALUATION_DERIVED_FIELDS,
+} from '../../compliance/jobwork-offcut-disposal.js';
+import {
+  listOffcutHoldingsByOrder,
+  listRetainedOffcutHoldings,
+} from '../../read/projections/job_work_offcut_holding.js';
+import {
+  getCreditNoteById,
+  listCreditNotesByOrder,
+} from '../../read/projections/job_work_credit_note.js';
 import { listJobWorkOutputsByOrder } from '../../read/projections/job_work_output.js';
 
 /**
@@ -117,6 +132,13 @@ const AUDITED_REJECTIONS = new Set([
   'SOD_VIOLATION',
   'ITEM_NOT_FOUND',
   'NOT_FOUND',
+  // Story 9.7: OFFCUT_NOT_RETAINED, CREDIT_NOTE_MISSING and CREDIT_NOTE_UNCITABLE are this story's
+  // NEW stable error codes. SOD_VIOLATION, APPROVAL_REQUIRED, APPROVAL_UNRESOLVED and
+  // FUNCTION_ACCESS_DENIED are already registered above and cover the disposal's other refusals - a
+  // refused acquisition is a refused statutory decision and must leave an audit row (AC 7).
+  'OFFCUT_NOT_RETAINED',
+  'CREDIT_NOTE_MISSING',
+  'CREDIT_NOTE_UNCITABLE',
 ]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -221,7 +243,8 @@ const ORDER_FIELDS = [
   'kit_bom_id',
   'has_contractual_offcut',
   // Story 9.6 Task 0 (Binding decision 16): the contracted offcut rate pair reaches the seam on
-  // create and update (optional) and on confirm (mandatory when contractual - the seam's gate).
+  // create and update (optional) and at confirm (optional since the 2026-09-05 reversal - the seam
+  // only shape-gates a value when supplied).
   'offcut_rate',
   'offcut_currency',
   // Story 9.6 revised: the offcut contract's own reference number. Without this the column existed,
@@ -926,9 +949,10 @@ const postServiceOrderReturnBase: RouteHandler = (req, res, params) =>
 // ---------------------------------------------------------------------------
 // Story 9.6 REVISED 2026-09-05: offcut CAPTURE (FR-JW-09/10) through the EXISTING custody helper.
 // The caller names nothing about the disposition - it is decided at DISPOSAL in Story 9.7. The seam
-// re-reads the order's contractual-offcut flag under the order
-// lock (Binding decision 1). The challan number, the real-time rate estimate and the settlement
-// declaration are caller fields the seam checks per branch; every derived field is refused here.
+// re-reads the order's contractual-offcut flag under the order lock, drains the customer's custody
+// balance, mints an unvalued offcut-class lot and writes the holding row. Capture carries NO
+// caller branch fields at all - the challan number, the rate and the settlement declaration all
+// belong to disposal (Story 9.7); every derived field is refused here.
 // ---------------------------------------------------------------------------
 
 const postServiceOrderOffcutBase: RouteHandler = (req, res, params) =>
@@ -1273,6 +1297,13 @@ const patchReturnClockClassificationBase: RouteHandler = async (req, res, params
 };
 
 const AGING_BUCKETS = ['breached', 'due_within_30', 'due_within_90', 'beyond_90'] as const;
+/**
+ * Story 9.7: retained offcut has no expiry of its own, so its age is banded against a 90-day
+ * reporting horizon and then run through the SAME agingBucketFor thresholds as the clocks. Offcut
+ * held longer than the horizon lands in `breached` as an attention flag, never as a statutory
+ * finding - the statutory deadline is the return clock's, and only the clock feeds deemed supply.
+ */
+const OFFCUT_AGING_HORIZON_DAYS = 90;
 type AgingBucket = (typeof AGING_BUCKETS)[number];
 
 /** Bucket by days to expiry; a breached clock is past due regardless of the day count. */
@@ -1315,6 +1346,57 @@ const getJobworkAgingReportBase: RouteHandler = async (req, res, _params) => {
     for (const bucket of AGING_BUCKETS) {
       buckets[bucket].outstanding_qty = qtyFromScaled(scaled[bucket]);
     }
+
+    // Story 9.7 AC 8 / AC 9: retained contractual offcut is still the CUSTOMER'S material and still
+    // carries a Section 143 exposure, so it must be visible on this report as well as the clocks.
+    // Only `retained` rows appear: once a row is `acquired` title has transferred and the material
+    // is carried as ordinary owned stock, and once it is `returned` there is nothing left to age -
+    // that filter is the whole of AC 9's second half.
+    //
+    // The buckets are AGE bands sharing this report's 30/90-day boundaries, NOT an expiry the
+    // holding row carries: the holding ledger has no statutory deadline of its own. The deadline
+    // lives on jobwork_return_clock, which is the single accounting authority for deemed supply
+    // (BSD-11) - so these rows are reported ALONGSIDE the clock figures and are deliberately kept
+    // out of every quantity total above. Adding them would double-count the exposure, because
+    // capture does not reconcile the clock and the same quantity is still outstanding there.
+    const offcutRows = await listRetainedOffcutHoldings({ siteIds, today });
+    const offcutBuckets: Record<AgingBucket, { count: number; quantity: string }> = {
+      breached: { count: 0, quantity: '0.000' },
+      due_within_30: { count: 0, quantity: '0.000' },
+      due_within_90: { count: 0, quantity: '0.000' },
+      beyond_90: { count: 0, quantity: '0.000' },
+    };
+    const offcutScaled: Record<AgingBucket, bigint> = {
+      breached: 0n,
+      due_within_30: 0n,
+      due_within_90: 0n,
+      beyond_90: 0n,
+    };
+    const offcutOut = offcutRows.map((row) => {
+      const bucket = agingBucketFor('retained', OFFCUT_AGING_HORIZON_DAYS - row.age_days);
+      offcutBuckets[bucket].count += 1;
+      offcutScaled[bucket] += qtyToScaled(row.quantity);
+      return {
+        holding_id: row.holding_id,
+        service_order_id: row.service_order_id,
+        customer_party_code: row.customer_party_code,
+        offcut_contract_ref_ext: row.offcut_contract_ref_ext,
+        sku: row.sku,
+        lot_id: row.lot_id,
+        source_lot_id: row.source_lot_id,
+        quantity: row.quantity,
+        uom: row.uom,
+        captured_at: row.captured_at,
+        business_date: row.business_date,
+        site_id: row.site_id,
+        age_days: row.age_days,
+        bucket,
+      };
+    });
+    for (const bucket of AGING_BUCKETS) {
+      offcutBuckets[bucket].quantity = qtyFromScaled(offcutScaled[bucket]);
+    }
+
     sendJson(res, 200, {
       report: 'job-work aging',
       generated_at: generatedAt,
@@ -1322,6 +1404,15 @@ const getJobworkAgingReportBase: RouteHandler = async (req, res, _params) => {
       buckets,
       rows: out,
       total_outstanding_qty: sumQty(rows, outstandingOf),
+      offcut_holdings: {
+        buckets: offcutBuckets,
+        rows: offcutOut,
+        total_retained_qty: qtyFromScaled(
+          AGING_BUCKETS.reduce((sum, bucket) => sum + offcutScaled[bucket], 0n),
+        ),
+        // Stated on the payload itself so no consumer adds the two together by accident.
+        counted_in_deemed_supply: false,
+      },
     });
   } catch (err: unknown) {
     sendAppError(req, res, err);
@@ -1645,6 +1736,308 @@ const getJobworkBillingReconciliationReportBase: RouteHandler = async (req, res,
   }
 };
 
+// ---------------------------------------------------------------------------
+// Story 9.7: offcut disposal, revaluation and credit-note acknowledgment (FR-JW-09/10, FR-JW-12).
+// Every gate below is a CONVENIENCE for a fast refusal; the authority is the applier in
+// src/compliance/jobwork-offcut-disposal.ts, which re-derives all of them under the order advisory
+// lock so a direct POST /api/v1/events meets the identical wall (the hold-bypass class).
+// ---------------------------------------------------------------------------
+
+/**
+ * Task 7.2: naming the price of the customer's offcut, and revising it, are finance decisions on top
+ * of the jobwork/write RBAC gate. Privilege AND scope come from the SAME assignments (the Story 9.5
+ * challan-reclassification fix): deriving the privilege from any finance_controller assignment while
+ * taking the site scope from the union of every jobwork/write assignment would let a controller at
+ * site A price site B's offcut.
+ */
+const OFFCUT_VALUATION_ROLES: ReadonlySet<string> = new Set(['finance_controller']);
+
+function requireFinanceControllerScope(req: IncomingMessage, siteId: string): void {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  const valuingRoles = authContext.roles.filter(
+    (r) =>
+      (r.module === 'jobwork' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      OFFCUT_VALUATION_ROLES.has(r.role),
+  );
+  if (valuingRoles.length === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'Valuing an offcut disposal requires the finance controller role',
+      { required_roles: [...OFFCUT_VALUATION_ROLES] },
+    );
+  }
+  const wildcard = valuingRoles.some((r) => r.locationId === '*');
+  if (!wildcard && !valuingRoles.some((r) => r.locationId === siteId)) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'No finance controller assignment grants access to the site of this order',
+      { site_id: siteId, required_roles: [...OFFCUT_VALUATION_ROLES] },
+    );
+  }
+}
+
+/** The two valuation write routes share everything but their field list and event type. */
+async function postOffcutValuationEvent(
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+  params: Record<string, string> | undefined,
+  spec: {
+    eventType: string;
+    idField: 'disposal_id' | 'revaluation_id';
+    callerFields: readonly string[];
+    derivedFields: readonly string[];
+  },
+): Promise<void> {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    rejectUnacceptedFields(body, ['posted_by', 'status', ...spec.derivedFields]);
+    if (body['service_order_id'] !== undefined && body['service_order_id'] !== serviceOrderId) {
+      throw new AppError(400, 'INVALID_PARAMS', 'service_order_id must equal the path id', {
+        service_order_id: body['service_order_id'],
+        path_service_order_id: serviceOrderId,
+      });
+    }
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (body[spec.idField] !== undefined && !isUuid(body[spec.idField])) {
+      throw new AppError(400, 'INVALID_PARAMS', `${spec.idField} must be a UUID when supplied`, {
+        field: spec.idField,
+      });
+    }
+    if (!isUuid(body['holding_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'holding_id is required and must be a UUID');
+    }
+
+    // A retry of a SUCCESSFUL posting must replay, not trip the 404 pre-check afresh; persistEvent
+    // is the idempotency authority. Site write access is re-checked on retries as well (the 9.5
+    // chunk-3 fix), and so is the finance-controller gate.
+    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const existing = await getServiceOrderById(serviceOrderId);
+    if (!existing && !isRetry) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+    }
+    if (existing) {
+      assertSiteWriteAccess(req, existing.site_id);
+      requireFinanceControllerScope(req, existing.site_id);
+    }
+    if (!existing) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: serviceOrderId,
+      });
+    }
+
+    const postingId = (body[spec.idField] as string | undefined) ?? randomUUID();
+    const payload: Record<string, unknown> = {
+      service_order_id: serviceOrderId,
+      [spec.idField]: postingId,
+      holding_id: body['holding_id'],
+      site_id: existing.site_id,
+      posted_by: actor.userId,
+    };
+    for (const field of spec.callerFields) {
+      if (body[field] !== undefined) payload[field] = body[field];
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: serviceOrderId,
+        event_type: spec.eventType,
+        payload,
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 201),
+    );
+    const persistedId = replayIdOrReject(persisted, spec.eventType, spec.idField);
+    const holdings = await listOffcutHoldingsByOrder(serviceOrderId);
+    const holding = holdings.find((row) => row.holding_id === body['holding_id']) ?? null;
+    const credit_notes = await listCreditNotesByOrder(serviceOrderId);
+    // A replay is not a posting: 200 with the same event_id, the house idiom.
+    sendJson(res, persistedId === postingId ? 201 : 200, {
+      event_id: persisted.event_id,
+      [spec.idField]: persistedId,
+      holding,
+      credit_notes,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditFailSafe(req, actor, err, {
+        service_order_id: params?.['serviceOrderId'] ?? null,
+        holding_id: (body as Record<string, unknown>)['holding_id'] ?? null,
+        event_type: spec.eventType,
+      });
+    }
+    sendAppError(req, res, err);
+  }
+}
+
+/** POST /service-orders/:serviceOrderId/offcut-disposals - AC 1, 2, 3, 4, 7. */
+const postServiceOrderOffcutDisposalBase: RouteHandler = (req, res, params) =>
+  postOffcutValuationEvent(req, res, params, {
+    eventType: JOBWORK_OFFCUT_DISPOSED,
+    idField: 'disposal_id',
+    callerFields: [
+      'disposition',
+      'rate',
+      'currency',
+      'approved_by',
+      'return_challan_number_ext',
+      'location_id',
+    ],
+    derivedFields: DISPOSAL_DERIVED_FIELDS,
+  });
+
+/** POST /service-orders/:serviceOrderId/offcut-revaluations - AC 5. */
+const postServiceOrderOffcutRevaluationBase: RouteHandler = (req, res, params) =>
+  postOffcutValuationEvent(req, res, params, {
+    eventType: JOBWORK_OFFCUT_REVALUED,
+    idField: 'revaluation_id',
+    callerFields: ['rate', 'currency', 'approved_by'],
+    derivedFields: REVALUATION_DERIVED_FIELDS,
+  });
+
+/**
+ * POST /jobwork/credit-notes/:creditNoteId/acknowledgment - AC 6. The INBOUND ERP acknowledgment,
+ * the 9.6 billing-feed precedent. acknowledged_by is stamped from the authenticated actor and the
+ * applier refuses SOD_VIOLATION when it (or the acting user) is the document's valued_by. There is
+ * deliberately NO finance-controller gate here: the whole point is that a DIFFERENT person
+ * acknowledges.
+ */
+const postCreditNoteAcknowledgmentBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  try {
+    const creditNoteId = requireUuidParam(params, 'creditNoteId');
+    rejectUnacceptedFields(body, [
+      'credit_note_id',
+      'service_order_id',
+      'site_id',
+      'acknowledged_by',
+      'acknowledged_at',
+      'status',
+      'valued_by',
+    ]);
+    const idempotencyKey = requireIdempotencyKey(body);
+    if (
+      typeof body['acknowledged_ref_ext'] !== 'string' ||
+      body['acknowledged_ref_ext'].trim() === ''
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'acknowledged_ref_ext (the ERP document number) is required',
+        { field: 'acknowledged_ref_ext' },
+      );
+    }
+
+    // 404-versus-403 collapse: a credit note at a site the caller cannot write is indistinguishable
+    // from a missing one. A retry of a SUCCESSFUL acknowledgment must still replay.
+    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const note = await getCreditNoteById(creditNoteId);
+    let accessDenied = false;
+    if (note) {
+      try {
+        assertSiteWriteAccess(req, note.site_id);
+      } catch (err) {
+        if (err instanceof AppError && err.errorCode === 'LOCATION_ACCESS_DENIED') {
+          accessDenied = true;
+        } else {
+          throw err;
+        }
+      }
+    }
+    if ((!note || accessDenied) && !isRetry) {
+      throw new AppError(404, 'NOT_FOUND', 'Credit note not found', {
+        credit_note_id: creditNoteId,
+      });
+    }
+    if (!note || accessDenied) {
+      throw new AppError(404, 'NOT_FOUND', 'Credit note not found', {
+        credit_note_id: creditNoteId,
+      });
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: note.service_order_id,
+        event_type: JOBWORK_CREDIT_NOTE_ACKNOWLEDGED,
+        payload: {
+          credit_note_id: creditNoteId,
+          service_order_id: note.service_order_id,
+          site_id: note.site_id,
+          acknowledged_ref_ext: (body['acknowledged_ref_ext'] as string).trim(),
+          acknowledged_by: actor.userId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+    const persistedId = replayIdOrReject(
+      persisted,
+      JOBWORK_CREDIT_NOTE_ACKNOWLEDGED,
+      'credit_note_id',
+    );
+    const updated = await getCreditNoteById(persistedId);
+    if (updated) assertSiteWriteAccess(req, updated.site_id);
+    sendJson(res, 200, {
+      event_id: persisted.event_id,
+      credit_note_id: persistedId,
+      credit_note: updated,
+    });
+  } catch (err: unknown) {
+    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+      await auditFailSafe(req, actor, err, {
+        credit_note_id: params?.['creditNoteId'] ?? null,
+        event_type: JOBWORK_CREDIT_NOTE_ACKNOWLEDGED,
+      });
+    }
+    sendAppError(req, res, err);
+  }
+};
+
+/** GET /service-orders/:serviceOrderId/offcut-holdings - the ledger plus its credit-note trail. */
+const listServiceOrderOffcutHoldingsBase: RouteHandler = async (req, res, params) => {
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    const order = await readableOrderOr404(req, res, serviceOrderId);
+    if (!order) return;
+    const holdings = await listOffcutHoldingsByOrder(serviceOrderId);
+    const credit_notes = await listCreditNotesByOrder(serviceOrderId);
+    sendJson(res, 200, {
+      service_order_id: serviceOrderId,
+      customer_party_code: order.customer_party_code,
+      holdings,
+      credit_notes,
+    });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
 export const createServiceOrderHandler = requireRole({
   module: 'jobwork',
   functionScope: 'write',
@@ -1759,3 +2152,23 @@ export const getJobworkBillingReconciliationReportHandler = requireRole({
   module: 'jobwork',
   functionScope: 'read',
 })(getJobworkBillingReconciliationReportBase);
+
+export const postServiceOrderOffcutDisposalHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderOffcutDisposalBase);
+
+export const postServiceOrderOffcutRevaluationHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postServiceOrderOffcutRevaluationBase);
+
+export const postCreditNoteAcknowledgmentHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(postCreditNoteAcknowledgmentBase);
+
+export const listServiceOrderOffcutHoldingsHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'read',
+})(listServiceOrderOffcutHoldingsBase);

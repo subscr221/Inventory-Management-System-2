@@ -561,6 +561,12 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/service-orders/:serviceOrderId/billing-feed',
       'POST /api/v1/jobwork/billing-feeds/:feedId/acknowledgment',
       'GET /api/v1/jobwork/reports/billing-reconciliation',
+      // Story 9.7: offcut disposal, revaluation, the credit-note acknowledgment and the holding read
+      // (FR-JW-09/10, FR-JW-12).
+      'POST /api/v1/service-orders/:serviceOrderId/offcut-disposals',
+      'POST /api/v1/service-orders/:serviceOrderId/offcut-revaluations',
+      'POST /api/v1/jobwork/credit-notes/:creditNoteId/acknowledgment',
+      'GET /api/v1/service-orders/:serviceOrderId/offcut-holdings',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

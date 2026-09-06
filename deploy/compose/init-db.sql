@@ -12856,6 +12856,27 @@ CREATE INDEX IF NOT EXISTS idx_job_work_offcut_holding_site ON job_work_offcut_h
 -- add-if-absent guard sees the OLD constraint present and silently skips the ALTER, so widening the
 -- disposition vocabulary later would keep being rejected on every already-migrated database while
 -- this file claimed otherwise.
+-- Story 9.7 (FR-JW-09/10, FR-JW-12): the DISPOSAL facts. Every one of these is NULL for as long as
+-- status = 'retained'; they are written together, once, by the disposal applier
+-- (src/compliance/jobwork-offcut-disposal.ts) and the acquisition value is later CORRECTED in place
+-- by a revaluation while the immutable document trail lives in job_work_credit_note. Money is
+-- NUMERIC(18,4) like every other Epic 9 money column; quantities stay NUMERIC(18,3).
+--
+-- `indicative_rate` is the offcut contract's rate copied off the order at disposal, stored BESIDE
+-- the negotiated `disposal_rate` so the variance is visible on the credit note and the reports. No
+-- tolerance is applied to that variance and nothing is refused on rate (the 2026-09-05 ruling that
+-- withdrew the 9.6 band): the control over the rate is the segregation of duties on the credit
+-- note's acknowledgment plus the DOA second signature above the band, not an arithmetic bound.
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS disposed_by UUID;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS disposal_rate NUMERIC(18,4);
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS indicative_rate NUMERIC(18,4);
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS disposal_currency TEXT;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS disposal_value NUMERIC(18,4);
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS approved_by UUID;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS doa_entry_id UUID;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS return_challan_number_ext TEXT;
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS owned_lot_id TEXT;
+
 DO $$
 BEGIN
   ALTER TABLE job_work_offcut_holding DROP CONSTRAINT IF EXISTS chk_job_work_offcut_holding_status;
@@ -12869,11 +12890,29 @@ BEGIN
     ADD CONSTRAINT chk_job_work_offcut_holding_disposition CHECK (
       disposition IS NULL OR disposition IN ('returned','acquired')
     );
+  -- Story 9.7: widened by DROP-then-ADD, this file's own stated rule. `disposed_by` joins the
+  -- biconditional (a disposed row that names nobody is an unattributable statutory decision), and
+  -- each disposition now carries its own mandatory shape: `acquired` is a purchase and must price
+  -- itself, `returned` is a movement back to the customer under a challan and must never carry a
+  -- price. A free retention is `acquired` at a rate of exactly zero, which satisfies the non-null
+  -- money legs - it is not a third disposition (BSD-5).
   ALTER TABLE job_work_offcut_holding DROP CONSTRAINT IF EXISTS chk_job_work_offcut_holding_lifecycle;
   ALTER TABLE job_work_offcut_holding
     ADD CONSTRAINT chk_job_work_offcut_holding_lifecycle CHECK (
       (status = 'disposed') = (
         disposed_at IS NOT NULL AND disposition IS NOT NULL AND disposal_event_id IS NOT NULL
+          AND disposed_by IS NOT NULL
+      )
+      AND (
+        disposition IS DISTINCT FROM 'acquired'
+        OR (disposal_rate IS NOT NULL AND disposal_currency IS NOT NULL AND disposal_value IS NOT NULL)
+      )
+      AND (
+        disposition IS DISTINCT FROM 'returned'
+        OR (
+          disposal_rate IS NULL AND disposal_currency IS NULL AND disposal_value IS NULL
+            AND return_challan_number_ext IS NOT NULL
+        )
       )
     );
 END $$;
@@ -12885,5 +12924,116 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON job_work_offcut_holding TO readonly_user;
+  END IF;
+END $$;
+
+-- Job-work offcut credit notes (Story 9.7, FR-JW-09/10, FR-JW-12). MIRROR COPY for first-boot
+-- container init: the CANONICAL definition is read/projections/job_work_credit_note.sql, applied
+-- by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. Change both
+-- files together; test/unit/schema-drift.test.ts fails the build when they diverge.
+--
+-- WHAT A CREDIT NOTE IS HERE. When the processor ACQUIRES contractual offcut, title transfers and
+-- the processor owes the customer the acquisition value. That value is billed as a CREDIT NOTE
+-- against the service invoice already raised for the order - never as a line on the service billing
+-- feed, which the 2026-09-05 reversal deliberately stopped waiting for the offcut so that finished
+-- work invoices on time. `cited_invoice_ref_ext` is the ERP document reference of that service
+-- invoice, taken from job_work_billing_feed.acknowledged_ref_ext.
+--
+-- THAT CITATION IS NOT AN IDENTITY. The 9.6 code review ruled acknowledged_ref_ext deliberately
+-- NON-unique because one consolidated ERP invoice may legitimately cover several job-work orders,
+-- and this table is the first consumer of that ruling. Both `cited_invoice_ref_ext` and this
+-- table's own `acknowledged_ref_ext` are therefore PLAINLY indexed, never uniquely: tightening
+-- either would refuse a legitimate consolidated document.
+--
+-- CORRECTIONS ARE DELTAS, NEVER MUTATIONS (AC 5, the 9.6 feed-header ruling carried forward). A
+-- revalued acquisition raises a second row with document_kind = 'delta', supersedes_credit_note_id
+-- pointing at the row it corrects and delta_value carrying the SIGNED difference (negative when the
+-- rate is revised down). The original is never updated and an acknowledged delta is never updated
+-- either: once ERP has ingested a document, changing it here would silently disagree with the
+-- customer's books. A second revaluation chains off the LATEST delta. There is deliberately no
+-- `void` and no `exception` state - `pending` and `acknowledged` are the whole lifecycle.
+--
+-- THE ACKNOWLEDGMENT IS THE CONTROL OVER THE RATE (AC 6). The 2026-09-05 ruling removed the rate
+-- tolerance band, so nothing arithmetic constrains what the finance controller may write as the
+-- acquisition rate. What constrains it is that the person who set the rate (`valued_by`) may not
+-- acknowledge the document that bills it; the applier refuses SOD_VIOLATION. That guard carries the
+-- entire control and must not be weakened or made configurable.
+
+CREATE TABLE IF NOT EXISTS job_work_credit_note (
+  credit_note_id            UUID PRIMARY KEY,
+  service_order_id          UUID NOT NULL,
+  holding_id                UUID NOT NULL,
+  document_kind             TEXT NOT NULL,
+  supersedes_credit_note_id UUID,
+  cited_invoice_ref_ext     TEXT NOT NULL,
+  rate                      NUMERIC(18,4) NOT NULL,
+  indicative_rate           NUMERIC(18,4),
+  currency                  TEXT NOT NULL,
+  value                     NUMERIC(18,4) NOT NULL,
+  delta_value               NUMERIC(18,4),
+  status                    TEXT NOT NULL DEFAULT 'pending',
+  acknowledged_at           TIMESTAMPTZ,
+  acknowledged_by           UUID,
+  acknowledged_ref_ext      TEXT,
+  valued_by                 UUID NOT NULL,
+  site_id                   UUID NOT NULL,
+  source_event_id           UUID NOT NULL,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_job_work_credit_note_kind CHECK (document_kind IN ('original','delta')),
+  CONSTRAINT chk_job_work_credit_note_status CHECK (status IN ('pending','acknowledged')),
+  CONSTRAINT chk_job_work_credit_note_chain CHECK (
+    (document_kind = 'delta') = (supersedes_credit_note_id IS NOT NULL AND delta_value IS NOT NULL)
+  ),
+  CONSTRAINT chk_job_work_credit_note_lifecycle CHECK (
+    (status = 'acknowledged') = (
+      acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledged_ref_ext IS NOT NULL
+    )
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_credit_note_source_event ON job_work_credit_note (source_event_id);
+CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_order ON job_work_credit_note (service_order_id);
+CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_holding ON job_work_credit_note (holding_id);
+-- Both reference columns are CITATIONS of ERP documents, not identities of these rows: one
+-- consolidated ERP invoice may be cited by several credit notes, and one ERP credit-note number may
+-- acknowledge several of these rows. Plain indexes, never unique (the 9.6 group-A ruling).
+CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_cited_ref ON job_work_credit_note (cited_invoice_ref_ext);
+CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_ack_ref ON job_work_credit_note (acknowledged_ref_ext);
+CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_site ON job_work_credit_note (site_id);
+
+-- DROP-then-ADD, not add-if-absent (the bom_line chk_bom_line_supply_method precedent): an
+-- add-if-absent guard sees the OLD constraint present and silently skips the ALTER, so any future
+-- widening would keep being rejected on every already-migrated database while this file claimed
+-- otherwise.
+DO $$
+BEGIN
+  ALTER TABLE job_work_credit_note DROP CONSTRAINT IF EXISTS chk_job_work_credit_note_kind;
+  ALTER TABLE job_work_credit_note
+    ADD CONSTRAINT chk_job_work_credit_note_kind CHECK (document_kind IN ('original','delta'));
+  ALTER TABLE job_work_credit_note DROP CONSTRAINT IF EXISTS chk_job_work_credit_note_status;
+  ALTER TABLE job_work_credit_note
+    ADD CONSTRAINT chk_job_work_credit_note_status CHECK (status IN ('pending','acknowledged'));
+  ALTER TABLE job_work_credit_note DROP CONSTRAINT IF EXISTS chk_job_work_credit_note_chain;
+  ALTER TABLE job_work_credit_note
+    ADD CONSTRAINT chk_job_work_credit_note_chain CHECK (
+      (document_kind = 'delta') = (supersedes_credit_note_id IS NOT NULL AND delta_value IS NOT NULL)
+    );
+  ALTER TABLE job_work_credit_note DROP CONSTRAINT IF EXISTS chk_job_work_credit_note_lifecycle;
+  ALTER TABLE job_work_credit_note
+    ADD CONSTRAINT chk_job_work_credit_note_lifecycle CHECK (
+      (status = 'acknowledged') = (
+        acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledged_ref_ext IS NOT NULL
+      )
+    );
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON job_work_credit_note TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON job_work_credit_note TO readonly_user;
   END IF;
 END $$;

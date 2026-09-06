@@ -379,6 +379,10 @@ import {
   patchReturnClockClassificationHandler,
   getJobworkItc04ReportHandler,
   getJobworkAgingReportHandler,
+  postServiceOrderOffcutDisposalHandler,
+  postServiceOrderOffcutRevaluationHandler,
+  postCreditNoteAcknowledgmentHandler,
+  listServiceOrderOffcutHoldingsHandler,
 } from './api/v1/service-orders.js';
 import {
   createProductionOrderHandler,
@@ -1069,6 +1073,13 @@ export function createAppRouter(): Router {
     '/api/v1/jobwork/billing-feeds/:feedId/acknowledgment',
     postBillingFeedAcknowledgmentHandler,
   );
+  // Story 9.7: the offcut credit-note acknowledgment. STATIC '/jobwork/credit-notes/...' registered
+  // here, before every parameterised '/service-orders/:serviceOrderId/...' route below, for the same
+  // recorded reason as the two blocks above.
+  router.post(
+    '/api/v1/jobwork/credit-notes/:creditNoteId/acknowledgment',
+    postCreditNoteAcknowledgmentHandler,
+  );
   // Story 9.1: job-work service orders (FR-JW-01, FR-JW-02, FR-B-16). Create/update/confirm only
   // (BSD-2): in_process is fired by Story 9.2's first customer-material receipt; closed is
   // reachable only through the Story 9.5 closure gate.
@@ -1114,6 +1125,20 @@ export function createAppRouter(): Router {
   router.post(
     '/api/v1/service-orders/:serviceOrderId/billing-feed',
     postServiceOrderBillingFeedHandler,
+  );
+  // Story 9.7: offcut disposal and revaluation (jobwork stream, FR-JW-09/10, FR-JW-12), plus the
+  // holding-ledger read. Both write routes additionally require the finance_controller role.
+  router.post(
+    '/api/v1/service-orders/:serviceOrderId/offcut-disposals',
+    postServiceOrderOffcutDisposalHandler,
+  );
+  router.post(
+    '/api/v1/service-orders/:serviceOrderId/offcut-revaluations',
+    postServiceOrderOffcutRevaluationHandler,
+  );
+  router.get(
+    '/api/v1/service-orders/:serviceOrderId/offcut-holdings',
+    listServiceOrderOffcutHoldingsHandler,
   );
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the

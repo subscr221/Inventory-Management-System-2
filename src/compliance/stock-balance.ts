@@ -14,7 +14,12 @@ import {
   OWNER_PARTY_CODE_REGEX,
 } from './ownership.js';
 import { assertJobworkReceiptOwnership } from './jobwork-receipt.js';
-import { isCustodyConsumptionHandoff, isCustodyReturnHandoff } from './custody-ledger.js';
+import {
+  isCustodyConsumptionHandoff,
+  isCustodyOffcutCaptureHandoff,
+  isCustodyOffcutDisposalHandoff,
+  isCustodyReturnHandoff,
+} from './custody-ledger.js';
 
 /**
  * Central stock-balance seam (Story 2.2), split in two because the two halves run at different
@@ -383,17 +388,21 @@ export async function applyStockBalanceProjection(
   // The class was added to two sets and every consumer of the vocabulary was not walked; this is the
   // same omission as the segregationErrorCode mapping fixed the same day.
   //
-  // Offcut gets NO Symbol door. Nothing in Story 9.6 issues offcut stock at all - capture RECEIVES
-  // into the class - so the bar is total with no exemption. Story 9.7's disposal is the first
-  // legitimate issue path and must open its own door on this same mechanism, never a classifier and
-  // never a payload field.
+  // Story 9.7 (FR-JW-09/10): offcut now has exactly ONE door of its own, CUSTODY_OFFCUT_DISPOSAL,
+  // stamped by the disposal applier once the holding row is still `retained`, the disposition is
+  // known and (on `acquired`) the CFO second signature has resolved. It is a THIRD Symbol rather
+  // than a reuse of CUSTODY_RETURN because the two are different physical facts: CUSTODY_RETURN is
+  // job_work material going back under a Rule 45 challan, and letting it open the offcut class would
+  // mean the 9.5 return path could drain retained offcut without ever meeting a disposal gate.
+  // Each class therefore admits only its own Symbol - allocation is still barred for both.
   if (
     CUSTOMER_OWNED_STOCK_CLASSES.has(stockClass) &&
     (kind === 'allocation' || kind === 'issue') &&
     !(
       kind === 'issue' &&
-      stockClass === JOB_WORK_STOCK_CLASS &&
-      (isCustodyConsumptionHandoff(envelope) || isCustodyReturnHandoff(envelope))
+      ((stockClass === JOB_WORK_STOCK_CLASS &&
+        (isCustodyConsumptionHandoff(envelope) || isCustodyReturnHandoff(envelope))) ||
+        (stockClass === OFFCUT_STOCK_CLASS && isCustodyOffcutDisposalHandoff(envelope)))
     )
   ) {
     throw new AppError(
@@ -449,14 +458,16 @@ export async function applyStockBalanceProjection(
         segregationErrorCode(existingClass),
         existingClass === JOB_WORK_STOCK_CLASS
           ? 'This lot already holds segregated customer-owned (job_work) material and cannot gain an owned balance'
-          : 'This lot already holds a non-saleable prototype balance and cannot be moved to owned stock',
+          : existingClass === OFFCUT_STOCK_CLASS
+            ? 'This lot already holds segregated customer-owned (offcut) material awaiting disposal and cannot gain an owned balance'
+            : 'This lot already holds a non-saleable prototype balance and cannot be moved to owned stock',
         {
           sku,
           stock_class: stockClass,
           lot_id: lotId,
           location_id: location.location_id,
           existing_stock_class: existingClass,
-          ...(existingClass === JOB_WORK_STOCK_CLASS ? { demand_kind: kind } : {}),
+          ...(CUSTOMER_OWNED_STOCK_CLASSES.has(existingClass) ? { demand_kind: kind } : {}),
         },
       );
     }
@@ -492,14 +503,16 @@ export async function applyStockBalanceProjection(
         segregationErrorCode(conflictClass),
         conflictClass === JOB_WORK_STOCK_CLASS
           ? `This lot already holds a ${existingClass} balance and cannot receive ${stockClass} stock (customer-owned material is segregated at lot level)`
-          : 'This lot already holds a saleable-class balance and cannot receive prototype stock',
+          : conflictClass === OFFCUT_STOCK_CLASS
+            ? `This lot already holds a ${existingClass} balance and cannot receive offcut stock (customer-owned offcut material is segregated at lot level)`
+            : 'This lot already holds a saleable-class balance and cannot receive prototype stock',
         {
           sku,
           stock_class: stockClass,
           lot_id: lotId,
           location_id: location.location_id,
           existing_stock_class: existingClass,
-          ...(conflictClass === JOB_WORK_STOCK_CLASS ? { demand_kind: kind } : {}),
+          ...(CUSTOMER_OWNED_STOCK_CLASSES.has(conflictClass) ? { demand_kind: kind } : {}),
         },
       );
     }
@@ -520,6 +533,25 @@ export async function applyStockBalanceProjection(
     // owner_party_code equal to that order's customer_party_code - the same choke point, so a
     // direct stock.received cannot mint unattributed customer stock either.
     await assertJobworkReceiptOwnership(envelope, stockClass, sku, location.location_id, client);
+    // Story 9.6 code review (2026-09-06): offcut-class receipts are not a free surface either.
+    // Only the capture seam may receive into the class - it drains custody, writes the holding row
+    // and stamps the CUSTODY_OFFCUT_CAPTURE Symbol on this same receipt view. Without this gate a
+    // bare stock.received, a GRN line or an edge upload carrying stock_class 'offcut' could mint
+    // phantom customer offcut that no Story 9.7 disposal will ever see (the job_work lesson,
+    // applied to the class this story widened the vocabulary with).
+    if (stockClass === OFFCUT_STOCK_CLASS && !isCustodyOffcutCaptureHandoff(envelope)) {
+      throw new AppError(
+        409,
+        'SOURCE_DOCUMENT_REQUIRED',
+        'Customer material (stock_class offcut) can only be received by the offcut capture flow (POST /api/v1/service-orders/:id/offcuts)',
+        {
+          sku,
+          location_id: location.location_id,
+          stock_class: stockClass,
+          lot_id: lotId,
+        },
+      );
+    }
     await applyStockReceipt(
       {
         sku,

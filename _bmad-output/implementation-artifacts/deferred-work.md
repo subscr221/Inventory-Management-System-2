@@ -571,3 +571,10 @@ Table 8: Folded duplicates
 | 733 | 8-8 | `governing_role` and `delegation_applied` are captured on the waiver payload and stored, but only `approver_user_id` and `doa_entry_id` are compared on apply... | Same root as line 706 (DOA layer off-transaction, single-hop, amount-agnostic). |
 | 748 | 9-4 | `resolveApprover` (called from `applyCustodyLossProjection`, src/compliance/custody-ledger.ts:853) runs on a second pooled connection outside the projection ... | Same root as line 706. |
 | 762 | 9-5 | FIFO deliberately includes breached clocks so the closure gate stays reachable, and `deemed_supply_qty` is deliberately frozen at breach (both Debug Log 3). ... | Same root as line 761 (allocation policy). |
+
+## Deferred from: code review (2026-09-06) of story 9.6
+
+| Ref | Story | Item | Trigger or note |
+| --- | --- | --- | --- |
+| 9.6C-1 | 9-6 | The reconciliation report does not surface duplicate acknowledged_ref_ext entries although the ack-ref index exists to serve that lookup (read/projections/job_work_billing_feed.sql:79-85, src/read/projections/job_work_billing_feed.ts:199-229). One consolidated ERP invoice legitimately acknowledges several orders, so the report needs a duplicate-ref count | Group C code review 2026-09-06, consciously deferred reconciliation follow-up |
+| 9.6C-2 | 9-6 | Cycle-count variance adjustments can mutate an offcut-class balance and silently desync job_work_offcut_holding (src/compliance/cycle-count.ts). Mirrors the pre-existing job_work count behavior | Needs the Story 9.7 disposal reconciliation ruling |

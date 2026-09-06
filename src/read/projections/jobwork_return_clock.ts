@@ -174,7 +174,21 @@ export async function listReturnClocksDueForSweep(
   const result = await client.query(
     `SELECT ${REPORT_SELECT} ${REPORT_FROM}
       WHERE c.status IN ('open', 'partially_reconciled')
-        AND o.status <> 'closed'
+        -- Story 9.7 AC 8: a closed order is normally out of scope - Story 9.5 closes only on a zero
+        -- custody balance, so nothing is left to chase. Contractual OFFCUT is the exception, and it
+        -- is the exception by design: capture drains the custody balance (which is what let the
+        -- order close) while the material stays the CUSTOMER'S and its Section 143 clock keeps
+        -- running. Without this arm, offcut retained past closure would age silently to a deemed
+        -- supply nobody was ever told about.
+        AND (
+          o.status <> 'closed'
+          OR EXISTS (
+            SELECT 1 FROM job_work_offcut_holding h
+             WHERE h.service_order_id = c.service_order_id
+               AND h.sku = c.sku
+               AND h.status = 'retained'
+          )
+        )
         AND (
           c.expiry_date < $1::date
           OR (c.expiry_date <= $1::date + $3::int AND c.alert_30_sent_at IS NULL)

@@ -1861,6 +1861,37 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 9.7: the offcut credit note - the original / delta document chain with an acknowledgment
+  // lifecycle. Both reference columns are citations of ERP documents and their indexes must stay
+  // PLAIN: a UNIQUE index on either would refuse a legitimate consolidated ERP invoice, which is
+  // exactly the ruling the 9.6 group-A review made for this table.
+  {
+    canonical: 'read/projections/job_work_credit_note.sql',
+    table: 'job_work_credit_note',
+    constraints: [
+      'chk_job_work_credit_note_kind',
+      'chk_job_work_credit_note_status',
+      'chk_job_work_credit_note_chain',
+      'chk_job_work_credit_note_lifecycle',
+    ],
+    indexes: [
+      'uq_job_work_credit_note_source_event',
+      'idx_job_work_credit_note_order',
+      'idx_job_work_credit_note_holding',
+      'idx_job_work_credit_note_cited_ref',
+      'idx_job_work_credit_note_ack_ref',
+      'idx_job_work_credit_note_site',
+    ],
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_credit_note_source_event ON job_work_credit_note (source_event_id)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_order ON job_work_credit_note (service_order_id)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_holding ON job_work_credit_note (holding_id)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_cited_ref ON job_work_credit_note (cited_invoice_ref_ext)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_ack_ref ON job_work_credit_note (acknowledged_ref_ext)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_site ON job_work_credit_note (site_id)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
   // Notification projections (read/projections/notification.sql), previously unpinned. The uq_*
   // UNIQUE constraints are inline in CREATE TABLE (no guarded DO block), so the table-body
   // comparison covers them.
@@ -1930,6 +1961,51 @@ describe('Story 2.1 schema drift guard', () => {
       );
       assert.ok(initDb.includes(fragment), `init-db.sql backfill mirror missing: ${fragment}`);
     }
+  });
+
+  // Story 9.7: the eight standalone ADD COLUMN statements carrying the disposal facts onto
+  // job_work_offcut_holding, plus the widened lifecycle CHECK. Standalone statements are exactly the
+  // case the generic CREATE TABLE comparison above cannot see, and a container booted from
+  // init-db.sql alone would have a holding ledger with nowhere to record a disposal.
+  it('Story 9.7 mirrors the offcut disposal columns and the widened lifecycle CHECK into init-db.sql', () => {
+    const holdingSql = read('read/projections/job_work_offcut_holding.sql');
+    for (const column of [
+      'ADD COLUMN IF NOT EXISTS disposed_by UUID',
+      'ADD COLUMN IF NOT EXISTS disposal_rate NUMERIC(18,4)',
+      'ADD COLUMN IF NOT EXISTS indicative_rate NUMERIC(18,4)',
+      'ADD COLUMN IF NOT EXISTS disposal_currency TEXT',
+      'ADD COLUMN IF NOT EXISTS disposal_value NUMERIC(18,4)',
+      'ADD COLUMN IF NOT EXISTS approved_by UUID',
+      'ADD COLUMN IF NOT EXISTS doa_entry_id UUID',
+      'ADD COLUMN IF NOT EXISTS return_challan_number_ext TEXT',
+      'ADD COLUMN IF NOT EXISTS owned_lot_id TEXT',
+    ]) {
+      const statement = `ALTER TABLE job_work_offcut_holding ${column};`;
+      assert.ok(holdingSql.includes(statement), `job_work_offcut_holding.sql missing: ${statement}`);
+      assert.ok(initDb.includes(statement), `init-db.sql missing the upgrade path: ${statement}`);
+    }
+    // The disposition-specific legs are the whole semantic content of the widened constraint: a
+    // name-only match stays green if `acquired` stops having to price itself.
+    for (const fragment of [
+      "disposition IS DISTINCT FROM 'acquired'",
+      'disposal_rate IS NOT NULL AND disposal_currency IS NOT NULL AND disposal_value IS NOT NULL',
+      "disposition IS DISTINCT FROM 'returned'",
+      'disposal_rate IS NULL AND disposal_currency IS NULL AND disposal_value IS NULL',
+      'AND disposed_by IS NOT NULL',
+    ]) {
+      assert.ok(
+        holdingSql.includes(fragment),
+        `job_work_offcut_holding.sql lifecycle CHECK missing: ${fragment}`,
+      );
+      assert.ok(initDb.includes(fragment), `init-db.sql lifecycle CHECK mirror missing: ${fragment}`);
+    }
+  });
+
+  it('Story 9.7 registers job_work_credit_note.sql in the MIGRATIONS list', () => {
+    assert.ok(
+      migrateSource.includes("'../../read/projections/job_work_credit_note.sql'"),
+      'migrate.ts must apply the credit-note projection',
+    );
   });
 
   // Story 9.6 code review (group A): six standalone ADD COLUMN statements on service_order, invisible
