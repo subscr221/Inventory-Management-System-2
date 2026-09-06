@@ -120,7 +120,15 @@ function stockEnvelope(
     stream_type: 'inventory',
     stream_id: extra.stream_id ?? randomUUID(),
     event_type: eventType,
-    payload: { business_stream: 'production', ...payload },
+    payload: {
+      business_stream: 'production',
+      // Story 2.4 (Ind AS 2) made issuing a FIFO-valued item consume cost layers, and a receipt
+      // only opens a layer when it carries a cost. These fixtures pre-date that, so every receipt
+      // here defaults to a unit cost; without one the stock exists but cannot be issued and the
+      // failure surfaces far away as INSUFFICIENT_FIFO_COST_LAYERS.
+      ...(eventType === 'stock.received' ? { unit_cost: 1 } : {}),
+      ...payload,
+    },
     metadata: {
       correlation_id: randomUUID(),
       actor: {
@@ -278,7 +286,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(selectRes.status, 200);
+    assert.strictEqual(selectRes.status, 200, JSON.stringify(selectRes.body));
     assert.strictEqual(selectRes.body['lot_number'], lot1Number);
 
     const issueRes = await makeRequest(
@@ -298,7 +306,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(issueRes.status, 201);
+    assert.strictEqual(issueRes.status, 201, JSON.stringify(issueRes.body));
     assert.strictEqual((issueRes.body['payload'] as Record<string, unknown>)['lot_id'], lot1Number);
   });
 
@@ -338,7 +346,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(issueRes.status, 400);
+    assert.strictEqual(issueRes.status, 400, JSON.stringify(issueRes.body));
     assert.strictEqual(issueRes.body['error_code'], 'LOT_EXPIRED');
     assert.ok(
       issueRes.body['details'] &&
@@ -365,7 +373,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       ),
       operatorHeaders,
     );
-    assert.strictEqual(deniedOverrideRes.status, 403);
+    assert.strictEqual(deniedOverrideRes.status, 403, JSON.stringify(deniedOverrideRes.body));
     assert.strictEqual(deniedOverrideRes.body['error_code'], 'FUNCTION_ACCESS_DENIED');
 
     // Retry through the HTTP layer (not a direct persistEvent bypass) with an actor whose
@@ -388,7 +396,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       ),
       qualityHeaders,
     );
-    assert.strictEqual(overrideRes.status, 201);
+    assert.strictEqual(overrideRes.status, 201, JSON.stringify(overrideRes.body));
     assert.strictEqual(
       (overrideRes.body['payload'] as Record<string, unknown>)['lot_id'],
       expiredLotNumber,
@@ -424,7 +432,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       qualityHeaders,
     );
 
-    assert.strictEqual(holdRes.status, 200);
+    assert.strictEqual(holdRes.status, 200, JSON.stringify(holdRes.body));
     assert.strictEqual(holdRes.body['quality_hold_status'], 'held');
 
     // Attempt issue - should fail
@@ -445,7 +453,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(issueRes.status, 400);
+    assert.strictEqual(issueRes.status, 400, JSON.stringify(issueRes.body));
     assert.strictEqual(issueRes.body['error_code'], 'LOT_ON_HOLD');
     assert.strictEqual(
       (issueRes.body['details'] as Record<string, unknown>)['reason'],
@@ -470,7 +478,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(allocateRes.status, 400);
+    assert.strictEqual(allocateRes.status, 400, JSON.stringify(allocateRes.body));
     assert.strictEqual(allocateRes.body['error_code'], 'LOT_ON_HOLD');
     assert.strictEqual(
       (allocateRes.body['details'] as Record<string, unknown>)['reason'],
@@ -485,7 +493,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       {},
       qualityHeaders,
     );
-    assert.strictEqual(clearRes.status, 200);
+    assert.strictEqual(clearRes.status, 200, JSON.stringify(clearRes.body));
     assert.strictEqual(clearRes.body['quality_hold_status'] as string, 'none');
 
     const retryRes = await makeRequest(
@@ -504,7 +512,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       ),
       operatorHeaders,
     );
-    assert.strictEqual(retryRes.status, 201);
+    assert.strictEqual(retryRes.status, 201, JSON.stringify(retryRes.body));
   });
 
   it('AC4: Lot trace returns all transactions and current balances within 500ms', async () => {
@@ -536,7 +544,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
         operatorHeaders,
       );
       durationsMs.push(performance.now() - startedAt);
-      assert.strictEqual(traceRes.status, 200);
+      assert.strictEqual(traceRes.status, 200, JSON.stringify(traceRes.body));
     }
     durationsMs.sort((a, b) => a - b);
     const p95DurationMs = durationsMs[Math.floor(SAMPLE_COUNT * 0.95) - 1]!;
@@ -588,7 +596,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(issueRes.status, 400);
+    assert.strictEqual(issueRes.status, 400, JSON.stringify(issueRes.body));
     assert.strictEqual(issueRes.body['error_code'], 'SERIAL_REQUIRED');
   });
 
@@ -610,7 +618,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(firstReceipt.status, 201);
+    assert.strictEqual(firstReceipt.status, 201, JSON.stringify(firstReceipt.body));
 
     // Second receipt with same serial should fail
     const dupReceipt = await makeRequest(
@@ -630,7 +638,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(dupReceipt.status, 400);
+    assert.strictEqual(dupReceipt.status, 400, JSON.stringify(dupReceipt.body));
     assert.strictEqual(dupReceipt.body['error_code'], 'DUPLICATE_SERIAL');
     // AC6 requires the location currently holding the serial to be returned, not just the
     // rejection code.
@@ -641,6 +649,12 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
   });
 
   it('FIFO selection picks oldest received lot', async () => {
+    // Triage 2026-09-05: these expiry dates were hardcoded as 2026-12-31 and 2026-08-31. Once the
+    // wall clock passed 2026-08-31 the "early expiry" lot was simply EXPIRED, FEFO correctly
+    // refused to select it, and this test began failing for a reason that had nothing to do with
+    // the code. Dates are now relative to today so the scenario stays true whenever it runs.
+    const daysAhead = (n: number): string =>
+      new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
     await persistEvent(
       stockEnvelope(
         'stock.received',
@@ -649,7 +663,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
           target_location_id: locAId,
           quantity: 20,
           lot_id: 'LOT-FIFO-OLD-LATE-EXPIRY',
-          expiry_date: '2026-12-31',
+          expiry_date: daysAhead(240),
         },
         { actor_location_id: locAId },
       ),
@@ -662,7 +676,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
           target_location_id: locAId,
           quantity: 20,
           lot_id: 'LOT-FIFO-NEW-EARLY-EXPIRY',
-          expiry_date: '2026-08-31',
+          expiry_date: daysAhead(120),
         },
         { actor_location_id: locAId },
       ),
@@ -691,8 +705,8 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(fefoRes.status, 200);
-    assert.strictEqual(fifoRes.status, 200);
+    assert.strictEqual(fefoRes.status, 200, JSON.stringify(fefoRes.body));
+    assert.strictEqual(fifoRes.status, 200, JSON.stringify(fifoRes.body));
     assert.strictEqual(fefoRes.body['lot_number'], 'LOT-FIFO-NEW-EARLY-EXPIRY');
     assert.strictEqual(fifoRes.body['lot_number'], 'LOT-FIFO-OLD-LATE-EXPIRY');
   });
@@ -722,7 +736,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(receiptRes.status, 201);
+    assert.strictEqual(receiptRes.status, 201, JSON.stringify(receiptRes.body));
 
     const projection = await getPool().query(
       'SELECT serial_number, current_location_id, current_quantity FROM serial_master WHERE serial_number = ANY($1::text[]) ORDER BY serial_number',
@@ -759,7 +773,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       operatorHeaders,
     );
 
-    assert.strictEqual(invalidRes.status, 400);
+    assert.strictEqual(invalidRes.status, 400, JSON.stringify(invalidRes.body));
     assert.strictEqual(invalidRes.body['error_code'], 'DUPLICATE_SERIAL');
   });
 
@@ -779,11 +793,23 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
     );
 
     const firstRes = await makeRequest(port, 'POST', '/api/v1/events', event, operatorHeaders);
-    assert.strictEqual(firstRes.status, 201);
+    assert.strictEqual(firstRes.status, 201, JSON.stringify(firstRes.body));
 
+    // Triage 2026-09-05: the REST replay contract is 2xx returning the ORIGINAL event, not 409.
+    // Deferred-work ledger 499 records the decision ("REST replay returns 200 with the original
+    // result; edge keeps 409 DUPLICATE_EVENT") and normalising 201 to 200 across every write
+    // handler is still the open platform story - so this asserts the behaviour that actually
+    // matters and is actually implemented: the replay returns the SAME event and applies once.
     const retryRes = await makeRequest(port, 'POST', '/api/v1/events', event, operatorHeaders);
-    assert.strictEqual(retryRes.status, 409);
-    assert.strictEqual(retryRes.body['error_code'], 'DUPLICATE_EVENT');
+    assert.ok(
+      retryRes.status === 200 || retryRes.status === 201,
+      `replay must be 2xx: ${JSON.stringify(retryRes.body)}`,
+    );
+    assert.strictEqual(
+      retryRes.body['event_id'],
+      firstRes.body['event_id'],
+      'a replay must return the original event, never mint a second',
+    );
 
     // Prove the rejected retry did not re-apply the lot/stock-balance projections - exactly one
     // lot row and exactly one receipt's worth of on_hand, not two (Story 2.3 re-review).
@@ -818,7 +844,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       ),
       operatorHeaders,
     );
-    assert.strictEqual(receiptRes.status, 201);
+    assert.strictEqual(receiptRes.status, 201, JSON.stringify(receiptRes.body));
 
     // Sum of serial current_quantity (2 x 1) must equal the issue's payload.quantity.
     const issueRes = await makeRequest(
@@ -837,7 +863,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       ),
       operatorHeaders,
     );
-    assert.strictEqual(issueRes.status, 201);
+    assert.strictEqual(issueRes.status, 201, JSON.stringify(issueRes.body));
 
     const projection = await getPool().query(
       'SELECT current_location_id, current_quantity FROM serial_master WHERE serial_number = ANY($1::text[])',
@@ -886,7 +912,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       ),
       operatorHeaders,
     );
-    assert.strictEqual(mismatchRes.status, 400);
+    assert.strictEqual(mismatchRes.status, 400, JSON.stringify(mismatchRes.body));
     assert.strictEqual(mismatchRes.body['error_code'], 'INVALID_PARAMS');
   });
 
@@ -911,7 +937,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       ),
       operatorHeaders,
     );
-    assert.strictEqual(receiveRes.status, 400);
+    assert.strictEqual(receiveRes.status, 400, JSON.stringify(receiveRes.body));
     assert.strictEqual(receiveRes.body['error_code'], 'LOT_REQUIRED');
 
     const issueRes = await makeRequest(
@@ -929,7 +955,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       ),
       operatorHeaders,
     );
-    assert.strictEqual(issueRes.status, 400);
+    assert.strictEqual(issueRes.status, 400, JSON.stringify(issueRes.body));
     assert.strictEqual(issueRes.body['error_code'], 'LOT_REQUIRED');
   });
 
@@ -958,7 +984,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       },
       qualityHeaders,
     );
-    assert.strictEqual(holdRes.status, 200);
+    assert.strictEqual(holdRes.status, 200, JSON.stringify(holdRes.body));
 
     const traceRes = await makeRequest(
       port,
@@ -967,7 +993,7 @@ describe('Story 2.3 Lot, Batch, and Serial Traceability Integration Tests', () =
       {},
       operatorHeaders,
     );
-    assert.strictEqual(traceRes.status, 200);
+    assert.strictEqual(traceRes.status, 200, JSON.stringify(traceRes.body));
     const trace = traceRes.body['trace'] as Array<Record<string, unknown>>;
     // The hold was placed by a wildcard-scoped quality officer, so its trace row carries a null
     // location. It must still appear in the recall trace for a wildcard-scoped reader; filtering

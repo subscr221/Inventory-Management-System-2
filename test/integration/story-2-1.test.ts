@@ -874,8 +874,12 @@ describe('Story 2.1 Item Master and Location Register Integration Tests', () => 
       ),
       adminHeaders,
     );
-    assert.strictEqual(duplicate.status, 409, JSON.stringify(duplicate.body));
-    assert.strictEqual(duplicate.body['error_code'], 'DUPLICATE_EVENT');
+    // Triage 2026-09-05: replay is 2xx returning the ORIGINAL event, not 409 (deferred-work
+    // ledger 499). The exactly-once assertion below is the one that carries this AC.
+    assert.ok(
+      duplicate.status === 200 || duplicate.status === 201,
+      `replay must be 2xx: ${JSON.stringify(duplicate.body)}`,
+    );
     assert.strictEqual(
       await domainEventCount(streamId),
       1,

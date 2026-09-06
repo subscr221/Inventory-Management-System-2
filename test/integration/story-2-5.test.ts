@@ -291,8 +291,12 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     onHand: number,
     lotId: string | null,
   ): Promise<void> {
+    // stock_balance.lot_id carries the lot NUMBER (TEXT), not the lot_master UUID - see the bridge
+    // comment at src/compliance/transfer-request.ts:30. Seeding the UUID here made every allocation
+    // read available_quantity 0 and cascaded through this whole file.
     await getPool().query(
-      `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand) VALUES ($1, $2, $3, 'owned', $4)`,
+      `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand)
+       VALUES ($1, $2, (SELECT lot_number FROM lot_master WHERE lot_id = $3::uuid), 'owned', $4)`,
       [sku, locationId, lotId, onHand],
     );
   }
@@ -302,9 +306,13 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     locationId: string,
     lotId: string | null,
   ): Promise<{ on_hand: number; allocated: number; in_transit: number; available: number } | null> {
+    // Same lot-identity rule as seedStock: stock_balance.lot_id is the lot NUMBER, so a caller
+    // holding the lot_master UUID has to bridge through lot_master to read its own row back.
     const r = await getPool().query(
       `SELECT on_hand, allocated, in_transit, available FROM stock_balance
-       WHERE sku = $1 AND location_id = $2 AND ($3::text IS NULL OR lot_id = $3)`,
+       WHERE sku = $1 AND location_id = $2
+         AND ($3::text IS NULL
+              OR lot_id = (SELECT lot_number FROM lot_master WHERE lot_id = $3::uuid))`,
       [sku, locationId, lotId],
     );
     if (r.rows.length === 0) return null;

@@ -408,34 +408,36 @@ describe('Story 3.10 Tasks 3-5 cross-dock transaction', () => {
     const identicalClient = await getPool().connect();
     try {
       await identicalClient.query('BEGIN');
-      await assert.rejects(
-        persistEvent(
-          {
-            event_id: completionEventId,
-            stream_type: 'warehouse',
-            stream_id: taskId,
-            event_type: 'cross_dock_task.completed',
-            payload: {
-              cross_dock_task_id: taskId,
-              to_location_id: stagingBinId,
-              pick_task_id: pickTaskId,
-              pick_line_id: pickLineId,
-            },
-            metadata: {
-              correlation_id: correlationId,
-              actor: actor(operatorId, 'warehouse_operator'),
-              device_id: `DEV-${run}`,
-              occurred_at: completedAt,
-            },
+      // Triage 2026-09-05: an identical replay no longer THROWS DUPLICATE_EVENT - persistEvent
+      // returns the ORIGINAL event instead (deferred-work ledger 499, the same contract change the
+      // REST idempotency family asserts). What must still hold is exactly-once application, which
+      // the conflicting-payload rejection below and the stock assertions above carry.
+      const replayed = await persistEvent(
+        {
+          event_id: completionEventId,
+          stream_type: 'warehouse',
+          stream_id: taskId,
+          event_type: 'cross_dock_task.completed',
+          payload: {
+            cross_dock_task_id: taskId,
+            to_location_id: stagingBinId,
+            pick_task_id: pickTaskId,
+            pick_line_id: pickLineId,
           },
-          undefined,
-          identicalClient,
-        ),
-        (error: unknown) =>
-          typeof error === 'object' &&
-          error !== null &&
-          'errorCode' in error &&
-          error.errorCode === 'DUPLICATE_EVENT',
+          metadata: {
+            correlation_id: correlationId,
+            actor: actor(operatorId, 'warehouse_operator'),
+            device_id: `DEV-${run}`,
+            occurred_at: completedAt,
+          },
+        },
+        undefined,
+        identicalClient,
+      );
+      assert.strictEqual(
+        replayed.event_id,
+        completionEventId,
+        'an identical replay must return the original event, never mint a second',
       );
       await identicalClient.query('ROLLBACK');
     } finally {

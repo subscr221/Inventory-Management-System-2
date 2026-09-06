@@ -11,6 +11,7 @@ import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
+import { lotNumberForUuid } from '../../compliance/transfer-request.js';
 import { randomUUID } from 'node:crypto';
 
 import type { TransferRequestRow } from '../../read/projections/transfer_request.js';
@@ -735,7 +736,12 @@ const rejectTransferRequestBase: RouteHandler = async (req, res, params) => {
       id,
     ]);
 
-    // Revert the allocation: decrease allocated to return the quantity to available
+    // Revert the allocation: decrease allocated to return the quantity to available.
+    // stock_balance.lot_id carries the lot NUMBER, never the lot_master UUID this row holds, so the
+    // UUID must be bridged first. Passing it raw matched zero rows and leaked the allocation on
+    // every rejected transfer - silently, because the UPDATE reports success either way.
+    const rejectLotNumber =
+      row.lot_id === null ? null : await lotNumberForUuid(row.lot_id, row.sku_id, client);
     await client.query(
       `UPDATE stock_balance
        SET allocated = GREATEST(allocated - $1::numeric, 0),
@@ -743,7 +749,7 @@ const rejectTransferRequestBase: RouteHandler = async (req, res, params) => {
        WHERE sku = $2 AND location_id = $3
          AND ($4::text IS NULL OR lot_id = $4)
          AND allocated >= $1::numeric`,
-      [row.quantity, row.sku_id, row.from_location_id, row.lot_id],
+      [row.quantity, row.sku_id, row.from_location_id, rejectLotNumber],
     );
 
     await persistEvent(

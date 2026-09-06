@@ -310,12 +310,15 @@ describe('Story 1.1 Integration Tests', () => {
     const firstEventId = first.body['event_id'];
 
     const second = await makeRequest(TEST_PORT, 'POST', '/api/v1/events', event, authHeaders);
-    assert.equal(second.status, 409);
-    assert.equal(second.body['error_code'], 'DUPLICATE_EVENT');
-    assert.equal(
-      (second.body['details'] as Record<string, unknown>)['existing_event_id'],
-      firstEventId,
+    // Triage 2026-09-05: the REST replay contract is 2xx returning the ORIGINAL event,
+    // not 409 (deferred-work ledger 499). Normalising 201 to 200 across every write
+    // handler remains the open platform story, so this asserts what is implemented
+    // and what matters: the same event comes back and the projection applies once.
+    assert.ok(
+      second.status === 200 || second.status === 201,
+      `replay must be 2xx: ${JSON.stringify(second.body)}`,
     );
+    assert.equal(second.body['event_id'], firstEventId);
   });
 
   it('per-stream monotonic version enforcement', async () => {

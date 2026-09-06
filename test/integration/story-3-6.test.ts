@@ -129,6 +129,15 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     );
   }
 
+  /**
+   * Triage 2026-09-05: lot expiries were hardcoded calendar dates. Once the wall clock passed them
+   * the "earlier expiry" lot was simply EXPIRED, FEFO correctly refused to pick it, and these tests
+   * began failing for a reason unrelated to picking. Dates are relative to today so the scenarios
+   * stay true whenever they run.
+   */
+  const daysAhead = (n: number): string =>
+    new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+
   async function seedLot(sku: string, lotNumber: string, expiry: string | null): Promise<string> {
     const result = await getPool().query(
       `INSERT INTO lot_master (lot_number, sku, expiry_date, quality_hold_status)
@@ -242,8 +251,8 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     const sku = `FG-0010-${run}`;
     const lotEarly = `LOT-E-${run}`;
     const lotLate = `LOT-L-${run}`;
-    await seedLot(sku, lotEarly, '2026-09-01');
-    await seedLot(sku, lotLate, '2027-01-01');
+    await seedLot(sku, lotEarly, daysAhead(30));
+    await seedLot(sku, lotLate, daysAhead(180));
     // The earlier-expiry lot sits in bin A1 (sequence 20), the later in bin A2 (sequence 10):
     // FEFO must direct 60 from lotEarly first, then 40 from lotLate.
     await seedStock(sku, binA1, lotEarly, 60);
@@ -397,8 +406,8 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     const sku = `FG-ZONE-${run}`;
     const lotAmb = `LOT-ZA-${run}`;
     const lotCold = `LOT-ZC-${run}`;
-    await seedLot(sku, lotAmb, '2026-10-01');
-    await seedLot(sku, lotCold, '2026-11-01');
+    await seedLot(sku, lotAmb, daysAhead(26));
+    await seedLot(sku, lotCold, daysAhead(57));
     await seedStock(sku, binA2, lotAmb, 30);
     await seedStock(sku, binC1, lotCold, 100);
     const lineId = await seedOrderLine(`SO36-Z1-${run}`, 1, sku, 80);
@@ -516,8 +525,8 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     const sku = `FG-SUB-${run}`;
     const directedLot = `LOT-D-${run}`;
     const substituteLot = `LOT-X-${run}`;
-    const directedUuid = await seedLot(sku, directedLot, '2026-09-15');
-    const substituteUuid = await seedLot(sku, substituteLot, '2026-12-15');
+    const directedUuid = await seedLot(sku, directedLot, daysAhead(10));
+    const substituteUuid = await seedLot(sku, substituteLot, daysAhead(101));
     await seedStock(sku, binA1, directedLot, 40);
     await seedStock(sku, binA2, substituteLot, 40);
     const lineId = await seedOrderLine(`SO36-S1-${run}`, 1, sku, 40);
@@ -623,8 +632,8 @@ describe('Story 3.6 Pick Task Generation and Execution', () => {
     const sku = `FG-DONE-${run}`;
     const lotA = `LOT-DA-${run}`;
     const lotB = `LOT-DB-${run}`;
-    const lotAUuid = await seedLot(sku, lotA, '2026-09-20');
-    const lotBUuid = await seedLot(sku, lotB, '2026-10-20');
+    const lotAUuid = await seedLot(sku, lotA, daysAhead(15));
+    const lotBUuid = await seedLot(sku, lotB, daysAhead(45));
     await seedStock(sku, binA1, lotA, 10);
     await seedStock(sku, binA2, lotB, 10);
     const lineId = await seedOrderLine(`SO36-D1-${run}`, 1, sku, 20);

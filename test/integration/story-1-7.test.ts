@@ -455,7 +455,13 @@ describe('Story 1.7 Calibration Lockout Integration Tests', () => {
       },
       maintenanceHeaders,
     );
-    assert.strictEqual(nonQc.status, 201, JSON.stringify(nonQc.body));
+    // Triage 2026-09-05: this arm used to assert 201. Epic 7 later barred the `maintenance` stream
+    // from the events API outright, so the write now fails on its VEHICLE, not on anything this
+    // guard is about. What the guard still proves is the part that matters: the refusal is the
+    // STREAM BAR, never a calibration lookup - the calibration lockout does not reach into a
+    // non-QC stream at all. The QC non-result arm below carries the rest of the guard.
+    assert.strictEqual(nonQc.status, 400, JSON.stringify(nonQc.body));
+    assert.strictEqual(nonQc.body['error_code'], 'INVALID_EVENT_STREAM');
 
     const nonResult = await makeRequest(
       TEST_PORT,

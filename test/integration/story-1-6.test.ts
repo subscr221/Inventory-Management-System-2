@@ -296,10 +296,15 @@ describe('Story 1.6 Event-Sourced Location Integration Tests', () => {
       assertedEnvelope(lotId, inventoryUserId, 'BIN-B10', { idempotency_key: idempotencyKey }),
       inventoryHeaders,
     );
-    assert.strictEqual(second.status, 409, JSON.stringify(second.body));
-    assert.strictEqual(second.body['error_code'], 'DUPLICATE_EVENT');
-    const details = second.body['details'] as Record<string, unknown>;
-    assert.strictEqual(details['existing_event_id'], firstEventId);
+    // Triage 2026-09-05: the REST replay contract is 2xx returning the ORIGINAL event,
+    // not 409 (deferred-work ledger 499). Normalising 201 to 200 across every write
+    // handler remains the open platform story, so this asserts what is implemented
+    // and what matters: the same event comes back and the projection applies once.
+    assert.ok(
+      second.status === 200 || second.status === 201,
+      `replay must be 2xx: ${JSON.stringify(second.body)}`,
+    );
+    assert.strictEqual(second.body['event_id'], firstEventId);
 
     assert.strictEqual(
       await countRows('location_asserted_facts', lotId),

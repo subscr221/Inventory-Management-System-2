@@ -27,8 +27,19 @@ import {
   getTransferRequestById,
 } from '../read/projections/transfer_request.js';
 
-/** Bridges a lot_master.lot_id UUID to the lot_number TEXT key stock_balance rows carry. */
-async function lotNumberForUuid(lotUuid: string, sku: string, client: PoolClient): Promise<string> {
+/**
+ * Bridges a lot_master.lot_id UUID to the lot_number TEXT key stock_balance rows carry.
+ *
+ * EXPORTED 2026-09-05: the reject handler in src/api/v1/transfer-requests.ts was releasing an
+ * allocation with the raw UUID against stock_balance.lot_id, which holds the NUMBER, so the UPDATE
+ * matched no rows and every rejected transfer leaked its allocation permanently. Every path that
+ * touches stock_balance by lot must go through THIS function.
+ */
+export async function lotNumberForUuid(
+  lotUuid: string,
+  sku: string,
+  client: PoolClient,
+): Promise<string> {
   const result = await client.query(
     `SELECT lot_number FROM lot_master WHERE lot_id = $1 AND sku = $2`,
     [lotUuid, sku],
