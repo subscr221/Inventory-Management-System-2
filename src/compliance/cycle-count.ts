@@ -90,6 +90,7 @@ const VALID_STOCK_CLASSES = new Set([
  */
 const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work', 'offcut']);
 const JOB_WORK_STOCK_CLASS = 'job_work';
+const OFFCUT_STOCK_CLASS = 'offcut';
 const COUNT_ADJUSTMENT_DOA_TYPE = 'inventory.count_adjustment';
 const SIGNOFF_ROLES = new Set([
   'inventory_controller',
@@ -1056,8 +1057,16 @@ async function applyStockAdjusted(
     );
     if (conflicting.rows.length > 0) {
       const existingClass = (conflicting.rows[0] as { stock_class: string }).stock_class;
-      const jobWorkConflict =
-        stockClass === JOB_WORK_STOCK_CLASS || existingClass === JOB_WORK_STOCK_CLASS;
+      // Fixed 2026-09-06: `offcut` is customer-owned exactly like `job_work`, so a conflict on it
+      // is a class-crossing refusal (CROSS_ISSUE_BLOCKED), not a claim that the material is a
+      // PROTOTYPE. Same omission as the stock-balance mapping - the class was added to
+      // SEGREGATED_STOCK_CLASSES without walking the consumers of the vocabulary.
+      const customerOwnedConflict =
+        stockClass === JOB_WORK_STOCK_CLASS ||
+        existingClass === JOB_WORK_STOCK_CLASS ||
+        stockClass === OFFCUT_STOCK_CLASS ||
+        existingClass === OFFCUT_STOCK_CLASS;
+      const jobWorkConflict = customerOwnedConflict;
       throw new AppError(
         400,
         jobWorkConflict ? 'CROSS_ISSUE_BLOCKED' : 'PROTOTYPE_NOT_SALEABLE',

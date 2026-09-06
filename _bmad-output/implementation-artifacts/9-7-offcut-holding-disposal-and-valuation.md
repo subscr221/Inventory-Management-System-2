@@ -38,7 +38,21 @@ so that customer offcut is never valued at a guessed rate and never sits unaccou
 - [ ] **Task 1: close the offcut issue hole in the segregation bar (AC 1, AC 2, AC 3; PREREQUISITE, do first after Task 0)**
   - [ ] 1.1 `src/compliance/stock-balance.ts:373-392`: the segregated-class issue/allocation bar keys on `stockClass === JOB_WORK_STOCK_CLASS` ONLY. `offcut` is in `SEGREGATED_STOCK_CLASSES` (so the laundering bar covers receipts) but is NOT barred from issue or allocation, so customer-owned retained offcut can today be picked into any sales dispatch. Widen the arm to `stockClass === JOB_WORK_STOCK_CLASS || stockClass === OFFCUT_STOCK_CLASS`.
   - [ ] 1.2 Mint ONE new Symbol door, `CUSTODY_OFFCUT_DISPOSAL`, exported from `src/compliance/custody-ledger.ts` beside `CUSTODY_CONSUMPTION` (`:73`) and `CUSTODY_RETURN` (`:84`), with an `isCustodyOffcutDisposalHandoff` predicate matching the two existing ones. The `offcut` arm admits ONLY that Symbol; `CUSTODY_RETURN` must NOT open the offcut class (that door belongs to `job_work` material returning under a Rule 45 challan, a different physical fact).
-  - [ ] 1.3 Regression arm: a plain `stock.issued` naming `stock_class: 'offcut'` is refused `CROSS_ISSUE_BLOCKED`, and an allocation naming it is refused likewise. Mutation-verify by removing the offcut term and watching the arm fail.
+  - [x] 1.3 DONE 2026-09-06, PULLED FORWARD out of this story and fixed on master rather than left
+        live: `offcut` now carries the same TOTAL demand bar as `job_work` in
+        `src/compliance/stock-balance.ts`, with NO Symbol door, because nothing in Story 9.6 issues
+        offcut stock at all. The regression arm lives in `test/integration/story-9-6.test.ts` and is
+        mutation-verified (removing `offcut` from `CUSTOMER_OWNED_STOCK_CLASSES` fails exactly that
+        arm). THIS STORY MUST OPEN ITS OWN DOOR on that same Symbol mechanism for disposal - a
+        classifier or a payload field would reopen the hole.
+        Also fixed alongside it: `cycle-count.ts` picked the refusal CODE with a job_work-only test,
+        so an `offcut` count conflict reported `PROTOTYPE_NOT_SALEABLE`.
+  - [ ] 1.4 STILL OPEN, found while walking the class vocabulary on 2026-09-06 and NOT fixed:
+        physical-verification variance reconciliation filters lines to `JOB_WORK_STOCK_CLASS`
+        (`src/compliance/cycle-count.ts:1423`), so a variance counted against `offcut` stock is
+        reconciled onto NOTHING. Offcut has left the custody ledger by then, so the adjustment
+        belongs on the HOLDING ledger, which has no adjustment path until this story builds one.
+        Until it does, a physical count of retained offcut cannot be reconciled anywhere.
   - [ ] 1.4 `src/compliance/cycle-count.ts:91` duplicates `SEGREGATED_STOCK_CLASSES` verbatim and already lists `offcut`; confirm no change is needed and say so in the Debug Log.
 
 - [ ] **Task 2: schema (AC 1, AC 3, AC 4, AC 5, AC 6)**

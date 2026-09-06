@@ -93,6 +93,12 @@ const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
 const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work', 'offcut']);
 const JOB_WORK_STOCK_CLASS = 'job_work';
 const OFFCUT_STOCK_CLASS = 'offcut';
+/**
+ * Customer-owned classes: material this entity holds but does not own, so NO demand of any kind may
+ * consume it. `job_work` is material in process; `offcut` is contractual offcut retained pending
+ * disposal. Both carry a running CGST Section 143 exposure while held.
+ */
+const CUSTOMER_OWNED_STOCK_CLASSES = new Set([JOB_WORK_STOCK_CLASS, OFFCUT_STOCK_CLASS]);
 
 /** The laundering-bar refusal code for a conflict involving `conflictClass` (see SEGREGATED_STOCK_CLASSES). */
 function segregationErrorCode(conflictClass: string): string {
@@ -370,11 +376,23 @@ export async function applyStockBalanceProjection(
   // Story 9.5 (FR-AC-11): the SECOND and only other door, CUSTODY_RETURN - unconsumed customer
   // material going back to the principal under a return challan, stamped by
   // applyCustodyReturnProjection on the identical mechanism. Still two Symbols, still no classifier.
+  // Story 9.6 revised, FIXED 2026-09-06: `offcut` carries the SAME total bar. It was added to
+  // SEGREGATED_STOCK_CLASSES when the class was introduced, but that set only governs the laundering
+  // check on RECEIPTS - it does nothing on issue - so retained customer offcut could be allocated to
+  // a sales dispatch and shipped to a third party while its Section 143 clock was still running.
+  // The class was added to two sets and every consumer of the vocabulary was not walked; this is the
+  // same omission as the segregationErrorCode mapping fixed the same day.
+  //
+  // Offcut gets NO Symbol door. Nothing in Story 9.6 issues offcut stock at all - capture RECEIVES
+  // into the class - so the bar is total with no exemption. Story 9.7's disposal is the first
+  // legitimate issue path and must open its own door on this same mechanism, never a classifier and
+  // never a payload field.
   if (
-    stockClass === JOB_WORK_STOCK_CLASS &&
+    CUSTOMER_OWNED_STOCK_CLASSES.has(stockClass) &&
     (kind === 'allocation' || kind === 'issue') &&
     !(
       kind === 'issue' &&
+      stockClass === JOB_WORK_STOCK_CLASS &&
       (isCustodyConsumptionHandoff(envelope) || isCustodyReturnHandoff(envelope))
     )
   ) {

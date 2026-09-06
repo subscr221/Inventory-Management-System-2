@@ -1404,6 +1404,50 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     assert.strictEqual((await orderRow(orderId))['invoiced_at'], null);
   });
 
+  it('retained offcut can be issued or allocated by NO demand (Story 9.7 Task 1.3, pulled forward)', async () => {
+    // Live defect found while creating Story 9.7 and fixed 2026-09-06. `offcut` was added to
+    // SEGREGATED_STOCK_CLASSES when the class was introduced, but that set only governs the
+    // laundering check on RECEIPTS. Nothing barred it from DEMAND, so retained customer offcut -
+    // still the customer's, still under a running Section 143 clock - could be allocated to a sales
+    // dispatch and shipped to a third party.
+    const { orderId, lot } = await inProcessOrder({ contractual: true });
+    const captured = await postOffcut(orderId, lot, { quantity: '10' });
+    assert.strictEqual(captured.status, 201, JSON.stringify(captured.body));
+    const offcutLot = (await storedPayload(captured.body['event_id'] as string))[
+      'offcut_lot_number'
+    ] as string;
+    assert.strictEqual(await stockOnHand(SKU, offcutLot, 'offcut'), '10.000');
+
+    for (const eventType of ['stock.issued', 'stock.allocated']) {
+      const res = await postEvent(
+        {
+          stream_type: 'inventory',
+          stream_id: randomUUID(),
+          event_type: eventType,
+          payload: {
+            sku: SKU,
+            target_location_id: dockId,
+            lot_id: offcutLot,
+            quantity: '1',
+            stock_class: 'offcut',
+            business_stream: 'job_work',
+          },
+          metadata: {
+            correlation_id: randomUUID(),
+            actor: { user_id: storeUserId, role: 'store_assistant', location_id: siteAId },
+            occurred_at: new Date().toISOString(),
+          },
+        },
+        storeHeaders,
+      );
+      assert.strictEqual(res.status, 400, `${eventType}: ${JSON.stringify(res.body)}`);
+      assert.strictEqual(res.body['error_code'], 'CROSS_ISSUE_BLOCKED', eventType);
+    }
+
+    // Nothing left the class.
+    assert.strictEqual(await stockOnHand(SKU, offcutLot, 'offcut'), '10.000');
+  });
+
   it('SECURITY: the direct events door refuses a cross-site offcut capture', async () => {
     // The route path is already covered above (off-site writer gets 403 LOCATION_ACCESS_DENIED).
     // This is the OTHER door. The events route resolves the authorising location from
