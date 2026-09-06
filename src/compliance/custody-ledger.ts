@@ -633,6 +633,23 @@ export function classifyDuplicate(err: unknown, entryId: string, eventId: string
         409,
       );
     }
+    // Story 9.7 chunk B code review (2026-09-06): the job_work_credit_note rows carry the same
+    // source-event idempotency as the custody rows. Two concurrent deliveries of the SAME disposal
+    // or revaluation event both pass the uncommitted-peer alreadyPersisted read; the loser reaches
+    // the credit-note INSERT after the winner commits and collides here. Without these arms the
+    // collision fell through to the store's 23505 map - which knows neither name - and surfaced as
+    // a raw PG 500 for exactly the duplicate the idempotency seam exists to absorb.
+    if (
+      constraint === 'uq_job_work_credit_note_source_event' ||
+      constraint === 'job_work_credit_note_pkey'
+    ) {
+      reject(
+        'DUPLICATE_EVENT',
+        'A job-work credit-note row already exists for this event',
+        { source_event_id: eventId, credit_note_id: entryId, constraint },
+        409,
+      );
+    }
   }
   throw err;
 }

@@ -4831,10 +4831,10 @@ export interface JobworkOffcutDisposedPayload {
   location_id?: string;
   posted_by: string;
   // Server-derived below. Refused on input, written back by the applier (the 9.2 idiom).
-  /** quantity x rate at the money scale; "0.0000" on a free retention. */
-  disposal_value?: string;
-  /** service_order.offcut_rate at the moment of disposal, stored beside the negotiated rate. */
-  indicative_rate?: string;
+  /** quantity x rate at the money scale; "0.0000" on a free retention; NULL on `returned`. */
+  disposal_value?: string | null;
+  /** service_order.offcut_rate at the moment of disposal, stored beside the negotiated rate; NULL on `returned`. */
+  indicative_rate?: string | null;
   /** The `original` credit note raised, when one was (never on `returned` or at rate zero). */
   credit_note_id?: string | null;
   /** The lot minted to carry the acquired material as ordinary owned stock. */

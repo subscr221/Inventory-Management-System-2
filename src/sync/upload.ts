@@ -214,6 +214,10 @@ const PERMANENT_ERROR_CODES = new Set([
   'OFFCUT_NOT_RETAINED',
   'CREDIT_NOTE_MISSING',
   'CREDIT_NOTE_UNCITABLE',
+  // Story 9.7 code review (2026-09-06): acknowledging a credit note a revaluation delta has
+  // superseded - the current document carries the commercial value, and no retry of the same
+  // acknowledgment can make the superseded one current again. Defensive, no edge scope.
+  'CREDIT_NOTE_SUPERSEDED',
   'UNREVERSED_TRANSACTIONS',
   'BOM_REVISION_DRIFT',
   'MATERIAL_REQUIREMENT_SET_TRUNCATED',

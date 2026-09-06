@@ -180,7 +180,11 @@ export async function runJobworkClockSweepCycle(
                 .join(
                   ', ',
                 )} - already counted on this clock, dispose of it (return or acquire) to close the exposure.`;
-        if (retainedOffcut.length > 0) offcutRetained += 1;
+        // Chunk C code review (2026-09-06): the counter is only bumped once the notice actually
+        // COMMITS. It used to increment here, before the stage's outcome was known, so a raced
+        // breach (skippedRaced) or a rolled-back emit still counted the clock as one whose notice
+        // named retained offcut - and a retried row was counted again next tick.
+        const namedOffcut = retainedOffcut.length > 0;
         if (stage === 'breached') {
           const deemed = deemedSupplyQty(clock.challan_qty, clock.reconciled_qty, clock.loss_qty);
           const flipped = await markReturnClockBreached(clock.clock_id, deemed, now, client);
@@ -214,6 +218,7 @@ export async function runJobworkClockSweepCycle(
               );
             }
             breached += 1;
+            if (namedOffcut) offcutRetained += 1;
           } else {
             // The guarded UPDATE matched nothing: another tick flipped this clock between the
             // candidate SELECT and here. Previously this branch emitted nothing, counted nothing and
@@ -272,6 +277,7 @@ export async function runJobworkClockSweepCycle(
             client,
           );
           alerted += 1;
+          if (namedOffcut) offcutRetained += 1;
         }
         await client.query('RELEASE SAVEPOINT jobwork_clock_stage');
       } catch (err) {

@@ -100,6 +100,13 @@ ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS approved_by UUID;
 ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS doa_entry_id UUID;
 ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS return_challan_number_ext TEXT;
 ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS owned_lot_id TEXT;
+-- Code review 2026-09-06: how much of the Section 143 clock the disposal actually absorbed. The
+-- reconcile is deliberately NON-strict (over-tolerance receipts can push the holding quantity past
+-- challan_qty capacity), so a disposal must never be blocked by a clock-accounting mismatch - but a
+-- shortfall must be VISIBLE here (`quantity - clock_reconciled_qty` is the residual still
+-- outstanding against the clock after the holding closed), not only on an event payload no read
+-- revisits. AC 1's "the clock for that quantity is stopped" is then checkable per disposed row.
+ALTER TABLE job_work_offcut_holding ADD COLUMN IF NOT EXISTS clock_reconciled_qty NUMERIC(18,3);
 
 DO $$
 BEGIN
@@ -127,6 +134,18 @@ BEGIN
         disposed_at IS NOT NULL AND disposition IS NOT NULL AND disposal_event_id IS NOT NULL
           AND disposed_by IS NOT NULL
       )
+      -- Chunk B code review 2026-09-06: the disposal facts must be NULL for as long as the row is
+      -- `retained` - the file header says so and the constraint now enforces it, so a retained row
+      -- can never carry disposal money, an approval, a challan, a minted lot or a clock reconcile.
+      AND (
+        status <> 'retained'
+        OR (
+          disposal_rate IS NULL AND indicative_rate IS NULL AND disposal_currency IS NULL
+            AND disposal_value IS NULL AND approved_by IS NULL AND doa_entry_id IS NULL
+            AND return_challan_number_ext IS NULL AND owned_lot_id IS NULL
+            AND clock_reconciled_qty IS NULL
+        )
+      )
       AND (
         disposition IS DISTINCT FROM 'acquired'
         OR (disposal_rate IS NOT NULL AND disposal_currency IS NOT NULL AND disposal_value IS NOT NULL)
@@ -138,6 +157,12 @@ BEGIN
             AND return_challan_number_ext IS NOT NULL
         )
       )
+    );
+  ALTER TABLE job_work_offcut_holding DROP CONSTRAINT IF EXISTS chk_job_work_offcut_holding_money;
+  ALTER TABLE job_work_offcut_holding
+    ADD CONSTRAINT chk_job_work_offcut_holding_money CHECK (
+      (disposal_rate IS NULL OR disposal_rate >= 0)
+      AND (disposal_value IS NULL OR disposal_value >= 0)
     );
 END $$;
 

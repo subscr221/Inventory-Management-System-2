@@ -42,6 +42,7 @@
   "errors.OFFCUT_NOT_RETAINED": "This contractual offcut has already been disposed of and cannot be disposed of again.",
   "errors.CREDIT_NOTE_MISSING": "This offcut acquisition raised no credit note, so there is no document to revalue.",
   "errors.CREDIT_NOTE_UNCITABLE": "The service invoice for this order has not been acknowledged by ERP, so an offcut credit note has no document reference to cite.",
+  "errors.CREDIT_NOTE_SUPERSEDED": "This offcut credit note has been superseded by a revaluation delta and is no longer the current document to acknowledge.",
   "errors.SOD_VIOLATION": "The same person cannot generate or settle this record and also acknowledge the document that bills it.",
   "errors.DUPLICATE_LOT": "This lot already exists in the system.",
   "errors.DUPLICATE_SERIAL": "This serial number already exists in the system for this item.",

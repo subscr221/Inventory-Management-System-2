@@ -49,6 +49,14 @@ export interface JobWorkOffcutHoldingRow {
   approved_by: string | null;
   doa_entry_id: string | null;
   return_challan_number_ext: string | null;
+  /**
+   * How much of the Section 143 clock this disposal actually absorbed (code review 2026-09-06): the
+   * reconcile is deliberately non-strict (over-tolerance receipts can exceed challan_qty capacity),
+   * and a shortfall must be visible ON this row - `quantity - clock_reconciled_qty` is the residual
+   * still outstanding against the clock after the holding closed. NULL only on rows disposed before
+   * this column existed.
+   */
+  clock_reconciled_qty: string | null;
   /** The owned lot minted on an `acquired` disposal; NULL on `returned`. */
   owned_lot_id: string | null;
   site_id: string;
@@ -84,8 +92,8 @@ const SELECT_COLUMNS = `holding_id, service_order_id, customer_party_code, offcu
   disposed_at, disposition, disposal_event_id, disposed_by,
   disposal_rate::text AS disposal_rate, indicative_rate::text AS indicative_rate,
   disposal_currency, disposal_value::text AS disposal_value, approved_by, doa_entry_id,
-  return_challan_number_ext, owned_lot_id, site_id, captured_by, source_event_id,
-  correlation_id, created_at, updated_at`;
+  return_challan_number_ext, clock_reconciled_qty::text AS clock_reconciled_qty, owned_lot_id,
+  site_id, captured_by, source_event_id, correlation_id, created_at, updated_at`;
 
 function toIso(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -211,6 +219,7 @@ export interface MarkOffcutHoldingDisposedInput {
   doa_entry_id: string | null;
   return_challan_number_ext: string | null;
   owned_lot_id: string | null;
+  clock_reconciled_qty: string;
 }
 
 /**
@@ -228,7 +237,7 @@ export async function markOffcutHoldingDisposed(
             disposal_event_id = $4::uuid, disposed_by = $5::uuid, disposal_rate = $6::numeric,
             indicative_rate = $7::numeric, disposal_currency = $8, disposal_value = $9::numeric,
             approved_by = $10::uuid, doa_entry_id = $11::uuid, return_challan_number_ext = $12,
-            owned_lot_id = $13, updated_at = now()
+            owned_lot_id = $13, clock_reconciled_qty = $14::numeric, updated_at = now()
       WHERE holding_id = $1 AND status = 'retained'`,
     [
       input.holding_id,
@@ -244,16 +253,22 @@ export async function markOffcutHoldingDisposed(
       input.doa_entry_id,
       input.return_challan_number_ext,
       input.owned_lot_id,
+      input.clock_reconciled_qty,
     ],
   );
   return (result.rowCount ?? 0) === 1;
 }
 
-/** Revaluation (AC 5) moves the CURRENT commercial value; indicative_rate is never touched. */
+/**
+ * Revaluation (AC 5) moves the CURRENT commercial value; indicative_rate is never touched.
+ * disposal_currency is written too (code review 2026-09-06): a revaluation changes the currency the
+ * current value is expressed in, and the row must not keep advertising the old one.
+ */
 export async function updateOffcutHoldingValuation(
   holdingId: string,
   valuation: {
     disposal_rate: string;
+    disposal_currency: string;
     disposal_value: string;
     approved_by: string | null;
     doa_entry_id: string | null;
@@ -262,12 +277,13 @@ export async function updateOffcutHoldingValuation(
 ): Promise<boolean> {
   const result = await client.query(
     `UPDATE job_work_offcut_holding
-        SET disposal_rate = $2::numeric, disposal_value = $3::numeric, approved_by = $4::uuid,
-            doa_entry_id = $5::uuid, updated_at = now()
+        SET disposal_rate = $2::numeric, disposal_currency = $3, disposal_value = $4::numeric,
+            approved_by = $5::uuid, doa_entry_id = $6::uuid, updated_at = now()
       WHERE holding_id = $1 AND status = 'disposed' AND disposition = 'acquired'`,
     [
       holdingId,
       valuation.disposal_rate,
+      valuation.disposal_currency,
       valuation.disposal_value,
       valuation.approved_by,
       valuation.doa_entry_id,
@@ -293,6 +309,9 @@ export async function listRetainedOffcutHoldings(
   let where = `status = 'retained'`;
   if (input.siteIds !== null) {
     if (input.siteIds.length === 0) return [];
+    // A malformed site id must be "no rows", not a 22P02 500 on the uuid[] cast (chunk B code
+    // review 2026-09-06); every sibling accessor guards malformed ids the same way.
+    if (!input.siteIds.every((id) => UUID_REGEX.test(id))) return [];
     params.push(input.siteIds);
     where += ` AND site_id = ANY($${params.length}::uuid[])`;
   }
@@ -316,6 +335,8 @@ export async function listRetainedOffcutHoldingsForOrderSku(
   sku: string,
   client: PoolClient,
 ): Promise<JobWorkOffcutHoldingRow[]> {
+  // A malformed id is "no rows", not a 22P02 500 (chunk B code review 2026-09-06).
+  if (!UUID_REGEX.test(serviceOrderId)) return [];
   const result = await client.query(
     `SELECT ${SELECT_COLUMNS} FROM job_work_offcut_holding
       WHERE service_order_id = $1 AND sku = $2 AND status = 'retained'

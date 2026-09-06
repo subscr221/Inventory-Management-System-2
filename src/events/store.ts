@@ -1192,8 +1192,8 @@ export async function persistEvent(
     // credit notes both raise. Chained after the billing feed because the disposal CITES the
     // acknowledged feed's ERP document reference.
     await applyJobworkOffcutDisposed(envelope, client, eventId, auditCtx);
-    await applyJobworkOffcutRevalued(envelope, client, eventId);
-    await applyJobworkCreditNoteAcknowledged(envelope, client, eventId);
+    await applyJobworkOffcutRevalued(envelope, client, eventId, auditCtx);
+    await applyJobworkCreditNoteAcknowledged(envelope, client, eventId, auditCtx);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)
     // runs inside this same transaction. It also rewrites envelope.payload with the SERVER's

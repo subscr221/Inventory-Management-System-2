@@ -415,18 +415,33 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
    * The DOA registry is global and outlives this run, so the holder resolveApprover actually picks
    * for a transaction type may be another suite's user. Resolve it the way the seam does rather
    * than assuming this suite's fixture wins (the 9.6 lesson).
+   *
+   * Chunk D code review (2026-09-06): match the BAND that governs the values this suite uses and
+   * assert the role, never "the oldest active entry" - stale overlapping entries (earlier runs,
+   * other bands) could otherwise resolve the signature to the wrong authority.
    */
   async function resolvedApprover(
     transactionType: string,
+    opts: { value?: number | null; role?: string } = {},
   ): Promise<{ userId: string; headers: Record<string, string> }> {
+    const value = opts.value ?? null;
     const entry = await getAdminPool().query(
       `SELECT role FROM doa_registry_entries
         WHERE transaction_type = $1 AND active = true
-        ORDER BY created_at ASC, entry_id ASC LIMIT 1`,
-      [transactionType],
+          AND ($2::numeric IS NULL OR (value_min IS NULL OR value_min <= $2::numeric))
+          AND ($2::numeric IS NULL OR (value_max IS NULL OR value_max >= $2::numeric))
+        ORDER BY value_min DESC NULLS LAST, created_at ASC, entry_id ASC LIMIT 1`,
+      [transactionType, value],
     );
     const role = entry.rows[0]?.['role'] as string | undefined;
     assert.ok(role, `no active DOA entry for ${transactionType}`);
+    if (opts.role !== undefined) {
+      assert.strictEqual(
+        role,
+        opts.role,
+        `DOA ${transactionType} resolved to ${role}, expected ${opts.role}`,
+      );
+    }
     const holder = await getAdminPool().query(
       `SELECT u.user_id, u.external_id FROM user_role_assignments a
          JOIN users u ON u.user_id = a.user_id
@@ -605,7 +620,8 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
               disposition, disposed_at, disposed_by, disposal_rate::text AS disposal_rate,
               indicative_rate::text AS indicative_rate, disposal_currency,
               disposal_value::text AS disposal_value, approved_by, doa_entry_id,
-              return_challan_number_ext, owned_lot_id, site_id
+              return_challan_number_ext, clock_reconciled_qty::text AS clock_reconciled_qty,
+              owned_lot_id, site_id
          FROM job_work_offcut_holding WHERE holding_id = $1`,
       [holdingId],
     );
@@ -855,7 +871,10 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
 
     // The `cfo` role is global and outlives this run, so the holder resolveApprover picks may be an
     // earlier run's user. Resolve the real approver instead of assuming this run's fixture wins.
-    const acquisitionApprover = await resolvedApprover(OFFCUT_ACQUISITION_TYPE);
+    const acquisitionApprover = await resolvedApprover(OFFCUT_ACQUISITION_TYPE, {
+      value: DOA_BAND_MIN,
+      role: CFO_ROLE,
+    });
     cfoUserId = acquisitionApprover.userId;
     cfoHeaders = acquisitionApprover.headers;
 
@@ -1275,9 +1294,11 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     assert.strictEqual(detailsOf(self.body)['valued_by'], financeUserId);
     assert.ok(self.traceId && (await auditedFor('SOD_VIOLATION', self.traceId)));
 
-    // MUTATION POINT 2 (direct-event arm): the same refusal through the events door, including a
-    // FORGED acknowledged_by naming somebody else while the acting user is still the valuer.
-    const forged = await postEvent(
+    // MUTATION POINT 2 (direct-event arm): the same refusal through the events door. Code review
+    // 2026-09-06 added the identity pin (P4): an acknowledgment must name the AUTHENTICATED actor
+    // as acknowledged_by, so a FORGED third-party name is now refused FUNCTION_ACCESS_DENIED before
+    // the SOD check can even run...
+    const forgedName = await postEvent(
       {
         stream_type: 'jobwork',
         stream_id: orderId,
@@ -1297,8 +1318,33 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
       },
       financeHeaders,
     );
-    assert.strictEqual(forged.status, 403, JSON.stringify(forged.body));
-    assert.strictEqual(forged.body['error_code'], 'SOD_VIOLATION');
+    assert.strictEqual(forgedName.status, 403, JSON.stringify(forgedName.body));
+    assert.strictEqual(forgedName.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+
+    // ...while the VALUER acknowledging as themself through the door still hits the SOD wall.
+    const selfDirect = await postEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: orderId,
+        event_type: 'jobwork.credit_note_acknowledged',
+        payload: {
+          service_order_id: orderId,
+          credit_note_id: creditNoteId,
+          site_id: siteAId,
+          acknowledged_ref_ext: `ERP-CN-${run}-self`,
+          acknowledged_by: financeUserId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: financeUserId, role: FINANCE_ROLE, location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      financeHeaders,
+    );
+    assert.strictEqual(selfDirect.status, 403, JSON.stringify(selfDirect.body));
+    assert.strictEqual(selfDirect.body['error_code'], 'SOD_VIOLATION');
+    assert.ok(selfDirect.traceId && (await auditedFor('SOD_VIOLATION', selfDirect.traceId)));
 
     // A different person acknowledges, and the document flips exactly once.
     const ok = await acknowledgeCreditNote(creditNoteId, ackHeaders);
@@ -1326,7 +1372,11 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     });
     assert.strictEqual(unsigned.status, 403, JSON.stringify(unsigned.body));
     assert.strictEqual(unsigned.body['error_code'], 'APPROVAL_REQUIRED');
-    assert.strictEqual(detailsOf(unsigned.body)['resolved_approver_user_id'], cfoUserId);
+    // Code review 2026-09-06: the refusal must NOT leak the resolved approver's user id - the
+    // approved_by claim is the second signature, and publishing the id in the error would hand a
+    // finance controller the key to their own approval.
+    assert.strictEqual(detailsOf(unsigned.body)['resolved_approver_user_id'], undefined);
+    assert.strictEqual(detailsOf(unsigned.body)['acquisition_value'], '1850.0000');
     assert.ok(unsigned.traceId && (await auditedFor('APPROVAL_REQUIRED', unsigned.traceId)));
     assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
 
@@ -1358,11 +1408,22 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
 
   it('AC 7 (BSD-10): dual control - the acting user must NOT be the resolved approver', async () => {
     const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '100' });
-    // MUTATION POINT 3 (route arm): the CFO posts their own acquisition. If the inverted comparison
-    // is "fixed" back into the 9.4 same-person form, this arm passes and dual control is gone.
-    // The CFO also holds finance_controller here only through this route's own gate, so the refusal
-    // has to come from the applier: the CFO does NOT hold finance_controller, so the route refuses
-    // first - the direct-event arm below is what proves the applier's own wall.
+    // MUTATION POINT 3: the CFO posts their own acquisition. If the inverted comparison is "fixed"
+    // back into the 9.4 same-person form, this arm passes and dual control is gone.
+    //
+    // The resolved approver here is granted finance_controller as well - the ROLES_SHARE_HOLDER
+    // shape `npm run verify:roles` refuses in production. The point of the guard is that even that
+    // shape cannot post: dual control is the applier's own wall, on both doors, and the chunk-C
+    // events-door finance gate must NOT be what stops a dual-role CFO (they would be allowed by it).
+    const adminPool = await getAdminPool();
+    const grant = await adminPool.query(
+      `INSERT INTO user_role_assignments (user_id, role, module, function_scope, location_id)
+       VALUES ($1, 'finance_controller', 'jobwork', 'write', '*')
+       ON CONFLICT DO NOTHING
+       RETURNING assignment_id`,
+      [cfoUserId],
+    );
+    const grantedAssignmentId = grant.rows[0]?.['assignment_id'] as string | undefined;
     const viaRoute = await dispose(
       orderId,
       {
@@ -1375,9 +1436,10 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
       cfoHeaders,
     );
     assert.strictEqual(viaRoute.status, 403, JSON.stringify(viaRoute.body));
-    assert.strictEqual(viaRoute.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+    assert.strictEqual(viaRoute.body['error_code'], 'APPROVAL_REQUIRED');
+    assert.strictEqual(detailsOf(viaRoute.body)['acting_user_id'], cfoUserId);
 
-    // MUTATION POINT 3 (direct-event arm): straight past the route's role gate, into the applier.
+    // MUTATION POINT 3 (direct-event arm): straight past the routes, into the applier.
     const viaEvent = await postEvent(
       disposalEnvelope(
         orderId,
@@ -1396,6 +1458,40 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     assert.strictEqual(viaEvent.body['error_code'], 'APPROVAL_REQUIRED');
     assert.strictEqual(detailsOf(viaEvent.body)['acting_user_id'], cfoUserId);
     assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
+
+    // Chunk C code review: the events-door finance gate. A user holding ONLY a jobwork write grant
+    // (accounts_officer, no finance_controller) must not be able to price an offcut acquisition
+    // through POST /api/v1/events - the identical wall to the route's requireFinanceControllerScope.
+    const financelessDoor = await postEvent(
+      disposalEnvelope(
+        orderId,
+        holdingId,
+        {
+          disposition: 'returned',
+          return_challan_number_ext: `RCH-${run}-door-gate`,
+        },
+        { userId: ackUserId, role: 'accounts_officer' },
+      ),
+      ackHeaders,
+    );
+    assert.strictEqual(financelessDoor.status, 403, JSON.stringify(financelessDoor.body));
+    assert.strictEqual(financelessDoor.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+    assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
+
+    // Chunk D code review (2026-09-06): remove the global role mutation this arm created so later
+    // authorization and segregation tests (and subsequent runs) never see a dual-role CFO.
+    if (grantedAssignmentId) {
+      await adminPool.query(
+        `DELETE FROM user_role_assignments WHERE assignment_id = $1`,
+        [grantedAssignmentId],
+      );
+    }
+    const cleaned = await adminPool.query(
+      `SELECT count(*)::int AS n FROM user_role_assignments
+        WHERE user_id = $1 AND role = 'finance_controller' AND module = 'jobwork'`,
+      [cfoUserId],
+    );
+    assert.strictEqual(cleaned.rows[0]!['n'], 0);
   });
 
   it('AC 7: a below-band acquisition claiming an approver is refused INVALID_PARAMS, never silently dropped', async () => {
@@ -1614,24 +1710,29 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     assert.strictEqual(early.status, 400, JSON.stringify(early.body));
     assert.strictEqual(early.body['error_code'], 'INVALID_PARAMS');
 
-    // An acknowledgment of a credit note that does not exist is a 404, not a 500.
-    const missing = await postEvent({
-      stream_type: 'jobwork',
-      stream_id: orderId,
-      event_type: 'jobwork.credit_note_acknowledged',
-      payload: {
-        service_order_id: orderId,
-        credit_note_id: randomUUID(),
-        site_id: siteAId,
-        acknowledged_ref_ext: 'ERP-CN-missing',
-        acknowledged_by: ackUserId,
+    // An acknowledgment of a credit note that does not exist is a 404, not a 500. The direct-event
+    // acknowledgment must name the AUTHENTICATED actor as acknowledged_by (the P4 identity pin), so
+    // the payload and the door user are the same person here.
+    const missing = await postEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: orderId,
+        event_type: 'jobwork.credit_note_acknowledged',
+        payload: {
+          service_order_id: orderId,
+          credit_note_id: randomUUID(),
+          site_id: siteAId,
+          acknowledged_ref_ext: 'ERP-CN-missing',
+          acknowledged_by: financeUserId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: financeUserId, role: FINANCE_ROLE, location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: ackUserId, role: 'accounts_officer', location_id: siteAId },
-        occurred_at: new Date().toISOString(),
-      },
-    });
+      financeHeaders,
+    );
     assert.strictEqual(missing.status, 404, JSON.stringify(missing.body));
   });
 
@@ -1722,5 +1823,234 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     assert.strictEqual(holdings.length, 1);
     assert.strictEqual(holdings[0]!['status'], 'disposed');
     assert.strictEqual((res.body['credit_notes'] as unknown[]).length, 1);
+  });
+
+  // -------------------------------------------------------------------------
+  // Code review 2026-09-06: the patch regressions, each arm proving its new guard
+  // -------------------------------------------------------------------------
+
+  it('P2 (code review 2026-09-06): the clock reconcile the disposal absorbed is visible on the holding row', async () => {
+    const { orderId, holdingId } = await retainedHolding({ quantity: '10' });
+    const res = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'returned',
+      return_challan_number_ext: `RCH-${run}-${randomUUID().slice(0, 6)}`,
+    });
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const row = await holdingRow(holdingId);
+    assert.strictEqual(row['status'], 'disposed');
+    assert.strictEqual(row['clock_reconciled_qty'], '10.000');
+  });
+
+  it('P8 (code review 2026-09-06): acknowledging a SUPERSEDED credit note is refused CREDIT_NOTE_SUPERSEDED, and the current delta still acknowledges', async () => {
+    const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
+    assert.strictEqual(
+      (
+        await dispose(orderId, {
+          holding_id: holdingId,
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        })
+      ).status,
+      201,
+    );
+    const notes0 = await creditNotes(orderId);
+    const original = notes0[notes0.length - 1]!;
+    assert.strictEqual(original['document_kind'], 'original');
+    assert.strictEqual(
+      (await revalue(orderId, { holding_id: holdingId, rate: '20.0000' })).status,
+      201,
+    );
+    // The original is now superseded by the delta and must not be acknowledged as the current
+    // document.
+    const stale = await acknowledgeCreditNote(original['credit_note_id'] as string);
+    assert.strictEqual(stale.status, 409, JSON.stringify(stale.body));
+    assert.strictEqual(stale.body['error_code'], 'CREDIT_NOTE_SUPERSEDED');
+    assert.ok(stale.traceId && (await auditedFor('CREDIT_NOTE_SUPERSEDED', stale.traceId)));
+    const notes = await creditNotes(orderId);
+    const delta = notes[notes.length - 1]!;
+    assert.strictEqual(delta['document_kind'], 'delta');
+    const ok = await acknowledgeCreditNote(delta['credit_note_id'] as string);
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(
+      ((await creditNotes(orderId))[notes.length - 1]!)['status'],
+      'acknowledged',
+    );
+  });
+
+  it('P6 (code review 2026-09-06): a disposal priced in a currency other than the order offcut currency is refused', async () => {
+    const { orderId, holdingId } = await retainedHolding({ quantity: '10' });
+    const res = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'acquired',
+      rate: INDICATIVE_RATE,
+      currency: 'USD',
+    });
+    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+    assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
+  });
+
+  it('P6 (code review 2026-09-06): a revaluation in a currency other than the superseded document is refused', async () => {
+    const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
+    assert.strictEqual(
+      (
+        await dispose(orderId, {
+          holding_id: holdingId,
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        })
+      ).status,
+      201,
+    );
+    const res = await revalue(orderId, { holding_id: holdingId, rate: '20.0000', currency: 'USD' });
+    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+    const row = await holdingRow(holdingId);
+    assert.strictEqual(row['disposal_rate'], INDICATIVE_RATE);
+    assert.strictEqual(row['disposal_currency'], 'INR');
+  });
+
+  it('P5 (code review 2026-09-06): a rate wider than NUMERIC(18,4) is refused cleanly, never a raw 22003 500', async () => {
+    const { orderId, holdingId } = await retainedHolding({ quantity: '10' });
+    const res = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'acquired',
+      rate: '999999999999999',
+      currency: 'INR',
+    });
+    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+    assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
+  });
+
+  it('P4 (code review 2026-09-06): a direct disposal naming somebody else as posted_by is refused FUNCTION_ACCESS_DENIED', async () => {
+    const { orderId, holdingId } = await retainedHolding({ quantity: '10' });
+    const forged = await postEvent(
+      disposalEnvelope(orderId, holdingId, {
+        disposition: 'returned',
+        return_challan_number_ext: `RCH-${run}-p4`,
+        posted_by: ackUserId,
+      }),
+    );
+    assert.strictEqual(forged.status, 403, JSON.stringify(forged.body));
+    assert.strictEqual(forged.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+    assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
+  });
+
+  it('D6 (chunk D code review 2026-09-06): the three routes refuse out-of-scope body fields (allow-list, never accepted-but-ignored)', async () => {
+    const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
+    const badSite = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'acquired',
+      rate: INDICATIVE_RATE,
+      currency: 'INR',
+      site_id: siteBId,
+    });
+    assert.strictEqual(badSite.status, 400, JSON.stringify(badSite.body));
+    assert.strictEqual(badSite.body['error_code'], 'INVALID_PARAMS');
+    assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
+
+    const res = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'acquired',
+      rate: INDICATIVE_RATE,
+      currency: 'INR',
+    });
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const badReval = await revalue(orderId, {
+      holding_id: holdingId,
+      rate: '20.0000',
+      disposition: 'returned',
+    });
+    assert.strictEqual(badReval.status, 400, JSON.stringify(badReval.body));
+    assert.strictEqual(badReval.body['error_code'], 'INVALID_PARAMS');
+    const row = await holdingRow(holdingId);
+    assert.strictEqual(row['disposal_rate'], INDICATIVE_RATE);
+
+    const notes = await creditNotes(orderId);
+    const original = notes[notes.length - 1]!;
+    const badAck = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/jobwork/credit-notes/${original['credit_note_id'] as string}/acknowledgment`,
+      {
+        idempotency_key: randomUUID(),
+        acknowledged_ref_ext: `ERP-${run}-nope`,
+        rate: '5.0000',
+      },
+      ackHeaders,
+    );
+    assert.strictEqual(badAck.status, 400, JSON.stringify(badAck.body));
+    assert.strictEqual(badAck.body['error_code'], 'INVALID_PARAMS');
+    assert.strictEqual(((await creditNotes(orderId))[notes.length - 1]!)['status'], 'pending');
+  });
+
+  it('D4 (chunk D code review 2026-09-06): an idempotency key reused for a DIFFERENT target is refused, never replayed against the wrong record', async () => {
+    const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
+    const key = randomUUID();
+    const first = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'acquired',
+      rate: INDICATIVE_RATE,
+      currency: 'INR',
+      idempotency_key: key,
+    });
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+
+    const other = await retainedHolding({ quantity: '10' });
+    const crossOrder = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/service-orders/${other.orderId}/offcut-disposals`,
+      {
+        location_id: dockId,
+        idempotency_key: key,
+        holding_id: other.holdingId,
+        disposition: 'returned',
+        return_challan_number_ext: `RCH-${run}-reuse`,
+      },
+      financeHeaders,
+    );
+    assert.strictEqual(crossOrder.status, 409, JSON.stringify(crossOrder.body));
+    assert.strictEqual(crossOrder.body['error_code'], 'DUPLICATE_EVENT');
+    assert.strictEqual(detailsOf(crossOrder.body)['stored_service_order_id'], orderId);
+    assert.strictEqual((await holdingRow(other.holdingId))['status'], 'retained');
+
+    const otherNote = await invoicedOrderWithHolding({ offcutQty: '10' });
+    assert.strictEqual(
+      (
+        await dispose(otherNote.orderId, {
+          holding_id: otherNote.holdingId,
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        })
+      ).status,
+      201,
+    );
+    const noteOne = ((await creditNotes(orderId))[0]!)['credit_note_id'] as string;
+    const noteTwo = ((await creditNotes(otherNote.orderId))[0]!)['credit_note_id'] as string;
+    const ackKey = randomUUID();
+    const ackOne = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/jobwork/credit-notes/${noteOne}/acknowledgment`,
+      { idempotency_key: ackKey, acknowledged_ref_ext: `ERP-${run}-cn1` },
+      ackHeaders,
+    );
+    assert.strictEqual(ackOne.status, 200, JSON.stringify(ackOne.body));
+    const ackTwo = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/jobwork/credit-notes/${noteTwo}/acknowledgment`,
+      { idempotency_key: ackKey, acknowledged_ref_ext: `ERP-${run}-cn2` },
+      ackHeaders,
+    );
+    assert.strictEqual(ackTwo.status, 409, JSON.stringify(ackTwo.body));
+    assert.strictEqual(ackTwo.body['error_code'], 'DUPLICATE_EVENT');
+    assert.strictEqual(((await creditNotes(otherNote.orderId))[0]!)['status'], 'pending');
   });
 });

@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   creditNoteDeltaValue,
+  hasBillableValue,
   offcutDisposalOpen,
   raisesCreditNote,
 } from '../../src/compliance/jobwork-offcut-disposal.js';
@@ -10,10 +11,17 @@ import {
  * Story 9.7 Task 9.5: the disposal predicate, the delta arithmetic and the zero-rate branch, in
  * isolation. Every arm below FAILS the predicate for a distinct reason - the 8.4 lesson that a
  * predicate only ever asserted green proves nothing about the gate it is supposed to be.
+ *
+ * Code review 2026-09-06: the predicate now carries the holding row's own location_id (P10) - the
+ * stock physically sits in that bin and no offcut re-location path exists, so a supplied location
+ * must match it, and `acquired` no longer needs a caller location at all (the event contract
+ * documents location_id as `returned`-only).
  */
 
-const RETAINED = { status: 'retained' as const };
-const DISPOSED = { status: 'disposed' as const };
+const HOLDING_LOCATION = '00000000-0000-0000-0000-000000000001';
+const OTHER_LOCATION = '00000000-0000-0000-0000-000000000002';
+const RETAINED = { status: 'retained' as const, location_id: HOLDING_LOCATION };
+const DISPOSED = { status: 'disposed' as const, location_id: HOLDING_LOCATION };
 
 describe('Story 9.7 offcutDisposalOpen', () => {
   it('opens a retained row for a fully-specified acquisition', () => {
@@ -98,11 +106,11 @@ describe('Story 9.7 offcutDisposalOpen', () => {
     );
   });
 
-  it('refuses a return with no challan number and any disposal with no location', () => {
+  it('refuses a return with no challan number and, separately, a return with no location', () => {
     assert.deepStrictEqual(
       offcutDisposalOpen(RETAINED, {
         disposition: 'returned',
-        location_id: '00000000-0000-0000-0000-000000000001',
+        location_id: HOLDING_LOCATION,
       }),
       { open: false, reason: 'challan_required' },
     );
@@ -112,6 +120,53 @@ describe('Story 9.7 offcutDisposalOpen', () => {
         return_challan_number_ext: 'RCH-1',
       }),
       { open: false, reason: 'location_required' },
+    );
+  });
+
+  it('D10 (chunk D code review 2026-09-06): a returned disposal carrying a currency (and no rate) is refused currency_refused, not silently priced', () => {
+    assert.deepStrictEqual(
+      offcutDisposalOpen(RETAINED, { disposition: 'returned', currency: 'INR' }),
+      { open: false, reason: 'currency_refused' },
+    );
+  });
+
+  it('P10 (code review 2026-09-06): an acquisition needs NO caller location, but a supplied one must match the holding bin', () => {
+    assert.deepStrictEqual(
+      offcutDisposalOpen(RETAINED, {
+        disposition: 'acquired',
+        rate: '5.0000',
+        currency: 'INR',
+      }),
+      { open: true },
+    );
+    assert.deepStrictEqual(
+      offcutDisposalOpen(RETAINED, {
+        disposition: 'acquired',
+        rate: '5.0000',
+        currency: 'INR',
+        location_id: HOLDING_LOCATION,
+      }),
+      { open: true },
+    );
+    assert.deepStrictEqual(
+      offcutDisposalOpen(RETAINED, {
+        disposition: 'acquired',
+        rate: '5.0000',
+        currency: 'INR',
+        location_id: OTHER_LOCATION,
+      }),
+      { open: false, reason: 'location_mismatch' },
+    );
+  });
+
+  it('P10 (code review 2026-09-06): a returned disposal naming a bin other than the holding bin is refused early', () => {
+    assert.deepStrictEqual(
+      offcutDisposalOpen(RETAINED, {
+        disposition: 'returned',
+        return_challan_number_ext: 'RCH-1',
+        location_id: OTHER_LOCATION,
+      }),
+      { open: false, reason: 'location_mismatch' },
     );
   });
 });
@@ -138,5 +193,13 @@ describe('Story 9.7 credit-note arithmetic', () => {
     assert.strictEqual(raisesCreditNote('acquired', '0'), false);
     assert.strictEqual(raisesCreditNote('acquired', '0.0000'), false);
     assert.strictEqual(raisesCreditNote('returned', '18.5000'), false);
+  });
+
+  it('P9 (code review 2026-09-06): the credit note is raised only when the COMPUTED value is non-zero', () => {
+    assert.strictEqual(hasBillableValue('0.0000'), false);
+    assert.strictEqual(hasBillableValue('0'), false);
+    assert.strictEqual(hasBillableValue('18.5000'), true);
+    assert.strictEqual(hasBillableValue('0.0001'), true);
+    assert.strictEqual(hasBillableValue(null), false);
   });
 });

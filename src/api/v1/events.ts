@@ -88,11 +88,60 @@ function assertPayloadSiteWriteAccess(
   }
 }
 
-function assertPlanningPayloadWriteLocation(
+/**
+ * Story 9.7 chunk C code review (2026-09-06): the finance-controller gate for naming (and revising)
+ * the price of the customer's offcut was REST-route-only, so the direct POST /api/v1/events door -
+ * which authorizes on module `jobwork` + `write` alone - let a user holding only a jobwork write
+ * grant (e.g. `jobwork_coordinator`) price an acquisition, mint owned stock and raise a credit note
+ * without ever holding the finance decision (Task 7.2). Privilege AND site scope come from the SAME
+ * filtered assignment list, exactly like the route's requireFinanceControllerScope: deriving the
+ * privilege from one assignment and the scope from another would let a controller at site A price
+ * site B's offcut. The ownership.agreement_set role check above is the precedent for a door-level
+ * function gate.
+ */
+const OFFCUT_VALUATION_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'jobwork.offcut_disposed',
+  'jobwork.offcut_revalued',
+]);
+const OFFCUT_VALUATION_ROLES: ReadonlySet<string> = new Set(['finance_controller']);
+
+function assertOffcutValuationFunctionAccess(
   authContext: NonNullable<ReturnType<typeof getAuthContext>>,
   body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
 ): void {
-  const locationId = planningPayloadLocation(body);
+  if (body.stream_type !== 'jobwork' || !OFFCUT_VALUATION_EVENT_TYPES.has(body.event_type)) return;
+  const valuingRoles = authContext.roles.filter(
+    (r) =>
+      (r.module === 'jobwork' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      OFFCUT_VALUATION_ROLES.has(r.role),
+  );
+  if (valuingRoles.length === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'Valuing an offcut disposal requires the finance controller role',
+      { required_roles: [...OFFCUT_VALUATION_ROLES] },
+    );
+  }
+  const siteId = body.payload['site_id'];
+  if (typeof siteId === 'string') {
+    const wildcard = valuingRoles.some((r) => r.locationId === '*');
+    if (!wildcard && !valuingRoles.some((r) => r.locationId === siteId)) {
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        'No finance controller assignment grants access to the site of this order',
+        { site_id: siteId, required_roles: [...OFFCUT_VALUATION_ROLES] },
+      );
+    }
+  }
+}
+
+function assertPlanningPayloadWriteLocation(
+  authContext: NonNullable<ReturnType<typeof getAuthContext>>,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): void {  const locationId = planningPayloadLocation(body);
   if (!locationId) return;
   if (body.event_type === 'ownership.agreement_set') {
     const allowed = authContext.roles.some(
@@ -179,6 +228,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   const auditLocationId = authorizedAssignment?.locationId ?? body.metadata.actor.location_id;
   if (authContext) {
     assertPlanningPayloadWriteLocation(authContext, body);
+    assertOffcutValuationFunctionAccess(authContext, body);
     assertPayloadSiteWriteAccess(authContext, body);
     body.metadata.actor.user_id = authContext.userId;
     const authorizedRole = getAuthorizedRole(req);

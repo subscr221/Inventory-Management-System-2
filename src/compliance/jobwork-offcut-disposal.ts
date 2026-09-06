@@ -20,14 +20,13 @@ import {
 import type { JobWorkOffcutHoldingRow } from '../read/projections/job_work_offcut_holding.js';
 import {
   getCreditNoteById,
+  getLatestCreditNoteForHolding,
   insertCreditNote,
-  listCreditNotesByHolding,
   markCreditNoteAcknowledged,
 } from '../read/projections/job_work_credit_note.js';
-import type { JobWorkCreditNoteRow } from '../read/projections/job_work_credit_note.js';
 import type { ServiceOrderRow } from '../read/projections/service_order.js';
 import { getServiceOrderById } from '../read/projections/service_order.js';
-import type { AuditEntryPayload } from '../read/projections/audit_log.js';
+import { logRejectionAudit, type AuditEntryPayload } from '../read/projections/audit_log.js';
 import { insertQcQualityHold } from '../read/projections/qc_quality_hold.js';
 import { placeQualityHold } from '../read/projections/lot_master.js';
 import { applyStockBalanceProjection } from './stock-balance.js';
@@ -39,7 +38,6 @@ import {
   alreadyPersisted,
   classifyDuplicate,
   requireInProcessOrder,
-  resolveLocation,
 } from './custody-ledger.js';
 import {
   billableValueOf,
@@ -115,8 +113,14 @@ const JOB_WORK_BUSINESS_STREAM = 'job_work';
 const OWNED_STOCK_CLASS = 'owned';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_TEXT_LENGTH = 200;
-/** NUMERIC(18,4), non-negative. Zero is legal and means a contractual free retention. */
-const MONEY_REGEX = /^\d+(\.\d{1,4})?$/;
+const CURRENCY_REGEX = /^[A-Z]{3}$/;
+/**
+ * NUMERIC(18,4), non-negative. Zero is legal and means a contractual free retention. The integer
+ * width is bounded at 14 digits to match the NUMERIC(18,4) money columns that bill the value (the
+ * 2026-09-06 service-order rate-bounding precedent); without the bound an oversized rate sails
+ * through the scaled arithmetic and dies as an unclassified SQLSTATE 22003 500 on the INSERT.
+ */
+const MONEY_REGEX = /^\d{1,14}(\.\d{1,4})?$/;
 
 const DISPOSAL_FIELDS = new Set([
   'service_order_id',
@@ -169,6 +173,15 @@ function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
 }
 
+function isPgCode(err: unknown, code: string): boolean {
+  return (
+    err !== null &&
+    typeof err === 'object' &&
+    'code' in err &&
+    (err as { code: string }).code === code
+  );
+}
+
 function reject(
   code: string,
   message: string,
@@ -176,6 +189,67 @@ function reject(
   status: number = 400,
 ): never {
   throw new AppError(status, code, message, details);
+}
+
+/**
+ * The refusal codes these three appliers audit THEMSELVES (code review 2026-09-06): a refused
+ * statutory decision must leave an audit row on BOTH doors, and the route-level AUDITED_REJECTIONS
+ * catch only sees the route door. The three 9.7 routes therefore SKIP these codes in their catch so
+ * there is exactly one row per refusal on either door. Codes outside this set (INVALID_PARAMS,
+ * NOT_FOUND, ...) are still audited by the route on the route door, exactly as before.
+ */
+const APPLIER_AUDITED_CODES = new Set([
+  'APPROVAL_REQUIRED',
+  'APPROVAL_UNRESOLVED',
+  'SOD_VIOLATION',
+  'OFFCUT_NOT_RETAINED',
+  'CREDIT_NOTE_MISSING',
+  'CREDIT_NOTE_UNCITABLE',
+  'CREDIT_NOTE_SUPERSEDED',
+]);
+
+type ApplierAuditCtx = Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>;
+
+/**
+ * Audit then refuse. Runs through logRejectionAudit (Story 6.4): a fresh connection, so the audit
+ * row survives the rollback this throw causes, and it never throws so a clean refusal is never
+ * displaced by an audit failure. Used ONLY for the codes above - everything else stays a plain
+ * `reject`, audited by the route on the route door as it always was.
+ */
+async function auditedRefusal(
+  auditCtx: ApplierAuditCtx | undefined,
+  code: string,
+  message: string,
+  details: Record<string, unknown>,
+  status: number,
+): Promise<never> {
+  if (auditCtx !== undefined && APPLIER_AUDITED_CODES.has(code)) {
+    await logRejectionAudit({
+      ...auditCtx,
+      event_id: null,
+      http_status: status,
+      error_code: code,
+      details,
+    });
+  }
+  throw new AppError(status, code, message, details);
+}
+
+/**
+ * 23505 -> DUPLICATE_EVENT via classifyDuplicate; SQLSTATE 22003 (a value that overflowed the
+ * NUMERIC(18,4) money columns) -> a clean INVALID_PARAMS 400 rather than a raw 500. The 22003 arm is
+ * still reachable with an in-range rate because quantity x rate can exceed 14 integer digits.
+ */
+function classifyCreditInsert(err: unknown, businessId: string, eventId: string): never {
+  if (isPgCode(err, '22003')) {
+    reject(
+      'INVALID_PARAMS',
+      'The computed credit value exceeds the NUMERIC(18,4) range of the credit note columns',
+      { business_id: businessId },
+      400,
+    );
+  }
+  return classifyDuplicate(err, businessId, eventId);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +265,7 @@ export type OffcutDisposalRefusal =
   | 'currency_refused'
   | 'challan_required'
   | 'location_required'
+  | 'location_mismatch'
   | 'challan_refused';
 
 /**
@@ -199,7 +274,7 @@ export type OffcutDisposalRefusal =
  * to INVALID_PARAMS (400).
  */
 export function offcutDisposalOpen(
-  holding: Pick<JobWorkOffcutHoldingRow, 'status'>,
+  holding: Pick<JobWorkOffcutHoldingRow, 'status' | 'location_id'>,
   input: {
     disposition: 'returned' | 'acquired';
     rate?: string | undefined;
@@ -224,8 +299,21 @@ export function offcutDisposalOpen(
     if (input.return_challan_number_ext === undefined) {
       return { open: false, reason: 'challan_required' };
     }
+    // P10 (code review 2026-09-06): a returned disposal must name the location the material leaves
+    // from, which is the holding's own bin. `acquired` never needs a caller location - the stock is
+    // where the holding row says it is and the applier uses that.
+    if (input.location_id === undefined) return { open: false, reason: 'location_required' };
   }
-  if (input.location_id === undefined) return { open: false, reason: 'location_required' };
+  // Whether or not the caller supplied a location, it must MATCH the holding row's: the stock
+  // physically sits in that bin (no offcut re-location path exists), so a different bin would only
+  // surface later as a misleading class-scoped INSUFFICIENT_STOCK after the DOA checks ran.
+  if (
+    input.location_id !== undefined &&
+    holding.location_id !== undefined &&
+    input.location_id !== holding.location_id
+  ) {
+    return { open: false, reason: 'location_mismatch' };
+  }
   return { open: true };
 }
 
@@ -241,6 +329,17 @@ export function creditNoteDeltaValue(latestValue: string, newValue: string): str
 /** BSD-5: a rate of exactly zero raises no credit note; there is nothing to credit. */
 export function raisesCreditNote(disposition: 'returned' | 'acquired', rate: string): boolean {
   return disposition === 'acquired' && moneyToScaled(rate) > 0n;
+}
+
+/**
+ * BSD-5 extended to the COMPUTED value: quantity x rate rounds half-up to the money scale, so a
+ * positive rate against a small quantity can still round to "0.0000" - and a zero-value `original`
+ * would contradict "nothing to credit" just like a zero rate would, while later poisoning the
+ * revaluation gate with a phantom document. The credit note is raised only when the scaled value is
+ * non-zero.
+ */
+export function hasBillableValue(disposalValue: string | null): boolean {
+  return disposalValue !== null && moneyToScaled(disposalValue) > 0n;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,6 +387,17 @@ function assertText(value: unknown, field: string): void {
   }
 }
 
+/**
+ * The money columns bill ISO 4217 codes only (the service-order offcut_currency precedent). A
+ * free-form currency would let a credit note bill a different currency than the invoice it cites
+ * and let a delta subtract one currency from another.
+ */
+function assertCurrency(value: unknown, field: string): void {
+  if (typeof value !== 'string' || !CURRENCY_REGEX.test(value)) {
+    reject('INVALID_PARAMS', `${field} must be a three-letter ISO 4217 code`, { field });
+  }
+}
+
 export function assertJobworkOffcutDisposalShape(envelope: EventEnvelope): void {
   if (!OFFCUT_DISPOSAL_EVENT_TYPES.has(envelope.event_type)) return;
   if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) {
@@ -297,6 +407,14 @@ export function assertJobworkOffcutDisposalShape(envelope: EventEnvelope): void 
     });
   }
   const p = envelope.payload as Record<string, unknown>;
+  // The stream binding (the jobwork-billing precedent): an event stored on order A's stream must
+  // never mutate order B. Without it the version history and the row it rewrites can diverge.
+  if (envelope.stream_id !== p['service_order_id']) {
+    reject('INVALID_EVENT_ENVELOPE', 'stream_id must equal service_order_id', {
+      stream_id: envelope.stream_id,
+      service_order_id: p['service_order_id'],
+    });
+  }
   if (envelope.event_type === JOBWORK_OFFCUT_DISPOSED) {
     assertClosedShape(p, DISPOSAL_FIELDS, DISPOSAL_DERIVED_FIELDS);
     for (const field of ['service_order_id', 'disposal_id', 'holding_id', 'site_id', 'posted_by']) {
@@ -308,15 +426,27 @@ export function assertJobworkOffcutDisposalShape(envelope: EventEnvelope): void 
       });
     }
     if (p['rate'] !== undefined) assertMoney(p['rate'], 'rate');
-    if (p['currency'] !== undefined) assertText(p['currency'], 'currency');
+    if (p['currency'] !== undefined) assertCurrency(p['currency'], 'currency');
     if (p['return_challan_number_ext'] !== undefined) {
       assertText(p['return_challan_number_ext'], 'return_challan_number_ext');
+      p['return_challan_number_ext'] = (p['return_challan_number_ext'] as string).trim();
     }
     if (p['location_id'] !== undefined && !isUuid(p['location_id'])) {
       reject('INVALID_PARAMS', 'location_id must be a UUID when supplied');
     }
     if (p['approved_by'] !== undefined && !isUuid(p['approved_by'])) {
       reject('INVALID_PARAMS', 'approved_by must be a UUID when supplied');
+    }
+    // The poster named in the payload must BE the authenticated actor (the billing-feed and
+    // closure-requested precedents): valued_by, disposed_by and placed_by are all stamped from this
+    // field, so a forged posted_by would let one person price an offcut and acknowledge it as two.
+    if (p['posted_by'] !== envelope.metadata.actor.user_id) {
+      reject(
+        'FUNCTION_ACCESS_DENIED',
+        'posted_by must be the authenticated actor posting the disposal',
+        { posted_by: p['posted_by'], actor_user_id: envelope.metadata.actor.user_id },
+        403,
+      );
     }
     return;
   }
@@ -332,9 +462,17 @@ export function assertJobworkOffcutDisposalShape(envelope: EventEnvelope): void 
       if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
     }
     assertMoney(p['rate'], 'rate');
-    assertText(p['currency'], 'currency');
+    assertCurrency(p['currency'], 'currency');
     if (p['approved_by'] !== undefined && !isUuid(p['approved_by'])) {
       reject('INVALID_PARAMS', 'approved_by must be a UUID when supplied');
+    }
+    if (p['posted_by'] !== envelope.metadata.actor.user_id) {
+      reject(
+        'FUNCTION_ACCESS_DENIED',
+        'posted_by must be the authenticated actor posting the revaluation',
+        { posted_by: p['posted_by'], actor_user_id: envelope.metadata.actor.user_id },
+        403,
+      );
     }
     return;
   }
@@ -343,6 +481,17 @@ export function assertJobworkOffcutDisposalShape(envelope: EventEnvelope): void 
     if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
   }
   assertText(p['acknowledged_ref_ext'], 'acknowledged_ref_ext');
+  p['acknowledged_ref_ext'] = (p['acknowledged_ref_ext'] as string).trim();
+  // The SoD guard on acknowledgment compares against this value, so a forged acknowledged_by would
+  // let the valuer walk past it (the 9.6 billing-feed precedent).
+  if (p['acknowledged_by'] !== envelope.metadata.actor.user_id) {
+    reject(
+      'FUNCTION_ACCESS_DENIED',
+      'acknowledged_by must be the authenticated actor acknowledging the credit note',
+      { acknowledged_by: p['acknowledged_by'], actor_user_id: envelope.metadata.actor.user_id },
+      403,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +538,7 @@ async function resolveAcquisitionApproval(
   claimedApprover: string | undefined,
   actingUserId: string,
   details: Record<string, unknown>,
+  auditCtx?: ApplierAuditCtx,
 ): Promise<{ approved_by: string | null; doa_entry_id: string | null }> {
   const approval = await resolveApprover(JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE, value);
   if (!approval.requiresApproval) {
@@ -403,7 +553,8 @@ async function resolveAcquisitionApproval(
     return { approved_by: null, doa_entry_id: null };
   }
   if (approval.approverActorId === null) {
-    reject(
+    return auditedRefusal(
+      auditCtx,
       'APPROVAL_UNRESOLVED',
       `No active approver could be resolved for ${JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE}`,
       { ...details, transaction_type: JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE },
@@ -411,14 +562,11 @@ async function resolveAcquisitionApproval(
     );
   }
   if (claimedApprover !== approval.approverActorId) {
-    reject(
+    return auditedRefusal(
+      auditCtx,
       'APPROVAL_REQUIRED',
       'An offcut acquisition in or above the governed band requires the resolved DOA approver',
-      {
-        ...details,
-        acquisition_value: value,
-        resolved_approver_user_id: approval.approverActorId,
-      },
+      { ...details, acquisition_value: value },
       403,
     );
   }
@@ -428,15 +576,16 @@ async function resolveAcquisitionApproval(
   // and the whole point of the second signature is that those are two different people - a
   // finance_controller who also held `cfo` could otherwise sign their own acquisition. The go-live
   // verifier (npm run verify:roles) refuses ROLES_SHARE_HOLDER for the same reason.
+  //
+  // Neither refusal below names the resolved approver: the approver's user id is a bearer
+  // credential here (the approved_by claim must equal it), and publishing it in a refusal would
+  // hand a finance controller the key to their own second signature (code review 2026-09-06).
   if (actingUserId === approval.approverActorId) {
-    reject(
+    return auditedRefusal(
+      auditCtx,
       'APPROVAL_REQUIRED',
       'An offcut acquisition is dual control: the acting user must not be the resolved DOA approver',
-      {
-        ...details,
-        acting_user_id: actingUserId,
-        resolved_approver_user_id: approval.approverActorId,
-      },
+      { ...details, acting_user_id: actingUserId },
       403,
     );
   }
@@ -448,10 +597,15 @@ async function resolveAcquisitionApproval(
  * feed must be acknowledged and carry the ERP document reference; a placeholder would be a
  * fabricated citation. The `returned` branch never reaches here.
  */
-async function citedInvoiceRef(order: ServiceOrderRow, client: PoolClient): Promise<string> {
+async function citedInvoiceRef(
+  order: ServiceOrderRow,
+  client: PoolClient,
+  auditCtx?: ApplierAuditCtx,
+): Promise<string> {
   const feed = await getBillingFeedByOrder(order.service_order_id, client);
   if (!feed) {
-    reject(
+    return auditedRefusal(
+      auditCtx,
       'CREDIT_NOTE_UNCITABLE',
       'This order has no billing feed, so there is no service invoice to credit',
       { service_order_id: order.service_order_id, reason: 'no_billing_feed' },
@@ -459,7 +613,8 @@ async function citedInvoiceRef(order: ServiceOrderRow, client: PoolClient): Prom
     );
   }
   if (feed.status !== 'acknowledged' || !feed.acknowledged_ref_ext) {
-    reject(
+    return auditedRefusal(
+      auditCtx,
       'CREDIT_NOTE_UNCITABLE',
       'The service invoice for this order has not been acknowledged by ERP, so there is no document reference to cite',
       {
@@ -551,10 +706,13 @@ export async function applyJobworkOffcutDisposed(
   envelope: EventEnvelope,
   client: PoolClient,
   eventId: string,
-  // Accepted for chain symmetry with every other applier in store.ts. Unused: the disposal's
-  // refusals are audited by the route through AUDITED_REJECTIONS, and the QC gate here is a
-  // governed hold rather than the audit-carrying QC completion hand-off.
-  _auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
+  // Story 9.7 code review (2026-09-06): the refusal audit used to be the route's job alone, which
+  // left every refusal on the direct POST /api/v1/events door with no audit row (AC 7 requires a
+  // refused acquisition to be refused AND audited). The applier now writes its own refusal rows
+  // through logRejectionAudit (the Story 6.4 helper - a fresh connection, so the row survives the
+  // rollback this throw causes). The routes skip the codes this file audits, so there is exactly
+  // one row per refusal on either door.
+  auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
 ): Promise<void> {
   if (envelope.event_type !== JOBWORK_OFFCUT_DISPOSED) return;
   if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) return;
@@ -582,7 +740,8 @@ export async function applyJobworkOffcutDisposed(
   });
   if (!gate.open) {
     if (gate.reason === 'not_retained' || gate.reason === 'already_disposed') {
-      reject(
+      await auditedRefusal(
+        auditCtx,
         'OFFCUT_NOT_RETAINED',
         'This offcut holding row is no longer retained and cannot be disposed of again',
         {
@@ -603,7 +762,34 @@ export async function applyJobworkOffcutDisposed(
     );
   }
 
-  const location = await resolveLocation(p.location_id as string, client);
+  // P6 (code review 2026-09-06): the credit note bills the order's service invoice, so its currency
+  // must be the order's contracted offcut currency when the order carries one. A free-form currency
+  // mismatch would let the credit note bill a different currency than the invoice it cites.
+  if (
+    p.disposition === 'acquired' &&
+    order.offcut_currency !== null &&
+    order.offcut_currency !== undefined &&
+    p.currency !== order.offcut_currency
+  ) {
+    reject(
+      'INVALID_PARAMS',
+      "The disposal currency must match the order's contracted offcut currency",
+      {
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        currency: p.currency,
+        offcut_currency: order.offcut_currency,
+      },
+      400,
+    );
+  }
+
+  // The stock physically sits where the holding row says it does, and no offcut re-location path
+  // exists, so the holding row's location is authoritative for BOTH branches: the offcut issue
+  // drains that bin and the minted owned lot lands there. The caller's returned-branch location_id
+  // is verified against it by the predicate above (code review 2026-09-06: an unbounded caller
+  // location failed late as a misleading class-scoped INSUFFICIENT_STOCK after the DOA checks).
+  const holdingLocationId = holding.location_id;
 
   // 3. The DOA second signature comes BEFORE any write (Task 4.7): an above-band acquisition must
   // leave the stock, the lot and the clock untouched when it is refused.
@@ -619,6 +805,7 @@ export async function applyJobworkOffcutDisposed(
       p.approved_by,
       envelope.metadata.actor.user_id,
       { service_order_id: order.service_order_id, holding_id: holding.holding_id },
+      auditCtx,
     );
   } else if (p.approved_by !== undefined) {
     reject(
@@ -639,7 +826,7 @@ export async function applyJobworkOffcutDisposed(
     event_type: 'stock.issued',
     payload: {
       sku: holding.sku,
-      target_location_id: location.location_id,
+      target_location_id: holdingLocationId,
       lot_id: holding.lot_id,
       quantity: holding.quantity,
       stock_class: OFFCUT_STOCK_CLASS,
@@ -700,7 +887,7 @@ export async function applyJobworkOffcutDisposed(
       event_type: 'stock.received',
       payload: {
         sku: holding.sku,
-        target_location_id: location.location_id,
+        target_location_id: holdingLocationId,
         lot_id: ownedLotNumber,
         quantity: holding.quantity,
         stock_class: OWNED_STOCK_CLASS,
@@ -722,21 +909,28 @@ export async function applyJobworkOffcutDisposed(
     // which is what every dispatch, allocation and pick gate in the codebase actually reads
     // (dispatchGateBlockedLots), and which Story 9.6 settled on for this exact material for this
     // exact reason. hold_id is minted FROM the disposal id so a replay reproduces the same row.
-    await insertQcQualityHold(
-      {
-        hold_id: p.disposal_id,
-        lot_id: lot!.lot_id,
-        lot_number: ownedLotNumber,
-        sku: holding.sku,
-        site_id: order.site_id,
-        hold_reason: `Offcut acquired from customer ${order.customer_party_code} under order ${order.order_number_ext}: inspected only as the customer's material, never against this entity's own specification`,
-        defect_code: null,
-        placed_by: p.posted_by,
-        placed_at: occurredAt,
-        source_event_id: eventId,
-      },
-      client,
-    );
+    try {
+      await insertQcQualityHold(
+        {
+          hold_id: p.disposal_id,
+          lot_id: lot!.lot_id,
+          lot_number: ownedLotNumber,
+          sku: holding.sku,
+          site_id: order.site_id,
+          hold_reason: `Offcut acquired from customer ${order.customer_party_code} under order ${order.order_number_ext}: inspected only as the customer's material, never against this entity's own specification`,
+          defect_code: null,
+          placed_by: p.posted_by,
+          placed_at: occurredAt,
+          source_event_id: eventId,
+        },
+        client,
+      );
+    } catch (err: unknown) {
+      // The PK is hold_id = disposal_id: two DIFFERENT acquired disposals reusing one disposal_id
+      // collide here as an unclassified 23505 500 (code review 2026-09-06). Classify it like the
+      // createLot and credit-note duplicates above.
+      classifyDuplicate(err, p.disposal_id, eventId);
+    }
     // The ONE enforcement flag (Story 8.5 BSD-1). The lot is minted seconds earlier and can carry no
     // other open hold, so a null return is a programming error rather than a race.
     const flagged = await placeQualityHold(
@@ -783,8 +977,17 @@ export async function applyJobworkOffcutDisposed(
   // rate is accepted as-is with the contract's indicative rate stored beside it - no tolerance is
   // applied and nothing is refused on rate (AC 4, the final 2026-09-05 ruling).
   const indicativeRate = order.offcut_rate ?? null;
-  if (rate !== null && raisesCreditNote(p.disposition, rate)) {
-    const citedRef = await citedInvoiceRef(order, client);
+  // P9 (code review 2026-09-06): the credit note is raised only when the COMPUTED scaled value is
+  // non-zero. quantity x rate rounds half-up to the money scale, so a positive rate against a small
+  // quantity can still round to "0.0000" - and a zero-value `original` would contradict BSD-5's
+  // "nothing to credit" (free retention is the only no-note case) while poisoning the revaluation
+  // chain with a phantom document.
+  if (
+    rate !== null &&
+    raisesCreditNote(p.disposition, rate) &&
+    hasBillableValue(disposalValue)
+  ) {
+    const citedRef = await citedInvoiceRef(order, client, auditCtx);
     creditNoteId = randomUUID();
     try {
       await insertCreditNote(
@@ -807,37 +1010,57 @@ export async function applyJobworkOffcutDisposed(
         client,
       );
     } catch (err: unknown) {
-      classifyDuplicate(err, p.disposal_id, eventId);
+      classifyCreditInsert(err, p.disposal_id, eventId);
     }
   }
 
   // 8. Close the holding row LAST, through the guarded UPDATE. A zero-row result means a concurrent
-  // disposal won between the FOR UPDATE read and here; that is a race, never a success.
-  const closed = await markOffcutHoldingDisposed(
-    {
-      holding_id: holding.holding_id,
-      disposed_at: occurredAt,
-      disposition: p.disposition,
-      disposal_event_id: eventId,
-      disposed_by: p.posted_by,
-      disposal_rate: rate,
-      indicative_rate: p.disposition === 'acquired' ? indicativeRate : null,
-      disposal_currency: p.disposition === 'acquired' ? (p.currency as string) : null,
-      disposal_value: disposalValue,
-      approved_by: approval.approved_by,
-      doa_entry_id: approval.doa_entry_id,
-      return_challan_number_ext: p.return_challan_number_ext ?? null,
-      owned_lot_id: ownedLotNumber,
-    },
-    client,
-  );
-  if (!closed) {
-    reject(
-      'DUPLICATE_EVENT',
-      'This offcut holding row was disposed of concurrently',
-      { holding_id: holding.holding_id },
-      409,
+  // disposal won between the FOR UPDATE read and here; that is a race, never a success. The
+  // Section 143 clock reconcile result rides the same row (code review 2026-09-06): clock capacity
+  // is challan_qty while the holding quantity may exceed it (over-tolerance), so the reconcile is
+  // deliberately non-strict - but a shortfall must be VISIBLE on the ledger row it concerns, not
+  // only on an event payload nobody re-reads.
+  try {
+    const closed = await markOffcutHoldingDisposed(
+      {
+        holding_id: holding.holding_id,
+        disposed_at: occurredAt,
+        disposition: p.disposition,
+        disposal_event_id: eventId,
+        disposed_by: p.posted_by,
+        disposal_rate: rate,
+        indicative_rate: p.disposition === 'acquired' ? indicativeRate : null,
+        disposal_currency: p.disposition === 'acquired' ? (p.currency as string) : null,
+        disposal_value: disposalValue,
+        approved_by: approval.approved_by,
+        doa_entry_id: approval.doa_entry_id,
+        return_challan_number_ext: p.return_challan_number_ext ?? null,
+        owned_lot_id: ownedLotNumber,
+        clock_reconciled_qty: clockReconciled,
+      },
+      client,
     );
+    if (!closed) {
+      reject(
+        'DUPLICATE_EVENT',
+        'This offcut holding row was disposed of concurrently',
+        { holding_id: holding.holding_id },
+        409,
+      );
+    }
+  } catch (err: unknown) {
+    // The ::numeric casts on disposal_rate / disposal_value can still overflow NUMERIC(18,4) when a
+    // large holding quantity multiplies an in-range rate - the rate regex bound alone cannot see the
+    // product. Classify it rather than surfacing a raw SQLSTATE 22003 500.
+    if (isPgCode(err, '22003')) {
+      reject(
+        'INVALID_PARAMS',
+        'The computed disposal value exceeds the NUMERIC(18,4) range of the holding ledger',
+        { holding_id: holding.holding_id, disposal_value: disposalValue ?? null },
+        400,
+      );
+    }
+    throw err;
   }
 
   // The stored event carries what THIS process derived, never what the caller asserted.
@@ -856,6 +1079,8 @@ export async function applyJobworkOffcutRevalued(
   envelope: EventEnvelope,
   client: PoolClient,
   eventId: string,
+  // Story 9.7 code review (2026-09-06): self-audited refusals - see the disposal applier's comment.
+  auditCtx?: ApplierAuditCtx,
 ): Promise<void> {
   if (envelope.event_type !== JOBWORK_OFFCUT_REVALUED) return;
   if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) return;
@@ -886,15 +1111,35 @@ export async function applyJobworkOffcutRevalued(
   }
 
   // Task 5.2: a delta supersedes a document, so one must exist. A free retention raised none, which
-  // is why revaluing it is refused rather than silently promoted to an original.
-  const documents = await listCreditNotesByHolding(holding.holding_id, client, true);
-  const latest = documents[documents.length - 1] as JobWorkCreditNoteRow | undefined;
+  // is why revaluing it is refused rather than silently promoted to an original. The latest document
+  // is found by the supersede POINTER (the document nothing supersedes), never by created_at order:
+  // created_at is the transaction start time, and two overlapping revaluations can invert that order
+  // against commit order (chunk B code review 2026-09-06).
+  const latest = await getLatestCreditNoteForHolding(holding.holding_id, client, true);
   if (!latest) {
-    reject(
+    return auditedRefusal(
+      auditCtx,
       'CREDIT_NOTE_MISSING',
       'This acquisition raised no credit note, so there is no document to supersede',
       { holding_id: holding.holding_id, service_order_id: order.service_order_id },
       409,
+    );
+  }
+
+  // P6 (code review 2026-09-06): the delta corrects the LATEST document, so it must be priced in
+  // that document's currency - otherwise the signed difference subtracts one currency from another
+  // and the current-value row mixes units.
+  if (p.currency !== latest.currency) {
+    reject(
+      'INVALID_PARAMS',
+      'The revaluation currency must match the currency of the document it supersedes',
+      {
+        holding_id: holding.holding_id,
+        credit_note_id: latest.credit_note_id,
+        currency: p.currency,
+        latest_currency: latest.currency,
+      },
+      400,
     );
   }
 
@@ -906,6 +1151,7 @@ export async function applyJobworkOffcutRevalued(
     p.approved_by,
     envelope.metadata.actor.user_id,
     { service_order_id: order.service_order_id, holding_id: holding.holding_id },
+    auditCtx,
   );
 
   // The delta chains off the LATEST document, so a second revaluation supersedes the first delta
@@ -933,16 +1179,19 @@ export async function applyJobworkOffcutRevalued(
       client,
     );
   } catch (err: unknown) {
-    classifyDuplicate(err, p.revaluation_id, eventId);
+    classifyCreditInsert(err, p.revaluation_id, eventId);
   }
 
   // The DOCUMENT trail is immutable - neither the original nor any earlier delta is touched - while
   // the holding row carries the CURRENT commercial value. That split is the distinction AC 5 draws:
-  // "a delta document is raised and the original is never mutated".
+  // "a delta document is raised and the original is never mutated". disposal_currency is written
+  // too (P6): a revaluation changes the commercial value's currency and the row must not keep
+  // advertising the old one.
   const revalued = await updateOffcutHoldingValuation(
     holding.holding_id,
     {
       disposal_rate: p.rate,
+      disposal_currency: p.currency,
       disposal_value: newValue,
       approved_by: approval.approved_by,
       doa_entry_id: approval.doa_entry_id,
@@ -972,6 +1221,8 @@ export async function applyJobworkCreditNoteAcknowledged(
   envelope: EventEnvelope,
   client: PoolClient,
   _eventId: string,
+  // Story 9.7 code review (2026-09-06): self-audited refusals - see the disposal applier's comment.
+  auditCtx?: ApplierAuditCtx,
 ): Promise<void> {
   if (envelope.event_type !== JOBWORK_CREDIT_NOTE_ACKNOWLEDGED) return;
   if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) return;
@@ -1011,6 +1262,29 @@ export async function applyJobworkCreditNoteAcknowledged(
     );
   }
 
+  // P8 (code review 2026-09-06): a revaluation delta SUPERSEDES the document it corrects, so an
+  // acknowledgment must target the holding's LATEST document. Acknowledging a superseded original
+  // or earlier delta would mark a document that no longer carries the commercial value as the one
+  // ERP ingested - while the delta that does carry it stays pending. Serialized with revaluations
+  // by the order advisory lock above.
+  const supersedingResult = await client.query(
+    `SELECT 1 FROM job_work_credit_note WHERE supersedes_credit_note_id = $1 LIMIT 1`,
+    [note.credit_note_id],
+  );
+  if ((supersedingResult.rowCount ?? 0) > 0) {
+    return auditedRefusal(
+      auditCtx,
+      'CREDIT_NOTE_SUPERSEDED',
+      'This credit note has been superseded by a revaluation delta and is no longer the current document',
+      {
+        credit_note_id: note.credit_note_id,
+        service_order_id: order.service_order_id,
+        holding_id: note.holding_id,
+      },
+      409,
+    );
+  }
+
   // AC 6, and this guard is the ENTIRE control over the acquisition rate: the 2026-09-05 ruling
   // removed the tolerance band, so nothing arithmetic constrains what the finance controller writes.
   // What constrains it is that they cannot also sign off the document that bills it. Compared
@@ -1020,7 +1294,8 @@ export async function applyJobworkCreditNoteAcknowledged(
   const selfAcknowledged =
     note.valued_by === p.acknowledged_by || note.valued_by === envelope.metadata.actor.user_id;
   if (selfAcknowledged) {
-    reject(
+    return auditedRefusal(
+      auditCtx,
       'SOD_VIOLATION',
       'A credit note cannot be acknowledged by the actor who valued the offcut it bills',
       {

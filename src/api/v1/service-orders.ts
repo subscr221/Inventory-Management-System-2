@@ -139,6 +139,28 @@ const AUDITED_REJECTIONS = new Set([
   'OFFCUT_NOT_RETAINED',
   'CREDIT_NOTE_MISSING',
   'CREDIT_NOTE_UNCITABLE',
+  // Chunk C code review (2026-09-06): registered here as well as in the applier's self-audit set so
+  // the route-level backstop exists for it too. The skip set excludes it, so nothing double-audits.
+  'CREDIT_NOTE_SUPERSEDED',
+]);
+
+/**
+ * Story 9.7 code review (2026-09-06): the three offcut appliers audit these refusal codes
+ * THEMSELVES - logRejectionAudit (Story 6.4) writes on a fresh connection so the row survives the
+ * rollback the refusal causes - because the direct POST /api/v1/events door has no route catch and
+ * AC 7 requires a refused acquisition to be refused AND audited on both doors. The three 9.7 routes
+ * therefore skip them here; without the skip a refused acquisition on the route door would write
+ * two audit rows with the same trace. Codes outside this set are still audited by the route catch
+ * exactly as before.
+ */
+const APPLIER_SELF_AUDITED_CODES = new Set([
+  'APPROVAL_REQUIRED',
+  'APPROVAL_UNRESOLVED',
+  'SOD_VIOLATION',
+  'OFFCUT_NOT_RETAINED',
+  'CREDIT_NOTE_MISSING',
+  'CREDIT_NOTE_UNCITABLE',
+  'CREDIT_NOTE_SUPERSEDED',
 ]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -191,6 +213,24 @@ function requireIdempotencyKey(body: Record<string, unknown>): string {
 function rejectUnacceptedFields(body: Record<string, unknown>, fields: string[]): void {
   for (const field of fields) {
     if (body[field] !== undefined) {
+      throw new AppError(400, 'INVALID_PARAMS', `${field} is not accepted on this route`, {
+        field,
+      });
+    }
+  }
+}
+
+/**
+ * Chunk C code review (2026-09-06): the DENY-list above is not symmetric with the events door's
+ * closed-shape assert - a payload field that belongs to another route (a `disposition` sent to the
+ * revaluation route, a `site_id` naming a different site, a `rate` sent to the acknowledgment
+ * route) was silently dropped and answered 201/200, while the identical payload draws INVALID_PARAMS
+ * on POST /api/v1/events. These three routes switch to an ALLOW-list so nothing the caller sends can
+ * be accepted-but-ignored.
+ */
+function rejectFieldsOutside(body: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const field of Object.keys(body)) {
+    if (!allowed.includes(field)) {
       throw new AppError(400, 'INVALID_PARAMS', `${field} is not accepted on this route`, {
         field,
       });
@@ -1372,8 +1412,14 @@ const getJobworkAgingReportBase: RouteHandler = async (req, res, _params) => {
       due_within_90: 0n,
       beyond_90: 0n,
     };
+    // Chunk C code review (2026-09-06): the offcut rows have no deadline, so a runway of zero at
+    // the horizon is NOT "due within 30 days" - it is past the attention horizon and reads as such.
+    // The bucket is age-based: at or beyond 90 days retained lands in `breached` as the attention
+    // flag this report's own header promises, and `beyond_90` (which needs a clock-style future
+    // expiry and can never occur here) stays dead for offcut.
     const offcutOut = offcutRows.map((row) => {
-      const bucket = agingBucketFor('retained', OFFCUT_AGING_HORIZON_DAYS - row.age_days);
+      const offcutRunway = OFFCUT_AGING_HORIZON_DAYS - row.age_days;
+      const bucket = offcutRunway <= 0 ? 'breached' : agingBucketFor('retained', offcutRunway);
       offcutBuckets[bucket].count += 1;
       offcutScaled[bucket] += qtyToScaled(row.quantity);
       return {
@@ -1798,7 +1844,15 @@ async function postOffcutValuationEvent(
   const now = new Date().toISOString();
   try {
     const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
-    rejectUnacceptedFields(body, ['posted_by', 'status', ...spec.derivedFields]);
+    // Chunk C code review: allow-list, not deny-list - `site_id`, the other route's caller fields
+    // and every server-owned field are refused, mirroring the events door's closed shape.
+    rejectFieldsOutside(body, [
+      'idempotency_key',
+      'service_order_id',
+      'holding_id',
+      spec.idField,
+      ...spec.callerFields,
+    ]);
     if (body['service_order_id'] !== undefined && body['service_order_id'] !== serviceOrderId) {
       throw new AppError(400, 'INVALID_PARAMS', 'service_order_id must equal the path id', {
         service_order_id: body['service_order_id'],
@@ -1864,18 +1918,48 @@ async function postOffcutValuationEvent(
       auditCtxFor(req, actor, 201),
     );
     const persistedId = replayIdOrReject(persisted, spec.eventType, spec.idField);
+    // Chunk C code review (2026-09-06): an idempotency key is per-OPERATION, and a replay must
+    // describe the record the STORED event acted on - never the current request's body or a
+    // different order's path (the 9.5 closure-route lesson). A key reused for a different target is
+    // a client bug and is refused, not silently replayed against the wrong record; persistEvent
+    // already returned the stored event without writing anything, so refusing here has no side
+    // effects to unwind.
+    const storedPayload = persisted.payload as Record<string, unknown>;
+    if (
+      storedPayload['service_order_id'] !== serviceOrderId ||
+      storedPayload['holding_id'] !== body['holding_id']
+    ) {
+      throw new AppError(
+        409,
+        'DUPLICATE_EVENT',
+        'This idempotency key was already used for a different disposal/revaluation target',
+        {
+          stored_service_order_id: storedPayload['service_order_id'],
+          stored_holding_id: storedPayload['holding_id'],
+          request_service_order_id: serviceOrderId,
+          request_holding_id: body['holding_id'],
+        },
+      );
+    }
     const holdings = await listOffcutHoldingsByOrder(serviceOrderId);
-    const holding = holdings.find((row) => row.holding_id === body['holding_id']) ?? null;
+    const holding =
+      holdings.find((row) => row.holding_id === storedPayload['holding_id']) ?? null;
     const credit_notes = await listCreditNotesByOrder(serviceOrderId);
-    // A replay is not a posting: 200 with the same event_id, the house idiom.
-    sendJson(res, persistedId === postingId ? 201 : 200, {
+    // A replay is not a posting: 200 with the same event_id, the house idiom. The status is decided
+    // by the REPLAY, never by whether the client echoed the posting id (chunk C code review) - an
+    // identical retry must read as a replay whether or not it named its own id.
+    sendJson(res, isRetry ? 200 : 201, {
       event_id: persisted.event_id,
       [spec.idField]: persistedId,
       holding,
       credit_notes,
     });
   } catch (err: unknown) {
-    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+    if (
+      err instanceof AppError &&
+      AUDITED_REJECTIONS.has(err.errorCode) &&
+      !APPLIER_SELF_AUDITED_CODES.has(err.errorCode)
+    ) {
       await auditFailSafe(req, actor, err, {
         service_order_id: params?.['serviceOrderId'] ?? null,
         holding_id: (body as Record<string, unknown>)['holding_id'] ?? null,
@@ -1925,15 +2009,9 @@ const postCreditNoteAcknowledgmentBase: RouteHandler = async (req, res, params) 
   const now = new Date().toISOString();
   try {
     const creditNoteId = requireUuidParam(params, 'creditNoteId');
-    rejectUnacceptedFields(body, [
-      'credit_note_id',
-      'service_order_id',
-      'site_id',
-      'acknowledged_by',
-      'acknowledged_at',
-      'status',
-      'valued_by',
-    ]);
+    // Chunk C code review: allow-list, not deny-list - a `rate`, a `site_id` or any other field is
+    // refused rather than accepted-and-ignored (the events door's closed shape).
+    rejectFieldsOutside(body, ['idempotency_key', 'acknowledged_ref_ext']);
     const idempotencyKey = requireIdempotencyKey(body);
     if (
       typeof body['acknowledged_ref_ext'] !== 'string' ||
@@ -1949,7 +2027,35 @@ const postCreditNoteAcknowledgmentBase: RouteHandler = async (req, res, params) 
 
     // 404-versus-403 collapse: a credit note at a site the caller cannot write is indistinguishable
     // from a missing one. A retry of a SUCCESSFUL acknowledgment must still replay.
-    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const retried = await findEventByIdempotencyKey(idempotencyKey);
+    const isRetry = retried !== null;
+    // Chunk C code review (2026-09-06): a replay must be bound to the STORED event's target. A key
+    // reused for a DIFFERENT credit note is a client bug - refusing here, before the site collapse,
+    // prevents the route from answering success about a document the caller never touched. And a
+    // retry of the SAME acknowledgment must still replay even if the caller's write grant at the
+    // note's site changed since the original success (the action was authorized when it committed);
+    // only a FIRST submission runs the 404-versus-403 collapse against current scope.
+    if (isRetry) {
+      const storedPayload = (retried!.payload as Record<string, unknown>) ?? {};
+      if (storedPayload['credit_note_id'] !== creditNoteId) {
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'This idempotency key was already used for a different credit note',
+          {
+            stored_credit_note_id: storedPayload['credit_note_id'] ?? null,
+            request_credit_note_id: creditNoteId,
+          },
+        );
+      }
+      const replayed = await getCreditNoteById(creditNoteId);
+      sendJson(res, 200, {
+        event_id: retried!.event_id,
+        credit_note_id: creditNoteId,
+        credit_note: replayed,
+      });
+      return;
+    }
     const note = await getCreditNoteById(creditNoteId);
     let accessDenied = false;
     if (note) {
@@ -1962,11 +2068,6 @@ const postCreditNoteAcknowledgmentBase: RouteHandler = async (req, res, params) 
           throw err;
         }
       }
-    }
-    if ((!note || accessDenied) && !isRetry) {
-      throw new AppError(404, 'NOT_FOUND', 'Credit note not found', {
-        credit_note_id: creditNoteId,
-      });
     }
     if (!note || accessDenied) {
       throw new AppError(404, 'NOT_FOUND', 'Credit note not found', {
@@ -2009,7 +2110,11 @@ const postCreditNoteAcknowledgmentBase: RouteHandler = async (req, res, params) 
       credit_note: updated,
     });
   } catch (err: unknown) {
-    if (err instanceof AppError && AUDITED_REJECTIONS.has(err.errorCode)) {
+    if (
+      err instanceof AppError &&
+      AUDITED_REJECTIONS.has(err.errorCode) &&
+      !APPLIER_SELF_AUDITED_CODES.has(err.errorCode)
+    ) {
       await auditFailSafe(req, actor, err, {
         credit_note_id: params?.['creditNoteId'] ?? null,
         event_type: JOBWORK_CREDIT_NOTE_ACKNOWLEDGED,

@@ -161,12 +161,45 @@ export async function listCreditNotesByHolding(
   return (result.rows as Record<string, unknown>[]).map(mapRow);
 }
 
+/**
+ * The LATEST document of the holding - the one no other document supersedes (code review 2026-09-06,
+ * chunk B). Ordering by `created_at` is unreliable for this purpose: the column defaults to the
+ * TRANSACTION start time, so when two revaluations of one holding overlap, the delta that began its
+ * transaction first but committed last is stamped earlier than the document it supersedes, and a
+ * timestamp-ordered "last" would chain the next delta off the wrong base. The supersede pointer is
+ * commit-ordered truth: serialized by the order advisory lock, exactly one document per holding has
+ * no successor, and it is the one the next delta must correct. Returns NULL when the holding has no
+ * documents (a free retention raised none).
+ */
+export async function getLatestCreditNoteForHolding(
+  holdingId: string,
+  client: PoolClient,
+  forUpdate: boolean = false,
+): Promise<JobWorkCreditNoteRow | null> {
+  if (!UUID_REGEX.test(holdingId)) return null;
+  const result = await client.query(
+    `SELECT ${SELECT_COLUMNS}
+       FROM job_work_credit_note c
+      WHERE c.holding_id = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM job_work_credit_note s
+           WHERE s.supersedes_credit_note_id = c.credit_note_id
+             AND s.holding_id = c.holding_id
+        )${forUpdate ? ' FOR UPDATE' : ''}`,
+    [holdingId],
+  );
+  const row = result.rows[0];
+  return row ? mapRow(row as Record<string, unknown>) : null;
+}
+
 /** Guarded flip: matches only while the document is not already acknowledged. */
 export async function markCreditNoteAcknowledged(
   creditNoteId: string,
   ack: { acknowledged_at: string; acknowledged_by: string; acknowledged_ref_ext: string },
   client: PoolClient,
 ): Promise<boolean> {
+  // A malformed id is "not found", not a 22P02 500 (the sibling accessors' precedent).
+  if (!UUID_REGEX.test(creditNoteId)) return false;
   const result = await client.query(
     `UPDATE job_work_credit_note
         SET status = 'acknowledged', acknowledged_at = $2::timestamptz, acknowledged_by = $3::uuid,

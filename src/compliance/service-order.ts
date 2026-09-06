@@ -373,6 +373,24 @@ function assertOffcutRateShape(p: Record<string, unknown>): void {
       );
     }
   }
+  // Story 9.6 code review (2026-09-06): the offcut contract reference is recordable at create,
+  // update and confirm, so it gets the same shape gate as the rate pair. An explicit null is
+  // refused rather than silently clearing a reference recorded earlier: removing an agreed contract
+  // reference is a decision that must not ride a confirm as an omitted field.
+  if (p['offcut_contract_ref_ext'] !== undefined) {
+    if (
+      typeof p['offcut_contract_ref_ext'] !== 'string' ||
+      p['offcut_contract_ref_ext'].trim() === '' ||
+      p['offcut_contract_ref_ext'].length > 200
+    ) {
+      reject(
+        'INVALID_PARAMS',
+        'offcut_contract_ref_ext must be a non-blank string of at most 200 characters when supplied',
+        { field: 'offcut_contract_ref_ext' },
+      );
+    }
+    p['offcut_contract_ref_ext'] = (p['offcut_contract_ref_ext'] as string).trim();
+  }
   // The pair travels together: a rate with no currency is an unbounded number on an invoice line,
   // and a null clear must clear both.
   const rateState =

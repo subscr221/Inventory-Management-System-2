@@ -59,11 +59,19 @@ CREATE TABLE IF NOT EXISTS job_work_credit_note (
   CONSTRAINT chk_job_work_credit_note_chain CHECK (
     (document_kind = 'delta') = (supersedes_credit_note_id IS NOT NULL AND delta_value IS NOT NULL)
   ),
+  -- Chunk B code review 2026-09-06: the biconditional used to pass for a `pending` row carrying ONE
+  -- or TWO of the ack stamps, and nothing prevented an acknowledgment predating the document. The
+  -- lifecycle is now all-or-nothing per status, and an acknowledgment can only post-date its row.
   CONSTRAINT chk_job_work_credit_note_lifecycle CHECK (
-    (status = 'acknowledged') = (
-      acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledged_ref_ext IS NOT NULL
-    )
-  )
+    (status = 'pending' AND acknowledged_at IS NULL AND acknowledged_by IS NULL
+      AND acknowledged_ref_ext IS NULL)
+    OR (status = 'acknowledged' AND acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL
+      AND acknowledged_ref_ext IS NOT NULL AND acknowledged_at >= created_at)
+  ),
+  -- BSD-5 says zero is the free-retention floor, so an acquisition money leg is never negative
+  -- (chunk B code review 2026-09-06). delta_value stays SIGNED: a downward revaluation is a
+  -- negative correction, that is its whole purpose.
+  CONSTRAINT chk_job_work_credit_note_money CHECK (rate >= 0 AND value >= 0)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_credit_note_source_event ON job_work_credit_note (source_event_id);
@@ -96,10 +104,20 @@ BEGIN
   ALTER TABLE job_work_credit_note DROP CONSTRAINT IF EXISTS chk_job_work_credit_note_lifecycle;
   ALTER TABLE job_work_credit_note
     ADD CONSTRAINT chk_job_work_credit_note_lifecycle CHECK (
-      (status = 'acknowledged') = (
-        acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL AND acknowledged_ref_ext IS NOT NULL
-      )
+      (status = 'pending' AND acknowledged_at IS NULL AND acknowledged_by IS NULL
+        AND acknowledged_ref_ext IS NULL)
+      OR (status = 'acknowledged' AND acknowledged_at IS NOT NULL AND acknowledged_by IS NOT NULL
+        AND acknowledged_ref_ext IS NOT NULL AND acknowledged_at >= created_at)
     );
+  ALTER TABLE job_work_credit_note DROP CONSTRAINT IF EXISTS chk_job_work_credit_note_money;
+  ALTER TABLE job_work_credit_note
+    ADD CONSTRAINT chk_job_work_credit_note_money CHECK (rate >= 0 AND value >= 0);
+  -- A delta must point at a REAL document; the same-holding/order binding is enforced by the
+  -- revaluation applier under the order advisory lock (a cross-row CHECK cannot express it).
+  ALTER TABLE job_work_credit_note DROP CONSTRAINT IF EXISTS fk_job_work_credit_note_supersedes;
+  ALTER TABLE job_work_credit_note
+    ADD CONSTRAINT fk_job_work_credit_note_supersedes
+      FOREIGN KEY (supersedes_credit_note_id) REFERENCES job_work_credit_note(credit_note_id);
 END $$;
 
 DO $$

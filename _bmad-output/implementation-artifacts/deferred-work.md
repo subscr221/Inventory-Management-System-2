@@ -574,6 +574,10 @@ Table 8: Folded duplicates
 
 ## Deferred from: code review (2026-09-06) of story 9.6
 
+Table 9 lists the two deferrals the 2026-09-06 group-C code review of story 9.6 consciously recorded. Both remain open as of 2026-09-06; 9.6C-2 is gated on the Story 9.7 disposal-reconciliation ruling.
+
+Table 9: Deferred from the code review (2026-09-06) of story 9.6
+
 | Ref | Story | Item | Trigger or note |
 | --- | --- | --- | --- |
 | 9.6C-1 | 9-6 | The reconciliation report does not surface duplicate acknowledged_ref_ext entries although the ack-ref index exists to serve that lookup (read/projections/job_work_billing_feed.sql:79-85, src/read/projections/job_work_billing_feed.ts:199-229). One consolidated ERP invoice legitimately acknowledges several orders, so the report needs a duplicate-ref count | Group C code review 2026-09-06, consciously deferred reconciliation follow-up |
