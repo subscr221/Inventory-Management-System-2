@@ -647,23 +647,27 @@ describe('Story 9.1 Job-Work Service Order Creation', () => {
     const bad = await confirmOrder(orderId, { offcut_election: 'sell_it' });
     assert.strictEqual(bad.status, 400);
 
-    // Story 9.6 Task 0 (Binding decision 16): a contractual order also needs its contracted offcut
-    // rate at confirm; the election alone is now refused at the third confirm gate.
+    // Story 9.6 REVISED (sprint change proposal 2026-09-05): the confirm-time rate MANDATE is
+    // withdrawn. The offcut contract is its own contract and may be agreed after the service order
+    // is confirmed, and where the offcut is later sold at auction no rate can exist in advance at
+    // all. A contractual order therefore confirms with no rate, and the indicative pair is optional.
     const noRate = await confirmOrder(orderId, { offcut_election: 'retain_and_buy' });
-    assert.strictEqual(noRate.status, 409, JSON.stringify(noRate.body));
-    assert.strictEqual(noRate.body['error_code'], 'INVALID_STATE_TRANSITION');
-    assert.strictEqual(detailsOf(noRate.body)['field'], 'offcut_rate');
+    assert.strictEqual(noRate.status, 200, JSON.stringify(noRate.body));
+    assert.strictEqual((await rowOf(orderId))['offcut_rate'], null);
 
-    const res = await confirmOrder(orderId, {
+    // A fresh order, because the one above is already confirmed: supplying the indicative pair
+    // still works and still stores.
+    const withRate = await createdOrderId({ has_contractual_offcut: true });
+    const res = await confirmOrder(withRate, {
       offcut_election: 'retain_and_buy',
       offcut_rate: '18.5000',
       offcut_currency: 'INR',
     });
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(orderOf(res).offcut_election, 'retain_and_buy');
-    assert.strictEqual((await rowOf(orderId))['offcut_election'], 'retain_and_buy');
-    assert.strictEqual((await rowOf(orderId))['offcut_rate'], '18.5000');
-    assert.strictEqual((await rowOf(orderId))['offcut_currency'], 'INR');
+    assert.strictEqual((await rowOf(withRate))['offcut_election'], 'retain_and_buy');
+    assert.strictEqual((await rowOf(withRate))['offcut_rate'], '18.5000');
+    assert.strictEqual((await rowOf(withRate))['offcut_currency'], 'INR');
   });
 
   it('Story 9.6 Task 0: a non-contractual order refuses to carry an offcut rate at confirm (mirror gate)', async () => {

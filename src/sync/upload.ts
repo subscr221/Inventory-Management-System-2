@@ -205,9 +205,6 @@ const PERMANENT_ERROR_CODES = new Set([
   // of the same request (the 9.5 precedent). Office actions, registered defensively.
   'OFFCUT_ELECTION_MISSING',
   'BILLING_NOT_READY',
-  // Story 9.6 code review 2026-09-05: a rate outside the governed band never clears on a retry of
-  // the same posting - the rate has to change, or the contract has to.
-  'OFFCUT_RATE_OUT_OF_BAND',
   'SOD_VIOLATION',
   'UNREVERSED_TRANSACTIONS',
   'BOM_REVISION_DRIFT',

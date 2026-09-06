@@ -653,6 +653,16 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     return (r.rows[0]?.['on_hand'] as string | undefined) ?? null;
   }
 
+  async function holdingRows(orderId: string): Promise<Record<string, unknown>[]> {
+    const r = await getAdminPool().query(
+      `SELECT holding_id, sku, lot_id, source_lot_id, quantity::text AS quantity, uom, status,
+              disposition, disposed_at, offcut_contract_ref_ext, captured_by
+         FROM job_work_offcut_holding WHERE service_order_id = $1 ORDER BY lot_id ASC`,
+      [orderId],
+    );
+    return r.rows as Record<string, unknown>[];
+  }
+
   async function storedPayload(eventId: string): Promise<Record<string, unknown>> {
     const r = await getAdminPool().query(`SELECT payload FROM domain_events WHERE event_id = $1`, [
       eventId,
@@ -910,39 +920,26 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
   // Task 0: the contracted offcut rate lives on the order
   // -------------------------------------------------------------------------
 
-  it('Task 0: a contractual order refuses confirm without an offcut rate, and confirms with the pair', async () => {
-    const orderId = await createDraftOrder({ contractual: true });
-    const noRate = await confirmOrder(orderId, { offcut_election: 'retain_and_buy' });
-    assert.strictEqual(noRate.status, 409, JSON.stringify(noRate.body));
-    assert.strictEqual(noRate.body['error_code'], 'INVALID_STATE_TRANSITION');
-    assert.strictEqual(detailsOf(noRate.body)['field'], 'offcut_rate');
-    assert.strictEqual((await orderRow(orderId))['status'], 'draft');
+  it('Task 0 REVISED: a contractual order confirms with NO offcut rate; the indicative pair is optional', async () => {
+    // Sprint change proposal 2026-09-05 withdrew the confirm-time rate mandate. The offcut contract
+    // is its own contract and may be agreed later, and where the offcut is eventually sold at
+    // auction no rate can exist in advance at all.
+    const bare = await createDraftOrder({ contractual: true });
+    const confirmBare = await confirmOrder(bare, { offcut_election: 'return' });
+    assert.strictEqual(confirmBare.status, 200, JSON.stringify(confirmBare.body));
+    assert.strictEqual((await orderRow(bare))['offcut_rate'], null);
+    assert.strictEqual((await orderRow(bare))['status'], 'confirmed');
 
-    // Direct-event arm: the gate lives in the seam, not the route.
-    const direct = await postEvent({
-      stream_type: 'jobwork',
-      stream_id: orderId,
-      event_type: 'jobwork.order_confirmed',
-      payload: { service_order_id: orderId, offcut_election: 'retain_and_buy' },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: coordinatorUserId, role: COORDINATOR_ROLE, location_id: siteAId },
-        occurred_at: new Date().toISOString(),
-      },
-    });
-    assert.strictEqual(direct.status, 409, JSON.stringify(direct.body));
-    assert.strictEqual(direct.body['error_code'], 'INVALID_STATE_TRANSITION');
-    assert.strictEqual(detailsOf(direct.body)['field'], 'offcut_rate');
-    assert.strictEqual((await orderRow(orderId))['status'], 'draft');
-
-    const ok = await confirmOrder(orderId, {
-      offcut_election: 'retain_and_buy',
+    // Supplying the indicative pair still works and still stores.
+    const withRate = await createDraftOrder({ contractual: true });
+    const confirmRate = await confirmOrder(withRate, {
+      offcut_election: 'return',
       offcut_rate: CONTRACTED_RATE,
       offcut_currency: 'INR',
     });
-    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
-    const row = await orderRow(orderId);
-    assert.strictEqual(row['offcut_rate'], '18.5000');
+    assert.strictEqual(confirmRate.status, 200, JSON.stringify(confirmRate.body));
+    const row = await orderRow(withRate);
+    assert.strictEqual(row['offcut_rate'], CONTRACTED_RATE);
     assert.strictEqual(row['offcut_currency'], 'INR');
   });
 
@@ -972,200 +969,105 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
   // AC 1: the `return` branch
   // -------------------------------------------------------------------------
 
-  it('AC1: a `return` offcut drains custody through the CUSTODY_RETURN door and writes four dispatch documents', async () => {
-    const { orderId, lot } = await inProcessOrder({ contractual: true, election: 'return' });
-    const challan = `RET-${run}-${randomUUID().slice(0, 6)}`;
-    const res = await postOffcut(orderId, lot, {
-      quantity: '50',
-      return_challan_number_ext: challan,
-    });
+  it('capture drains custody into the offcut holding ledger, UNVALUED, minting a segregated offcut lot', async () => {
+    const { orderId, lot } = await inProcessOrder({ contractual: true });
+    const res = await postOffcut(orderId, lot, { quantity: '30' });
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    assert.strictEqual(res.body['custody_balance_after'], '950.000');
+
+    // The custody ledger drains so the Story 9.5 closure gate stays reachable...
+    assert.strictEqual(await custodyBalance(orderId), '970.000');
     const entry = res.body['entry'] as Record<string, unknown>;
     assert.strictEqual(entry['movement_category'], 'offcut');
-    assert.strictEqual(entry['ownership'], 'customer');
-    assert.strictEqual(entry['billable'], false);
-    assert.strictEqual(entry['quantity_delta'], '-50.000');
-    assert.strictEqual(entry['reference_ext'], challan);
+    assert.strictEqual(entry['quantity_delta'], '-30.000');
+    assert.strictEqual(entry['billable'], false, 'capture is unvalued: nothing is billable yet');
 
-    assert.strictEqual(await custodyBalance(orderId), '950.000');
-    assert.strictEqual(await stockOnHand(SKU, lot, 'job_work'), '950.000');
+    // ...and the material lands in the holding ledger, still the customer's, awaiting disposal.
+    const holdings = await holdingRows(orderId);
+    assert.strictEqual(holdings.length, 1);
+    assert.strictEqual(holdings[0]!['status'], 'retained');
+    assert.strictEqual(holdings[0]!['quantity'], '30.000');
+    assert.strictEqual(holdings[0]!['source_lot_id'], lot);
+    assert.strictEqual(holdings[0]!['disposition'], null);
+    assert.strictEqual(holdings[0]!['disposed_at'], null);
 
+    // The offcut lot carries the segregated `offcut` class, NOT owned stock, and is not QC held:
+    // it is the customer's material, not ours to inspect for use.
     const payload = await storedPayload(res.body['event_id'] as string);
-    assert.strictEqual(payload['election'], 'return');
-    assert.strictEqual(payload['converted_lot_number'], null);
-    assert.strictEqual(payload['billable_value'], null);
+    const offcutLot = payload['offcut_lot_number'] as string;
+    assert.ok(offcutLot.endsWith('-OC1'), offcutLot);
+    assert.strictEqual(await stockOnHand(SKU, offcutLot, 'offcut'), '30.000');
+    assert.strictEqual(await stockOnHand(SKU, offcutLot, 'owned'), null, 'never owned at capture');
+    assert.strictEqual((await qcHeld(offcutLot)).held, false);
 
-    const docs = await documentsFor(orderId);
-    assert.deepStrictEqual(
-      docs.map((d) => d['document_type']),
-      ['bol', 'commercial_invoice', 'label', 'packing_slip'],
-    );
-    const challanDoc = docs.find((d) => d['document_type'] === 'commercial_invoice')!;
-    assert.ok(
-      (challanDoc['document_content'] as string).includes('JOB-WORK OFFCUT RETURN CHALLAN'),
-    );
-    assert.ok((challanDoc['document_content'] as string).includes(challan));
-    assert.strictEqual(challanDoc['generated_by'], coordinatorUserId);
-
-    // The clock absorbs the returned quantity (non-strict, reconciled_qty).
-    const clock = await getAdminPool().query(
-      `SELECT reconciled_qty::text AS reconciled_qty FROM jobwork_return_clock WHERE service_order_id = $1`,
-      [orderId],
-    );
-    assert.strictEqual(clock.rows[0]!['reconciled_qty'], '50.000');
+    // No documents and no valuation at capture: both belong to disposal (Story 9.7).
+    assert.strictEqual((await documentsFor(orderId)).length, 0);
+    assert.strictEqual(payload['billable_value'], undefined);
+    assert.strictEqual(payload['effective_offcut_rate'], undefined);
   });
 
-  it('AC1: a `return` offcut without a challan number refuses INVALID_PARAMS; with a rate estimate refuses INVALID_PARAMS', async () => {
-    const { orderId, lot } = await inProcessOrder({ contractual: true, election: 'return' });
-    const noChallan = await postOffcut(orderId, lot, { quantity: '5' });
-    assert.strictEqual(noChallan.status, 400, JSON.stringify(noChallan.body));
-    assert.strictEqual(noChallan.body['error_code'], 'INVALID_PARAMS');
-    assert.strictEqual(detailsOf(noChallan.body)['field'], 'return_challan_number_ext');
-
-    const withOverride = await postOffcut(orderId, lot, {
+  it('disposal-time fields reach nothing: the route filters them, the seam refuses them', async () => {
+    const { orderId, lot } = await inProcessOrder({ contractual: true });
+    // The route's allowlist does not forward them, so capture succeeds and NOTHING disposal-shaped
+    // happens: no settlement stamp, no valuation, no document.
+    const viaRoute = await postOffcut(orderId, lot, {
       quantity: '5',
-      return_challan_number_ext: `RET-${run}-x`,
+      return_challan_number_ext: 'RC-1',
       offcut_rate_estimate: '20.0000',
+      settles_offcut: true,
     });
-    assert.strictEqual(withOverride.status, 400, JSON.stringify(withOverride.body));
-    assert.strictEqual(withOverride.body['error_code'], 'INVALID_PARAMS');
-    assert.strictEqual(detailsOf(withOverride.body)['field'], 'offcut_rate_estimate');
-    assert.strictEqual(await custodyBalance(orderId), '1000.000');
+    assert.strictEqual(viaRoute.status, 201, JSON.stringify(viaRoute.body));
+    assert.strictEqual((await orderRow(orderId))['offcut_settled_at'], null, 'nothing settled');
     assert.strictEqual((await documentsFor(orderId)).length, 0);
+    const stored = await storedPayload(viaRoute.body['event_id'] as string);
+    for (const gone of ['return_challan_number_ext', 'offcut_rate_estimate', 'settles_offcut']) {
+      assert.strictEqual(stored[gone], undefined, `${gone} must not reach the stored event`);
+    }
+
+    // The seam is the authority: a direct event carrying them is refused outright.
+    for (const field of [
+      { return_challan_number_ext: 'RC-1' },
+      { offcut_rate_estimate: '20.0000' },
+      { settles_offcut: true },
+      { election: 'retain_and_buy' },
+    ]) {
+      const direct = await postEvent(offcutEnvelope(orderId, lot, { quantity: '1', ...field }));
+      assert.strictEqual(
+        direct.status,
+        400,
+        `${JSON.stringify(field)}: ${JSON.stringify(direct.body)}`,
+      );
+      assert.strictEqual(direct.body['error_code'], 'INVALID_PARAMS');
+    }
   });
 
   // -------------------------------------------------------------------------
   // AC 2: retain_and_buy
   // -------------------------------------------------------------------------
 
-  it('AC2: retain_and_buy drains custody, mints a QC-held owned lot, and bills quantity x the contracted rate', async () => {
-    const { orderId, lot } = await inProcessOrder({
-      contractual: true,
-      election: 'retain_and_buy',
-    });
-    const res = await postOffcut(orderId, lot, { quantity: '40' });
-    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    const entry = res.body['entry'] as Record<string, unknown>;
-    assert.strictEqual(entry['billable'], true);
-    assert.strictEqual(entry['quantity_delta'], '-40.000');
-    const order = await orderRow(orderId);
-    assert.strictEqual(entry['reference_ext'], order['order_number_ext']);
+  it('an order may capture offcut in SEVERAL batches; each mints its own lot and stays retained', async () => {
+    // The old model settled the offcut once and refused everything after it. Capture has no such
+    // gate: an order produces offcut as it runs, and the disposition is decided later, per order.
+    const { orderId, lot } = await inProcessOrder({ contractual: true });
+    const first = await postOffcut(orderId, lot, { quantity: '10' });
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+    const second = await postOffcut(orderId, lot, { quantity: '15' });
+    assert.strictEqual(second.status, 201, JSON.stringify(second.body));
 
-    const payload = await storedPayload(res.body['event_id'] as string);
-    assert.strictEqual(payload['election'], 'retain_and_buy');
-    assert.strictEqual(payload['effective_offcut_rate'], '18.5000');
-    assert.strictEqual(payload['billable_value'], '740.0000');
-    const converted = payload['converted_lot_number'] as string;
-    assert.strictEqual(
-      converted,
-      `${order['order_number_ext']}-${(order['site_id'] as string).slice(0, 8)}-OC1`,
+    const holdings = await holdingRows(orderId);
+    assert.strictEqual(holdings.length, 2);
+    assert.deepStrictEqual(holdings.map((h) => h['quantity']).sort(), ['10.000', '15.000']);
+    assert.ok(holdings.every((h) => h['status'] === 'retained'));
+    const lots = holdings.map((h) => h['lot_id'] as string);
+    assert.ok(
+      lots.some((l) => l.endsWith('-OC1')) && lots.some((l) => l.endsWith('-OC2')),
+      lots.join(),
     );
-    assert.strictEqual(await custodyBalance(orderId), '960.000');
-    assert.strictEqual(await stockOnHand(SKU, lot, 'job_work'), '960.000');
-    assert.strictEqual(await stockOnHand(SKU, converted, 'owned'), '40.000');
-
-    // Binding decision 19: held for QC on mint and NOT allocatable through the gate predicate.
-    const hold = await qcHeld(converted);
-    assert.strictEqual(hold.holdStatus, 'held');
-    assert.strictEqual(hold.openHolds, 1);
-    assert.strictEqual(hold.held, true);
-    assert.ok(payload['converted_lot_hold_id']);
-
-    // Genealogy (disclosed): lot_trace is UNIQUE on event_id, so the offcut event carries the
-    // customer lot's drain row only; the owned lot's first trace row is written by the hold event,
-    // whose causation_id is the offcut event.
-    const trace = await getAdminPool().query(
-      `SELECT lm.lot_number, lt.quantity_change::numeric(18,3)::text AS quantity_change FROM lot_trace lt
-         JOIN lot_master lm ON lm.lot_id = lt.lot_id
-        WHERE lt.event_id = $1`,
-      [res.body['event_id']],
-    );
-    assert.deepStrictEqual(
-      trace.rows.map((r: Record<string, unknown>) => [r['lot_number'], r['quantity_change']]),
-      [[lot, '-40.000']],
-    );
-    const holdTrace = await getAdminPool().query(
-      `SELECT lt.event_type, de.metadata->>'causation_id' AS causation_id
-         FROM lot_trace lt
-         JOIN lot_master lm ON lm.lot_id = lt.lot_id
-         JOIN domain_events de ON de.event_id = lt.event_id
-        WHERE lm.lot_number = $1`,
-      [converted],
-    );
-    assert.strictEqual(holdTrace.rows.length, 1, JSON.stringify(holdTrace.rows));
-    assert.strictEqual(holdTrace.rows[0]!['event_type'], 'qc.hold_placed');
-    assert.strictEqual(holdTrace.rows[0]!['causation_id'], res.body['event_id']);
-  });
-
-  it('AC2 (PO ruling, open question 6): a real-time offcut_rate_estimate IS the settlement rate, no approval; the contracted rate rides beside it', async () => {
-    const { orderId, lot } = await inProcessOrder({
-      contractual: true,
-      election: 'retain_and_buy',
-    });
-    // A number literal is refused at the shape assert; the estimate is an exact decimal string.
-    const numeric = await postOffcut(orderId, lot, { quantity: '10', offcut_rate_estimate: 20 });
-    assert.strictEqual(numeric.status, 400, JSON.stringify(numeric.body));
-    assert.strictEqual(numeric.body['error_code'], 'INVALID_PARAMS');
-
-    // The coordinator posts the estimate directly: no DOA approver, no approved_by.
-    const estimated = await postOffcut(orderId, lot, {
-      quantity: '10',
-      offcut_rate_estimate: '20.0000',
-    });
-    assert.strictEqual(estimated.status, 201, JSON.stringify(estimated.body));
-    const payload = await storedPayload(estimated.body['event_id'] as string);
-    assert.strictEqual(payload['effective_offcut_rate'], '20.0000');
-    assert.strictEqual(payload['contracted_offcut_rate'], '18.5000');
-    assert.strictEqual(payload['billable_value'], '200.0000');
-    assert.strictEqual(payload['approved_by'], undefined);
-    assert.strictEqual(await custodyBalance(orderId), '990.000');
-
-    // An estimate equal to the contracted rate is simply the rate; no refusal.
-    const same = await postOffcut(orderId, lot, { quantity: '5', offcut_rate_estimate: '18.5' });
-    assert.strictEqual(same.status, 201, JSON.stringify(same.body));
-    const samePayload = await storedPayload(same.body['event_id'] as string);
-    assert.strictEqual(samePayload['effective_offcut_rate'], '18.5');
-    assert.strictEqual(samePayload['billable_value'], '92.5000');
-
-    // Without an estimate the contracted rate is the effective rate, stamped in both slots.
-    const contracted = await postOffcut(orderId, lot, { quantity: '2', settles_offcut: true });
-    assert.strictEqual(contracted.status, 201, JSON.stringify(contracted.body));
-    const contractedPayload = await storedPayload(contracted.body['event_id'] as string);
-    assert.strictEqual(contractedPayload['effective_offcut_rate'], '18.5000');
-    assert.strictEqual(contractedPayload['contracted_offcut_rate'], '18.5000');
-    assert.strictEqual(contractedPayload['billable_value'], '37.0000');
+    assert.strictEqual(await custodyBalance(orderId), '975.000');
   });
 
   // -------------------------------------------------------------------------
   // AC 3: retain_free
   // -------------------------------------------------------------------------
-
-  it('AC3: retain_free drains custody with billable = false, converts to a QC-held owned lot, and refuses an estimate', async () => {
-    const { orderId, lot } = await inProcessOrder({ contractual: true, election: 'retain_free' });
-    const withOverride = await postOffcut(orderId, lot, {
-      quantity: '5',
-      offcut_rate_estimate: '1.0000',
-    });
-    assert.strictEqual(withOverride.status, 400, JSON.stringify(withOverride.body));
-    assert.strictEqual(withOverride.body['error_code'], 'INVALID_PARAMS');
-
-    const res = await postOffcut(orderId, lot, { quantity: '30' });
-    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    const entry = res.body['entry'] as Record<string, unknown>;
-    assert.strictEqual(entry['billable'], false);
-    assert.strictEqual(entry['reference_ext'], 'offcut_election:retain_free');
-    const payload = await storedPayload(res.body['event_id'] as string);
-    assert.strictEqual(payload['election'], 'retain_free');
-    assert.strictEqual(payload['billable_value'], null);
-    assert.strictEqual(payload['effective_offcut_rate'], null);
-    const converted = payload['converted_lot_number'] as string;
-    assert.ok(converted.endsWith('-OC1'));
-    assert.strictEqual(await stockOnHand(SKU, converted, 'owned'), '30.000');
-    assert.strictEqual(await custodyBalance(orderId), '970.000');
-    assert.strictEqual((await qcHeld(converted)).held, true);
-    assert.strictEqual((await documentsFor(orderId)).length, 0);
-  });
 
   // -------------------------------------------------------------------------
   // Election gate and settlement (Binding decisions 1, 15)
@@ -1182,50 +1084,22 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     assert.strictEqual((await ledgerRows(orderId, 'offcut')).length, 0);
   });
 
-  it('settles_offcut stamps the order; a further offcut refuses OFFCUT_ELECTION_MISSING with already_settled_at', async () => {
-    const { orderId, lot } = await inProcessOrder({ contractual: true, election: 'return' });
-    const first = await postOffcut(orderId, lot, {
-      quantity: '20',
-      return_challan_number_ext: `RET-${run}-a`,
-    });
-    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
-    assert.strictEqual((await orderRow(orderId))['offcut_settled_at'], null);
-
-    const settling = await postOffcut(orderId, lot, {
-      quantity: '20',
-      return_challan_number_ext: `RET-${run}-b`,
-      settles_offcut: true,
-    });
-    assert.strictEqual(settling.status, 201, JSON.stringify(settling.body));
-    const row = await orderRow(orderId);
-    assert.ok(row['offcut_settled_at']);
-    assert.strictEqual(row['offcut_settled_by'], coordinatorUserId);
-
-    const after = await postOffcut(orderId, lot, {
-      quantity: '1',
-      return_challan_number_ext: `RET-${run}-c`,
-    });
-    assert.strictEqual(after.status, 409, JSON.stringify(after.body));
-    assert.strictEqual(after.body['error_code'], 'OFFCUT_ELECTION_MISSING');
-    assert.strictEqual(detailsOf(after.body)['reason'], 'already_settled');
-    assert.ok(detailsOf(after.body)['already_settled_at']);
-    assert.strictEqual(await custodyBalance(orderId), '960.000');
-  });
-
-  it('an offcut replays on the same idempotency key (200, same event, one ledger row) and refuses derived fields', async () => {
-    const { orderId, lot } = await inProcessOrder({ contractual: true, election: 'retain_free' });
+  it('an offcut capture replays on the same idempotency key and refuses every derived field', async () => {
+    const { orderId, lot } = await inProcessOrder({ contractual: true });
     const key = randomUUID();
     const first = await postOffcut(orderId, lot, { quantity: '5', idempotency_key: key });
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
     const replay = await postOffcut(orderId, lot, { quantity: '5', idempotency_key: key });
     assert.strictEqual(replay.status, 200, JSON.stringify(replay.body));
     assert.strictEqual(replay.body['event_id'], first.body['event_id']);
-    assert.strictEqual((await ledgerRows(orderId, 'offcut')).length, 1);
+    assert.strictEqual((await holdingRows(orderId)).length, 1, 'a replay writes no second holding');
     assert.strictEqual(await custodyBalance(orderId), '995.000');
 
-    const derived = await postOffcut(orderId, lot, { quantity: '5', election: 'return' });
-    assert.strictEqual(derived.status, 400, JSON.stringify(derived.body));
-    assert.strictEqual(derived.body['error_code'], 'INVALID_PARAMS');
+    for (const derived of ['custody_balance_after', 'offcut_lot_id', 'offcut_lot_number']) {
+      const res = await postOffcut(orderId, lot, { quantity: '1', [derived]: 'x' });
+      assert.strictEqual(res.status, 400, `${derived}: ${JSON.stringify(res.body)}`);
+      assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+    }
   });
 
   it('RBAC and site scope: read-only refuses 403, an off-site writer sees 404, an outsider gets 403 on the report', async () => {
@@ -1317,7 +1191,7 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     assert.strictEqual(ownLines.length, 1);
     assert.strictEqual(ownLines[0]!['sku'], SKU_OWNED);
     assert.strictEqual(ownLines[0]!['quantity'], '5.500');
-    assert.deepStrictEqual(payload['retain_and_buy_lines'], []);
+    assert.strictEqual(payload['retain_and_buy_lines'], undefined, 'no offcut line on the feed');
     assert.strictEqual(payload['open_to_dispatch_qty'], '30.000');
     assert.strictEqual((await orderRow(orderId))['invoiced_at'], null);
 
@@ -1343,34 +1217,26 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     assert.strictEqual(row['retry_window_elapsed'], false);
   });
 
-  it('AC4 / decision 15: a contractual order refuses billing until the settling offcut lands, then carries the retain-and-buy line', async () => {
-    const { orderId, lot } = await dispatchedOrder({
-      contractual: true,
-      election: 'retain_and_buy',
-    });
-    const blocked = await generateFeed(orderId);
-    assert.strictEqual(blocked.status, 409, JSON.stringify(blocked.body));
-    assert.strictEqual(blocked.body['error_code'], 'BILLING_NOT_READY');
-    assert.strictEqual(detailsOf(blocked.body)['reason'], 'offcut_not_settled');
+  it('AC4 REVISED: billing does NOT wait for the offcut, and the feed carries no offcut line', async () => {
+    // The offcut_not_settled precondition is withdrawn. Offcut sits retained and unvalued for as
+    // long as it takes; holding the service invoice for it would block a delivered, dispatched job
+    // for months. The buyback reaches ERP later as a credit note (Story 9.7).
+    const { orderId, lot } = await dispatchedOrder({ contractual: true });
+    const captured = await postOffcut(orderId, lot, { quantity: '10' });
+    assert.strictEqual(captured.status, 201, JSON.stringify(captured.body));
+    assert.strictEqual((await holdingRows(orderId))[0]!['status'], 'retained');
 
-    const settle = await postOffcut(orderId, lot, { quantity: '40', settles_offcut: true });
-    assert.strictEqual(settle.status, 201, JSON.stringify(settle.body));
+    const gen = await generateFeed(orderId);
+    assert.strictEqual(gen.status, 201, JSON.stringify(gen.body));
+    const payload = await storedPayload(gen.body['event_id'] as string);
+    assert.strictEqual(payload['total_value'], '250.0000', 'the service value alone');
 
-    const res = await generateFeed(orderId);
-    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    const feed = res.body['feed'] as Record<string, unknown>;
-    const payload = feed['payload'] as Record<string, unknown>;
-    const lines = payload['retain_and_buy_lines'] as Record<string, unknown>[];
-    assert.strictEqual(lines.length, 1);
-    assert.strictEqual(lines[0]!['quantity'], '40.000');
-    assert.strictEqual(lines[0]!['offcut_rate'], '18.5000');
-    assert.strictEqual(lines[0]!['contracted_offcut_rate'], '18.5000');
-    assert.strictEqual(lines[0]!['billable_value'], '740.0000');
-    assert.strictEqual(lines[0]!['currency'], 'INR');
-    assert.ok((lines[0]!['converted_lot_number'] as string).endsWith('-OC1'));
-    assert.strictEqual(payload['service_value'], '250.0000');
-    assert.strictEqual(payload['offcut_value'], '740.0000');
-    assert.strictEqual(feed['total_value'], '990.0000');
+    const feedPayload = (await feedRow(gen.body['feed_id'] as string))!['payload'] as Record<
+      string,
+      unknown
+    >;
+    assert.strictEqual(feedPayload['retain_and_buy_lines'], undefined);
+    assert.strictEqual(feedPayload['offcut_value'], undefined);
   });
 
   it('AC4: acknowledgment by a SECOND actor stamps invoiced_at; self-acknowledgment refuses SOD_VIOLATION (audited); a second acknowledgment refuses DUPLICATE_EVENT', async () => {
@@ -1423,65 +1289,6 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
   // settling posting is the only place the retain-and-buy rate is named AND the posting that stamps
   // the sole billing precondition, so an unbounded rate plus a settler-acknowledged feed let one
   // actor price the customer's scrap and sign off the invoice for it.
-  it('a settlement rate outside the governed band refuses OFFCUT_RATE_OUT_OF_BAND (audited)', async () => {
-    const { orderId, lot } = await inProcessOrder({
-      contractual: true,
-      election: 'retain_and_buy',
-    });
-    // Contracted 18.5000, band 10%: 20.3500 is the edge and passes, 20.3501 is one tick past it.
-    const high = await postOffcut(orderId, lot, {
-      quantity: '10',
-      offcut_rate_estimate: '20.3501',
-    });
-    assert.strictEqual(high.status, 409, JSON.stringify(high.body));
-    assert.strictEqual(high.body['error_code'], 'OFFCUT_RATE_OUT_OF_BAND');
-    assert.strictEqual(detailsOf(high.body)['contracted_offcut_rate'], '18.5000');
-    assert.ok(await auditedFor('OFFCUT_RATE_OUT_OF_BAND', high.body['trace_id'] as string));
-    assert.strictEqual(await custodyBalance(orderId), '1000.000', 'a refusal drains nothing');
-
-    const low = await postOffcut(orderId, lot, { quantity: '10', offcut_rate_estimate: '0.0001' });
-    assert.strictEqual(low.status, 409, JSON.stringify(low.body));
-    assert.strictEqual(low.body['error_code'], 'OFFCUT_RATE_OUT_OF_BAND');
-
-    const edge = await postOffcut(orderId, lot, {
-      quantity: '10',
-      offcut_rate_estimate: '20.3500',
-    });
-    assert.strictEqual(edge.status, 201, JSON.stringify(edge.body));
-    const payload = await storedPayload(edge.body['event_id'] as string);
-    assert.strictEqual(payload['effective_offcut_rate'], '20.3500');
-  });
-
-  it('AC4: a feed cannot be acknowledged by the actor who settled the offcut it bills', async () => {
-    const { orderId, lot } = await dispatchedOrder({
-      contractual: true,
-      election: 'retain_and_buy',
-    });
-    // The ACKNOWLEDGER settles the offcut; the coordinator generates, so the generator leg is clean
-    // and only the settler leg can refuse.
-    const settle = await postOffcut(
-      orderId,
-      lot,
-      { quantity: '10', settles_offcut: true },
-      acknowledgerHeaders,
-    );
-    assert.strictEqual(settle.status, 201, JSON.stringify(settle.body));
-    assert.strictEqual((await orderRow(orderId))['offcut_settled_by'], acknowledgerUserId);
-
-    const gen = await generateFeed(orderId);
-    assert.strictEqual(gen.status, 201, JSON.stringify(gen.body));
-    const feedId = gen.body['feed_id'] as string;
-
-    const settler = await acknowledge(feedId);
-    assert.strictEqual(settler.status, 409, JSON.stringify(settler.body));
-    assert.strictEqual(settler.body['error_code'], 'SOD_VIOLATION');
-    assert.strictEqual(detailsOf(settler.body)['reason'], 'offcut_settler');
-    assert.strictEqual(detailsOf(settler.body)['offcut_settled_by'], acknowledgerUserId);
-    assert.ok(await auditedFor('SOD_VIOLATION', settler.body['trace_id'] as string));
-    assert.strictEqual((await feedRow(feedId))!['status'], 'pending');
-    assert.strictEqual((await orderRow(orderId))['invoiced_at'], null);
-  });
-
   it('AC4 / decision 12: a per_hour price basis needs measured_hours and bills them', async () => {
     const { orderId } = await dispatchedOrder({ basisType: 'per_hour' });
     const missing = await generateFeed(orderId);
@@ -1558,39 +1365,32 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
   // Task 10.5: direct-event bypass arms hit the identical gates
   // -------------------------------------------------------------------------
 
-  it('direct POST /api/v1/events: custody.offcut_recorded meets OFFCUT_ELECTION_MISSING and the settled gate; `election` is refused on input', async () => {
-    const plain = await inProcessOrder();
-    const res = await postEvent(offcutEnvelope(plain.orderId, plain.lot));
-    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
-    assert.strictEqual(res.body['error_code'], 'OFFCUT_ELECTION_MISSING');
-    assert.strictEqual(await custodyBalance(plain.orderId), '1000.000');
+  it('direct POST /api/v1/events: custody.offcut_recorded meets the identical capture wall', async () => {
+    // The hold-bypass class: the route is never the authority, the applier is.
+    const { orderId, lot } = await inProcessOrder({ contractual: false });
+    const refused = await postEvent(offcutEnvelope(orderId, lot, { quantity: '5' }));
+    assert.strictEqual(refused.status, 409, JSON.stringify(refused.body));
+    assert.strictEqual(refused.body['error_code'], 'OFFCUT_ELECTION_MISSING');
+    assert.strictEqual(detailsOf(refused.body)['reason'], 'not_contractual');
 
-    const named = await postEvent(
-      offcutEnvelope(plain.orderId, plain.lot, { election: 'retain_free' }),
+    const contractual = await inProcessOrder({ contractual: true });
+    const derived = await postEvent(
+      offcutEnvelope(contractual.orderId, contractual.lot, {
+        quantity: '5',
+        offcut_lot_number: 'FORGED-OC1',
+      }),
     );
-    assert.strictEqual(named.status, 400, JSON.stringify(named.body));
-    assert.strictEqual(named.body['error_code'], 'INVALID_PARAMS');
+    assert.strictEqual(derived.status, 400, JSON.stringify(derived.body));
+    assert.strictEqual(derived.body['error_code'], 'INVALID_PARAMS');
 
-    const settled = await inProcessOrder({ contractual: true, election: 'retain_free' });
-    const settling = await postOffcut(settled.orderId, settled.lot, {
-      quantity: '5',
-      settles_offcut: true,
-    });
-    assert.strictEqual(settling.status, 201, JSON.stringify(settling.body));
-    const after = await postEvent(offcutEnvelope(settled.orderId, settled.lot));
-    assert.strictEqual(after.status, 409, JSON.stringify(after.body));
-    assert.strictEqual(after.body['error_code'], 'OFFCUT_ELECTION_MISSING');
-    assert.strictEqual(detailsOf(after.body)['reason'], 'already_settled');
-    assert.strictEqual(await custodyBalance(settled.orderId), '995.000');
-
-    // And the legitimate direct event succeeds through the same seam.
-    const open = await inProcessOrder({ contractual: true, election: 'retain_free' });
-    const ok = await postEvent(offcutEnvelope(open.orderId, open.lot));
+    const ok = await postEvent(
+      offcutEnvelope(contractual.orderId, contractual.lot, { quantity: '5' }),
+    );
     assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
-    assert.strictEqual(await custodyBalance(open.orderId), '990.000');
+    assert.strictEqual((await holdingRows(contractual.orderId)).length, 1);
   });
 
-  it('direct POST /api/v1/events: jobwork.billing_feed_generated meets both BILLING_NOT_READY legs; acknowledgment meets SOD_VIOLATION', async () => {
+  it('direct POST /api/v1/events: jobwork.billing_feed_generated meets the BILLING_NOT_READY wall; acknowledgment meets SOD_VIOLATION', async () => {
     function generatedEnvelope(orderId: string, actorId = coordinatorUserId) {
       return {
         stream_type: 'jobwork',
@@ -1615,11 +1415,11 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     assert.strictEqual(a.body['error_code'], 'BILLING_NOT_READY');
     assert.strictEqual(detailsOf(a.body)['reason'], 'no_dispatch');
 
-    const unsettled = await dispatchedOrder({ contractual: true, election: 'retain_and_buy' });
-    const b = await postEvent(generatedEnvelope(unsettled.orderId));
-    assert.strictEqual(b.status, 409, JSON.stringify(b.body));
-    assert.strictEqual(b.body['error_code'], 'BILLING_NOT_READY');
-    assert.strictEqual(detailsOf(b.body)['reason'], 'offcut_not_settled');
+    // Story 9.6 revised: there is no second leg. A dispatched contractual order with offcut still
+    // retained and unvalued BILLS - waiting for the offcut would hold a delivered job's invoice.
+    const unsettled = await dispatchedOrder({ contractual: true });
+    const captured = await postOffcut(unsettled.orderId, unsettled.lot, { quantity: '5' });
+    assert.strictEqual(captured.status, 201, JSON.stringify(captured.body));
 
     // A forged generated_by (someone else's id) is refused before any write.
     const forged = await postEvent(generatedEnvelope(unsettled.orderId, acknowledgerUserId));
@@ -1642,7 +1442,6 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
 
     const settle = await postOffcut(unsettled.orderId, unsettled.lot, {
       quantity: '1',
-      settles_offcut: true,
     });
     assert.strictEqual(settle.status, 201, JSON.stringify(settle.body));
     const ok = await postEvent(generatedEnvelope(unsettled.orderId));

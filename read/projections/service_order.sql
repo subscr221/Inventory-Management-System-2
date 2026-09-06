@@ -70,6 +70,11 @@ ALTER TABLE service_order ADD COLUMN IF NOT EXISTS invoiced_at TIMESTAMPTZ;
 ALTER TABLE service_order ADD COLUMN IF NOT EXISTS invoiced_feed_id UUID;
 ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_settled_at TIMESTAMPTZ;
 ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_settled_by UUID;
+-- Story 9.6 revised 2026-09-05 (sprint change proposal): the offcut contract is its OWN contract
+-- with its own reference number, because the offcut may later be resold - back to the originating
+-- customer, to a scrap buyer, or at auction. Nullable: the offcut contract may be agreed after the
+-- service order is confirmed, so nothing requires it at confirm.
+ALTER TABLE service_order ADD COLUMN IF NOT EXISTS offcut_contract_ref_ext TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_service_order_number_site ON service_order (order_number_ext, site_id);
 CREATE INDEX IF NOT EXISTS idx_service_order_status ON service_order (status);

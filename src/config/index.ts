@@ -760,14 +760,6 @@ export const config = {
       10_000,
       true,
     ),
-    // Story 9.6 code review 2026-09-05: how far a settlement's real-time offcut rate estimate may
-    // deviate from the order's CONTRACTED rate before the posting is refused OFFCUT_RATE_OUT_OF_BAND.
-    // The PO ruling on open question 6 replaced BSD-16's DOA approval chain with a plain estimate,
-    // which left the settling actor free to name any strictly positive rate on money that bills the
-    // customer; this band is the fail-closed replacement. Percent, bounded to 100 (a band wider than
-    // the contracted rate itself is no band at all). A zero-deviation policy is deliberately not
-    // expressible here: the estimate exists because measured scrap differs from the contract.
-    offcutRateTolerancePct: parsePositiveIntEnv('JOBWORK_OFFCUT_RATE_TOLERANCE_PCT', 10, 100, true),
   },
   qc: {
     // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -

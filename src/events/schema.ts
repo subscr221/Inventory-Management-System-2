@@ -378,7 +378,7 @@ export interface GoodsReceivedPayload {
   lot_id?: string;
   expiry_date?: string;
   serials?: Array<{ serial_number: string; initial_quantity?: number }>;
-  stock_class?: 'owned' | 'consignment' | 'vmi' | 'job_work';
+  stock_class?: 'owned' | 'consignment' | 'vmi' | 'job_work' | 'offcut';
   owner_party_code?: string;
   unit_cost?: number | string;
   quarantine_approved?: boolean;
@@ -4689,18 +4689,13 @@ export interface CustodyOffcutRecordedPayload {
   uom: string;
   site_id: string;
   posted_by: string;
-  return_challan_number_ext?: string;
-  offcut_rate_estimate?: string;
-  settles_offcut?: boolean;
-  election?: 'return' | 'retain_and_buy' | 'retain_free';
+  // Server-derived below. Story 9.6 revised 2026-09-05: capture is UNVALUED and carries no
+  // disposition, so there is no election, no rate, no billable value and no settlement declaration
+  // on this event any more. All of those belong to disposal (Story 9.7).
   custody_balance_after?: string;
-  converted_lot_id?: string | null;
-  converted_lot_number?: string | null;
-  billable_value?: string | null;
-  effective_offcut_rate?: string | null;
-  contracted_offcut_rate?: string | null;
-  /** The Story 8.5 governed hold placed on the converted owned lot (retention branches only). */
-  converted_lot_hold_id?: string | null;
+  /** The lot minted to carry the segregated `offcut` stock (the laundering bar is lot-ROW based). */
+  offcut_lot_id?: string | null;
+  offcut_lot_number?: string | null;
 }
 
 export interface CustodyOffcutRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {

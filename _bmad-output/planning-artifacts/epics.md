@@ -131,7 +131,7 @@ This document provides the complete epic and story breakdown for the Materials &
 - FR-JW-06: Consumption posting against the order following customer-supplied kit lines.
 - FR-JW-07: Own-material additions billed distinctly from the service charge.
 - FR-JW-08: Process loss norms; over-norm loss requires supervisor approval before dispatch readiness.
-- FR-JW-09/10: Contractual offcut election (return, retain-and-buy, retain free) captured at confirmation and executed with documents.
+- FR-JW-09/10: Contractual offcut is captured to a separate holding ledger at quantity grain, unvalued, under its own contract reference, and retained until disposal. Disposal is elected at disposal time and is one of two branches: the material is RETURNED to the customer as their own property, or it is ACQUIRED by the processor at the rate the finance controller sets, which transfers title and raises a credit note. Any onward resale, whether back to the customer, to a scrap buyer or at auction, happens afterwards to stock the processor already owns and is an ordinary sale, not a job-work event.
 - FR-JW-11: Output passes the FG quality gate before dispatch; partial dispatches supported.
 - FR-JW-12: Measured billing feed (pieces, certified weight, or hours) handed to ERP for invoicing.
 - FR-JW-13: Customer stock in physical verification with reconciliation on the next custody statement.
@@ -2651,8 +2651,8 @@ So that customer ownership is fully accounted for at all times.
 ### Story 9.4: Process Loss, Offcut Election Capture, and QC-Gated Dispatch
 
 As a job-work supervisor,
-I want process-loss norms with over-norm approval, contractual offcut election captured at confirmation, output through the FG QC gate before dispatch, and partial dispatch support,
-So that loss is controlled, offcut terms are fixed per contract, and only quality-released output ships.
+I want process-loss norms with over-norm approval, the contractual offcut arrangement recorded at confirmation, output through the FG QC gate before dispatch, and partial dispatch support,
+So that loss is controlled, offcut obligations are visible from the contract onward, and only quality-released output ships.
 
 **Acceptance Criteria:**
 
@@ -2662,7 +2662,7 @@ So that loss is controlled, offcut terms are fixed per contract, and only qualit
 
 **Given** an order with a contractual offcut arrangement (FR-JW-09/10)
 **When** the order is confirmed
-**Then** the offcut election (return, retain-and-buy, or retain free) is captured on the order; execution of the elected disposition is Story 9.6
+**Then** the order records that it carries a contractual offcut arrangement and, where one exists, the offcut contract reference; no disposition and no rate are elected at confirmation, because both are decided at disposal (Story 9.7)
 
 **Given** finished job-work output (FR-JW-11)
 **When** dispatch is attempted before the output passes the FG QC gate
@@ -2673,8 +2673,9 @@ So that loss is controlled, offcut terms are fixed per contract, and only qualit
 **Then** each partial dispatch reduces the order's open-to-dispatch quantity, decrements the custody ledger (FR-JW-05), and generates dispatch documents through the Story 3.7 flows, with only QC-released quantities dispatchable
 
 **Dev notes:**
-- Sequencing: the offcut-election capture AC extends the Story 9.1 `Confirm` transition — implement it inside the Story 9.1 confirmation flow, not as a separate later step.
-- Split: offcut-election execution (FR-JW-09/10) and the measured ERP billing feed (FR-JW-12) moved to Story 9.6.
+- Sequencing: the offcut-arrangement AC extends the Story 9.1 `Confirm` transition - implement it inside the Story 9.1 confirmation flow, not as a separate later step.
+- Split: offcut capture (FR-JW-09/10) and the measured ERP billing feed (FR-JW-12) are Story 9.6; offcut disposal and valuation are Story 9.7.
+- Revised 2026-09-05 by sprint change proposal: the disposition is NOT elected at confirmation. Neither is the rate, which cannot exist at confirmation where the offcut is later sold at auction.
 
 ---
 
@@ -2723,35 +2724,86 @@ So that job-work statutory obligations are met and no order closes with unaccoun
 ### Story 9.6: Offcut Election Execution and ERP Billing Feed
 
 As a job-work coordinator,
-I want the captured offcut election executed with documents at dispatch or retention, and a measured billing feed delivered to ERP with acknowledgment and failure handling,
-So that offcuts are settled per contract with the paperwork to prove it and every completed job is invoiced from measured quantities.
+I want contractual offcut captured out of custody into its own holding ledger, and a measured billing feed delivered to ERP with acknowledgment and failure handling,
+So that offcut stops blocking order closure while its fate is undecided, and every completed job is invoiced from measured quantities without waiting on it.
 
 **Acceptance Criteria:**
 
-**Given** an order with offcut election `return` (FR-JW-09/10)
-**When** offcuts are dispatched back to the customer
-**Then** a return challan and dispatch documents are generated through the Story 3.7 flows and the custody ledger is decremented by the returned quantity
-
-**Given** an order with offcut election `retain-and-buy` (FR-JW-09/10)
-**When** the retention is executed
-**Then** a billable line at the contracted rate is raised onto the ERP billing feed, and the custody ledger writes the offcut quantity out to own stock with an attributed conversion record
-
-**Given** an order with offcut election `retain free` (FR-JW-09/10)
-**When** the retention is executed
-**Then** a free-retention record is written and the custody ledger is adjusted to zero for the offcut quantity with an attributed adjustment referencing the contractual election
+**Given** processing that produces contractual offcut (FR-JW-09/10)
+**When** the offcut quantity is captured
+**Then** the quantity leaves the custody ledger and is recorded in the offcut holding ledger, unvalued, against the order and its offcut contract reference, with the Section 143 return clock still running against it, and the order's custody balance is reduced so the closure gate is reachable
 
 **Given** a completed, dispatched job-work order (FR-JW-12)
 **When** billing is generated
-**Then** a measured billing feed (pieces, certified weight, or hours) — carrying the order and challan references, measured basis and quantity, price basis, and any own-material (FR-JW-07) and retain-and-buy lines — is sent to ERP with an `idempotency_key`, and the order is marked invoiced only on ERP acknowledgment
+**Then** a measured billing feed (pieces, certified weight, or hours), carrying the order and challan references, measured basis and quantity, price basis, and any own-material (FR-JW-07) lines, is sent to ERP with an `idempotency_key`, and the order is marked invoiced only on ERP acknowledgment. Offcut buyback is billed separately as a credit note when the offcut is valued at disposal (Story 9.7), and billing is never held waiting for it
 
 **Given** a billing feed transmission that fails or is not acknowledged (FR-JW-12)
 **When** the configured retry window elapses
 **Then** the feed enters an exception queue with an alert through Story 1.11 to the job-work coordinator, retries never create duplicate billable events (replays rejected with `error_code: "DUPLICATE_EVENT"`), and unacknowledged feeds appear on a billing-reconciliation report
 
 **Dev notes:**
-- Split from Story 9.4: election capture stays in Story 9.4 (at confirmation); this story executes the elected disposition and owns the billing feed.
+- Split from Story 9.4: the offcut ARRANGEMENT is recorded at confirmation in Story 9.4; this story captures the offcut quantity out of custody into the holding ledger and owns the billing feed. Disposal and valuation are Story 9.7.
 - The job-work billing feed is an outbound interface owned by this story — it does not depend on the Epic 4 ERP handoff (Epic 4 is outside the pilot go-live slice).
-- Executing the election is a precondition for the Story 9.5 closure gate: retained or unreturned offcuts otherwise leave the custody ledger non-zero (`CUSTODY_NOT_ZERO`).
+- Capture moves offcut OUT of the custody ledger into the holding ledger, so the Story 9.5 closure gate is reachable while the offcut is still retained. The offcut's own lifecycle continues after the order closes, under its contract reference.
+- The Section 143 clock follows the material, not the order: it keeps running while offcut is retained and is stopped only at disposal. The Story 9.5 breach sweep must therefore read the holding ledger as well as the return clocks.
+- Revised 2026-09-05 by sprint change proposal. The shipped implementation (commit 6439870) elected the disposition and the rate at confirmation and settled, valued, converted and billed in one posting; that half is reversed.
+
+---
+
+### Story 9.7: Offcut Holding, Disposal and Valuation
+
+As a finance controller,
+I want retained offcut disposed of and valued when its fate is actually known, with the resulting buyback billed as a credit note against the service invoice,
+So that customer offcut is never valued at a guessed rate and never sits unaccounted.
+
+**Acceptance Criteria:**
+
+**Given** offcut retained in the holding ledger (FR-JW-09/10)
+**When** the finance controller records a disposal
+**Then** the disposition (`returned` or `acquired`) and, on `acquired`, the final rate are captured together, the final rate being the offcut contract's INDICATIVE rate adjusted for the offcut's physical condition as verified by the processor, the holding ledger row is closed, and the Section 143 clock for that quantity is stopped
+
+**Given** a disposal of `returned` (FR-JW-09/10)
+**When** it is executed
+**Then** a return challan and dispatch documents are generated through the Story 3.7 flows
+
+**Given** a disposal of `acquired` (FR-JW-09/10)
+**When** it is executed
+**Then** title transfers to the processor, a new owned lot is minted under a QC hold, and a credit note for the acquisition value is raised against the order's service invoice citing that invoice's ERP document reference; a contractual free retention is the same branch at a rate of zero, which mints the lot and raises no credit note
+
+**Given** a disposal of `acquired` whose negotiated rate differs from the offcut contract's indicative rate (FR-JW-09/10)
+**When** the disposal is posted
+**Then** it is accepted and the negotiated rate is recorded as the commercial value, with the indicative rate stored beside it so the variance is visible on the credit note and the reports; no tolerance is applied and nothing is refused on rate
+
+**Given** a valued disposal (FR-JW-12)
+**When** the finance controller later revises the rate
+**Then** a delta document is raised and the original is never mutated
+
+**Given** any offcut disposal (FR-JW-12)
+**When** the acknowledging actor is the finance controller who set the rate
+**Then** the acknowledgment is refused with `error_code: "SOD_VIOLATION"`
+
+**Given** offcut still retained in the holding ledger (FR-AC-11, FR-JW-14)
+**When** the Story 9.5 breach sweep runs
+**Then** retained offcut is read alongside the return clocks and ages against the same deemed-supply thresholds, whether or not its order has closed
+
+**Given** offcut held under the job contract with the customer (FR-JW-13, FR-JW-14)
+**When** the job-work ageing report is produced
+**Then** offcut still governed by that contract appears on the report; once it is `acquired` and title has transferred it leaves the report and is carried in the scrap holding ledger instead, because it is no longer customer material and no longer a job-work exposure
+
+**Dev notes:**
+- Created 2026-09-05 by sprint change proposal, which reversed the Story 9.6 offcut model.
+- Ownership while retained is fail-closed: the material stays the customer's and the Section 143 clock keeps running. Disposal is the ownership-transfer event for the retain branches.
+- Valuation is revisable after the fact, so corrections are delta documents. Nothing acknowledged is ever mutated, and there is no void path.
+- The credit note is the first consumer of the billing feed's `acknowledged_ref_ext`; that column is a citation, not an identity, and must stay non-unique so one consolidated ERP invoice can be cited by several documents.
+- Depends on the Story 9.6 reversal landing first: the confirm-time rate mandate, the settle-value-convert-bill posting, the `offcut_not_settled` billing precondition and the `OFFCUT_RATE_OUT_OF_BAND` guard all have to go before this story can be built coherently.
+- Ruled 2026-09-05: the processor ALWAYS buys before it sells, never sells on the customer's behalf. Onward resale (back to the originating customer, to a scrap buyer, or at auction) is therefore a sale of stock the processor already owns and is OUT OF SCOPE here - it leaves this story as ordinary owned stock. Two prices exist and must not be conflated: the finance controller's rate is what the processor PAYS the customer for title; any auction or scrap price is what the processor later RECEIVES, and only the first belongs to this story.
+- Confirmed 2026-09-05: a contractual free retention IS `acquired` at a rate of zero, not a third branch. Same title transfer, same owned lot under QC hold, no credit note because there is nothing to credit. The disposition vocabulary is closed at two values.
+- Ruled 2026-09-05: the offcut contract DOES carry a pre-indicative buy-in rate, and the final rate moves with the offcut's physical condition. The processor verifies that condition ALONE; the eventual buyer's view of condition bears only on the later resale price, never on what the customer is paid, so acquisition and resale stay fully decoupled.
+- Ruled 2026-09-05 (final, superseding an earlier choice of a hard band): the commercial value is the rate NEGOTIATED in reality, not a bounded figure. The indicative rate is a reference stored beside it so the variance is visible; no tolerance is applied and no disposal is refused on rate. The `OFFCUT_RATE_OUT_OF_BAND` guard and its `JOBWORK_OFFCUT_RATE_TOLERANCE_PCT` knob are therefore REMOVED, not re-anchored.
+- Consequence to hold onto: with no band, the ONLY control over the rate is separation of duties. The finance controller who sets it must not be able to acknowledge the credit note that bills it, so that guard carries the whole weight and must not be weakened.
+- `service_order.offcut_rate` and `offcut_currency` survive as the indicative pair; only the confirm-time mandate is withdrawn.
+- Ruled 2026-09-05: offcut still governed by the job contract appears on the job-work ageing report. Once acquired, it leaves that report and is carried in the SCRAP HOLDING LEDGER, because title has transferred and it is no longer a job-work exposure. Recommended implementation is a segregated scrap stock class or designated scrap location on the existing stock machinery rather than a new projection, unless scrap needs its own valuation and ageing views.
+- NOTE: condition verification here is COMMERCIAL grading that sets a price. It is not the QC hold placed on the minted owned lot, which is about fitness for use. Do not merge the two.
 
 ---
 
@@ -3032,11 +3084,11 @@ So that input tax credit is accurate, defensible, and reconciled to the portal.
 
 ---
 
-### Story 11.2: IRN-Before-Dispatch Enforcement and Branch Transfer Documents
+### Story 11.2: IRN-Before-Dispatch Enforcement
 
 As a dispatch controller,
-I want e-invoiceable dispatches blocked until IRN and signed QR are received, and branch transfers between GSTINs treated as taxable supplies with Rule 28 valuation and documents,
-So that no non-compliant shipment leaves and inter-branch movements are correctly taxed.
+I want e-invoiceable dispatches blocked until IRN and signed QR are received,
+So that no non-compliant shipment leaves the site.
 
 **Acceptance Criteria:**
 
@@ -3044,17 +3096,60 @@ So that no non-compliant shipment leaves and inter-branch movements are correctl
 **When** dispatch is attempted before the IRN and signed QR are received from the IRP flow through ERP
 **Then** dispatch is blocked with `error_code: "IRN_MISSING"` until IRN and signed QR are present
 
+**Given** an IRN and signed QR returned by the IRP through ERP (FR-AC-14, INT-GST-01)
+**When** they are recorded against the supply
+**Then** they are stored against it, the dispatch block lifts, and a replay of the same recording is idempotent
+
+**Dev notes:**
+- RULED 2026-09-05: the SIGNED QR is not required by this platform and ALL supplies are e-invoiceable
+  with no exemption. The gate is the IRN alone; ERP owns producing and printing the QR. This
+  deliberately diverges from the "IRN and signed QR" wording of FR-AC-14 and of the criteria above,
+  and the divergence is recorded rather than hidden.
+- SPLIT 2026-09-05 from the original Story 11.2, which bundled IRN enforcement with GSTIN branch
+  transfers. The two share only the word "dispatch". IRN enforcement is the statutory blocker on
+  shipping e-invoiceable goods and is PULLED INTO THE PILOT SLICE; the branch-transfer half is now
+  Story 11.5.
+- Greenfield outbound: every IRN reference in the codebase today is INBOUND supplier-invoice side
+  (three-way match, `supplier_invoice`). Nothing models an outbound IRN.
+- The block belongs beside the existing dispatch gates in `src/compliance/dispatch.ts`
+  (`dispatchGateBlockedLots`, `qcGatedLotIds`), which is where the QC and hold gates already live -
+  the repeated hold-bypass lesson is that one shared gate helper is the only safe shape.
+- No IRP integration is built here: the IRN and signed QR arrive through ERP, exactly as the
+  acceptance criterion says. This platform enforces, it does not call the IRP.
+
+---
+
+### Story 11.5: Branch Transfer Valuation and GST Documents
+
+As a GST accountant,
+I want branch transfers between GSTINs treated as taxable supplies with Rule 28 valuation and their GST documents generated before dispatch,
+So that inter-branch movements are correctly taxed and documented.
+
+**Acceptance Criteria:**
+
 **Given** a stock transfer between two GSTINs (FR-AC-10)
 **When** the branch transfer is created
-**Then** it is treated as a taxable supply valued on a Rule 28 basis — open market value; value of like kind and quality; cost-plus under Rules 30/31; or the second-proviso invoice value where the recipient GSTIN is eligible for full ITC — with the basis defaulted per GSTIN pair from dated configuration, overridable by the GST accountant, and the selected basis recorded on the transfer
+**Then** it is treated as a taxable supply valued on a Rule 28 basis - open market value; value of like kind and quality; cost-plus under Rules 30/31; or the second-proviso invoice value where the recipient GSTIN is eligible for full ITC - with the basis defaulted per GSTIN pair from dated configuration, overridable by the GST accountant, and the selected basis recorded on the transfer
 
 **Given** a valued branch transfer (FR-AC-10)
 **When** GST documents are generated before dispatch
-**Then** a tax invoice exists (carrying IRN and signed QR where the supply is e-invoiceable, per the FR-AC-14 block above) and an e-way bill exists where the consignment value exceeds the threshold
+**Then** a tax invoice exists (carrying IRN and signed QR where the supply is e-invoiceable, per the Story 11.2 block) and an e-way bill exists where the consignment value exceeds the threshold
 
 **Given** a branch transfer without its generated GST documents (FR-AC-10)
 **When** dispatch is attempted
-**Then** it is blocked with `error_code: "GST_DOCUMENTS_REQUIRED"` until the documents exist — GST documents are the blocking artifacts here; gate-pass enforcement (FR-GP-11) is Epic 20 (Phase 2)
+**Then** it is blocked with `error_code: "GST_DOCUMENTS_REQUIRED"` until the documents exist - GST documents are the blocking artifacts here; gate-pass enforcement (FR-GP-11) is Epic 20 (Phase 2)
+
+**Dev notes:**
+- SPLIT 2026-09-05 from the original Story 11.2. Confirmed the same day that the pilot operates MORE
+  THAN ONE GSTIN, so this is a GO-LIVE requirement, not post-pilot work: the first movement across
+  that boundary is a taxable supply.
+- PREREQUISITE, and it does not exist yet: `gstin_ext` is currently modelled only on `supplier`.
+  Sites and locations carry no GSTIN at all, so "a transfer between two GSTINs" has no data model to
+  stand on. That modelling is task one of this story.
+- This extends Story 2.5's `transfer_request`. Before starting, the story-2-5 integration suite must
+  be green: its fifteen tests currently fail as a seeding cascade, so the transfer feature this story
+  builds on has no working regression net.
+- Depends on Story 11.2 for the IRN half of the tax-invoice criterion.
 
 ---
 

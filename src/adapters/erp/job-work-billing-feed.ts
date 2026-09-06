@@ -74,32 +74,6 @@ export function billableValueOf(quantity: string, rate: string): string {
   return moneyFromScaled(negative ? -rounded : rounded);
 }
 
-/**
- * Story 9.6 code review 2026-09-05: is a settlement's effective offcut rate outside the permitted
- * band around the order's CONTRACTED rate?
- *
- * The PO ruling on open question 6 made the settlement rate a real-time estimate with no DOA gate,
- * which left it validated only as "a strictly positive decimal with at most four decimals" - one
- * actor could price retained customer scrap at 0.0001 or at 10^14 and stamp the settlement that
- * gates billing in the same posting. The band is the fail-closed replacement for the approval chain
- * BSD-16 asked for: a real-time estimate may drift from the contract, it may not replace it.
- *
- * Exact scaled-integer arithmetic (never floating point): |effective - contracted| * 100 compared
- * against contracted * tolerancePct. A non-positive contracted rate is out of band by definition -
- * there is no meaningful band around zero - and the caller has already refused one upstream.
- */
-export function offcutRateOutOfBand(
-  contractedRate: string,
-  effectiveRate: string,
-  tolerancePct: number,
-): boolean {
-  const contracted = moneyToScaled(contractedRate);
-  if (contracted <= 0n) return true;
-  const effective = moneyToScaled(effectiveRate);
-  const delta = effective > contracted ? effective - contracted : contracted - effective;
-  return delta * 100n > contracted * BigInt(tolerancePct);
-}
-
 // ---------------------------------------------------------------------------
 // Measured basis (Binding decision 12)
 // ---------------------------------------------------------------------------
@@ -197,23 +171,6 @@ export interface JobWorkBillingOwnMaterialLine {
   business_date: string;
 }
 
-/** FR-JW-09/10: a retain-and-buy offcut settled at the contracted (or DOA-approved) rate. */
-export interface JobWorkBillingOffcutLine {
-  entry_id: string;
-  sku: string;
-  lot_id: string | null;
-  quantity: string;
-  uom: string;
-  /** The effective settlement rate: the real-time estimate when supplied, else the contracted rate. */
-  offcut_rate: string | null;
-  /** The order's contracted rate, stamped beside the effective rate so ERP sees the variance. */
-  contracted_offcut_rate: string | null;
-  currency: string | null;
-  billable_value: string | null;
-  converted_lot_number: string | null;
-  business_date: string;
-}
-
 export interface JobWorkBillingFeedPayload {
   feed_type: 'job_work_billing';
   feed_id: string;
@@ -230,9 +187,9 @@ export interface JobWorkBillingFeedPayload {
   service_value: string;
   dispatch_lines: JobWorkBillingDispatchLine[];
   own_material_lines: JobWorkBillingOwnMaterialLine[];
-  retain_and_buy_lines: JobWorkBillingOffcutLine[];
-  /** SUM(retain_and_buy_lines.billable_value). */
-  offcut_value: string;
+  // Story 9.6 revised 2026-09-05: no retain-and-buy lines. Offcut is captured unvalued and disposed
+  // of later (Story 9.7); its buyback reaches ERP as a CREDIT NOTE against this invoice, never as a
+  // line on the feed that raised it.
   total_value: string;
   currency: string;
   /** Binding decision 18: summed (quantity - dispatched_quantity) over the order's outputs. */
@@ -248,14 +205,6 @@ export interface BuildBillingFeedInput {
   receipts: JobworkMaterialReceiptRow[];
   dispatches: JobWorkBillingDispatchLine[];
   ownMaterialRows: CustodyLedgerEntryRow[];
-  /** `offcut` ledger rows with billable = true, each paired with the rate/value its event derived. */
-  offcutRows: {
-    row: CustodyLedgerEntryRow;
-    offcut_rate: string | null;
-    contracted_offcut_rate: string | null;
-    billable_value: string | null;
-    converted_lot_number: string | null;
-  }[];
   measured: { measured_basis: JobWorkMeasuredBasis; measured_quantity: string };
   openToDispatchQty: string;
   idempotencyKey: string;
@@ -300,24 +249,6 @@ export function buildJobWorkBillingFeedPayload(
     input.measured.measured_quantity,
     priceBasisRateAsMoney(order.price_basis.rate),
   );
-  let offcutValue = '0.0000';
-  const retainAndBuyLines: JobWorkBillingOffcutLine[] = input.offcutRows.map((entry) => {
-    if (entry.billable_value !== null) offcutValue = moneyAdd(offcutValue, entry.billable_value);
-    return {
-      entry_id: entry.row.entry_id,
-      sku: entry.row.sku,
-      lot_id: entry.row.lot_id,
-      // Ledger deltas are negative drains; the billed quantity is the magnitude.
-      quantity: entry.row.quantity_delta.replace(/^-/, ''),
-      uom: entry.row.uom,
-      offcut_rate: entry.offcut_rate,
-      contracted_offcut_rate: entry.contracted_offcut_rate,
-      currency: entry.offcut_rate === null ? null : (order.offcut_currency ?? currency),
-      billable_value: entry.billable_value,
-      converted_lot_number: entry.converted_lot_number,
-      business_date: entry.row.business_date,
-    };
-  });
   return {
     feed_type: 'job_work_billing',
     feed_id: input.feedId,
@@ -348,9 +279,7 @@ export function buildJobWorkBillingFeedPayload(
       uom: r.uom,
       business_date: r.business_date,
     })),
-    retain_and_buy_lines: retainAndBuyLines,
-    offcut_value: offcutValue,
-    total_value: moneyAdd(serviceValue, offcutValue),
+    total_value: serviceValue,
     currency,
     open_to_dispatch_qty: input.openToDispatchQty,
     idempotency_key: input.idempotencyKey,

@@ -65,7 +65,19 @@ const STOCK_BALANCE_EVENT_KINDS: Record<string, StockBalanceEventKind> = {
  * permanent property of that balance row, which is why the bar below is structural rather than a
  * clearable flag.
  */
-const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work', 'prototype']);
+const VALID_STOCK_CLASSES = new Set([
+  'owned',
+  'consignment',
+  'vmi',
+  'job_work',
+  'prototype',
+  // Story 9.6 (revised 2026-09-05): contractual offcut retained pending disposal. Still the
+  // CUSTOMER's material - the Section 143 clock keeps running against it - so it is segregated on
+  // exactly the same terms as job_work and must never launder into owned stock. It is a distinct
+  // class rather than job_work so that material awaiting an offcut disposal is separable from
+  // material still in process on the shop floor.
+  'offcut',
+]);
 
 /** FR-Q-12: prototype stock can never be allocated, nor laundered into an owned balance row. */
 const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
@@ -78,7 +90,7 @@ const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
  * CROSS_ISSUE_BLOCKED. Kept OUT of NON_SALEABLE_STOCK_CLASSES: that set's semantics are
  * prototype-specific. Duplicated in cycle-count.ts - the two files move together.
  */
-const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work']);
+const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work', 'offcut']);
 const JOB_WORK_STOCK_CLASS = 'job_work';
 
 /** The laundering-bar refusal code for a conflict involving `conflictClass` (see SEGREGATED_STOCK_CLASSES). */

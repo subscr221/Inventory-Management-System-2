@@ -69,14 +69,26 @@ const CYCLE_COUNT_EVENT_TYPES = new Set([
 // every count path before it can be counted. 'prototype' is a Story 8.8 ORIGIN class (BSD-9);
 // counting it is legitimate, only allocating or laundering it into 'owned' is barred, and that bar
 // lives at the stock-balance applier choke point.
-const VALID_STOCK_CLASSES = new Set(['owned', 'consignment', 'vmi', 'job_work', 'prototype']);
+const VALID_STOCK_CLASSES = new Set([
+  'owned',
+  'consignment',
+  'vmi',
+  'job_work',
+  'prototype',
+  // Story 9.6 (revised 2026-09-05): contractual offcut retained pending disposal. Still the
+  // CUSTOMER's material - the Section 143 clock keeps running against it - so it is segregated on
+  // exactly the same terms as job_work and must never launder into owned stock. It is a distinct
+  // class rather than job_work so that material awaiting an offcut disposal is separable from
+  // material still in process on the shop floor.
+  'offcut',
+]);
 /**
  * Story 9.2 (FR-JW-04): mirrors stock-balance.ts SEGREGATED_STOCK_CLASSES verbatim - the classes
  * the lot-level laundering bar segregates ('prototype' with its FR-Q-12 PROTOTYPE_NOT_SALEABLE
  * code from Story 8.8, 'job_work' customer-owned material with CROSS_ISSUE_BLOCKED). The two
  * files move together.
  */
-const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work']);
+const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work', 'offcut']);
 const JOB_WORK_STOCK_CLASS = 'job_work';
 const COUNT_ADJUSTMENT_DOA_TYPE = 'inventory.count_adjustment';
 const SIGNOFF_ROLES = new Set([

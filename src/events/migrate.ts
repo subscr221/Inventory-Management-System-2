@@ -257,6 +257,7 @@ const MIGRATIONS = [
   // (offcut rate pair, invoiced and offcut-settled stamps) re-apply harmlessly. FK-shaped
   // service_order_id, no declared FK (the Epic 9 house convention).
   '../../read/projections/job_work_billing_feed.sql',
+  '../../read/projections/job_work_offcut_holding.sql',
 ];
 
 async function migrate(): Promise<void> {

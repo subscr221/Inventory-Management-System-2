@@ -114,10 +114,6 @@ const AUDITED_REJECTIONS = new Set([
   // the QC-gate codes reach this file through the retention conversion's QC hand-off.
   'OFFCUT_ELECTION_MISSING',
   'BILLING_NOT_READY',
-  // Story 9.6 code review 2026-09-05: a settlement priced outside the governed band around the
-  // order's contracted rate is exactly the attempt the removed BSD-16 approval chain would have
-  // caught, so a refusal MUST leave an audit row naming who tried it and at what rate.
-  'OFFCUT_RATE_OUT_OF_BAND',
   'SOD_VIOLATION',
   'ITEM_NOT_FOUND',
   'NOT_FOUND',
@@ -929,7 +925,9 @@ const postServiceOrderOffcutBase: RouteHandler = (req, res, params) =>
   postCustodyEvent(req, res, params, {
     eventType: CUSTODY_OFFCUT_RECORDED,
     idField: 'offcut_id',
-    extraFields: ['return_challan_number_ext', 'offcut_rate_estimate', 'settles_offcut'],
+    // Story 9.6 revised 2026-09-05: capture carries NO branch fields. The disposition, the return
+    // challan and the rate all belong to disposal (Story 9.7).
+    extraFields: [],
     derivedFields: [...OFFCUT_DERIVED_FIELDS],
   });
 

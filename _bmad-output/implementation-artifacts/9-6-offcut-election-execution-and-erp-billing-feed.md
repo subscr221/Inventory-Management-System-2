@@ -6,6 +6,47 @@ baseline_commit: 8ccd2e6651fd16bed3167b7d2219dc131a7631ba
 
 Status: review
 
+> **REVERSED AND REBUILT 2026-09-05** per `_bmad-output/planning-artifacts/sprint-change-proposal-2026-09-05.md`
+> (APPROVED). The offcut half of this story was reversed and rebuilt against the ruled model; the
+> BILLING half stands, minus the `offcut_not_settled` precondition. Read the sprint change proposal
+> and the Reversal Notes below before touching anything here. Acceptance criteria 1 to 3 as written
+> below, Task 0's confirm-time rate mandate, binding decisions 14, 15 and 16, the PO ruling on open
+> question 6, and the `OFFCUT_RATE_OUT_OF_BAND` guard added by the group-A code review are all
+> superseded. Disposal and valuation are Story 9.7.
+
+## Reversal Notes (2026-09-05)
+
+What capture does now: it drains the custody ledger, mints a lot in the NEW `offcut` stock class and
+writes an UNVALUED row to the new `job_work_offcut_holding` projection. It does not price the offcut,
+convert it to own stock, raise a billing line, render documents, stamp a settlement or stop the
+Section 143 clock. All of that is disposal, and disposal is Story 9.7.
+
+Removed: the confirm-time `offcut_rate` mandate; the `offcut_not_settled` billing precondition; the
+three-branch election switch; `offcutRateOutOfBand` with its `OFFCUT_RATE_OUT_OF_BAND` code and
+`JOBWORK_OFFCUT_RATE_TOLERANCE_PCT` knob; the retain-and-buy lines on the billing feed.
+
+Added: the `offcut` stock class (segregated and laundering-barred exactly like `job_work`);
+`service_order.offcut_contract_ref_ext`; `job_work_offcut_holding` with `disposed_at`, `disposition`
+and `disposal_event_id` forward-declared for Story 9.7.
+
+Three decisions worth carrying forward:
+
+1. The offcut lot is MINTED, never reused. The laundering bar is lot-ROW based, so receiving a second
+   segregated class onto a lot that has ever held a `job_work` row is refused regardless of on_hand.
+   `source_lot_id` on the holding row carries the genealogy back to the customer's lot.
+2. `reconcileReturnClocks` is deliberately NOT called at capture, unlike every other custody drain in
+   Epic 9. The material is still the customer's and the clock is still running; stopping it here
+   would erase an open exposure. Story 9.7 stops it at disposal and must sweep the holding ledger.
+3. Disposal-time fields are DROPPED by the route (its allowlist does not forward them) and REFUSED by
+   the seam. The wall is at the seam, which is where it belongs; the test asserts both halves.
+
+Gates: tsc, eslint and prettier clean; migrate twice idempotent; schema-drift 155/155 with the new
+projection mirrored; unit 496/496; story-9-6 17/17; Epic 9 plus spine green; full suite 1891/1919
+with all 28 failures documented noise and 0 new. `test/integration/story-9-1.test.ts` was updated
+because it asserted the withdrawn confirm-time mandate - a done story's test changed by this
+reversal, disclosed rather than quietly patched.
+
+
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
 ## Story

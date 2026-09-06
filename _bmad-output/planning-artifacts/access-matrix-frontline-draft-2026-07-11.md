@@ -79,7 +79,7 @@ Role IDs are proposed `snake_case` identifiers for RBAC/SCIM configuration.
 
 | Role ID | Description | Location scope | Anchors |
 |---|---|---|---|
-| `jobwork_coordinator` | Service orders, custody ledger, customer statements, offcut election capture | Assigned site(s) | Stories 9.1–9.4 |
+| `jobwork_coordinator` | Service orders, custody ledger, customer statements, offcut capture to the holding ledger | Assigned site(s) | Stories 9.1-9.4, 9.6 |
 | `jobwork_supervisor` | Over-norm loss approval; order closure (custody must be zero) | Assigned site(s) | FR-JW-08/15 |
 
 ### Finance / GST (Story 11.2 + Epic 13 gate)
@@ -87,7 +87,17 @@ Role IDs are proposed `snake_case` identifiers for RBAC/SCIM configuration.
 | Role ID | Description | Location scope | Anchors |
 |---|---|---|---|
 | `gst_officer` | Branch-transfer documents, IRN request monitoring; per-GSTIN scope | GSTIN(s) | FR-AC-10/14, Story 11.2 |
-| `finance_controller` | Migration sign-off (with dept heads), valuation views; period ops arrive with Epic 11 | All | FR-DM-03, Story 13.3 |
+| `finance_controller` | Migration sign-off (with dept heads), valuation views, job-work offcut disposal and valuation; period ops arrive with Epic 11 | All | FR-DM-03, Story 9.7, Story 13.3 |
+
+At the pilot site the `site_head` holds the finance-controller function (ruled 2026-09-05): the site
+head takes the offcut valuation decision. This is a grant, not a rename - the role stays
+`finance_controller` and the site head is the person granted it - so the Story 9.7 separation of
+duties still applies to whoever holds it. That creates a real pilot constraint worth planning for:
+the actor who sets an offcut rate may not acknowledge the credit note that bills it, and the site
+head is also the Story 1.11 escalation target for job work. At a single site with few senior
+people, someone other than the site head must be able to acknowledge, or the credit note has no
+route to `acknowledged`.
+
 | `migration_lead` | Staging loads, dry-runs, reconciliation reports; **cannot sign off own load** (SOD-07) | All (project) | Stories 13.1–13.3 |
 
 ### Deferred to full matrix (placeholders — wave 1 and later)
@@ -200,7 +210,7 @@ Legend: **C** = create/execute · **A** = approval hat (resolved via DOA) · **R
 
 | Capability | jobwork_coordinator | jobwork_supervisor | gst_officer | dispatch_clerk |
 |---|---|---|---|---|
-| Create/confirm job-work order; capture offcut election | C | A (confirm) | — | — |
+| Create/confirm job-work order; record the offcut arrangement | C | A (confirm) | — | — |
 | Post consumption against custody ledger | C | R | — | — |
 | Approve over-norm process loss | — | A | — | — |
 | Close order (custody balance must be zero) | — | A | — | — |

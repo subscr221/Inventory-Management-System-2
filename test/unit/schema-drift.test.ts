@@ -1835,6 +1835,32 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 9.6 revised (sprint change proposal 2026-09-05): the offcut holding ledger. Offcut is
+  // captured here UNVALUED and retained until disposal, and the row is where the still-open Section
+  // 143 exposure lives once the custody ledger has been drained so the order can close.
+  {
+    canonical: 'read/projections/job_work_offcut_holding.sql',
+    table: 'job_work_offcut_holding',
+    constraints: [
+      'chk_job_work_offcut_holding_status',
+      'chk_job_work_offcut_holding_quantity',
+      'chk_job_work_offcut_holding_disposition',
+      'chk_job_work_offcut_holding_lifecycle',
+    ],
+    indexes: [
+      'uq_job_work_offcut_holding_source_event',
+      'idx_job_work_offcut_holding_order',
+      'idx_job_work_offcut_holding_retained',
+      'idx_job_work_offcut_holding_site',
+    ],
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_offcut_holding_source_event ON job_work_offcut_holding (source_event_id)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_offcut_holding_order ON job_work_offcut_holding (service_order_id)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_offcut_holding_retained ON job_work_offcut_holding (status, captured_at)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_offcut_holding_site ON job_work_offcut_holding (site_id)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
   // Notification projections (read/projections/notification.sql), previously unpinned. The uq_*
   // UNIQUE constraints are inline in CREATE TABLE (no guarded DO block), so the table-body
   // comparison covers them.
@@ -1921,6 +1947,8 @@ describe('Story 2.1 schema drift guard', () => {
       'ADD COLUMN IF NOT EXISTS invoiced_feed_id UUID',
       'ADD COLUMN IF NOT EXISTS offcut_settled_at TIMESTAMPTZ',
       'ADD COLUMN IF NOT EXISTS offcut_settled_by UUID',
+      // Story 9.6 revised: the offcut contract's own reference number.
+      'ADD COLUMN IF NOT EXISTS offcut_contract_ref_ext TEXT',
     ]) {
       assert.ok(orderSql.includes(column), `service_order.sql missing the upgrade path: ${column}`);
       assert.ok(initDb.includes(column), `init-db.sql missing the upgrade path: ${column}`);

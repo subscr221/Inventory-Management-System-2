@@ -179,20 +179,12 @@ const OFFCUT_FIELDS = new Set([
   'uom',
   'site_id',
   'posted_by',
-  'return_challan_number_ext',
-  'offcut_rate_estimate',
-  'settles_offcut',
 ]);
 /** Server-derived on an offcut: the election is never named by the caller (Binding decision 1). */
 export const OFFCUT_DERIVED_FIELDS = [
-  'election',
   'custody_balance_after',
-  'converted_lot_id',
-  'converted_lot_number',
-  'billable_value',
-  'effective_offcut_rate',
-  'contracted_offcut_rate',
-  'converted_lot_hold_id',
+  'offcut_lot_id',
+  'offcut_lot_number',
 ] as const;
 // The 9.6 Task 0 rate shape (service-order.ts OFFCUT_RATE_REGEX): at most four decimals.
 const OFFCUT_RATE_ESTIMATE_REGEX = /^\d{1,14}(\.\d{1,4})?$/;

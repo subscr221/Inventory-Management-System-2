@@ -69,6 +69,7 @@ const CREATE_FIELDS = new Set([
   // update, MANDATORY at confirm when has_contractual_offcut is true.
   'offcut_rate',
   'offcut_currency',
+  'offcut_contract_ref_ext',
 ]);
 // has_contractual_offcut is deliberately NOT updatable: it is set at creation and is the sole
 // predicate of the FR-JW-09/10 confirm gate, so an updatable flag would let the same actor blocked
@@ -85,6 +86,7 @@ const UPDATE_FIELDS = new Set([
   'kit_bom_id',
   'offcut_rate',
   'offcut_currency',
+  'offcut_contract_ref_ext',
 ]);
 // Story 9.6 Task 0: at most FOUR decimals (the NUMERIC(18,4) column), strictly positive, and an
 // exact decimal STRING at the event boundary - the receiptTolerancePercent convention, never a
@@ -748,37 +750,16 @@ async function applyOrderConfirmed(envelope: EventEnvelope, client: PoolClient):
       409,
     );
   }
-  // Story 9.6 Task 0 (Binding decision 16): the THIRD confirm gate, a verbatim copy of the
-  // offcut_election pair above. The contracted offcut rate is agreed when the contract is, so a
-  // contractual arrangement makes the rate MANDATORY at confirm - without it AC2's "contracted
-  // rate" has no source and the number would be typed at settlement by the person who benefits.
-  if (
-    order.has_contractual_offcut === true &&
-    p.offcut_rate === undefined &&
-    order.offcut_rate === null
-  ) {
-    reject(
-      'INVALID_STATE_TRANSITION',
-      'A service order with a contractual offcut arrangement requires a contracted offcut rate to confirm',
-      { service_order_id: p.service_order_id, has_contractual_offcut: true, field: 'offcut_rate' },
-      409,
-    );
-  }
-  // Mirror refusal: a rate without the arrangement it prices is refused exactly as an election is.
+  // Story 9.6 REVISED 2026-09-05 (sprint change proposal): the confirm-time rate MANDATE is
+  // withdrawn. The offcut contract is its own contract and may be agreed after the service order is
+  // confirmed, and where the offcut is later sold at auction no rate can exist in advance at all.
+  // What survives is the indicative rate's SHAPE gate below: a rate may not ride an order that has
+  // no contractual offcut arrangement to price.
   if (order.has_contractual_offcut !== true && p.offcut_rate !== undefined) {
     reject(
       'INVALID_STATE_TRANSITION',
       'A service order without a contractual offcut arrangement cannot carry an offcut rate',
       { service_order_id: p.service_order_id, has_contractual_offcut: false, field: 'offcut_rate' },
-      409,
-    );
-  }
-  // A null clear at confirm would confirm a contractual order with no rate through the back door.
-  if (order.has_contractual_offcut === true && p.offcut_rate === null) {
-    reject(
-      'INVALID_STATE_TRANSITION',
-      'A service order with a contractual offcut arrangement cannot clear its offcut rate at confirm',
-      { service_order_id: p.service_order_id, has_contractual_offcut: true, field: 'offcut_rate' },
       409,
     );
   }

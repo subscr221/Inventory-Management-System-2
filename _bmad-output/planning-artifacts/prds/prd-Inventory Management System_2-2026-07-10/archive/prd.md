@@ -242,7 +242,7 @@ Each feature groups the source modules it absorbs, with FRs nested under it by t
 - **FR-JW-06** Consumption posting against the order following customer-supplied kit lines.
 - **FR-JW-07** Own-material additions billed distinctly from the service charge.
 - **FR-JW-08** Process loss norms; over-norm loss requires supervisor approval before dispatch readiness.
-- **FR-JW-09/10** Contractual offcut election (return, retain-and-buy, retain free) captured at confirmation and executed with documents.
+- **FR-JW-09/10** Contractual offcut is captured to a separate holding ledger at quantity grain, unvalued, under its own contract reference, and retained until disposal. Disposal is elected at disposal time and is one of two branches: the material is RETURNED to the customer as their own property, or it is ACQUIRED by the processor at the rate the finance controller sets, which transfers title and raises a credit note. Any onward resale, whether back to the customer, to a scrap buyer or at auction, happens afterwards to stock the processor already owns and is an ordinary sale, not a job-work event. Revised 2026-09-05 by sprint change proposal.
 - **FR-JW-11** Output passes the FG quality gate before dispatch; partial dispatches supported.
 - **FR-JW-12** Measured billing feed (pieces, certified weight, or hours) handed to ERP for invoicing.
 - **FR-JW-13** Customer stock in physical verification with reconciliation on the next custody statement.

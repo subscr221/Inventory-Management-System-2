@@ -8,7 +8,6 @@ import {
   moneyFromScaled,
   moneyToScaled,
   priceBasisRateAsMoney,
-  offcutRateOutOfBand,
   resolveMeasuredBasis,
 } from '../../src/adapters/erp/job-work-billing-feed.js';
 import {
@@ -16,11 +15,7 @@ import {
   billingNotReadyReason,
   orderAcceptsBilling,
 } from '../../src/compliance/jobwork-billing.js';
-import {
-  electionConvertsToOwnStock,
-  electionIsBillable,
-  offcutElectionOpen,
-} from '../../src/compliance/jobwork-offcut.js';
+import { offcutCaptureOpen } from '../../src/compliance/jobwork-offcut.js';
 import { isOffcutRateString } from '../../src/compliance/service-order.js';
 
 /**
@@ -165,8 +160,6 @@ describe('Story 9.6 billing and offcut predicates', () => {
       billingNotReadyReason({
         status: 'in_process',
         dispatchCount: 0,
-        hasContractualOffcut: false,
-        offcutSettledAt: null,
       }),
       'no_dispatch',
     );
@@ -174,8 +167,6 @@ describe('Story 9.6 billing and offcut predicates', () => {
       billingNotReadyReason({
         status: 'in_process',
         dispatchCount: 1,
-        hasContractualOffcut: false,
-        offcutSettledAt: null,
       }),
       null,
     );
@@ -183,41 +174,18 @@ describe('Story 9.6 billing and offcut predicates', () => {
       billingNotReadyReason({
         status: 'confirmed',
         dispatchCount: 1,
-        hasContractualOffcut: false,
-        offcutSettledAt: null,
       }),
       'order_not_started',
     );
   });
 
-  it('billingNotReadyReason: a contractual offcut blocks until settled, then bills (decision 15)', () => {
+  it('billingNotReadyReason: a contractual offcut no longer blocks billing (revised 2026-09-05)', () => {
+    // The offcut precondition was withdrawn: offcut is captured unvalued and disposed of later, so
+    // holding the service invoice for it would block a delivered job for months.
     assert.strictEqual(
-      billingNotReadyReason({
-        status: 'in_process',
-        dispatchCount: 2,
-        hasContractualOffcut: true,
-        offcutSettledAt: null,
-      }),
-      'offcut_not_settled',
-    );
-    assert.strictEqual(
-      billingNotReadyReason({
-        status: 'in_process',
-        dispatchCount: 2,
-        hasContractualOffcut: true,
-        offcutSettledAt: '2026-09-04T10:00:00.000Z',
-      }),
+      billingNotReadyReason({ status: 'in_process', dispatchCount: 1 }),
       null,
-    );
-    // The dispatch leg is checked FIRST, so a settled offcut with no dispatch still names dispatch.
-    assert.strictEqual(
-      billingNotReadyReason({
-        status: 'in_process',
-        dispatchCount: 0,
-        hasContractualOffcut: true,
-        offcutSettledAt: '2026-09-04T10:00:00.000Z',
-      }),
-      'no_dispatch',
+      'a dispatched order bills regardless of any outstanding offcut',
     );
   });
 
@@ -245,64 +213,18 @@ describe('Story 9.6 billing and offcut predicates', () => {
     );
   });
 
-  it('offcutRateOutOfBand bounds the estimate against the contracted rate, exactly at the edge', () => {
-    // 10% of 100.0000 is exactly 10.0000: the boundary itself is IN band, one tick past it is not.
-    assert.strictEqual(offcutRateOutOfBand('100.0000', '110.0000', 10), false);
-    assert.strictEqual(offcutRateOutOfBand('100.0000', '110.0001', 10), true);
-    assert.strictEqual(offcutRateOutOfBand('100.0000', '90.0000', 10), false);
-    assert.strictEqual(offcutRateOutOfBand('100.0000', '89.9999', 10), true);
-    // The two hostile ends the removed approval chain would have caught.
-    assert.strictEqual(offcutRateOutOfBand('100.0000', '0.0001', 10), true);
-    assert.strictEqual(offcutRateOutOfBand('100.0000', '99999999999999.0000', 10), true);
-    assert.strictEqual(offcutRateOutOfBand('100.0000', '100.0000', 10), false);
-  });
-
   // -------------------------------------------------------------------------
   // Offcut election gate (Binding decisions 1, 4, 15)
   // -------------------------------------------------------------------------
 
-  it('offcutElectionOpen: only a contractual, elected, unsettled order is executable', () => {
-    assert.deepStrictEqual(
-      offcutElectionOpen({
-        has_contractual_offcut: false,
-        offcut_election: null,
-        offcut_settled_at: null,
-      }),
-      { open: false, reason: 'not_contractual' },
-    );
-    assert.deepStrictEqual(
-      offcutElectionOpen({
-        has_contractual_offcut: true,
-        offcut_election: null,
-        offcut_settled_at: null,
-      }),
-      { open: false, reason: 'no_election' },
-    );
-    assert.deepStrictEqual(
-      offcutElectionOpen({
-        has_contractual_offcut: true,
-        offcut_election: 'return',
-        offcut_settled_at: '2026-09-04T10:00:00.000Z',
-      }),
-      { open: false, reason: 'already_settled' },
-    );
-    assert.deepStrictEqual(
-      offcutElectionOpen({
-        has_contractual_offcut: true,
-        offcut_election: 'retain_and_buy',
-        offcut_settled_at: null,
-      }),
-      { open: true, election: 'retain_and_buy' },
-    );
-  });
-
-  it('electionIsBillable / electionConvertsToOwnStock partition the three branches', () => {
-    assert.strictEqual(electionIsBillable('retain_and_buy'), true);
-    assert.strictEqual(electionIsBillable('retain_free'), false);
-    assert.strictEqual(electionIsBillable('return'), false);
-    assert.strictEqual(electionConvertsToOwnStock('retain_and_buy'), true);
-    assert.strictEqual(electionConvertsToOwnStock('retain_free'), true);
-    assert.strictEqual(electionConvertsToOwnStock('return'), false);
+  it('offcutCaptureOpen: only a contractual order may have offcut captured against it', () => {
+    // Revised 2026-09-05: no election check and no settled check. The disposition is decided at
+    // disposal, and an order may produce offcut in several batches over its life.
+    assert.deepStrictEqual(offcutCaptureOpen({ has_contractual_offcut: true }), { open: true });
+    assert.deepStrictEqual(offcutCaptureOpen({ has_contractual_offcut: false }), {
+      open: false,
+      reason: 'not_contractual',
+    });
   });
 
   // -------------------------------------------------------------------------

@@ -21,12 +21,17 @@ export interface ServiceOrderRow {
   offcut_election: 'return' | 'retain_and_buy' | 'retain_free' | null;
   has_contractual_offcut: boolean;
   /**
-   * Story 9.6 Task 0 (Binding decision 16): the CONTRACTED offcut rate, money per unit of customer
-   * material in offcut_currency, mandatory at confirm when has_contractual_offcut is true. Read back
+   * Story 9.6 revised 2026-09-05: the INDICATIVE offcut buy-in rate, money per unit of customer
+   * material in offcut_currency. It is a reference, never a gate: the rate that actually settles is
+   * the one negotiated at disposal (Story 9.7), which moves with the offcut's physical condition and
+   * is stored beside this figure so the variance is visible. NOT mandatory at confirm - the offcut
+   * contract may be agreed later than the service order. Read back
    * as a NUMERIC(18,4) text so no caller ever floats it.
    */
   offcut_rate: string | null;
   offcut_currency: string | null;
+  /** The offcut contract's own reference number: the offcut may later be resold under it. */
+  offcut_contract_ref_ext: string | null;
   /** Story 9.6 (Binding decision 9): stamped by jobwork.billing_feed_acknowledged, never a status. */
   invoiced_at: string | null;
   invoiced_feed_id: string | null;
@@ -130,9 +135,10 @@ export interface InsertServiceOrderInput {
   price_basis: ServiceOrderPriceBasis | null;
   kit_bom_id: string | null;
   has_contractual_offcut: boolean;
-  /** Story 9.6 Task 0: optional at creation; the confirm gate makes them mandatory when contractual. */
+  /** Story 9.6 revised: the INDICATIVE rate pair and the offcut contract reference, all optional. */
   offcut_rate: string | null;
   offcut_currency: string | null;
+  offcut_contract_ref_ext?: string | null;
   site_id: string;
   business_stream: string;
   created_by: string;
@@ -149,8 +155,8 @@ export async function insertServiceOrder(
       service_order_id, order_number_ext, customer_party_code, customer_name,
       spec_reference_ext, promised_start_date, promised_delivery_date, price_basis,
       kit_bom_id, has_contractual_offcut, status, site_id, business_stream, created_by,
-      correlation_id, source_event_id, offcut_rate, offcut_currency
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'draft',$11,$12,$13,$14,$15,$16::numeric,$17)`,
+      correlation_id, source_event_id, offcut_rate, offcut_currency, offcut_contract_ref_ext
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,'draft',$11,$12,$13,$14,$15,$16::numeric,$17,$18)`,
     [
       row.service_order_id,
       row.order_number_ext,
@@ -169,6 +175,7 @@ export async function insertServiceOrder(
       row.source_event_id,
       row.offcut_rate,
       row.offcut_currency,
+      row.offcut_contract_ref_ext ?? null,
     ],
   );
 }
@@ -190,6 +197,7 @@ export interface UpdateServiceOrderFieldsInput {
   has_contractual_offcut?: boolean;
   offcut_rate?: string | null;
   offcut_currency?: string | null;
+  offcut_contract_ref_ext?: string | null;
   offcut_settled_at?: string;
   offcut_settled_by?: string;
   invoiced_at?: string;

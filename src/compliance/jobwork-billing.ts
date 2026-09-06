@@ -12,7 +12,6 @@ import {
 import type { ServiceOrderRow } from '../read/projections/service_order.js';
 import { listJobworkMaterialReceiptsByOrder } from '../read/projections/jobwork_material_receipt.js';
 import { listCustodyLedgerByOrder } from '../read/projections/custody_ledger_entry.js';
-import type { CustodyLedgerEntryRow } from '../read/projections/custody_ledger_entry.js';
 import {
   getBillingFeedById,
   insertBillingFeed,
@@ -32,10 +31,14 @@ import { qtyFromScaled, qtyToScaled } from './custody-statement.js';
  * INSIDE the event transaction with every precondition re-derived under the order advisory lock
  * (the hold-bypass class - a direct POST /api/v1/events meets the identical wall).
  *
- * Generation (AC 4) has TWO preconditions, both BILLING_NOT_READY with details.reason:
- *   (a) at least one job_work_dispatch row - AC4's literal "completed, dispatched";
- *   (b) offcut_settled_at stamped when has_contractual_offcut (Binding decision 15) - one feed per
- *       order plus an offcut-blind precondition would silently lose the retain-and-buy line forever.
+ * Generation (AC 4) has ONE precondition, BILLING_NOT_READY with details.reason: at least one
+ * job_work_dispatch row - AC4's literal "completed, dispatched".
+ *
+ * Story 9.6 REVISED 2026-09-05: the offcut precondition is GONE. Offcut is now captured unvalued and
+ * disposed of later (Story 9.7), so waiting for it would hold the service invoice for however long
+ * the offcut sits retained - possibly months after the work was delivered. Offcut buyback reaches
+ * ERP as a CREDIT NOTE against this invoice when the finance controller values it, never as a line
+ * on this feed.
  * There is deliberately NO "every output fully dispatched" gate (Binding decision 18): the
  * open-to-dispatch quantity goes on the feed and the reconciliation report instead.
  * One feed per order is a SCHEMA rule (Binding decision 14, uq_job_work_billing_feed_order), so a
@@ -109,30 +112,26 @@ export function orderAcceptsBilling(status: ServiceOrderRow['status']): boolean 
 
 /**
  * The two generation preconditions as one pure predicate. Returns the FIRST failing reason, or
- * null when billing may proceed. `offcutSettled` is the row's stamp; `dispatchCount` the count of
- * job_work_dispatch rows for the order.
+ * null when billing may proceed. `dispatchCount` is the count of job_work_dispatch rows for the
+ * order. Story 9.6 revised: there is deliberately no offcut leg - see the module header.
  */
 export function billingNotReadyReason(input: {
   status: ServiceOrderRow['status'];
   dispatchCount: number;
-  hasContractualOffcut: boolean;
-  offcutSettledAt: string | null;
-}): 'order_not_started' | 'no_dispatch' | 'offcut_not_settled' | null {
+}): 'order_not_started' | 'no_dispatch' | null {
   if (!orderAcceptsBilling(input.status)) return 'order_not_started';
   if (input.dispatchCount < 1) return 'no_dispatch';
-  if (input.hasContractualOffcut && input.offcutSettledAt === null) return 'offcut_not_settled';
   return null;
 }
 
 /**
  * Binding decision 17: the acknowledging actor must not be the feed's generating actor.
  *
- * Story 9.6 code review 2026-09-05 widened this to the offcut SETTLER. The settling posting is the
- * only place the retain-and-buy rate is named (custody.offcut_recorded carries a caller-supplied
- * offcut_rate_estimate) AND it is the posting that stamps offcut_settled_at, which is the sole
- * billing precondition. Comparing only the generator to the acknowledger left the person who priced
- * the scrap free to sign off the invoice that bills it, so the rate-setter sat outside the SoD chain
- * entirely. All three roles must now be distinct actors.
+ * Story 9.6 code review 2026-09-05 widened this to the offcut SETTLER: whoever names the price of
+ * the customer's offcut must not also sign off the document that bills it. Under the revised model
+ * the rate is named at DISPOSAL by the finance controller (Story 9.7), and with the tolerance band
+ * removed this guard is the ONLY control over that rate - so it must not be weakened. The
+ * `offcutSettledBy` leg is inert until Story 9.7 stamps the column.
  */
 export function acknowledgmentSodViolation(input: {
   generatedBy: string;
@@ -348,24 +347,18 @@ export async function applyJobworkBillingFeedGenerated(
   const notReady = billingNotReadyReason({
     status: order.status,
     dispatchCount: dispatches.length,
-    hasContractualOffcut: order.has_contractual_offcut,
-    offcutSettledAt: order.offcut_settled_at,
   });
   if (notReady !== null) {
     reject(
       'BILLING_NOT_READY',
       notReady === 'no_dispatch'
         ? 'A billing feed requires a completed, dispatched order: no job-work dispatch has been recorded'
-        : notReady === 'offcut_not_settled'
-          ? 'A billing feed on an order with a contractual offcut requires the offcut election to be settled first (post the settling offcut with settles_offcut: true)'
-          : `A billing feed requires an order that has started processing; this order is ${order.status}`,
+        : `A billing feed requires an order that has started processing; this order is ${order.status}`,
       {
         service_order_id: order.service_order_id,
         reason: notReady,
         status: order.status,
         dispatch_count: dispatches.length,
-        has_contractual_offcut: order.has_contractual_offcut,
-        offcut_settled_at: order.offcut_settled_at,
       },
       409,
     );
@@ -400,53 +393,6 @@ export async function applyJobworkBillingFeedGenerated(
   const ledger = await listCustodyLedgerByOrder(order.service_order_id, client);
   // FR-JW-07 own-material lines (the 9.3 shape) and FR-JW-09/10 retain-and-buy lines (Task 5.2).
   const ownMaterialRows = ledger.filter((r) => r.ownership === 'processor' && r.billable === true);
-  const offcutLedgerRows = ledger.filter(
-    (r) => r.movement_category === 'offcut' && r.billable === true,
-  );
-  // The rate and value each offcut event DERIVED live on the stored event payload: custody_ledger_entry
-  // is a general custody QUANTITY ledger shared by Stories 9.3 to 9.5, and denormalising money into it
-  // for this one caller both pollutes that table and creates a second figure that can disagree with the
-  // event after a replay. Reading the derived values back out of the payload is the codebase's own
-  // idiom (master-data.ts:344, quality.ts:3077). Story 9.6 code review 2026-09-05: fetched with a
-  // single `= ANY($1)` rather than one round trip per offcut row inside the write transaction.
-  const offcutPayloads = new Map<string, Record<string, unknown>>();
-  if (offcutLedgerRows.length > 0) {
-    const stored = await client.query(
-      `SELECT event_id, payload FROM domain_events WHERE event_id = ANY($1::uuid[])`,
-      [offcutLedgerRows.map((r: CustodyLedgerEntryRow) => r.source_event_id)],
-    );
-    for (const storedRow of stored.rows) {
-      offcutPayloads.set(
-        storedRow['event_id'] as string,
-        (storedRow['payload'] ?? {}) as Record<string, unknown>,
-      );
-    }
-  }
-  const offcutRows = await Promise.all(
-    offcutLedgerRows.map(async (row: CustodyLedgerEntryRow) => {
-      const payload = offcutPayloads.get(row.source_event_id) ?? {};
-      return {
-        row,
-        offcut_rate:
-          typeof payload['effective_offcut_rate'] === 'string'
-            ? (payload['effective_offcut_rate'] as string)
-            : null,
-        contracted_offcut_rate:
-          typeof payload['contracted_offcut_rate'] === 'string'
-            ? (payload['contracted_offcut_rate'] as string)
-            : null,
-        billable_value:
-          typeof payload['billable_value'] === 'string'
-            ? (payload['billable_value'] as string)
-            : null,
-        converted_lot_number:
-          typeof payload['converted_lot_number'] === 'string'
-            ? (payload['converted_lot_number'] as string)
-            : null,
-      };
-    }),
-  );
-
   const idempotencyKey = p.idempotency_key ?? envelope.idempotency_key ?? eventId;
   const payload = buildJobWorkBillingFeedPayload({
     feedId: p.feed_id,
@@ -454,7 +400,6 @@ export async function applyJobworkBillingFeedGenerated(
     receipts,
     dispatches,
     ownMaterialRows,
-    offcutRows,
     measured,
     openToDispatchQty,
     idempotencyKey,
