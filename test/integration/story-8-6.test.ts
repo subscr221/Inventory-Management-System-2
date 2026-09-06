@@ -123,7 +123,11 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 

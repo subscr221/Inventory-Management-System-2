@@ -96,7 +96,11 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
@@ -714,7 +718,11 @@ describe('Story 8.3 Lot Disposition - Accept, Reject, Conditional Release', () =
       disposition(held.taskId, 'accept'),
     ]);
     const statuses = [a.status, b.status].sort((x, y) => x - y);
-    assert.deepStrictEqual(statuses, [201, 409], `${JSON.stringify(a.body)} ${JSON.stringify(b.body)}`);
+    assert.deepStrictEqual(
+      statuses,
+      [201, 409],
+      `${JSON.stringify(a.body)} ${JSON.stringify(b.body)}`,
+    );
     const loser = a.status === 409 ? a : b;
     assert.strictEqual(loser.body['error_code'], 'DISPOSITION_EXISTS');
     assert.strictEqual(await countRows('qc_lot_disposition', 'lot_id = $1', [held.lotId]), 1);
@@ -933,7 +941,10 @@ describe('Story 8.3 Lot Disposition - Accept, Reject, Conditional Release', () =
     const res = await ncrOutcome(ncrId, 'scrap');
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.strictEqual(res.body['error_code'], 'LOT_ON_HOLD');
-    assert.strictEqual(await countRows('qc_ncr', 'ncr_id = $1 AND outcome IS NOT NULL', [ncrId]), 0);
+    assert.strictEqual(
+      await countRows('qc_ncr', 'ncr_id = $1 AND outcome IS NOT NULL', [ncrId]),
+      0,
+    );
   });
 
   it('AC3: two concurrent identical-key rework outcomes on one NCR never produce a stale-replay QC_REWORK_NOT_DERIVED', async () => {
@@ -960,9 +971,16 @@ describe('Story 8.3 Lot Disposition - Accept, Reject, Conditional Release', () =
       assert.strictEqual(loser.body['error_code'], 'NCR_OUTCOME_EXISTS', bodies);
     } else {
       assert.deepStrictEqual(statuses, [200, 201], bodies);
-      assert.strictEqual(a.body['event_id'], b.body['event_id'], 'both requests resolve to the same event');
+      assert.strictEqual(
+        a.body['event_id'],
+        b.body['event_id'],
+        'both requests resolve to the same event',
+      );
     }
-    assert.strictEqual(await countRows('qc_ncr', 'ncr_id = $1 AND outcome = $2', [ncrId, 'rework']), 1);
+    assert.strictEqual(
+      await countRows('qc_ncr', 'ncr_id = $1 AND outcome = $2', [ncrId, 'rework']),
+      1,
+    );
   });
 
   it('AC4: a downgrade relabels the quantity onto an ungoverned seconds lot', async () => {
@@ -1077,9 +1095,9 @@ describe('Story 8.3 Lot Disposition - Accept, Reject, Conditional Release', () =
     assert.strictEqual(res.body['error_code'], 'LOCATION_ACCESS_DENIED');
     assert.strictEqual(await countRows('qc_lot_disposition', 'lot_id = $1', [held.lotId]), 0);
     assert.strictEqual(
-      await countRows('audit_log', `error_code = 'LOCATION_ACCESS_DENIED' AND user_id = $1`, [
+      (await countRows('audit_log', `error_code = 'LOCATION_ACCESS_DENIED' AND user_id = $1`, [
         inspectorUserId,
-      ]) > 0,
+      ])) > 0,
       true,
       'the refused decision is in the statutory audit log',
     );
@@ -1364,7 +1382,14 @@ describe('Story 8.3 Lot Disposition - Accept, Reject, Conditional Release', () =
 
     // A site-B NCR is invisible to the site-A inspector.
     const otherPlan = await planOk();
-    const otherHeld = await inspected(otherPlan, '5.000000', false, binB1Id, siteBId, qcHeadHeaders);
+    const otherHeld = await inspected(
+      otherPlan,
+      '5.000000',
+      false,
+      binB1Id,
+      siteBId,
+      qcHeadHeaders,
+    );
     const otherReject = await disposition(otherHeld.taskId, 'reject', qcHeadHeaders);
     assert.strictEqual(otherReject.status, 201, JSON.stringify(otherReject.body));
     const otherNcrId = (otherReject.body['ncr'] as Record<string, unknown>)['ncr_id'] as string;

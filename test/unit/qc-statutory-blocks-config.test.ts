@@ -4,10 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../../src/config/index.js';
-import {
-  bisLicenceBlockApplies,
-  labelVersionBlockApplies,
-} from '../../src/compliance/quality.js';
+import { bisLicenceBlockApplies, labelVersionBlockApplies } from '../../src/compliance/quality.js';
 
 /**
  * Story 8.6 (AC 1, AC 3, AC 4, Binding Scope Decision 3): QC_STATUTORY_RELEASE_BLOCKS is a

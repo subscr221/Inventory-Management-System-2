@@ -117,7 +117,11 @@ async function provisionUser(port: number, externalId: string, roles: Role[]): P
     { externalId, email: externalId, displayName: externalId, roles },
     SCIM_HEADERS,
   );
-  assert.strictEqual(res.status, 201, `provision ${externalId} failed: ${JSON.stringify(res.body)}`);
+  assert.strictEqual(
+    res.status,
+    201,
+    `provision ${externalId} failed: ${JSON.stringify(res.body)}`,
+  );
   return (res.body as Record<string, string>)['userId']!;
 }
 
@@ -804,10 +808,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
       inspectorHeaders,
     );
     assert.strictEqual(after.status, 200, JSON.stringify(after.body));
-    assert.strictEqual(
-      (after.body['release'] as Record<string, unknown>)['lot_id'],
-      held.lotId,
-    );
+    assert.strictEqual((after.body['release'] as Record<string, unknown>)['lot_id'], held.lotId);
     const sampleAfter = await makeRequest(
       port,
       'GET',
@@ -844,10 +845,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
     assert.strictEqual(await countRows('qc_batch_release', 'lot_id = $1', [held.lotId]), 1);
     // Testing Standards: every success path asserts the audit row AND the transactional
     // notification, not just the first one in the file.
-    assert.strictEqual(
-      await countRows('audit_log', `event_id = $1`, [res.body['event_id']]),
-      1,
-    );
+    assert.strictEqual(await countRows('audit_log', `event_id = $1`, [res.body['event_id']]), 1);
     assert.strictEqual(
       await countRows(
         'domain_events',
@@ -916,10 +914,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
     const second = await logRetentionSample(sequential.taskId);
     assert.strictEqual(second.status, 409, JSON.stringify(second.body));
     assert.strictEqual(second.body['error_code'], 'RETENTION_SAMPLE_EXISTS');
-    assert.strictEqual(
-      detailsOf(second.body)['existing_retention_sample_id'],
-      retentionSampleId,
-    );
+    assert.strictEqual(detailsOf(second.body)['existing_retention_sample_id'], retentionSampleId);
     assert.strictEqual(await auditCount('RETENTION_SAMPLE_EXISTS', sequential.taskId), 1);
     assert.strictEqual(
       await countRows('qc_retention_sample', 'lot_id = $1', [sequential.lotId]),
@@ -1026,7 +1021,10 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
 
     const swept = await runRetentionExpiryCycle();
     assert.strictEqual(swept.disposalPending, 1, JSON.stringify(swept));
-    assert.strictEqual((await retentionSampleRow(onBoundary.lotId))?.['status'], 'disposal_pending');
+    assert.strictEqual(
+      (await retentionSampleRow(onBoundary.lotId))?.['status'],
+      'disposal_pending',
+    );
     assert.strictEqual((await retentionSampleRow(beyond.lotId))?.['status'], 'retained');
   });
 
@@ -1124,10 +1122,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
       (ev['payload'] as Record<string, unknown>)['disposition'],
       'conditional_release',
     );
-    assert.strictEqual(
-      await countRows('audit_log', `event_id = $1`, [res.body['event_id']]),
-      1,
-    );
+    assert.strictEqual(await countRows('audit_log', `event_id = $1`, [res.body['event_id']]), 1);
     assert.strictEqual(
       await countRows(
         'domain_events',
@@ -1155,10 +1150,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
     assert.strictEqual(second.body['error_code'], 'RELEASE_EXISTS');
     assert.strictEqual(detailsOf(second.body)['existing_release_id'], releaseId);
     assert.strictEqual(await auditCount('RELEASE_EXISTS', sequential.taskId), 1);
-    assert.strictEqual(
-      await countRows('qc_batch_release', 'lot_id = $1', [sequential.lotId]),
-      1,
-    );
+    assert.strictEqual(await countRows('qc_batch_release', 'lot_id = $1', [sequential.lotId]), 1);
 
     const raced = await accepted(await planOk(), '5.000000');
     assert.strictEqual((await logRetentionSample(raced.taskId)).status, 201);
@@ -1220,10 +1212,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
     );
     const deniedAudit = await auditRow('LOCATION_ACCESS_DENIED', held.taskId);
     assert.strictEqual(deniedAudit['user_id'], inspectorUserId);
-    assert.strictEqual(
-      (deniedAudit['details'] as Record<string, unknown>)['lot_id'],
-      held.lotId,
-    );
+    assert.strictEqual((deniedAudit['details'] as Record<string, unknown>)['lot_id'], held.lotId);
   });
 
   it('AC8: every Story 8.4 event type is central-only on the edge upload route', async () => {
@@ -1293,7 +1282,11 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
 
     // qc.retention_sample_logged: the expiry is derived from the same retention resolution as the
     // release record, so a client cannot shorten it.
-    for (const forged of [{ expires_on: '2027-01-01' }, { retention_years: 1 }, { logged_by: inspectorUserId }]) {
+    for (const forged of [
+      { expires_on: '2027-01-01' },
+      { retention_years: 1 },
+      { logged_by: inspectorUserId },
+    ]) {
       const res = await postEvent(
         qcEnvelope('qc.retention_sample_logged', held.taskId, {
           task_id: held.taskId,
@@ -1651,9 +1644,7 @@ describe('Story 8.4 CoA/CoC, Retention Samples and Batch Release Records', () =>
       assert.strictEqual((await retentionSampleRow(good.lotId))?.['status'], 'disposal_pending');
       assert.strictEqual((await retentionSampleRow(poisoned.lotId))?.['status'], 'retained');
     } finally {
-      await getAdminPool().query(
-        `ALTER TABLE qc_retention_sample DROP CONSTRAINT tmp_poison_8_4`,
-      );
+      await getAdminPool().query(`ALTER TABLE qc_retention_sample DROP CONSTRAINT tmp_poison_8_4`);
     }
 
     // Once the poison is gone the previously failing row sweeps normally on the next tick.

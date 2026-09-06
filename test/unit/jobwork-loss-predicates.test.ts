@@ -184,6 +184,9 @@ describe('Story 9.4 apportionDispatchScaled (AC5 custody apportionment)', () => 
     };
     assert.equal(apportionDispatchScaled(base), 0n);
     assert.equal(apportionDispatchScaled({ ...base, alreadyReleased: 0n, skuConsumed: 0n }), 0n);
-    assert.equal(apportionDispatchScaled({ ...base, alreadyReleased: 0n, orderOutputTotal: 0n }), 0n);
+    assert.equal(
+      apportionDispatchScaled({ ...base, alreadyReleased: 0n, orderOutputTotal: 0n }),
+      0n,
+    );
   });
 });

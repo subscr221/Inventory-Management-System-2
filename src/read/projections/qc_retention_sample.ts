@@ -64,7 +64,8 @@ const SAMPLE_COLUMNS = `retention_sample_id, lot_id, task_id, quantity::text AS 
     disposed_at, source_event_id, created_at, updated_at`;
 
 const toIso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
-const toIsoOrNull = (v: unknown): string | null => (v === null || v === undefined ? null : toIso(v));
+const toIsoOrNull = (v: unknown): string | null =>
+  v === null || v === undefined ? null : toIso(v);
 
 function mapRow(row: Record<string, unknown>): QcRetentionSampleRow {
   return {

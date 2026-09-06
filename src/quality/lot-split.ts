@@ -107,10 +107,7 @@ export async function lockOwnedLotGrains(
  * The unallocated owned on-hand of a lot as a scaled integer, rejecting a lot that carries any
  * allocation. `grains` must already be locked by lockOwnedLotGrains.
  */
-export function availableScaled(
-  grains: ParentGrain[],
-  context: Record<string, unknown>,
-): bigint {
+export function availableScaled(grains: ParentGrain[], context: Record<string, unknown>): bigint {
   let total = 0n;
   for (const grain of grains) {
     if (toScaledQuantity(grain.allocated) !== 0n) {

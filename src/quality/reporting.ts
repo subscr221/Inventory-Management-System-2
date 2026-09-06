@@ -67,11 +67,7 @@ export function percent(numerator: number, denominator: number): string | null {
  * WHERE-fragment helper: appends an `= ANY` site condition when the filter narrows. `column` is a
  * trusted literal from this module, never caller input.
  */
-function siteCondition(
-  column: string,
-  filter: SiteFilter,
-  values: unknown[],
-): string {
+function siteCondition(column: string, filter: SiteFilter, values: unknown[]): string {
   if (filter === null) return '';
   values.push(filter);
   return ` AND ${column} = ANY($${values.length}::uuid[])`;

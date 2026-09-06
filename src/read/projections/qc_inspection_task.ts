@@ -20,12 +20,7 @@ import { getPool } from '../../config/db.js';
  * qc_gate_cleared so a permitted conditionally-released internal movement is not re-excluded.
  */
 
-export type QcGateStatus =
-  | 'qc_hold'
-  | 'conditionally_released'
-  | 'accepted'
-  | 'rejected'
-  | 'split';
+export type QcGateStatus = 'qc_hold' | 'conditionally_released' | 'accepted' | 'rejected' | 'split';
 /** Story 8.2 (Binding Scope Decision 5): the inspection axis, independent of the gate axis. */
 export type QcTaskStatus = 'open' | 'sampling_determined' | 'inspected';
 export type QcSamplingOutcome = 'accepted' | 'not_accepted';
@@ -42,9 +37,8 @@ export const QC_GATE_BLOCKED_STATUSES: readonly QcGateStatus[] = [
  * The blocked states that a per-lot assertQcGateAllows pass can NOT clear. A conditional release is
  * clearable (the deviation names the movement); a hold, a rejection and a split are not.
  */
-export const QC_GATE_HARD_BLOCKED_STATUSES: readonly QcGateStatus[] = QC_GATE_BLOCKED_STATUSES.filter(
-  (status) => status !== 'conditionally_released',
-);
+export const QC_GATE_HARD_BLOCKED_STATUSES: readonly QcGateStatus[] =
+  QC_GATE_BLOCKED_STATUSES.filter((status) => status !== 'conditionally_released');
 
 export interface QcInspectionTaskRow {
   task_id: string;

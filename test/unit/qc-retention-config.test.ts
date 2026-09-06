@@ -137,7 +137,11 @@ describe('Story 8.4 retention configuration (AC 1, AC 2)', () => {
     // would pass for `return config.quality.retentionYearsDefault`.
     assert.strictEqual(resolveRetentionYears(true, 5, 9), 9, 'a BIS lot is lifted to the floor');
     assert.strictEqual(resolveRetentionYears(false, 5, 9), 5, 'a non-BIS lot keeps the default');
-    assert.strictEqual(resolveRetentionYears(true, 12, 9), 12, 'the default wins when it is higher');
+    assert.strictEqual(
+      resolveRetentionYears(true, 12, 9),
+      12,
+      'the default wins when it is higher',
+    );
     // The reachable configuration still resolves to the default for both.
     assert.strictEqual(resolveRetentionYears(true), config.quality.retentionYearsDefault);
     assert.strictEqual(resolveRetentionYears(false), config.quality.retentionYearsDefault);
