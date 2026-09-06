@@ -238,6 +238,16 @@ export function renderCustodyStatementText(statement: CustodyStatement): string 
         `           physical verification variance ${line.variance_qty ?? line.quantity_delta}  verified_by ${line.posted_by}`,
       );
     }
+    // Story 9.6 review 2026-09-06: offcut leaves the CUSTODY ledger at capture so the order can
+    // close, but the material is still the CUSTOMER'S until disposal - it sits in the offcut holding
+    // ledger under its own contract, with the Section 143 clock still running. Without this line the
+    // statement showed the quantity leaving and a closing balance of zero, telling the customer we
+    // hold none of their material while we physically hold their offcut.
+    if (line.movement_category === 'offcut') {
+      out.push(
+        `           offcut retained pending disposal - still your material, held under ${line.reference_ext ?? 'the offcut arrangement'}`,
+      );
+    }
   }
   out.push(rule());
   out.push('CLOSING CUSTOMER-OWNED BALANCES');

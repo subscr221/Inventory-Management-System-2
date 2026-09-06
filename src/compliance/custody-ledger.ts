@@ -181,13 +181,8 @@ const OFFCUT_FIELDS = new Set([
   'posted_by',
 ]);
 /** Server-derived on an offcut: the election is never named by the caller (Binding decision 1). */
-export const OFFCUT_DERIVED_FIELDS = [
-  'custody_balance_after',
-  'offcut_lot_id',
-  'offcut_lot_number',
-] as const;
+export const OFFCUT_DERIVED_FIELDS = ['custody_balance_after', 'offcut_lot_number'] as const;
 // The 9.6 Task 0 rate shape (service-order.ts OFFCUT_RATE_REGEX): at most four decimals.
-const OFFCUT_RATE_ESTIMATE_REGEX = /^\d{1,14}(\.\d{1,4})?$/;
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_REGEX.test(value);
@@ -490,37 +485,11 @@ export function assertCustodyOffcutShape(envelope: EventEnvelope): void {
     reject('INVALID_PARAMS', 'lot_id is required and must be a non-empty string');
   }
   p['lot_id'] = (p['lot_id'] as string).trim();
-  if (p['return_challan_number_ext'] !== undefined && p['return_challan_number_ext'] !== null) {
-    if (
-      !isNonEmptyString(p['return_challan_number_ext']) ||
-      (p['return_challan_number_ext'] as string).trim().length > MAX_TEXT_LENGTH
-    ) {
-      reject(
-        'INVALID_PARAMS',
-        `return_challan_number_ext must be a non-blank delivery challan number of at most ${MAX_TEXT_LENGTH} characters when supplied`,
-        { field: 'return_challan_number_ext' },
-      );
-    }
-    p['return_challan_number_ext'] = (p['return_challan_number_ext'] as string).trim();
-  }
-  if (p['offcut_rate_estimate'] !== undefined && p['offcut_rate_estimate'] !== null) {
-    // An exact decimal STRING, never a number literal (the receiptTolerancePercent convention), so
-    // the billable value settles in scaled-integer arithmetic.
-    if (
-      typeof p['offcut_rate_estimate'] !== 'string' ||
-      !OFFCUT_RATE_ESTIMATE_REGEX.test(p['offcut_rate_estimate']) ||
-      !/[1-9]/.test(p['offcut_rate_estimate'])
-    ) {
-      reject(
-        'INVALID_PARAMS',
-        'offcut_rate_estimate must be a strictly positive exact decimal string with at most four decimals',
-        { field: 'offcut_rate_estimate', value: p['offcut_rate_estimate'] },
-      );
-    }
-  }
-  if (p['settles_offcut'] !== undefined && typeof p['settles_offcut'] !== 'boolean') {
-    reject('INVALID_PARAMS', 'settles_offcut must be a boolean when supplied');
-  }
+  // Story 9.6 REVISED 2026-09-05: the three disposal-time fields this block used to validate -
+  // return_challan_number_ext, offcut_rate_estimate and settles_offcut - were removed from
+  // OFFCUT_FIELDS by the model reversal, so assertCommonShape rejects them as unknown keys BEFORE
+  // reaching here. Their per-field validators and the OFFCUT_RATE_ESTIMATE_REGEX were dead code
+  // encoding the withdrawn contract, and are gone (2026-09-06). Story 9.7 adds disposal's own.
 }
 
 // ---------------------------------------------------------------------------

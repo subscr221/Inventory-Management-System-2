@@ -224,10 +224,17 @@ const ORDER_FIELDS = [
   // create and update (optional) and on confirm (mandatory when contractual - the seam's gate).
   'offcut_rate',
   'offcut_currency',
+  // Story 9.6 revised: the offcut contract's own reference number. Without this the column existed,
+  // the seam allowed it and NOTHING could ever populate it (fixed 2026-09-06).
+  'offcut_contract_ref_ext',
 ] as const;
 
 /** Story 9.6 Task 0.4: the ORDER_FIELDS the confirm route ALSO accepts (the rest stay refused). */
-const CONFIRM_FIELDS: readonly string[] = ['offcut_rate', 'offcut_currency'];
+const CONFIRM_FIELDS: readonly string[] = [
+  'offcut_rate',
+  'offcut_currency',
+  'offcut_contract_ref_ext',
+];
 
 // BSD-7 / FR-AC-01: order events carry the governed job-work business stream code.
 const JOB_WORK_BUSINESS_STREAM = 'job_work';
@@ -389,7 +396,9 @@ const confirmServiceOrderBase: RouteHandler = async (req, res, params) => {
       assertSiteWriteAccess(req, existing.site_id);
     }
 
-    // BSD-6: offcut_election is OPTIONAL in 9.1, persisted with no behavior; 9.4 makes it
+    // BSD-6: offcut_election is OPTIONAL, persisted with no behavior. REVISED 2026-09-06: the
+    // confirm-time mandate is withdrawn and the capture applier never reads this value - the
+    // disposition is decided at disposal (Story 9.7). Previously 9.4 made it
     // mandatory and acts on it. Vocabulary is enforced in the seam's shape assert. Story 9.6 Task 0
     // adds the contracted offcut rate pair beside it, gated identically by the seam.
     const payload: Record<string, unknown> = { service_order_id: serviceOrderId };
@@ -915,8 +924,9 @@ const postServiceOrderReturnBase: RouteHandler = (req, res, params) =>
   });
 
 // ---------------------------------------------------------------------------
-// Story 9.6: offcut election execution (FR-JW-09/10) through the EXISTING custody helper. The
-// caller never names the branch; the seam re-reads service_order.offcut_election under the order
+// Story 9.6 REVISED 2026-09-05: offcut CAPTURE (FR-JW-09/10) through the EXISTING custody helper.
+// The caller names nothing about the disposition - it is decided at DISPOSAL in Story 9.7. The seam
+// re-reads the order's contractual-offcut flag under the order
 // lock (Binding decision 1). The challan number, the real-time rate estimate and the settlement
 // declaration are caller fields the seam checks per branch; every derived field is refused here.
 // ---------------------------------------------------------------------------

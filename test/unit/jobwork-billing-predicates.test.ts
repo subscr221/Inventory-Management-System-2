@@ -53,9 +53,16 @@ describe('Story 9.6 billing and offcut predicates', () => {
 
   it('priceBasisRateAsMoney re-serialises the JSON number through the exact path', () => {
     assert.strictEqual(priceBasisRateAsMoney(12.5), '12.5000');
-    assert.strictEqual(priceBasisRateAsMoney(0), '0.0000');
     assert.throws(() => priceBasisRateAsMoney(-1), AppError);
-    assert.throws(() => priceBasisRateAsMoney(1.23456), TypeError);
+    // Review 2026-09-06: a ZERO rate used to mint a zero-value billing feed that permanently
+    // consumed the order's one feed slot, with no route to void or regenerate it.
+    assert.throws(() => priceBasisRateAsMoney(0), AppError);
+    // ...and an over-precise rate threw a bare TypeError, which the middleware turned into a 500,
+    // despite the docstring promising a refusal. It is the classified 400 it always claimed to be.
+    assert.throws(
+      () => priceBasisRateAsMoney(1.23456),
+      (err: unknown) => err instanceof AppError && err.errorCode === 'INVALID_PARAMS',
+    );
   });
 
   // -------------------------------------------------------------------------

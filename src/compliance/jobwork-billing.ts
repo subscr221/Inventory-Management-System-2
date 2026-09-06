@@ -175,6 +175,10 @@ export function assertJobworkBillingShape(envelope: EventEnvelope): void {
     for (const field of ['service_order_id', 'feed_id', 'site_id', 'generated_by']) {
       if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
     }
+    // Story 9.6 review 2026-09-06: it is only meaningful on a per_hour basis. Accepting it on any
+    // other basis stored an hours figure on the event that had no effect on the invoice, which reads
+    // as evidence of a billing input that was never used. The basis lives on the order, so the seam
+    // refuses the mismatch below, under the lock; this stays a type check.
     if (p['measured_hours'] !== undefined && typeof p['measured_hours'] !== 'string') {
       reject('INVALID_PARAMS', 'measured_hours must be a NUMERIC string when supplied', {
         field: 'measured_hours',
@@ -333,6 +337,17 @@ export async function applyJobworkBillingFeedGenerated(
       ORDER BY dispatched_at ASC, created_at ASC, dispatch_id ASC`,
     [order.service_order_id],
   );
+  // Dispatch lines are summed into ONE measured_quantity and billed at ONE rate, so mixing uoms
+  // would bill kilograms and pieces as if they were the same unit (fixed 2026-09-06).
+  const dispatchUoms = new Set(dispatchResult.rows.map((row) => row['uom'] as string));
+  if (dispatchUoms.size > 1) {
+    reject(
+      'INVALID_PARAMS',
+      'This order has dispatches in more than one unit of measure and cannot be billed on a single measured quantity',
+      { service_order_id: order.service_order_id, uoms: [...dispatchUoms].sort() },
+      409,
+    );
+  }
   const dispatches: JobWorkBillingDispatchLine[] = dispatchResult.rows.map((row) => ({
     dispatch_id: row['dispatch_id'] as string,
     lot_number: row['lot_number'] as string,
@@ -376,6 +391,21 @@ export async function applyJobworkBillingFeedGenerated(
   // Measured basis (Binding decision 12): dispatched total for per_piece/per_kg, exact scaled sum.
   let dispatchedTotal = 0n;
   for (const line of dispatches) dispatchedTotal += qtyToScaled(line.dispatched_quantity);
+  // measured_hours is only an input to a per_hour basis. Accepting it on any other basis stored an
+  // hours figure on the event that never touched the invoice (fixed 2026-09-06). The basis lives on
+  // the ORDER, so this is the first point that can judge it - under the lock, not at the route.
+  if (p.measured_hours !== undefined && order.price_basis.basis_type !== 'per_hour') {
+    reject(
+      'INVALID_PARAMS',
+      'measured_hours applies only to a per_hour price basis',
+      {
+        field: 'measured_hours',
+        basis_type: order.price_basis.basis_type,
+        service_order_id: order.service_order_id,
+      },
+      400,
+    );
+  }
   const measured = resolveMeasuredBasis({
     basisType: order.price_basis.basis_type,
     dispatchedTotal: qtyFromScaled(dispatchedTotal),

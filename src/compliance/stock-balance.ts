@@ -92,10 +92,17 @@ const NON_SALEABLE_STOCK_CLASSES = new Set(['prototype']);
  */
 const SEGREGATED_STOCK_CLASSES = new Set(['prototype', 'job_work', 'offcut']);
 const JOB_WORK_STOCK_CLASS = 'job_work';
+const OFFCUT_STOCK_CLASS = 'offcut';
 
 /** The laundering-bar refusal code for a conflict involving `conflictClass` (see SEGREGATED_STOCK_CLASSES). */
 function segregationErrorCode(conflictClass: string): string {
-  return conflictClass === JOB_WORK_STOCK_CLASS ? 'CROSS_ISSUE_BLOCKED' : 'PROTOTYPE_NOT_SALEABLE';
+  // `offcut` is customer-owned material held pending disposal - the same ownership story as
+  // job_work, so the same refusal. It was added to SEGREGATED_STOCK_CLASSES on 2026-09-05 without
+  // extending this mapping, which meant an attempt to launder a customer's offcut into owned stock
+  // was refused with a code saying the material is a PROTOTYPE (fixed 2026-09-06).
+  return conflictClass === JOB_WORK_STOCK_CLASS || conflictClass === OFFCUT_STOCK_CLASS
+    ? 'CROSS_ISSUE_BLOCKED'
+    : 'PROTOTYPE_NOT_SALEABLE';
 }
 
 /** ponytail: NUMERIC(18,6) ceiling, prevents Postgres overflow on insert/update */

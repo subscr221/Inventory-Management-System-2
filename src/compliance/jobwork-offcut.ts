@@ -4,7 +4,6 @@ import type { CustodyOffcutRecordedPayload } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
 import { getItemBySku } from '../read/projections/item_master.js';
 import { createLot } from '../read/projections/lot_master.js';
-import { applyStockReceipt } from '../read/projections/stock_balance.js';
 import { insertOffcutHolding } from '../read/projections/job_work_offcut_holding.js';
 import {
   insertCustodyLedgerEntry,
@@ -240,27 +239,44 @@ export async function applyCustodyOffcutProjection(
   // The site discriminator keeps two sites running the same external order number from colliding
   // on uq_lot_master_lot_number (the 9.4 lot-number lesson).
   const offcutLotNumber = `${order.order_number_ext}-${order.site_id.slice(0, 8)}-OC${sequence}`;
-  const offcutLot = await createLot(
-    {
-      lot_number: offcutLotNumber,
+  try {
+    await createLot(
+      {
+        lot_number: offcutLotNumber,
+        sku: p.sku,
+        expiry_date: null,
+        quality_hold_status: 'none',
+        quality_hold_reason: null,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    // uq_lot_master_lot_number is GLOBAL while order_number_ext is unique only per site, and the
+    // eight-character site prefix in the lot number is a truncation rather than a key - so a
+    // collision is reachable and must be a classified 409, not a raw 500 (fixed 2026-09-06).
+    classifyDuplicate(err, p.offcut_id, eventId);
+  }
+  // Through the COMPLIANCE SEAM, not the raw projection (fixed 2026-09-06). The module header
+  // justifies minting a new lot precisely BECAUSE the laundering bar is lot-row based and would
+  // refuse a second segregated class on a lot that has held `job_work` - but the previous code
+  // called `applyStockReceipt` directly, so the bar it named as its reason was never invoked, and
+  // neither were the quantity ceiling or the location checks. The mint means the bar has nothing to
+  // catch here; that is the point, and now the bar actually runs and says so.
+  const receiptView: EventEnvelope = {
+    ...envelope,
+    event_id: eventId,
+    stream_type: 'inventory',
+    event_type: 'stock.received',
+    payload: {
       sku: p.sku,
-      expiry_date: null,
-      quality_hold_status: 'none',
-      quality_hold_reason: null,
-    },
-    client,
-  );
-  await applyStockReceipt(
-    {
-      sku: p.sku,
-      location_id: location.location_id,
-      location_code: location.location_code,
+      target_location_id: location.location_id,
       lot_id: offcutLotNumber,
       quantity: p.quantity,
       stock_class: OFFCUT_STOCK_CLASS,
+      business_stream: JOB_WORK_BUSINESS_STREAM,
     },
-    client,
-  );
+  };
+  await applyStockBalanceProjection(receiptView, client);
 
   // 4. The custody drain row, then the holding row.
   const quantityDelta = qtyNegate(p.quantity);
@@ -301,27 +317,33 @@ export async function applyCustodyOffcutProjection(
     classifyDuplicate(err, p.offcut_id, eventId);
   }
 
-  await insertOffcutHolding(
-    {
-      holding_id: p.offcut_id,
-      service_order_id: order.service_order_id,
-      customer_party_code: order.customer_party_code,
-      offcut_contract_ref_ext: order.offcut_contract_ref_ext ?? null,
-      sku: p.sku,
-      lot_id: offcutLotNumber,
-      source_lot_id: p.lot_id,
-      location_id: location.location_id,
-      quantity: p.quantity,
-      uom: p.uom,
-      captured_at: occurredAt,
-      business_date: toIstCalendarDate(new Date(occurredAt)),
-      site_id: order.site_id,
-      captured_by: p.posted_by,
-      source_event_id: eventId,
-      correlation_id: envelope.metadata.correlation_id ?? null,
-    },
-    client,
-  );
+  try {
+    await insertOffcutHolding(
+      {
+        holding_id: p.offcut_id,
+        service_order_id: order.service_order_id,
+        customer_party_code: order.customer_party_code,
+        offcut_contract_ref_ext: order.offcut_contract_ref_ext ?? null,
+        sku: p.sku,
+        lot_id: offcutLotNumber,
+        source_lot_id: p.lot_id,
+        location_id: location.location_id,
+        quantity: p.quantity,
+        uom: p.uom,
+        captured_at: occurredAt,
+        business_date: toIstCalendarDate(new Date(occurredAt)),
+        site_id: order.site_id,
+        captured_by: p.posted_by,
+        source_event_id: eventId,
+        correlation_id: envelope.metadata.correlation_id ?? null,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    // Both the holding_id PK and uq_job_work_offcut_holding_source_event can raise 23505; the
+    // sibling custody insert above is classified and this was not (fixed 2026-09-06).
+    classifyDuplicate(err, p.offcut_id, eventId);
+  }
 
   await appendCustodyTrace(
     {
@@ -336,8 +358,9 @@ export async function applyCustodyOffcutProjection(
     client,
   );
 
-  // The stored event carries what THIS process derived, never what the caller asserted.
+  // The stored event carries what THIS process derived, never what the caller asserted. ONE lot
+  // identifier, the NUMBER, matching what the holding row and the stock_balance row carry - a
+  // lot_master UUID here would join against neither (fixed 2026-09-06).
   envelope.payload['custody_balance_after'] = qtyAdd(balance, quantityDelta);
-  envelope.payload['offcut_lot_id'] = offcutLot.lot_id;
   envelope.payload['offcut_lot_number'] = offcutLotNumber;
 }

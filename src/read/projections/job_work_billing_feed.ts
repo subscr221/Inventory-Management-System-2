@@ -162,9 +162,13 @@ export async function markBillingFeedAcknowledged(
   client: PoolClient,
 ): Promise<boolean> {
   const result = await client.query(
+    // Acknowledging an `exception` feed RESOLVES that exception, so the stamps come off with it
+    // (fixed 2026-09-06). Leaving them set kept a resolved feed on the exception queue and left the
+    // Story 1.11 escalation still hopping to the site head for a feed ERP had already answered.
     `UPDATE job_work_billing_feed
         SET status = 'acknowledged', acknowledged_at = $2::timestamptz, acknowledged_by = $3::uuid,
-            acknowledged_ref_ext = $4, updated_at = now()
+            acknowledged_ref_ext = $4, exception_raised_at = NULL, alert_sent_at = NULL,
+            updated_at = now()
       WHERE feed_id = $1 AND status <> 'acknowledged'`,
     [feedId, ack.acknowledged_at, ack.acknowledged_by, ack.acknowledged_ref_ext],
   );

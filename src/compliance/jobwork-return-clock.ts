@@ -30,7 +30,9 @@ import { qtyFromScaled, qtyToScaled } from './custody-statement.js';
  *
  * The clock stops when goods LEAVE the job worker: dispatch of processed output (9.4, apportioned
  * back into input-sku quantities), a return of unconsumed material (9.5 custody.return_recorded),
- * accounted loss (9.4, loss_qty) and the forward-declared 9.6 offcut election. Consumption into WIP
+ * accounted loss (9.4, loss_qty). Story 9.6 offcut CAPTURE deliberately does NOT reconcile here
+ * (revised 2026-09-05): the material is still the customer's until disposal and the clock must keep
+ * running against it; Story 9.7 stops it at disposal. Consumption into WIP
  * stops NOTHING (the bracket is still on the floor). A count_adjustment is a verification
  * discrepancy, not a movement out, and never reaches this helper.
  *

@@ -65,7 +65,8 @@ export interface InsertOffcutHoldingInput {
 }
 
 const SELECT_COLUMNS = `holding_id, service_order_id, customer_party_code, offcut_contract_ref_ext,
-  sku, lot_id, source_lot_id, location_id, quantity::text AS quantity, uom, status, captured_at, business_date,
+  sku, lot_id, source_lot_id, location_id, quantity::text AS quantity, uom, status, captured_at,
+  to_char(business_date, 'YYYY-MM-DD') AS business_date,
   disposed_at, disposition, disposal_event_id, site_id, captured_by, source_event_id,
   correlation_id, created_at, updated_at`;
 
@@ -78,11 +79,11 @@ function mapRow(row: Record<string, unknown>): JobWorkOffcutHoldingRow {
   return {
     ...(row as unknown as JobWorkOffcutHoldingRow),
     captured_at: toIso(row['captured_at']) as string,
-    business_date: String(
-      row['business_date'] instanceof Date
-        ? (row['business_date'] as Date).toISOString().slice(0, 10)
-        : row['business_date'],
-    ),
+    // Selected as text by to_char above. Mapping the raw DATE with toISOString() shifted it a day
+    // back in any timezone ahead of UTC, because node-pg returns a DATE as LOCAL midnight - a row
+    // written 2026-09-06 IST read back 2026-09-05 (fixed 2026-09-06, the custody_ledger_entry
+    // precedent).
+    business_date: String(row['business_date']),
     disposed_at: toIso(row['disposed_at']),
     created_at: toIso(row['created_at']) as string,
     updated_at: toIso(row['updated_at']) as string,
@@ -121,10 +122,14 @@ export async function insertOffcutHolding(
   );
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function getOffcutHoldingById(
   holdingId: string,
   client?: PoolClient,
 ): Promise<JobWorkOffcutHoldingRow | null> {
+  // A malformed id is "not found", not a 22P02 500 (the getBillingFeedById precedent).
+  if (!UUID_REGEX.test(holdingId)) return null;
   const runner = client ?? getPool();
   const result = await runner.query(
     `SELECT ${SELECT_COLUMNS} FROM job_work_offcut_holding WHERE holding_id = $1`,

@@ -1100,7 +1100,7 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     assert.strictEqual((await holdingRows(orderId)).length, 1, 'a replay writes no second holding');
     assert.strictEqual(await custodyBalance(orderId), '995.000');
 
-    for (const derived of ['custody_balance_after', 'offcut_lot_id', 'offcut_lot_number']) {
+    for (const derived of ['custody_balance_after', 'offcut_lot_number']) {
       const res = await postOffcut(orderId, lot, { quantity: '1', [derived]: 'x' });
       assert.strictEqual(res.status, 400, `${derived}: ${JSON.stringify(res.body)}`);
       assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');

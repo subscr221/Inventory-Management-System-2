@@ -770,7 +770,7 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
   // AC 3: mandatory offcut election
   // -------------------------------------------------------------------------
 
-  it('AC3: a contractual-offcut order refuses confirm without an election', async () => {
+  it('AC3 REVISED: a contractual-offcut order confirms WITHOUT an election', async () => {
     const create = await makeRequest(
       port,
       'POST',
@@ -797,14 +797,37 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
       { idempotency_key: randomUUID() },
       coordinatorHeaders,
     );
-    assert.strictEqual(confirm.status, 409, JSON.stringify(confirm.body));
-    assert.strictEqual(confirm.body['error_code'], 'INVALID_STATE_TRANSITION');
+    // Story 9.6 REVISED 2026-09-06 (sprint change proposal): the confirm-time ELECTION mandate is
+    // withdrawn, as the rate mandate was before it. The disposition is decided at DISPOSAL by the
+    // finance controller (Story 9.7), so an operator can no longer be blocked at confirm by a
+    // question nobody can answer yet. This assertion previously expected 409.
+    assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
 
-    // Story 9.6 Task 0: a contractual order also carries its contracted offcut rate at confirm.
+    // The election and the indicative rate pair are still ACCEPTED when the caller has them - on a
+    // FRESH order, because the one above is now already confirmed.
+    const second = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/service-orders',
+      {
+        site_id: siteAId,
+        customer_party_code: CUSTOMER,
+        customer_name: 'Acme Fabrication Pvt Ltd',
+        price_basis: { basis_type: 'per_kg', rate: 12.5, currency: 'INR' },
+        kit_bom_id: kitBomId,
+        has_contractual_offcut: true,
+        idempotency_key: randomUUID(),
+      },
+      coordinatorHeaders,
+    );
+    assert.strictEqual(second.status, 201, JSON.stringify(second.body));
+    const electedOrderId = (second.body['service_order'] as Record<string, unknown>)[
+      'service_order_id'
+    ] as string;
     const confirmWithElection = await makeRequest(
       port,
       'POST',
-      `/api/v1/service-orders/${orderId}/confirm`,
+      `/api/v1/service-orders/${electedOrderId}/confirm`,
       {
         idempotency_key: randomUUID(),
         offcut_election: 'retain_and_buy',
@@ -816,7 +839,7 @@ describe('Story 9.4 Process Loss, Offcut Election Capture, and QC-Gated Dispatch
     assert.strictEqual(confirmWithElection.status, 200, JSON.stringify(confirmWithElection.body));
     const row = await getAdminPool().query(
       `SELECT offcut_election FROM service_order WHERE service_order_id = $1`,
-      [orderId],
+      [electedOrderId],
     );
     assert.strictEqual(row.rows[0]!['offcut_election'], 'retain_and_buy');
   });

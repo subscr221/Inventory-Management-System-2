@@ -4430,7 +4430,11 @@ export interface JobworkOrderCreatedPayload {
   promised_delivery_date?: string;
   price_basis?: ServiceOrderPriceBasisPayload;
   kit_bom_id?: string;
-  /** Story 9.4 (FR-JW-09/10): when true, confirmation requires an offcut_election. */
+  /**
+   * Story 9.4 (FR-JW-09/10): the order carries a contractual offcut arrangement. REVISED
+   * 2026-09-06: this no longer forces an election at confirmation - the disposition and the rate are
+   * decided at DISPOSAL (Story 9.7).
+   */
   has_contractual_offcut?: boolean;
   /**
    * Story 9.6 Task 0 (Binding decision 16): the CONTRACTED offcut rate, an exact decimal STRING
@@ -4439,6 +4443,8 @@ export interface JobworkOrderCreatedPayload {
    */
   offcut_rate?: string | null;
   offcut_currency?: string | null;
+  /** Story 9.6 revised: the offcut contract's own reference number (the offcut may be resold under it). */
+  offcut_contract_ref_ext?: string | null;
   site_id: string;
   business_stream: string;
 }
@@ -4461,6 +4467,8 @@ export interface JobworkOrderUpdatedPayload {
   has_contractual_offcut?: boolean;
   offcut_rate?: string | null;
   offcut_currency?: string | null;
+  /** Story 9.6 revised: the offcut contract's own reference number (the offcut may be resold under it). */
+  offcut_contract_ref_ext?: string | null;
 }
 
 export interface JobworkOrderUpdatedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -4475,6 +4483,8 @@ export interface JobworkOrderConfirmedPayload {
   /** Story 9.6 Task 0: mandatory (here or already on the row) when has_contractual_offcut. */
   offcut_rate?: string | null;
   offcut_currency?: string | null;
+  /** Story 9.6 revised: the offcut contract's own reference number (the offcut may be resold under it). */
+  offcut_contract_ref_ext?: string | null;
 }
 
 export interface JobworkOrderConfirmedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -4693,8 +4703,16 @@ export interface CustodyOffcutRecordedPayload {
   // disposition, so there is no election, no rate, no billable value and no settlement declaration
   // on this event any more. All of those belong to disposal (Story 9.7).
   custody_balance_after?: string;
-  /** The lot minted to carry the segregated `offcut` stock (the laundering bar is lot-ROW based). */
-  offcut_lot_id?: string | null;
+  /**
+   * The lot minted to carry the segregated `offcut` stock (the laundering bar is lot-ROW based).
+   *
+   * This is the lot NUMBER, and it is the ONLY lot identifier on this event. It is the same value
+   * `job_work_offcut_holding.lot_id` and `stock_balance.lot_id` carry, because on this platform a
+   * `lot_id` column holds the lot number - see the bridge comment in compliance/transfer-request.ts.
+   * A `lot_master` UUID was also stamped here until 2026-09-06; it was removed because Story 9.7's
+   * disposal and any recall trace would have joined the UUID against those number-bearing columns
+   * and matched nothing. One identifier, joinable everywhere.
+   */
   offcut_lot_number?: string | null;
 }
 

@@ -584,6 +584,7 @@ async function applyOrderCreated(
         has_contractual_offcut: p.has_contractual_offcut ?? false,
         offcut_rate: p.offcut_rate ?? null,
         offcut_currency: p.offcut_currency ?? null,
+        offcut_contract_ref_ext: p.offcut_contract_ref_ext ?? null,
         site_id: p.site_id,
         business_stream: p.business_stream,
         created_by: envelope.metadata.actor.user_id,
@@ -683,6 +684,9 @@ async function applyOrderUpdated(envelope: EventEnvelope, client: PoolClient): P
       ...(p.kit_bom_id !== undefined && { kit_bom_id: p.kit_bom_id }),
       ...(p.offcut_rate !== undefined && { offcut_rate: p.offcut_rate }),
       ...(p.offcut_currency !== undefined && { offcut_currency: p.offcut_currency }),
+      ...(p.offcut_contract_ref_ext !== undefined && {
+        offcut_contract_ref_ext: p.offcut_contract_ref_ext,
+      }),
     },
     client,
   );
@@ -728,18 +732,14 @@ async function applyOrderConfirmed(envelope: EventEnvelope, client: PoolClient):
   // Story 9.4 (FR-JW-09/10): a contractual offcut arrangement makes the ALREADY-forward-declared
   // (BSD-6) offcut_election mandatory at confirm. Mirrors the kit-BOM/price-basis gate shape
   // exactly - same code, same status, same 409.
-  if (
-    order.has_contractual_offcut === true &&
-    p.offcut_election === undefined &&
-    order.offcut_election === null
-  ) {
-    reject(
-      'INVALID_STATE_TRANSITION',
-      'A service order with a contractual offcut arrangement requires an offcut election to confirm',
-      { service_order_id: p.service_order_id, has_contractual_offcut: true },
-      409,
-    );
-  }
+  // Story 9.6 REVISED 2026-09-06 (sprint change proposal): the confirm-time ELECTION mandate is
+  // withdrawn, exactly as the rate mandate below it was. The disposition is decided at DISPOSAL by
+  // the finance controller (Story 9.7), not at confirmation - the approved ruling is that "no
+  // disposition and no rate are elected at confirmation". Leaving this gate in place blocked an
+  // operator from confirming an order until they answered a question nobody can answer yet, and the
+  // value it collected was dead: the capture applier never reads `offcut_election`.
+  // The symmetric refusal below SURVIVES: an election on an order with no contractual arrangement is
+  // still meaningless and still refused.
   // Symmetric refusal: an election is meaningless without the contractual arrangement it elects
   // under, and silently storing one would misreport the order's offcut obligation to 9.6 billing.
   if (order.has_contractual_offcut !== true && p.offcut_election !== undefined) {

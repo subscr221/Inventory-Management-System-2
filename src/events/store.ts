@@ -244,7 +244,8 @@ import {
   assertJobworkDispatchShape,
   applyJobworkDispatchProjection,
 } from '../compliance/jobwork-dispatch.js';
-// Story 9.6: offcut election execution (custody stream) and the ERP billing feed (jobwork stream).
+// Story 9.6: offcut CAPTURE (custody stream) and the ERP billing feed (jobwork stream). Revised
+// 2026-09-05: capture is unvalued and elects nothing; disposal and valuation are Story 9.7.
 import { assertCustodyOffcutShape } from '../compliance/custody-ledger.js';
 import { applyCustodyOffcutProjection } from '../compliance/jobwork-offcut.js';
 import {
@@ -1168,7 +1169,10 @@ export async function persistEvent(
     // dispatched by applyServiceOrderProjection above, alongside the other order-lifecycle events;
     // the 9.4 dispatch and loss appliers above additionally reconcile the return clocks in-line.
     await applyCustodyReturnProjection(envelope, client, eventId);
-    // Story 9.6: the offcut election execution (election re-read under the order lock, the shared
+    // Story 9.6 REVISED 2026-09-05: offcut CAPTURE. It drains custody into the unvalued holding
+    // ledger and mints an `offcut`-class lot. It does NOT elect a disposition, value the offcut,
+    // convert it to own stock, render documents, stamp a settlement or stop the Section 143 clock -
+    // every one of those is Story 9.7. (Previously: the shared
     // CUSTODY_RETURN drain, the `offcut` ledger row, lot_trace, the capped clock reconciliation,
     // the owned-lot mint plus QC hand-off on retention, the return documents, the settlement
     // stamp) and the billing feed generation / acknowledgment (preconditions and the SoD check

@@ -41,8 +41,7 @@ function planningPayloadLocation(body: {
   return typeof locationId === 'string' ? locationId : null;
 }
 
-const PAYLOAD_SITE_UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PAYLOAD_SITE_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * THE CENTRAL SITE GATE for the direct events door (added 2026-09-06 after a confirmed cross-site

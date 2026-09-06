@@ -117,6 +117,16 @@ export function resolveMeasuredBasis(input: MeasuredBasisInput): {
       }
       return { measured_basis: 'per_hour', measured_quantity: hours };
     }
+    // The DDL deliberately leaves basis_type OPEN ("enforced in the seam, not a CHECK, because
+    // FR-JW-01 does not close the vocabulary"), so an unrecognised value is reachable and must be a
+    // classified refusal rather than an undefined that dies on NOT NULL as a 500 (fixed 2026-09-06).
+    default:
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `Unsupported price basis "${String(input.basisType)}": this order cannot be billed`,
+        { basis_type: input.basisType },
+      );
   }
 }
 
@@ -218,12 +228,8 @@ export interface BuildBillingFeedInput {
  * is refused rather than truncated.
  */
 export function priceBasisRateAsMoney(rate: number): string {
-  if (!Number.isFinite(rate) || rate < 0) {
-    throw new AppError(
-      400,
-      'INVALID_PARAMS',
-      'price_basis.rate must be a finite non-negative number',
-    );
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new AppError(400, 'INVALID_PARAMS', 'price_basis.rate must be a finite positive number');
   }
   const text = rate.toString();
   if (/e/i.test(text)) {
@@ -231,7 +237,19 @@ export function priceBasisRateAsMoney(rate: number): string {
       rate,
     });
   }
-  return moneyFromScaled(moneyToScaled(text));
+  // The docstring above promised a refusal rather than truncation, but delegating straight to
+  // moneyToScaled threw a bare TypeError, which the error middleware turns into a 500 (fixed
+  // 2026-09-06). The refusal is now the classified 400 it always claimed to be.
+  try {
+    return moneyFromScaled(moneyToScaled(text));
+  } catch {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `price_basis.rate carries more than ${MONEY_SCALE} decimals and cannot be billed exactly`,
+      { rate },
+    );
+  }
 }
 
 export function buildJobWorkBillingFeedPayload(
