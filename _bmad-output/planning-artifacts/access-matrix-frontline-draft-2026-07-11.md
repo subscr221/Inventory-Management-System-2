@@ -87,26 +87,28 @@ Role IDs are proposed `snake_case` identifiers for RBAC/SCIM configuration.
 | Role ID | Description | Location scope | Anchors |
 |---|---|---|---|
 | `gst_officer` | Branch-transfer documents, IRN request monitoring; per-GSTIN scope | GSTIN(s) | FR-AC-10/14, Story 11.2 |
-| `finance_controller` | Migration sign-off (with dept heads), valuation views, job-work offcut disposal and valuation; period ops arrive with Epic 11 | All | FR-DM-03, Story 9.7, Story 13.3 |
-
+| `finance_controller` | Job-work offcut disposal and valuation (sets the acquisition rate), migration sign-off with dept heads, valuation views; period ops arrive with Epic 11 | All | FR-DM-03, Story 9.7, Story 13.3 |
 | `cfo` | Second signature on job-work offcut ACQUISITION above the governed DOA band; no operational duties | All | Story 9.7 |
+| `migration_lead` | Staging loads, dry-runs, reconciliation reports; **cannot sign off own load** (SOD-07) | All (project) | Stories 13.1-13.3 |
 
-Ruled 2026-09-06: `cfo` is a role distinct from and ABOVE `finance_controller`, and the two must be
-held by different people. The signature sits on the acquisition at disposal, never on capture -
-capture records a physical fact and gating it would leave produced material untracked. Because
-`resolveApprover` raises `NO_APPROVER_FOUND` when nobody holds a role, a `cfo` DOA band with no
-provisioned holder refuses every acquisition above it: grant the role before Story 9.7 goes live.
+**Ruled 2026-09-06: `cfo` and `finance_controller` are two distinct roles held by two SEPARATE REAL
+PEOPLE.** This SUPERSEDES the 2026-09-05 note that the site head would wear the finance-controller
+hat at the pilot; the site head holds neither. The separation is the whole control: the finance
+controller sets the acquisition rate at disposal, and the CFO co-signs it above the governed DOA
+band, so no single person both prices a customer's offcut and approves paying for it.
 
-At the pilot site the `site_head` holds the finance-controller function (ruled 2026-09-05): the site
-head takes the offcut valuation decision. This is a grant, not a rename - the role stays
-`finance_controller` and the site head is the person granted it - so the Story 9.7 separation of
-duties still applies to whoever holds it. That creates a real pilot constraint worth planning for:
-the actor who sets an offcut rate may not acknowledge the credit note that bills it, and the site
-head is also the Story 1.11 escalation target for job work. At a single site with few senior
-people, someone other than the site head must be able to acknowledge, or the credit note has no
-route to `acknowledged`.
+Three consequences worth carrying:
 
-| `migration_lead` | Staging loads, dry-runs, reconciliation reports; **cannot sign off own load** (SOD-07) | All (project) | Stories 13.1–13.3 |
+- The pilot constraint recorded on 2026-09-05 DISSOLVES. It said that because the site head held
+  `finance_controller` and was also the Story 1.11 job-work escalation target, someone else had to
+  be found to acknowledge the credit note. With the roles held by separate people that problem does
+  not arise.
+- The signature sits on the ACQUISITION at disposal, never on capture: capture records a physical
+  fact, and gating it would leave produced material on the floor with nothing in the ledger.
+- PROVISIONING PREREQUISITE, and it fails closed: `resolveApprover` raises `NO_APPROVER_FOUND` when
+  no active user holds a role. A `cfo` DOA band with nobody provisioned refuses every acquisition
+  above it, and an unheld `finance_controller` blocks disposal outright. BOTH roles must be granted
+  to real, different users before Story 9.7 goes live.
 
 ### Deferred to full matrix (placeholders — wave 1 and later)
 

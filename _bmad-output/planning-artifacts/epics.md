@@ -2801,19 +2801,24 @@ So that customer offcut is never valued at a guessed rate and never sits unaccou
   gating it would leave produced material on the floor with nothing in the ledger, the exact
   untracked-material gap the fail-closed ownership ruling exists to prevent. Disposal is where title
   transfers and money moves, so that is where dual control belongs.
-- `cfo` is a NEW role, distinct from and above `finance_controller`. It cannot be the same role: at
-  the pilot the site head holds `finance_controller` (ruled 2026-09-05) AND is the job-work
-  escalation target, so reusing it would have the same person signing twice - dual control in name
-  only. Roles are free text in role assignments and in `doa_registry.role`, so this is registry data
-  plus an access-matrix row, not a code vocabulary change.
+- `cfo` and `finance_controller` are TWO DISTINCT ROLES HELD BY TWO SEPARATE REAL PEOPLE (ruled
+  2026-09-06, superseding the 2026-09-05 note that the site head would wear the finance-controller
+  hat - the site head holds neither). The separation IS the control: the finance controller sets the
+  acquisition rate at disposal, the CFO co-signs it above the band, so nobody both prices a
+  customer's offcut and approves paying for it. Roles are free text in role assignments and in
+  `doa_registry.role`, so this is registry data plus access-matrix rows, not a code vocabulary
+  change.
+- The 2026-09-05 pilot constraint DISSOLVES with that separation. It said that because the site head
+  held `finance_controller` and was also the Story 1.11 job-work escalation target, someone else had
+  to be found to acknowledge the credit note. With the roles on separate people, it does not arise.
 - The band uses the EXISTING DOA machinery that already governs over-norm loss and warranty
   overrides: `doa_registry` bands by `transaction_type` with `value_min`/`value_max`, and
   `resolveApprover` resolves the holder, honouring active delegations. Do not invent a second
   approval idiom.
 - OPERATIONAL PREREQUISITE, and it fails closed if missed: `resolveApprover` raises
   `NO_APPROVER_FOUND` when no active user holds the role. A `cfo` DOA band with nobody provisioned
-  means every acquisition above it is refused. The role must be granted to a real user before this
-  story goes live, and that person must not be the site head.
+  refuses every acquisition above it, and an unheld `finance_controller` blocks disposal outright.
+  BOTH roles must be granted to real, DIFFERENT users before this story goes live.
 - Ownership while retained is fail-closed: the material stays the customer's and the Section 143 clock keeps running. Disposal is the ownership-transfer event for the retain branches.
 - Valuation is revisable after the fact, so corrections are delta documents. Nothing acknowledged is ever mutated, and there is no void path.
 - The credit note is the first consumer of the billing feed's `acknowledged_ref_ext`; that column is a citation, not an identity, and must stay non-unique so one consolidated ERP invoice can be cited by several documents.
