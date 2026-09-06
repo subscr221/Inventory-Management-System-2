@@ -135,6 +135,7 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
 
   let siteAId: string;
   let siteBId: string;
+  let otherSiteUserId: string;
   let dockId: string;
   let kitBomId: string;
   let kitRevisionId: string;
@@ -873,9 +874,13 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
     ]);
     outsiderHeaders = await authFor(port, `outsider-9-6-${run}@example.com`);
 
-    await provisionUser(port, `jw-other-site-9-6-${run}@example.com`, [
+    otherSiteUserId = await provisionUser(port, `jw-other-site-9-6-${run}@example.com`, [
       { role: COORDINATOR_ROLE, module: 'jobwork', functionScope: 'write', locationId: siteBId },
       { role: COORDINATOR_ROLE, module: 'jobwork', functionScope: 'read', locationId: siteBId },
+      // Site-B custody rights, so the cross-site probe below is refused (or not) on SITE grounds
+      // rather than stopping at the module gate and proving nothing.
+      { role: COORDINATOR_ROLE, module: 'custody', functionScope: 'write', locationId: siteBId },
+      { role: COORDINATOR_ROLE, module: 'custody', functionScope: 'read', locationId: siteBId },
     ]);
     otherSiteHeaders = await authFor(port, `jw-other-site-9-6-${run}@example.com`);
 
@@ -1365,6 +1370,88 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
   // Task 10.5: direct-event bypass arms hit the identical gates
   // -------------------------------------------------------------------------
 
+  // REPRODUCER, currently RED on purpose. Confirmed by execution 2026-09-06: this returns 201, the
+  // feed flips to `acknowledged`, and the order is stamped invoiced_at with a fabricated ERP
+  // reference - by a writer whose only grant is another site.
+  it('SECURITY: the direct events door refuses a cross-site billing acknowledgment', async () => {
+    const { orderId } = await dispatchedOrder();
+    const gen = await generateFeed(orderId);
+    assert.strictEqual(gen.status, 201, JSON.stringify(gen.body));
+    const feedId = gen.body['feed_id'] as string;
+    const ackEnvelope = {
+      stream_type: 'jobwork',
+      stream_id: orderId,
+      event_type: 'jobwork.billing_feed_acknowledged',
+      payload: {
+        feed_id: feedId,
+        service_order_id: orderId,
+        site_id: siteAId,
+        acknowledged_ref_ext: `ERP-CROSSSITE-${run}`,
+        acknowledged_by: otherSiteUserId,
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: { user_id: otherSiteUserId, role: COORDINATOR_ROLE, location_id: siteBId },
+        occurred_at: new Date().toISOString(),
+      },
+    };
+    const res = await postEvent(ackEnvelope, otherSiteHeaders);
+    assert.ok(
+      res.status === 403 || res.status === 404,
+      `a site-B writer must not acknowledge a site-A feed through the events door: ${res.status} ${JSON.stringify(res.body)}`,
+    );
+    assert.notStrictEqual((await feedRow(feedId))!['status'], 'acknowledged');
+    assert.strictEqual((await orderRow(orderId))['invoiced_at'], null);
+  });
+
+  it('SECURITY: the direct events door refuses a cross-site offcut capture', async () => {
+    // The route path is already covered above (off-site writer gets 403 LOCATION_ACCESS_DENIED).
+    // This is the OTHER door. The events route resolves the authorising location from
+    // metadata.actor.location_id, which postEventBase then overwrites with the authorising
+    // assignment - so the ACTOR is honest. What is not checked anywhere is the relationship
+    // between the actor's authorised location and the SITE NAMED IN THE PAYLOAD: the applier only
+    // compares payload site to order-row site, and an attacker supplies a payload naming the
+    // target's own site, so that comparison always agrees with itself.
+    const { orderId, lot } = await inProcessOrder({ contractual: true });
+    // The real attack shape: the actor sits at their OWN site (an honest claim their grant
+    // satisfies, and one postEventBase overwrites from the authorising assignment anyway) while the
+    // PAYLOAD names the target's site. The applier then compares payload site to order-row site -
+    // both the target's - so that comparison agrees with itself and never involves the actor.
+    const crossSite = await postEvent(
+      {
+        stream_type: 'custody',
+        stream_id: orderId,
+        event_type: 'custody.offcut_recorded',
+        payload: {
+          service_order_id: orderId,
+          offcut_id: randomUUID(),
+          sku: SKU,
+          lot_id: lot,
+          location_id: dockId,
+          quantity: '1',
+          uom: 'KG',
+          site_id: siteAId,
+          posted_by: otherSiteUserId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: otherSiteUserId, role: COORDINATOR_ROLE, location_id: siteBId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      otherSiteHeaders,
+    );
+    assert.ok(
+      crossSite.status === 403 || crossSite.status === 404,
+      `a site-B writer must not capture site-A offcut through the events door: ${crossSite.status} ${JSON.stringify(crossSite.body)}`,
+    );
+    assert.strictEqual(
+      (await holdingRows(orderId)).length,
+      0,
+      'a refused cross-site capture must write no holding row',
+    );
+  });
+
   it('direct POST /api/v1/events: custody.offcut_recorded meets the identical capture wall', async () => {
     // The hold-bypass class: the route is never the authority, the applier is.
     const { orderId, lot } = await inProcessOrder({ contractual: false });
@@ -1462,6 +1549,7 @@ describe('Story 9.6 Offcut Election Execution and ERP Billing Feed', () => {
       payload: {
         feed_id: feedId,
         service_order_id: unsettled.orderId,
+        site_id: siteAId,
         acknowledged_ref_ext: 'ERP-DIRECT',
         acknowledged_by: coordinatorUserId,
       },

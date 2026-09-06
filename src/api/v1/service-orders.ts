@@ -1537,6 +1537,9 @@ const postBillingFeedAcknowledgmentBase: RouteHandler = async (req, res, params)
         payload: {
           feed_id: feedId,
           service_order_id: feed.service_order_id,
+          // The site this route already asserted write access to, carried onto the event so the
+          // seam and the central events-door gate can both re-derive it.
+          site_id: feed.site_id,
           acknowledged_ref_ext: (body['acknowledged_ref_ext'] as string).trim(),
           acknowledged_by: actor.userId,
         },

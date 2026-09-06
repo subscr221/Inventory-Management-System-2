@@ -84,6 +84,7 @@ export const GENERATED_DERIVED_FIELDS = [
 const ACKNOWLEDGED_FIELDS = new Set([
   'feed_id',
   'service_order_id',
+  'site_id',
   'acknowledged_ref_ext',
   'acknowledged_by',
 ]);
@@ -199,7 +200,7 @@ export function assertJobworkBillingShape(envelope: EventEnvelope): void {
         reject('INVALID_PARAMS', `${key} is not a recognized field on this event`, { field: key });
       }
     }
-    for (const field of ['feed_id', 'service_order_id', 'acknowledged_by']) {
+    for (const field of ['feed_id', 'service_order_id', 'site_id', 'acknowledged_by']) {
       if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
     }
     if (
@@ -466,6 +467,20 @@ export async function applyJobworkBillingFeedAcknowledged(
     );
   }
   const feed = await getBillingFeedById(p.feed_id, client, true);
+  // Added 2026-09-06. The payload site is bound to the FEED ROW here, exactly as generation binds it
+  // to the order row at lockedOrder(). That binding is what lets the central site gate on
+  // POST /api/v1/events (assertPayloadSiteWriteAccess) reach this event at all: the gate ties the
+  // payload site to the actor's grants, this ties it to the row, and only the two together tie the
+  // ROW to the actor. Before this, the acknowledgment payload carried no site and a writer granted
+  // solely at another site acknowledged this feed and stamped the order invoiced.
+  if (feed && feed.site_id !== p.site_id) {
+    reject(
+      'SOURCE_DOCUMENT_REQUIRED',
+      'The billing feed belongs to a different site than the posting',
+      { feed_id: p.feed_id, feed_site_id: feed.site_id, site_id: p.site_id },
+      409,
+    );
+  }
   if (!feed || feed.service_order_id !== order.service_order_id) {
     reject(
       'NOT_FOUND',

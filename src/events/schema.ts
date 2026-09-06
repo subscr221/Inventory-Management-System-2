@@ -4738,6 +4738,13 @@ export interface JobworkBillingFeedGeneratedEnvelope extends Omit<EventEnvelope,
  * actor is the feed's generated_by.
  */
 export interface JobworkBillingFeedAcknowledgedPayload {
+  /**
+   * The feed's site. Added 2026-09-06: without it this payload had NOTHING for the central site
+   * gate on POST /api/v1/events to bind against, and a writer granted only at another site
+   * acknowledged this feed and stamped the order invoiced. The applier re-derives it against the
+   * feed row, exactly as generation does against the order row.
+   */
+  site_id: string;
   feed_id: string;
   service_order_id: string;
   acknowledged_ref_ext: string;

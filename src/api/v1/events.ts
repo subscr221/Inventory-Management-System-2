@@ -41,6 +41,54 @@ function planningPayloadLocation(body: {
   return typeof locationId === 'string' ? locationId : null;
 }
 
+const PAYLOAD_SITE_UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * THE CENTRAL SITE GATE for the direct events door (added 2026-09-06 after a confirmed cross-site
+ * write).
+ *
+ * The hole this closes, precisely, because every part of it looked correct in isolation:
+ *   1. `requireRole` authorises this route against `metadata.actor.location_id`, and an attacker
+ *      states their OWN honest location - one their grant genuinely satisfies - so RBAC passes.
+ *   2. `postEventBase` then overwrites the actor from the authorising assignment, so the stored
+ *      event and the audit row are truthful. Nothing is spoofed.
+ *   3. The appliers compare the PAYLOAD's site to the resource ROW's site. An attacker names the
+ *      target's site in the payload, so that comparison agrees with itself and never once involves
+ *      the actor.
+ * Nothing anywhere compared the RESOURCE's site to the actor's AUTHORISED location. Proven by
+ * execution: a writer granted only at site B captured site A's customer offcut, and acknowledged
+ * site A's billing feed with a fabricated ERP reference, both 201.
+ *
+ * The REST routes were never exposed - they call their own site assertions against the row they
+ * loaded (`assertSiteWriteAccess` in service-orders.ts is the pattern). This is that assertion,
+ * hoisted to the one door that lacked it, modelled on `assertPlanningPayloadWriteLocation` above.
+ *
+ * It binds payload site to the actor's grants. The appliers already bind payload site to row site.
+ * Composed, the two bind ROW site to the actor - which is the property that was missing. An event
+ * whose payload carries no `site_id` is not covered here and must be bound by its own applier; that
+ * is why `jobwork.billing_feed_acknowledged` gained a `site_id` in the same change.
+ */
+function assertPayloadSiteWriteAccess(
+  authContext: NonNullable<ReturnType<typeof getAuthContext>>,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): void {
+  const siteId = body.payload['site_id'];
+  if (typeof siteId !== 'string' || !PAYLOAD_SITE_UUID_REGEX.test(siteId)) return;
+  const { wildcard, locations } = permittedLocationsForModuleScope(
+    authContext.roles,
+    body.stream_type,
+    'write',
+  );
+  if (!wildcard && !locations.has(siteId)) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No write assignment grants access to site "${siteId}"`,
+    );
+  }
+}
+
 function assertPlanningPayloadWriteLocation(
   authContext: NonNullable<ReturnType<typeof getAuthContext>>,
   body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
@@ -132,6 +180,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   const auditLocationId = authorizedAssignment?.locationId ?? body.metadata.actor.location_id;
   if (authContext) {
     assertPlanningPayloadWriteLocation(authContext, body);
+    assertPayloadSiteWriteAccess(authContext, body);
     body.metadata.actor.user_id = authContext.userId;
     const authorizedRole = getAuthorizedRole(req);
     if (authorizedRole) {
