@@ -89,6 +89,14 @@ Role IDs are proposed `snake_case` identifiers for RBAC/SCIM configuration.
 | `gst_officer` | Branch-transfer documents, IRN request monitoring; per-GSTIN scope | GSTIN(s) | FR-AC-10/14, Story 11.2 |
 | `finance_controller` | Migration sign-off (with dept heads), valuation views, job-work offcut disposal and valuation; period ops arrive with Epic 11 | All | FR-DM-03, Story 9.7, Story 13.3 |
 
+| `cfo` | Second signature on job-work offcut ACQUISITION above the governed DOA band; no operational duties | All | Story 9.7 |
+
+Ruled 2026-09-06: `cfo` is a role distinct from and ABOVE `finance_controller`, and the two must be
+held by different people. The signature sits on the acquisition at disposal, never on capture -
+capture records a physical fact and gating it would leave produced material untracked. Because
+`resolveApprover` raises `NO_APPROVER_FOUND` when nobody holds a role, a `cfo` DOA band with no
+provisioned holder refuses every acquisition above it: grant the role before Story 9.7 goes live.
+
 At the pilot site the `site_head` holds the finance-controller function (ruled 2026-09-05): the site
 head takes the offcut valuation decision. This is a grant, not a rename - the role stays
 `finance_controller` and the site head is the person granted it - so the Story 9.7 separation of

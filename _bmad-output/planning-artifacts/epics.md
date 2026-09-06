@@ -2745,7 +2745,7 @@ So that offcut stops blocking order closure while its fate is undecided, and eve
 - Split from Story 9.4: the offcut ARRANGEMENT is recorded at confirmation in Story 9.4; this story captures the offcut quantity out of custody into the holding ledger and owns the billing feed. Disposal and valuation are Story 9.7.
 - The job-work billing feed is an outbound interface owned by this story — it does not depend on the Epic 4 ERP handoff (Epic 4 is outside the pilot go-live slice).
 - Capture moves offcut OUT of the custody ledger into the holding ledger, so the Story 9.5 closure gate is reachable while the offcut is still retained. The offcut's own lifecycle continues after the order closes, under its contract reference.
-- The Section 143 clock follows the material, not the order: it keeps running while offcut is retained and is stopped only at disposal. The Story 9.5 breach sweep must therefore read the holding ledger as well as the return clocks.
+- The Section 143 clock follows the material, not the order: it keeps running while offcut is retained and is stopped only at disposal. Widening the Story 9.5 breach sweep to read the holding ledger is STORY 9.7's, not this story's - ruled 2026-09-06 to remove a contradiction between this note and the 9.6 story file. The exposure is not lost in the meantime: because capture deliberately does not reconcile the clock, the quantity stays outstanding on `jobwork_return_clock` and still ages there. Story 9.7 rewrites that reader anyway, so building it here would build it twice.
 - Revised 2026-09-05 by sprint change proposal. The shipped implementation (commit 6439870) elected the disposition and the rate at confirmation and settled, valued, converted and billed in one posting; that half is reversed.
 
 ---
@@ -2782,6 +2782,10 @@ So that customer offcut is never valued at a guessed rate and never sits unaccou
 **When** the acknowledging actor is the finance controller who set the rate
 **Then** the acknowledgment is refused with `error_code: "SOD_VIOLATION"`
 
+**Given** a disposal of `acquired` whose acquisition value falls in or above the governed DOA band (FR-JW-09/10)
+**When** it is posted without a resolved second signature from the `cfo` role
+**Then** it is refused with `error_code: "APPROVAL_REQUIRED"` and audited, and with one it proceeds and records the approver on the disposal
+
 **Given** offcut still retained in the holding ledger (FR-AC-11, FR-JW-14)
 **When** the Story 9.5 breach sweep runs
 **Then** retained offcut is read alongside the return clocks and ages against the same deemed-supply thresholds, whether or not its order has closed
@@ -2792,6 +2796,24 @@ So that customer offcut is never valued at a guessed rate and never sits unaccou
 
 **Dev notes:**
 - Created 2026-09-05 by sprint change proposal, which reversed the Story 9.6 offcut model.
+- CFO SECOND SIGNATURE, ruled 2026-09-06. The signature sits on the ACQUISITION at disposal, NOT on
+  capture. Capture is a physical fact - offcut comes off a machine whether or not anyone signs - so
+  gating it would leave produced material on the floor with nothing in the ledger, the exact
+  untracked-material gap the fail-closed ownership ruling exists to prevent. Disposal is where title
+  transfers and money moves, so that is where dual control belongs.
+- `cfo` is a NEW role, distinct from and above `finance_controller`. It cannot be the same role: at
+  the pilot the site head holds `finance_controller` (ruled 2026-09-05) AND is the job-work
+  escalation target, so reusing it would have the same person signing twice - dual control in name
+  only. Roles are free text in role assignments and in `doa_registry.role`, so this is registry data
+  plus an access-matrix row, not a code vocabulary change.
+- The band uses the EXISTING DOA machinery that already governs over-norm loss and warranty
+  overrides: `doa_registry` bands by `transaction_type` with `value_min`/`value_max`, and
+  `resolveApprover` resolves the holder, honouring active delegations. Do not invent a second
+  approval idiom.
+- OPERATIONAL PREREQUISITE, and it fails closed if missed: `resolveApprover` raises
+  `NO_APPROVER_FOUND` when no active user holds the role. A `cfo` DOA band with nobody provisioned
+  means every acquisition above it is refused. The role must be granted to a real user before this
+  story goes live, and that person must not be the site head.
 - Ownership while retained is fail-closed: the material stays the customer's and the Section 143 clock keeps running. Disposal is the ownership-transfer event for the retain branches.
 - Valuation is revisable after the fact, so corrections are delta documents. Nothing acknowledged is ever mutated, and there is no void path.
 - The credit note is the first consumer of the billing feed's `acknowledged_ref_ext`; that column is a citation, not an identity, and must stay non-unique so one consolidated ERP invoice can be cited by several documents.
