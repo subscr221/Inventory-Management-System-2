@@ -172,14 +172,20 @@ export async function runJobworkClockSweepCycle(
           clock.sku,
           client,
         );
+        // Chunk B review decision (2026-09-07): the notice is (order, sku)-scoped, not clock-scoped,
+        // so on a sku with more than one due clock the old wording ("already counted on THIS
+        // clock") named a specific clock as the holder of the quantity when it could belong to a
+        // different clock entirely, or - beyond challan capacity - to no clock at all. Softened to
+        // make no per-clock ownership claim; this is a pointer to where the material physically is,
+        // never an accounting authority (see the CRITICAL note above).
         const offcutNote =
           retainedOffcut.length === 0
             ? ''
-            : ` Retained contractual offcut on this sku: ${retainedOffcut
+            : ` Retained contractual offcut on this order/sku: ${retainedOffcut
                 .map((row) => `${row.quantity} ${row.uom} in lot ${row.lot_id}`)
                 .join(
                   ', ',
-                )} - already counted on this clock, dispose of it (return or acquire) to close the exposure.`;
+                )} - retained contractual offcut exists on this order, dispose or revalue it to close the exposure.`;
         // Chunk C code review (2026-09-06): the counter is only bumped once the notice actually
         // COMMITS. It used to increment here, before the stage's outcome was known, so a raced
         // breach (skippedRaced) or a rolled-back emit still counted the clock as one whose notice

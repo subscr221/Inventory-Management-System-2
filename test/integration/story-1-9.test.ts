@@ -567,6 +567,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/service-orders/:serviceOrderId/offcut-revaluations',
       'POST /api/v1/jobwork/credit-notes/:creditNoteId/acknowledgment',
       'GET /api/v1/service-orders/:serviceOrderId/offcut-holdings',
+      // Story 9.8: the CFO's authenticated second signature on an above-band offcut acquisition.
+      'POST /api/v1/service-orders/:serviceOrderId/offcut-acquisition-proposals/:proposalId/approve',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

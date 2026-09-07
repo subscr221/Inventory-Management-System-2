@@ -3,6 +3,8 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import type {
   JobworkCreditNoteAcknowledgedPayload,
+  JobworkOffcutAcquisitionApprovedPayload,
+  JobworkOffcutAcquisitionProposedPayload,
   JobworkOffcutDisposedPayload,
   JobworkOffcutRevaluedPayload,
 } from '../events/schema.js';
@@ -24,6 +26,12 @@ import {
   insertCreditNote,
   markCreditNoteAcknowledged,
 } from '../read/projections/job_work_credit_note.js';
+import {
+  getOffcutAcquisitionProposalById,
+  getPendingProposalForHolding,
+  insertOffcutAcquisitionProposal,
+  markOffcutAcquisitionProposalApproved,
+} from '../read/projections/job_work_offcut_acquisition_proposal.js';
 import type { ServiceOrderRow } from '../read/projections/service_order.js';
 import { getServiceOrderById } from '../read/projections/service_order.js';
 import { logRejectionAudit, type AuditEntryPayload } from '../read/projections/audit_log.js';
@@ -93,10 +101,15 @@ const JOBWORK_STREAM_TYPES = new Set(['jobwork']);
 export const JOBWORK_OFFCUT_DISPOSED = 'jobwork.offcut_disposed';
 export const JOBWORK_OFFCUT_REVALUED = 'jobwork.offcut_revalued';
 export const JOBWORK_CREDIT_NOTE_ACKNOWLEDGED = 'jobwork.credit_note_acknowledged';
+/** Story 9.8: the two-step second signature on an above-band acquisition. */
+export const JOBWORK_OFFCUT_ACQUISITION_PROPOSED = 'jobwork.offcut_acquisition_proposed';
+export const JOBWORK_OFFCUT_ACQUISITION_APPROVED = 'jobwork.offcut_acquisition_approved';
 const OFFCUT_DISPOSAL_EVENT_TYPES = new Set([
   JOBWORK_OFFCUT_DISPOSED,
   JOBWORK_OFFCUT_REVALUED,
   JOBWORK_CREDIT_NOTE_ACKNOWLEDGED,
+  JOBWORK_OFFCUT_ACQUISITION_PROPOSED,
+  JOBWORK_OFFCUT_ACQUISITION_APPROVED,
 ]);
 
 /**
@@ -122,6 +135,13 @@ const CURRENCY_REGEX = /^[A-Z]{3}$/;
  */
 const MONEY_REGEX = /^\d{1,14}(\.\d{1,4})?$/;
 
+/**
+ * Story 9.8, AC 4: `approved_by` is GONE from this set. The Story 9.7 interim let the poster name
+ * the approver in their own request body and merely checked the string against resolveApprover's
+ * output; there is now no field on a disposal through which any caller can name an approver, on
+ * either door. An above-band acquisition is not signed here at all - it is proposed
+ * (JOBWORK_OFFCUT_ACQUISITION_PROPOSED) and approved by the CFO's own authenticated action.
+ */
 const DISPOSAL_FIELDS = new Set([
   'service_order_id',
   'disposal_id',
@@ -130,11 +150,45 @@ const DISPOSAL_FIELDS = new Set([
   'disposition',
   'rate',
   'currency',
-  'approved_by',
   'return_challan_number_ext',
   'location_id',
   'posted_by',
 ]);
+
+/** Story 9.8: the proposal's caller-supplied shape. No approver field exists (AC 4). */
+const PROPOSAL_FIELDS = new Set([
+  'service_order_id',
+  'proposal_id',
+  'holding_id',
+  'site_id',
+  'rate',
+  'currency',
+  // Optional and verified against the holding row, never used to move anything: a proposal moves no
+  // stock at all. It is accepted so a caller's stated bin is CHECKED rather than ignored.
+  'location_id',
+  'posted_by',
+]);
+export const PROPOSAL_DERIVED_FIELDS = [
+  'proposed_value',
+  'indicative_rate',
+  'doa_entry_id',
+  'resolved_approver_actor_id',
+] as const;
+
+/**
+ * Story 9.8: the approval's shape. The caller names the PROPOSAL, never the holding, the rate or an
+ * approver - every one of those is read from the frozen proposal row, so an approval cannot be
+ * redirected at another holding or repriced on its way through.
+ */
+const APPROVAL_FIELDS = new Set(['service_order_id', 'proposal_id', 'site_id', 'approved_by']);
+export const APPROVAL_DERIVED_FIELDS = [
+  'holding_id',
+  'disposal_value',
+  'indicative_rate',
+  'credit_note_id',
+  'owned_lot_number',
+  'clock_reconciled_qty',
+] as const;
 /** Server-derived on disposal: refused on input, written back by the applier (the 9.2 idiom). */
 export const DISPOSAL_DERIVED_FIELDS = [
   'disposal_value',
@@ -239,12 +293,21 @@ async function auditedRefusal(
  * 23505 -> DUPLICATE_EVENT via classifyDuplicate; SQLSTATE 22003 (a value that overflowed the
  * NUMERIC(18,4) money columns) -> a clean INVALID_PARAMS 400 rather than a raw 500. The 22003 arm is
  * still reachable with an in-range rate because quantity x rate can exceed 14 integer digits.
+ *
+ * `columnsLabel` names the table this 22003 actually came from in the error message - code review
+ * 2026-09-07: reusing one hardcoded "credit note columns" message for the proposal table's own
+ * overflow produced a message naming the wrong table.
  */
-function classifyCreditInsert(err: unknown, businessId: string, eventId: string): never {
+function classifyMoneyInsert(
+  err: unknown,
+  businessId: string,
+  eventId: string,
+  columnsLabel: string,
+): never {
   if (isPgCode(err, '22003')) {
     reject(
       'INVALID_PARAMS',
-      'The computed credit value exceeds the NUMERIC(18,4) range of the credit note columns',
+      `The computed value exceeds the NUMERIC(18,4) range of the ${columnsLabel} columns`,
       { business_id: businessId },
       400,
     );
@@ -434,9 +497,6 @@ export function assertJobworkOffcutDisposalShape(envelope: EventEnvelope): void 
     if (p['location_id'] !== undefined && !isUuid(p['location_id'])) {
       reject('INVALID_PARAMS', 'location_id must be a UUID when supplied');
     }
-    if (p['approved_by'] !== undefined && !isUuid(p['approved_by'])) {
-      reject('INVALID_PARAMS', 'approved_by must be a UUID when supplied');
-    }
     // The poster named in the payload must BE the authenticated actor (the billing-feed and
     // closure-requested precedents): valued_by, disposed_by and placed_by are all stamped from this
     // field, so a forged posted_by would let one person price an offcut and acknowledge it as two.
@@ -445,6 +505,46 @@ export function assertJobworkOffcutDisposalShape(envelope: EventEnvelope): void 
         'FUNCTION_ACCESS_DENIED',
         'posted_by must be the authenticated actor posting the disposal',
         { posted_by: p['posted_by'], actor_user_id: envelope.metadata.actor.user_id },
+        403,
+      );
+    }
+    return;
+  }
+  if (envelope.event_type === JOBWORK_OFFCUT_ACQUISITION_PROPOSED) {
+    assertClosedShape(p, PROPOSAL_FIELDS, PROPOSAL_DERIVED_FIELDS);
+    for (const field of ['service_order_id', 'proposal_id', 'holding_id', 'site_id', 'posted_by']) {
+      if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
+    }
+    assertMoney(p['rate'], 'rate');
+    assertCurrency(p['currency'], 'currency');
+    if (p['location_id'] !== undefined && !isUuid(p['location_id'])) {
+      reject('INVALID_PARAMS', 'location_id must be a UUID when supplied');
+    }
+    // proposed_by is stamped from this field and the dual-control comparison is made against it, so
+    // a forged posted_by would let one person propose an acquisition in another's name.
+    if (p['posted_by'] !== envelope.metadata.actor.user_id) {
+      reject(
+        'FUNCTION_ACCESS_DENIED',
+        'posted_by must be the authenticated actor proposing the acquisition',
+        { posted_by: p['posted_by'], actor_user_id: envelope.metadata.actor.user_id },
+        403,
+      );
+    }
+    return;
+  }
+  if (envelope.event_type === JOBWORK_OFFCUT_ACQUISITION_APPROVED) {
+    assertClosedShape(p, APPROVAL_FIELDS, APPROVAL_DERIVED_FIELDS);
+    for (const field of ['service_order_id', 'proposal_id', 'site_id', 'approved_by']) {
+      if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
+    }
+    // THE POINT OF THIS STORY. The approver is the AUTHENTICATED caller and nothing else: this pins
+    // the payload to the session, and the applier then pins the session to the proposal row's frozen
+    // resolved_approver_actor_id. A request body can no longer name who signed.
+    if (p['approved_by'] !== envelope.metadata.actor.user_id) {
+      reject(
+        'FUNCTION_ACCESS_DENIED',
+        'approved_by must be the authenticated actor approving the acquisition',
+        { approved_by: p['approved_by'], actor_user_id: envelope.metadata.actor.user_id },
         403,
       );
     }
@@ -593,6 +693,23 @@ async function resolveAcquisitionApproval(
 }
 
 /**
+ * Story 9.8: the band lookup for the DISPOSAL path, with no claimed-approver argument because no
+ * such field exists any more (AC 4). Below every band the disposal proceeds unsigned in ONE request
+ * exactly as Story 9.7 built it (AC 6); in or above a band it is not signable here at all and the
+ * caller must propose it instead.
+ *
+ * resolveApprover raises APPROVAL_UNRESOLVED itself when a band matched but nobody holds the role;
+ * the null arm below is the defensive twin of that, audited on both doors.
+ */
+async function resolveAcquisitionBand(value: string): Promise<{
+  requiresApproval: boolean;
+  approverActorId: string | null;
+  doaEntryId: string | null;
+}> {
+  return resolveApprover(JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE, value);
+}
+
+/**
  * Task 4.11: the credit note CITES the service invoice, so there must be one. The order's billing
  * feed must be acknowledged and carry the ERP document reference; a placeholder would be a
  * fabricated citation. The `returned` branch never reaches here.
@@ -731,6 +848,30 @@ export async function applyJobworkOffcutDisposed(
 
   // 2. The holding row under FOR UPDATE, then the whole disposal shape as one predicate.
   const holding = await lockedHolding(p.holding_id, order, client);
+
+  // Code review 2026-09-07 (Story 9.8 finding): a PENDING acquisition proposal must block every
+  // other disposal of this holding, not just a second proposal (the schema's partial unique index
+  // already refuses that). Without this, the two-step signature is bypassable by re-submitting an
+  // ordinary `returned` disposal, or a repriced-below-band `acquired` one, on the SAME holding while
+  // a proposal awaits the CFO - completing with no CFO signature at all and permanently orphaning
+  // the pending row (no supersede path exists). Checked AFTER the holding row is locked FOR UPDATE:
+  // a concurrent approval also locks this same row (in that order), so Postgres serializes the two
+  // paths and this read is never racy.
+  const pendingProposal = await getPendingProposalForHolding(holding.holding_id, client);
+  if (pendingProposal) {
+    await auditedRefusal(
+      auditCtx,
+      'OFFCUT_NOT_RETAINED',
+      'This offcut holding row has a pending acquisition proposal awaiting CFO approval and cannot be disposed of by any other route',
+      {
+        holding_id: holding.holding_id,
+        proposal_id: pendingProposal.proposal_id,
+        reason: 'acquisition_proposal_pending',
+      },
+      409,
+    );
+  }
+
   const gate = offcutDisposalOpen(holding, {
     disposition: p.disposition,
     rate: p.rate,
@@ -784,37 +925,110 @@ export async function applyJobworkOffcutDisposed(
     );
   }
 
-  // The stock physically sits where the holding row says it does, and no offcut re-location path
-  // exists, so the holding row's location is authoritative for BOTH branches: the offcut issue
-  // drains that bin and the minted owned lot lands there. The caller's returned-branch location_id
-  // is verified against it by the predicate above (code review 2026-09-06: an unbounded caller
-  // location failed late as a misleading class-scoped INSUFFICIENT_STOCK after the DOA checks).
-  const holdingLocationId = holding.location_id;
-
-  // 3. The DOA second signature comes BEFORE any write (Task 4.7): an above-band acquisition must
-  // leave the stock, the lot and the clock untouched when it is refused.
+  // 3. The DOA band decision comes BEFORE any write (Task 4.7): an above-band acquisition must
+  // leave the stock, the lot and the clock untouched.
+  //
+  // Story 9.8 (AC 1, AC 4): in or above the band this event CANNOT sign anything. There is no
+  // approver field left to claim, and the second signature is a separate authenticated CFO action
+  // on a persisted proposal. Refusing here - on the applier, so the direct events door meets the
+  // identical wall - is what stops the single-event contract being used to skip it.
   const rate = p.disposition === 'acquired' ? (p.rate as string) : null;
   const disposalValue = rate === null ? null : billableValueOf(holding.quantity, rate);
-  let approval: { approved_by: string | null; doa_entry_id: string | null } = {
-    approved_by: null,
-    doa_entry_id: null,
-  };
   if (p.disposition === 'acquired') {
-    approval = await resolveAcquisitionApproval(
-      disposalValue as string,
-      p.approved_by,
-      envelope.metadata.actor.user_id,
-      { service_order_id: order.service_order_id, holding_id: holding.holding_id },
-      auditCtx,
-    );
-  } else if (p.approved_by !== undefined) {
-    reject(
-      'INVALID_PARAMS',
-      'A returned disposal transfers no title and cannot carry an approval claim',
-      { holding_id: holding.holding_id, disposition: p.disposition },
-      400,
-    );
+    const band = await resolveAcquisitionBand(disposalValue as string);
+    if (band.requiresApproval) {
+      await auditedRefusal(
+        auditCtx,
+        'APPROVAL_REQUIRED',
+        'An offcut acquisition in or above the governed band must be proposed and approved by the resolved DOA approver, not posted as a disposal',
+        {
+          service_order_id: order.service_order_id,
+          holding_id: holding.holding_id,
+          acquisition_value: disposalValue,
+        },
+        403,
+      );
+    }
   }
+
+  const effects = await executeOffcutDisposal({
+    envelope,
+    eventId,
+    client,
+    order,
+    holding,
+    disposition: p.disposition,
+    rate,
+    currency: p.currency ?? null,
+    returnChallanNumberExt: p.return_challan_number_ext ?? null,
+    disposalId: p.disposal_id,
+    postedBy: p.posted_by,
+    occurredAt,
+    // Below every band there is no approval to record, and there is no longer any path by which a
+    // caller could assert one (AC 4, AC 6).
+    approvedBy: null,
+    doaEntryId: null,
+    auditCtx,
+  });
+
+  // The stored event carries what THIS process derived, never what the caller asserted.
+  envelope.payload['disposal_value'] = effects.disposalValue;
+  envelope.payload['indicative_rate'] = effects.indicativeRate;
+  envelope.payload['credit_note_id'] = effects.creditNoteId;
+  envelope.payload['owned_lot_number'] = effects.ownedLotNumber;
+  envelope.payload['clock_reconciled_qty'] = effects.clockReconciled;
+}
+
+// ---------------------------------------------------------------------------
+// The disposal EFFECTS themselves (Story 9.7 AC 1, AC 3), shared by two callers since Story 9.8:
+// the below-band single-event disposal above, and the CFO approval of an above-band proposal below.
+// Everything here runs under the order advisory lock with the holding row already FOR UPDATE, in
+// the lock order the module header states.
+// ---------------------------------------------------------------------------
+
+interface DisposalExecution {
+  envelope: EventEnvelope;
+  eventId: string;
+  client: PoolClient;
+  order: ServiceOrderRow;
+  holding: JobWorkOffcutHoldingRow;
+  disposition: 'returned' | 'acquired';
+  rate: string | null;
+  currency: string | null;
+  returnChallanNumberExt: string | null;
+  /** Also the hold_id of the QC hold on an acquisition, so a replay reproduces the same row. */
+  disposalId: string;
+  postedBy: string;
+  occurredAt: string;
+  approvedBy: string | null;
+  doaEntryId: string | null;
+  auditCtx: ApplierAuditCtx | undefined;
+}
+
+interface DisposalEffects {
+  disposalValue: string | null;
+  indicativeRate: string | null;
+  creditNoteId: string | null;
+  ownedLotNumber: string | null;
+  clockReconciled: string;
+}
+
+async function executeOffcutDisposal(a: DisposalExecution): Promise<DisposalEffects> {
+  const { envelope, eventId, client, order, holding, auditCtx, occurredAt } = a;
+  const p = {
+    disposition: a.disposition,
+    currency: a.currency ?? undefined,
+    return_challan_number_ext: a.returnChallanNumberExt ?? undefined,
+    disposal_id: a.disposalId,
+    posted_by: a.postedBy,
+  };
+  const approval = { approved_by: a.approvedBy, doa_entry_id: a.doaEntryId };
+  const rate = a.rate;
+  const disposalValue = rate === null ? null : billableValueOf(holding.quantity, rate);
+
+  // The stock physically sits where the holding row says it does, and no offcut re-location path
+  // exists, so the holding row's location is authoritative for BOTH branches.
+  const holdingLocationId = holding.location_id;
 
   // 4. Issue the offcut stock through the ONE door that opens the `offcut` class. Both branches
   // move the material out of the segregated class: `returned` physically leaves, and `acquired`
@@ -852,12 +1066,19 @@ export async function applyJobworkOffcutDisposed(
         409,
       );
     }
+    // The per-order acquisition counter is derived from the minted lot numbers rather than a raw
+    // row count (code review 2026-09-07): MAX over the `-OA{n}` suffix is gap-free and needs no
+    // JS arithmetic on a count. Every mint on this order serializes under the order advisory lock,
+    // so the value read here is stable for the rest of this transaction. regexp_match rows that
+    // carry no suffix (none should) contribute NULL and are ignored by MAX, and the COALESCE
+    // keeps an all-NULL result at zero instead of yielding NULL + 1.
     const sequenceResult = await client.query(
-      `SELECT COUNT(*)::int AS n FROM job_work_offcut_holding
+      `SELECT COALESCE(MAX((regexp_match(owned_lot_id, '-OA([0-9]+)$'))[1]::bigint), 0) AS n
+         FROM job_work_offcut_holding
         WHERE service_order_id = $1 AND owned_lot_id IS NOT NULL`,
       [order.service_order_id],
     );
-    const sequence = (sequenceResult.rows[0]!['n'] as number) + 1;
+    const sequence = Number(sequenceResult.rows[0]!['n'] as string) + 1;
     // The site discriminator keeps two sites running the same external order number from colliding
     // on the GLOBAL uq_lot_master_lot_number (the 9.4 lot-number lesson).
     ownedLotNumber = `${order.order_number_ext}-${order.site_id.slice(0, 8)}-OA${sequence}`;
@@ -982,11 +1203,7 @@ export async function applyJobworkOffcutDisposed(
   // quantity can still round to "0.0000" - and a zero-value `original` would contradict BSD-5's
   // "nothing to credit" (free retention is the only no-note case) while poisoning the revaluation
   // chain with a phantom document.
-  if (
-    rate !== null &&
-    raisesCreditNote(p.disposition, rate) &&
-    hasBillableValue(disposalValue)
-  ) {
+  if (rate !== null && raisesCreditNote(p.disposition, rate) && hasBillableValue(disposalValue)) {
     const citedRef = await citedInvoiceRef(order, client, auditCtx);
     creditNoteId = randomUUID();
     try {
@@ -1010,7 +1227,7 @@ export async function applyJobworkOffcutDisposed(
         client,
       );
     } catch (err: unknown) {
-      classifyCreditInsert(err, p.disposal_id, eventId);
+      classifyMoneyInsert(err, p.disposal_id, eventId, 'credit note');
     }
   }
 
@@ -1063,12 +1280,393 @@ export async function applyJobworkOffcutDisposed(
     throw err;
   }
 
-  // The stored event carries what THIS process derived, never what the caller asserted.
-  envelope.payload['disposal_value'] = disposalValue;
-  envelope.payload['indicative_rate'] = p.disposition === 'acquired' ? indicativeRate : null;
-  envelope.payload['credit_note_id'] = creditNoteId;
-  envelope.payload['owned_lot_number'] = ownedLotNumber;
-  envelope.payload['clock_reconciled_qty'] = clockReconciled;
+  return {
+    disposalValue,
+    indicativeRate: p.disposition === 'acquired' ? indicativeRate : null,
+    creditNoteId,
+    ownedLotNumber,
+    clockReconciled,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Story 9.8: the two-step second signature on an above-band acquisition
+// ---------------------------------------------------------------------------
+
+/**
+ * Story 9.8 AC 1, 4, 5, 8: PROPOSE an above-band acquisition. Nothing physical happens - no stock
+ * moves, no lot is minted, no credit note is raised, the holding stays `retained` and the Section
+ * 143 clock keeps running. The row this writes is the persisted middle state that the CFO's own
+ * authenticated approval later executes.
+ *
+ * DUAL CONTROL AT PROPOSE TIME (AC 5, BSD-10 inverted). The resolved approver must not be the
+ * proposer. Checking it here as well as at approve time is not belt-and-braces: without it a
+ * finance controller who also held `cfo` could file a proposal only they could sign, and the
+ * schema's chk_..._dual_control would refuse it as an unclassified 23514 500 instead of a clean,
+ * audited APPROVAL_REQUIRED.
+ */
+export async function applyJobworkOffcutAcquisitionProposed(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+  auditCtx?: ApplierAuditCtx,
+): Promise<void> {
+  if (envelope.event_type !== JOBWORK_OFFCUT_ACQUISITION_PROPOSED) return;
+  if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) return;
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as JobworkOffcutAcquisitionProposedPayload;
+
+  const order = await requireInProcessOrder(
+    p.service_order_id,
+    p.site_id,
+    client,
+    orderAcceptsBilling,
+  );
+  const holding = await lockedHolding(p.holding_id, order, client);
+  const gate = offcutDisposalOpen(holding, {
+    disposition: 'acquired',
+    rate: p.rate,
+    currency: p.currency,
+    location_id: p.location_id,
+  });
+  if (!gate.open) {
+    if (gate.reason === 'not_retained' || gate.reason === 'already_disposed') {
+      await auditedRefusal(
+        auditCtx,
+        'OFFCUT_NOT_RETAINED',
+        'This offcut holding row is no longer retained and cannot be acquired',
+        {
+          holding_id: holding.holding_id,
+          status: holding.status,
+          disposition: holding.disposition,
+          disposed_at: holding.disposed_at,
+          reason: gate.reason,
+        },
+        409,
+      );
+    }
+    reject(
+      'INVALID_PARAMS',
+      'The proposal payload does not match an acquisition',
+      { holding_id: holding.holding_id, reason: gate.reason },
+      400,
+    );
+  }
+
+  // P6, carried over from the disposal: the credit note this eventually raises bills the order's
+  // service invoice, so its currency must be the order's contracted offcut currency.
+  if (
+    order.offcut_currency !== null &&
+    order.offcut_currency !== undefined &&
+    p.currency !== order.offcut_currency
+  ) {
+    reject(
+      'INVALID_PARAMS',
+      "The proposed currency must match the order's contracted offcut currency",
+      {
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        currency: p.currency,
+        offcut_currency: order.offcut_currency,
+      },
+      400,
+    );
+  }
+
+  const proposedValue = billableValueOf(holding.quantity, p.rate);
+  // Code review 2026-09-07 (Story 9.8 finding): resolveApprover (indents.ts) THROWS
+  // APPROVAL_UNRESOLVED rather than returning approverActorId: null when a band matches but no role
+  // holder exists - the `band.approverActorId === null` branch below is therefore unreachable and,
+  // left unwrapped, the thrown error would skip auditedRefusal entirely (and APPROVAL_UNRESOLVED
+  // sits in APPLIER_SELF_AUDITED_CODES, so the route would ALSO skip auditing it), leaving this
+  // refusal with no audit_log row on either door. Caught here and re-routed through the same audited
+  // refusal path every other band-resolution failure in this file uses.
+  let band: { requiresApproval: boolean; approverActorId: string | null; doaEntryId: string | null };
+  try {
+    band = await resolveAcquisitionBand(proposedValue);
+  } catch (err: unknown) {
+    if (err instanceof AppError && err.errorCode === 'APPROVAL_UNRESOLVED') {
+      return auditedRefusal(auditCtx, err.errorCode, err.message, err.details, err.statusCode);
+    }
+    throw err;
+  }
+  // AC 6 is a hard boundary in BOTH directions: a below-band acquisition has no second signature to
+  // capture and must go through the single-request disposal, or a proposal would invent an approval
+  // step the governance never asked for and leave the offcut retained until someone signed it.
+  if (!band.requiresApproval) {
+    reject(
+      'INVALID_PARAMS',
+      'This acquisition value is below every governed band and must be posted as a disposal, not proposed',
+      {
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        acquisition_value: proposedValue,
+      },
+      400,
+    );
+  }
+  if (band.approverActorId === null) {
+    // Unreachable given resolveApprover's throw-not-null contract above; kept as a defensive
+    // fallback in case that contract ever changes back.
+    await auditedRefusal(
+      auditCtx,
+      'APPROVAL_UNRESOLVED',
+      `No active approver could be resolved for ${JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE}`,
+      {
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        transaction_type: JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE,
+      },
+      409,
+    );
+  }
+  // The refusal deliberately does NOT name the resolved approver (the 9.7 chunk-A reasoning, still
+  // load-bearing even though there is no claim field left: the id is who the approval route will
+  // accept, and a proposer who learns it learns exactly whose session to obtain).
+  if (band.approverActorId === p.posted_by) {
+    await auditedRefusal(
+      auditCtx,
+      'APPROVAL_REQUIRED',
+      'An offcut acquisition is dual control: the proposer must not be the resolved DOA approver',
+      {
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        acting_user_id: p.posted_by,
+      },
+      403,
+    );
+  }
+
+  const indicativeRate = order.offcut_rate ?? null;
+  try {
+    await insertOffcutAcquisitionProposal(
+      {
+        proposal_id: p.proposal_id,
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        site_id: order.site_id,
+        rate: p.rate,
+        currency: p.currency,
+        indicative_rate: indicativeRate,
+        proposed_value: proposedValue,
+        doa_entry_id: band.doaEntryId as string,
+        resolved_approver_actor_id: band.approverActorId as string,
+        proposed_by: p.posted_by,
+        source_event_id: eventId,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    // AC 4: the partial unique index refuses a SECOND competing proposal on one holding. Classified
+    // rather than surfaced as an unclassified 23505 500, and named so the client can tell it apart
+    // from a plain replay of its own posting.
+    if (
+      isPgCode(err, '23505') &&
+      String((err as { constraint?: string }).constraint ?? '').includes(
+        'uq_job_work_offcut_acq_proposal_pending',
+      )
+    ) {
+      reject(
+        'DUPLICATE_EVENT',
+        'This offcut holding already has an acquisition proposal awaiting approval',
+        { holding_id: holding.holding_id, service_order_id: order.service_order_id },
+        409,
+      );
+    }
+    classifyMoneyInsert(err, p.proposal_id, eventId, 'offcut acquisition proposal');
+  }
+
+  envelope.payload['proposed_value'] = proposedValue;
+  envelope.payload['indicative_rate'] = indicativeRate;
+  envelope.payload['doa_entry_id'] = band.doaEntryId;
+  envelope.payload['resolved_approver_actor_id'] = band.approverActorId;
+}
+
+/**
+ * Story 9.8 AC 2, 3, 5: the CFO's own authenticated approval, and the ONLY way an above-band
+ * acquisition reaches the Story 9.7 disposal effects.
+ *
+ * THE IDENTITY IS THE CONTROL. `approved_by` was already pinned to the authenticated actor by the
+ * shape validator; here it is compared against the proposal row's FROZEN
+ * `resolved_approver_actor_id`. Nothing in any request body chooses who signs, and the resolution is
+ * not repeated (the band, the role holder and any delegation could all have moved since - the
+ * transfer-request precedent freezes the approver for exactly that reason).
+ */
+export async function applyJobworkOffcutAcquisitionApproved(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+  auditCtx?: ApplierAuditCtx,
+): Promise<void> {
+  if (envelope.event_type !== JOBWORK_OFFCUT_ACQUISITION_APPROVED) return;
+  if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) return;
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as JobworkOffcutAcquisitionApprovedPayload;
+  const occurredAt = envelope.metadata.occurred_at ?? new Date().toISOString();
+  const actingUserId = envelope.metadata.actor.user_id;
+
+  const order = await requireInProcessOrder(
+    p.service_order_id,
+    p.site_id,
+    client,
+    orderAcceptsBilling,
+  );
+
+  const proposal = await getOffcutAcquisitionProposalById(p.proposal_id, client, true);
+  if (!proposal || proposal.service_order_id !== order.service_order_id) {
+    reject(
+      'NOT_FOUND',
+      'No acquisition proposal with this id exists for this service order',
+      { proposal_id: p.proposal_id, service_order_id: p.service_order_id },
+      404,
+    );
+  }
+  // The payload site is bound to the ROW, exactly as the credit-note acknowledgment binds it: the
+  // events door ties the site to the actor's grants and this ties it to the row.
+  if (proposal.site_id !== p.site_id) {
+    reject(
+      'SOURCE_DOCUMENT_REQUIRED',
+      'The acquisition proposal belongs to a different site than the approval',
+      { proposal_id: proposal.proposal_id, proposal_site_id: proposal.site_id, site_id: p.site_id },
+      409,
+    );
+  }
+  if (proposal.status !== 'pending') {
+    reject(
+      'DUPLICATE_EVENT',
+      'This acquisition proposal is no longer awaiting approval',
+      {
+        proposal_id: proposal.proposal_id,
+        status: proposal.status,
+        decided_at: proposal.decided_at,
+      },
+      409,
+    );
+  }
+
+  // AC 3: anyone who is not the resolved approver - the original proposer included - is refused and
+  // audited, with no disposal effect. The refusal never names the approver (see the propose-time
+  // comment); the caller either is them or has no business knowing who is.
+  if (proposal.resolved_approver_actor_id !== actingUserId) {
+    await auditedRefusal(
+      auditCtx,
+      'APPROVAL_REQUIRED',
+      'Only the resolved DOA approver may approve this offcut acquisition',
+      {
+        proposal_id: proposal.proposal_id,
+        service_order_id: order.service_order_id,
+        acting_user_id: actingUserId,
+      },
+      403,
+    );
+  }
+  // AC 5, approve-time half of the dual control - STRUCTURALLY UNREACHABLE, not live defense in
+  // depth (code review 2026-09-07 correction of the comment that used to claim otherwise). The
+  // check immediately above already established actingUserId === proposal.resolved_approver_actor_id;
+  // the schema's chk_job_work_offcut_acq_proposal_dual_control CHECK guarantees
+  // resolved_approver_actor_id <> proposed_by for every row that can ever exist. Together those make
+  // actingUserId === proposal.proposed_by impossible here - role grants moving between the two steps
+  // cannot retroactively make two already-frozen columns on a persisted row equal. Kept as a restated
+  // invariant for clarity and as a cheap guard against the constraint or the check above ever being
+  // weakened independently, not as a currently-reachable branch.
+  if (actingUserId === proposal.proposed_by) {
+    await auditedRefusal(
+      auditCtx,
+      'APPROVAL_REQUIRED',
+      'An offcut acquisition is dual control: the approver must not be the proposer',
+      {
+        proposal_id: proposal.proposal_id,
+        service_order_id: order.service_order_id,
+        acting_user_id: actingUserId,
+      },
+      403,
+    );
+  }
+
+  const holding = await lockedHolding(proposal.holding_id, order, client);
+  const gate = offcutDisposalOpen(holding, {
+    disposition: 'acquired',
+    rate: proposal.rate,
+    currency: proposal.currency,
+  });
+  if (!gate.open) {
+    await auditedRefusal(
+      auditCtx,
+      'OFFCUT_NOT_RETAINED',
+      'This offcut holding row is no longer retained and cannot be acquired',
+      {
+        holding_id: holding.holding_id,
+        proposal_id: proposal.proposal_id,
+        status: holding.status,
+        disposition: holding.disposition,
+        reason: gate.reason,
+      },
+      409,
+    );
+  }
+
+  // Code review 2026-09-07 (Story 9.8 finding): `occurred_at` is caller-suppliable on the direct
+  // events door (unlike the REST route, which always stamps server time). A backdated value here
+  // would otherwise trip chk_job_work_offcut_acq_proposal_lifecycle's `decided_at >= created_at`
+  // as an unclassified Postgres 23514 inside the UPDATE below - checked here instead, before any
+  // write, for a clean refusal matching the house convention.
+  if (new Date(occurredAt).getTime() < new Date(proposal.created_at).getTime()) {
+    reject(
+      'INVALID_PARAMS',
+      'occurred_at cannot precede the proposal it approves',
+      {
+        proposal_id: proposal.proposal_id,
+        occurred_at: occurredAt,
+        proposal_created_at: proposal.created_at,
+      },
+      400,
+    );
+  }
+
+  // The Story 9.7 AC 1 / AC 3 effects, unchanged and now driven by the signature rather than by the
+  // poster's claim. The proposal id doubles as the disposal id (and so as the QC hold's id), so a
+  // replay reproduces the same rows. `disposed_by` stays the finance controller who priced it;
+  // `approved_by` is the CFO who signed.
+  const effects = await executeOffcutDisposal({
+    envelope,
+    eventId,
+    client,
+    order,
+    holding,
+    disposition: 'acquired',
+    rate: proposal.rate,
+    currency: proposal.currency,
+    returnChallanNumberExt: null,
+    disposalId: proposal.proposal_id,
+    postedBy: proposal.proposed_by,
+    occurredAt,
+    approvedBy: actingUserId,
+    doaEntryId: proposal.doa_entry_id,
+    auditCtx,
+  });
+
+  const decided = await markOffcutAcquisitionProposalApproved(
+    proposal.proposal_id,
+    { decided_at: occurredAt, decided_by: actingUserId, disposal_event_id: eventId },
+    client,
+  );
+  if (!decided) {
+    reject(
+      'DUPLICATE_EVENT',
+      'This acquisition proposal was approved concurrently',
+      { proposal_id: proposal.proposal_id },
+      409,
+    );
+  }
+
+  envelope.payload['holding_id'] = holding.holding_id;
+  envelope.payload['disposal_value'] = effects.disposalValue;
+  envelope.payload['indicative_rate'] = effects.indicativeRate;
+  envelope.payload['credit_note_id'] = effects.creditNoteId;
+  envelope.payload['owned_lot_number'] = effects.ownedLotNumber;
+  envelope.payload['clock_reconciled_qty'] = effects.clockReconciled;
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,7 +1777,7 @@ export async function applyJobworkOffcutRevalued(
       client,
     );
   } catch (err: unknown) {
-    classifyCreditInsert(err, p.revaluation_id, eventId);
+    classifyMoneyInsert(err, p.revaluation_id, eventId, 'credit note');
   }
 
   // The DOCUMENT trail is immutable - neither the original nor any earlier delta is touched - while

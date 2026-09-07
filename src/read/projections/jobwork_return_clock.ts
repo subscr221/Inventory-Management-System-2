@@ -173,7 +173,24 @@ export async function listReturnClocksDueForSweep(
 ): Promise<JobworkReturnClockReportRow[]> {
   const result = await client.query(
     `SELECT ${REPORT_SELECT} ${REPORT_FROM}
-      WHERE c.status IN ('open', 'partially_reconciled')
+      WHERE (
+          c.status IN ('open', 'partially_reconciled')
+          -- Chunk B review decision (2026-09-07): an over-tolerance receipt can fully absorb the
+          -- clock's own capacity and flip it to 'reconciled' while a retained offcut holding on the
+          -- same (order, sku) is still outstanding - the exact corner Story 9.5's non-strict
+          -- reconcile was built for. Without this arm the holding aged silently once its clock
+          -- reconciled (only the ageing report saw it). Reconciled clocks are otherwise still
+          -- out of scope; this only re-admits one carrying a live retained holding.
+          OR (
+            c.status = 'reconciled'
+            AND EXISTS (
+              SELECT 1 FROM job_work_offcut_holding h
+               WHERE h.service_order_id = c.service_order_id
+                 AND h.sku = c.sku
+                 AND h.status = 'retained'
+            )
+          )
+        )
         -- Story 9.7 AC 8: a closed order is normally out of scope - Story 9.5 closes only on a zero
         -- custody balance, so nothing is left to chase. Contractual OFFCUT is the exception, and it
         -- is the exception by design: capture drains the custody balance (which is what let the

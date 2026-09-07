@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SUPPORTED_EVENT_TYPES } from '../../src/events/schema.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '../..');
@@ -1873,6 +1874,10 @@ const EXPECTED = [
       'chk_job_work_credit_note_status',
       'chk_job_work_credit_note_chain',
       'chk_job_work_credit_note_lifecycle',
+      // D9 (chunk D code review 2026-09-06): the money CHECK (BSD-5: no negative acquisition money)
+      // and the supersede FK (a delta must point at a real document) were shipped without pins.
+      'chk_job_work_credit_note_money',
+      'fk_job_work_credit_note_supersedes',
     ],
     indexes: [
       'uq_job_work_credit_note_source_event',
@@ -1889,6 +1894,34 @@ const EXPECTED = [
       'CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_cited_ref ON job_work_credit_note (cited_invoice_ref_ext)',
       'CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_ack_ref ON job_work_credit_note (acknowledged_ref_ext)',
       'CREATE INDEX IF NOT EXISTS idx_job_work_credit_note_site ON job_work_credit_note (site_id)',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 9.8: the offcut acquisition proposal. The PARTIAL unique index is the AC 4 refusal of a
+  // second competing proposal on one holding, and the dual-control CHECK is BSD-10 expressed in the
+  // schema rather than only in the applier - both must stay pinned here.
+  {
+    canonical: 'read/projections/job_work_offcut_acquisition_proposal.sql',
+    table: 'job_work_offcut_acquisition_proposal',
+    constraints: [
+      'chk_job_work_offcut_acq_proposal_status',
+      'chk_job_work_offcut_acq_proposal_lifecycle',
+      'chk_job_work_offcut_acq_proposal_money',
+      'chk_job_work_offcut_acq_proposal_dual_control',
+    ],
+    indexes: [
+      'uq_job_work_offcut_acq_proposal_source_event',
+      'uq_job_work_offcut_acq_proposal_pending',
+      'idx_job_work_offcut_acq_proposal_order',
+      'idx_job_work_offcut_acq_proposal_approver',
+      'idx_job_work_offcut_acq_proposal_site',
+    ],
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_offcut_acq_proposal_source_event ON job_work_offcut_acquisition_proposal (source_event_id)',
+      "CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_offcut_acq_proposal_pending ON job_work_offcut_acquisition_proposal (holding_id) WHERE status = 'pending'",
+      'CREATE INDEX IF NOT EXISTS idx_job_work_offcut_acq_proposal_order ON job_work_offcut_acquisition_proposal (service_order_id)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_offcut_acq_proposal_approver ON job_work_offcut_acquisition_proposal (resolved_approver_actor_id, status)',
+      'CREATE INDEX IF NOT EXISTS idx_job_work_offcut_acq_proposal_site ON job_work_offcut_acquisition_proposal (site_id)',
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
@@ -1979,9 +2012,16 @@ describe('Story 2.1 schema drift guard', () => {
       'ADD COLUMN IF NOT EXISTS doa_entry_id UUID',
       'ADD COLUMN IF NOT EXISTS return_challan_number_ext TEXT',
       'ADD COLUMN IF NOT EXISTS owned_lot_id TEXT',
+      // D9 (chunk D code review 2026-09-06): the standalone Section 143 clock column, invisible to
+      // the generic CREATE TABLE body comparison for the same reason challan_class was - a missing
+      // init-db mirror boots a container whose holding ledger can record no shortfall.
+      'ADD COLUMN IF NOT EXISTS clock_reconciled_qty NUMERIC(18,3)',
     ]) {
       const statement = `ALTER TABLE job_work_offcut_holding ${column};`;
-      assert.ok(holdingSql.includes(statement), `job_work_offcut_holding.sql missing: ${statement}`);
+      assert.ok(
+        holdingSql.includes(statement),
+        `job_work_offcut_holding.sql missing: ${statement}`,
+      );
       assert.ok(initDb.includes(statement), `init-db.sql missing the upgrade path: ${statement}`);
     }
     // The disposition-specific legs are the whole semantic content of the widened constraint: a
@@ -1997,7 +2037,30 @@ describe('Story 2.1 schema drift guard', () => {
         holdingSql.includes(fragment),
         `job_work_offcut_holding.sql lifecycle CHECK missing: ${fragment}`,
       );
-      assert.ok(initDb.includes(fragment), `init-db.sql lifecycle CHECK mirror missing: ${fragment}`);
+      assert.ok(
+        initDb.includes(fragment),
+        `init-db.sql lifecycle CHECK mirror missing: ${fragment}`,
+      );
+    }
+  });
+
+  // D9 (chunk D code review 2026-09-06): the money CHECK and the supersede FK are pinned by NAME in
+  // the table array above; these NEGATIVE arms pin their BODIES in both the projection and
+  // init-db.sql. Name-only matching stays green if the money CHECK is weakened to accept negatives
+  // (a phantom BSD-5 contradiction) or the FK is dropped (an orphan delta the ack trail can never
+  // resolve).
+  it('Story 9.7 pins the credit-note money CHECK body and the supersede FK body', () => {
+    const creditNoteSql = read('read/projections/job_work_credit_note.sql');
+    // Negative arms for the two constraints pinned by name in the table array above: weakening the
+    // money CHECK to accept negatives (a phantom BSD-5 contradiction) or dropping the supersede FK
+    // (an orphan delta the ack trail can never resolve) fails these even though the name pins stay
+    // green.
+    for (const fragment of [
+      'rate >= 0 AND value >= 0',
+      'REFERENCES job_work_credit_note(credit_note_id)',
+    ]) {
+      assert.ok(creditNoteSql.includes(fragment), `job_work_credit_note.sql missing: ${fragment}`);
+      assert.ok(initDb.includes(fragment), `init-db.sql missing the mirror of: ${fragment}`);
     }
   });
 
@@ -2791,3 +2854,22 @@ function extractViewBody(sql: string, viewName: string): string {
   if (!m) throw new Error(`Could not find CREATE VIEW ${viewName} in canonical SQL`);
   return m[1]!.trim();
 }
+
+/**
+ * Story 9.8 Task 6.2: the two new event types are pinned in the registry. Registration is what
+ * makes them postable on the direct events door at all, and their stream type is what binds them to
+ * the order's own stream - a silent change to either would move the two-step signature onto a
+ * stream its appliers do not read.
+ */
+describe('Story 9.8 event-type registry', () => {
+  it('registers the acquisition proposal and approval on the jobwork stream', () => {
+    assert.deepStrictEqual(SUPPORTED_EVENT_TYPES['jobwork.offcut_acquisition_proposed'], {
+      streamType: 'jobwork',
+      requiresBusinessStream: false,
+    });
+    assert.deepStrictEqual(SUPPORTED_EVENT_TYPES['jobwork.offcut_acquisition_approved'], {
+      streamType: 'jobwork',
+      requiresBusinessStream: false,
+    });
+  });
+});

@@ -13074,3 +13074,96 @@ BEGIN
     GRANT SELECT ON job_work_credit_note TO readonly_user;
   END IF;
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- Story 9.8: the offcut ACQUISITION PROPOSAL - the persisted middle state that makes the DOA second
+-- signature a real authenticated CFO action instead of a string the poster claims. Duplicated here
+-- for first-boot container init: the CANONICAL definition is
+-- read/projections/job_work_offcut_acquisition_proposal.sql, applied by src/events/migrate.ts.
+-- Change both files together.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS job_work_offcut_acquisition_proposal (
+  proposal_id                UUID PRIMARY KEY,
+  service_order_id           UUID NOT NULL,
+  holding_id                 UUID NOT NULL,
+  site_id                    UUID NOT NULL,
+  rate                       NUMERIC(18,4) NOT NULL,
+  currency                   TEXT NOT NULL,
+  indicative_rate            NUMERIC(18,4),
+  proposed_value             NUMERIC(18,4) NOT NULL,
+  doa_entry_id               UUID NOT NULL,
+  resolved_approver_actor_id UUID NOT NULL,
+  proposed_by                UUID NOT NULL,
+  status                     TEXT NOT NULL DEFAULT 'pending',
+  decided_at                 TIMESTAMPTZ,
+  decided_by                 UUID,
+  disposal_event_id          UUID,
+  source_event_id            UUID NOT NULL,
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_job_work_offcut_acq_proposal_status CHECK (
+    status IN ('pending','approved','superseded')
+  ),
+  CONSTRAINT chk_job_work_offcut_acq_proposal_lifecycle CHECK (
+    (status = 'pending' AND decided_at IS NULL AND decided_by IS NULL
+      AND disposal_event_id IS NULL)
+    OR (status = 'approved' AND decided_at IS NOT NULL AND decided_by IS NOT NULL
+      AND disposal_event_id IS NOT NULL AND decided_at >= created_at)
+    OR (status = 'superseded' AND decided_at IS NOT NULL AND disposal_event_id IS NULL)
+  ),
+  -- BSD-5: zero is the free-retention floor, so an acquisition money leg is never negative.
+  CONSTRAINT chk_job_work_offcut_acq_proposal_money CHECK (rate >= 0 AND proposed_value >= 0),
+  -- BSD-10 inverted: the proposer may never be the resolved approver. Not representable, not
+  -- merely refused later.
+  CONSTRAINT chk_job_work_offcut_acq_proposal_dual_control CHECK (
+    resolved_approver_actor_id <> proposed_by
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_offcut_acq_proposal_source_event ON job_work_offcut_acquisition_proposal (source_event_id);
+-- AC 4: one pending proposal per holding. A second competing proposal is refused by the schema.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_offcut_acq_proposal_pending ON job_work_offcut_acquisition_proposal (holding_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_job_work_offcut_acq_proposal_order ON job_work_offcut_acquisition_proposal (service_order_id);
+CREATE INDEX IF NOT EXISTS idx_job_work_offcut_acq_proposal_approver ON job_work_offcut_acquisition_proposal (resolved_approver_actor_id, status);
+CREATE INDEX IF NOT EXISTS idx_job_work_offcut_acq_proposal_site ON job_work_offcut_acquisition_proposal (site_id);
+
+DO $$
+BEGIN
+  ALTER TABLE job_work_offcut_acquisition_proposal
+    DROP CONSTRAINT IF EXISTS chk_job_work_offcut_acq_proposal_status;
+  ALTER TABLE job_work_offcut_acquisition_proposal
+    ADD CONSTRAINT chk_job_work_offcut_acq_proposal_status CHECK (
+      status IN ('pending','approved','superseded')
+    );
+  ALTER TABLE job_work_offcut_acquisition_proposal
+    DROP CONSTRAINT IF EXISTS chk_job_work_offcut_acq_proposal_lifecycle;
+  ALTER TABLE job_work_offcut_acquisition_proposal
+    ADD CONSTRAINT chk_job_work_offcut_acq_proposal_lifecycle CHECK (
+      (status = 'pending' AND decided_at IS NULL AND decided_by IS NULL
+        AND disposal_event_id IS NULL)
+      OR (status = 'approved' AND decided_at IS NOT NULL AND decided_by IS NOT NULL
+        AND disposal_event_id IS NOT NULL AND decided_at >= created_at)
+      OR (status = 'superseded' AND decided_at IS NOT NULL AND disposal_event_id IS NULL)
+    );
+  ALTER TABLE job_work_offcut_acquisition_proposal
+    DROP CONSTRAINT IF EXISTS chk_job_work_offcut_acq_proposal_money;
+  ALTER TABLE job_work_offcut_acquisition_proposal
+    ADD CONSTRAINT chk_job_work_offcut_acq_proposal_money CHECK (rate >= 0 AND proposed_value >= 0);
+  ALTER TABLE job_work_offcut_acquisition_proposal
+    DROP CONSTRAINT IF EXISTS chk_job_work_offcut_acq_proposal_dual_control;
+  ALTER TABLE job_work_offcut_acquisition_proposal
+    ADD CONSTRAINT chk_job_work_offcut_acq_proposal_dual_control CHECK (
+      resolved_approver_actor_id <> proposed_by
+    );
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON job_work_offcut_acquisition_proposal TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON job_work_offcut_acquisition_proposal TO readonly_user;
+  END IF;
+END $$;

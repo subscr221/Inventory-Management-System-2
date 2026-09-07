@@ -582,3 +582,14 @@ Table 9: Deferred from the code review (2026-09-06) of story 9.6
 | --- | --- | --- | --- |
 | 9.6C-1 | 9-6 | The reconciliation report does not surface duplicate acknowledged_ref_ext entries although the ack-ref index exists to serve that lookup (read/projections/job_work_billing_feed.sql:79-85, src/read/projections/job_work_billing_feed.ts:199-229). One consolidated ERP invoice legitimately acknowledges several orders, so the report needs a duplicate-ref count | Group C code review 2026-09-06, consciously deferred reconciliation follow-up |
 | 9.6C-2 | 9-6 | Cycle-count variance adjustments can mutate an offcut-class balance and silently desync job_work_offcut_holding (src/compliance/cycle-count.ts). Mirrors the pre-existing job_work count behavior | Needs the Story 9.7 disposal reconciliation ruling |
+
+## Deferred from: code review of story-9-8 (2026-09-07)
+
+Table 10 lists the two deferrals the 2026-09-07 adversarial review of story 9.8 consciously recorded (8 patch findings were routed to action instead; see the story file's Review Findings subsection).
+
+Table 10: Deferred from the code review (2026-09-07) of story-9-8
+
+| Ref | Story | Item | Trigger or note |
+| --- | --- | --- | --- |
+| 9.8-1 | 9-8 | `requireUuidParam` in `src/api/v1/service-orders.ts:253-259` does not lowercase the UUID path param before use, unlike the equivalent helper in `src/api/v1/production-completions.ts:188-196` - a same-key retry with different URL-path casing on the new approve route is wrongly rejected as a cross-target DUPLICATE_EVENT | Pre-existing helper predating this story, shared by every route in the file; fixing it is a cross-cutting change out of scope here |
+| 9.8-2 | 9-8 | The revaluation route/door (`POST .../offcut-revaluations` and direct events door for `jobwork.offcut_revalued`) still accepts a poster-claimed `approved_by` compared only against `resolveApprover`'s output, never against an authenticated CFO session - the exact single-event signature-forgery contract Story 9.8 was written to eliminate on the disposal path is still fully reachable here, including against an offcut already signed via the new two-step flow (`REVALUATION_FIELDS` src/compliance/jobwork-offcut-disposal.ts:200-209, shape validator :543-566, `applyJobworkOffcutRevalued` :1670-1683, route callerFields src/api/v1/service-orders.ts:2082-2088) | Human decision 2026-09-07 (code review of story-9-8): "its taking too much of time." Residual risk accepted; needs a follow-up story before go-live (extend the two-step flow to revaluation, or block above-band revaluation outright) |

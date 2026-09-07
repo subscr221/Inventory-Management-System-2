@@ -11,6 +11,7 @@ import { closePool, closeAdminPool, getAdminPool } from '../../src/config/db.js'
 import { toIstCalendarDate } from '../../src/lib/business-days.js';
 import { runJobworkClockSweepCycle } from '../../src/notify/jobwork-clock-sweep.js';
 import { dispatchGateBlockedLots } from '../../src/compliance/dispatch.js';
+import { getLatestCreditNoteForHolding } from '../../src/read/projections/job_work_credit_note.js';
 
 /**
  * Story 9.7 Offcut Holding, Disposal and Valuation (FR-JW-09/10, FR-JW-12, FR-AC-11). Real
@@ -119,6 +120,15 @@ async function authFor(port: number, sub: string): Promise<Record<string, string
 
 function detailsOf(body: Record<string, unknown>): Record<string, unknown> {
   return (body['details'] ?? {}) as Record<string, unknown>;
+}
+
+/**
+ * D2 (chunk D code review 2026-09-06): NUMERIC strings compared through Number() float through
+ * binary doubles, so "0.500" - "0.200" can read as 0.30000000000000004. Compare at the QTY scale
+ * (3) as integers instead: strip the dot and diff the whole numbers.
+ */
+function scaledQty(q: string): number {
+  return Number(q.replace('.', ''));
 }
 
 // Role names asserted as LITERALS, never against exported constants (the 8.4 lesson).
@@ -301,11 +311,13 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
   async function receive(
     serviceOrderId: string,
     qty: string,
+    opts: { challanQty?: string } = {},
   ): Promise<{ lot: string; challan: string }> {
     const poRef = await seedPo(SKU);
     const token = await seedToken(poRef);
     const lot = `LOT-JW-9-7-${run}-${randomUUID().slice(0, 6)}`;
     const challan = `CH-${run}-${randomUUID().slice(0, 6)}`;
+    const challanQty = opts.challanQty ?? qty;
     const res = await makeRequest(
       port,
       'POST',
@@ -326,7 +338,7 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
         service_order_id: serviceOrderId,
         challan_number_ext: challan,
         challan_date: '2026-09-01',
-        challan_qty: qty,
+        challan_qty: challanQty,
       },
       storeHeaders,
     );
@@ -475,6 +487,33 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
         holding_id: holdingId,
         site_id: siteAId,
         location_id: dockId,
+        posted_by: actor.userId,
+        ...extra,
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: { user_id: actor.userId, role: actor.role, location_id: siteAId },
+        occurred_at: new Date().toISOString(),
+      },
+    };
+  }
+
+  /** Story 9.8: the direct-door envelope for an above-band acquisition PROPOSAL. */
+  function proposalEnvelope(
+    orderId: string,
+    holdingId: string,
+    extra: Record<string, unknown> = {},
+    actor: { userId: string; role: string } = { userId: financeUserId, role: FINANCE_ROLE },
+  ) {
+    return {
+      stream_type: 'jobwork',
+      stream_id: orderId,
+      event_type: 'jobwork.offcut_acquisition_proposed',
+      payload: {
+        service_order_id: orderId,
+        proposal_id: randomUUID(),
+        holding_id: holdingId,
+        site_id: siteAId,
         posted_by: actor.userId,
         ...extra,
       },
@@ -769,6 +808,7 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
       '../../read/projections/job_work_billing_feed.sql',
       '../../read/projections/job_work_offcut_holding.sql',
       '../../read/projections/job_work_credit_note.sql',
+      '../../read/projections/job_work_offcut_acquisition_proposal.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
@@ -954,26 +994,13 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     const offcutLot = holding['lot_id'] as string;
     assert.strictEqual(await stockOnHand(offcutLot, 'offcut'), '10.000');
 
-    // MUTATION POINT 1 (route arm): an ordinary issue naming the offcut class carries no Symbol and
-    // must be refused. Removing `offcut` from CUSTOMER_OWNED_STOCK_CLASSES, or widening the door to
-    // any Symbol, fails this arm.
-    const issue = await makeRequest(
-      port,
-      'POST',
-      '/api/v1/stock/issues',
-      {
-        sku: SKU,
-        lot_id: offcutLot,
-        location_id: dockId,
-        quantity: '1',
-        stock_class: 'offcut',
-        idempotency_key: randomUUID(),
-      },
-      coordinatorHeaders,
-    );
-    assert.ok(issue.status >= 400, `an offcut issue must never succeed: ${issue.text}`);
-
-    // MUTATION POINT 1 (direct-event arm): the same attempt through the events door.
+    // MUTATION POINT 1: an ordinary stock issue naming the offcut class carries no Symbol and must
+    // be refused. There is no lightweight issue ROUTE to exercise here - the earlier arm pointed at
+    // /api/v1/stock/issues, a route this codebase has never registered, so its 404 was exactly the
+    // false-green chunk D forbids. Every issue path funnels into applyStockBalanceProjection, the
+    // same seam the direct-event arm below drives: removing `offcut` from
+    // CUSTOMER_OWNED_STOCK_CLASSES, or widening the door to any Symbol, fails THAT arm, and the
+    // disposal arm at the end proves the offcut class still drains through its ONE door.
     const direct = await postEvent(
       {
         stream_type: 'inventory',
@@ -995,7 +1022,12 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
       },
       coordinatorHeaders,
     );
-    assert.ok(direct.status >= 400, `a direct offcut issue must never succeed: ${direct.text}`);
+    assert.strictEqual(
+      direct.status,
+      400,
+      `a direct offcut issue must never succeed: ${direct.text}`,
+    );
+    assert.strictEqual(direct.body['error_code'], 'CROSS_ISSUE_BLOCKED', direct.text);
     assert.strictEqual(await stockOnHand(offcutLot, 'offcut'), '10.000');
 
     // ...and the disposal path, which stamps the Symbol, does drain it.
@@ -1100,7 +1132,13 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
 
     const clock = await clockRow(orderId);
     // Consumption never touches the clock; this disposal moves exactly the disposed quantity.
-    assert.strictEqual(Number(clock['reconciled_qty']) - Number(clockBefore['reconciled_qty']), 10);
+    // D2 (chunk D code review 2026-09-06): the delta is compared as scaled integers, never through
+    // Number() on NUMERIC strings (binary float noise).
+    assert.strictEqual(
+      scaledQty(clock['reconciled_qty'] as string) -
+        scaledQty(clockBefore['reconciled_qty'] as string),
+      scaledQty('10.000'),
+    );
   });
 
   it('AC 3 (BSD-5): a free retention is acquired at rate zero - it mints the lot and raises NO credit note', async () => {
@@ -1361,49 +1399,57 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
   // AC 7: the governed DOA band and dual control
   // -------------------------------------------------------------------------
 
-  it('AC 7: an above-band acquisition is refused APPROVAL_REQUIRED and audited, then proceeds with the resolved cfo', async () => {
+  // Story 9.8 REPOINTED these arms. The AC 7 interim contract - the poster claiming an `approved_by`
+  // that merely had to match resolveApprover's output - is GONE: an above-band acquisition is now a
+  // PROPOSAL awaiting the CFO's own authenticated approval. The full two-step round trip lives in
+  // test/integration/story-9-8.test.ts; what stays here is that the old contract cannot be reached.
+  it('AC 7 (Story 9.8): an above-band acquisition becomes a PROPOSAL, and no request may name an approver', async () => {
     const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '100' });
-    // 100 KG at 18.5 = 1850, above the 1000 band.
-    const unsigned = await dispose(orderId, {
-      holding_id: holdingId,
-      disposition: 'acquired',
-      rate: INDICATIVE_RATE,
-      currency: 'INR',
-    });
-    assert.strictEqual(unsigned.status, 403, JSON.stringify(unsigned.body));
-    assert.strictEqual(unsigned.body['error_code'], 'APPROVAL_REQUIRED');
-    // Code review 2026-09-06: the refusal must NOT leak the resolved approver's user id - the
-    // approved_by claim is the second signature, and publishing the id in the error would hand a
-    // finance controller the key to their own approval.
-    assert.strictEqual(detailsOf(unsigned.body)['resolved_approver_user_id'], undefined);
-    assert.strictEqual(detailsOf(unsigned.body)['acquisition_value'], '1850.0000');
-    assert.ok(unsigned.traceId && (await auditedFor('APPROVAL_REQUIRED', unsigned.traceId)));
-    assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
 
-    // A forged approver naming somebody who is not the resolved CFO is refused the same way.
-    const forged = await dispose(orderId, {
-      holding_id: holdingId,
-      disposition: 'acquired',
-      rate: INDICATIVE_RATE,
-      currency: 'INR',
-      approved_by: ackUserId,
-    });
-    assert.strictEqual(forged.status, 403, JSON.stringify(forged.body));
-    assert.strictEqual(forged.body['error_code'], 'APPROVAL_REQUIRED');
-
-    // With the resolved CFO named, and posted by the finance controller, it proceeds.
-    const signed = await dispose(orderId, {
+    // Story 9.8 AC 4: there is no field left on a disposal through which a caller can name an
+    // approver, on either door. MUTATION POINT: re-adding `approved_by` to the route's allow-list
+    // or to DISPOSAL_FIELDS resurrects the whole hazard, and this arm is what catches it.
+    const claimed = await dispose(orderId, {
       holding_id: holdingId,
       disposition: 'acquired',
       rate: INDICATIVE_RATE,
       currency: 'INR',
       approved_by: cfoUserId,
     });
-    assert.strictEqual(signed.status, 201, JSON.stringify(signed.body));
+    assert.strictEqual(claimed.status, 400, JSON.stringify(claimed.body));
+    assert.strictEqual(claimed.body['error_code'], 'INVALID_PARAMS');
+
+    // The direct events door cannot post the above-band acquisition AS A DISPOSAL to skip the
+    // second signature: the applier refuses it under the order lock and audits the refusal. The
+    // refusal still does not name the resolved approver.
+    const viaEvent = await postEvent(
+      disposalEnvelope(orderId, holdingId, {
+        disposition: 'acquired',
+        rate: INDICATIVE_RATE,
+        currency: 'INR',
+      }),
+    );
+    assert.strictEqual(viaEvent.status, 403, JSON.stringify(viaEvent.body));
+    assert.strictEqual(viaEvent.body['error_code'], 'APPROVAL_REQUIRED');
+    assert.strictEqual(detailsOf(viaEvent.body)['resolved_approver_user_id'], undefined);
+    assert.strictEqual(detailsOf(viaEvent.body)['acquisition_value'], '1850.0000');
+    assert.ok(viaEvent.traceId && (await auditedFor('APPROVAL_REQUIRED', viaEvent.traceId)));
+    assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
+
+    // 100 KG at 18.5 = 1850, above the 1000 band: the disposal route answers with a pending
+    // proposal and touches nothing (AC 1, AC 8 of Story 9.8).
+    const proposed = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'acquired',
+      rate: INDICATIVE_RATE,
+      currency: 'INR',
+    });
+    assert.strictEqual(proposed.status, 201, JSON.stringify(proposed.body));
+    assert.strictEqual(proposed.body['status'], 'pending_approval');
     const row = await holdingRow(holdingId);
-    assert.strictEqual(row['approved_by'], cfoUserId);
-    assert.ok(row['doa_entry_id'], 'the matched DOA band is recorded on the disposal');
-    assert.strictEqual(row['disposal_value'], '1850.0000');
+    assert.strictEqual(row['status'], 'retained');
+    assert.strictEqual(row['approved_by'], null);
+    assert.strictEqual(row['disposal_value'], null);
   });
 
   it('AC 7 (BSD-10): dual control - the acting user must NOT be the resolved approver', async () => {
@@ -1431,7 +1477,6 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
         disposition: 'acquired',
         rate: INDICATIVE_RATE,
         currency: 'INR',
-        approved_by: cfoUserId,
       },
       cfoHeaders,
     );
@@ -1439,18 +1484,17 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     assert.strictEqual(viaRoute.body['error_code'], 'APPROVAL_REQUIRED');
     assert.strictEqual(detailsOf(viaRoute.body)['acting_user_id'], cfoUserId);
 
-    // MUTATION POINT 3 (direct-event arm): straight past the routes, into the applier.
+    // MUTATION POINT 3 (direct-event arm): straight past the routes, into the applier. Story 9.8
+    // moved this refusal to PROPOSE time - the CFO may not file a proposal only they could sign.
     const viaEvent = await postEvent(
-      disposalEnvelope(
+      proposalEnvelope(
         orderId,
         holdingId,
+        { rate: INDICATIVE_RATE, currency: 'INR' },
         {
-          disposition: 'acquired',
-          rate: INDICATIVE_RATE,
-          currency: 'INR',
-          approved_by: cfoUserId,
+          userId: cfoUserId,
+          role: CFO_ROLE,
         },
-        { userId: cfoUserId, role: CFO_ROLE },
       ),
       cfoHeaders,
     );
@@ -1481,10 +1525,9 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     // Chunk D code review (2026-09-06): remove the global role mutation this arm created so later
     // authorization and segregation tests (and subsequent runs) never see a dual-role CFO.
     if (grantedAssignmentId) {
-      await adminPool.query(
-        `DELETE FROM user_role_assignments WHERE assignment_id = $1`,
-        [grantedAssignmentId],
-      );
+      await adminPool.query(`DELETE FROM user_role_assignments WHERE assignment_id = $1`, [
+        grantedAssignmentId,
+      ]);
     }
     const cleaned = await adminPool.query(
       `SELECT count(*)::int AS n FROM user_role_assignments
@@ -1494,17 +1537,31 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     assert.strictEqual(cleaned.rows[0]!['n'], 0);
   });
 
-  it('AC 7: a below-band acquisition claiming an approver is refused INVALID_PARAMS, never silently dropped', async () => {
+  it('AC 7 (Story 9.8 AC 6): a below-band acquisition still completes in ONE request', async () => {
     const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
+    // 10 KG at 18.5 = 185, below the 1000 band: no proposal step is invented for it.
     const res = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'acquired',
+      rate: INDICATIVE_RATE,
+      currency: 'INR',
+    });
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    assert.strictEqual(res.body['status'], undefined, 'a below-band acquisition is not pending');
+    const row = await holdingRow(holdingId);
+    assert.strictEqual(row['status'], 'disposed');
+    assert.strictEqual(row['approved_by'], null);
+    assert.strictEqual(row['doa_entry_id'], null);
+    // And it still cannot carry an approval claim - the field does not exist (Story 9.8 AC 4).
+    const claimed = await dispose(orderId, {
       holding_id: holdingId,
       disposition: 'acquired',
       rate: INDICATIVE_RATE,
       currency: 'INR',
       approved_by: cfoUserId,
     });
-    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
-    assert.strictEqual(res.body['error_code'], 'INVALID_PARAMS');
+    assert.strictEqual(claimed.status, 400, JSON.stringify(claimed.body));
+    assert.strictEqual(claimed.body['error_code'], 'INVALID_PARAMS');
   });
 
   // -------------------------------------------------------------------------
@@ -1581,6 +1638,10 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
       undefined,
       coordinatorHeaders,
     );
+    // D2 (chunk D code review 2026-09-06): assert the status BEFORE reading the body - a failed
+    // report would otherwise surface as a TypeError on an undefined body field, not as a report
+    // failure.
+    assert.strictEqual(after.status, 200, JSON.stringify(after.body));
     const afterRows = (after.body['offcut_holdings'] as Record<string, unknown>)['rows'] as Record<
       string,
       unknown
@@ -1591,6 +1652,52 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     );
   });
 
+  it('D10 (chunk D code review 2026-09-06): the ageing horizon boundary - 90 days is breached, 89 is due_within_30, and beyond_90 stays dead for offcut', async () => {
+    // `age_days = today - business_date`, runway = 90 - age_days, so 90 lands exactly on breached,
+    // 89 on due_within_30, and beyond_90 is unreachable (runway can never exceed the 90-day
+    // horizon). The capture route is unaware of business_date, so the rows are backdated directly.
+    const businessDateMinusDays = (days: number): string => {
+      const d = new Date(`${TODAY}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - days);
+      return d.toISOString().slice(0, 10);
+    };
+    const breached = await retainedHolding({ quantity: '10' });
+    const dueSoon = await retainedHolding({ quantity: '10' });
+    await getAdminPool().query(
+      `UPDATE job_work_offcut_holding SET business_date = $2::date WHERE holding_id = $1`,
+      [breached.holdingId, businessDateMinusDays(90)],
+    );
+    await getAdminPool().query(
+      `UPDATE job_work_offcut_holding SET business_date = $2::date WHERE holding_id = $1`,
+      [dueSoon.holdingId, businessDateMinusDays(89)],
+    );
+    const report = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/jobwork/reports/aging?site_id=${siteAId}`,
+      undefined,
+      coordinatorHeaders,
+    );
+    assert.strictEqual(report.status, 200, JSON.stringify(report.body));
+    const section = report.body['offcut_holdings'] as Record<string, unknown>;
+    const rows = section['rows'] as Record<string, unknown>[];
+    const breachedRow = rows.find((r) => r['holding_id'] === breached.holdingId);
+    const dueSoonRow = rows.find((r) => r['holding_id'] === dueSoon.holdingId);
+    assert.ok(breachedRow, 'the 90-day-old holding must appear');
+    assert.ok(dueSoonRow, 'the 89-day-old holding must appear');
+    assert.strictEqual(breachedRow['age_days'], 90);
+    assert.strictEqual(breachedRow['bucket'], 'breached');
+    assert.strictEqual(dueSoonRow['age_days'], 89);
+    assert.strictEqual(dueSoonRow['bucket'], 'due_within_30');
+    const buckets = section['buckets'] as Record<string, Record<string, unknown>>;
+    assert.strictEqual(
+      buckets['beyond_90']!['count'],
+      0,
+      'beyond_90 can never be populated for offcut',
+    );
+    assert.ok((buckets['breached']!['count'] as number) >= 1);
+  });
+
   // -------------------------------------------------------------------------
   // AC 8: the breach sweep
   // -------------------------------------------------------------------------
@@ -1598,7 +1705,10 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
   it('AC 8: the sweep surfaces retained offcut - on a CLOSED order too - without double-counting deemed supply', async () => {
     const orderId = await confirmedOrder();
     const { lot } = await receive(orderId, '100');
-    const holdingId = await capture(orderId, lot, '40');
+    // D2 (chunk D code review 2026-09-06): capture the WHOLE custody balance so the Story 9.5
+    // closure gate is actually REACHABLE - the previous '40' left 60 KG in custody, the order never
+    // closed, and the `[200, 409]` acceptance let the "closed-order sweep" claim go unproven.
+    const holdingId = await capture(orderId, lot, '100');
     const holding = await holdingRow(holdingId);
     const closed = await makeRequest(
       port,
@@ -1607,9 +1717,12 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
       { idempotency_key: randomUUID() },
       coordinatorHeaders,
     );
-    // 60 KG of custody balance is left, so the order stays open; the arm below still proves the
-    // closed-order path because the candidate query no longer excludes it either way.
-    assert.ok([200, 409].includes(closed.status), JSON.stringify(closed.body));
+    assert.strictEqual(closed.status, 200, JSON.stringify(closed.body));
+    const orderStatus = await getAdminPool().query(
+      `SELECT status FROM service_order WHERE service_order_id = $1`,
+      [orderId],
+    );
+    assert.strictEqual(orderStatus.rows[0]!['status'], 'closed');
 
     // Backdate the clock so this row sorts FIRST in the sweep's expiry-ascending batch, and reaches
     // the breach stage deterministically. Never a hardcoded future date (the 2026-09-05 lesson).
@@ -1623,20 +1736,36 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
 
     const result = await runJobworkClockSweepCycle({ today: TODAY });
     assert.strictEqual(result.cycleFailed, false);
-    assert.ok(result.offcutRetained >= 1, 'the sweep must report the retained offcut it surfaced');
+    // D2 (chunk D code review 2026-09-06): an exact count, never `>= 1` - a doubled counter (the
+    // raced/rolled-back path counting a row twice) must fail this arm.
+    assert.strictEqual(
+      result.offcutRetained,
+      1,
+      'the sweep must count the retained offcut exactly once',
+    );
 
     const swept = await clockRow(orderId);
     assert.strictEqual(swept['status'], 'breached');
-    // BSD-11 / Task 8.3: deemed supply is challan - reconciled - loss, and the 40 KG of retained
-    // offcut is ALREADY inside that figure because capture does not reconcile the clock. Adding it
-    // again would report 140 KG of deemed supply against a 100 KG challan.
+    // BSD-11 / Task 8.3: deemed supply is challan - reconciled - loss, and the retained offcut is
+    // ALREADY inside that figure because capture does not reconcile the clock. Adding it again
+    // would report 200 KG of deemed supply against a 100 KG challan.
     assert.strictEqual(swept['deemed_supply_qty'], '100.000');
     assert.strictEqual(swept['reconciled_qty'], '0.000');
+
+    // D10 (chunk D code review 2026-09-06): the raced/rolled-back path in deterministic form - a
+    // SECOND sweep sees the clock already breached, surfaces nothing, and must NOT count the row
+    // again. `offcutRetained` is only ever incremented once the stage outcome commits.
+    const again = await runJobworkClockSweepCycle({ today: TODAY });
+    assert.strictEqual(again.cycleFailed, false);
+    assert.strictEqual(again.offcutRetained, 0, 'a retried/raced row must not be counted twice');
+    assert.strictEqual((await clockRow(orderId))['status'], 'breached');
 
     const notes = await notificationsFor(clock['clock_id'] as string);
     assert.ok(notes.length >= 1, 'the breach must notify');
     const text = notes.map((n) => String(n['next_step'] ?? '')).join('\n');
-    assert.match(text, /Retained contractual offcut on this sku/);
+    // Chunk B review decision (2026-09-07): wording softened to drop the false per-clock
+    // ownership claim on multi-clock skus (see jobwork-clock-sweep.ts).
+    assert.match(text, /Retained contractual offcut on this order\/sku/);
     assert.ok(text.includes(holding['lot_id'] as string));
   });
 
@@ -1751,6 +1880,331 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
   });
 
+  it('D5 (chunk D code review 2026-09-06): the direct events door meets every gate the route does - acquired pricing, the site sub-check, payload-site binding, the currency guards and the self-audited refusal codes', async () => {
+    // 1. An `acquired` PRICED disposal through the door by a non-finance actor is refused by the
+    //    finance gate. The chunk-C arm only tried `returned`; the priced branch is the whole point
+    //    of the gate (minting owned stock and raising a credit note on a jobwork write grant alone).
+    const priced = await retainedHolding({ quantity: '10' });
+    const acquiredDoor = await postEvent(
+      disposalEnvelope(
+        priced.orderId,
+        priced.holdingId,
+        {
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        },
+        { userId: ackUserId, role: 'accounts_officer' },
+      ),
+      ackHeaders,
+    );
+    assert.strictEqual(acquiredDoor.status, 403, JSON.stringify(acquiredDoor.body));
+    assert.strictEqual(acquiredDoor.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+    assert.strictEqual((await holdingRow(priced.holdingId))['status'], 'retained');
+
+    // 2. The finance gate's SITE sub-check through the door. A user who CAN write the site (jobwork
+    //    write at site A - so the payload-site binding passes) but whose finance_controller grant is
+    //    site-B-only must still be refused the valuation event: privilege and scope come from the
+    //    SAME assignment (events.ts chunk-C comment). The pre-existing `otherSiteHeaders` fixture
+    //    cannot reach this arm because its jobwork write grant is site-B-only too, so the door's
+    //    payload-site binding fires first as LOCATION_ACCESS_DENIED.
+    const financeOtherSiteUser = `jw-finance-other-site-9-7-${run}@example.com`;
+    const financeOtherSiteUserId = await provisionUser(port, financeOtherSiteUser, [
+      { role: 'accounts_officer', module: 'jobwork', functionScope: 'write', locationId: siteAId },
+      { role: 'accounts_officer', module: 'jobwork', functionScope: 'read', locationId: siteAId },
+      {
+        role: 'finance_controller',
+        module: 'jobwork',
+        functionScope: 'write',
+        locationId: siteBId,
+      },
+    ]);
+    const financeOtherSiteHeaders = await authFor(port, financeOtherSiteUser);
+    const otherSite = await retainedHolding({ quantity: '10' });
+    const otherSiteDoor = await postEvent(
+      disposalEnvelope(
+        otherSite.orderId,
+        otherSite.holdingId,
+        {
+          disposition: 'returned',
+          return_challan_number_ext: `RCH-${run}-door-site`,
+        },
+        { userId: financeOtherSiteUserId, role: FINANCE_ROLE },
+      ),
+      financeOtherSiteHeaders,
+    );
+    assert.strictEqual(otherSiteDoor.status, 403, JSON.stringify(otherSiteDoor.body));
+    assert.strictEqual(otherSiteDoor.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+    assert.strictEqual((await holdingRow(otherSite.holdingId))['status'], 'retained');
+
+    // 3. Payload-site binding for a NON-valuation event: an acknowledgment naming site A, posted
+    //    with a token whose jobwork write grant is site-B-only, is refused LOCATION_ACCESS_DENIED
+    //    by the door's central gate before any applier runs.
+    const binding = await postEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: randomUUID(),
+        event_type: 'jobwork.credit_note_acknowledged',
+        payload: {
+          service_order_id: randomUUID(),
+          credit_note_id: randomUUID(),
+          site_id: siteAId,
+          acknowledged_ref_ext: `ERP-${run}-binding`,
+          acknowledged_by: '00000000-0000-0000-0000-0000000000b5',
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: {
+            user_id: '00000000-0000-0000-0000-0000000000b5',
+            role: FINANCE_ROLE,
+            location_id: siteBId,
+          },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      otherSiteHeaders,
+    );
+    assert.strictEqual(binding.status, 403, JSON.stringify(binding.body));
+    assert.strictEqual(binding.body['error_code'], 'LOCATION_ACCESS_DENIED');
+
+    // 4. The currency equality guards (P6) through the door: the applier refuses a disposal or a
+    //    revaluation priced in a currency other than the order offcut currency.
+    const currencyOrder = await invoicedOrderWithHolding({ offcutQty: '10' });
+    const disposalCurrencyDoor = await postEvent(
+      disposalEnvelope(currencyOrder.orderId, currencyOrder.holdingId, {
+        disposition: 'acquired',
+        rate: INDICATIVE_RATE,
+        currency: 'USD',
+      }),
+    );
+    assert.strictEqual(disposalCurrencyDoor.status, 400, JSON.stringify(disposalCurrencyDoor.body));
+    assert.strictEqual(disposalCurrencyDoor.body['error_code'], 'INVALID_PARAMS');
+    assert.strictEqual((await holdingRow(currencyOrder.holdingId))['status'], 'retained');
+    assert.strictEqual(
+      (
+        await dispose(currencyOrder.orderId, {
+          holding_id: currencyOrder.holdingId,
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        })
+      ).status,
+      201,
+    );
+    const revaluationCurrencyDoor = await postEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: currencyOrder.orderId,
+        event_type: 'jobwork.offcut_revalued',
+        payload: {
+          service_order_id: currencyOrder.orderId,
+          revaluation_id: randomUUID(),
+          holding_id: currencyOrder.holdingId,
+          site_id: siteAId,
+          rate: '20.0000',
+          currency: 'USD',
+          posted_by: financeUserId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: financeUserId, role: FINANCE_ROLE, location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      financeHeaders,
+    );
+    assert.strictEqual(
+      revaluationCurrencyDoor.status,
+      400,
+      JSON.stringify(revaluationCurrencyDoor.body),
+    );
+    assert.strictEqual(revaluationCurrencyDoor.body['error_code'], 'INVALID_PARAMS');
+
+    // 5. CREDIT_NOTE_UNCITABLE through the door (no acknowledged billing feed), self-audited.
+    const uncitable = await retainedHolding({ quantity: '10' });
+    const uncitableDoor = await postEvent(
+      disposalEnvelope(uncitable.orderId, uncitable.holdingId, {
+        disposition: 'acquired',
+        rate: INDICATIVE_RATE,
+        currency: 'INR',
+      }),
+    );
+    assert.strictEqual(uncitableDoor.status, 409, JSON.stringify(uncitableDoor.body));
+    assert.strictEqual(uncitableDoor.body['error_code'], 'CREDIT_NOTE_UNCITABLE');
+    assert.ok(
+      uncitableDoor.traceId && (await auditedFor('CREDIT_NOTE_UNCITABLE', uncitableDoor.traceId)),
+    );
+
+    // 6. OFFCUT_NOT_RETAINED through the door (a second disposal of the SAME row after a SUCCESSFUL
+    //    first one), self-audited. The holding above is still retained (the UNCITABLE refusal rolled
+    //    back), so a separate holding is used here.
+    const twice = await retainedHolding({ quantity: '10' });
+    const firstDisposal = await postEvent(
+      disposalEnvelope(twice.orderId, twice.holdingId, {
+        disposition: 'returned',
+        return_challan_number_ext: `RCH-${run}-d5-first`,
+      }),
+    );
+    assert.strictEqual(firstDisposal.status, 201, JSON.stringify(firstDisposal.body));
+    const secondDoor = await postEvent(
+      disposalEnvelope(twice.orderId, twice.holdingId, {
+        disposition: 'returned',
+        return_challan_number_ext: `RCH-${run}-d5-second`,
+      }),
+    );
+    assert.strictEqual(secondDoor.status, 409, JSON.stringify(secondDoor.body));
+    assert.strictEqual(secondDoor.body['error_code'], 'OFFCUT_NOT_RETAINED');
+    assert.ok(secondDoor.traceId && (await auditedFor('OFFCUT_NOT_RETAINED', secondDoor.traceId)));
+
+    // 7. CREDIT_NOTE_SUPERSEDED through the door (acknowledging the superseded original),
+    //    self-audited; the CURRENT delta still acknowledges through the door.
+    const superseded = await invoicedOrderWithHolding({ offcutQty: '10' });
+    assert.strictEqual(
+      (
+        await dispose(superseded.orderId, {
+          holding_id: superseded.holdingId,
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        })
+      ).status,
+      201,
+    );
+    assert.strictEqual(
+      (
+        await revalue(superseded.orderId, {
+          holding_id: superseded.holdingId,
+          rate: '20.0000',
+        })
+      ).status,
+      201,
+    );
+    const supersededNotes = await creditNotes(superseded.orderId);
+    const supersededOriginal = supersededNotes[0]!['credit_note_id'] as string;
+    const supersededDelta = supersededNotes[supersededNotes.length - 1]![
+      'credit_note_id'
+    ] as string;
+    const staleDoor = await postEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: superseded.orderId,
+        event_type: 'jobwork.credit_note_acknowledged',
+        payload: {
+          service_order_id: superseded.orderId,
+          credit_note_id: supersededOriginal,
+          site_id: siteAId,
+          acknowledged_ref_ext: `ERP-${run}-d5-stale`,
+          acknowledged_by: ackUserId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: ackUserId, role: 'accounts_officer', location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      ackHeaders,
+    );
+    assert.strictEqual(staleDoor.status, 409, JSON.stringify(staleDoor.body));
+    assert.strictEqual(staleDoor.body['error_code'], 'CREDIT_NOTE_SUPERSEDED');
+    assert.ok(staleDoor.traceId && (await auditedFor('CREDIT_NOTE_SUPERSEDED', staleDoor.traceId)));
+    const currentDoor = await postEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: superseded.orderId,
+        event_type: 'jobwork.credit_note_acknowledged',
+        payload: {
+          service_order_id: superseded.orderId,
+          credit_note_id: supersededDelta,
+          site_id: siteAId,
+          acknowledged_ref_ext: `ERP-${run}-d5-current`,
+          acknowledged_by: ackUserId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: ackUserId, role: 'accounts_officer', location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      ackHeaders,
+    );
+    // The events door answers 201 for a created event (the ROUTE answers 200); both acknowledge.
+    assert.strictEqual(currentDoor.status, 201, JSON.stringify(currentDoor.body));
+    assert.strictEqual(
+      (await creditNotes(superseded.orderId))[supersededNotes.length - 1]!['status'],
+      'acknowledged',
+    );
+
+    // 8. The revaluation finance gate on BOTH doors, and the revaluation posted_by identity pin
+    //    (P4) on the door.
+    const revalGate = await invoicedOrderWithHolding({ offcutQty: '10' });
+    assert.strictEqual(
+      (
+        await dispose(revalGate.orderId, {
+          holding_id: revalGate.holdingId,
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        })
+      ).status,
+      201,
+    );
+    const routeRevalGate = await revalue(
+      revalGate.orderId,
+      { holding_id: revalGate.holdingId, rate: '20.0000' },
+      coordinatorHeaders,
+    );
+    assert.strictEqual(routeRevalGate.status, 403, JSON.stringify(routeRevalGate.body));
+    assert.strictEqual(routeRevalGate.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+    const doorRevalGate = await postEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: revalGate.orderId,
+        event_type: 'jobwork.offcut_revalued',
+        payload: {
+          service_order_id: revalGate.orderId,
+          revaluation_id: randomUUID(),
+          holding_id: revalGate.holdingId,
+          site_id: siteAId,
+          rate: '20.0000',
+          currency: 'INR',
+          posted_by: coordinatorUserId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: coordinatorUserId, role: COORDINATOR_ROLE, location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      coordinatorHeaders,
+    );
+    assert.strictEqual(doorRevalGate.status, 403, JSON.stringify(doorRevalGate.body));
+    assert.strictEqual(doorRevalGate.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+    const doorRevalPin = await postEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: revalGate.orderId,
+        event_type: 'jobwork.offcut_revalued',
+        payload: {
+          service_order_id: revalGate.orderId,
+          revaluation_id: randomUUID(),
+          holding_id: revalGate.holdingId,
+          site_id: siteAId,
+          rate: '20.0000',
+          currency: 'INR',
+          posted_by: ackUserId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: financeUserId, role: FINANCE_ROLE, location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      financeHeaders,
+    );
+    assert.strictEqual(doorRevalPin.status, 403, JSON.stringify(doorRevalPin.body));
+    assert.strictEqual(doorRevalPin.body['error_code'], 'FUNCTION_ACCESS_DENIED');
+  });
+
   it('Task 7.2: a jobwork writer without the finance_controller role cannot value a disposal', async () => {
     const { orderId, holdingId } = await retainedHolding({ quantity: '10' });
     const res = await dispose(
@@ -1798,6 +2252,78 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     assert.strictEqual(docs.length, 4, 'a replay must not render a second document set');
   });
 
+  it("D7 (chunk D code review 2026-09-06): an acknowledgment replays 200 after the caller's site-scoped grant moves, and a replay never answers 201", async () => {
+    // Every fixture ack user is wildcard-scoped, so the isRetry short-circuit before the
+    // 404-versus-403 site collapse was indistinguishable from a site check that happened to pass.
+    // This arm uses a SITE-scoped accounts_officer, moves the grant away between the success and
+    // the retry, and demands the replay still answers 200 about the STORED event (the action was
+    // authorized when it committed - the ack handler's chunk-C comment).
+    const scopedAckUser = `jw-ack-scoped-9-7-${run}@example.com`;
+    const scopedAckUserId = await provisionUser(port, scopedAckUser, [
+      { role: 'accounts_officer', module: 'jobwork', functionScope: 'write', locationId: siteAId },
+      { role: 'accounts_officer', module: 'jobwork', functionScope: 'read', locationId: siteAId },
+    ]);
+    const scopedAckHeaders = await authFor(port, scopedAckUser);
+
+    const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
+    assert.strictEqual(
+      (
+        await dispose(orderId, {
+          holding_id: holdingId,
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        })
+      ).status,
+      201,
+    );
+    const note = (await creditNotes(orderId))[0]!['credit_note_id'] as string;
+    const key = randomUUID();
+    const body = { idempotency_key: key, acknowledged_ref_ext: `ERP-${run}-grantmove` };
+    const first = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/jobwork/credit-notes/${note}/acknowledgment`,
+      body,
+      scopedAckHeaders,
+    );
+    assert.strictEqual(first.status, 200, JSON.stringify(first.body));
+
+    // The caller's write grant at the note's site is now gone (moved to the other site entirely).
+    await getAdminPool().query(
+      `UPDATE user_role_assignments SET location_id = $2
+        WHERE user_id = $1 AND role = 'accounts_officer' AND module = 'jobwork' AND function_scope = 'write'`,
+      [scopedAckUserId, siteBId],
+    );
+
+    // A FIRST submission would now hit the 404-versus-403 collapse; the RETRY must still replay the
+    // stored event - and as 200, never 201 (a retry answers about an event that already exists).
+    const retry = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/jobwork/credit-notes/${note}/acknowledgment`,
+      body,
+      scopedAckHeaders,
+    );
+    assert.strictEqual(retry.status, 200, JSON.stringify(retry.body));
+    assert.strictEqual(retry.body['event_id'], first.body['event_id']);
+    assert.strictEqual((await creditNotes(orderId))[0]!['status'], 'acknowledged');
+
+    // Cleanup: a fresh, same-key ack attempt from ANOTHER person would be a different event target
+    // semantics check; instead just restore nothing - the run-scoped user is discarded by the next
+    // run. But prove the grant move actually took effect: a NEW acknowledgment from the scoped user
+    // is now a 404 (site collapse), never a success.
+    const freshKey = randomUUID();
+    const afterMove = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/jobwork/credit-notes/${note}/acknowledgment`,
+      { idempotency_key: freshKey, acknowledged_ref_ext: `ERP-${run}-grantmove2` },
+      scopedAckHeaders,
+    );
+    assert.strictEqual(afterMove.status, 404, JSON.stringify(afterMove.body));
+  });
+
   it('GET offcut-holdings returns the ledger and its credit-note trail', async () => {
     const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
     assert.strictEqual(
@@ -1820,7 +2346,11 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     );
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     const holdings = res.body['holdings'] as Record<string, unknown>[];
+    // D2 (chunk D code review 2026-09-06): prove the ledger is scoped to THIS order - a GET that
+    // leaked another order's disposed row would satisfy a bare length/status check.
     assert.strictEqual(holdings.length, 1);
+    assert.strictEqual(holdings[0]!['holding_id'], holdingId);
+    assert.strictEqual(holdings[0]!['service_order_id'], orderId);
     assert.strictEqual(holdings[0]!['status'], 'disposed');
     assert.strictEqual((res.body['credit_notes'] as unknown[]).length, 1);
   });
@@ -1840,6 +2370,187 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     const row = await holdingRow(holdingId);
     assert.strictEqual(row['status'], 'disposed');
     assert.strictEqual(row['clock_reconciled_qty'], '10.000');
+  });
+
+  it('D8 (chunk D code review 2026-09-06): an over-tolerance receipt makes the clock shortfall VISIBLE on the holding row', async () => {
+    // Challan says 1000 but the GRN over-receives 1040 (inside the 5% tolerance, and the receiving
+    // route COMMITS over-tolerance lines by design). The clock capacity is challan_qty = 1000, so a
+    // 1030 KG holding can only reconcile 1000 of it - the residual 30 must be visible as
+    // `quantity - clock_reconciled_qty` on the row the disposal wrote.
+    const orderId = await confirmedOrder();
+    const { lot } = await receive(orderId, '1040', { challanQty: '1000' });
+    const holdingId = await capture(orderId, lot, '1030');
+    const res = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'returned',
+      return_challan_number_ext: `RCH-${run}-${randomUUID().slice(0, 6)}`,
+    });
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const row = await holdingRow(holdingId);
+    assert.strictEqual(row['status'], 'disposed');
+    assert.strictEqual(row['quantity'], '1030.000');
+    assert.strictEqual(row['clock_reconciled_qty'], '1000.000');
+    const clock = await clockRow(orderId);
+    assert.strictEqual(clock['reconciled_qty'], '1000.000');
+  });
+
+  it('D8 (chunk D code review 2026-09-06): two ACQUIRED disposals reusing one disposal_id collide on the QC-hold PK as DUPLICATE_EVENT', async () => {
+    // The QC hold's PK is hold_id = disposal_id. Two acquired disposals on DIFFERENT holdings of the
+    // same order reusing one disposal_id must classify the second as DUPLICATE_EVENT (409), never a
+    // raw SQLSTATE 23505 500, and must roll back completely.
+    const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
+    const { lot: lot2 } = await receive(orderId, '100');
+    const holdingId2 = await capture(orderId, lot2, '10');
+    const reusedDisposalId = randomUUID();
+    const first = await postEvent(
+      disposalEnvelope(orderId, holdingId, {
+        disposition: 'acquired',
+        rate: INDICATIVE_RATE,
+        currency: 'INR',
+        disposal_id: reusedDisposalId,
+      }),
+    );
+    assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+    const second = await postEvent(
+      disposalEnvelope(orderId, holdingId2, {
+        disposition: 'acquired',
+        rate: INDICATIVE_RATE,
+        currency: 'INR',
+        disposal_id: reusedDisposalId,
+      }),
+    );
+    assert.strictEqual(second.status, 409, JSON.stringify(second.body));
+    assert.strictEqual(second.body['error_code'], 'DUPLICATE_EVENT');
+    assert.strictEqual((await holdingRow(holdingId2))['status'], 'retained');
+    const notes = await creditNotes(orderId);
+    assert.strictEqual(
+      notes.length,
+      1,
+      'the collided disposal must not raise a second credit note',
+    );
+  });
+
+  it('D8 (chunk D code review 2026-09-06): a positive rate whose computed value rounds to 0.0000 is a no-note acquisition, end to end', async () => {
+    // P9 pins the gate in the unit suite; this is the END-TO-END shape. quantity 0.001 at rate
+    // 0.0100 computes to 0.0000100 and rounds half-up to "0.0000" at the money scale, so the
+    // acquisition mints the owned lot but raises NO credit note - the BSD-5 free-retention branch
+    // must NOT be the only no-note path.
+    const { orderId, holdingId } = await retainedHolding({ quantity: '0.001' });
+    const res = await dispose(orderId, {
+      holding_id: holdingId,
+      disposition: 'acquired',
+      rate: '0.0100',
+      currency: 'INR',
+    });
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const row = await holdingRow(holdingId);
+    assert.strictEqual(row['disposition'], 'acquired');
+    assert.strictEqual(row['disposal_rate'], '0.0100');
+    assert.strictEqual(row['disposal_value'], '0.0000');
+    assert.ok(
+      row['owned_lot_id'],
+      'a rounded-to-zero acquisition still transfers title and mints a lot',
+    );
+    assert.strictEqual(await stockOnHand(row['owned_lot_id'] as string, 'owned'), '0.001');
+    assert.strictEqual(await stockOnHand(row['lot_id'] as string, 'offcut'), '0.000');
+    assert.deepStrictEqual(await creditNotes(orderId), []);
+  });
+
+  it('D8 (chunk D code review 2026-09-06): acknowledging an EARLIER delta in a two-delta chain is refused CREDIT_NOTE_SUPERSEDED', async () => {
+    // P8 stops at one revaluation: the original superseded by delta1. This arm proves the chain
+    // closes - after delta2 supersedes delta1, acknowledging delta1 is refused too, and only the
+    // CURRENT delta (delta2) acknowledges.
+    const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
+    assert.strictEqual(
+      (
+        await dispose(orderId, {
+          holding_id: holdingId,
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        })
+      ).status,
+      201,
+    );
+    assert.strictEqual(
+      (await revalue(orderId, { holding_id: holdingId, rate: '20.0000' })).status,
+      201,
+    );
+    assert.strictEqual(
+      (await revalue(orderId, { holding_id: holdingId, rate: '15.0000' })).status,
+      201,
+    );
+    const notes = await creditNotes(orderId);
+    const delta1 = notes[1]!['credit_note_id'] as string;
+    const delta2 = notes[2]!['credit_note_id'] as string;
+    assert.strictEqual(notes[2]!['supersedes_credit_note_id'], delta1);
+
+    const staleDelta = await acknowledgeCreditNote(delta1);
+    assert.strictEqual(staleDelta.status, 409, JSON.stringify(staleDelta.body));
+    assert.strictEqual(staleDelta.body['error_code'], 'CREDIT_NOTE_SUPERSEDED');
+    assert.ok(
+      staleDelta.traceId && (await auditedFor('CREDIT_NOTE_SUPERSEDED', staleDelta.traceId)),
+    );
+    assert.strictEqual((await creditNotes(orderId))[1]!['status'], 'pending');
+
+    const currentDelta = await acknowledgeCreditNote(delta2);
+    assert.strictEqual(currentDelta.status, 200, JSON.stringify(currentDelta.body));
+    assert.strictEqual((await creditNotes(orderId))[2]!['status'], 'acknowledged');
+    assert.strictEqual((await creditNotes(orderId))[0]!['status'], 'pending');
+  });
+
+  it('D9 (chunk D code review 2026-09-06): the latest-document pointer wins over created_at ordering - a delta seeded with an EARLIER created_at is still the chaining base', async () => {
+    // The chunk-B pointer fix (getLatestCreditNoteForHolding: the document nothing supersedes) was
+    // indistinguishable from created_at ordering because revaluations always create deltas AFTER
+    // their predecessor. Invert the two rows' created_at so the pointer and the clock disagree, and
+    // assert the POINTER wins - both in the projection and in the observable next chain link.
+    const { orderId, holdingId } = await invoicedOrderWithHolding({ offcutQty: '10' });
+    assert.strictEqual(
+      (
+        await dispose(orderId, {
+          holding_id: holdingId,
+          disposition: 'acquired',
+          rate: INDICATIVE_RATE,
+          currency: 'INR',
+        })
+      ).status,
+      201,
+    );
+    assert.strictEqual(
+      (await revalue(orderId, { holding_id: holdingId, rate: '20.0000' })).status,
+      201,
+    );
+    let notes = await creditNotes(orderId);
+    const original = notes[0]!['credit_note_id'] as string;
+    const delta1 = notes[1]!['credit_note_id'] as string;
+    // Invert: the original is now the LATEST-created row and delta1 the earliest.
+    await getAdminPool().query(
+      `UPDATE job_work_credit_note
+          SET created_at = CASE credit_note_id
+              WHEN $1 THEN now()
+              WHEN $2 THEN now() - interval '1 day'
+              ELSE created_at END
+        WHERE credit_note_id IN ($1, $2)`,
+      [original, delta1],
+    );
+    const client = await getAdminPool().connect();
+    try {
+      const latest = await getLatestCreditNoteForHolding(holdingId, client);
+      assert.ok(latest, 'the projection must still resolve a latest document');
+      assert.strictEqual(latest.credit_note_id, delta1);
+    } finally {
+      client.release();
+    }
+
+    // The observable consequence: the NEXT revaluation chains off delta1 (the pointer), never the
+    // original (the later-created row). Reverting the projection to `ORDER BY created_at DESC`
+    // makes this arm supersede the original and fail.
+    assert.strictEqual(
+      (await revalue(orderId, { holding_id: holdingId, rate: '15.0000' })).status,
+      201,
+    );
+    notes = await creditNotes(orderId);
+    assert.strictEqual(notes[2]!['supersedes_credit_note_id'], delta1);
   });
 
   it('P8 (code review 2026-09-06): acknowledging a SUPERSEDED credit note is refused CREDIT_NOTE_SUPERSEDED, and the current delta still acknowledges', async () => {
@@ -1873,10 +2584,7 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     assert.strictEqual(delta['document_kind'], 'delta');
     const ok = await acknowledgeCreditNote(delta['credit_note_id'] as string);
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
-    assert.strictEqual(
-      ((await creditNotes(orderId))[notes.length - 1]!)['status'],
-      'acknowledged',
-    );
+    assert.strictEqual((await creditNotes(orderId))[notes.length - 1]!['status'], 'acknowledged');
   });
 
   it('P6 (code review 2026-09-06): a disposal priced in a currency other than the order offcut currency is refused', async () => {
@@ -1985,7 +2693,7 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     );
     assert.strictEqual(badAck.status, 400, JSON.stringify(badAck.body));
     assert.strictEqual(badAck.body['error_code'], 'INVALID_PARAMS');
-    assert.strictEqual(((await creditNotes(orderId))[notes.length - 1]!)['status'], 'pending');
+    assert.strictEqual((await creditNotes(orderId))[notes.length - 1]!['status'], 'pending');
   });
 
   it('D4 (chunk D code review 2026-09-06): an idempotency key reused for a DIFFERENT target is refused, never replayed against the wrong record', async () => {
@@ -2031,8 +2739,8 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
       ).status,
       201,
     );
-    const noteOne = ((await creditNotes(orderId))[0]!)['credit_note_id'] as string;
-    const noteTwo = ((await creditNotes(otherNote.orderId))[0]!)['credit_note_id'] as string;
+    const noteOne = (await creditNotes(orderId))[0]!['credit_note_id'] as string;
+    const noteTwo = (await creditNotes(otherNote.orderId))[0]!['credit_note_id'] as string;
     const ackKey = randomUUID();
     const ackOne = await makeRequest(
       port,
@@ -2051,6 +2759,6 @@ describe('Story 9.7 Offcut Holding, Disposal and Valuation', () => {
     );
     assert.strictEqual(ackTwo.status, 409, JSON.stringify(ackTwo.body));
     assert.strictEqual(ackTwo.body['error_code'], 'DUPLICATE_EVENT');
-    assert.strictEqual(((await creditNotes(otherNote.orderId))[0]!)['status'], 'pending');
+    assert.strictEqual((await creditNotes(otherNote.orderId))[0]!['status'], 'pending');
   });
 });

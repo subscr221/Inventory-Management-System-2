@@ -38,6 +38,7 @@ import {
 } from '../../read/projections/job_work_billing_feed.js';
 import { billingFeedRetryWindowElapsed } from '../../adapters/erp/job-work-billing-feed.js';
 import { config } from '../../config/index.js';
+import { getPool } from '../../config/db.js';
 import {
   listReturnClocksForItc04,
   listDeemedSuppliesForItc04,
@@ -62,13 +63,24 @@ import {
   JOBWORK_OFFCUT_DISPOSED,
   JOBWORK_OFFCUT_REVALUED,
   JOBWORK_CREDIT_NOTE_ACKNOWLEDGED,
+  JOBWORK_OFFCUT_ACQUISITION_PROPOSED,
+  JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+  JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE,
   DISPOSAL_DERIVED_FIELDS,
   REVALUATION_DERIVED_FIELDS,
 } from '../../compliance/jobwork-offcut-disposal.js';
 import {
+  getOffcutHoldingById,
   listOffcutHoldingsByOrder,
   listRetainedOffcutHoldings,
 } from '../../read/projections/job_work_offcut_holding.js';
+import {
+  getOffcutAcquisitionProposalById,
+  listOffcutAcquisitionProposalsByOrder,
+} from '../../read/projections/job_work_offcut_acquisition_proposal.js';
+import type { JobWorkOffcutAcquisitionProposalRow } from '../../read/projections/job_work_offcut_acquisition_proposal.js';
+import { resolveApprover } from './indents.js';
+import { billableValueOf } from '../../adapters/erp/job-work-billing-feed.js';
 import {
   getCreditNoteById,
   listCreditNotesByOrder,
@@ -1826,6 +1838,44 @@ function requireFinanceControllerScope(req: IncomingMessage, siteId: string): vo
   }
 }
 
+/**
+ * Story 9.8 (AC 1): is this `acquired` posting in or above the governed DOA band, and therefore a
+ * PROPOSAL rather than a disposal? The event type has to be chosen before persistEvent, so the band
+ * is looked up here - and like every other pre-check in this file it is a CONVENIENCE, never the
+ * authority: the disposal applier refuses an above-band acquisition and the proposal applier refuses
+ * a below-band one, both under the order advisory lock, so the direct events door cannot use the
+ * wrong event type to slip past the second signature either way.
+ *
+ * Anything malformed answers `false` and lets the applier produce the real, classified refusal.
+ */
+/** Story 9.8: the subset of the disposal's caller fields a PROPOSAL payload accepts. */
+const PROPOSAL_CALLER_FIELDS: readonly string[] = ['rate', 'currency', 'location_id'];
+
+async function isAboveBandAcquisition(
+  body: Record<string, unknown>,
+  order: ServiceOrderRow,
+): Promise<boolean> {
+  if (body['disposition'] !== 'acquired') return false;
+  const rate = body['rate'];
+  const holdingId = body['holding_id'];
+  if (typeof rate !== 'string' || !/^\d{1,14}(\.\d{1,4})?$/.test(rate.trim())) return false;
+  if (typeof holdingId !== 'string') return false;
+  const holding = await getOffcutHoldingById(holdingId);
+  if (!holding || holding.service_order_id !== order.service_order_id) return false;
+  try {
+    const band = await resolveApprover(
+      JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE,
+      billableValueOf(holding.quantity, rate.trim()),
+    );
+    return band.requiresApproval;
+  } catch {
+    // resolveApprover raises APPROVAL_UNRESOLVED when a band MATCHED but nobody holds the role.
+    // That is an above-band acquisition, so route it to the proposal and let its applier refuse it
+    // under the lock - where the refusal is audited on both doors alike.
+    return true;
+  }
+}
+
 /** The two valuation write routes share everything but their field list and event type. */
 async function postOffcutValuationEvent(
   req: IncomingMessage,
@@ -1836,6 +1886,8 @@ async function postOffcutValuationEvent(
     idField: 'disposal_id' | 'revaluation_id';
     callerFields: readonly string[];
     derivedFields: readonly string[];
+    /** Story 9.8: only the disposal route can turn into a proposal. */
+    bandAware?: boolean;
   },
 ): Promise<void> {
   const body = requireBody(req, res);
@@ -1872,7 +1924,8 @@ async function postOffcutValuationEvent(
     // A retry of a SUCCESSFUL posting must replay, not trip the 404 pre-check afresh; persistEvent
     // is the idempotency authority. Site write access is re-checked on retries as well (the 9.5
     // chunk-3 fix), and so is the finance-controller gate.
-    const isRetry = (await findEventByIdempotencyKey(idempotencyKey)) !== null;
+    const retried = await findEventByIdempotencyKey(idempotencyKey);
+    const isRetry = retried !== null;
     const existing = await getServiceOrderById(serviceOrderId);
     if (!existing && !isRetry) {
       throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
@@ -1889,15 +1942,44 @@ async function postOffcutValuationEvent(
       });
     }
 
+    // Story 9.8 (AC 1, AC 10): choose the event type. A retry always follows the STORED event, so a
+    // band that moved between the original posting and the retry can never turn a replay into a
+    // spurious DUPLICATE_EVENT against a different event type.
+    let eventType = spec.eventType;
+    let idField: string = spec.idField;
+    let proposalFields: readonly string[] | null = null;
+    // Code review 2026-09-07 (Story 9.8 finding): this retry branch must be scoped to the SAME
+    // bandAware route the original posting could have come from - postOffcutValuationEvent is
+    // shared with the revaluation route (bandAware unset there), and without this gate a proposal
+    // idempotency key reused against the revaluation route would be accepted as a "replay" and
+    // answer with a proposal-shaped response from the wrong endpoint.
+    if (isRetry && spec.bandAware === true && retried!.event_type === JOBWORK_OFFCUT_ACQUISITION_PROPOSED) {
+      eventType = JOBWORK_OFFCUT_ACQUISITION_PROPOSED;
+      idField = 'proposal_id';
+      proposalFields = PROPOSAL_CALLER_FIELDS;
+    } else if (
+      !isRetry &&
+      spec.bandAware === true &&
+      (await isAboveBandAcquisition(body, existing))
+    ) {
+      eventType = JOBWORK_OFFCUT_ACQUISITION_PROPOSED;
+      idField = 'proposal_id';
+      proposalFields = PROPOSAL_CALLER_FIELDS;
+    }
+
     const postingId = (body[spec.idField] as string | undefined) ?? randomUUID();
     const payload: Record<string, unknown> = {
       service_order_id: serviceOrderId,
-      [spec.idField]: postingId,
+      [idField]: postingId,
       holding_id: body['holding_id'],
       site_id: existing.site_id,
       posted_by: actor.userId,
     };
-    for (const field of spec.callerFields) {
+    // A proposal carries no `disposition` and no return challan: it is an acquisition by
+    // construction, and nothing physical moves until it is approved. The fields it does not accept
+    // are DROPPED here rather than accepted-and-ignored - the closed shape in the applier refuses
+    // any that reach it, and offcutDisposalOpen still checks a supplied location against the row.
+    for (const field of proposalFields ?? spec.callerFields) {
       if (body[field] !== undefined) payload[field] = body[field];
     }
 
@@ -1905,7 +1987,7 @@ async function postOffcutValuationEvent(
       {
         stream_type: 'jobwork',
         stream_id: serviceOrderId,
-        event_type: spec.eventType,
+        event_type: eventType,
         payload,
         metadata: {
           correlation_id: randomUUID(),
@@ -1917,7 +1999,7 @@ async function postOffcutValuationEvent(
       } as any,
       auditCtxFor(req, actor, 201),
     );
-    const persistedId = replayIdOrReject(persisted, spec.eventType, spec.idField);
+    const persistedId = replayIdOrReject(persisted, eventType, idField);
     // Chunk C code review (2026-09-06): an idempotency key is per-OPERATION, and a replay must
     // describe the record the STORED event acted on - never the current request's body or a
     // different order's path (the 9.5 closure-route lesson). A key reused for a different target is
@@ -1942,12 +2024,27 @@ async function postOffcutValuationEvent(
       );
     }
     const holdings = await listOffcutHoldingsByOrder(serviceOrderId);
-    const holding =
-      holdings.find((row) => row.holding_id === storedPayload['holding_id']) ?? null;
+    const holding = holdings.find((row) => row.holding_id === storedPayload['holding_id']) ?? null;
     const credit_notes = await listCreditNotesByOrder(serviceOrderId);
     // A replay is not a posting: 200 with the same event_id, the house idiom. The status is decided
     // by the REPLAY, never by whether the client echoed the posting id (chunk C code review) - an
     // identical retry must read as a replay whether or not it named its own id.
+    //
+    // Story 9.8 (AC 1): an above-band acquisition answers with the PENDING PROPOSAL, never with a
+    // completed disposal. The holding it names is still `retained` and the caller must be able to
+    // see that from the response alone.
+    if (eventType === JOBWORK_OFFCUT_ACQUISITION_PROPOSED) {
+      const proposal = await getOffcutAcquisitionProposalById(persistedId);
+      sendJson(res, isRetry ? 200 : 201, {
+        event_id: persisted.event_id,
+        status: 'pending_approval',
+        proposal_id: persistedId,
+        proposal,
+        holding,
+        credit_notes,
+      });
+      return;
+    }
     sendJson(res, isRetry ? 200 : 201, {
       event_id: persisted.event_id,
       [spec.idField]: persistedId,
@@ -1970,20 +2067,20 @@ async function postOffcutValuationEvent(
   }
 }
 
-/** POST /service-orders/:serviceOrderId/offcut-disposals - AC 1, 2, 3, 4, 7. */
+/**
+ * POST /service-orders/:serviceOrderId/offcut-disposals - AC 1, 2, 3, 4, 7.
+ *
+ * Story 9.8 (AC 4): `approved_by` is GONE from the accepted fields. A request naming an approver is
+ * refused INVALID_PARAMS by the allow-list, and an above-band acquisition posted here becomes a
+ * PROPOSAL (AC 1) instead of a disposal - the signature is captured by the approve route below.
+ */
 const postServiceOrderOffcutDisposalBase: RouteHandler = (req, res, params) =>
   postOffcutValuationEvent(req, res, params, {
     eventType: JOBWORK_OFFCUT_DISPOSED,
     idField: 'disposal_id',
-    callerFields: [
-      'disposition',
-      'rate',
-      'currency',
-      'approved_by',
-      'return_challan_number_ext',
-      'location_id',
-    ],
+    callerFields: ['disposition', 'rate', 'currency', 'return_challan_number_ext', 'location_id'],
     derivedFields: DISPOSAL_DERIVED_FIELDS,
+    bandAware: true,
   });
 
 /** POST /service-orders/:serviceOrderId/offcut-revaluations - AC 5. */
@@ -2124,18 +2221,276 @@ const postCreditNoteAcknowledgmentBase: RouteHandler = async (req, res, params) 
   }
 };
 
-/** GET /service-orders/:serviceOrderId/offcut-holdings - the ledger plus its credit-note trail. */
+/**
+ * Story 9.8: POST /service-orders/:serviceOrderId/offcut-acquisition-proposals/:proposalId/approve
+ * - the SECOND SIGNATURE (AC 2, 3, 5, 10), ported from the Story 2.5 transfer-request precedent.
+ *
+ * The approver is `actorContext(req).userId` and nothing else: this route accepts no field naming an
+ * approver, and the applier compares that authenticated identity against the proposal row's frozen
+ * `resolved_approver_actor_id` under the order advisory lock. There is deliberately NO
+ * finance-controller gate here - the whole point is that a DIFFERENT person, the `cfo`, signs.
+ *
+ * Code review 2026-09-07: the transfer-request port is made EXACT. The proposal row is read
+ * FOR UPDATE inside the SAME transaction that persists the approval, so a concurrent propose,
+ * approve or order-close serializes here instead of slipping between two independent pre-reads:
+ * the order and the proposal can no longer move apart after they have been checked. The
+ * authorization pre-checks (still pending, resolved approver, dual control) run against that
+ * locked row and apply to the FRESH request only - a same-key retry answers against the STORED
+ * event (AD-16) and is never refused by them.
+ */
+const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, params) => {
+  const body = requireBody(req, res);
+  if (!body) return;
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+  const client = await getPool().connect();
+  let committed = false;
+  try {
+    const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
+    const proposalId = requireUuidParam(params, 'proposalId');
+    // Allow-list: no rate, no site, and above all no approver field (AC 4).
+    rejectFieldsOutside(body, ['idempotency_key']);
+    const idempotencyKey = requireIdempotencyKey(body);
+
+    // AC 10: a retry replays against the STORED event's target; a key reused for a DIFFERENT
+    // proposal is a client bug and is refused rather than answering success about a proposal the
+    // caller never approved (the 9.7 chunk-C target-binding lesson).
+    const retried = await findEventByIdempotencyKey(idempotencyKey);
+    const isRetry = retried !== null;
+    if (isRetry) {
+      const storedPayload = (retried!.payload as Record<string, unknown>) ?? {};
+      if (
+        storedPayload['proposal_id'] !== proposalId ||
+        storedPayload['service_order_id'] !== serviceOrderId
+      ) {
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'This idempotency key was already used for a different acquisition proposal',
+          {
+            stored_proposal_id: storedPayload['proposal_id'] ?? null,
+            stored_service_order_id: storedPayload['service_order_id'] ?? null,
+            request_proposal_id: proposalId,
+            request_service_order_id: serviceOrderId,
+          },
+        );
+      }
+    }
+
+    await client.query('BEGIN');
+    // The proposal row is read FOR UPDATE inside the transaction that persists the approval (code
+    // review 2026-09-07): a concurrent approve or order close blocks here, so the checks below and
+    // the applier's enforcement in persistEvent run against the SAME row, with no window in which
+    // the order and the proposal can move apart. This is the Story 2.5 transfer-request approve
+    // transaction, with the row lock as the mutual exclusion the status-UPDATE was there.
+    const proposal = await getOffcutAcquisitionProposalById(proposalId, client, true);
+    if (!proposal) {
+      throw new AppError(404, 'NOT_FOUND', 'Acquisition proposal not found', {
+        proposal_id: proposalId,
+      });
+    }
+    // The order is read from the PROPOSAL ROW, not the path: the envelope is bound to the row, and
+    // a path that disagrees with it is refused rather than silently approving another order.
+    const order = await getServiceOrderById(proposal.service_order_id, client, true);
+    if (!order) {
+      throw new AppError(404, 'SERVICE_ORDER_NOT_FOUND', 'Service order not found', {
+        service_order_id: proposal.service_order_id,
+      });
+    }
+    assertSiteWriteAccess(req, order.site_id);
+    if (proposal.service_order_id !== serviceOrderId) {
+      throw new AppError(404, 'NOT_FOUND', 'Acquisition proposal not found', {
+        proposal_id: proposalId,
+        service_order_id: serviceOrderId,
+      });
+    }
+    // The payload site is bound to the ROW, exactly as the credit-note acknowledgment binds it. The
+    // applier re-checks this under the order advisory lock; this mirror keeps the route's own
+    // envelope from ever naming a site the row does not own.
+    if (proposal.site_id !== order.site_id) {
+      throw new AppError(
+        409,
+        'SOURCE_DOCUMENT_REQUIRED',
+        'The acquisition proposal belongs to a different site than its service order',
+        {
+          proposal_id: proposal.proposal_id,
+          proposal_site_id: proposal.site_id,
+          site_id: order.site_id,
+        },
+      );
+    }
+
+    // The authorization pre-checks run on the FRESH request only (code review 2026-09-07). On a
+    // replay the proposal row is already approved and the original approver may be long gone;
+    // AD-16 demands a same-key retry answer against the STORED event, so nothing here may refuse it
+    // (the 7.7 BD-2 lesson). The applier still raises identical codes under the order advisory lock
+    // on the direct-events door, so refusing the wrong caller here never weakens that door - it
+    // merely fails the wrong route caller before any event work, instead of after.
+    if (!isRetry) {
+      if (proposal.status !== 'pending') {
+        throw new AppError(
+          409,
+          'DUPLICATE_EVENT',
+          'This acquisition proposal is no longer awaiting approval',
+          {
+            proposal_id: proposal.proposal_id,
+            status: proposal.status,
+            decided_at: proposal.decided_at,
+          },
+        );
+      }
+      // AC 3, route-door half. The refusal never names the approver (the propose-time comment in
+      // the seam): the caller either is them or has no business knowing who is. The audit is written
+      // HERE, not by the route catch: APPROVAL_REQUIRED sits in APPLIER_SELF_AUDITED_CODES, which
+      // exists to skip a second row when the APPLIER self-audits - but this refusal never reaches
+      // the applier, so skipping here would leave it unaudited entirely (the 9.8 test caught this).
+      if (proposal.resolved_approver_actor_id !== actor.userId) {
+        const refusal = new AppError(
+          403,
+          'APPROVAL_REQUIRED',
+          'Only the resolved DOA approver may approve this offcut acquisition',
+          {
+            proposal_id: proposal.proposal_id,
+            service_order_id: order.service_order_id,
+            acting_user_id: actor.userId,
+          },
+        );
+        await auditFailSafe(req, actor, refusal, {
+          proposal_id: proposal.proposal_id,
+          event_type: JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+        });
+        throw refusal;
+      }
+      // AC 5, route-door half of the dual control. The row constraint and the applier also refuse
+      // this; here it is caught before the transaction does any work. Audited for the same reason
+      // as the AC 3 half above.
+      if (actor.userId === proposal.proposed_by) {
+        const refusal = new AppError(
+          403,
+          'APPROVAL_REQUIRED',
+          'An offcut acquisition is dual control: the approver must not be the proposer',
+          {
+            proposal_id: proposal.proposal_id,
+            service_order_id: order.service_order_id,
+            acting_user_id: actor.userId,
+          },
+        );
+        await auditFailSafe(req, actor, refusal, {
+          proposal_id: proposal.proposal_id,
+          event_type: JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+        });
+        throw refusal;
+      }
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'jobwork',
+        stream_id: serviceOrderId,
+        event_type: JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+        payload: {
+          service_order_id: serviceOrderId,
+          proposal_id: proposalId,
+          site_id: order.site_id,
+          approved_by: actor.userId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKey,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, isRetry ? 200 : 201),
+      client,
+    );
+    await client.query('COMMIT');
+    committed = true;
+
+    const persistedId = replayIdOrReject(
+      persisted,
+      JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+      'proposal_id',
+    );
+    // The proposal is re-read AFTER the commit, in the same committed view the approval just
+    // wrote, so the response can never describe a row a concurrent writer changed between the
+    // event and the read (code review 2026-09-07). On a replay this returns the ORIGINAL
+    // approval's row - the storage shape of the committed event, not a newer guess.
+    const decided = await getOffcutAcquisitionProposalById(persistedId);
+    const holdings = await listOffcutHoldingsByOrder(serviceOrderId);
+    const holding = decided
+      ? (holdings.find((row) => row.holding_id === decided.holding_id) ?? null)
+      : null;
+    const credit_notes = await listCreditNotesByOrder(serviceOrderId);
+    sendJson(res, isRetry ? 200 : 201, {
+      event_id: persisted.event_id,
+      proposal_id: persistedId,
+      proposal: decided,
+      holding,
+      credit_notes,
+    });
+  } catch (err: unknown) {
+    if (!committed) {
+      await client.query('ROLLBACK').catch(() => undefined);
+    }
+    if (
+      err instanceof AppError &&
+      AUDITED_REJECTIONS.has(err.errorCode) &&
+      !APPLIER_SELF_AUDITED_CODES.has(err.errorCode)
+    ) {
+      await auditFailSafe(req, actor, err, {
+        proposal_id: params?.['proposalId'] ?? null,
+        event_type: JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+      });
+    }
+    sendAppError(req, res, err);
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * GET /service-orders/:serviceOrderId/offcut-holdings - the ledger plus its credit-note trail, and
+ * since Story 9.8 (AC 7) any acquisition proposal awaiting signature. A `retained` holding carrying
+ * a `pending_approval` block is one whose acquisition has been priced and proposed but NOT signed:
+ * the material is still the customer's, the Section 143 clock is still running (AC 8), and the CFO
+ * or an auditor can see exactly what is waiting for them without guessing.
+ */
 const listServiceOrderOffcutHoldingsBase: RouteHandler = async (req, res, params) => {
   try {
     const serviceOrderId = requireUuidParam(params, 'serviceOrderId');
     const order = await readableOrderOr404(req, res, serviceOrderId);
     if (!order) return;
-    const holdings = await listOffcutHoldingsByOrder(serviceOrderId);
+    const rows = await listOffcutHoldingsByOrder(serviceOrderId);
+    const proposals = await listOffcutAcquisitionProposalsByOrder(serviceOrderId);
+    const pendingByHolding = new Map<string, JobWorkOffcutAcquisitionProposalRow>();
+    for (const proposal of proposals) {
+      if (proposal.status === 'pending') pendingByHolding.set(proposal.holding_id, proposal);
+    }
+    const holdings = rows.map((row) => {
+      const pending = pendingByHolding.get(row.holding_id);
+      return {
+        ...row,
+        pending_approval: pending
+          ? {
+              proposal_id: pending.proposal_id,
+              rate: pending.rate,
+              currency: pending.currency,
+              proposed_value: pending.proposed_value,
+              resolved_approver_actor_id: pending.resolved_approver_actor_id,
+              proposed_by: pending.proposed_by,
+              created_at: pending.created_at,
+            }
+          : null,
+      };
+    });
     const credit_notes = await listCreditNotesByOrder(serviceOrderId);
     sendJson(res, 200, {
       service_order_id: serviceOrderId,
       customer_party_code: order.customer_party_code,
       holdings,
+      acquisition_proposals: proposals,
       credit_notes,
     });
   } catch (err: unknown) {
@@ -2277,3 +2632,8 @@ export const listServiceOrderOffcutHoldingsHandler = requireRole({
   module: 'jobwork',
   functionScope: 'read',
 })(listServiceOrderOffcutHoldingsBase);
+
+export const approveOffcutAcquisitionProposalHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(approveOffcutAcquisitionProposalBase);

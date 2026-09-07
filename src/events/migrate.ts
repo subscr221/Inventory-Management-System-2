@@ -263,6 +263,11 @@ const MIGRATIONS = [
   // and its new guarded ADD COLUMN lines (the disposal facts) re-apply harmlessly. FK-shaped
   // service_order_id / holding_id, no declared FK (the Epic 9 house convention).
   '../../read/projections/job_work_credit_note.sql',
+  // Story 9.8: the offcut acquisition PROPOSAL - the persisted middle state that turns the DOA
+  // second signature into a real authenticated CFO action. Appended after the 9.7 file; no earlier
+  // file is edited by this story. FK-shaped service_order_id / holding_id, no declared FK (the
+  // Epic 9 house convention).
+  '../../read/projections/job_work_offcut_acquisition_proposal.sql',
 ];
 
 async function migrate(): Promise<void> {

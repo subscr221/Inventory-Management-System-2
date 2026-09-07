@@ -383,6 +383,7 @@ import {
   postServiceOrderOffcutRevaluationHandler,
   postCreditNoteAcknowledgmentHandler,
   listServiceOrderOffcutHoldingsHandler,
+  approveOffcutAcquisitionProposalHandler,
 } from './api/v1/service-orders.js';
 import {
   createProductionOrderHandler,
@@ -1139,6 +1140,12 @@ export function createAppRouter(): Router {
   router.get(
     '/api/v1/service-orders/:serviceOrderId/offcut-holdings',
     listServiceOrderOffcutHoldingsHandler,
+  );
+  // Story 9.8: the CFO's own authenticated second signature on an above-band offcut acquisition.
+  // Deliberately NOT finance-controller gated - a different person signs than prices.
+  router.post(
+    '/api/v1/service-orders/:serviceOrderId/offcut-acquisition-proposals/:proposalId/approve',
+    approveOffcutAcquisitionProposalHandler,
   );
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the

@@ -99,9 +99,20 @@ function assertPayloadSiteWriteAccess(
  * site B's offcut. The ownership.agreement_set role check above is the precedent for a door-level
  * function gate.
  */
+/**
+ * Story 9.8 (AC 9): the proposal JOINS this set - proposing an acquisition is the pricing decision
+ * Story 9.7 Task 7.2 gated, only now it lands in a proposal row instead of a disposal.
+ *
+ * `jobwork.offcut_acquisition_approved` is deliberately NOT here. Its gate is a different one and it
+ * cannot live on this door: the approver is the `cfo`, who holds no finance_controller assignment
+ * (they are two separate real people by ruling - that separation IS the control), and the identity
+ * that matters is the one FROZEN ON THE PROPOSAL ROW, which this door has not read. The applier
+ * performs that check against the row, so both doors meet the identical wall.
+ */
 const OFFCUT_VALUATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'jobwork.offcut_disposed',
   'jobwork.offcut_revalued',
+  'jobwork.offcut_acquisition_proposed',
 ]);
 const OFFCUT_VALUATION_ROLES: ReadonlySet<string> = new Set(['finance_controller']);
 

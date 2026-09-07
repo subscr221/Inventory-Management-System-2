@@ -650,6 +650,24 @@ export function classifyDuplicate(err: unknown, entryId: string, eventId: string
         409,
       );
     }
+    // Story 9.7 chunk D code review (2026-09-07): the acquired disposal also mints an owned lot and
+    // a Story 8.5 governed hold, both keyed by the DISPOSAL id. Two deliveries reusing one disposal
+    // id - or a delivery replaying after the original commit - collide on `lot_master_pkey` /
+    // `uq_lot_master_lot_number` (createLot) or `qc_quality_hold_pkey` (insertQcQualityHold) exactly
+    // as the credit-note insert does. The catch comments in jobwork-offcut-disposal.ts claim this
+    // classification; until these arms existed the collision rethrew and surfaced as a raw PG 500.
+    if (
+      constraint === 'lot_master_pkey' ||
+      constraint === 'uq_lot_master_lot_number' ||
+      constraint === 'qc_quality_hold_pkey'
+    ) {
+      reject(
+        'DUPLICATE_EVENT',
+        'An owned lot or quality-hold row already exists for this disposal',
+        { disposal_id: entryId, constraint },
+        409,
+      );
+    }
   }
   throw err;
 }

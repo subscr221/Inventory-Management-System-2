@@ -259,6 +259,9 @@ import {
   applyJobworkOffcutDisposed,
   applyJobworkOffcutRevalued,
   applyJobworkCreditNoteAcknowledged,
+  // Story 9.8: the two-step second signature on an above-band acquisition.
+  applyJobworkOffcutAcquisitionProposed,
+  applyJobworkOffcutAcquisitionApproved,
 } from '../compliance/jobwork-offcut-disposal.js';
 import {
   assertProductionMaterialShape,
@@ -1192,6 +1195,10 @@ export async function persistEvent(
     // credit notes both raise. Chained after the billing feed because the disposal CITES the
     // acknowledged feed's ERP document reference.
     await applyJobworkOffcutDisposed(envelope, client, eventId, auditCtx);
+    // Story 9.8: propose, then approve. The approval runs the same disposal effects the
+    // single-event below-band disposal above runs, gated on the CFO's authenticated identity.
+    await applyJobworkOffcutAcquisitionProposed(envelope, client, eventId, auditCtx);
+    await applyJobworkOffcutAcquisitionApproved(envelope, client, eventId, auditCtx);
     await applyJobworkOffcutRevalued(envelope, client, eventId, auditCtx);
     await applyJobworkCreditNoteAcknowledged(envelope, client, eventId, auditCtx);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and

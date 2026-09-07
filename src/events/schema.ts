@@ -4823,8 +4823,6 @@ export interface JobworkOffcutDisposedPayload {
   rate?: string;
   /** `acquired` only, and mandatory with `rate`. */
   currency?: string;
-  /** `acquired` only, above the DOA band: the resolved `cfo` approver, who must NOT be the poster. */
-  approved_by?: string;
   /** `returned` only, mandatory: the challan the material goes back under. */
   return_challan_number_ext?: string;
   /** `returned` only, mandatory: the location the offcut stock is issued from. */
@@ -4897,6 +4895,70 @@ export interface JobworkCreditNoteAcknowledgedPayload {
 export interface JobworkCreditNoteAcknowledgedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'jobwork.credit_note_acknowledged';
   payload: JobworkCreditNoteAcknowledgedPayload;
+}
+
+/**
+ * Story 9.8 (extends Story 9.7 AC 7): an above-band offcut acquisition is PROPOSED, not disposed.
+ * This event replaces the above-band branch of `jobwork.offcut_disposed` entirely - it persists the
+ * proposal, freezes the resolved DOA approver, and performs NO disposal effect: no stock moves, no
+ * lot is minted, no credit note is raised and the Section 143 clock keeps running (AC 1, AC 8).
+ *
+ * There is deliberately NO approver field a caller can name. The Story 9.7 interim let the poster
+ * assert an `approved_by` that merely had to match resolveApprover's output, which is a string, not
+ * a signature; `resolved_approver_actor_id` below is SERVER-DERIVED and written back by the applier.
+ */
+export interface JobworkOffcutAcquisitionProposedPayload {
+  service_order_id: string;
+  proposal_id: string;
+  holding_id: string;
+  site_id: string;
+  rate: string;
+  currency: string;
+  /** Optional; verified against the holding row. A proposal moves no stock. */
+  location_id?: string;
+  posted_by: string;
+  // Server-derived below. Refused on input, written back by the applier (the 9.2 idiom).
+  /** quantity x rate at the money scale - the value the DOA band was matched against. */
+  proposed_value?: string;
+  /** service_order.offcut_rate at the moment of proposal, stored beside the negotiated rate. */
+  indicative_rate?: string | null;
+  doa_entry_id?: string;
+  /** Whom resolveApprover named, frozen here and never re-resolved at approve time. */
+  resolved_approver_actor_id?: string;
+}
+
+export interface JobworkOffcutAcquisitionProposedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.offcut_acquisition_proposed';
+  payload: JobworkOffcutAcquisitionProposedPayload;
+}
+
+/**
+ * Story 9.8: the SECOND SIGNATURE. Its applier performs the Story 9.7 AC 1 / AC 3 disposal effects
+ * for the `acquired` branch - title transfers, an owned lot is minted under a QC hold, the credit
+ * note is raised against the cited service invoice and the Section 143 clock stops.
+ *
+ * `approved_by` is pinned to the AUTHENTICATED actor (the posted_by idiom) and is additionally
+ * compared against the PROPOSAL ROW's frozen `resolved_approver_actor_id` inside the applier, so a
+ * forged value cannot walk past the signature on either door. The proposal row also carries the
+ * holding this approves - the caller never names it, and cannot redirect the approval at another.
+ */
+export interface JobworkOffcutAcquisitionApprovedPayload {
+  service_order_id: string;
+  proposal_id: string;
+  site_id: string;
+  approved_by: string;
+  // Server-derived below.
+  holding_id?: string;
+  disposal_value?: string | null;
+  indicative_rate?: string | null;
+  credit_note_id?: string | null;
+  owned_lot_number?: string | null;
+  clock_reconciled_qty?: string;
+}
+
+export interface JobworkOffcutAcquisitionApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.offcut_acquisition_approved';
+  payload: JobworkOffcutAcquisitionApprovedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -5879,6 +5941,16 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'jobwork.credit_note_acknowledged': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  // Story 9.8: the two-step acquisition signature. Both ride the order's own 'jobwork' stream, like
+  // the 9.7 events they split apart.
+  'jobwork.offcut_acquisition_proposed': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  'jobwork.offcut_acquisition_approved': {
     streamType: 'jobwork',
     requiresBusinessStream: false,
   },
