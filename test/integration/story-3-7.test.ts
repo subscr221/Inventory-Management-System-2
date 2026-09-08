@@ -1,6 +1,6 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { request as httpRequest, type Server, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createAppServer } from '../../src/server.js';
@@ -668,6 +668,23 @@ describe('Story 3.7 - Packing, Shipping, and Dispatch Documents', () => {
     ]);
 
     await generateShippingDocuments(port, warehouseManager.token, dispatchOrderId);
+
+    // Story 11.2: an ERP-backed dispatch is e-invoiceable, so the IRN must be recorded before the
+    // final dispatch can succeed. Seed the coverage row directly (the projection is app_user-write).
+    await getPool().query(
+      `INSERT INTO dispatch_irn
+         (dispatch_order_id, invoice_number_ext, irn_ext, so_number_ext, site_id, recorded_by, source_event_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        dispatchOrderId,
+        `INV-005-${run}`,
+        createHash('sha256').update(`IRN-005-${run}`).digest('hex'),
+        `SO-005-${run}`,
+        siteId,
+        warehouseManager.userId,
+        randomUUID(),
+      ],
+    );
 
     const eventId = await dispatchOrder(port, warehouseManager.token, dispatchOrderId);
 

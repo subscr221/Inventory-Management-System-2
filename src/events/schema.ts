@@ -575,6 +575,27 @@ export interface DispatchDispatchedEnvelope extends Omit<EventEnvelope, 'payload
   payload: DispatchDispatchedPayload;
 }
 
+// Story 11.2: outbound IRN coverage recording. The payload is the coverage list: one invoice
+// (invoice_number_ext) with one IRN (irn_ext), covering a set of dispatch orders. site_id is
+// REQUIRED so assertPayloadSiteWriteAccess on the direct events door has something to bind to.
+// The recording clerk is NOT a payload field: the applier takes it from metadata.actor.user_id,
+// which both doors pin to the authenticated user (a poster-supplied recorded_by was the Story 9.9
+// approved_by attribution class; code review 2026-09-09). so_number_ext is server-derived from
+// erp_sales_order and refused on input (see assertDispatchIrnShape). irn_ext is the IRP's
+// 64-character hexadecimal hash, lower-cased before storage.
+export interface DispatchIrnRecordedPayload {
+  invoice_number_ext: string;
+  irn_ext: string;
+  dispatch_order_ids: string[];
+  irp_acknowledged_at?: string | null;
+  site_id: string;
+}
+
+export interface DispatchIrnRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'dispatch.irn_recorded';
+  payload: DispatchIrnRecordedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Story 3.8: warehouse task management - configurable SLA thresholds
 // ---------------------------------------------------------------------------
@@ -4853,6 +4874,12 @@ export interface JobworkOffcutDisposedEnvelope extends Omit<EventEnvelope, 'payl
  * That split - immutable documents, current value on the ledger row - is the distinction AC 5 draws.
  * The DOA band applies to the REVALUED value on the same terms as the disposal (open question 5),
  * or a below-band disposal followed by a revaluation would be an unsigned route to any value.
+ *
+ * STORY 9.9: there is no `approved_by` on this payload any more. It used to be a string the POSTER
+ * supplied, merely checked against resolveApprover's output - which made the CFO's user id the only
+ * barrier to a finance controller signing their own revaluation. This event is now BELOW-BAND ONLY
+ * and carries no signature at all; in or above a band it is refused APPROVAL_REQUIRED and the
+ * caller must propose it (`jobwork.offcut_revaluation_proposed`) instead.
  */
 export interface JobworkOffcutRevaluedPayload {
   service_order_id: string;
@@ -4861,7 +4888,6 @@ export interface JobworkOffcutRevaluedPayload {
   site_id: string;
   rate: string;
   currency: string;
-  approved_by?: string;
   posted_by: string;
   // Server-derived below.
   /** new value minus the value of the document being superseded; signed, may be negative. */
@@ -4959,6 +4985,74 @@ export interface JobworkOffcutAcquisitionApprovedPayload {
 export interface JobworkOffcutAcquisitionApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'jobwork.offcut_acquisition_approved';
   payload: JobworkOffcutAcquisitionApprovedPayload;
+}
+
+/**
+ * Story 9.9 (closes deferred-work 9.8-2): an above-band offcut REVALUATION is PROPOSED, not
+ * revalued. Exactly what Story 9.8 did to the acquisition path, applied to the path that was left
+ * on the Story 9.7 claimed-approver contract. The applier runs every precondition the revaluation
+ * applier runs - the order accepts billing, the holding is `disposed`/`acquired`, a latest credit
+ * note exists, the currency matches that document - BEFORE writing the proposal, so a proposal is
+ * never raised for a revaluation that could not have succeeded. It performs NOTHING: no delta
+ * credit note, no holding update, no clock movement (AC 1).
+ *
+ * `supersedes_credit_note_id` is SERVER-DERIVED and frozen on the proposal row: a below-band
+ * revaluation needs no signature and can land between propose and approve, so the document the
+ * delta chains off can move, and approving against a stale one would silently corrupt the running
+ * correction (AC 5).
+ */
+export interface JobworkOffcutRevaluationProposedPayload {
+  service_order_id: string;
+  proposal_id: string;
+  holding_id: string;
+  site_id: string;
+  rate: string;
+  currency: string;
+  posted_by: string;
+  // Server-derived below. Refused on input, written back by the applier (the 9.2 idiom).
+  /** quantity x rate at the money scale - the value the DOA band was matched against. */
+  proposed_value?: string;
+  /** The holding's indicative rate, carried onto the delta document when this is approved. */
+  indicative_rate?: string | null;
+  doa_entry_id?: string;
+  /** Whom resolveApprover named, frozen here and never re-resolved at approve time. */
+  resolved_approver_actor_id?: string;
+  /** The latest credit note at propose time - the document the delta will supersede (AC 5). */
+  supersedes_credit_note_id?: string;
+}
+
+export interface JobworkOffcutRevaluationProposedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.offcut_revaluation_proposed';
+  payload: JobworkOffcutRevaluationProposedPayload;
+}
+
+/**
+ * Story 9.9: the SECOND SIGNATURE on a revaluation, and the ONLY way an above-band revaluation
+ * reaches the Story 9.7 AC 5 effects - a delta credit note superseding the latest document and the
+ * holding row carrying the new current value.
+ *
+ * `approved_by` is pinned to the AUTHENTICATED actor (the posted_by idiom) and is additionally
+ * compared against the PROPOSAL ROW's frozen `resolved_approver_actor_id` inside the applier. The
+ * caller never names the holding, the rate or the document being superseded: all three are read
+ * from the frozen row, so an approval cannot be redirected or repriced on its way through.
+ */
+export interface JobworkOffcutRevaluationApprovedPayload {
+  service_order_id: string;
+  proposal_id: string;
+  site_id: string;
+  approved_by: string;
+  // Server-derived below.
+  holding_id?: string;
+  /** new value minus the value of the document superseded; signed, may be negative. */
+  delta_value?: string;
+  credit_note_id?: string;
+  supersedes_credit_note_id?: string;
+  disposal_value?: string;
+}
+
+export interface JobworkOffcutRevaluationApprovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'jobwork.offcut_revaluation_approved';
+  payload: JobworkOffcutRevaluationApprovedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -5103,6 +5197,14 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'dispatch.dispatched': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  // Story 11.2: outbound IRN recording on the existing 'warehouse' stream. The IRN arrives from the
+  // IRP THROUGH ERP, but recording it is this platform's own write: it must NOT be named erp.* or
+  // ride the erp stream, which assertErpReadOnly 405s. It posts no valuated movement of its own, so
+  // business-stream tagging is not gated on it, matching its three dispatch siblings.
+  'dispatch.irn_recorded': {
     streamType: 'warehouse',
     requiresBusinessStream: false,
   },
@@ -5951,6 +6053,18 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'jobwork.offcut_acquisition_approved': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  // Story 9.9: the same two-step signature on the REVALUATION path. Same stream and the same
+  // requiresBusinessStream setting as their acquisition counterparts above - Story 9.6's group-A
+  // review found three event types missing from this registry, where the consumer fails OPEN and
+  // the omission is therefore invisible.
+  'jobwork.offcut_revaluation_proposed': {
+    streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  'jobwork.offcut_revaluation_approved': {
     streamType: 'jobwork',
     requiresBusinessStream: false,
   },

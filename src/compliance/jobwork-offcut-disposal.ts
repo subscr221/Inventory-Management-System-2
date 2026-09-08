@@ -6,6 +6,8 @@ import type {
   JobworkOffcutAcquisitionApprovedPayload,
   JobworkOffcutAcquisitionProposedPayload,
   JobworkOffcutDisposedPayload,
+  JobworkOffcutRevaluationApprovedPayload,
+  JobworkOffcutRevaluationProposedPayload,
   JobworkOffcutRevaluedPayload,
 } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
@@ -26,11 +28,13 @@ import {
   insertCreditNote,
   markCreditNoteAcknowledged,
 } from '../read/projections/job_work_credit_note.js';
+import type { JobWorkCreditNoteRow } from '../read/projections/job_work_credit_note.js';
 import {
   getOffcutAcquisitionProposalById,
   getPendingProposalForHolding,
   insertOffcutAcquisitionProposal,
   markOffcutAcquisitionProposalApproved,
+  markOffcutRevaluationProposalApproved,
 } from '../read/projections/job_work_offcut_acquisition_proposal.js';
 import type { ServiceOrderRow } from '../read/projections/service_order.js';
 import { getServiceOrderById } from '../read/projections/service_order.js';
@@ -104,12 +108,17 @@ export const JOBWORK_CREDIT_NOTE_ACKNOWLEDGED = 'jobwork.credit_note_acknowledge
 /** Story 9.8: the two-step second signature on an above-band acquisition. */
 export const JOBWORK_OFFCUT_ACQUISITION_PROPOSED = 'jobwork.offcut_acquisition_proposed';
 export const JOBWORK_OFFCUT_ACQUISITION_APPROVED = 'jobwork.offcut_acquisition_approved';
+/** Story 9.9: the same two-step second signature on an above-band REVALUATION. */
+export const JOBWORK_OFFCUT_REVALUATION_PROPOSED = 'jobwork.offcut_revaluation_proposed';
+export const JOBWORK_OFFCUT_REVALUATION_APPROVED = 'jobwork.offcut_revaluation_approved';
 const OFFCUT_DISPOSAL_EVENT_TYPES = new Set([
   JOBWORK_OFFCUT_DISPOSED,
   JOBWORK_OFFCUT_REVALUED,
   JOBWORK_CREDIT_NOTE_ACKNOWLEDGED,
   JOBWORK_OFFCUT_ACQUISITION_PROPOSED,
   JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+  JOBWORK_OFFCUT_REVALUATION_PROPOSED,
+  JOBWORK_OFFCUT_REVALUATION_APPROVED,
 ]);
 
 /**
@@ -198,6 +207,14 @@ export const DISPOSAL_DERIVED_FIELDS = [
   'clock_reconciled_qty',
 ] as const;
 
+/**
+ * Story 9.9 (AC 3), the same deletion Story 9.8 made on the disposal: `approved_by` is GONE. It was
+ * a string the POSTER supplied and the seam merely compared against resolveApprover's output, so
+ * the CFO's user id was the entire barrier - and a user id is not a secret. There is now no field
+ * on a revaluation through which any caller can name an approver, on either door. An above-band
+ * revaluation is not signed here at all: it is proposed (JOBWORK_OFFCUT_REVALUATION_PROPOSED) and
+ * approved by the CFO's own authenticated action.
+ */
 const REVALUATION_FIELDS = new Set([
   'service_order_id',
   'revaluation_id',
@@ -205,10 +222,46 @@ const REVALUATION_FIELDS = new Set([
   'site_id',
   'rate',
   'currency',
-  'approved_by',
   'posted_by',
 ]);
 export const REVALUATION_DERIVED_FIELDS = [
+  'delta_value',
+  'credit_note_id',
+  'supersedes_credit_note_id',
+  'disposal_value',
+] as const;
+
+/** Story 9.9: the revaluation proposal's caller-supplied shape. No approver field exists (AC 3). */
+const REVALUATION_PROPOSAL_FIELDS = new Set([
+  'service_order_id',
+  'proposal_id',
+  'holding_id',
+  'site_id',
+  'rate',
+  'currency',
+  'posted_by',
+]);
+export const REVALUATION_PROPOSAL_DERIVED_FIELDS = [
+  'proposed_value',
+  'indicative_rate',
+  'doa_entry_id',
+  'resolved_approver_actor_id',
+  'supersedes_credit_note_id',
+] as const;
+
+/**
+ * Story 9.9: the revaluation approval's shape. The caller names the PROPOSAL, never the holding,
+ * the rate, the document being superseded or an approver - every one of those is read from the
+ * frozen proposal row.
+ */
+const REVALUATION_APPROVAL_FIELDS = new Set([
+  'service_order_id',
+  'proposal_id',
+  'site_id',
+  'approved_by',
+]);
+export const REVALUATION_APPROVAL_DERIVED_FIELDS = [
+  'holding_id',
   'delta_value',
   'credit_note_id',
   'supersedes_credit_note_id',
@@ -563,14 +616,52 @@ export function assertJobworkOffcutDisposalShape(envelope: EventEnvelope): void 
     }
     assertMoney(p['rate'], 'rate');
     assertCurrency(p['currency'], 'currency');
-    if (p['approved_by'] !== undefined && !isUuid(p['approved_by'])) {
-      reject('INVALID_PARAMS', 'approved_by must be a UUID when supplied');
-    }
+    // Story 9.9 (AC 3): the `approved_by must be a UUID when supplied` branch that used to stand
+    // here is DELETED along with the field. assertClosedShape above now refuses the field outright,
+    // which is what closes the direct events door as well as the route allow-list.
     if (p['posted_by'] !== envelope.metadata.actor.user_id) {
       reject(
         'FUNCTION_ACCESS_DENIED',
         'posted_by must be the authenticated actor posting the revaluation',
         { posted_by: p['posted_by'], actor_user_id: envelope.metadata.actor.user_id },
+        403,
+      );
+    }
+    return;
+  }
+  if (envelope.event_type === JOBWORK_OFFCUT_REVALUATION_PROPOSED) {
+    assertClosedShape(p, REVALUATION_PROPOSAL_FIELDS, REVALUATION_PROPOSAL_DERIVED_FIELDS);
+    for (const field of ['service_order_id', 'proposal_id', 'holding_id', 'site_id', 'posted_by']) {
+      if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
+    }
+    assertMoney(p['rate'], 'rate');
+    assertCurrency(p['currency'], 'currency');
+    // proposed_by is stamped from this field and the dual-control comparison is made against it, so
+    // a forged posted_by would let one person propose a revaluation in another's name.
+    if (p['posted_by'] !== envelope.metadata.actor.user_id) {
+      reject(
+        'FUNCTION_ACCESS_DENIED',
+        'posted_by must be the authenticated actor proposing the revaluation',
+        { posted_by: p['posted_by'], actor_user_id: envelope.metadata.actor.user_id },
+        403,
+      );
+    }
+    return;
+  }
+  if (envelope.event_type === JOBWORK_OFFCUT_REVALUATION_APPROVED) {
+    assertClosedShape(p, REVALUATION_APPROVAL_FIELDS, REVALUATION_APPROVAL_DERIVED_FIELDS);
+    for (const field of ['service_order_id', 'proposal_id', 'site_id', 'approved_by']) {
+      if (!isUuid(p[field])) reject('INVALID_PARAMS', `${field} is required and must be a UUID`);
+    }
+    // THE POINT OF STORY 9.9, and identical to the acquisition approval above. The approver is the
+    // AUTHENTICATED caller and nothing else: this pins the payload to the session, and the applier
+    // then pins the session to the proposal row's frozen resolved_approver_actor_id. A request body
+    // can no longer name who signed a revaluation either.
+    if (p['approved_by'] !== envelope.metadata.actor.user_id) {
+      reject(
+        'FUNCTION_ACCESS_DENIED',
+        'approved_by must be the authenticated actor approving the revaluation',
+        { approved_by: p['approved_by'], actor_user_id: envelope.metadata.actor.user_id },
         403,
       );
     }
@@ -627,70 +718,17 @@ async function lockedHolding(
 }
 
 /**
- * AC 7 (BSD-9, BSD-10): the DOA second signature on an acquisition value.
- *
- * Below every band findMatchingDoaEntry returns no entry and the disposal proceeds unapproved; a
- * claimed approved_by in that case is refused INVALID_PARAMS rather than silently dropped, so the
- * 201 can never echo an approver the ledger did not record (the 9.4 symmetric refusal).
+ * Story 9.9 (closes deferred-work 9.8-2): `resolveAcquisitionApproval` STOOD HERE and is deleted.
+ * It took a `claimedApprover` string off the payload and refused the posting unless it equalled
+ * resolveApprover's output - which made the approver's user id the entire barrier to a finance
+ * controller signing their own acquisition. Story 9.8 removed its last acquisition call site and
+ * Story 9.9 removed the revaluation one, so the parameter, the function and the paragraph that
+ * defended it ("the approver's user id is a bearer credential here") are all gone rather than left
+ * one line from being reintroduced. A user id is NOT a bearer credential: it appears in audit rows,
+ * event payloads, user listings and prior event history, so suppressing it in one refusal message
+ * narrowed one leak of a value that leaks everywhere else. Both paths now resolve the BAND only,
+ * and the signature is a separate authenticated action on a persisted proposal.
  */
-async function resolveAcquisitionApproval(
-  value: string,
-  claimedApprover: string | undefined,
-  actingUserId: string,
-  details: Record<string, unknown>,
-  auditCtx?: ApplierAuditCtx,
-): Promise<{ approved_by: string | null; doa_entry_id: string | null }> {
-  const approval = await resolveApprover(JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE, value);
-  if (!approval.requiresApproval) {
-    if (claimedApprover !== undefined) {
-      reject(
-        'INVALID_PARAMS',
-        'This acquisition value is below every governed band and cannot carry an approval claim',
-        { ...details, acquisition_value: value },
-        400,
-      );
-    }
-    return { approved_by: null, doa_entry_id: null };
-  }
-  if (approval.approverActorId === null) {
-    return auditedRefusal(
-      auditCtx,
-      'APPROVAL_UNRESOLVED',
-      `No active approver could be resolved for ${JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE}`,
-      { ...details, transaction_type: JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE },
-      409,
-    );
-  }
-  if (claimedApprover !== approval.approverActorId) {
-    return auditedRefusal(
-      auditCtx,
-      'APPROVAL_REQUIRED',
-      'An offcut acquisition in or above the governed band requires the resolved DOA approver',
-      { ...details, acquisition_value: value },
-      403,
-    );
-  }
-  // DUAL CONTROL, and this comparison is INVERTED against the Story 9.4 over-norm-loss chain at
-  // custody-ledger.ts, where the acting user must EQUAL the resolved approver. It is not a
-  // transcription bug. Here the finance controller names the price and the CFO approves paying it,
-  // and the whole point of the second signature is that those are two different people - a
-  // finance_controller who also held `cfo` could otherwise sign their own acquisition. The go-live
-  // verifier (npm run verify:roles) refuses ROLES_SHARE_HOLDER for the same reason.
-  //
-  // Neither refusal below names the resolved approver: the approver's user id is a bearer
-  // credential here (the approved_by claim must equal it), and publishing it in a refusal would
-  // hand a finance controller the key to their own second signature (code review 2026-09-06).
-  if (actingUserId === approval.approverActorId) {
-    return auditedRefusal(
-      auditCtx,
-      'APPROVAL_REQUIRED',
-      'An offcut acquisition is dual control: the acting user must not be the resolved DOA approver',
-      { ...details, acting_user_id: actingUserId },
-      403,
-    );
-  }
-  return { approved_by: approval.approverActorId, doa_entry_id: approval.doaEntryId };
-}
 
 /**
  * Story 9.8: the band lookup for the DISPOSAL path, with no claimed-approver argument because no
@@ -707,6 +745,162 @@ async function resolveAcquisitionBand(value: string): Promise<{
   doaEntryId: string | null;
 }> {
   return resolveApprover(JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE, value);
+}
+
+/**
+ * Story 9.9: resolveAcquisitionBand with the APPROVAL_UNRESOLVED re-routing the Story 9.8 propose
+ * applier had inline. resolveApprover (indents.ts) THROWS APPROVAL_UNRESOLVED rather than returning
+ * `approverActorId: null` when a band matches but no role holder exists, and left unwrapped that
+ * throw skips auditedRefusal entirely - while APPROVAL_UNRESOLVED also sits in the routes'
+ * APPLIER_SELF_AUDITED_CODES, so the route skips auditing it too and the refusal lands with no
+ * audit_log row on EITHER door. Every band lookup on this path goes through here for that reason.
+ */
+async function resolveAcquisitionBandAudited(
+  value: string,
+  details: Record<string, unknown>,
+  auditCtx?: ApplierAuditCtx,
+): Promise<{ requiresApproval: boolean; approverActorId: string | null; doaEntryId: string | null }> {
+  try {
+    return await resolveAcquisitionBand(value);
+  } catch (err: unknown) {
+    if (err instanceof AppError && err.errorCode === 'APPROVAL_UNRESOLVED') {
+      return auditedRefusal(
+        auditCtx,
+        err.errorCode,
+        err.message,
+        { ...details, ...err.details },
+        err.statusCode,
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Story 9.9: the revaluation preconditions that decide whether a revaluation COULD succeed, shared
+ * by the single-request below-band path and the proposal path - so a proposal is never raised for a
+ * revaluation that would have been refused, and the two cannot drift apart.
+ *
+ * Task 5.2: a delta supersedes a document, so one must exist. A free retention raised none, which is
+ * why revaluing it is refused rather than silently promoted to an original. The latest document is
+ * found by the supersede POINTER (the document nothing supersedes), never by created_at order:
+ * created_at is the transaction start time, and two overlapping revaluations can invert that order
+ * against commit order (chunk B code review 2026-09-06).
+ *
+ * P6 (code review 2026-09-06): the delta corrects the LATEST document, so it must be priced in that
+ * document's currency - otherwise the signed difference subtracts one currency from another and the
+ * current-value row mixes units.
+ */
+async function latestSupersedableCreditNote(
+  order: ServiceOrderRow,
+  holding: JobWorkOffcutHoldingRow,
+  currency: string,
+  client: PoolClient,
+  auditCtx?: ApplierAuditCtx,
+): Promise<JobWorkCreditNoteRow> {
+  const latest = await getLatestCreditNoteForHolding(holding.holding_id, client, true);
+  if (!latest) {
+    return auditedRefusal(
+      auditCtx,
+      'CREDIT_NOTE_MISSING',
+      'This acquisition raised no credit note, so there is no document to supersede',
+      { holding_id: holding.holding_id, service_order_id: order.service_order_id },
+      409,
+    );
+  }
+  if (currency !== latest.currency) {
+    reject(
+      'INVALID_PARAMS',
+      'The revaluation currency must match the currency of the document it supersedes',
+      {
+        holding_id: holding.holding_id,
+        credit_note_id: latest.credit_note_id,
+        currency,
+        latest_currency: latest.currency,
+      },
+      400,
+    );
+  }
+  return latest;
+}
+
+/**
+ * Story 9.9 Task 4.2: the Story 9.7 AC 5 revaluation effects, extracted so the BELOW-band single
+ * request and the APPROVED above-band proposal run the SAME code. Two copies of a delta-credit-note
+ * chain would be two places for the arithmetic to drift.
+ *
+ * The delta chains off the LATEST document, so a second revaluation supersedes the first delta
+ * rather than the original again, and the arithmetic stays a running correction.
+ *
+ * The DOCUMENT trail is immutable - neither the original nor any earlier delta is touched - while
+ * the holding row carries the CURRENT commercial value. That split is the distinction AC 5 draws:
+ * "a delta document is raised and the original is never mutated". disposal_currency is written too
+ * (P6): a revaluation changes the commercial value's currency and the row must not keep advertising
+ * the old one.
+ */
+async function executeOffcutRevaluationDelta(args: {
+  client: PoolClient;
+  eventId: string;
+  /** The id classifyMoneyInsert names in an overflow refusal: the revaluation or the proposal. */
+  businessId: string;
+  order: ServiceOrderRow;
+  holding: JobWorkOffcutHoldingRow;
+  latest: JobWorkCreditNoteRow;
+  rate: string;
+  currency: string;
+  newValue: string;
+  /** The finance controller who named the rate - the AC 6 SoD comparison is against this column. */
+  valuedBy: string;
+  approvedBy: string | null;
+  doaEntryId: string | null;
+}): Promise<{ deltaValue: string; creditNoteId: string; supersedesCreditNoteId: string }> {
+  const { client, latest, holding, order } = args;
+  const deltaValue = creditNoteDeltaValue(latest.value, args.newValue);
+  const creditNoteId = randomUUID();
+  try {
+    await insertCreditNote(
+      {
+        credit_note_id: creditNoteId,
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        document_kind: 'delta',
+        supersedes_credit_note_id: latest.credit_note_id,
+        cited_invoice_ref_ext: latest.cited_invoice_ref_ext,
+        rate: args.rate,
+        indicative_rate: holding.indicative_rate,
+        currency: args.currency,
+        value: args.newValue,
+        delta_value: deltaValue,
+        valued_by: args.valuedBy,
+        site_id: order.site_id,
+        source_event_id: args.eventId,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    classifyMoneyInsert(err, args.businessId, args.eventId, 'credit note');
+  }
+
+  const revalued = await updateOffcutHoldingValuation(
+    holding.holding_id,
+    {
+      disposal_rate: args.rate,
+      disposal_currency: args.currency,
+      disposal_value: args.newValue,
+      approved_by: args.approvedBy,
+      doa_entry_id: args.doaEntryId,
+    },
+    client,
+  );
+  if (!revalued) {
+    reject(
+      'DUPLICATE_EVENT',
+      'This offcut holding row was revalued concurrently',
+      { holding_id: holding.holding_id },
+      409,
+    );
+  }
+  return { deltaValue, creditNoteId, supersedesCreditNoteId: latest.credit_note_id };
 }
 
 /**
@@ -1375,22 +1569,15 @@ export async function applyJobworkOffcutAcquisitionProposed(
   }
 
   const proposedValue = billableValueOf(holding.quantity, p.rate);
-  // Code review 2026-09-07 (Story 9.8 finding): resolveApprover (indents.ts) THROWS
-  // APPROVAL_UNRESOLVED rather than returning approverActorId: null when a band matches but no role
-  // holder exists - the `band.approverActorId === null` branch below is therefore unreachable and,
-  // left unwrapped, the thrown error would skip auditedRefusal entirely (and APPROVAL_UNRESOLVED
-  // sits in APPLIER_SELF_AUDITED_CODES, so the route would ALSO skip auditing it), leaving this
-  // refusal with no audit_log row on either door. Caught here and re-routed through the same audited
-  // refusal path every other band-resolution failure in this file uses.
-  let band: { requiresApproval: boolean; approverActorId: string | null; doaEntryId: string | null };
-  try {
-    band = await resolveAcquisitionBand(proposedValue);
-  } catch (err: unknown) {
-    if (err instanceof AppError && err.errorCode === 'APPROVAL_UNRESOLVED') {
-      return auditedRefusal(auditCtx, err.errorCode, err.message, err.details, err.statusCode);
-    }
-    throw err;
-  }
+  // Code review 2026-09-07 (Story 9.8 finding), now shared with the Story 9.9 paths as
+  // resolveAcquisitionBandAudited: resolveApprover THROWS APPROVAL_UNRESOLVED rather than returning
+  // `approverActorId: null`, and left unwrapped that throw would leave the refusal with no audit_log
+  // row on EITHER door. See that helper for the whole reasoning.
+  const band = await resolveAcquisitionBandAudited(
+    proposedValue,
+    { service_order_id: order.service_order_id, holding_id: holding.holding_id },
+    auditCtx,
+  );
   // AC 6 is a hard boundary in BOTH directions: a below-band acquisition has no second signature to
   // capture and must go through the single-request disposal, or a proposal would invent an approval
   // step the governance never asked for and leave the offcut retained until someone signed it.
@@ -1531,6 +1718,18 @@ export async function applyJobworkOffcutAcquisitionApproved(
       'The acquisition proposal belongs to a different site than the approval',
       { proposal_id: proposal.proposal_id, proposal_site_id: proposal.site_id, site_id: p.site_id },
       409,
+    );
+  }
+  // Story 9.9: one table now carries BOTH signatures, so the kind is part of the identity. Without
+  // this an acquisition approval aimed at a REVALUATION proposal would run the disposal effects -
+  // minting a lot and transferring title - against a holding that was disposed of long ago. It reads
+  // as "no acquisition proposal with this id" because from this event's point of view there is none.
+  if (proposal.kind !== 'acquisition') {
+    reject(
+      'NOT_FOUND',
+      'No acquisition proposal with this id exists for this service order',
+      { proposal_id: proposal.proposal_id, kind: proposal.kind },
+      404,
     );
   }
   if (proposal.status !== 'pending') {
@@ -1708,107 +1907,435 @@ export async function applyJobworkOffcutRevalued(
     );
   }
 
-  // Task 5.2: a delta supersedes a document, so one must exist. A free retention raised none, which
-  // is why revaluing it is refused rather than silently promoted to an original. The latest document
-  // is found by the supersede POINTER (the document nothing supersedes), never by created_at order:
-  // created_at is the transaction start time, and two overlapping revaluations can invert that order
-  // against commit order (chunk B code review 2026-09-06).
-  const latest = await getLatestCreditNoteForHolding(holding.holding_id, client, true);
-  if (!latest) {
-    return auditedRefusal(
+  const latest = await latestSupersedableCreditNote(
+    order,
+    holding,
+    p.currency,
+    client,
+    auditCtx,
+  );
+  const newValue = billableValueOf(holding.quantity, p.rate);
+
+  // Task 5.5 / open question 5: the band applies to the REVALUED value on the same terms, or a
+  // below-band disposal followed by a revaluation would be an unsigned route to any value.
+  //
+  // Story 9.9 (AC 1, AC 3, AC 4): in or above the band this event CANNOT sign anything. There is no
+  // approver field left to claim, and the second signature is a separate authenticated CFO action on
+  // a persisted proposal. Refusing here - on the APPLIER, so the direct events door meets the
+  // identical wall - is what stops the single-event contract being used to skip it. Below every
+  // band the revaluation completes in ONE request exactly as Story 9.7 built it (AC 4).
+  const band = await resolveAcquisitionBandAudited(
+    newValue,
+    { service_order_id: order.service_order_id, holding_id: holding.holding_id },
+    auditCtx,
+  );
+  if (band.requiresApproval) {
+    await auditedRefusal(
       auditCtx,
-      'CREDIT_NOTE_MISSING',
-      'This acquisition raised no credit note, so there is no document to supersede',
-      { holding_id: holding.holding_id, service_order_id: order.service_order_id },
+      'APPROVAL_REQUIRED',
+      'An offcut revaluation in or above the governed band must be proposed and approved by the resolved DOA approver, not posted as a revaluation',
+      {
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        revalued_value: newValue,
+      },
+      403,
+    );
+  }
+
+  const effects = await executeOffcutRevaluationDelta({
+    client,
+    eventId,
+    businessId: p.revaluation_id,
+    order,
+    holding,
+    latest,
+    rate: p.rate,
+    currency: p.currency,
+    newValue,
+    valuedBy: p.posted_by,
+    // Below every band there is no approval to record, and there is no longer any path by which a
+    // caller could assert one (AC 3, AC 4).
+    approvedBy: null,
+    doaEntryId: null,
+  });
+
+  envelope.payload['delta_value'] = effects.deltaValue;
+  envelope.payload['credit_note_id'] = effects.creditNoteId;
+  envelope.payload['supersedes_credit_note_id'] = effects.supersedesCreditNoteId;
+  envelope.payload['disposal_value'] = newValue;
+}
+
+// ---------------------------------------------------------------------------
+// Story 9.9: the two-step second signature on an above-band revaluation
+// ---------------------------------------------------------------------------
+
+/**
+ * Story 9.9 AC 1: PROPOSE an above-band revaluation. Nothing happens - no delta credit note is
+ * raised, the holding keeps its current value and the Section 143 clock is untouched. The row this
+ * writes is the persisted middle state that the CFO's own authenticated approval later executes.
+ *
+ * It runs EVERY precondition the revaluation applier runs before writing the proposal, so a proposal
+ * is never raised for a revaluation that could not have succeeded, and it freezes the two things
+ * that can move before the signature arrives: the resolved approver (the band, the role holder and
+ * any delegation can all shift) and the document the delta will supersede (a BELOW-band revaluation
+ * needs no signature and can land in between - AC 5).
+ *
+ * DUAL CONTROL AT PROPOSE TIME (BSD-10 inverted). The resolved approver must not be the proposer.
+ * Checking it here as well as at approve time is not belt-and-braces: without it a finance
+ * controller who also held `cfo` could file a proposal only they could sign, and the schema's
+ * chk_..._dual_control would refuse it as an unclassified 23514 500 instead of a clean, audited
+ * APPROVAL_REQUIRED.
+ */
+export async function applyJobworkOffcutRevaluationProposed(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+  auditCtx?: ApplierAuditCtx,
+): Promise<void> {
+  if (envelope.event_type !== JOBWORK_OFFCUT_REVALUATION_PROPOSED) return;
+  if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) return;
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as JobworkOffcutRevaluationProposedPayload;
+
+  const order = await requireInProcessOrder(
+    p.service_order_id,
+    p.site_id,
+    client,
+    orderAcceptsBilling,
+  );
+  const holding = await lockedHolding(p.holding_id, order, client);
+  // The sibling condition of OFFCUT_NOT_RETAINED, identical to the revaluation applier: there is
+  // nothing to revalue until a disposal has priced it, and a `returned` disposal transferred no
+  // title and never carried a value.
+  if (holding.status !== 'disposed' || holding.disposition !== 'acquired') {
+    reject(
+      'INVALID_PARAMS',
+      'Only an acquired offcut disposal can be revalued',
+      {
+        holding_id: holding.holding_id,
+        status: holding.status,
+        disposition: holding.disposition,
+      },
+      400,
+    );
+  }
+  const latest = await latestSupersedableCreditNote(order, holding, p.currency, client, auditCtx);
+
+  const proposedValue = billableValueOf(holding.quantity, p.rate);
+  const band = await resolveAcquisitionBandAudited(
+    proposedValue,
+    { service_order_id: order.service_order_id, holding_id: holding.holding_id },
+    auditCtx,
+  );
+  // A hard boundary in BOTH directions (the Story 9.8 symmetry, copied exactly): a below-band
+  // revaluation has no second signature to capture and must go through the single-request route, or
+  // a proposal would invent an approval step the governance never asked for and leave the holding
+  // carrying a stale value until someone signed it. Re-derived HERE, under the order advisory lock,
+  // so the direct events door cannot pick the wrong event type to slip past the signature either
+  // way.
+  if (!band.requiresApproval) {
+    reject(
+      'INVALID_PARAMS',
+      'This revalued value is below every governed band and must be posted as a revaluation, not proposed',
+      {
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        revalued_value: proposedValue,
+      },
+      400,
+    );
+  }
+  if (band.approverActorId === null) {
+    // Unreachable given resolveApprover's throw-not-null contract (see
+    // resolveAcquisitionBandAudited); kept as a defensive fallback in case it ever changes back.
+    await auditedRefusal(
+      auditCtx,
+      'APPROVAL_UNRESOLVED',
+      `No active approver could be resolved for ${JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE}`,
+      {
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        transaction_type: JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE,
+      },
+      409,
+    );
+  }
+  // The refusal deliberately does NOT name the resolved approver: the id is who the approval route
+  // will accept, and a proposer who learns it learns exactly whose session to obtain.
+  if (band.approverActorId === p.posted_by) {
+    await auditedRefusal(
+      auditCtx,
+      'APPROVAL_REQUIRED',
+      'An offcut revaluation is dual control: the proposer must not be the resolved DOA approver',
+      {
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        acting_user_id: p.posted_by,
+      },
+      403,
+    );
+  }
+
+  const indicativeRate = holding.indicative_rate ?? null;
+  try {
+    await insertOffcutAcquisitionProposal(
+      {
+        proposal_id: p.proposal_id,
+        service_order_id: order.service_order_id,
+        holding_id: holding.holding_id,
+        site_id: order.site_id,
+        rate: p.rate,
+        currency: p.currency,
+        indicative_rate: indicativeRate,
+        proposed_value: proposedValue,
+        doa_entry_id: band.doaEntryId as string,
+        resolved_approver_actor_id: band.approverActorId as string,
+        proposed_by: p.posted_by,
+        source_event_id: eventId,
+        kind: 'revaluation',
+        // AC 5: the document this was priced against, frozen. Re-deriving it at approve time would
+        // let an intervening below-band revaluation move it silently.
+        supersedes_credit_note_id: latest.credit_note_id,
+      },
+      client,
+    );
+  } catch (err: unknown) {
+    // The partial unique index refuses a SECOND competing proposal on one holding, across BOTH
+    // kinds. Classified rather than surfaced as an unclassified 23505 500.
+    if (
+      isPgCode(err, '23505') &&
+      String((err as { constraint?: string }).constraint ?? '').includes(
+        'uq_job_work_offcut_acq_proposal_pending',
+      )
+    ) {
+      reject(
+        'DUPLICATE_EVENT',
+        'This offcut holding already has a proposal awaiting approval',
+        { holding_id: holding.holding_id, service_order_id: order.service_order_id },
+        409,
+      );
+    }
+    classifyMoneyInsert(err, p.proposal_id, eventId, 'offcut revaluation proposal');
+  }
+
+  envelope.payload['proposed_value'] = proposedValue;
+  envelope.payload['indicative_rate'] = indicativeRate;
+  envelope.payload['doa_entry_id'] = band.doaEntryId;
+  envelope.payload['resolved_approver_actor_id'] = band.approverActorId;
+  envelope.payload['supersedes_credit_note_id'] = latest.credit_note_id;
+}
+
+/**
+ * Story 9.9 AC 2, 3, 5: the CFO's own authenticated approval, and the ONLY way an above-band
+ * revaluation reaches the Story 9.7 AC 5 effects.
+ *
+ * THE IDENTITY IS THE CONTROL. `approved_by` was already pinned to the authenticated actor by the
+ * shape validator; here it is compared against the proposal row's FROZEN
+ * `resolved_approver_actor_id`. Nothing in any request body chooses who signs, and the resolution is
+ * NEVER repeated - the band, the role holder and any delegation could all have moved since.
+ */
+export async function applyJobworkOffcutRevaluationApproved(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+  auditCtx?: ApplierAuditCtx,
+): Promise<void> {
+  if (envelope.event_type !== JOBWORK_OFFCUT_REVALUATION_APPROVED) return;
+  if (!JOBWORK_STREAM_TYPES.has(envelope.stream_type)) return;
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as unknown as JobworkOffcutRevaluationApprovedPayload;
+  const occurredAt = envelope.metadata.occurred_at ?? new Date().toISOString();
+  const actingUserId = envelope.metadata.actor.user_id;
+
+  const order = await requireInProcessOrder(
+    p.service_order_id,
+    p.site_id,
+    client,
+    orderAcceptsBilling,
+  );
+
+  const proposal = await getOffcutAcquisitionProposalById(p.proposal_id, client, true);
+  if (!proposal || proposal.service_order_id !== order.service_order_id) {
+    reject(
+      'NOT_FOUND',
+      'No revaluation proposal with this id exists for this service order',
+      { proposal_id: p.proposal_id, service_order_id: p.service_order_id },
+      404,
+    );
+  }
+  // The payload site is bound to the ROW, exactly as the acquisition approval binds it.
+  if (proposal.site_id !== p.site_id) {
+    reject(
+      'SOURCE_DOCUMENT_REQUIRED',
+      'The revaluation proposal belongs to a different site than the approval',
+      { proposal_id: proposal.proposal_id, proposal_site_id: proposal.site_id, site_id: p.site_id },
+      409,
+    );
+  }
+  // The kind is part of the identity now that one table carries both signatures: this event must
+  // never execute an ACQUISITION proposal, whose approval mints a lot and transfers title.
+  if (proposal.kind !== 'revaluation') {
+    reject(
+      'NOT_FOUND',
+      'No revaluation proposal with this id exists for this service order',
+      { proposal_id: proposal.proposal_id, kind: proposal.kind },
+      404,
+    );
+  }
+  if (proposal.status !== 'pending') {
+    reject(
+      'DUPLICATE_EVENT',
+      'This revaluation proposal is no longer awaiting approval',
+      {
+        proposal_id: proposal.proposal_id,
+        status: proposal.status,
+        decided_at: proposal.decided_at,
+      },
       409,
     );
   }
 
-  // P6 (code review 2026-09-06): the delta corrects the LATEST document, so it must be priced in
-  // that document's currency - otherwise the signed difference subtracts one currency from another
-  // and the current-value row mixes units.
-  if (p.currency !== latest.currency) {
+  // AC 3: anyone who is not the resolved approver - the original proposer included - is refused and
+  // audited, with no revaluation effect. The refusal never names the approver (see the propose-time
+  // comment); the caller either is them or has no business knowing who is.
+  if (proposal.resolved_approver_actor_id !== actingUserId) {
+    await auditedRefusal(
+      auditCtx,
+      'APPROVAL_REQUIRED',
+      'Only the resolved DOA approver may approve this offcut revaluation',
+      {
+        proposal_id: proposal.proposal_id,
+        service_order_id: order.service_order_id,
+        acting_user_id: actingUserId,
+      },
+      403,
+    );
+  }
+  // The approve-time half of the dual control - STRUCTURALLY UNREACHABLE, exactly as on the
+  // acquisition path: the check above established actingUserId === resolved_approver_actor_id, and
+  // chk_job_work_offcut_acq_proposal_dual_control guarantees resolved_approver_actor_id <>
+  // proposed_by for every row that can exist. Kept as a restated invariant and as a cheap guard
+  // against either of those being weakened independently, not as a currently-reachable branch.
+  if (actingUserId === proposal.proposed_by) {
+    await auditedRefusal(
+      auditCtx,
+      'APPROVAL_REQUIRED',
+      'An offcut revaluation is dual control: the approver must not be the proposer',
+      {
+        proposal_id: proposal.proposal_id,
+        service_order_id: order.service_order_id,
+        acting_user_id: actingUserId,
+      },
+      403,
+    );
+  }
+
+  const holding = await lockedHolding(proposal.holding_id, order, client);
+  if (holding.status !== 'disposed' || holding.disposition !== 'acquired') {
     reject(
       'INVALID_PARAMS',
-      'The revaluation currency must match the currency of the document it supersedes',
+      'Only an acquired offcut disposal can be revalued',
       {
         holding_id: holding.holding_id,
-        credit_note_id: latest.credit_note_id,
-        currency: p.currency,
-        latest_currency: latest.currency,
+        proposal_id: proposal.proposal_id,
+        status: holding.status,
+        disposition: holding.disposition,
       },
       400,
     );
   }
 
-  const newValue = billableValueOf(holding.quantity, p.rate);
-  // Task 5.5 / open question 5: the band applies to the REVALUED value on the same terms, or a
-  // below-band disposal followed by a revaluation would be an unsigned route to any value.
-  const approval = await resolveAcquisitionApproval(
-    newValue,
-    p.approved_by,
-    envelope.metadata.actor.user_id,
-    { service_order_id: order.service_order_id, holding_id: holding.holding_id },
-    auditCtx,
-  );
-
-  // The delta chains off the LATEST document, so a second revaluation supersedes the first delta
-  // rather than the original again, and the arithmetic stays a running correction.
-  const deltaValue = creditNoteDeltaValue(latest.value, newValue);
-  const creditNoteId = randomUUID();
-  try {
-    await insertCreditNote(
+  // `occurred_at` is caller-suppliable on the direct events door (unlike the REST route, which
+  // always stamps server time). A backdated value would otherwise trip the lifecycle CHECK's
+  // `decided_at >= created_at` as an unclassified 23514 inside the UPDATE below - checked here
+  // instead, before any write (the Story 9.8 finding).
+  if (new Date(occurredAt).getTime() < new Date(proposal.created_at).getTime()) {
+    reject(
+      'INVALID_PARAMS',
+      'occurred_at cannot precede the proposal it approves',
       {
-        credit_note_id: creditNoteId,
-        service_order_id: order.service_order_id,
-        holding_id: holding.holding_id,
-        document_kind: 'delta',
-        supersedes_credit_note_id: latest.credit_note_id,
-        cited_invoice_ref_ext: latest.cited_invoice_ref_ext,
-        rate: p.rate,
-        indicative_rate: holding.indicative_rate,
-        currency: p.currency,
-        value: newValue,
-        delta_value: deltaValue,
-        valued_by: p.posted_by,
-        site_id: order.site_id,
-        source_event_id: eventId,
+        proposal_id: proposal.proposal_id,
+        occurred_at: occurredAt,
+        proposal_created_at: proposal.created_at,
       },
-      client,
+      400,
     );
-  } catch (err: unknown) {
-    classifyMoneyInsert(err, p.revaluation_id, eventId, 'credit note');
   }
 
-  // The DOCUMENT trail is immutable - neither the original nor any earlier delta is touched - while
-  // the holding row carries the CURRENT commercial value. That split is the distinction AC 5 draws:
-  // "a delta document is raised and the original is never mutated". disposal_currency is written
-  // too (P6): a revaluation changes the commercial value's currency and the row must not keep
-  // advertising the old one.
-  const revalued = await updateOffcutHoldingValuation(
-    holding.holding_id,
-    {
-      disposal_rate: p.rate,
-      disposal_currency: p.currency,
-      disposal_value: newValue,
-      approved_by: approval.approved_by,
-      doa_entry_id: approval.doa_entry_id,
-    },
+  const latest = await latestSupersedableCreditNote(
+    order,
+    holding,
+    proposal.currency,
     client,
+    auditCtx,
   );
-  if (!revalued) {
-    reject(
-      'DUPLICATE_EVENT',
-      'This offcut holding row was revalued concurrently',
-      { holding_id: holding.holding_id },
+  // AC 5, THE REASON THE PROPOSAL FREEZES THE DOCUMENT. A below-band revaluation needs no signature
+  // and can land between propose and approve, so the document the delta would chain off can move.
+  // Raising the proposed delta against a stale document would silently corrupt the running
+  // correction: the delta is the signed difference against the value of the document it supersedes,
+  // so it would be arithmetically right about the wrong document.
+  //
+  // The message deliberately does NOT tell the caller to "propose it again": they cannot. The
+  // partial unique index gives a holding ONE pending proposal, this one still holds it, and Story
+  // 9.8 reserved the `superseded` status for a withdrawal path that nothing writes yet. Saying
+  // otherwise would send a finance controller round a loop that refuses them DUPLICATE_EVENT. The
+  // gap is recorded as deferred work rather than closed here: a withdrawal is its own authority
+  // question (who may withdraw a signature request, and is that itself a governed decision).
+  if (latest.credit_note_id !== proposal.supersedes_credit_note_id) {
+    await auditedRefusal(
+      auditCtx,
+      'CREDIT_NOTE_SUPERSEDED',
+      'The document this revaluation was priced against has since been superseded by a later revaluation, so this proposal can no longer be approved and is now stale',
+      {
+        proposal_id: proposal.proposal_id,
+        holding_id: holding.holding_id,
+        proposed_against_credit_note_id: proposal.supersedes_credit_note_id,
+        latest_credit_note_id: latest.credit_note_id,
+      },
       409,
     );
   }
 
-  envelope.payload['delta_value'] = deltaValue;
-  envelope.payload['credit_note_id'] = creditNoteId;
-  envelope.payload['supersedes_credit_note_id'] = latest.credit_note_id;
-  envelope.payload['disposal_value'] = newValue;
+  // The Story 9.7 AC 5 effects, unchanged and now driven by the signature rather than by the
+  // poster's claim. `valued_by` stays the finance controller who priced it; `approved_by` on the
+  // holding row is the CFO who signed.
+  const effects = await executeOffcutRevaluationDelta({
+    client,
+    eventId,
+    businessId: proposal.proposal_id,
+    order,
+    holding,
+    latest,
+    rate: proposal.rate,
+    currency: proposal.currency,
+    newValue: proposal.proposed_value,
+    valuedBy: proposal.proposed_by,
+    approvedBy: actingUserId,
+    doaEntryId: proposal.doa_entry_id,
+  });
+
+  const decided = await markOffcutRevaluationProposalApproved(
+    proposal.proposal_id,
+    { decided_at: occurredAt, decided_by: actingUserId, revaluation_event_id: eventId },
+    client,
+  );
+  if (!decided) {
+    reject(
+      'DUPLICATE_EVENT',
+      'This revaluation proposal was approved concurrently',
+      { proposal_id: proposal.proposal_id },
+      409,
+    );
+  }
+
+  envelope.payload['holding_id'] = holding.holding_id;
+  envelope.payload['delta_value'] = effects.deltaValue;
+  envelope.payload['credit_note_id'] = effects.creditNoteId;
+  envelope.payload['supersedes_credit_note_id'] = effects.supersedesCreditNoteId;
+  envelope.payload['disposal_value'] = proposal.proposed_value;
 }
 
 // ---------------------------------------------------------------------------

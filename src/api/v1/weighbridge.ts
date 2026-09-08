@@ -254,7 +254,7 @@ async function resolveGateByToken(correlationId: string): Promise<{ site_id: str
 
 const getWeighbridgeEventBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, WEIGHBRIDGE_READ_ROLES, 'read');
-  const weighbridgeEventId = params['weighbridgeEventId'];
+  const weighbridgeEventId = params['weighbridgeEventId']?.toLowerCase();
   if (!weighbridgeEventId || !UUID_REGEX.test(weighbridgeEventId)) {
     sendRequestError(
       req,

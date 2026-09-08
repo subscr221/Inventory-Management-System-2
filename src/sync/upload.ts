@@ -51,6 +51,10 @@ const PERMANENT_ERROR_CODES = new Set([
   'PERIOD_LOCKED',
   'COUNT_VARIANCE_REQUIRES_APPROVAL',
   'STOCK_ADJUSTMENT_NEGATIVE_BALANCE',
+  // Story 9.10 (Task 2): offcut-class count adjustments are a structural bar; an offline edge
+  // retry of the same count can never clear it - the quantity is corrected through the offcut
+  // disposal and revaluation flow, never a count.
+  'OFFCUT_ADJUSTMENT_REFUSED',
   // Story 2.7: inventory-planning permanent business rejections
   'LEAD_TIME_NOT_CONFIGURED',
   'INSUFFICIENT_DEMAND_HISTORY',
@@ -118,6 +122,18 @@ const PERMANENT_ERROR_CODES = new Set([
   'LOT_ON_HOLD',
   'DISPATCH_DOCUMENTS_NOT_GENERATED',
   'INVALID_PARAMS',
+  // Story 11.2: outbound IRN-before-dispatch enforcement. IRN_MISSING is a structural bar (the IRN
+  // must be recorded before final dispatch; an offline retry can never clear it). DISPATCH_IRN_CONFLICT
+  // is the permanent classification of a recording that collides with a DIFFERENT invoice's coverage
+  // of the same dispatch order. DISPATCH_IRN_INVALID_PAYLOAD, DISPATCH_ORDER_SITE_MISMATCH and
+  // DISPATCH_ORDER_CLOSED are structural refusals of the recording itself. The edge connector's
+  // PERMANENT_ERROR_CODES twin (edge/src/sync/connector.ts) carries the IDENTICAL block - the Story
+  // 4.3 rule, restored by the 9.5 review; change both together.
+  'IRN_MISSING',
+  'DISPATCH_IRN_CONFLICT',
+  'DISPATCH_IRN_INVALID_PAYLOAD',
+  'DISPATCH_ORDER_SITE_MISMATCH',
+  'DISPATCH_ORDER_CLOSED',
   'CROSS_DOCK_TASK_NOT_FOUND',
   'CROSS_DOCK_TASK_NOT_READY',
   'CROSS_DOCK_TASK_ALREADY_COMPLETED',
@@ -217,6 +233,12 @@ const PERMANENT_ERROR_CODES = new Set([
   // Story 9.7 code review (2026-09-06): acknowledging a credit note a revaluation delta has
   // superseded - the current document carries the commercial value, and no retry of the same
   // acknowledgment can make the superseded one current again. Defensive, no edge scope.
+  //
+  // Story 9.9 reuses this code for the second case with the same property: approving a revaluation
+  // proposal whose frozen supersedes_credit_note_id is no longer the holding's latest document
+  // (AC 5). A retry cannot make it latest again either - the proposal has to be re-posted. Story
+  // 9.9's other two refusals are already permanent above: an above-band revaluation posted as a
+  // plain revaluation is APPROVAL_REQUIRED, and a below-band proposal is INVALID_PARAMS.
   'CREDIT_NOTE_SUPERSEDED',
   'UNREVERSED_TRANSACTIONS',
   'BOM_REVISION_DRIFT',

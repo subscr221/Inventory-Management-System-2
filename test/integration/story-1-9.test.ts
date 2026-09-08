@@ -301,6 +301,9 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/dispatch/:dispatchOrderId/dispatch',
       'GET /api/v1/dispatch/:dispatchOrderId/packing-records',
       'GET /api/v1/dispatch/:dispatchOrderId/documents',
+      // Story 11.2: outbound IRN coverage registry
+      'POST /api/v1/dispatch/:dispatchOrderId/irn',
+      'GET /api/v1/dispatch/:dispatchOrderId/irn',
       'GET /api/v1/packing-records/:packingRecordId',
       'GET /api/v1/dispatch-order-status/:dispatchOrderId',
       'GET /api/v1/dispatch/documents/:documentId',
@@ -569,6 +572,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/service-orders/:serviceOrderId/offcut-holdings',
       // Story 9.8: the CFO's authenticated second signature on an above-band offcut acquisition.
       'POST /api/v1/service-orders/:serviceOrderId/offcut-acquisition-proposals/:proposalId/approve',
+      // Story 9.9: the same signature on an above-band offcut REVALUATION (closes 9.8-2).
+      'POST /api/v1/service-orders/:serviceOrderId/offcut-revaluation-proposals/:proposalId/approve',
       // Story 8.6 (FR-Q-13): the quality reporting dashboard.
       'GET /api/v1/qc/reports/dashboard',
       'POST /api/v1/qc/dispositions/:dispositionId/scorecard/quality-acceptance',

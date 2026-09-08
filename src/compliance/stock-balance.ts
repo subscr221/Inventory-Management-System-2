@@ -101,9 +101,11 @@ const OFFCUT_STOCK_CLASS = 'offcut';
 /**
  * Customer-owned classes: material this entity holds but does not own, so NO demand of any kind may
  * consume it. `job_work` is material in process; `offcut` is contractual offcut retained pending
- * disposal. Both carry a running CGST Section 143 exposure while held.
+ * disposal. Both carry a running CGST Section 143 exposure while held. Exported so the cycle-count
+ * physical-verification path reuses the SAME set (Story 9.10 Task 3.3) - the two classes must not
+ * be able to drift apart again.
  */
-const CUSTOMER_OWNED_STOCK_CLASSES = new Set([JOB_WORK_STOCK_CLASS, OFFCUT_STOCK_CLASS]);
+export const CUSTOMER_OWNED_STOCK_CLASSES = new Set([JOB_WORK_STOCK_CLASS, OFFCUT_STOCK_CLASS]);
 
 /** The laundering-bar refusal code for a conflict involving `conflictClass` (see SEGREGATED_STOCK_CLASSES). */
 function segregationErrorCode(conflictClass: string): string {

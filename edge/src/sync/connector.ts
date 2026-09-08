@@ -54,6 +54,11 @@ const PERMANENT_ERROR_CODES = new Set([
   'PERIOD_LOCKED',
   'COUNT_VARIANCE_REQUIRES_APPROVAL',
   'STOCK_ADJUSTMENT_NEGATIVE_BALANCE',
+  // Story 9.10: an offcut-class count adjustment is refused outright and will never succeed on a
+  // retry. This list is the twin of PERMANENT_ERROR_CODES in src/sync/upload.ts; a code missing here
+  // falls back to the status-based classification, and a 403 surfacing of it would trip the
+  // 401/403 halt below and stall the whole outbox.
+  'OFFCUT_ADJUSTMENT_REFUSED',
   // Story 2.7: inventory-planning permanent business rejections
   'LEAD_TIME_NOT_CONFIGURED',
   'INSUFFICIENT_DEMAND_HISTORY',
@@ -119,6 +124,12 @@ const PERMANENT_ERROR_CODES = new Set([
   'LOT_ON_HOLD',
   'DISPATCH_DOCUMENTS_NOT_GENERATED',
   'INVALID_PARAMS',
+  // Story 11.2: outbound IRN-before-dispatch enforcement (twin of the block in src/sync/upload.ts).
+  'IRN_MISSING',
+  'DISPATCH_IRN_CONFLICT',
+  'DISPATCH_IRN_INVALID_PAYLOAD',
+  'DISPATCH_ORDER_SITE_MISMATCH',
+  'DISPATCH_ORDER_CLOSED',
   'CROSS_DOCK_TASK_NOT_FOUND',
   'CROSS_DOCK_TASK_NOT_READY',
   'CROSS_DOCK_TASK_ALREADY_COMPLETED',

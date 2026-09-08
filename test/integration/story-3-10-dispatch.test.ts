@@ -1,6 +1,6 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { closePool, getPool } from '../../src/config/db.js';
 import { persistEvent } from '../../src/events/store.js';
 
@@ -211,6 +211,22 @@ describe('Story 3.10 cross-dock feeds packing and dispatch on staging stock', ()
         occurred_at: '2026-07-31T09:05:00.000Z',
       },
     });
+    // Story 11.2: an ERP-backed dispatch is e-invoiceable, so the IRN must be recorded before the
+    // final dispatch can succeed. Seed the coverage row directly (projection is app_user-write).
+    await getPool().query(
+      `INSERT INTO dispatch_irn
+         (dispatch_order_id, invoice_number_ext, irn_ext, so_number_ext, site_id, recorded_by, source_event_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        soId,
+        `INV-310D-${run}`,
+        createHash('sha256').update(`IRN-310D-${run}`).digest('hex'),
+        `SO-310D-${run}`,
+        siteId,
+        clerkId,
+        randomUUID(),
+      ],
+    );
     await persistEvent({
       event_id: randomUUID(),
       stream_type: 'dispatch',

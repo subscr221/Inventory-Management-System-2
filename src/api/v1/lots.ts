@@ -228,6 +228,10 @@ const selectLotBase: RouteHandler = async (req, res, params) => {
   const breakdown = lots.map((lot) => {
     const available = lotBalances.get(lot.lot_number) ?? 0;
     let reason = 'insufficient_quantity';
+    // Story 9.10 (Task 1.5): REPORTING read, deliberately left as `=== 'held'` - this sets a human
+    // reason LABEL for the breakdown row, not a gate. The selection gate below still uses
+    // `!== 'none'`, so a third status would be excluded from selection (fail-closed) while being
+    // labelled by its real status here rather than mislabelled 'on_hold'.
     if (lot.quality_hold_status === 'held') reason = 'on_hold';
     else if (lot.expiry_date && lot.expiry_date < today) reason = 'expired';
     return {

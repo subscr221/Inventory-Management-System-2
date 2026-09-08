@@ -10,9 +10,16 @@ import { getPool } from '../../config/db.js';
  * read/projections/job_work_offcut_acquisition_proposal.sql for why.
  *
  * Money is NUMERIC(18,4) text, never floated by a caller.
+ *
+ * Story 9.9 extends the SAME table to the above-band REVALUATION signature, discriminated by
+ * `kind`. A revaluation proposal also freezes `supersedes_credit_note_id` - the document its delta
+ * will chain off - because a below-band revaluation needs no signature and can land between propose
+ * and approve (AC 5). See the .sql header for why this is one table and not two.
  */
 
 export type JobWorkOffcutAcquisitionProposalStatus = 'pending' | 'approved' | 'superseded';
+/** Story 9.9: which signature this row carries. Rows written before Story 9.9 are 'acquisition'. */
+export type JobWorkOffcutProposalKind = 'acquisition' | 'revaluation';
 
 export interface JobWorkOffcutAcquisitionProposalRow {
   proposal_id: string;
@@ -26,6 +33,12 @@ export interface JobWorkOffcutAcquisitionProposalRow {
   /** quantity x rate at the money scale, as it stood when the band was matched. */
   proposed_value: string;
   doa_entry_id: string;
+  kind: JobWorkOffcutProposalKind;
+  /**
+   * Story 9.9 (AC 5): the credit note this revaluation was priced against, frozen at propose time.
+   * NULL on an acquisition proposal, which supersedes nothing.
+   */
+  supersedes_credit_note_id: string | null;
   /** Who resolveApprover named at PROPOSE time. The approve action compares the caller against it. */
   resolved_approver_actor_id: string;
   proposed_by: string;
@@ -34,6 +47,8 @@ export interface JobWorkOffcutAcquisitionProposalRow {
   decided_by: string | null;
   /** The `jobwork.offcut_acquisition_approved` event that executed the disposal. */
   disposal_event_id: string | null;
+  /** Story 9.9: the `jobwork.offcut_revaluation_approved` event that raised the delta. */
+  revaluation_event_id: string | null;
   source_event_id: string;
   created_at: string;
   updated_at: string;
@@ -52,6 +67,10 @@ export interface InsertOffcutAcquisitionProposalInput {
   resolved_approver_actor_id: string;
   proposed_by: string;
   source_event_id: string;
+  /** Story 9.9. Omitted means 'acquisition', so the Story 9.8 call site is unchanged. */
+  kind?: JobWorkOffcutProposalKind;
+  /** Story 9.9: required on a revaluation proposal, refused by the schema on an acquisition. */
+  supersedes_credit_note_id?: string | null;
 }
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -64,8 +83,9 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 const SELECT_COLUMNS = `proposal_id, service_order_id, holding_id, site_id, rate::text AS rate,
   currency, indicative_rate::text AS indicative_rate, proposed_value::text AS proposed_value,
-  doa_entry_id, resolved_approver_actor_id, proposed_by, status, decided_at, decided_by,
-  disposal_event_id, source_event_id, created_at, updated_at`;
+  doa_entry_id, kind, supersedes_credit_note_id, resolved_approver_actor_id, proposed_by, status,
+  decided_at, decided_by, disposal_event_id, revaluation_event_id, source_event_id, created_at,
+  updated_at`;
 
 const toIso = (v: unknown): string | null =>
   v === null || v === undefined ? null : v instanceof Date ? v.toISOString() : String(v);
@@ -91,8 +111,10 @@ export async function insertOffcutAcquisitionProposal(
   await client.query(
     `INSERT INTO job_work_offcut_acquisition_proposal (
        proposal_id, service_order_id, holding_id, site_id, rate, currency, indicative_rate,
-       proposed_value, doa_entry_id, resolved_approver_actor_id, proposed_by, status, source_event_id
-     ) VALUES ($1, $2, $3, $4, $5::numeric, $6, $7::numeric, $8::numeric, $9, $10, $11, 'pending', $12)`,
+       proposed_value, doa_entry_id, resolved_approver_actor_id, proposed_by, status,
+       source_event_id, kind, supersedes_credit_note_id
+     ) VALUES ($1, $2, $3, $4, $5::numeric, $6, $7::numeric, $8::numeric, $9, $10, $11, 'pending',
+               $12, $13, $14)`,
     [
       input.proposal_id,
       input.service_order_id,
@@ -106,6 +128,8 @@ export async function insertOffcutAcquisitionProposal(
       input.resolved_approver_actor_id,
       input.proposed_by,
       input.source_event_id,
+      input.kind ?? 'acquisition',
+      input.supersedes_credit_note_id ?? null,
     ],
   );
 }
@@ -164,8 +188,30 @@ export async function markOffcutAcquisitionProposalApproved(
     `UPDATE job_work_offcut_acquisition_proposal
         SET status = 'approved', decided_at = $2::timestamptz, decided_by = $3::uuid,
             disposal_event_id = $4::uuid, updated_at = now()
-      WHERE proposal_id = $1 AND status = 'pending'`,
+      WHERE proposal_id = $1 AND status = 'pending' AND kind = 'acquisition'`,
     [proposalId, decision.decided_at, decision.decided_by, decision.disposal_event_id],
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
+/**
+ * Story 9.9: the revaluation twin. Separate from the acquisition flip rather than parameterised on
+ * a column name, so neither can ever write the other kind's event id - the lifecycle CHECK requires
+ * EXACTLY ONE of the two, matching `kind`, and a shared writer would turn that into a 23514 500.
+ * The `kind` predicate is part of the guard for the same reason.
+ */
+export async function markOffcutRevaluationProposalApproved(
+  proposalId: string,
+  decision: { decided_at: string; decided_by: string; revaluation_event_id: string },
+  client: PoolClient,
+): Promise<boolean> {
+  if (!UUID_REGEX.test(proposalId)) return false;
+  const result = await client.query(
+    `UPDATE job_work_offcut_acquisition_proposal
+        SET status = 'approved', decided_at = $2::timestamptz, decided_by = $3::uuid,
+            revaluation_event_id = $4::uuid, updated_at = now()
+      WHERE proposal_id = $1 AND status = 'pending' AND kind = 'revaluation'`,
+    [proposalId, decision.decided_at, decision.decided_by, decision.revaluation_event_id],
   );
   return (result.rowCount ?? 0) === 1;
 }

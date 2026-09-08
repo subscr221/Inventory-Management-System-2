@@ -574,14 +574,14 @@ Table 8: Folded duplicates
 
 ## Deferred from: code review (2026-09-06) of story 9.6
 
-Table 9 lists the two deferrals the 2026-09-06 group-C code review of story 9.6 consciously recorded. Both remain open as of 2026-09-06; 9.6C-2 is gated on the Story 9.7 disposal-reconciliation ruling.
+Table 9 lists the two deferrals the 2026-09-06 group-C code review of story 9.6 consciously recorded. Both were RESOLVED 2026-09-08 by Story 9.10 (see the resolution notes in the rows).
 
 Table 9: Deferred from the code review (2026-09-06) of story 9.6
 
 | Ref | Story | Item | Trigger or note |
 | --- | --- | --- | --- |
-| 9.6C-1 | 9-6 | The reconciliation report does not surface duplicate acknowledged_ref_ext entries although the ack-ref index exists to serve that lookup (read/projections/job_work_billing_feed.sql:79-85, src/read/projections/job_work_billing_feed.ts:199-229). One consolidated ERP invoice legitimately acknowledges several orders, so the report needs a duplicate-ref count | Group C code review 2026-09-06, consciously deferred reconciliation follow-up |
-| 9.6C-2 | 9-6 | Cycle-count variance adjustments can mutate an offcut-class balance and silently desync job_work_offcut_holding (src/compliance/cycle-count.ts). Mirrors the pre-existing job_work count behavior | Needs the Story 9.7 disposal reconciliation ruling |
+| 9.6C-1 | 9-6 | The reconciliation report does not surface duplicate acknowledged_ref_ext entries although the ack-ref index exists to serve that lookup (read/projections/job_work_billing_feed.sql:79-85, src/read/projections/job_work_billing_feed.ts:199-229). One consolidated ERP invoice legitimately acknowledges several orders, so the report needs a duplicate-ref count | RESOLVED 2026-09-08 by Story 9.10 Task 5: `listDuplicateAcknowledgedRefs` companion query surfaces the count on the reconciliation report (site-scoped). Commit lands with the story's review commit |
+| 9.6C-2 | 9-6 | Cycle-count variance adjustments can mutate an offcut-class balance and silently desync job_work_offcut_holding (src/compliance/cycle-count.ts). Mirrors the pre-existing job_work count behavior | RESOLVED 2026-09-08 by Story 9.10 Tasks 2-3: offcut-class count adjustments are now refused outright in the applier (`OFFCUT_ADJUSTMENT_REFUSED`, both doors, audited) and customer-owned line variance_value is zeroed, so no count path can mutate an offcut-class balance. Commit lands with the story's review commit |
 
 ## Deferred from: code review of story-9-8 (2026-09-07)
 
@@ -591,5 +591,113 @@ Table 10: Deferred from the code review (2026-09-07) of story-9-8
 
 | Ref | Story | Item | Trigger or note |
 | --- | --- | --- | --- |
-| 9.8-1 | 9-8 | `requireUuidParam` in `src/api/v1/service-orders.ts:253-259` does not lowercase the UUID path param before use, unlike the equivalent helper in `src/api/v1/production-completions.ts:188-196` - a same-key retry with different URL-path casing on the new approve route is wrongly rejected as a cross-target DUPLICATE_EVENT | Pre-existing helper predating this story, shared by every route in the file; fixing it is a cross-cutting change out of scope here |
-| 9.8-2 | 9-8 | The revaluation route/door (`POST .../offcut-revaluations` and direct events door for `jobwork.offcut_revalued`) still accepts a poster-claimed `approved_by` compared only against `resolveApprover`'s output, never against an authenticated CFO session - the exact single-event signature-forgery contract Story 9.8 was written to eliminate on the disposal path is still fully reachable here, including against an offcut already signed via the new two-step flow (`REVALUATION_FIELDS` src/compliance/jobwork-offcut-disposal.ts:200-209, shape validator :543-566, `applyJobworkOffcutRevalued` :1670-1683, route callerFields src/api/v1/service-orders.ts:2082-2088) | Human decision 2026-09-07 (code review of story-9-8): "its taking too much of time." Residual risk accepted; needs a follow-up story before go-live (extend the two-step flow to revaluation, or block above-band revaluation outright) |
+| 9.8-1 | 9-8 | `requireUuidParam` in `src/api/v1/service-orders.ts:253-259` does not lowercase the UUID path param before use, unlike the equivalent helper in `src/api/v1/production-completions.ts:188-196` - a same-key retry with different URL-path casing on the new approve route is wrongly rejected as a cross-target DUPLICATE_EVENT | RESOLVED 2026-09-08 by Story 9.10 Task 4: `requireUuidParam` lower-cases the path segment in ALL SEVEN route files that define it (service-orders, quality, production-orders, production-material, compliance, maintenance, production-completions), with the explanatory comment carried across. Commit lands with the story's review commit |
+| 9.8-2 | 9-8 | The revaluation route/door (`POST .../offcut-revaluations` and direct events door for `jobwork.offcut_revalued`) still accepts a poster-claimed `approved_by` compared only against `resolveApprover`'s output, never against an authenticated CFO session - the exact single-event signature-forgery contract Story 9.8 was written to eliminate on the disposal path is still fully reachable here, including against an offcut already signed via the new two-step flow (`REVALUATION_FIELDS` src/compliance/jobwork-offcut-disposal.ts:200-209, shape validator :543-566, `applyJobworkOffcutRevalued` :1670-1683, route callerFields src/api/v1/service-orders.ts:2082-2088) | RESOLVED 2026-09-09 by Story 9.9, which extended the two-step flow rather than blocking above-band revaluation (Project Lead ruling 2026-09-07). `approved_by` is gone from `REVALUATION_FIELDS`, from the shape validator and from the route allow-list; an above-band revaluation is refused APPROVAL_REQUIRED on both doors and must be proposed; the signature is the resolved approver's own authenticated request against a frozen `resolved_approver_actor_id`. `resolveAcquisitionApproval` and its "bearer credential" defence are deleted outright. Human decision 2026-09-07 that deferred it: "its taking too much of time" |
+
+## Deferred from: code review of story-9-10 (2026-09-08)
+
+- 9.10R-1 Seven byte-identical private copies of `requireUuidParam` exist across
+  `src/api/v1/compliance.ts`, `maintenance.ts`, `production-completions.ts`, `production-material.ts`,
+  `production-orders.ts`, `quality.ts` and `service-orders.ts`. Story 9.10 Task 4 lower-cased all
+  seven and added a near-duplicate rationale comment to each rather than extracting one shared
+  helper. The copies pre-date this story; the duplication is the same divergence hazard Task 1
+  exists to close, one layer up.
+- 9.10R-2 `logRejectionAudit` takes its own pool connection deliberately outside the caller's
+  transaction, and Story 9.10 calls it from inside `applyCycleCountProjection`
+  (`src/compliance/cycle-count.ts:1070`), which runs inside `persistEvent`. Two consequences, both
+  latent while no rebuild harness exists: every retry of the same idempotency key writes another
+  `audit_log` row before the refusal, and any `stock.adjusted` event with `stock_class = 'offcut'`
+  already in `domain_events` can never be re-applied. The connection acquisition also has no
+  timeout, so a refusal storm against a saturated pool waits while holding advisory and row locks.
+  This is the pattern the offcut-domain appliers already use; changing it is a platform decision,
+  not a story-9-10 decision.
+- 9.10R-3 Lower-casing `requireUuidParam` changes retry semantics for any event committed through
+  an upper-case path BEFORE Story 9.10. `src/api/v1/service-orders.ts:2024` compares the stored
+  payload's `service_order_id` against the now-lower-cased path segment, so such a retry answers
+  409 `DUPLICATE_EVENT` instead of replaying. A data check for pre-existing upper-case stream ids
+  would size the exposure; the pilot has no production data yet.
+- 9.10R-4 `test/integration/story-9-10.test.ts:1067` seeds an `owned` and an `offcut` balance at the
+  same lot-less `(sku, location)` grain through the admin pool. The stock-class laundering bar in
+  `cycle-count.ts:1085` and its twin in `stock-balance.ts` exist to prevent exactly that
+  coexistence, so the AC 2 and AC 3 arms assert behaviour on a state the production write paths
+  refuse to create. The refusal they pin is real; the grain it is pinned on is not reachable.
+
+## Deferred from: code review of story-9-9 (2026-09-09)
+
+- 9.9R-1 The holdings read surface (`GET /service-orders/:serviceOrderId/offcut-holdings`,
+  src/api/v1/service-orders.ts:2573-2574) exposes `resolved_approver_actor_id` and `proposed_by`
+  on every pending proposal of both kinds. Pre-existing from Story 9.8; Story 9.9 extends it to
+  revaluation rows. The refusal seams deliberately never name the approver, so the read surface
+  and the refusal message now disagree about what may be disclosed. No release blocker: user ids
+  are not bearer credentials (the story's own position), but the defence-in-depth intent of the
+  anonymous refusals is undermined.
+- 9.9R-2 The approve applier executes the frozen `proposed_value` with no invariant re-derivation
+  against the live holding at approve time (src/compliance/jobwork-offcut-disposal.ts:2305-2318).
+  A below-band revaluation can land between propose and approve (AC 5 is precisely that case), and
+  while the AC 5 document check catches a superseded document, no guard verifies
+  `proposed_value === billableValueOf(current_quantity, rate)`. Latent while Story 9.10's bar
+  keeps offcut quantity immutable; a future quantity path would silently mint a delta whose value
+  disagrees with quantity x rate.
+- 9.9R-3 The `superseded` lifecycle leg of `chk_job_work_offcut_acq_proposal_lifecycle`
+  (read/projections/job_work_offcut_acquisition_proposal.sql:89-90) allows `decided_at` present
+  with `decided_by` NULL and imposes no `decided_at >= created_at` bound. Reserved for the future
+  withdrawal path; with AC 5 now creating real dead proposals (9.9-1), rows that should later be
+  `superseded` are indistinguishable from ones still genuinely awaiting signature.
+- 9.9R-4 AC 5's superseded-document signal is shadowed when the intervening below-band revaluation
+  used a different currency (src/compliance/jobwork-offcut-disposal.ts:2268-2274): the currency
+  check in `latestSupersedableCreditNote` rejects INVALID_PARAMS before the id comparison at :2287
+  runs, so the CREDIT_NOTE_SUPERSEDED audit row a CFO would expect is never produced.
+
+## Deferred from: development of story-9-9 (2026-09-09)
+
+- 9.9-1 A revaluation proposal that is refused `CREDIT_NOTE_SUPERSEDED` at approve time (AC 5, a
+  below-band revaluation landed between propose and approve) is stale forever, and it still holds
+  the holding's ONE pending slot from
+  `uq_job_work_offcut_acq_proposal_pending`. No further proposal can be raised on that offcut,
+  because Story 9.8 reserved the `superseded` status for a withdrawal path that nothing writes.
+  Story 9.9 deliberately did not invent one: withdrawing a pending signature request is its own
+  authority question (who may withdraw, and is the withdrawal itself a governed decision), and
+  answering it inside a story about forgery would have been a design decision taken by a
+  developer. The refusal message is worded not to promise a re-proposal that would be refused
+  `DUPLICATE_EVENT`, and `test/integration/story-9-9.test.ts` asserts the gap so it cannot change
+  silently.
+- 9.9-2 The edge connector's `PERMANENT_ERROR_CODES` twin
+  (`edge/src/sync/connector.ts`) has drifted from the server's
+  (`src/sync/upload.ts`) again, by nine codes: `BILLING_NOT_READY`, `CREDIT_NOTE_MISSING`,
+  `CREDIT_NOTE_SUPERSEDED`, `CREDIT_NOTE_UNCITABLE`, `KIT_LINE_MISMATCH`,
+  `OFFCUT_ELECTION_MISSING`, `OFFCUT_NOT_RETAINED`, `PROTOTYPE_NOT_SALEABLE` and `SOD_VIOLATION`.
+  All nine pre-date Story 9.9, whose own refusals are already registered server-side; the drift is
+  raised here because Story 9.9 now depends on `CREDIT_NOTE_SUPERSEDED` for an approval refusal,
+  and because the server file's comment asserts the two sets carry the identical block, which is
+  the same invariant the Story 9.5 review found broken. The outcome is currently equivalent for a
+  409, so this is a divergence hazard rather than a live defect. A drift TEST would close the class
+  instead of the instance.
+- 9.9-3 The `GET /service-orders/:serviceOrderId/offcut-holdings` response key
+  `acquisition_proposals` now carries revaluation proposals too, discriminated by each row's
+  `kind`. The key kept its Story 9.8 name because that response shape is already committed and
+  renaming it would break every reader to fix a label. A reader that branches on the key rather
+  than on `kind` will mis-read a revaluation as an acquisition.
+
+## Deferred from: code review of story-11-2 (2026-09-09)
+
+- 11.2R-1 `POST /api/v1/events` has no frontline-role denial for `dispatch.packed`,
+  `dispatch.shipping_documents_generated` or `dispatch.dispatched`. Only the edge door
+  (`src/api/v1/edge.ts`, `DISPATCH_DENIED_FRONTLINE_ROLES`) refuses `store_assistant` and
+  `warehouse_operator`; the generic events door checks module scope plus
+  `assertPayloadSiteWriteAccess` only, so a `warehouse_operator` with warehouse write scope can
+  post any `dispatch.*` event directly. Pre-existing since Story 3.7; Story 11.2 closes the hole for
+  its own `dispatch.irn_recorded` only. A door-level role gate keyed by event type (the
+  `OFFCUT_VALUATION_EVENT_TYPES` precedent) would close the class.
+- 11.2R-2 IRN applier refusals other than `IRN_MISSING` (`DISPATCH_IRN_CONFLICT`,
+  `DISPATCH_ORDER_SITE_MISMATCH`) leave no `audit_log` row: the store audits only on success and the
+  applier self-audits only the statutory refusal. This matches every sibling applier; raised because
+  a competing-invoice conflict is a compliance-relevant event with no trace.
+- 11.2R-3 `also_covers` on `POST /api/v1/dispatch/:dispatchOrderId/irn` is uncapped: N site
+  resolutions, N ERP-line reads and N advisory locks per request. No list-bearing route in the
+  codebase caps its list today; a shared cap belongs to a sweep, not one route.
+- 11.2R-4 `chk_dispatch_irn_present` uses `btrim` (spaces only), so a tab-only `irn_ext` passes the
+  DB constraint, and there is no CHECK on a blank `so_number_ext`. Both app doors `trim()` before
+  insert, so this is reachable only by direct SQL.
+- 11.2R-5 No uniqueness on `irn_ext` across invoice numbers: the same IRN under two different
+  `invoice_number_ext` values on different orders is accepted. The IRN is ERP-minted and the IRP
+  guarantees uniqueness upstream; the platform records, it does not mint.

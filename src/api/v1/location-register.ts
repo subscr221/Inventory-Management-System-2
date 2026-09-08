@@ -264,7 +264,7 @@ const createLocationBase: RouteHandler = async (req, res, _params) => {
 // PATCH /api/v1/locations/:locationId
 // -----------------------------------------------------------------------------------------------
 const updateLocationBase: RouteHandler = async (req, res, params) => {
-  const locationId = params['locationId'];
+  const locationId = params['locationId']?.toLowerCase();
   if (!locationId || !UUID_REGEX.test(locationId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'locationId must be a valid UUID');
     return;

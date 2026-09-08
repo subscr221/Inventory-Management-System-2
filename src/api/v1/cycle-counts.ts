@@ -340,7 +340,7 @@ const createCycleCountBase: RouteHandler = async (req, res) => {
 // ---------------------------------------------------------------------------
 
 const submitCycleCountBase: RouteHandler = async (req, res, params) => {
-  const id = params['cycle_count_id'];
+  const id = params['cycle_count_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'cycle_count_id must be a valid UUID');
     return;
@@ -424,8 +424,8 @@ const submitCycleCountBase: RouteHandler = async (req, res, params) => {
 // ---------------------------------------------------------------------------
 
 const approveAdjustmentBase: RouteHandler = async (req, res, params) => {
-  const id = params['cycle_count_id'];
-  const adjustmentId = params['adjustment_id'];
+  const id = params['cycle_count_id']?.toLowerCase();
+  const adjustmentId = params['adjustment_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id) || !adjustmentId || !UUID_REGEX.test(adjustmentId)) {
     sendRequestError(
       req,
@@ -573,8 +573,8 @@ const approveAdjustmentBase: RouteHandler = async (req, res, params) => {
 // ---------------------------------------------------------------------------
 
 const rejectAdjustmentBase: RouteHandler = async (req, res, params) => {
-  const id = params['cycle_count_id'];
-  const adjustmentId = params['adjustment_id'];
+  const id = params['cycle_count_id']?.toLowerCase();
+  const adjustmentId = params['adjustment_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id) || !adjustmentId || !UUID_REGEX.test(adjustmentId)) {
     sendRequestError(
       req,
@@ -672,7 +672,7 @@ const rejectAdjustmentBase: RouteHandler = async (req, res, params) => {
 // ---------------------------------------------------------------------------
 
 const getCycleCountBase: RouteHandler = async (req, res, params) => {
-  const id = params['cycle_count_id'];
+  const id = params['cycle_count_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'cycle_count_id must be a valid UUID');
     return;

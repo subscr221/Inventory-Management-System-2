@@ -96,7 +96,7 @@ function eventMetadata(
 // ---------------------------------------------------------------------------
 
 export const linkGrnToPoBase: RouteHandler = async (req, res, params) => {
-  const grnId = params['grnId'];
+  const grnId = params['grnId']?.toLowerCase();
   if (!grnId || !UUID_REGEX.test(grnId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'grnId must be a UUID', { grn_id: grnId });
     return;
@@ -269,7 +269,7 @@ export const listThreeWayMatchesBase: RouteHandler = async (req, res, _params) =
 };
 
 export const getThreeWayMatchBase: RouteHandler = async (req, res, params) => {
-  const matchId = params['matchId'];
+  const matchId = params['matchId']?.toLowerCase();
   if (!matchId || !UUID_REGEX.test(matchId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'matchId must be a UUID', {
       match_id: matchId,
@@ -307,7 +307,7 @@ function recordNoteBase(
   noteType: 'credit_note' | 'debit_note',
 ): RouteHandler {
   return async (req, res, params) => {
-    const invoiceId = params['invoiceId'];
+    const invoiceId = params['invoiceId']?.toLowerCase();
     if (!invoiceId || !UUID_REGEX.test(invoiceId)) {
       sendRequestError(req, res, 400, 'INVALID_PARAMS', 'invoiceId must be a UUID', {
         invoice_id: invoiceId,

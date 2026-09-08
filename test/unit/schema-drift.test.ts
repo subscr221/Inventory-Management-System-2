@@ -1908,6 +1908,9 @@ const EXPECTED = [
       'chk_job_work_offcut_acq_proposal_lifecycle',
       'chk_job_work_offcut_acq_proposal_money',
       'chk_job_work_offcut_acq_proposal_dual_control',
+      // Story 9.9: the kind discriminator, which also carries the AC 5 rule that a revaluation
+      // proposal MUST name the document it supersedes and an acquisition must not.
+      'chk_job_work_offcut_acq_proposal_kind',
     ],
     indexes: [
       'uq_job_work_offcut_acq_proposal_source_event',
@@ -1946,6 +1949,23 @@ const EXPECTED = [
     table: 'push_subscriptions',
     indexes: ['idx_push_subscriptions_user'],
     appUserGrant: 'INSERT, SELECT, UPDATE, DELETE',
+  },
+  // Story 11.2: the outbound IRN coverage registry. The source-event index is pinned EXPLICITLY as
+  // a PLAIN (non-unique) index: one recording event writes N coverage rows, one per dispatch order
+  // the invoice covers, so a later "restore" of a UNIQUE would break multi-line invoices. The
+  // chk_dispatch_irn_present block is a guarded DROP-then-ADD pair (the bom_line precedent).
+  {
+    canonical: 'read/projections/dispatch_irn.sql',
+    table: 'dispatch_irn',
+    constraints: ['chk_dispatch_irn_present'],
+    indexes: ['idx_dispatch_irn_source_event', 'idx_dispatch_irn_invoice', 'idx_dispatch_irn_so'],
+    indexBodies: [
+      'CREATE INDEX IF NOT EXISTS idx_dispatch_irn_source_event ON dispatch_irn (source_event_id)',
+      'CREATE INDEX IF NOT EXISTS idx_dispatch_irn_invoice ON dispatch_irn (invoice_number_ext)',
+      'CREATE INDEX IF NOT EXISTS idx_dispatch_irn_so ON dispatch_irn (so_number_ext)',
+    ],
+    // UPDATE is the supersession path only (same invoice, regenerated IRN - review decision D1).
+    appUserGrant: 'INSERT, SELECT, UPDATE',
   },
 ];
 
@@ -1994,6 +2014,58 @@ describe('Story 2.1 schema drift guard', () => {
       );
       assert.ok(initDb.includes(fragment), `init-db.sql backfill mirror missing: ${fragment}`);
     }
+  });
+
+  // Story 9.9 (Task 1.6): the offcut proposal table gained a `kind` discriminator, the frozen
+  // superseded document and the revaluation event id as STANDALONE ADD COLUMN statements - exactly
+  // the case the generic CREATE TABLE body comparison above cannot see - and its lifecycle CHECK
+  // was WIDENED. The Story 9.6 group-A lesson is that a name-only pin stays green when the
+  // constraint body changes, so the semantic content of the widened constraint is pinned here as
+  // text: an approved row must carry EXACTLY ONE event id, matching its kind.
+  it('Story 9.9 mirrors the proposal kind columns and the widened lifecycle CHECK into init-db.sql', () => {
+    const proposalSql = read('read/projections/job_work_offcut_acquisition_proposal.sql');
+    for (const column of [
+      "ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'acquisition'",
+      'ADD COLUMN IF NOT EXISTS supersedes_credit_note_id UUID',
+      'ADD COLUMN IF NOT EXISTS revaluation_event_id UUID',
+    ]) {
+      const statement = `ALTER TABLE job_work_offcut_acquisition_proposal
+  ${column};`;
+      assert.ok(
+        proposalSql.includes(statement),
+        `job_work_offcut_acquisition_proposal.sql missing: ${statement}`,
+      );
+      assert.ok(initDb.includes(statement), `init-db.sql missing the upgrade path: ${statement}`);
+    }
+    // The kind-specific legs are the whole semantic content of the widened constraint. A pin on
+    // the constraint NAME alone stays green if an approved revaluation stops having to name the
+    // event that approved it, or if an acquisition starts being allowed to supersede a document.
+    for (const fragment of [
+      "(kind = 'acquisition' AND supersedes_credit_note_id IS NULL)",
+      "OR (kind = 'revaluation' AND supersedes_credit_note_id IS NOT NULL)",
+      'AND disposal_event_id IS NULL AND revaluation_event_id IS NULL)',
+      "(kind = 'acquisition' AND disposal_event_id IS NOT NULL",
+      "OR (kind = 'revaluation' AND revaluation_event_id IS NOT NULL",
+    ]) {
+      assert.ok(
+        normalizeSql(proposalSql).includes(normalizeSql(fragment)),
+        `job_work_offcut_acquisition_proposal.sql missing constraint text: ${fragment}`,
+      );
+      assert.ok(
+        normalizeSql(initDb).includes(normalizeSql(fragment)),
+        `init-db.sql missing constraint text: ${fragment}`,
+      );
+    }
+    // AC 4 of Story 9.8 survives the extension: ONE pending proposal per holding, across BOTH
+    // kinds. Splitting the partial unique index per kind would let an acquisition proposal and a
+    // revaluation proposal wait on the same offcut at once.
+    const pendingIndex =
+      "CREATE UNIQUE INDEX IF NOT EXISTS uq_job_work_offcut_acq_proposal_pending ON job_work_offcut_acquisition_proposal (holding_id) WHERE status = 'pending'";
+    assert.ok(proposalSql.includes(pendingIndex), 'the pending index must not be split per kind');
+    assert.ok(
+      initDb.includes(pendingIndex),
+      'init-db.sql pending index must not be split per kind',
+    );
   });
 
   // Story 9.7: the eight standalone ADD COLUMN statements carrying the disposal facts onto
@@ -2868,6 +2940,31 @@ describe('Story 9.8 event-type registry', () => {
       requiresBusinessStream: false,
     });
     assert.deepStrictEqual(SUPPORTED_EVENT_TYPES['jobwork.offcut_acquisition_approved'], {
+      streamType: 'jobwork',
+      requiresBusinessStream: false,
+    });
+  });
+});
+
+// Story 9.9 Task 2.2. The consumer of this registry FAILS OPEN, so an event type missing from it is
+// invisible - Story 9.6's group-A review found three that way. Pinned with the same settings as the
+// acquisition counterparts above, which is what "the same stream and the same requiresBusinessStream
+// setting" has to mean in a test rather than in a comment.
+describe('Story 9.9 event-type registry', () => {
+  it('registers the revaluation proposal and approval on the jobwork stream', () => {
+    assert.deepStrictEqual(
+      SUPPORTED_EVENT_TYPES['jobwork.offcut_revaluation_proposed'],
+      SUPPORTED_EVENT_TYPES['jobwork.offcut_acquisition_proposed'],
+    );
+    assert.deepStrictEqual(
+      SUPPORTED_EVENT_TYPES['jobwork.offcut_revaluation_approved'],
+      SUPPORTED_EVENT_TYPES['jobwork.offcut_acquisition_approved'],
+    );
+    assert.deepStrictEqual(SUPPORTED_EVENT_TYPES['jobwork.offcut_revaluation_proposed'], {
+      streamType: 'jobwork',
+      requiresBusinessStream: false,
+    });
+    assert.deepStrictEqual(SUPPORTED_EVENT_TYPES['jobwork.offcut_revaluation_approved'], {
       streamType: 'jobwork',
       requiresBusinessStream: false,
     });

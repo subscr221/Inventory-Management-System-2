@@ -149,7 +149,7 @@ const createDoaEntryBase: RouteHandler = async (req, res, _params) => {
 // Task 2.2 - PATCH /api/v1/doa/entries/:entryId
 // -----------------------------------------------------------------------------------------------
 const updateDoaEntryBase: RouteHandler = async (req, res, params) => {
-  const entryId = params['entryId'];
+  const entryId = params['entryId']?.toLowerCase();
   if (!entryId || !UUID_REGEX.test(entryId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'entryId must be a valid UUID');
     return;

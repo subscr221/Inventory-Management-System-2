@@ -171,7 +171,7 @@ const listPutawayTasksBase: RouteHandler = async (req, res) => {
 
 const getPutawayTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PUTAWAY_READ_ROLES, 'read');
-  const putawayTaskId = params['putawayTaskId'];
+  const putawayTaskId = params['putawayTaskId']?.toLowerCase();
   if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
     sendRequestError(
       req,
@@ -199,7 +199,7 @@ const getPutawayTaskBase: RouteHandler = async (req, res, params) => {
 
 const getPutawaySuggestionBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PUTAWAY_EXECUTE_ROLES, 'read');
-  const putawayTaskId = params['putawayTaskId'];
+  const putawayTaskId = params['putawayTaskId']?.toLowerCase();
   if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
     sendRequestError(
       req,
@@ -244,7 +244,7 @@ const getPutawaySuggestionBase: RouteHandler = async (req, res, params) => {
 
 const completePutawayBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PUTAWAY_EXECUTE_ROLES, 'write');
-  const putawayTaskId = params['putawayTaskId'];
+  const putawayTaskId = params['putawayTaskId']?.toLowerCase();
   if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
     sendRequestError(
       req,
@@ -346,7 +346,7 @@ const listVelocityClassificationBase: RouteHandler = async (req, res) => {
  */
 const assignPutawayTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PUTAWAY_SUPERVISE_ROLES, 'write');
-  const putawayTaskId = params['putawayTaskId'];
+  const putawayTaskId = params['putawayTaskId']?.toLowerCase();
   if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
     sendRequestError(
       req,

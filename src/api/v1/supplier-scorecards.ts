@@ -199,7 +199,7 @@ function parseScorecardFilters(
 // ---------------------------------------------------------------------------
 
 export const getSupplierScorecardBase: RouteHandler = async (req, res, params) => {
-  const supplierId = params['supplierId'];
+  const supplierId = params['supplierId']?.toLowerCase();
   if (!supplierId || !UUID_REGEX.test(supplierId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId must be a UUID', {
       supplier_id: supplierId,
@@ -255,7 +255,7 @@ export const getSupplierScorecardBase: RouteHandler = async (req, res, params) =
 // ---------------------------------------------------------------------------
 
 export const listSupplierScorecardTransactionsBase: RouteHandler = async (req, res, params) => {
-  const supplierId = params['supplierId'];
+  const supplierId = params['supplierId']?.toLowerCase();
   if (!supplierId || !UUID_REGEX.test(supplierId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'supplierId must be a UUID', {
       supplier_id: supplierId,
@@ -281,7 +281,7 @@ export const listSupplierScorecardTransactionsBase: RouteHandler = async (req, r
 // ---------------------------------------------------------------------------
 
 export const recordOnTimeDeliveryMetricBase: RouteHandler = async (req, res, params) => {
-  const grnId = params['grnId'];
+  const grnId = params['grnId']?.toLowerCase();
   if (!grnId || !UUID_REGEX.test(grnId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'grnId must be a UUID', { grn_id: grnId });
     return;
@@ -381,7 +381,7 @@ export const recordOnTimeDeliveryMetricBase: RouteHandler = async (req, res, par
 // ---------------------------------------------------------------------------
 
 export const recordPriceVarianceMetricBase: RouteHandler = async (req, res, params) => {
-  const matchId = params['matchId'];
+  const matchId = params['matchId']?.toLowerCase();
   if (!matchId || !UUID_REGEX.test(matchId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'matchId must be a UUID', {
       match_id: matchId,
@@ -467,7 +467,7 @@ export const recordPriceVarianceMetricBase: RouteHandler = async (req, res, para
 // ---------------------------------------------------------------------------
 
 export const recordResponsivenessMetricBase: RouteHandler = async (req, res, params) => {
-  const poId = params['poId'];
+  const poId = params['poId']?.toLowerCase();
   if (!poId || !UUID_REGEX.test(poId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'poId must be a UUID', { po_id: poId });
     return;
@@ -567,7 +567,7 @@ export const recordResponsivenessMetricBase: RouteHandler = async (req, res, par
  * SCORECARD_REFERENCE_INVALID.
  */
 export const recordQualityAcceptanceMetricBase: RouteHandler = async (req, res, params) => {
-  const dispositionId = params['dispositionId'];
+  const dispositionId = params['dispositionId']?.toLowerCase();
   if (!dispositionId || !UUID_REGEX.test(dispositionId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'dispositionId must be a UUID', {
       disposition_id: dispositionId,

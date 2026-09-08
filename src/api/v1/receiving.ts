@@ -252,7 +252,7 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
 
 const getGrnBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, RECEIVING_READ_ROLES, 'read');
-  const grnId = params['grnId'];
+  const grnId = params['grnId']?.toLowerCase();
   if (!grnId || !UUID_REGEX.test(grnId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'grnId path parameter must be a UUID');
     return;
@@ -338,7 +338,7 @@ const listDiscrepanciesBase: RouteHandler = async (req, res) => {
 
 const releasePutawayTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PUTAWAY_RELEASE_ROLES, 'write');
-  const putawayTaskId = params['putawayTaskId'];
+  const putawayTaskId = params['putawayTaskId']?.toLowerCase();
   if (!putawayTaskId || !UUID_REGEX.test(putawayTaskId)) {
     sendRequestError(
       req,

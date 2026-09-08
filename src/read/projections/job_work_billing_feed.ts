@@ -228,3 +228,78 @@ export async function listUnacknowledgedBillingFeeds(
     customer_party_code: (row as Record<string, unknown>)['customer_party_code'] as string,
   }));
 }
+
+/**
+ * Story 9.10 (closes deferred-work 9.6C-1, AC 5): every acknowledged_ref_ext that covers MORE than
+ * one service order, site-scoped. One consolidated ERP invoice legitimately acknowledging several
+ * job-work orders is CORRECT behaviour, not an error, so this is a REPORTING count for the reader to
+ * judge - never a refusal or a warning. The count deliberately uses the number of DISTINCT
+ * acknowledged feeds per reference (each feed is one-per-order via uq_job_work_billing_feed_order).
+ */
+export interface DuplicateAcknowledgedRefRow {
+  acknowledged_ref_ext: string;
+  order_count: number;
+  site_ids: string[];
+  feed_ids: string[];
+}
+
+/** Bound on the report body; the reference list grows with acknowledged history forever. */
+const DUPLICATE_ACK_REF_LIMIT = 500;
+
+export async function listDuplicateAcknowledgedRefs(
+  params: { siteIds: string[] | null },
+  client?: PoolClient,
+): Promise<DuplicateAcknowledgedRefRow[]> {
+  // Code review 2026-09-08 (P3): the duplicate must be detected over ALL acknowledged feeds and the
+  // site scope applied AFTER that, never before. Filtering first and then grouping made a reference
+  // that acknowledges one order at site A and one at site B collapse to order_count = 1 for a
+  // site-scoped reader and disappear from the report entirely - the single case a reconciliation
+  // reader most needs to see. `MIN(site_id)` also reported one arbitrary site as THE site for a
+  // genuinely multi-site reference; the row now carries every site the reference touches.
+  //
+  // Scope is preserved where it matters: `order_count` and `site_ids` describe the reference as a
+  // whole (that is the finance fact being reported), while `feed_ids` lists only the feeds the
+  // reader is scoped to, so a site-scoped reader learns a reference is shared and how widely without
+  // receiving another site's record identifiers.
+  let sites: string[] | null = null;
+  if (params.siteIds !== null) {
+    sites = params.siteIds.filter((s) => UUID_REGEX.test(s));
+    if (sites.length === 0) return [];
+  }
+  const result = await runner(client).query(
+    `WITH acknowledged AS (
+       SELECT f.acknowledged_ref_ext, f.feed_id, f.site_id
+         FROM job_work_billing_feed f
+        WHERE f.status = 'acknowledged'
+          AND f.acknowledged_ref_ext IS NOT NULL
+     ), dup AS (
+       SELECT a.acknowledged_ref_ext,
+              COUNT(DISTINCT a.feed_id)::int AS order_count,
+              array_agg(DISTINCT a.site_id::text) AS site_ids
+         FROM acknowledged a
+        GROUP BY a.acknowledged_ref_ext
+       HAVING COUNT(DISTINCT a.feed_id) > 1
+     )
+     SELECT d.acknowledged_ref_ext,
+            d.order_count,
+            d.site_ids,
+            COALESCE(
+              (SELECT array_agg(a.feed_id::text ORDER BY a.feed_id)
+                 FROM acknowledged a
+                WHERE a.acknowledged_ref_ext = d.acknowledged_ref_ext
+                  AND ($1::text[] IS NULL OR a.site_id::text = ANY($1::text[]))),
+              ARRAY[]::text[]
+            ) AS feed_ids
+       FROM dup d
+      WHERE $1::text[] IS NULL OR d.site_ids && $1::text[]
+      ORDER BY d.acknowledged_ref_ext ASC
+      LIMIT ${DUPLICATE_ACK_REF_LIMIT}`,
+    [sites],
+  );
+  return result.rows.map((row) => ({
+    acknowledged_ref_ext: row['acknowledged_ref_ext'] as string,
+    order_count: Number(row['order_count']),
+    site_ids: (row['site_ids'] as string[] | null) ?? [],
+    feed_ids: (row['feed_ids'] as string[] | null) ?? [],
+  }));
+}

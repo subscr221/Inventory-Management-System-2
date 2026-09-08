@@ -305,7 +305,7 @@ const createGateEventBase: RouteHandler = async (req, res) => {
 
 const reverseGateEventBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, GATE_WRITE_ROLES, 'write');
-  const gateEventId = params['gateEventId'];
+  const gateEventId = params['gateEventId']?.toLowerCase();
   if (!gateEventId || !UUID_REGEX.test(gateEventId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'gateEventId path parameter must be a UUID');
     return;
@@ -342,7 +342,7 @@ const reverseGateEventBase: RouteHandler = async (req, res, params) => {
 
 const getGateEventBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, GENERAL_READ_ROLES, 'read');
-  const gateEventId = params['gateEventId'];
+  const gateEventId = params['gateEventId']?.toLowerCase();
   if (!gateEventId || !UUID_REGEX.test(gateEventId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'gateEventId path parameter must be a UUID');
     return;

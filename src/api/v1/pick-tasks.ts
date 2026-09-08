@@ -333,7 +333,7 @@ const listPickTasksBase: RouteHandler = async (req, res) => {
 
 const getPickTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PICK_READ_ROLES, 'read');
-  const pickTaskId = params['pickTaskId'];
+  const pickTaskId = params['pickTaskId']?.toLowerCase();
   if (!pickTaskId || !UUID_REGEX.test(pickTaskId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'pickTaskId path parameter must be a UUID');
     return;
@@ -356,7 +356,7 @@ const getPickTaskBase: RouteHandler = async (req, res, params) => {
 
 const assignPickTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PICK_SUPERVISE_ROLES, 'write');
-  const pickTaskId = params['pickTaskId'];
+  const pickTaskId = params['pickTaskId']?.toLowerCase();
   if (!pickTaskId || !UUID_REGEX.test(pickTaskId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'pickTaskId path parameter must be a UUID');
     return;
@@ -450,8 +450,8 @@ const assignPickTaskBase: RouteHandler = async (req, res, params) => {
 
 const confirmPickLineBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PICK_CONFIRM_ROLES, 'write');
-  const pickTaskId = params['pickTaskId'];
-  const pickLineId = params['pickLineId'];
+  const pickTaskId = params['pickTaskId']?.toLowerCase();
+  const pickLineId = params['pickLineId']?.toLowerCase();
   if (!pickTaskId || !UUID_REGEX.test(pickTaskId) || !pickLineId || !UUID_REGEX.test(pickLineId)) {
     sendRequestError(
       req,
@@ -538,7 +538,7 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
 
 const completePickTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PICK_SUPERVISE_ROLES, 'write');
-  const pickTaskId = params['pickTaskId'];
+  const pickTaskId = params['pickTaskId']?.toLowerCase();
   if (!pickTaskId || !UUID_REGEX.test(pickTaskId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'pickTaskId path parameter must be a UUID');
     return;
@@ -595,7 +595,7 @@ const completePickTaskBase: RouteHandler = async (req, res, params) => {
 
 const printPickTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, PICK_READ_ROLES, 'read');
-  const pickTaskId = params['pickTaskId'];
+  const pickTaskId = params['pickTaskId']?.toLowerCase();
   if (!pickTaskId || !UUID_REGEX.test(pickTaskId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'pickTaskId path parameter must be a UUID');
     return;

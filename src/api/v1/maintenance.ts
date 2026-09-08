@@ -2701,7 +2701,11 @@ function requireUuidParam(params: Record<string, string> | undefined, name: stri
   if (!value || !isUuid(value)) {
     throw new AppError(400, 'INVALID_PARAMS', `${name} must be a UUID`);
   }
-  return value;
+  // Story 9.10 (Task 4, closes deferred-work 9.8-1): lower-cased because UUID_REGEX is
+  // case-insensitive while PostgreSQL returns uuid columns lower-cased. Comparing the raw path
+  // segment against a persisted stream_id let an upper-case path COMMIT an event and then answer
+  // 409 on a retry.
+  return value.toLowerCase();
 }
 
 /** A required calendar date field from the body, distinct from business_date. */

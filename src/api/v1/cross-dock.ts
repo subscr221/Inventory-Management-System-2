@@ -114,7 +114,7 @@ function auditCtxFor(
 }
 
 function taskId(params: Record<string, string>): string | null {
-  const value = params['crossDockTaskId'];
+  const value = params['crossDockTaskId']?.toLowerCase();
   return value && UUID_REGEX.test(value) ? value : null;
 }
 

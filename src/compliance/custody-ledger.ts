@@ -668,6 +668,27 @@ export function classifyDuplicate(err: unknown, entryId: string, eventId: string
         409,
       );
     }
+    // Story 9.9 code review (2026-09-09): the proposal table's own pkey and source-event unique.
+    // The propose appliers classify only uq_job_work_offcut_acq_proposal_pending inline; a proposal
+    // id reused through the direct events door (a NEW event, so alreadyPersisted does not absorb it)
+    // collides here on the pkey, and two deliveries of one propose event collide on the source-event
+    // unique. Without these arms both fell through to the raw 500 the classification exists to stop.
+    if (constraint === 'job_work_offcut_acquisition_proposal_pkey') {
+      reject(
+        'DUPLICATE_EVENT',
+        'A job-work offcut proposal row with this id already exists',
+        { proposal_id: entryId, constraint },
+        409,
+      );
+    }
+    if (constraint === 'uq_job_work_offcut_acq_proposal_source_event') {
+      reject(
+        'DUPLICATE_EVENT',
+        'A job-work offcut proposal row already exists for this event',
+        { source_event_id: eventId, constraint },
+        409,
+      );
+    }
   }
   throw err;
 }

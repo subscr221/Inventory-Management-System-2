@@ -108,11 +108,18 @@ function assertPayloadSiteWriteAccess(
  * (they are two separate real people by ruling - that separation IS the control), and the identity
  * that matters is the one FROZEN ON THE PROPOSAL ROW, which this door has not read. The applier
  * performs that check against the row, so both doors meet the identical wall.
+ *
+ * Story 9.9: `jobwork.offcut_revaluation_proposed` joins for exactly the reason the acquisition
+ * proposal did - proposing a revaluation IS the pricing decision, only landing in a proposal row
+ * instead of a delta document - and `jobwork.offcut_revaluation_approved` stays out for exactly the
+ * reason its acquisition twin does. This omission was live for the length of one test run: the
+ * story's task list named the seam, the routes and the schema, and not this door.
  */
 const OFFCUT_VALUATION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'jobwork.offcut_disposed',
   'jobwork.offcut_revalued',
   'jobwork.offcut_acquisition_proposed',
+  'jobwork.offcut_revaluation_proposed',
 ]);
 const OFFCUT_VALUATION_ROLES: ReadonlySet<string> = new Set(['finance_controller']);
 
@@ -149,10 +156,58 @@ function assertOffcutValuationFunctionAccess(
   }
 }
 
+/**
+ * Story 11.2 code review (2026-09-09): recording the outbound IRN lifts the statutory
+ * IRN-before-dispatch block, and the REST route restricts it to dispatch_clerk / warehouse_manager.
+ * This door authorised on module `warehouse` + `write` alone, so a warehouse_operator (who may
+ * confirm pick lines but perform no dispatch-side action) could post dispatch.irn_recorded and
+ * remove the wall the same role cannot pass on the route. Privilege AND site scope come from the
+ * SAME assignment, exactly as the offcut-valuation gate above.
+ */
+const DISPATCH_IRN_EVENT_TYPE = 'dispatch.irn_recorded';
+const DISPATCH_IRN_RECORDING_ROLES: ReadonlySet<string> = new Set([
+  'dispatch_clerk',
+  'warehouse_manager',
+]);
+
+function assertDispatchIrnFunctionAccess(
+  authContext: NonNullable<ReturnType<typeof getAuthContext>>,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): void {
+  if (body.stream_type !== 'warehouse' || body.event_type !== DISPATCH_IRN_EVENT_TYPE) return;
+  const recordingRoles = authContext.roles.filter(
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      DISPATCH_IRN_RECORDING_ROLES.has(r.role),
+  );
+  if (recordingRoles.length === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'Recording an IRN requires a dispatch clerk or warehouse manager assignment',
+      { required_roles: [...DISPATCH_IRN_RECORDING_ROLES] },
+    );
+  }
+  const siteId = body.payload['site_id'];
+  if (typeof siteId === 'string') {
+    const wildcard = recordingRoles.some((r) => r.locationId === '*');
+    if (!wildcard && !recordingRoles.some((r) => r.locationId === siteId)) {
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        'No dispatch clerk or warehouse manager assignment grants access to the site of this order',
+        { site_id: siteId, required_roles: [...DISPATCH_IRN_RECORDING_ROLES] },
+      );
+    }
+  }
+}
+
 function assertPlanningPayloadWriteLocation(
   authContext: NonNullable<ReturnType<typeof getAuthContext>>,
   body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
-): void {  const locationId = planningPayloadLocation(body);
+): void {
+  const locationId = planningPayloadLocation(body);
   if (!locationId) return;
   if (body.event_type === 'ownership.agreement_set') {
     const allowed = authContext.roles.some(
@@ -240,6 +295,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   if (authContext) {
     assertPlanningPayloadWriteLocation(authContext, body);
     assertOffcutValuationFunctionAccess(authContext, body);
+    assertDispatchIrnFunctionAccess(authContext, body);
     assertPayloadSiteWriteAccess(authContext, body);
     body.metadata.actor.user_id = authContext.userId;
     const authorizedRole = getAuthorizedRole(req);
@@ -314,7 +370,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
 
 const getStreamBase: RouteHandler = async (req, res, params) => {
   const streamType = params['streamType'];
-  const streamId = params['streamId'];
+  const streamId = params['streamId']?.toLowerCase();
 
   if (!streamType || !streamId) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'streamType and streamId are required');

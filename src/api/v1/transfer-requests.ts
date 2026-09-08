@@ -467,7 +467,7 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
 // ---------------------------------------------------------------------------
 
 const getTransferRequestBase: RouteHandler = async (req, res, params) => {
-  const id = params['transfer_request_id'];
+  const id = params['transfer_request_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID');
     return;
@@ -581,7 +581,7 @@ function transferRequestRowToJson(row: TransferRequestRow): Record<string, unkno
 // ---------------------------------------------------------------------------
 
 const approveTransferRequestBase: RouteHandler = async (req, res, params) => {
-  const id = params['transfer_request_id'];
+  const id = params['transfer_request_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID');
     return;
@@ -680,7 +680,7 @@ const approveTransferRequestBase: RouteHandler = async (req, res, params) => {
 // ---------------------------------------------------------------------------
 
 const rejectTransferRequestBase: RouteHandler = async (req, res, params) => {
-  const id = params['transfer_request_id'];
+  const id = params['transfer_request_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID');
     return;
@@ -801,7 +801,7 @@ const rejectTransferRequestBase: RouteHandler = async (req, res, params) => {
 // ---------------------------------------------------------------------------
 
 const shipTransferRequestBase: RouteHandler = async (req, res, params) => {
-  const id = params['transfer_request_id'];
+  const id = params['transfer_request_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID');
     return;
@@ -931,7 +931,7 @@ const shipTransferRequestBase: RouteHandler = async (req, res, params) => {
 // ---------------------------------------------------------------------------
 
 const receiveTransferRequestBase: RouteHandler = async (req, res, params) => {
-  const id = params['transfer_request_id'];
+  const id = params['transfer_request_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID');
     return;

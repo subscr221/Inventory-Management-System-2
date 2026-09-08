@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import type {
   DispatchDispatchedEnvelope,
+  DispatchIrnRecordedEnvelope,
   DispatchPackedEnvelope,
   DispatchShippingDocumentsGeneratedEnvelope,
 } from '../events/schema.js';
@@ -17,6 +18,14 @@ import {
 } from '../read/projections/dispatch_document.js';
 import { getSalesOrderLineById } from '../read/projections/erp_sales_order.js';
 import { QC_GATE_BLOCKED_STATUSES } from '../read/projections/qc_inspection_task.js';
+import type { AuditEntryPayload } from '../read/projections/audit_log.js';
+import { logRejectionAudit } from '../read/projections/audit_log.js';
+import {
+  dispatchIrnPresent,
+  getDispatchIrn,
+  insertDispatchIrnCoverage,
+  supersedeDispatchIrn,
+} from '../read/projections/dispatch_irn.js';
 import {
   renderBOL,
   renderPackingSlip,
@@ -401,6 +410,7 @@ export async function applyDispatchDispatchedProjection(
   envelope: DispatchDispatchedEnvelope,
   client: PoolClient,
   _eventId: string,
+  auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
 ): Promise<void> {
   const p = envelope.payload;
 
@@ -446,24 +456,35 @@ export async function applyDispatchDispatchedProjection(
     );
   }
 
-  // Re-run LOT_ON_HOLD check — lock every candidate lot first, same race fix as the generate-documents check.
-  const holdResult = await client.query(
-    `SELECT lm.lot_id, lm.quality_hold_status
+  // Re-run LOT_ON_HOLD check — the COMPLETE gate through the shared guard, which locks every
+  // candidate lot_master row FIRST, then checks the manual/recall hold half and the QC-gate half.
+  // Story 9.10 (Task 1.2): this used to inline its own hold query plus a qcGatedLotIds call - both
+  // halves checked in the right order, but the shared guard's OWN file diverging from the rule its
+  // header comment states is how the next divergence becomes invisible. Converge on the shared
+  // guard, keeping the refusal code and HTTP status byte-for-byte (400, LOT_ON_HOLD).
+  const lotResult = await client.query(
+    `SELECT lm.lot_id
      FROM packing_record pr
      JOIN lot_master lm ON lm.lot_id = pr.lot_id
      WHERE pr.dispatch_order_id = $1
-     ORDER BY lm.lot_id
-     FOR UPDATE OF lm`,
+     ORDER BY lm.lot_id`,
     [p.dispatch_order_id],
   );
-  if (holdResult.rows.some((r: Record<string, unknown>) => r['quality_hold_status'] !== 'none')) {
-    throw new AppError(400, 'LOT_ON_HOLD', 'Cannot dispatch: one or more lots are on quality hold');
-  }
-  // Story 8.1 (Task 6): the final recheck also re-runs the QC gate under the same locks.
-  const qcGatedAtDispatch = await qcGatedLotIds(
-    holdResult.rows.map((r: Record<string, unknown>) => r['lot_id'] as string),
+  const { heldLotIds, qcGatedLotIds: qcGatedAtDispatch } = await dispatchGateBlockedLots(
+    lotResult.rows.map((r: Record<string, unknown>) => r['lot_id'] as string),
     client,
   );
+  if (heldLotIds.length > 0) {
+    throw new AppError(
+      400,
+      'LOT_ON_HOLD',
+      'Cannot dispatch: one or more lots are on quality hold',
+      {
+        held_lot_ids: heldLotIds,
+        reason: 'quality_hold',
+      },
+    );
+  }
   if (qcGatedAtDispatch.length > 0) {
     throw new AppError(
       400,
@@ -471,6 +492,50 @@ export async function applyDispatchDispatchedProjection(
       'Cannot dispatch: one or more lots have not been released by QC',
       { held_lot_ids: qcGatedAtDispatch, reason: 'qc_gate' },
     );
+  }
+
+  // Story 11.2 (AC 1): the IRN-before-dispatch wall, re-derived INSIDE the transaction (the
+  // dispatch_order_status row above is already FOR UPDATE) so the direct POST /api/v1/events door
+  // meets the identical wall. It runs AFTER the hold and QC rechecks so an order that is already
+  // blocked (LOT_ON_HOLD) reports that existing 400 and the IRN wall only fires for an
+  // otherwise-clear dispatch attempt. dispatchIsEInvoiceable is the single future-exemption point
+  // (binding decision 4: pilot answer true for every erp_sales_order-backed supply on this path) and
+  // dispatchGateIrnMissing is the single helper every dispatch surface must call (Task 3.1). There
+  // is NO override for anybody (binding decision 5; access-matrix invariant).
+  //
+  // Code review 2026-09-09: the wall FAILS CLOSED. An order whose erp_sales_order row is missing
+  // (dispatch_order_status carries no FK, so a purge or re-sync can strand it) cannot have coverage
+  // recorded against it (the recording applier requires the line), so it is refused IRN_MISSING
+  // rather than exempted - the 8.4 "null never blocks" shape that Story 8.6 reversed.
+  const soLine = await getSalesOrderLineById(p.dispatch_order_id, client);
+  const irnMissing =
+    soLine === null
+      ? true
+      : dispatchIsEInvoiceable(soLine) &&
+        (await dispatchGateIrnMissing(p.dispatch_order_id, client));
+  if (irnMissing) {
+    const refusal = new AppError(
+      409,
+      'IRN_MISSING',
+      soLine === null
+        ? 'Cannot dispatch: the dispatch order does not resolve to an ERP sales-order line, so no IRN can be verified for it'
+        : 'Cannot dispatch: no IRN has been recorded for this dispatch order',
+      {
+        dispatch_order_id: p.dispatch_order_id,
+        so_number_ext: soLine?.so_number_ext ?? null,
+        reason: soLine === null ? 'no_erp_sales_order_line' : 'irn_not_recorded',
+      },
+    );
+    if (auditCtx) {
+      await logRejectionAudit({
+        ...auditCtx,
+        event_id: null,
+        http_status: 409,
+        error_code: 'IRN_MISSING',
+        details: refusal.details,
+      });
+    }
+    throw refusal;
   }
 
   // Count how many packing records this dispatch order has, so the decrement below can be
@@ -520,4 +585,258 @@ export async function applyDispatchDispatchedProjection(
 
   // Update packing record statuses
   await updatePackingRecordsStatusByDispatchOrder(p.dispatch_order_id, 'dispatched', client);
+}
+
+// ---------------------------------------------------------------------------
+// Story 11.2: the outbound IRN coverage registry and the dispatch gate.
+// ---------------------------------------------------------------------------
+
+// Binding decision 4 (ruled 2026-09-05): ALL supplies are e-invoiceable. There is no exemption to
+// classify, so the gate applies to every dispatch on this path. This predicate is the SINGLE place
+// a future exemption would land; it is parameterised on the resolved erp_sales_order line so a unit
+// test can actually fail it (the 8.4 tautological-config lesson), and so the applier can keep the
+// pilot answer ("true for every erp-backed sales supply") in one auditable place.
+export function dispatchIsEInvoiceable(soLine: { so_number_ext: string; status: string }): boolean {
+  // A sales dispatch order IS an erp_sales_order row (dispatch_order_status joins on its id), so
+  // EVERY order that resolves to an ERP sales line is e-invoiceable - including one whose
+  // so_number_ext is blank (a sync defect is not an exemption; the wall must not open on bad data).
+  // The predicate takes the line, never null: the applier fails closed BEFORE calling it when the
+  // line is missing. A future exemption (e.g. SEZ/export supply) would branch on the line here.
+  return typeof soLine.so_number_ext === 'string';
+}
+
+// Task 3.1/3.2: the IRN half of the dispatch gate, kept as a SIBLING of dispatchGateBlockedLots (the
+// IRN is DISPATCH-ORDER-keyed, not lot-keyed, so forcing it into { heldLotIds, qcGatedLotIds } would
+// be wrong). EVERY dispatch surface meets the IRN check by calling THIS helper in the same locked
+// transaction; there is no second ad-hoc call site.
+export async function dispatchGateIrnMissing(
+  dispatchOrderId: string,
+  client: PoolClient,
+): Promise<boolean> {
+  return !(await dispatchIrnPresent(dispatchOrderId, client));
+}
+
+// Closed-shape allowlist for the recording payload. so_number_ext is server-derived and refused on
+// input; recorded_by is the authenticated actor (metadata.actor.user_id, pinned by both doors) and
+// likewise refused; anything not listed here is refused.
+const DISPATCH_IRN_ALLOWED_FIELDS = new Set([
+  'invoice_number_ext',
+  'irn_ext',
+  'dispatch_order_ids',
+  'irp_acknowledged_at',
+  'site_id',
+]);
+
+/**
+ * Review decision D2 (2026-09-09): a GST IRN is the IRP's SHA-256 over the invoice, presented as 64
+ * hexadecimal characters. Anything else cannot be an IRN, and accepting "any non-blank string" made
+ * the statutory gate a formality. Both doors normalise to lower case before storage
+ * (normalizeIrnExt) and the DB CHECK pins the same lower-case shape.
+ */
+export const IRN_EXT_REGEX = /^[0-9a-f]{64}$/i;
+
+export function normalizeIrnExt(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+// Strict RFC 3339 / ISO 8601 instant: Date.parse alone accepts "1" and "March" in V8, which then
+// fail the TIMESTAMPTZ cast inside the transaction as a raw 500. The upper bound mirrors the
+// occurred_at rule from the deferred-work triage: an IRP acknowledgement cannot lie in the future.
+const ISO_INSTANT_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+const IRP_ACK_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+export function isValidIrpAcknowledgedAt(value: unknown, now: number = Date.now()): boolean {
+  if (typeof value !== 'string' || !ISO_INSTANT_REGEX.test(value)) return false;
+  const parsed = Date.parse(value);
+  return !Number.isNaN(parsed) && parsed <= now + IRP_ACK_FUTURE_SKEW_MS;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function isOptionalTimestamp(value: unknown): boolean {
+  return value === undefined || value === null || isValidIrpAcknowledgedAt(value);
+}
+
+export function assertDispatchIrnShape(envelope: DispatchIrnRecordedEnvelope): void {
+  const p = envelope.payload;
+  if (typeof p !== 'object' || p === null)
+    reject('DISPATCH_IRN_INVALID_PAYLOAD', 'payload is required');
+  const payload = p as unknown as Record<string, unknown>;
+  for (const key of Object.keys(payload)) {
+    if (!DISPATCH_IRN_ALLOWED_FIELDS.has(key))
+      reject(
+        'DISPATCH_IRN_INVALID_PAYLOAD',
+        `so_number_ext, recorded_by and every other field is server-derived and refused on input (unexpected key: ${key})`,
+      );
+  }
+  if (payload['so_number_ext'] !== undefined)
+    reject('DISPATCH_IRN_INVALID_PAYLOAD', 'so_number_ext is server-derived and refused on input');
+  if (!isNonEmptyString(payload['invoice_number_ext']))
+    reject(
+      'DISPATCH_IRN_INVALID_PAYLOAD',
+      'invoice_number_ext is required and must be a non-empty string',
+    );
+  if (!isNonEmptyString(payload['irn_ext']) || !IRN_EXT_REGEX.test(payload['irn_ext'].trim()))
+    reject(
+      'DISPATCH_IRN_INVALID_PAYLOAD',
+      'irn_ext is required and must be the 64-character hexadecimal IRN issued by the IRP',
+    );
+  if (!Array.isArray(payload['dispatch_order_ids']) || payload['dispatch_order_ids'].length === 0)
+    reject(
+      'DISPATCH_IRN_INVALID_PAYLOAD',
+      'dispatch_order_ids is required and must be a non-empty array',
+    );
+  const ids = payload['dispatch_order_ids'] as unknown[];
+  for (const id of ids) {
+    if (!isUuid(id))
+      reject('DISPATCH_IRN_INVALID_PAYLOAD', 'every dispatch_order_id must be a UUID');
+  }
+  // Case-insensitive dedupe: a UUID differing only in case is the same order, and the applier
+  // lower-cases every id before locking and writing.
+  if (new Set(ids.map((id) => (id as string).toLowerCase())).size !== ids.length)
+    reject('DISPATCH_IRN_INVALID_PAYLOAD', 'dispatch_order_ids must not contain duplicates');
+  if (!isUuid(payload['site_id']))
+    reject('DISPATCH_IRN_INVALID_PAYLOAD', 'site_id is required and must be a UUID');
+  if (!isOptionalTimestamp(payload['irp_acknowledged_at']))
+    reject(
+      'DISPATCH_IRN_INVALID_PAYLOAD',
+      'irp_acknowledged_at must be an RFC 3339 instant not in the future, or null',
+    );
+}
+
+/**
+ * Task 2.5/2.6 applier: one recording event writes N coverage rows, one per listed dispatch order,
+ * in this single transaction. Replay idempotency comes from the persistEvent alreadyPersisted
+ * short-circuit (never a bespoke pre-read of dispatch_irn, and never a UNIQUE index on
+ * source_event_id).
+ *
+ * Collision handling (deviates from the Task 2.6 text, which said "let the PK raise 23505 and
+ * classify it"): a per-dispatch-order advisory xact lock is taken first and the existing coverage
+ * row is READ under it, so two concurrent recordings serialize and the loser classifies against the
+ * committed row instead of surfacing a raw dispatch_irn_pkey 23505 - outcome-equivalent, disclosed
+ * in the story Completion Notes. Classification (review decision D1, 2026-09-09):
+ *   - DIFFERENT invoice on an already covered order: 409 DISPATCH_IRN_CONFLICT, no overwrite.
+ *   - SAME invoice, SAME IRN: a no-op that succeeds (a re-post, not a replay).
+ *   - SAME invoice, DIFFERENT IRN: the IRP cancel-and-regenerate case - the stored IRN is
+ *     SUPERSEDED in place (the only UPDATE on dispatch_irn) and the superseding event is stamped.
+ * Every input is normalised first: ids lower-cased, invoice trimmed, IRN trimmed + lower-cased -
+ * so the events door and the REST door store identical bytes.
+ */
+export async function applyDispatchIrnRecorded(
+  envelope: DispatchIrnRecordedEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload;
+  // The recording clerk is the authenticated actor, pinned onto metadata by both doors. Never a
+  // payload field (the Story 9.9 approved_by lesson).
+  const recordedBy = envelope.metadata.actor.user_id;
+  const correlationId = envelope.metadata.correlation_id ?? null;
+  const invoiceNumberExt = p.invoice_number_ext.trim();
+  const irnExt = normalizeIrnExt(p.irn_ext);
+  const irpAcknowledgedAt = p.irp_acknowledged_at ?? null;
+  const dispatchOrderIds = p.dispatch_order_ids.map((id) => id.toLowerCase());
+
+  // Site binding (Task 2.4): the payload MUST carry site_id so assertPayloadSiteWriteAccess fires on
+  // the direct events door, and the applier binds payload site to row site by checking every listed
+  // dispatch order resolves to that same site (via its erp_sales_order line), refusing the whole
+  // event otherwise. so_number_ext is server-derived from that same line. Review decision D3: a line
+  // ERP has closed can no longer be invoiced, so recording against it is refused on both doors.
+  const resolved: Array<{ dispatch_order_id: string; so_number_ext: string }> = [];
+  for (const dispatchOrderId of dispatchOrderIds) {
+    const soLine = await getSalesOrderLineById(dispatchOrderId, client);
+    if (!soLine) {
+      throw new AppError(
+        404,
+        'DISPATCH_ORDER_NOT_FOUND',
+        `No ERP sales-order line exists for dispatch order "${dispatchOrderId}"`,
+        { dispatch_order_id: dispatchOrderId },
+      );
+    }
+    if (soLine.status !== 'open') {
+      throw new AppError(
+        409,
+        'DISPATCH_ORDER_CLOSED',
+        `Dispatch order "${dispatchOrderId}" is ${soLine.status} in ERP; an IRN cannot be recorded against it`,
+        { dispatch_order_id: dispatchOrderId, status: soLine.status },
+      );
+    }
+    if (soLine.ship_from_site_id !== p.site_id) {
+      throw new AppError(
+        400,
+        'DISPATCH_ORDER_SITE_MISMATCH',
+        `Dispatch order "${dispatchOrderId}" does not belong to the payload site`,
+        {
+          dispatch_order_id: dispatchOrderId,
+          site_id: p.site_id,
+          resolved_site_id: soLine.ship_from_site_id,
+        },
+      );
+    }
+    resolved.push({ dispatch_order_id: dispatchOrderId, so_number_ext: soLine.so_number_ext });
+  }
+
+  // Write one coverage row per listed dispatch order. Take a per-dispatch-order advisory xact lock
+  // FIRST (deterministic order) so two concurrent recordings that cover the SAME dispatch order
+  // (e.g. via each other's also_covers) serialize: the loser blocks, then reads the committed
+  // coverage row and classifies (same invoice = no-op, different invoice = 409), instead of one
+  // losing on a raw dispatch_irn_pkey 23505. The insert below then never races a PK collision.
+  const lockKeys = [...resolved.map((r) => r.dispatch_order_id)].sort();
+  for (const dispatchOrderId of lockKeys) {
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+      `dispatch_irn:${dispatchOrderId}`,
+    ]);
+  }
+
+  for (const row of resolved) {
+    const existing = await getDispatchIrn(row.dispatch_order_id, client);
+    if (existing) {
+      if (existing.invoice_number_ext !== invoiceNumberExt) {
+        throw new AppError(
+          409,
+          'DISPATCH_IRN_CONFLICT',
+          `Dispatch order ${row.dispatch_order_id} is already covered by invoice ${existing.invoice_number_ext}`,
+          {
+            dispatch_order_id: row.dispatch_order_id,
+            invoice_number_ext: invoiceNumberExt,
+            existing_invoice_number_ext: existing.invoice_number_ext,
+            so_number_ext: existing.so_number_ext,
+          },
+        );
+      }
+      if (existing.irn_ext === irnExt) {
+        // SAME invoice, SAME IRN: a no-op that succeeds.
+        continue;
+      }
+      // SAME invoice, DIFFERENT IRN: supersede in place (decision D1).
+      await supersedeDispatchIrn(
+        {
+          dispatch_order_id: row.dispatch_order_id,
+          irn_ext: irnExt,
+          irp_acknowledged_at: irpAcknowledgedAt,
+          recorded_by: recordedBy,
+          source_event_id: eventId,
+          correlation_id: correlationId,
+        },
+        client,
+      );
+      continue;
+    }
+    await insertDispatchIrnCoverage(
+      {
+        dispatch_order_id: row.dispatch_order_id,
+        invoice_number_ext: invoiceNumberExt,
+        irn_ext: irnExt,
+        so_number_ext: row.so_number_ext,
+        irp_acknowledged_at: irpAcknowledgedAt,
+        site_id: p.site_id,
+        recorded_by: recordedBy,
+        source_event_id: eventId,
+        correlation_id: correlationId,
+      },
+      client,
+    );
+  }
 }

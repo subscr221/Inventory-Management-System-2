@@ -398,6 +398,20 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
       );
     }
   }
+  // Story 11.2 (code review 2026-09-09): recording the ERP-issued IRN is a dispatch-side action
+  // restricted to the same roles as the REST route (dispatch_clerk / warehouse_manager). The
+  // recording clerk is metadata.actor.user_id, already pinned above; a payload recorded_by is
+  // refused by the shape assert.
+  if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.irn_recorded') {
+    const role = assignment.role;
+    if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        `Role "${role}" is not authorized to record an IRN`,
+      );
+    }
+  }
   // Story 4.1: supplier creation identity is the authenticated actor. Supplier GSTIN uniqueness
   // is enforced inside the compliance seam (not here), so both HTTP and edge paths are guarded.
   if (body.stream_type === 'procurement' && body.event_type === 'supplier.registered') {

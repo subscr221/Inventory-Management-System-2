@@ -58,7 +58,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function validLotId(params: Record<string, string>): string | null {
-  const lotId = params['lotId'];
+  const lotId = params['lotId']?.toLowerCase();
   return lotId && UUID_REGEX.test(lotId) ? lotId : null;
 }
 

@@ -235,7 +235,7 @@ const completePhysicalVerificationBase: RouteHandler = async (req, res) => {
 // ---------------------------------------------------------------------------
 
 const signOffPhysicalVerificationBase: RouteHandler = async (req, res, params) => {
-  const id = params['physical_verification_id'];
+  const id = params['physical_verification_id']?.toLowerCase();
   if (!id || !UUID_REGEX.test(id)) {
     sendRequestError(
       req,

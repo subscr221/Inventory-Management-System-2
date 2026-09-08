@@ -71,6 +71,8 @@ import {
   applyDispatchPackedProjection,
   applyDispatchShippingDocumentsGeneratedProjection,
   applyDispatchDispatchedProjection,
+  assertDispatchIrnShape,
+  applyDispatchIrnRecorded,
 } from '../compliance/dispatch.js';
 import {
   assertTaskSlaConfigUpdatedShape,
@@ -262,6 +264,9 @@ import {
   // Story 9.8: the two-step second signature on an above-band acquisition.
   applyJobworkOffcutAcquisitionProposed,
   applyJobworkOffcutAcquisitionApproved,
+  // Story 9.9: the same two-step signature on an above-band revaluation.
+  applyJobworkOffcutRevaluationProposed,
+  applyJobworkOffcutRevaluationApproved,
 } from '../compliance/jobwork-offcut-disposal.js';
 import {
   assertProductionMaterialShape,
@@ -282,6 +287,7 @@ import type {
   DispatchPackedEnvelope,
   DispatchShippingDocumentsGeneratedEnvelope,
   DispatchDispatchedEnvelope,
+  DispatchIrnRecordedEnvelope,
   TaskSlaConfigUpdatedEnvelope,
   PutawayTaskAssignedEnvelope,
   PickTaskAssignedEnvelope,
@@ -628,6 +634,11 @@ export async function persistEvent(
   if (envelope.event_type === 'dispatch.dispatched') {
     assertDispatchDispatchedShape(envelope as unknown as DispatchDispatchedEnvelope);
   }
+  // Story 11.2: the dispatch.irn_recorded shape assert is non-DB and runs with the other
+  // pre-transaction asserts, so a malformed IRN recording never consumes an idempotency key.
+  if (envelope.event_type === 'dispatch.irn_recorded') {
+    assertDispatchIrnShape(envelope as unknown as DispatchIrnRecordedEnvelope);
+  }
   // Story 3.8: task SLA threshold shape validation (task_type, threshold_minutes, optional zone_id)
   // is non-DB and runs with the other pre-transaction asserts, so a malformed threshold change never
   // consumes an idempotency key.
@@ -869,8 +880,11 @@ export async function persistEvent(
     // Story 2.6: cycle-count variance computation, DOA-gated adjustment lifecycle, approved
     // stock adjustments, and physical-verification evidence run inside this same transaction so
     // the projection and the domain_events insert commit or roll back together. The AC2 guard
-    // (stock.adjusted requires an approved adjustment) lives in applyCycleCountProjection.
-    await applyCycleCountProjection(envelope, client, eventId);
+    // (stock.adjusted requires an approved adjustment) lives in applyCycleCountProjection. auditCtx
+    // is forwarded so the Story 9.10 offcut-adjustment bar can leave a statutory refusal audit row
+    // on BOTH doors (the route and the direct events door), the same pattern the offcut-domain
+    // appliers use.
+    await applyCycleCountProjection(envelope, client, eventId, auditCtx);
     // Story 2.7: inventory-planning params, safety-stock/reorder-point computation, replenishment
     // recommendation, and obsolescence flag/clear run inside this same transaction so the
     // projection and the domain_events insert commit or roll back together. The reorder-crossing
@@ -957,6 +971,17 @@ export async function persistEvent(
     if (envelope.event_type === 'dispatch.dispatched') {
       await applyDispatchDispatchedProjection(
         envelope as unknown as DispatchDispatchedEnvelope,
+        client,
+        eventId,
+        auditCtx,
+      );
+    }
+    // Story 11.2: the outbound IRN recording applier writes one coverage row per listed dispatch
+    // order in this same transaction, and classifies a DIFFERENT-invoice collision on an already
+    // covered dispatch order as 409 DISPATCH_IRN_CONFLICT (see applyDispatchIrnRecorded).
+    if (envelope.event_type === 'dispatch.irn_recorded') {
+      await applyDispatchIrnRecorded(
+        envelope as unknown as DispatchIrnRecordedEnvelope,
         client,
         eventId,
       );
@@ -1200,6 +1225,11 @@ export async function persistEvent(
     await applyJobworkOffcutAcquisitionProposed(envelope, client, eventId, auditCtx);
     await applyJobworkOffcutAcquisitionApproved(envelope, client, eventId, auditCtx);
     await applyJobworkOffcutRevalued(envelope, client, eventId, auditCtx);
+    // Story 9.9: propose, then approve, on the revaluation path. The approval raises the same delta
+    // credit note the single-event below-band revaluation above raises, gated on the CFO's
+    // authenticated identity rather than on a string the poster supplied.
+    await applyJobworkOffcutRevaluationProposed(envelope, client, eventId, auditCtx);
+    await applyJobworkOffcutRevaluationApproved(envelope, client, eventId, auditCtx);
     await applyJobworkCreditNoteAcknowledged(envelope, client, eventId, auditCtx);
     // Story 4.5: three-way match projection (native PO binding on the GRN, the match record and
     // its invoice match_status mirror, credit/debit note lifts, payment-clearance feed ledger)

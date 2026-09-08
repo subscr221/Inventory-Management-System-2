@@ -323,6 +323,23 @@ export async function applyCrossDockTaskCompletedProjection(
     business_date: gateBusinessDateOf(envelope),
     client,
   });
+  // Story 9.10 (Task 1.3), rewritten by code review 2026-09-08 (P4) because the original text was
+  // wrong on both of its stated reasons. This is the third gate idiom and does NOT use the shared
+  // dispatchGateBlockedLots guard. The real reason is the JOIN, not the key type: the lock above
+  // must bind the lot to THIS receipt through `grn_line_id`, which the shared guard (a plain
+  // `WHERE lot_id = ANY(...)` over lot_master) cannot express. Cross-dock does address lot_master by
+  // UUID - `task.lot_id` - so the earlier claim that it "addresses its lot by NUMBER" was false; the
+  // lot NUMBER is used later, for the stock_balance rows.
+  //
+  // The second original claim, that "a cross-dock has no QC inspection task row", was both false as
+  // stated and self-defeating: `assertQcGateAllows` looks the task up itself and, before 2026-09-08,
+  // returned early when there was none - so on a GRN lot (which carries no task) the QC half it was
+  // credited with was vacuous. Since that review the hold half of `assertQcGateAllows` runs
+  // unconditionally, so this call now refuses a held lot with or without a task, and the inline
+  // check above is a deliberate belt-and-braces refusal taken under the row lock.
+  //
+  // Both halves are therefore covered, in the fixed lock order (lot, gate, stock). A reader auditing
+  // call sites must recognise this as a complete gate, not one half of one.
   const lotNumber = lotResult.rows[0]!['lot_number'] as string;
   await client.query(
     `SELECT balance_id FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id = $3 AND stock_class = 'owned' ORDER BY balance_id FOR UPDATE`,

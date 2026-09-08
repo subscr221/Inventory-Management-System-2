@@ -384,6 +384,7 @@ import {
   postCreditNoteAcknowledgmentHandler,
   listServiceOrderOffcutHoldingsHandler,
   approveOffcutAcquisitionProposalHandler,
+  approveOffcutRevaluationProposalHandler,
 } from './api/v1/service-orders.js';
 import {
   createProductionOrderHandler,
@@ -465,6 +466,8 @@ import {
   getPackingRecord,
   getDispatchOrderStatusHandler,
   getDispatchDocument,
+  postIrnRecorded,
+  getIrnCoverage,
 } from './api/v1/dispatch.js';
 import {
   createTransferRequestHandler,
@@ -1147,6 +1150,12 @@ export function createAppRouter(): Router {
     '/api/v1/service-orders/:serviceOrderId/offcut-acquisition-proposals/:proposalId/approve',
     approveOffcutAcquisitionProposalHandler,
   );
+  // Story 9.9: the same second signature on an above-band offcut REVALUATION, closing the path
+  // Story 9.8 left on the claimed-approver contract. Also NOT finance-controller gated.
+  router.post(
+    '/api/v1/service-orders/:serviceOrderId/offcut-revaluation-proposals/:proposalId/approve',
+    approveOffcutRevaluationProposalHandler,
+  );
 
   // Story 4.5: goods receipt and three-way match - native PO binding on a Story 3.4 GRN, the
   // PO/receipt/invoice match, the credit and debit notes that lift a blocked match, and the ERP
@@ -1203,6 +1212,10 @@ export function createAppRouter(): Router {
   router.post('/api/v1/dispatch/:dispatchOrderId/dispatch', postDispatched);
   router.get('/api/v1/dispatch/:dispatchOrderId/packing-records', getPackingRecords);
   router.get('/api/v1/dispatch/:dispatchOrderId/documents', getDispatchDocuments);
+  // Story 11.2: outbound IRN coverage registry - record the ERP-issued IRN (POST) and read the
+  // recorded coverage back (GET) to see whether the IRN-before-dispatch block has lifted.
+  router.post('/api/v1/dispatch/:dispatchOrderId/irn', postIrnRecorded);
+  router.get('/api/v1/dispatch/:dispatchOrderId/irn', getIrnCoverage);
   router.get('/api/v1/packing-records/:packingRecordId', getPackingRecord);
   router.get('/api/v1/dispatch-order-status/:dispatchOrderId', getDispatchOrderStatusHandler);
   router.get('/api/v1/dispatch/documents/:documentId', getDispatchDocument);

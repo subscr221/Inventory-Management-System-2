@@ -35,6 +35,7 @@ import {
 import {
   getBillingFeedById,
   listUnacknowledgedBillingFeeds,
+  listDuplicateAcknowledgedRefs,
 } from '../../read/projections/job_work_billing_feed.js';
 import { billingFeedRetryWindowElapsed } from '../../adapters/erp/job-work-billing-feed.js';
 import { config } from '../../config/index.js';
@@ -66,6 +67,8 @@ import {
   JOBWORK_OFFCUT_ACQUISITION_PROPOSED,
   JOBWORK_OFFCUT_ACQUISITION_APPROVED,
   JOBWORK_OFFCUT_ACQUISITION_TRANSACTION_TYPE,
+  JOBWORK_OFFCUT_REVALUATION_PROPOSED,
+  JOBWORK_OFFCUT_REVALUATION_APPROVED,
   DISPOSAL_DERIVED_FIELDS,
   REVALUATION_DERIVED_FIELDS,
 } from '../../compliance/jobwork-offcut-disposal.js';
@@ -255,7 +258,12 @@ function requireUuidParam(params: Record<string, string> | undefined, name: stri
   if (!value || !isUuid(value)) {
     throw new AppError(400, 'INVALID_PARAMS', `${name} must be a UUID`, { [name]: value ?? null });
   }
-  return value;
+  // Story 9.10 (Task 4, closes deferred-work 9.8-1): lower-cased because UUID_REGEX is
+  // case-insensitive while PostgreSQL returns uuid columns lower-cased (production-completions.ts
+  // records the same lesson from a real 409). Comparing the raw path segment against the persisted
+  // stream_id let an upper-case path COMMIT a service-order event and then answer 409 on a retry.
+  // The richer `details` payload is kept deliberately - the two helpers differ there by design.
+  return value.toLowerCase();
 }
 
 function assertSiteReadAccess(req: IncomingMessage, siteId: string): void {
@@ -1787,6 +1795,10 @@ const getJobworkBillingReconciliationReportBase: RouteHandler = async (req, res,
         exception: out.filter((r) => r.status === 'exception').length,
         open_to_dispatch: out.filter((r) => r.open_to_dispatch).length,
       },
+      // Story 9.10 (closes deferred-work 9.6C-1, AC 5): an ERP reference covering several orders is
+      // CORRECT behaviour, so the report surfaces the count for the reader to judge rather than
+      // leaving duplicate acknowledged_ref_ext entries to be discovered by hand.
+      duplicate_acknowledged_refs: await listDuplicateAcknowledgedRefs({ siteIds }),
       rows: out,
     });
   } catch (err: unknown) {
@@ -1850,12 +1862,21 @@ function requireFinanceControllerScope(req: IncomingMessage, siteId: string): vo
  */
 /** Story 9.8: the subset of the disposal's caller fields a PROPOSAL payload accepts. */
 const PROPOSAL_CALLER_FIELDS: readonly string[] = ['rate', 'currency', 'location_id'];
+/**
+ * Story 9.9: the revaluation proposal accepts no location - a revaluation names no bin, moves no
+ * stock and its proposal moves even less.
+ */
+const REVALUATION_PROPOSAL_CALLER_FIELDS: readonly string[] = ['rate', 'currency'];
 
-async function isAboveBandAcquisition(
+/**
+ * The band lookup both routes share. Story 9.9: the DOA band applies to the revalued value on the
+ * SAME terms and through the SAME transaction type as the acquisition (Story 9.7 Task 5.5), or a
+ * below-band disposal followed by an unsigned revaluation would be a route to any value.
+ */
+async function isAboveBandValue(
   body: Record<string, unknown>,
   order: ServiceOrderRow,
 ): Promise<boolean> {
-  if (body['disposition'] !== 'acquired') return false;
   const rate = body['rate'];
   const holdingId = body['holding_id'];
   if (typeof rate !== 'string' || !/^\d{1,14}(\.\d{1,4})?$/.test(rate.trim())) return false;
@@ -1868,12 +1889,26 @@ async function isAboveBandAcquisition(
       billableValueOf(holding.quantity, rate.trim()),
     );
     return band.requiresApproval;
-  } catch {
-    // resolveApprover raises APPROVAL_UNRESOLVED when a band MATCHED but nobody holds the role.
-    // That is an above-band acquisition, so route it to the proposal and let its applier refuse it
-    // under the lock - where the refusal is audited on both doors alike.
-    return true;
+  } catch (err) {
+    // Story 9.9 code review (2026-09-09): this catch used to swallow EVERY failure. resolveApprover
+    // raises APPROVAL_UNRESOLVED when a band MATCHED but nobody holds the role - that is an
+    // above-band value, so route it to the proposal and let its applier refuse it under the lock,
+    // where the refusal is audited on both doors alike. Any OTHER error (a transient DB fault, for
+    // example) must propagate: routing a below-band revaluation into a proposal on a transient
+    // error would turn an infrastructure fault into a spurious business refusal by the applier.
+    if (err instanceof AppError && err.errorCode === 'APPROVAL_UNRESOLVED') {
+      return true;
+    }
+    throw err;
   }
+}
+
+async function isAboveBandAcquisition(
+  body: Record<string, unknown>,
+  order: ServiceOrderRow,
+): Promise<boolean> {
+  if (body['disposition'] !== 'acquired') return false;
+  return isAboveBandValue(body, order);
 }
 
 /** The two valuation write routes share everything but their field list and event type. */
@@ -1886,8 +1921,17 @@ async function postOffcutValuationEvent(
     idField: 'disposal_id' | 'revaluation_id';
     callerFields: readonly string[];
     derivedFields: readonly string[];
-    /** Story 9.8: only the disposal route can turn into a proposal. */
-    bandAware?: boolean;
+    /**
+     * Story 9.8 (disposal) and Story 9.9 (revaluation): the PROPOSAL this route turns into above
+     * the governed band. Both routes now have one; the shape is per-route because the event type,
+     * the id field and the accepted fields all differ.
+     */
+    proposal?: {
+      eventType: string;
+      idField: string;
+      callerFields: readonly string[];
+      isAboveBand: (body: Record<string, unknown>, order: ServiceOrderRow) => Promise<boolean>;
+    };
   },
 ): Promise<void> {
   const body = requireBody(req, res);
@@ -1948,23 +1992,24 @@ async function postOffcutValuationEvent(
     let eventType = spec.eventType;
     let idField: string = spec.idField;
     let proposalFields: readonly string[] | null = null;
-    // Code review 2026-09-07 (Story 9.8 finding): this retry branch must be scoped to the SAME
-    // bandAware route the original posting could have come from - postOffcutValuationEvent is
-    // shared with the revaluation route (bandAware unset there), and without this gate a proposal
-    // idempotency key reused against the revaluation route would be accepted as a "replay" and
-    // answer with a proposal-shaped response from the wrong endpoint.
-    if (isRetry && spec.bandAware === true && retried!.event_type === JOBWORK_OFFCUT_ACQUISITION_PROPOSED) {
-      eventType = JOBWORK_OFFCUT_ACQUISITION_PROPOSED;
-      idField = 'proposal_id';
-      proposalFields = PROPOSAL_CALLER_FIELDS;
+    // Code review 2026-09-07 (Story 9.8 finding): this retry branch must be scoped to THIS route's
+    // own proposal event type - postOffcutValuationEvent is shared by the disposal and revaluation
+    // routes, and without the scoping a proposal idempotency key reused against the other route
+    // would be accepted as a "replay" and answer with a proposal-shaped response from the wrong
+    // endpoint. Story 9.9 keeps that scoping when both routes gained a proposal: the comparison is
+    // against `spec.proposal.eventType`, never "is this any proposal".
+    if (isRetry && spec.proposal !== undefined && retried!.event_type === spec.proposal.eventType) {
+      eventType = spec.proposal.eventType;
+      idField = spec.proposal.idField;
+      proposalFields = spec.proposal.callerFields;
     } else if (
       !isRetry &&
-      spec.bandAware === true &&
-      (await isAboveBandAcquisition(body, existing))
+      spec.proposal !== undefined &&
+      (await spec.proposal.isAboveBand(body, existing))
     ) {
-      eventType = JOBWORK_OFFCUT_ACQUISITION_PROPOSED;
-      idField = 'proposal_id';
-      proposalFields = PROPOSAL_CALLER_FIELDS;
+      eventType = spec.proposal.eventType;
+      idField = spec.proposal.idField;
+      proposalFields = spec.proposal.callerFields;
     }
 
     const postingId = (body[spec.idField] as string | undefined) ?? randomUUID();
@@ -2030,14 +2075,23 @@ async function postOffcutValuationEvent(
     // by the REPLAY, never by whether the client echoed the posting id (chunk C code review) - an
     // identical retry must read as a replay whether or not it named its own id.
     //
-    // Story 9.8 (AC 1): an above-band acquisition answers with the PENDING PROPOSAL, never with a
-    // completed disposal. The holding it names is still `retained` and the caller must be able to
-    // see that from the response alone.
-    if (eventType === JOBWORK_OFFCUT_ACQUISITION_PROPOSED) {
+    // Story 9.8 (AC 1) and Story 9.9 (AC 1): an above-band posting answers with the PENDING
+    // PROPOSAL, never with a completed disposal or revaluation. The holding it names still carries
+    // its old state and the caller must be able to see that from the response alone.
+    if (spec.proposal !== undefined && eventType === spec.proposal.eventType) {
       const proposal = await getOffcutAcquisitionProposalById(persistedId);
       sendJson(res, isRetry ? 200 : 201, {
         event_id: persisted.event_id,
-        status: 'pending_approval',
+        // Story 9.9 code review (2026-09-09): the status was hardcoded 'pending_approval', so a
+        // REPLAY of a propose key whose proposal had since been approved answered 'pending_approval'
+        // while the nested proposal row said 'approved'. The top-level status now follows the row:
+        // the row's 'pending' maps to the response vocabulary 'pending_approval', and a signature
+        // that has since landed (approved, superseded) is the truthful answer on the replay.
+        status: proposal
+          ? proposal.status === 'pending'
+            ? 'pending_approval'
+            : proposal.status
+          : 'pending_approval',
         proposal_id: persistedId,
         proposal,
         holding,
@@ -2080,16 +2134,36 @@ const postServiceOrderOffcutDisposalBase: RouteHandler = (req, res, params) =>
     idField: 'disposal_id',
     callerFields: ['disposition', 'rate', 'currency', 'return_challan_number_ext', 'location_id'],
     derivedFields: DISPOSAL_DERIVED_FIELDS,
-    bandAware: true,
+    proposal: {
+      eventType: JOBWORK_OFFCUT_ACQUISITION_PROPOSED,
+      idField: 'proposal_id',
+      callerFields: PROPOSAL_CALLER_FIELDS,
+      isAboveBand: isAboveBandAcquisition,
+    },
   });
 
-/** POST /service-orders/:serviceOrderId/offcut-revaluations - AC 5. */
+/**
+ * POST /service-orders/:serviceOrderId/offcut-revaluations - Story 9.7 AC 5.
+ *
+ * Story 9.9 (AC 3): `approved_by` is GONE from the accepted fields, exactly as Story 9.8 removed it
+ * from the disposal above. A request naming an approver is refused INVALID_PARAMS by this
+ * allow-list, and the applier's closed shape refuses it on the direct events door - two different
+ * guards, because a route-only guard passes a seam-only mutant (the Story 8.6 lesson). An above-band
+ * revaluation posted here becomes a PROPOSAL (AC 1) and the signature is captured by the approve
+ * route below.
+ */
 const postServiceOrderOffcutRevaluationBase: RouteHandler = (req, res, params) =>
   postOffcutValuationEvent(req, res, params, {
     eventType: JOBWORK_OFFCUT_REVALUED,
     idField: 'revaluation_id',
-    callerFields: ['rate', 'currency', 'approved_by'],
+    callerFields: ['rate', 'currency'],
     derivedFields: REVALUATION_DERIVED_FIELDS,
+    proposal: {
+      eventType: JOBWORK_OFFCUT_REVALUATION_PROPOSED,
+      idField: 'proposal_id',
+      callerFields: REVALUATION_PROPOSAL_CALLER_FIELDS,
+      isAboveBand: isAboveBandValue,
+    },
   });
 
 /**
@@ -2238,7 +2312,16 @@ const postCreditNoteAcknowledgmentBase: RouteHandler = async (req, res, params) 
  * locked row and apply to the FRESH request only - a same-key retry answers against the STORED
  * event (AD-16) and is never refused by them.
  */
-const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, params) => {
+async function approveOffcutProposalBase(
+  req: IncomingMessage,
+  res: Parameters<RouteHandler>[1],
+  params: Record<string, string> | undefined,
+  spec: {
+    /** Which signature this route approves. The proposal row's `kind` must match it. */
+    kind: 'acquisition' | 'revaluation';
+    eventType: string;
+  },
+): Promise<void> {
   const body = requireBody(req, res);
   if (!body) return;
   const actor = actorContext(req);
@@ -2266,7 +2349,7 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
         throw new AppError(
           409,
           'DUPLICATE_EVENT',
-          'This idempotency key was already used for a different acquisition proposal',
+          `This idempotency key was already used for a different ${spec.kind} proposal`,
           {
             stored_proposal_id: storedPayload['proposal_id'] ?? null,
             stored_service_order_id: storedPayload['service_order_id'] ?? null,
@@ -2278,14 +2361,27 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
     }
 
     await client.query('BEGIN');
+    // Story 9.9 code review (2026-09-09): the order advisory lock is acquired HERE, BEFORE the
+    // proposal row, mirroring the events-door applier's requireInProcessOrder (order advisory lock
+    // then order row, then the proposal row). Locking the proposal row before the order row on this
+    // route while the door locks the order before the proposal opened a 40P01 deadlock when the
+    // same proposal was approved concurrently through both doors; both now serialize on the order
+    // advisory lock first, so the row-lock order can no longer invert. Re-acquiring the same
+    // advisory lock later inside persistEvent's applier is a reentrant no-op within this
+    // transaction.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [serviceOrderId]);
     // The proposal row is read FOR UPDATE inside the transaction that persists the approval (code
     // review 2026-09-07): a concurrent approve or order close blocks here, so the checks below and
     // the applier's enforcement in persistEvent run against the SAME row, with no window in which
     // the order and the proposal can move apart. This is the Story 2.5 transfer-request approve
     // transaction, with the row lock as the mutual exclusion the status-UPDATE was there.
     const proposal = await getOffcutAcquisitionProposalById(proposalId, client, true);
-    if (!proposal) {
-      throw new AppError(404, 'NOT_FOUND', 'Acquisition proposal not found', {
+    // Story 9.9: one table carries both signatures, so the KIND is part of the row's identity here
+    // exactly as it is in the applier. A revaluation proposal reached through the acquisition route
+    // would otherwise run the disposal effects - minting a lot and transferring title - on a holding
+    // disposed of long ago. It reads as "not found" because for this route there is no such row.
+    if (!proposal || proposal.kind !== spec.kind) {
+      throw new AppError(404, 'NOT_FOUND', `Offcut ${spec.kind} proposal not found`, {
         proposal_id: proposalId,
       });
     }
@@ -2297,9 +2393,17 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
         service_order_id: proposal.service_order_id,
       });
     }
-    assertSiteWriteAccess(req, order.site_id);
+    // Story 9.9 code review (2026-09-09): the site-write gate is a FRESH-request gate only, exactly
+    // as on the credit-note acknowledgment route. A same-key retry of a committed approval answers
+    // against the STORED event (AD-16), and the original approver may have lost the site assignment
+    // in between - the event was authorized when it committed, so nothing about the replay may be
+    // refused on current grants. The applier's enforcement under the order advisory lock still gates
+    // the direct-events door.
+    if (!isRetry) {
+      assertSiteWriteAccess(req, order.site_id);
+    }
     if (proposal.service_order_id !== serviceOrderId) {
-      throw new AppError(404, 'NOT_FOUND', 'Acquisition proposal not found', {
+      throw new AppError(404, 'NOT_FOUND', `Offcut ${spec.kind} proposal not found`, {
         proposal_id: proposalId,
         service_order_id: serviceOrderId,
       });
@@ -2311,7 +2415,7 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
       throw new AppError(
         409,
         'SOURCE_DOCUMENT_REQUIRED',
-        'The acquisition proposal belongs to a different site than its service order',
+        `The ${spec.kind} proposal belongs to a different site than its service order`,
         {
           proposal_id: proposal.proposal_id,
           proposal_site_id: proposal.site_id,
@@ -2331,7 +2435,7 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
         throw new AppError(
           409,
           'DUPLICATE_EVENT',
-          'This acquisition proposal is no longer awaiting approval',
+          `This ${spec.kind} proposal is no longer awaiting approval`,
           {
             proposal_id: proposal.proposal_id,
             status: proposal.status,
@@ -2348,7 +2452,7 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
         const refusal = new AppError(
           403,
           'APPROVAL_REQUIRED',
-          'Only the resolved DOA approver may approve this offcut acquisition',
+          `Only the resolved DOA approver may approve this offcut ${spec.kind}`,
           {
             proposal_id: proposal.proposal_id,
             service_order_id: order.service_order_id,
@@ -2357,7 +2461,7 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
         );
         await auditFailSafe(req, actor, refusal, {
           proposal_id: proposal.proposal_id,
-          event_type: JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+          event_type: spec.eventType,
         });
         throw refusal;
       }
@@ -2368,7 +2472,7 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
         const refusal = new AppError(
           403,
           'APPROVAL_REQUIRED',
-          'An offcut acquisition is dual control: the approver must not be the proposer',
+          `An offcut ${spec.kind} is dual control: the approver must not be the proposer`,
           {
             proposal_id: proposal.proposal_id,
             service_order_id: order.service_order_id,
@@ -2377,7 +2481,7 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
         );
         await auditFailSafe(req, actor, refusal, {
           proposal_id: proposal.proposal_id,
-          event_type: JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+          event_type: spec.eventType,
         });
         throw refusal;
       }
@@ -2387,7 +2491,7 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
       {
         stream_type: 'jobwork',
         stream_id: serviceOrderId,
-        event_type: JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+        event_type: spec.eventType,
         payload: {
           service_order_id: serviceOrderId,
           proposal_id: proposalId,
@@ -2408,11 +2512,7 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
     await client.query('COMMIT');
     committed = true;
 
-    const persistedId = replayIdOrReject(
-      persisted,
-      JOBWORK_OFFCUT_ACQUISITION_APPROVED,
-      'proposal_id',
-    );
+    const persistedId = replayIdOrReject(persisted, spec.eventType, 'proposal_id');
     // The proposal is re-read AFTER the commit, in the same committed view the approval just
     // wrote, so the response can never describe a row a concurrent writer changed between the
     // event and the read (code review 2026-09-07). On a replay this returns the ORIGINAL
@@ -2441,14 +2541,34 @@ const approveOffcutAcquisitionProposalBase: RouteHandler = async (req, res, para
     ) {
       await auditFailSafe(req, actor, err, {
         proposal_id: params?.['proposalId'] ?? null,
-        event_type: JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+        event_type: spec.eventType,
       });
     }
     sendAppError(req, res, err);
   } finally {
     client.release();
   }
-};
+}
+
+const approveOffcutAcquisitionProposalBase: RouteHandler = (req, res, params) =>
+  approveOffcutProposalBase(req, res, params, {
+    kind: 'acquisition',
+    eventType: JOBWORK_OFFCUT_ACQUISITION_APPROVED,
+  });
+
+/**
+ * Story 9.9: POST
+ * /service-orders/:serviceOrderId/offcut-revaluation-proposals/:proposalId/approve - the SECOND
+ * SIGNATURE on an above-band revaluation (AC 2, 3, 5). It is the SAME handler as the acquisition
+ * approval above, parameterised by kind, rather than a second copy: Story 9.8's review found three
+ * separate transaction-shape defects in that handler, and a copy would have inherited none of the
+ * fixes and drifted from the next one.
+ */
+const approveOffcutRevaluationProposalBase: RouteHandler = (req, res, params) =>
+  approveOffcutProposalBase(req, res, params, {
+    kind: 'revaluation',
+    eventType: JOBWORK_OFFCUT_REVALUATION_APPROVED,
+  });
 
 /**
  * GET /service-orders/:serviceOrderId/offcut-holdings - the ledger plus its credit-note trail, and
@@ -2475,6 +2595,10 @@ const listServiceOrderOffcutHoldingsBase: RouteHandler = async (req, res, params
         pending_approval: pending
           ? {
               proposal_id: pending.proposal_id,
+              // Story 9.9: an acquisition and a revaluation now wait in the same place, and they
+              // mean different things - one is title not yet transferred, the other is a price
+              // correction not yet signed.
+              kind: pending.kind,
               rate: pending.rate,
               currency: pending.currency,
               proposed_value: pending.proposed_value,
@@ -2490,6 +2614,10 @@ const listServiceOrderOffcutHoldingsBase: RouteHandler = async (req, res, params
       service_order_id: serviceOrderId,
       customer_party_code: order.customer_party_code,
       holdings,
+      // Story 9.9: this array now carries BOTH kinds of proposal - each row's `kind` says which.
+      // The key keeps its Story 9.8 name because that response shape is already shipped; renaming
+      // it would break every reader to fix a label. `pending_approval.kind` above is the field a
+      // reader should branch on.
       acquisition_proposals: proposals,
       credit_notes,
     });
@@ -2637,3 +2765,8 @@ export const approveOffcutAcquisitionProposalHandler = requireRole({
   module: 'jobwork',
   functionScope: 'write',
 })(approveOffcutAcquisitionProposalBase);
+
+export const approveOffcutRevaluationProposalHandler = requireRole({
+  module: 'jobwork',
+  functionScope: 'write',
+})(approveOffcutRevaluationProposalBase);

@@ -278,7 +278,7 @@ const checkReplenishmentBase: RouteHandler = async (req, res) => {
 
 const confirmReplenishmentBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, REPLENISHMENT_READ_ROLES, 'write');
-  const replenishmentTaskId = params['replenishmentTaskId'];
+  const replenishmentTaskId = params['replenishmentTaskId']?.toLowerCase();
   if (!replenishmentTaskId || !UUID_REGEX.test(replenishmentTaskId)) {
     sendRequestError(
       req,
@@ -337,7 +337,7 @@ const confirmReplenishmentBase: RouteHandler = async (req, res, params) => {
 
 const assignReplenishmentTaskBase: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, REPLENISHMENT_SUPERVISE_ROLES, 'write');
-  const replenishmentTaskId = params['replenishmentTaskId'];
+  const replenishmentTaskId = params['replenishmentTaskId']?.toLowerCase();
   if (!replenishmentTaskId || !UUID_REGEX.test(replenishmentTaskId)) {
     sendRequestError(
       req,

@@ -164,7 +164,7 @@ const runCostRollupBase: RouteHandler = async (req, res, params) => {
 // ---------------------------------------------------------------------------
 
 const listCostRollupsBase: RouteHandler = async (req, res, params) => {
-  const bomId = params?.['bomId'];
+  const bomId = params?.['bomId']?.toLowerCase();
   if (!bomId || !UUID_REGEX.test(bomId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'bomId must be a UUID');
     return;
@@ -219,7 +219,7 @@ const compareCostRollupsBase: RouteHandler = async (req, res) => {
 // ---------------------------------------------------------------------------
 
 const getCostRollupBase: RouteHandler = async (req, res, params) => {
-  const rollupId = params?.['rollupId'];
+  const rollupId = params?.['rollupId']?.toLowerCase();
   if (!rollupId || !UUID_REGEX.test(rollupId)) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'rollupId must be a UUID');
     return;

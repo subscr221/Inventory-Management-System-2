@@ -25,11 +25,25 @@
 -- controller prices the offcut and the CFO approves paying for it, so a row whose proposer IS its
 -- resolved approver is not a proposal that merely gets refused later - it is not representable.
 --
+-- STORY 9.9 EXTENDS THIS TABLE TO THE REVALUATION SIGNATURE rather than adding a sibling. Every
+-- property above is exactly what an above-band REVALUATION needs too - the frozen approver, dual
+-- control as a column constraint, one pending signature per holding, the same lifecycle - and a
+-- second table would duplicate all four and give the next reader two places to look. `kind` is the
+-- discriminator. A revaluation proposal additionally freezes `supersedes_credit_note_id`, because a
+-- BELOW-band revaluation needs no signature and can land between propose and approve: the document
+-- the delta chains off can move, so the one the proposal was priced against is recorded rather than
+-- re-derived at approve time (Story 9.9 AC 5, refused CREDIT_NOTE_SUPERSEDED). Same reasoning as
+-- the frozen approver, applied to the other moving part.
+--
 -- ONE PENDING PROPOSAL PER HOLDING (AC 4). The partial unique index is what refuses a second,
 -- competing proposal for the same offcut while one is still awaiting signature; a client posting
 -- one gets a schema-derived DUPLICATE_EVENT rather than two proposals racing to approve the same
 -- holding. `superseded` is reserved for a future withdrawal path - nothing in Story 9.8 writes it,
--- and the lifecycle CHECK keeps it honest if something ever does.
+-- and the lifecycle CHECK keeps it honest if something ever does. The partial unique index is NOT split per kind (Story 9.9): an
+-- acquisition proposal and a revaluation proposal on the same holding are mutually exclusive by
+-- lifecycle anyway - revaluation requires status = 'disposed' AND disposition = 'acquired', which
+-- an unapproved acquisition has not reached - and one pending signature per offcut is the rule
+-- either way.
 
 CREATE TABLE IF NOT EXISTS job_work_offcut_acquisition_proposal (
   proposal_id                UUID PRIMARY KEY,
@@ -41,24 +55,39 @@ CREATE TABLE IF NOT EXISTS job_work_offcut_acquisition_proposal (
   indicative_rate            NUMERIC(18,4),
   proposed_value             NUMERIC(18,4) NOT NULL,
   doa_entry_id               UUID NOT NULL,
+  kind                       TEXT NOT NULL DEFAULT 'acquisition',
+  supersedes_credit_note_id  UUID,
   resolved_approver_actor_id UUID NOT NULL,
   proposed_by                UUID NOT NULL,
   status                     TEXT NOT NULL DEFAULT 'pending',
   decided_at                 TIMESTAMPTZ,
   decided_by                 UUID,
   disposal_event_id          UUID,
+  revaluation_event_id       UUID,
   source_event_id            UUID NOT NULL,
   created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_job_work_offcut_acq_proposal_status CHECK (
     status IN ('pending','approved','superseded')
   ),
+  -- Story 9.9: the discriminator that lets this ONE table carry both signatures. 'acquisition' is
+  -- the DEFAULT, which is what backfills every row written before Story 9.9 correctly - all of them
+  -- are acquisitions. The frozen document a delta chains off is required on, and only on, a
+  -- revaluation proposal (AC 5): an acquisition supersedes nothing.
+  CONSTRAINT chk_job_work_offcut_acq_proposal_kind CHECK (
+    (kind = 'acquisition' AND supersedes_credit_note_id IS NULL)
+    OR (kind = 'revaluation' AND supersedes_credit_note_id IS NOT NULL)
+  ),
   CONSTRAINT chk_job_work_offcut_acq_proposal_lifecycle CHECK (
     (status = 'pending' AND decided_at IS NULL AND decided_by IS NULL
-      AND disposal_event_id IS NULL)
+      AND disposal_event_id IS NULL AND revaluation_event_id IS NULL)
     OR (status = 'approved' AND decided_at IS NOT NULL AND decided_by IS NOT NULL
-      AND disposal_event_id IS NOT NULL AND decided_at >= created_at)
-    OR (status = 'superseded' AND decided_at IS NOT NULL AND disposal_event_id IS NULL)
+      AND decided_at >= created_at
+      AND ((kind = 'acquisition' AND disposal_event_id IS NOT NULL AND revaluation_event_id IS NULL)
+        OR (kind = 'revaluation' AND revaluation_event_id IS NOT NULL
+          AND disposal_event_id IS NULL)))
+    OR (status = 'superseded' AND decided_at IS NOT NULL AND disposal_event_id IS NULL
+      AND revaluation_event_id IS NULL)
   ),
   -- BSD-5: zero is the free-retention floor, so an acquisition money leg is never negative. A free
   -- retention is below every band anyway and never reaches this table.
@@ -75,6 +104,17 @@ CREATE INDEX IF NOT EXISTS idx_job_work_offcut_acq_proposal_order ON job_work_of
 CREATE INDEX IF NOT EXISTS idx_job_work_offcut_acq_proposal_approver ON job_work_offcut_acquisition_proposal (resolved_approver_actor_id, status);
 CREATE INDEX IF NOT EXISTS idx_job_work_offcut_acq_proposal_site ON job_work_offcut_acquisition_proposal (site_id);
 
+-- Story 9.9: the additive upgrade path for a database already carrying Story 9.8 proposals. These
+-- are STANDALONE statements, so the schema-drift guard's CREATE TABLE body comparison cannot see
+-- them - they are pinned by name in test/unit/schema-drift.test.ts for the same reason the Story 9.7
+-- holding columns are. `kind` defaults to 'acquisition' so existing rows backfill correctly.
+ALTER TABLE job_work_offcut_acquisition_proposal
+  ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'acquisition';
+ALTER TABLE job_work_offcut_acquisition_proposal
+  ADD COLUMN IF NOT EXISTS supersedes_credit_note_id UUID;
+ALTER TABLE job_work_offcut_acquisition_proposal
+  ADD COLUMN IF NOT EXISTS revaluation_event_id UUID;
+
 -- DROP-then-ADD, not add-if-absent (the bom_line chk_bom_line_supply_method precedent): an
 -- add-if-absent guard sees the OLD constraint present and silently skips the ALTER, so any future
 -- widening would keep being rejected on every already-migrated database while this file claimed
@@ -88,14 +128,26 @@ BEGIN
       status IN ('pending','approved','superseded')
     );
   ALTER TABLE job_work_offcut_acquisition_proposal
+    DROP CONSTRAINT IF EXISTS chk_job_work_offcut_acq_proposal_kind;
+  ALTER TABLE job_work_offcut_acquisition_proposal
+    ADD CONSTRAINT chk_job_work_offcut_acq_proposal_kind CHECK (
+      (kind = 'acquisition' AND supersedes_credit_note_id IS NULL)
+      OR (kind = 'revaluation' AND supersedes_credit_note_id IS NOT NULL)
+    );
+  ALTER TABLE job_work_offcut_acquisition_proposal
     DROP CONSTRAINT IF EXISTS chk_job_work_offcut_acq_proposal_lifecycle;
   ALTER TABLE job_work_offcut_acquisition_proposal
     ADD CONSTRAINT chk_job_work_offcut_acq_proposal_lifecycle CHECK (
       (status = 'pending' AND decided_at IS NULL AND decided_by IS NULL
-        AND disposal_event_id IS NULL)
+        AND disposal_event_id IS NULL AND revaluation_event_id IS NULL)
       OR (status = 'approved' AND decided_at IS NOT NULL AND decided_by IS NOT NULL
-        AND disposal_event_id IS NOT NULL AND decided_at >= created_at)
-      OR (status = 'superseded' AND decided_at IS NOT NULL AND disposal_event_id IS NULL)
+        AND decided_at >= created_at
+        AND ((kind = 'acquisition' AND disposal_event_id IS NOT NULL
+            AND revaluation_event_id IS NULL)
+          OR (kind = 'revaluation' AND revaluation_event_id IS NOT NULL
+            AND disposal_event_id IS NULL)))
+      OR (status = 'superseded' AND decided_at IS NOT NULL AND disposal_event_id IS NULL
+        AND revaluation_event_id IS NULL)
     );
   ALTER TABLE job_work_offcut_acquisition_proposal
     DROP CONSTRAINT IF EXISTS chk_job_work_offcut_acq_proposal_money;

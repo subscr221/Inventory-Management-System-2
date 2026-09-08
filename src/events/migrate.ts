@@ -268,6 +268,11 @@ const MIGRATIONS = [
   // file is edited by this story. FK-shaped service_order_id / holding_id, no declared FK (the
   // Epic 9 house convention).
   '../../read/projections/job_work_offcut_acquisition_proposal.sql',
+  // Story 11.2: the outbound IRN coverage registry (tail-append). One coverage row per dispatch
+  // order naming the invoice whose IRN covers it; dispatched as a new read-only projection with no
+  // earlier file edited by this story. FK-shaped dispatch_order_id / site_id, no declared FK (the
+  // Epic 9 house convention).
+  '../../read/projections/dispatch_irn.sql',
 ];
 
 async function migrate(): Promise<void> {

@@ -190,6 +190,10 @@ async function selectLotForIssue(
   const breakdown = allLots.map((lot) => {
     const available = lotBalances.get(lot.lot_number) ?? 0;
     let reason = 'insufficient_quantity';
+    // Story 9.10 (Task 1.5): REPORTING read, deliberately left as `=== 'held'` - this sets a human
+    // reason LABEL for the breakdown row, not a gate. The availability gate below still uses
+    // `!== 'none'`, so a third status would be excluded from selection (fail-closed) while being
+    // labelled by its real status here rather than mislabelled 'on_hold'.
     if (lot.quality_hold_status === 'held') reason = 'on_hold';
     else if (lot.expiry_date && lot.expiry_date < today) reason = 'expired';
     return {
@@ -296,7 +300,7 @@ export async function validateLotForIssueAllocate(
       details: { lotNumber, sku },
     };
   }
-  if (lot.quality_hold_status === 'held') {
+  if (lot.quality_hold_status !== 'none') {
     return {
       valid: false,
       errorCode: ERROR_CODES.LOT_ON_HOLD,

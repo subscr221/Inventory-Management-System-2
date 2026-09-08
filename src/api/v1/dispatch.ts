@@ -24,6 +24,13 @@ import {
   listDocumentsByDispatchOrder,
   getDocumentById,
 } from '../../read/projections/dispatch_document.js';
+import { getDispatchIrn } from '../../read/projections/dispatch_irn.js';
+import { getSalesOrderLineById } from '../../read/projections/erp_sales_order.js';
+import {
+  IRN_EXT_REGEX,
+  isValidIrpAcknowledgedAt,
+  normalizeIrnExt,
+} from '../../compliance/dispatch.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -129,6 +136,37 @@ async function resolveDispatchOrderSite(dispatchOrderId: string): Promise<string
     );
   }
   return status.site_id;
+}
+
+/**
+ * Story 11.2 (review decision D3, 2026-09-09): the IRN routes resolve the dispatch order through its
+ * erp_sales_order line, NOT through dispatch_order_status. ERP raises the invoice (and the IRP the
+ * IRN) independently of pick generation, so the desk must be able to record - and read back - the
+ * IRN before picking has started; the events door already needed only the line. A line ERP has
+ * closed can no longer be invoiced, so the WRITE path refuses it DISPATCH_ORDER_CLOSED (the applier
+ * enforces the same rule for the events door); the READ path answers for closed lines too.
+ */
+async function resolveDispatchOrderLineSite(
+  dispatchOrderId: string,
+  mode: 'read' | 'record',
+): Promise<string> {
+  const line = await getSalesOrderLineById(dispatchOrderId);
+  if (!line) {
+    throw new AppError(
+      404,
+      'DISPATCH_ORDER_NOT_FOUND',
+      `No dispatch order exists for "${dispatchOrderId}"`,
+    );
+  }
+  if (mode === 'record' && line.status !== 'open') {
+    throw new AppError(
+      409,
+      'DISPATCH_ORDER_CLOSED',
+      `Dispatch order "${dispatchOrderId}" is ${line.status} in ERP; an IRN cannot be recorded against it`,
+      { dispatch_order_id: dispatchOrderId, status: line.status },
+    );
+  }
+  return line.ship_from_site_id;
 }
 
 function parsePackingLines(body: Record<string, unknown>): Array<{
@@ -412,7 +450,7 @@ export const postDispatched: RouteHandler = async (req, res) => {
 export const getPackingRecords: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, DISPATCH_READ_ROLES, 'read');
 
-  const dispatchOrderId = params['dispatchOrderId'];
+  const dispatchOrderId = params['dispatchOrderId']?.toLowerCase();
   if (!dispatchOrderId || !UUID_REGEX.test(dispatchOrderId)) {
     throw new AppError(
       400,
@@ -431,7 +469,7 @@ export const getPackingRecords: RouteHandler = async (req, res, params) => {
 export const getDispatchDocuments: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, DISPATCH_READ_ROLES, 'read');
 
-  const dispatchOrderId = params['dispatchOrderId'];
+  const dispatchOrderId = params['dispatchOrderId']?.toLowerCase();
   if (!dispatchOrderId || !UUID_REGEX.test(dispatchOrderId)) {
     throw new AppError(
       400,
@@ -450,7 +488,7 @@ export const getDispatchDocuments: RouteHandler = async (req, res, params) => {
 export const getPackingRecord: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, DISPATCH_READ_ROLES, 'read');
 
-  const packingRecordId = params['packingRecordId'];
+  const packingRecordId = params['packingRecordId']?.toLowerCase();
   if (!packingRecordId || !UUID_REGEX.test(packingRecordId)) {
     throw new AppError(
       400,
@@ -477,7 +515,7 @@ export const getPackingRecord: RouteHandler = async (req, res, params) => {
 export const getDispatchOrderStatusHandler: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, DISPATCH_READ_ROLES, 'read');
 
-  const dispatchOrderId = params['dispatchOrderId'];
+  const dispatchOrderId = params['dispatchOrderId']?.toLowerCase();
   if (!dispatchOrderId || !UUID_REGEX.test(dispatchOrderId)) {
     throw new AppError(
       400,
@@ -504,7 +542,7 @@ export const getDispatchOrderStatusHandler: RouteHandler = async (req, res, para
 export const getDispatchDocument: RouteHandler = async (req, res, params) => {
   assertRoleAllowed(req, DISPATCH_READ_ROLES, 'read');
 
-  const documentId = params['documentId'];
+  const documentId = params['documentId']?.toLowerCase();
   if (!documentId || !UUID_REGEX.test(documentId)) {
     throw new AppError(
       400,
@@ -526,4 +564,185 @@ export const getDispatchDocument: RouteHandler = async (req, res, params) => {
   assertSiteAccess(req, siteId, 'read');
 
   sendJson(res, 200, document);
+};
+
+// ---------------------------------------------------------------------------
+// Story 11.2: the outbound IRN coverage registry routes. POST records the ERP-issued IRN against a
+// dispatch order (and, for a multi-line invoice, the other dispatch orders the SAME invoice covers
+// via also_covers); GET lets the dispatch desk see whether the IRN block has lifted. The path names
+// ONE dispatch order because that is what the dispatch desk has in hand and what resolveDispatchOrderSite
+// + assertSiteAccess already scope on; the payload carries the FULL coverage list so the applier can
+// bind the payload site to every row site and refuse the whole event if any listed order resolves to
+// a different site.
+// ---------------------------------------------------------------------------
+
+export const postIrnRecorded: RouteHandler = async (req, res, params) => {
+  const actor = actorContext(req);
+  assertRoleAllowed(req, DISPATCH_WRITE_ROLES, 'write');
+
+  const body = await getParsedBody(req);
+  const b = body as Record<string, unknown>;
+  // Lower-cased like every sibling handler (Story 9.10 AC 4): a mixed-case path id would otherwise
+  // defeat the coverage-list dedupe and the applier's per-order advisory lock key.
+  const rawDispatchOrderId = params['dispatchOrderId'];
+  if (typeof rawDispatchOrderId !== 'string' || !UUID_REGEX.test(rawDispatchOrderId)) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'dispatchOrderId is required and must be a valid UUID',
+    );
+  }
+  const dispatchOrderId = rawDispatchOrderId.toLowerCase();
+
+  // Task 2.4 / 6.1: so_number_ext is server-derived from erp_sales_order and REFUSED on input, not
+  // silently dropped (the events door refuses it in assertDispatchIrnShape; the route must match).
+  if (b['so_number_ext'] !== undefined || b['soNumberExt'] !== undefined) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'so_number_ext is server-derived from the ERP sales order and must not be supplied',
+    );
+  }
+
+  // 8.7 D8 (#AD-16): a state-changing route requires a client-supplied idempotency key, so a retried
+  // recording replays the SAME event (persistEvent short-circuits on the key) instead of appending
+  // a fresh dispatch.irn_recorded every time (AC 2: "a replay of the same recording is idempotent").
+  const idempotencyKey = b['idempotency_key'] ?? b['idempotencyKey'];
+  if (typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+    throw new AppError(400, 'INVALID_PARAMS', 'idempotency_key is required', {
+      field: 'idempotency_key',
+    });
+  }
+
+  // The site binding is single-site: the payload site is derived from the path dispatch order's ERP
+  // line, and the applier refuses the whole event if any listed dispatch order resolves to a
+  // different site. So the route resolves the path order's site once and refuses anything not at
+  // that same site.
+  const siteId = await resolveDispatchOrderLineSite(dispatchOrderId, 'record');
+  assertSiteAccess(req, siteId, 'write');
+
+  const invoiceNumberExt = b['invoice_number_ext'] ?? b['invoiceNumberExt'];
+  const irnExt = b['irn_ext'] ?? b['irn'];
+  if (typeof invoiceNumberExt !== 'string' || !invoiceNumberExt.trim()) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'invoice_number_ext is required and must be a non-empty string',
+    );
+  }
+  // Review decision D2: the IRN is the IRP's 64-character hexadecimal hash; nothing else clears the
+  // statutory gate.
+  if (typeof irnExt !== 'string' || !IRN_EXT_REGEX.test(irnExt.trim())) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'irn_ext is required and must be the 64-character hexadecimal IRN issued by the IRP',
+    );
+  }
+  const irpAcknowledgedAt = b['irp_acknowledged_at'] ?? b['irpAcknowledgedAt'] ?? null;
+  if (irpAcknowledgedAt !== null && !isValidIrpAcknowledgedAt(irpAcknowledgedAt)) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'irp_acknowledged_at must be an RFC 3339 instant not in the future, or null',
+    );
+  }
+
+  const alsoCovers = b['also_covers'] ?? b['alsoCovers'] ?? [];
+  if (!Array.isArray(alsoCovers)) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'also_covers must be an array of dispatch order UUIDs',
+    );
+  }
+  for (const id of alsoCovers) {
+    if (typeof id !== 'string' || !UUID_REGEX.test(id)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'every also_covers entry must be a valid dispatch order UUID',
+      );
+    }
+  }
+
+  // Coverage list: the path dispatch order plus every also_covers order, lower-cased and deduplicated.
+  const coverageIds = [
+    ...new Set([dispatchOrderId, ...(alsoCovers as string[]).map((id) => id.toLowerCase())]),
+  ];
+
+  // Task 6.3: run the site assertion over EVERY id in the coverage list, not just the one in the
+  // path, and refuse the whole request if any of them is outside the caller's grants. The access
+  // check runs BEFORE the same-site comparison so a caller without a grant at the other site sees
+  // the same 403 as for any other order there, and the mismatch code matches the applier's.
+  for (const id of coverageIds) {
+    const coverageSiteId = await resolveDispatchOrderLineSite(id, 'record');
+    assertSiteAccess(req, coverageSiteId, 'write');
+    if (coverageSiteId !== siteId) {
+      throw new AppError(
+        400,
+        'DISPATCH_ORDER_SITE_MISMATCH',
+        `Dispatch order ${id} does not belong to the same site as the path dispatch order`,
+        { dispatch_order_id: id, site_id: siteId, resolved_site_id: coverageSiteId },
+      );
+    }
+  }
+
+  const auditCtx = auditCtxFor(req, actor, 200);
+
+  const result = await persistEvent(
+    {
+      stream_type: 'warehouse',
+      stream_id: dispatchOrderId,
+      event_type: 'dispatch.irn_recorded',
+      idempotency_key: idempotencyKey.trim(),
+      payload: {
+        invoice_number_ext: invoiceNumberExt.trim(),
+        irn_ext: normalizeIrnExt(irnExt),
+        dispatch_order_ids: coverageIds,
+        site_id: siteId,
+        irp_acknowledged_at: irpAcknowledgedAt === null ? undefined : irpAcknowledgedAt,
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurred_at: new Date().toISOString(),
+      },
+    },
+    auditCtx,
+  );
+
+  sendJson(res, 200, {
+    eventId: result.event_id,
+    dispatchOrderId,
+    siteId,
+    coverage: coverageIds,
+  });
+};
+
+export const getIrnCoverage: RouteHandler = async (req, res, params) => {
+  assertRoleAllowed(req, DISPATCH_READ_ROLES, 'read');
+
+  const dispatchOrderId = params['dispatchOrderId']?.toLowerCase();
+  if (!dispatchOrderId || !UUID_REGEX.test(dispatchOrderId)) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'dispatchOrderId parameter is required and must be a valid UUID',
+    );
+  }
+
+  const siteId = await resolveDispatchOrderLineSite(dispatchOrderId, 'read');
+  assertSiteAccess(req, siteId, 'read');
+
+  const coverage = await getDispatchIrn(dispatchOrderId);
+  if (!coverage) {
+    throw new AppError(
+      404,
+      'DISPATCH_IRN_NOT_RECORDED',
+      `No IRN has been recorded for dispatch order ${dispatchOrderId}`,
+    );
+  }
+
+  sendJson(res, 200, { dispatchOrderId, coverage });
 };

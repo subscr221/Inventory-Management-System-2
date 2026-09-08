@@ -4633,6 +4633,30 @@ export async function assertQcGateAllows(check: QcGateCheck): Promise<void> {
   const lot = lotResult.rows[0]!;
   const lotId = lot['lot_id'] as string;
   const task = await getQcInspectionTaskByLotId(lotId, client, true);
+
+  // Story 9.10 code review 2026-09-08 (D2, AC 1): the manual and recall hold half runs FIRST and
+  // UNCONDITIONALLY, before the QC-gate half below and before the no-task early return.
+  //
+  // The two axes are independent: `qc_inspection_task` rows are minted only for synthetic-completion,
+  // production-order and job-work-order sources, while `POST /lots/:id/quality-hold` places a manual
+  // or recall hold on ANY lot_master row. The old `if (!task) return;` sat above every
+  // `quality_hold_status` check, so a held lot with no inspection task passed this gate outright -
+  // and for `pick.ts`, `transfer-request.ts`, `production-material.ts` and `maintenance-spares.ts`
+  // this helper is the ONLY lot gate, so nothing downstream caught it. That is the same missing-half
+  // class Task 1 swept at the dispatch seam, in the one place the sweep did not look.
+  //
+  // Checking it here rather than at each of the eleven call sites keeps the rule in one place, which
+  // is the whole point of Task 1.
+  if (lot['quality_hold_status'] !== 'none') {
+    throw new AppError(400, 'LOT_ON_HOLD', 'Lot is on quality hold', {
+      lot_id: lotId,
+      lot_number: lot['lot_number'],
+      sku: lot['sku'],
+      qc_gate_status: task?.gate_status ?? null,
+      operation: check.operation,
+      reason: 'manual_hold',
+    });
+  }
   if (!task) return;
 
   const base = {
@@ -4666,23 +4690,13 @@ export async function assertQcGateAllows(check: QcGateCheck): Promise<void> {
     );
   }
   if (task.gate_status === 'accepted') {
-    // An accepted lot has left the gate. The INDEPENDENT manual or recall hold still blocks it -
-    // the two axes are separate and both must be clear.
-    if (lot['quality_hold_status'] !== 'none') {
-      throw new AppError(400, 'LOT_ON_HOLD', 'Lot is on quality hold', {
-        ...base,
-        reason: 'manual_hold',
-      });
-    }
+    // An accepted lot has left the gate. The INDEPENDENT manual or recall hold still blocks it, and
+    // is checked unconditionally at the top of this function (code review 2026-09-08, D2) - it used
+    // to be checked here and in the conditional-release branch below, which is exactly why a lot
+    // with no inspection task was never checked at all.
     return;
   }
-  // conditionally_released
-  if (lot['quality_hold_status'] !== 'none') {
-    throw new AppError(400, 'LOT_ON_HOLD', 'Lot is on quality hold', {
-      ...base,
-      reason: 'manual_hold',
-    });
-  }
+  // conditionally_released. The manual/recall hold was already refused above.
   if (!INTERNAL_MOVEMENT_OPERATIONS.has(check.operation)) {
     throw new AppError(
       400,

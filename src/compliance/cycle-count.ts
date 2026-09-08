@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
+import { CUSTOMER_OWNED_STOCK_CLASSES } from './stock-balance.js';
 import { getItemBySku } from '../read/projections/item_master.js';
 import {
   findActiveDelegation,
@@ -28,6 +29,7 @@ import {
   markPhysicalVerificationSignedOff,
 } from '../read/projections/physical_verification.js';
 import { toIstCalendarDate } from '../lib/business-days.js';
+import { logRejectionAudit, type AuditEntryPayload } from '../read/projections/audit_log.js';
 import { insertCustodyLedgerEntry } from '../read/projections/custody_ledger_entry.js';
 import { getServiceOrderById } from '../read/projections/service_order.js';
 // Story 9.5 code review (chunk 2): the scaled-integer helpers, so the NUMERIC(18,6) verification
@@ -110,6 +112,9 @@ export const CYCLE_COUNT_ERROR_CODES = {
   COUNT_VARIANCE_REQUIRES_APPROVAL: 'COUNT_VARIANCE_REQUIRES_APPROVAL',
   STOCK_ADJUSTMENT_NEGATIVE_BALANCE: 'STOCK_ADJUSTMENT_NEGATIVE_BALANCE',
   APPROVAL_REQUIRED: 'APPROVAL_REQUIRED',
+  // Story 9.10 (Task 2): offcut-class count adjustments are refused outright; the quantity is
+  // corrected through the offcut disposal and revaluation flow, never a count.
+  OFFCUT_ADJUSTMENT_REFUSED: 'OFFCUT_ADJUSTMENT_REFUSED',
 } as const;
 
 function isNonEmptyString(value: unknown): value is string {
@@ -571,6 +576,7 @@ export async function applyCycleCountProjection(
   envelope: EventEnvelope,
   client: PoolClient,
   eventId: string,
+  auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
 ): Promise<void> {
   const type = cycleCountEventType(envelope);
   if (!type) return;
@@ -631,7 +637,7 @@ export async function applyCycleCountProjection(
   }
 
   if (type === 'stock.adjusted') {
-    await applyStockAdjusted(envelope, client, eventId);
+    await applyStockAdjusted(envelope, client, eventId, auditCtx);
     return;
   }
 
@@ -832,11 +838,41 @@ async function applySubmitted(envelope: EventEnvelope, client: PoolClient): Prom
       (line['unit_cost'] as number | undefined) ?? null,
       client,
     );
+    // Story 9.10 (Task 3, AC 3): customer-owned material (offcut and job_work) is held unvalued by
+    // the 2026-09-05 offcut-domain ruling - there is no company rate to value it at, so it must not
+    // reach the physical-verification evidence row carrying a figure derived from a rate that is not
+    // the company's. That zeroing happens at the EVIDENCE row (applyPhysicalVerificationCompleted),
+    // NOT here.
+    //
+    // Code review 2026-09-08 (D1): zeroing the count line itself was wrong. `variance_value` on the
+    // count line is not only a valuation - it is the input `resolveCountApprover` bands on, and
+    // `findMatchingDoaEntry` matches with `$2 > value_min`. Zeroing it here banded every `job_work`
+    // adjustment (which Task 2 does NOT bar) at the lowest-authority band regardless of magnitude,
+    // and, because applyAdjustmentDecision resolves the approver for the REJECT decision too, made
+    // the adjustment neither approvable nor rejectable under any registry whose lowest band starts
+    // at zero - deadlocking physical-verification close. The count line therefore keeps its computed
+    // value for banding; `unit_cost` stays mandatory for these classes because the banding consumes
+    // it. Only the statutory evidence row is unvalued.
     const varianceValue = await multiplyNumeric(Math.abs(variance), unitCost, client);
 
     let adjustmentId: string | null = null;
     let adjustmentStatus: string | null = null;
     let lineApprover: string | null = null;
+    // Code review 2026-09-08 (P1): an `offcut` line DOES still mint its adjustment, deliberately.
+    //
+    // The review proposed suppressing it, because the Task 2 bar in applyStockAdjusted guarantees it
+    // can never be applied. That was rejected on inspection: applyStockAdjusted refuses a
+    // non-approved adjustment (APPROVAL_REQUIRED) BEFORE it reaches the offcut bar, so an offcut
+    // line with no adjustment can never reach the bar through either door. Suppressing the mint
+    // would therefore delete AC 2's audited OFFCUT_ADJUSTMENT_REFUSED refusal entirely and leave the
+    // counter with silence instead of a statutory reason.
+    //
+    // The deadlock the review found was real but its cause was D1, not this mint: zeroing
+    // variance_value made resolveCountApprover unable to band the line, and applyAdjustmentDecision
+    // resolves the approver for the REJECT decision too, so the line could be neither approved nor
+    // rejected and the count could never close. With the value restored above, rejecting the offcut
+    // adjustment resolves normally and releases the count, which is the documented exit named in the
+    // refusal details.
     if (breach && variance !== 0) {
       adjustmentId = randomUUID();
       adjustmentStatus = 'pending_approval';
@@ -934,6 +970,7 @@ async function applyStockAdjusted(
   envelope: EventEnvelope,
   client: PoolClient,
   eventId: string,
+  auditCtx?: Omit<AuditEntryPayload, 'event_id' | 'error_code' | 'details'>,
 ): Promise<void> {
   const p = envelope.payload as Record<string, unknown>;
   const adjustmentId = p['adjustment_id'] as string;
@@ -1024,6 +1061,51 @@ async function applyStockAdjusted(
   await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
     `${sku}|${locationId}|${lotId ?? ''}|${stockClass}`,
   ]);
+
+  // Story 9.10 (Task 2, AC 2): an offcut-class count adjustment is REFUSED outright. `offcut`
+  // stock is the customer's, held unvalued under a running Section 143 clock and already priced
+  // into a credit note; a warehouse count would move `stock_balance` while leaving the
+  // `job_work_offcut_holding` row - which prices the credit note and reconciles the clock -
+  // untouched. Changing its quantity is a commercial event between two parties, never a
+  // warehouse correction one counter can make (RULED 2026-09-07 by the Project Lead). The bar is
+  // UNCONDITIONAL on the offcut class regardless of the existing class (a same-class offcut-to-
+  // offcut adjustment passes the class-conflict guard below, which fires only on a CLASS
+  // conflict), and applies to both directions of the delta. It is re-derived in the applier under
+  // the same locks, never only at the route, so the direct-events door meets the identical wall.
+  // The refusal is a statutory decision, so an audit row is written here (logRejectionAudit on a
+  // fresh connection, surviving the rollback this throw causes) on BOTH doors - the same pattern
+  // the offcut-domain appliers use - never only when the route happens to audit it.
+  if (stockClass === OFFCUT_STOCK_CLASS) {
+    const refusal = new AppError(
+      400,
+      CYCLE_COUNT_ERROR_CODES.OFFCUT_ADJUSTMENT_REFUSED,
+      'Offcut-class quantity is corrected through the offcut disposal and revaluation flow, not through a cycle count',
+      {
+        sku,
+        stock_class: stockClass,
+        location_id: locationId,
+        lot_id: lotId,
+        adjustment_id: adjustmentId,
+        cycle_count_id: cycleCountId,
+        // Code review 2026-09-08 (P1): name the exit. This adjustment can never be applied, and
+        // applyPhysicalVerificationCompleted refuses a count that still carries a pending_approval
+        // or approved line (COUNT_TASK_LOCKED), so the count stays open until this line is
+        // explicitly REJECTED. Without saying so, the message sends the counter to the disposal
+        // flow and leaves the count they were closing stuck behind them.
+        resolution: 'reject_adjustment_to_close_count',
+      },
+    );
+    if (auditCtx) {
+      await logRejectionAudit({
+        ...auditCtx,
+        event_id: null,
+        http_status: 400,
+        error_code: CYCLE_COUNT_ERROR_CODES.OFFCUT_ADJUSTMENT_REFUSED,
+        details: refusal.details,
+      });
+    }
+    throw refusal;
+  }
 
   // Code review 2026-09-02 round 2 (Story 8.8, FR-Q-12): a positive count adjustment is an
   // inflow, and this INSERT..ON CONFLICT was the one write path that bypassed the stock-class
@@ -1313,7 +1395,13 @@ async function applyPhysicalVerificationCompleted(
           book_quantity: l.book_quantity,
           counted_quantity: l.counted_quantity,
           variance_quantity: l.variance_quantity,
-          variance_value: l.variance_value,
+          // Story 9.10 (Task 3, AC 3), placement corrected by code review 2026-09-08 (D1):
+          // customer-owned material (offcut and job_work) is held unvalued by the 2026-09-05
+          // offcut-domain ruling, so the STATUTORY EVIDENCE row carries a zero variance value while
+          // the count line keeps the computed figure the DOA bands read. `stock_class` is stored on
+          // this same row, so an auditor can tell a deliberately-unvalued customer-owned line from
+          // an owned line whose cost lookup returned zero.
+          variance_value: CUSTOMER_OWNED_STOCK_CLASSES.has(l.stock_class) ? 0 : l.variance_value,
           adjustment_event_ref: l.applied_event_id,
           counter_actor_id: header?.submitted_by_actor_id ?? null,
           approver_actor_id: l.approver_actor_id,
