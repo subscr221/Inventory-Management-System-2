@@ -104,7 +104,39 @@ function assertEdgePayloadSiteWriteAccess(
 // qc_inspector, gst_officer and every other role the REST route denies could lift the
 // IRN-before-dispatch wall through edge sync. Allowlist, matching the events door exactly.
 const DISPATCH_IRN_RECORDING_ROLES = ['dispatch_clerk', 'warehouse_manager'];
-const DISPATCH_DENIED_FRONTLINE_ROLES = ['store_assistant', 'warehouse_operator'];
+// Story 3.7 Task 7.3, converted from a denylist by the edge-door sweep follow-up (2026-09-09).
+// These mirror DISPATCH_WRITE_ROLES and DISPATCH_DOC_WRITE_ROLES in src/api/v1/dispatch.ts, which
+// are what the REST routes postPacked / postShippingDocumentsGenerated / postDispatched enforce.
+// The previous denylist (store_assistant, warehouse_operator) admitted every OTHER role by
+// default, so each role added to the system landed on the permitted side of a dispatch-side SoD
+// guard without anyone deciding that.
+const DISPATCH_WRITE_ROLES = ['dispatch_clerk', 'warehouse_manager'];
+const DISPATCH_DOC_WRITE_ROLES = ['dispatch_clerk', 'warehouse_manager', 'inventory_controller'];
+
+/**
+ * Allowlist gate for a dispatch-side edge event, filtered across ALL of the caller's assignments.
+ * The predecessor read `assignment.role` - one arbitrarily-selected assignment - so a user holding
+ * a permitted role AND another warehouse role was admitted or refused depending on which one
+ * happened to sort first. Site scope for these events is carried by
+ * assertEdgePayloadSiteWriteAccess.
+ */
+function assertEdgeDispatchRoleAllowed(
+  authContext: NonNullable<ReturnType<typeof getAuthContext>>,
+  allowedRoles: readonly string[],
+  action: string,
+): void {
+  const permitted = authContext.roles.some(
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      allowedRoles.includes(r.role),
+  );
+  if (!permitted) {
+    throw new AppError(403, 'FUNCTION_ACCESS_DENIED', `Not authorized to ${action}`, {
+      required_roles: [...allowedRoles],
+    });
+  }
+}
 // Story 11.5: the only role that may value a branch transfer or record its GST documents.
 const BRANCH_TRANSFER_GST_ROLES = ['gst_officer'];
 const BRANCH_TRANSFER_GST_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -475,39 +507,22 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   // dispatch-side action, across all three event types (not just dispatch.dispatched).
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.packed') {
     body.payload['packed_by'] = authContext.userId;
-    const role = assignment.role;
-    if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
-      throw new AppError(
-        403,
-        'FUNCTION_ACCESS_DENIED',
-        `Role "${role}" is not authorized to pack a dispatch order`,
-      );
-    }
+    assertEdgeDispatchRoleAllowed(authContext, DISPATCH_WRITE_ROLES, 'pack a dispatch order');
   }
   if (
     body.stream_type === 'warehouse' &&
     body.event_type === 'dispatch.shipping_documents_generated'
   ) {
     body.payload['generated_by'] = authContext.userId;
-    const role = assignment.role;
-    if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
-      throw new AppError(
-        403,
-        'FUNCTION_ACCESS_DENIED',
-        `Role "${role}" is not authorized to generate shipping documents`,
-      );
-    }
+    assertEdgeDispatchRoleAllowed(
+      authContext,
+      DISPATCH_DOC_WRITE_ROLES,
+      'generate shipping documents',
+    );
   }
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.dispatched') {
     body.payload['dispatched_by'] = authContext.userId;
-    const role = assignment.role;
-    if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
-      throw new AppError(
-        403,
-        'FUNCTION_ACCESS_DENIED',
-        `Role "${role}" is not authorized to confirm dispatch`,
-      );
-    }
+    assertEdgeDispatchRoleAllowed(authContext, DISPATCH_WRITE_ROLES, 'confirm dispatch');
   }
   // Story 11.2 (code review 2026-09-09): recording the ERP-issued IRN is a dispatch-side action
   // restricted to the same roles as the REST route (dispatch_clerk / warehouse_manager). The

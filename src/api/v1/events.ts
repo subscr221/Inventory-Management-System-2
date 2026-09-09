@@ -170,6 +170,56 @@ const DISPATCH_IRN_RECORDING_ROLES: ReadonlySet<string> = new Set([
   'warehouse_manager',
 ]);
 
+/**
+ * Edge-door sweep follow-up (2026-09-09), found by the parity arm written for the edge door.
+ *
+ * Story 3.7 Task 7.3 made packing, shipping-document generation and dispatch confirmation
+ * dispatch-side actions, and the REST routes enforce that (DISPATCH_WRITE_ROLES and
+ * DISPATCH_DOC_WRITE_ROLES in src/api/v1/dispatch.ts). The edge door enforced it too, first as a
+ * denylist and now as these allowlists. THIS door had no gate for the three event types at all:
+ * `dispatch.packed`, `dispatch.shipping_documents_generated` and `dispatch.dispatched` appeared
+ * nowhere in this file, their payloads carry no `site_id` so assertPayloadSiteWriteAccess could
+ * not bite, and src/compliance/dispatch.ts holds no role check either. Proven by execution: a
+ * gate_officer posting dispatch.packed here passed authorisation entirely and was refused only by
+ * business state (DISPATCH_ORDER_NOT_PICKED), so on a picked order it would have packed.
+ *
+ * Unlike the IRN gate above there is no site half: these payloads carry no site id, and resolving
+ * one would mean reading the dispatch order inside the door. The edge door has the same limitation
+ * and the same shape; the site scope for these three actions rests on the module assignment alone.
+ */
+const DISPATCH_SOD_ROLES: Readonly<Record<string, readonly string[]>> = {
+  'dispatch.packed': ['dispatch_clerk', 'warehouse_manager'],
+  'dispatch.dispatched': ['dispatch_clerk', 'warehouse_manager'],
+  'dispatch.shipping_documents_generated': [
+    'dispatch_clerk',
+    'warehouse_manager',
+    'inventory_controller',
+  ],
+};
+
+function assertDispatchSodFunctionAccess(
+  authContext: NonNullable<ReturnType<typeof getAuthContext>>,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): void {
+  if (body.stream_type !== 'warehouse') return;
+  const allowedRoles = DISPATCH_SOD_ROLES[body.event_type];
+  if (!allowedRoles) return;
+  const permitted = authContext.roles.some(
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      allowedRoles.includes(r.role),
+  );
+  if (!permitted) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `Event "${body.event_type}" is a dispatch-side action restricted to specific roles`,
+      { required_roles: [...allowedRoles] },
+    );
+  }
+}
+
 function assertDispatchIrnFunctionAccess(
   authContext: NonNullable<ReturnType<typeof getAuthContext>>,
   body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
@@ -372,6 +422,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     assertPlanningPayloadWriteLocation(authContext, body);
     assertOffcutValuationFunctionAccess(authContext, body);
     assertDispatchIrnFunctionAccess(authContext, body);
+    assertDispatchSodFunctionAccess(authContext, body);
     assertBranchTransferGstFunctionAccess(authContext, body);
     assertPayloadSiteWriteAccess(authContext, body);
     body.metadata.actor.user_id = authContext.userId;

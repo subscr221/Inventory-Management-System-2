@@ -12,8 +12,8 @@ import { closePool, closeAdminPool, getAdminPool, getPool } from '../../src/conf
 // ---------------------------------------------------------------------------
 // Edge-sync door security sweep (2026-09-09) - the pin for src/api/v1/edge.ts.
 //
-// POST /api/v1/events and POST /api/v1/edge/events are meant to be twins. Two holes were closed on
-// the edge door and this file is their only coverage:
+// POST /api/v1/events and POST /api/v1/edge/events are meant to be twins. Three holes were closed
+// on the edge door and this file is their only coverage:
 //
 //   1. dispatch.irn_recorded was gated by a DENYLIST of two frontline roles (store_assistant,
 //      warehouse_operator) and admitted everyone else, so gate_officer, qc_inspector and every
@@ -28,6 +28,18 @@ import { closePool, closeAdminPool, getAdminPool, getPool } from '../../src/conf
 //      twin, ordered LAST so the specific function gates still answer with their precise
 //      FUNCTION_ACCESS_DENIED and every other site_id-carrying event type is caught with
 //      LOCATION_ACCESS_DENIED.
+//   3. The three Story 3.7 dispatch gates (dispatch.packed,
+//      dispatch.shipping_documents_generated, dispatch.dispatched) were the same shape of denylist
+//      as (1) - store_assistant / warehouse_operator refused, every other role admitted by default,
+//      read off one arbitrarily-selected assignment. They are now allowlists mirroring
+//      DISPATCH_WRITE_ROLES / DISPATCH_DOC_WRITE_ROLES in src/api/v1/dispatch.ts, which is what the
+//      REST routes enforce.
+//   4. That conversion exposed a gap on the OTHER door: POST /api/v1/events applied no role gate at
+//      all to those same three event types (no reference in events.ts, no site_id in their payloads
+//      for assertPayloadSiteWriteAccess to bind to, and no role check in src/compliance/dispatch.ts),
+//      so any holder of warehouse write could pack, document and ship there. assertDispatchSodFunctionAccess
+//      closes it with the same two lists. It has NO site half by design - these payloads carry no
+//      site id - and neither does the edge door's; do not add an arm asserting one.
 //
 // Real PostgreSQL, the real production router, SCIM provisioning and dev-token auth. Tests run
 // serially; every identifier is run-scoped. The harness scaffolding is a deliberate local
@@ -49,6 +61,12 @@ const HARNESS_DDL = [
   '../../read/projections/location_register.sql',
   '../../read/projections/item_master.sql',
   '../../read/projections/erp_sales_order.sql',
+  '../../read/projections/lot_master.sql',
+  '../../read/projections/stock_balance.sql',
+  '../../read/projections/pick_task.sql',
+  '../../read/projections/pick_line.sql',
+  '../../read/projections/packing_record.sql',
+  '../../read/projections/dispatch_document.sql',
   '../../read/projections/dispatch_irn.sql',
   '../../read/projections/compliance_bis_licence.sql',
   '../../read/projections/compliance_bis_licence_alert.sql',
@@ -159,26 +177,61 @@ function detailsOf(body: Record<string, unknown>): Record<string, unknown> {
     : {};
 }
 
-async function seedLocation(locationId: string, code: string, siteId: string): Promise<void> {
+async function seedLocation(
+  locationId: string,
+  code: string,
+  siteId: string,
+  level = 'site',
+  parentId: string | null = null,
+  pickSequence: number | null = null,
+): Promise<void> {
   await getAdminPool().query(
     `INSERT INTO location_register
        (location_id, location_code, level, parent_location_id, site_id, zone_type,
-        temperature_class, size_class, hazmat_allowed, quarantine, access_restricted, status)
-     VALUES ($1, $2, 'site', NULL, $3, 'general', 'ambient', 'standard', false, false, false, 'active')`,
-    [locationId, code, siteId],
+        temperature_class, size_class, hazmat_allowed, quarantine, access_restricted, status,
+        pick_sequence)
+     VALUES ($1, $2, $3, $4, $5, 'general', 'ambient', 'standard', false, false, false, 'active', $6)`,
+    [locationId, code, level, parentId, siteId, pickSequence],
+  );
+}
+
+async function createLot(lotNumber: string, sku: string, lotId: string): Promise<void> {
+  await getAdminPool().query(
+    `INSERT INTO lot_master (lot_id, lot_number, sku, quality_hold_status)
+     VALUES ($1, $2, $3, 'none')`,
+    [lotId, lotNumber, sku],
+  );
+}
+
+async function seedStock(
+  sku: string,
+  locationId: string,
+  lotNumber: string,
+  onHand: number,
+): Promise<void> {
+  await getAdminPool().query(
+    `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand)
+     VALUES ($1, $2, $3, 'owned', $4)`,
+    [sku, locationId, lotNumber, onHand],
   );
 }
 
 // erp_sales_order is a direct-upsert reference projection (Story 2.9), not event-sourced. An IRN can
 // be recorded against a line before any picking exists (Story 11.2 decision D3), so this is the only
 // fixture the IRN arms need - no pick/pack/document machinery.
-async function seedErpSalesOrder(id: string, soNumberExt: string, siteId: string): Promise<void> {
+async function seedErpSalesOrder(
+  id: string,
+  soNumberExt: string,
+  siteId: string,
+  sku = `SKU-${soNumberExt}`,
+  quantity = '5',
+): Promise<void> {
   await getAdminPool().query(
     `INSERT INTO erp_sales_order
        (id, so_number_ext, line_no, sku, quantity, ship_from_site_id, ship_from_site_code_ext,
         ship_to_ext, status, source_system, last_synced_at)
-     VALUES ($1, $2, 1, $3, '5', $4, 'SITE-EDGE', 'Customer EDGE', 'open', 'ERP', now())`,
-    [id, soNumberExt, `SKU-${soNumberExt}`, siteId],
+     VALUES ($1, $2, 1, $3, $4, $5, 'SITE-EDGE', 'Customer EDGE', 'open', 'ERP', now())`,
+    [id, soNumberExt, sku, quantity, siteId],
   );
 }
 
@@ -212,6 +265,141 @@ describe('Edge-sync door sweep - IRN allowlist and blanket payload-site check', 
   let clerkReadScope: Actor; // dispatch_clerk at READ scope, warehouse write held elsewhere
   let complianceA: Actor; // compliance/write/siteA - drives the blanket check
   let gstOfficerA: Actor; // gst_officer inventory/write/siteA - drives the ordering arm
+  let manager: Actor; // warehouse_manager - generates pick tasks for the staging fixture
+  let operator: Actor; // warehouse_operator - confirms pick lines for the staging fixture
+  let inventoryController: Actor; // on the DOC list only - proves the two lists differ
+
+  // The Story 3.7 staging fixture: a bin with stock, one confirmed pick line, so the dispatch-side
+  // event types below reach their seams in a legitimate state rather than being refused for a
+  // reason unrelated to the role gate.
+  const zoneId = randomUUID();
+  const binId = randomUUID();
+
+  async function stageToPack(
+    dispatchOrderId: string,
+    tag: string,
+  ): Promise<{ sku: string; lotId: string; quantity: string }> {
+    const sku = `SKU-EDGE-${tag}-${run}`;
+    const lotNumber = `LOT-EDGE-${tag}-${run}`;
+    const lotId = randomUUID();
+    const quantity = '10';
+
+    await seedErpSalesOrder(dispatchOrderId, `SO-EDGE-${tag}-${run}`, siteA, sku, quantity);
+    await createLot(lotNumber, sku, lotId);
+    await seedStock(sku, binId, lotNumber, Number(quantity));
+
+    const pick = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      {
+        dispatchOrderId,
+        dispatchOrderLineIds: [dispatchOrderId],
+        strategy: 'single',
+      },
+      bearer(manager.token),
+    );
+    assert.equal(pick.status, 201, `pick generation failed for ${tag}: ${pick.raw}`);
+    const pickTaskId = (pick.body['pickTaskIds'] as string[] | undefined)?.[0];
+    const pickLineId = (pick.body['pickLineIds'] as string[] | undefined)?.[0];
+    assert(
+      typeof pickTaskId === 'string' && typeof pickLineId === 'string',
+      `pick response incomplete for ${tag}: ${pick.raw}`,
+    );
+
+    const confirm = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/pick-tasks/${pickTaskId}/lines/${pickLineId}/confirm`,
+      { confirmedLotId: lotId, confirmedQuantity: quantity, captureMethod: 'PWA' },
+      bearer(operator.token),
+    );
+    assert.equal(confirm.status, 200, `pick confirmation failed for ${tag}: ${confirm.raw}`);
+    return { sku, lotId, quantity };
+  }
+
+  function uploadEdge(
+    actor: Actor,
+    role: string,
+    dispatchOrderId: string,
+    eventType: string,
+    payload: Record<string, unknown>,
+  ): Promise<HttpResult> {
+    return makeRequest(
+      port,
+      'POST',
+      '/api/v1/edge/events',
+      edgeEnvelope('warehouse', dispatchOrderId, eventType, payload, actor, role, siteA),
+      bearer(actor.token),
+    );
+  }
+
+  function postEvents(
+    actor: Actor,
+    role: string,
+    streamId: string,
+    eventType: string,
+    payload: Record<string, unknown>,
+  ): Promise<HttpResult> {
+    return makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'warehouse',
+        stream_id: streamId,
+        event_type: eventType,
+        payload,
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role, location_id: siteA },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      bearer(actor.token),
+    );
+  }
+
+  function packPayload(
+    dispatchOrderId: string,
+    staged: { sku: string; lotId: string; quantity: string },
+  ): Record<string, unknown> {
+    return {
+      packing_record_id: randomUUID(),
+      dispatch_order_id: dispatchOrderId,
+      sku: staged.sku,
+      packed_qty: staged.quantity,
+      lot_id: staged.lotId,
+      carton_count: 2,
+      actual_weight_kg: '4.0',
+    };
+  }
+
+  async function eventCount(dispatchOrderId: string, eventType: string): Promise<number> {
+    const rows = await getPool().query(
+      `SELECT COUNT(*)::int AS n FROM domain_events WHERE stream_id = $1 AND event_type = $2`,
+      [dispatchOrderId, eventType],
+    );
+    return rows.rows[0]?.['n'] as number;
+  }
+
+  async function orderStatus(
+    dispatchOrderId: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    const rows = await getPool().query(
+      `SELECT packed_at, dispatched_at FROM dispatch_order_status WHERE dispatch_order_id = $1`,
+      [dispatchOrderId],
+    );
+    return rows.rows[0] as Record<string, unknown> | undefined;
+  }
+
+  async function documentCount(dispatchOrderId: string): Promise<number> {
+    const rows = await getPool().query(
+      `SELECT COUNT(*)::int AS n FROM dispatch_document WHERE dispatch_order_id = $1`,
+      [dispatchOrderId],
+    );
+    return rows.rows[0]?.['n'] as number;
+  }
 
   function edgeEnvelope(
     streamType: string,
@@ -307,6 +495,14 @@ describe('Edge-sync door sweep - IRN allowlist and blanket payload-site check', 
     await seedLocation(siteA, `SITE-A-EDGE-${run}`, siteA);
     await seedLocation(siteB, `SITE-B-EDGE-${run}`, siteB);
 
+    // The Story 3.7 arms need a real pickable bin under siteA.
+    const aisleId = randomUUID();
+    const rackId = randomUUID();
+    await seedLocation(zoneId, `ZONE-EDGE-${run}`, siteA, 'zone', siteA);
+    await seedLocation(aisleId, `AISLE-EDGE-${run}`, siteA, 'aisle', zoneId);
+    await seedLocation(rackId, `RACK-EDGE-${run}`, siteA, 'rack', aisleId);
+    await seedLocation(binId, `BIN-EDGE-${run}`, siteA, 'bin', rackId, 10);
+
     clerk = await provisionUser(port, `edge-clerk-${run}@example.com`, 'Dispatch Clerk', [
       { role: 'dispatch_clerk', module: 'warehouse', functionScope: 'write', locationId: siteA },
     ]);
@@ -366,6 +562,30 @@ describe('Edge-sync door sweep - IRN allowlist and blanket payload-site check', 
     gstOfficerA = await provisionUser(port, `edge-gst-${run}@example.com`, 'GST Officer', [
       { role: 'gst_officer', module: 'inventory', functionScope: 'write', locationId: siteA },
     ]);
+    manager = await provisionUser(port, `edge-manager-${run}@example.com`, 'Warehouse Manager', [
+      { role: 'warehouse_manager', module: 'warehouse', functionScope: 'write', locationId: siteA },
+    ]);
+    operator = await provisionUser(port, `edge-operator-${run}@example.com`, 'Warehouse Operator', [
+      {
+        role: 'warehouse_operator',
+        module: 'warehouse',
+        functionScope: 'write',
+        locationId: siteA,
+      },
+    ]);
+    inventoryController = await provisionUser(
+      port,
+      `edge-invctl-${run}@example.com`,
+      'Inventory Controller',
+      [
+        {
+          role: 'inventory_controller',
+          module: 'warehouse',
+          functionScope: 'write',
+          locationId: siteA,
+        },
+      ],
+    );
   });
 
   after(async () => {
@@ -645,5 +865,352 @@ describe('Edge-sync door sweep - IRN allowlist and blanket payload-site check', 
     assert.equal(result.body['error_code'], 'FUNCTION_ACCESS_DENIED', result.raw);
     assert.equal(detailsOf(result.body)['site_id'], siteB);
     assert.deepEqual(detailsOf(result.body)['required_roles'], ['gst_officer']);
+  });
+
+  // --- Arm 7: the three Story 3.7 dispatch gates, converted denylist -> allowlist --------------
+
+  const DISPATCH_WRITE_ROLES = ['dispatch_clerk', 'warehouse_manager'];
+  const DISPATCH_DOC_WRITE_ROLES = ['dispatch_clerk', 'warehouse_manager', 'inventory_controller'];
+
+  it('Arm 7: dispatch.packed, dispatch.shipping_documents_generated and dispatch.dispatched refuse a gate_officer and a qc_inspector with FUNCTION_ACCESS_DENIED, and a dispatch_clerk still performs all three', async () => {
+    // The pre-conversion gates rejected a DENYLIST of store_assistant / warehouse_operator and
+    // admitted every other role by default, so each of these identities could pack, document and
+    // ship a real order through edge sync - all three SoD-guarded, dispatch-side actions. The order
+    // is genuinely staged (stock, a confirmed pick line), so nothing but the role gate can be
+    // producing the refusal.
+    const orderId = randomUUID();
+    const staged = await stageToPack(orderId, 'S37');
+
+    for (const [role, actor] of [
+      ['gate_officer', gateOfficer],
+      ['qc_inspector', qcInspector],
+    ] as Array<[string, Actor]>) {
+      const denied = await uploadEdge(
+        actor,
+        role,
+        orderId,
+        'dispatch.packed',
+        packPayload(orderId, staged),
+      );
+      assert.equal(denied.status, 403, denied.raw);
+      assert.equal(denied.body['error_code'], 'FUNCTION_ACCESS_DENIED', `${role}: ${denied.raw}`);
+      assert.deepEqual(detailsOf(denied.body)['required_roles'], DISPATCH_WRITE_ROLES);
+    }
+    assert.equal(await eventCount(orderId, 'dispatch.packed'), 0, 'no packing event may persist');
+    assert.equal((await orderStatus(orderId))?.['packed_at'], null, 'the order stays unpacked');
+
+    const packed = await uploadEdge(
+      clerk,
+      'dispatch_clerk',
+      orderId,
+      'dispatch.packed',
+      packPayload(orderId, staged),
+    );
+    assert.equal(packed.status, 201, packed.raw);
+    assert.notEqual((await orderStatus(orderId))?.['packed_at'], null);
+
+    // Document generation carries the WIDER list, so its refusal names three roles, not two.
+    const docsDenied = await uploadEdge(
+      gateOfficer,
+      'gate_officer',
+      orderId,
+      'dispatch.shipping_documents_generated',
+      { dispatch_order_id: orderId, document_types: ['bol', 'packing_slip'] },
+    );
+    assert.equal(docsDenied.status, 403, docsDenied.raw);
+    assert.equal(docsDenied.body['error_code'], 'FUNCTION_ACCESS_DENIED', docsDenied.raw);
+    assert.deepEqual(detailsOf(docsDenied.body)['required_roles'], DISPATCH_DOC_WRITE_ROLES);
+    assert.equal(await documentCount(orderId), 0, 'no shipping document may be generated');
+
+    const docs = await uploadEdge(
+      clerk,
+      'dispatch_clerk',
+      orderId,
+      'dispatch.shipping_documents_generated',
+      { dispatch_order_id: orderId, document_types: ['bol', 'packing_slip'] },
+    );
+    assert.equal(docs.status, 201, docs.raw);
+    assert.ok((await documentCount(orderId)) > 0);
+
+    // The Story 11.2 wall has to come down before dispatch is reachable at all, so the refusal
+    // below is the ROLE gate and not IRN_MISSING.
+    const irn = await uploadIrn(clerk, 'dispatch_clerk', orderId, 'S37');
+    assert.equal(irn.status, 201, irn.raw);
+
+    const shipDenied = await uploadEdge(
+      gateOfficer,
+      'gate_officer',
+      orderId,
+      'dispatch.dispatched',
+      {
+        dispatch_order_id: orderId,
+      },
+    );
+    assert.equal(shipDenied.status, 403, shipDenied.raw);
+    assert.equal(shipDenied.body['error_code'], 'FUNCTION_ACCESS_DENIED', shipDenied.raw);
+    assert.deepEqual(detailsOf(shipDenied.body)['required_roles'], DISPATCH_WRITE_ROLES);
+    assert.equal(await eventCount(orderId, 'dispatch.dispatched'), 0);
+    assert.equal((await orderStatus(orderId))?.['dispatched_at'], null, 'the goods stay put');
+
+    const shipped = await uploadEdge(clerk, 'dispatch_clerk', orderId, 'dispatch.dispatched', {
+      dispatch_order_id: orderId,
+    });
+    assert.equal(shipped.status, 201, shipped.raw);
+    assert.notEqual((await orderStatus(orderId))?.['dispatched_at'], null);
+  });
+
+  // --- Arm 8: the doc-generation allowlist is genuinely wider ---------------------------------
+
+  it('Arm 8: an inventory_controller is refused on dispatch.packed and dispatch.dispatched but ADMITTED on dispatch.shipping_documents_generated', async () => {
+    // If the two lists were ever collapsed into one, this arm is the only thing that notices.
+    const orderId = randomUUID();
+    const staged = await stageToPack(orderId, 'IC');
+
+    const packDenied = await uploadEdge(
+      inventoryController,
+      'inventory_controller',
+      orderId,
+      'dispatch.packed',
+      packPayload(orderId, staged),
+    );
+    assert.equal(packDenied.status, 403, packDenied.raw);
+    assert.equal(packDenied.body['error_code'], 'FUNCTION_ACCESS_DENIED', packDenied.raw);
+    assert.deepEqual(detailsOf(packDenied.body)['required_roles'], DISPATCH_WRITE_ROLES);
+    assert.equal((await orderStatus(orderId))?.['packed_at'], null);
+
+    const packed = await uploadEdge(
+      clerk,
+      'dispatch_clerk',
+      orderId,
+      'dispatch.packed',
+      packPayload(orderId, staged),
+    );
+    assert.equal(packed.status, 201, packed.raw);
+
+    // The same identity, one event type later, IS on the list.
+    const docs = await uploadEdge(
+      inventoryController,
+      'inventory_controller',
+      orderId,
+      'dispatch.shipping_documents_generated',
+      { dispatch_order_id: orderId, document_types: ['bol'] },
+    );
+    assert.equal(docs.status, 201, docs.raw);
+    assert.ok((await documentCount(orderId)) > 0);
+
+    const irn = await uploadIrn(clerk, 'dispatch_clerk', orderId, 'IC');
+    assert.equal(irn.status, 201, irn.raw);
+
+    const shipDenied = await uploadEdge(
+      inventoryController,
+      'inventory_controller',
+      orderId,
+      'dispatch.dispatched',
+      { dispatch_order_id: orderId },
+    );
+    assert.equal(shipDenied.status, 403, shipDenied.raw);
+    assert.equal(shipDenied.body['error_code'], 'FUNCTION_ACCESS_DENIED', shipDenied.raw);
+    assert.deepEqual(detailsOf(shipDenied.body)['required_roles'], DISPATCH_WRITE_ROLES);
+    assert.equal((await orderStatus(orderId))?.['dispatched_at'], null);
+  });
+
+  // --- Arm 9: filtered across ALL assignments, not one arbitrarily-selected one ---------------
+
+  it('Arm 9: a user holding dispatch_clerk plus another warehouse role packs regardless of provisioning order', async () => {
+    for (const [label, actor] of [
+      ['clerk-first', clerkFirst],
+      ['clerk-second', clerkSecond],
+    ] as Array<[string, Actor]>) {
+      const orderId = randomUUID();
+      const staged = await stageToPack(orderId, `PACK-${label}`);
+      const packed = await uploadEdge(
+        actor,
+        'dispatch_clerk',
+        orderId,
+        'dispatch.packed',
+        packPayload(orderId, staged),
+      );
+      assert.equal(packed.status, 201, `${label} holds dispatch_clerk: ${packed.raw}`);
+      assert.notEqual((await orderStatus(orderId))?.['packed_at'], null);
+    }
+  });
+
+  // --- Arm 10: the module and scope halves of the shared gate ---------------------------------
+
+  it('Arm 10: a dispatch_clerk assignment on the wrong module, and one at read scope, cannot pack; the same order packs for a real clerk', async () => {
+    const orderId = randomUUID();
+    const staged = await stageToPack(orderId, 'MODSCOPE');
+
+    for (const [label, actor] of [
+      ['wrong-module', clerkWrongModule],
+      ['read-scope', clerkReadScope],
+    ] as Array<[string, Actor]>) {
+      // Both reach the gate on their gate_officer warehouse-write assignment, so this is a refusal
+      // BY THE GATE, not a module or scope refusal at the door.
+      const denied = await uploadEdge(
+        actor,
+        'dispatch_clerk',
+        orderId,
+        'dispatch.packed',
+        packPayload(orderId, staged),
+      );
+      assert.equal(denied.status, 403, denied.raw);
+      assert.equal(denied.body['error_code'], 'FUNCTION_ACCESS_DENIED', `${label}: ${denied.raw}`);
+      assert.deepEqual(detailsOf(denied.body)['required_roles'], DISPATCH_WRITE_ROLES);
+    }
+    assert.equal((await orderStatus(orderId))?.['packed_at'], null);
+
+    // Non-vacuity: the order itself was packable all along.
+    const packed = await uploadEdge(
+      clerk,
+      'dispatch_clerk',
+      orderId,
+      'dispatch.packed',
+      packPayload(orderId, staged),
+    );
+    assert.equal(packed.status, 201, packed.raw);
+    assert.notEqual((await orderStatus(orderId))?.['packed_at'], null);
+  });
+
+  // --- Arm 11: the same three gates, on the EVENTS door (the gap this file found) --------------
+
+  it('Arm 11: POST /api/v1/events refuses a gate_officer on all three dispatch-side event types for a fully-picked order, admits inventory_controller on documents only, and admits a dispatch_clerk throughout', async () => {
+    // Until 2026-09-09 the events door applied NO role gate to these three event types: no
+    // reference in events.ts, no site_id in the payloads for assertPayloadSiteWriteAccess to bind
+    // to, and no role check in the dispatch seam. A gate_officer post reached BUSINESS-STATE
+    // validation and came back 400 DISPATCH_ORDER_NOT_PICKED - which is why this arm uses a
+    // genuinely staged, fully-picked order and asserts the status AND the code: on this order the
+    // pre-fix door would have PACKED it, so nothing weaker than 403 FUNCTION_ACCESS_DENIED can
+    // satisfy the arm.
+    const orderId = randomUUID();
+    const staged = await stageToPack(orderId, 'DOOR');
+
+    const packDenied = await postEvents(
+      gateOfficer,
+      'gate_officer',
+      orderId,
+      'dispatch.packed',
+      packPayload(orderId, staged),
+    );
+    assert.equal(packDenied.status, 403, packDenied.raw);
+    assert.equal(packDenied.body['error_code'], 'FUNCTION_ACCESS_DENIED', packDenied.raw);
+    assert.deepEqual(detailsOf(packDenied.body)['required_roles'], DISPATCH_WRITE_ROLES);
+    assert.equal(await eventCount(orderId, 'dispatch.packed'), 0);
+    assert.equal((await orderStatus(orderId))?.['packed_at'], null, 'the order stays unpacked');
+
+    const packed = await postEvents(
+      clerk,
+      'dispatch_clerk',
+      orderId,
+      'dispatch.packed',
+      packPayload(orderId, staged),
+    );
+    assert.ok(packed.status >= 200 && packed.status < 300, packed.raw);
+    assert.notEqual((await orderStatus(orderId))?.['packed_at'], null);
+
+    // Documents: the wider list, named in the refusal ...
+    const docsDenied = await postEvents(
+      gateOfficer,
+      'gate_officer',
+      orderId,
+      'dispatch.shipping_documents_generated',
+      { dispatch_order_id: orderId, document_types: ['bol', 'packing_slip'] },
+    );
+    assert.equal(docsDenied.status, 403, docsDenied.raw);
+    assert.equal(docsDenied.body['error_code'], 'FUNCTION_ACCESS_DENIED', docsDenied.raw);
+    assert.deepEqual(detailsOf(docsDenied.body)['required_roles'], DISPATCH_DOC_WRITE_ROLES);
+    assert.equal(await documentCount(orderId), 0);
+
+    // ... and genuinely wider: inventory_controller passes HERE and nowhere else.
+    const docs = await postEvents(
+      inventoryController,
+      'inventory_controller',
+      orderId,
+      'dispatch.shipping_documents_generated',
+      { dispatch_order_id: orderId, document_types: ['bol', 'packing_slip'] },
+    );
+    assert.ok(docs.status >= 200 && docs.status < 300, docs.raw);
+    assert.ok((await documentCount(orderId)) > 0);
+
+    // The Story 11.2 wall comes down first, so the dispatch refusals below are the ROLE gate.
+    const irn = await uploadIrn(clerk, 'dispatch_clerk', orderId, 'DOOR');
+    assert.equal(irn.status, 201, irn.raw);
+
+    for (const [role, actor] of [
+      ['gate_officer', gateOfficer],
+      ['inventory_controller', inventoryController],
+    ] as Array<[string, Actor]>) {
+      const denied = await postEvents(actor, role, orderId, 'dispatch.dispatched', {
+        dispatch_order_id: orderId,
+      });
+      assert.equal(denied.status, 403, denied.raw);
+      assert.equal(denied.body['error_code'], 'FUNCTION_ACCESS_DENIED', `${role}: ${denied.raw}`);
+      assert.deepEqual(detailsOf(denied.body)['required_roles'], DISPATCH_WRITE_ROLES);
+    }
+    assert.equal((await orderStatus(orderId))?.['dispatched_at'], null, 'the goods stay put');
+
+    // inventory_controller is refused on packing too - the two lists differ at both ends.
+    const icPack = await postEvents(
+      inventoryController,
+      'inventory_controller',
+      randomUUID(),
+      'dispatch.packed',
+      packPayload(orderId, staged),
+    );
+    assert.equal(icPack.status, 403, icPack.raw);
+    assert.equal(icPack.body['error_code'], 'FUNCTION_ACCESS_DENIED', icPack.raw);
+    assert.deepEqual(detailsOf(icPack.body)['required_roles'], DISPATCH_WRITE_ROLES);
+
+    const shipped = await postEvents(clerk, 'dispatch_clerk', orderId, 'dispatch.dispatched', {
+      dispatch_order_id: orderId,
+    });
+    assert.ok(shipped.status >= 200 && shipped.status < 300, shipped.raw);
+    assert.notEqual((await orderStatus(orderId))?.['dispatched_at'], null);
+  });
+
+  // --- Arm 12: two-door parity for the dispatch-side gates ------------------------------------
+
+  it('Arm 12: the SAME dispatch.packed payload and identity are refused FUNCTION_ACCESS_DENIED at BOTH doors, and admitted at both for a dispatch_clerk', async () => {
+    // This is the arm that would have caught the original gap: the doors are compared directly on
+    // one payload rather than each being pinned in isolation.
+    const orderId = randomUUID();
+    const staged = await stageToPack(orderId, 'PARITY37');
+    const payload = packPayload(orderId, staged);
+
+    const eventsDoor = await postEvents(
+      gateOfficer,
+      'gate_officer',
+      orderId,
+      'dispatch.packed',
+      payload,
+    );
+    const edgeDoor = await uploadEdge(
+      gateOfficer,
+      'gate_officer',
+      orderId,
+      'dispatch.packed',
+      payload,
+    );
+    assert.equal(eventsDoor.status, 403, eventsDoor.raw);
+    assert.equal(edgeDoor.status, 403, edgeDoor.raw);
+    assert.equal(eventsDoor.body['error_code'], 'FUNCTION_ACCESS_DENIED', eventsDoor.raw);
+    assert.equal(edgeDoor.body['error_code'], 'FUNCTION_ACCESS_DENIED', edgeDoor.raw);
+    assert.equal(edgeDoor.body['error_code'], eventsDoor.body['error_code']);
+    assert.deepEqual(detailsOf(eventsDoor.body)['required_roles'], DISPATCH_WRITE_ROLES);
+    assert.deepEqual(detailsOf(edgeDoor.body)['required_roles'], DISPATCH_WRITE_ROLES);
+    assert.equal(await eventCount(orderId, 'dispatch.packed'), 0, 'neither door may pack');
+    assert.equal((await orderStatus(orderId))?.['packed_at'], null);
+
+    // Two-sided: the allowlisted role passes at the events door, and the order is genuinely
+    // packable - so neither refusal above was the order's own state.
+    const packed = await postEvents(
+      clerk,
+      'dispatch_clerk',
+      orderId,
+      'dispatch.packed',
+      packPayload(orderId, staged),
+    );
+    assert.ok(packed.status >= 200 && packed.status < 300, packed.raw);
+    assert.notEqual((await orderStatus(orderId))?.['packed_at'], null);
   });
 });

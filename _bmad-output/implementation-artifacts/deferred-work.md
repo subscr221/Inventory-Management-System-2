@@ -834,12 +834,24 @@ defects on `src/api/v1/edge.ts`, all fixed, all now pinned by
    held some other warehouse role at site B could lift site B's block. The site half now binds
    privilege and scope to the SAME assignment, matching the events door exactly.
 
-NOT fixed, deliberately, and still open: the three Story 3.7 dispatch gates (`dispatch.packed`,
-`dispatch.shipping_documents_generated`, `dispatch.dispatched`) still use the frontline DENYLIST and
-a single arbitrarily-selected assignment. The denylist there is documented as by design (Task 7.3
-SOD guard), and their site scope is now covered by the blanket check, so this is a consistency and
-false-denial issue rather than a hole - but the single-assignment read means a user holding a denied
-role plus a permitted one is admitted or refused depending on assignment ordering. Worth a follow-up
-that converts all three to allowlists filtered across assignments.
+FOLLOW-UP, same day: the three Story 3.7 dispatch gates (`dispatch.packed`,
+`dispatch.shipping_documents_generated`, `dispatch.dispatched`) were ALSO converted, from the
+frontline denylist on a single arbitrary assignment to allowlists filtered across all assignments,
+mirroring `DISPATCH_WRITE_ROLES` / `DISPATCH_DOC_WRITE_ROLES` in `src/api/v1/dispatch.ts` (the
+doc-generation list is deliberately wider - `inventory_controller` may generate shipping documents
+but may not pack or dispatch). The dead `DISPATCH_DENIED_FRONTLINE_ROLES` constant is gone.
 
-Suite after the sweep: 2105/2105, 0 failures.
+That conversion then exposed a LARGER hole, in the opposite direction from the sweep: the EVENTS
+door had no gate for those three event types AT ALL. They appeared nowhere in `src/api/v1/events.ts`,
+their payloads carry no `site_id` so `assertPayloadSiteWriteAccess` could not reach them, and
+`src/compliance/dispatch.ts` holds no role check either (its only `role` occurrence is a
+notification target). Any holder of `warehouse` write could pack, generate shipping documents for,
+and ship an order through `POST /api/v1/events`. Proven by execution twice: before the fix a
+`gate_officer` posting `dispatch.packed` passed authorisation entirely and was refused only by
+business state, and on a fully-picked order it PACKED. `assertDispatchSodFunctionAccess` now gates
+all three on this door with the same allowlists.
+
+Deliberate limitation on BOTH doors, recorded so it is not rediscovered as a bug: there is no site
+half for these three actions. The payloads carry no site id and resolving one would mean reading
+the dispatch order inside the door, so their site scope rests on the module assignment alone.
+Suite after the sweep and its follow-up: 2111/2111, 0 failures.
