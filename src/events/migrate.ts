@@ -273,6 +273,21 @@ const MIGRATIONS = [
   // earlier file edited by this story. FK-shaped dispatch_order_id / site_id, no declared FK (the
   // Epic 9 house convention).
   '../../read/projections/dispatch_irn.sql',
+  // Story 11.5: branch transfer valuation and GST documents (tail-append, four new projections).
+  // site_gstin is the dated per-site GSTIN registration every cross-site transfer resolves both
+  // ends through; the valuation config is dated per GSTIN pair; the valuation row is a sibling of
+  // transfer_request keyed by its id; the document table holds the ERP-issued tax invoice and
+  // e-way bill the ship gate requires. FK-shaped site / transfer ids, no declared FK (house
+  // convention). No earlier file is edited by this story.
+  '../../read/projections/site_gstin.sql',
+  '../../read/projections/branch_transfer_valuation_config.sql',
+  '../../read/projections/branch_transfer_valuation.sql',
+  '../../read/projections/branch_transfer_gst_document.sql',
+  // Story 11.5 code review (D1): the statutory supply class STAMPED at create time and read by
+  // the ship gate, so the gate never re-derives it from the dated site_gstin /
+  // branch_transfer_valuation_config configuration a later edit can move under an in-flight
+  // transfer. Tail-appended after the four 11.5 files; no earlier file changes position.
+  '../../read/projections/branch_transfer_classification.sql',
 ];
 
 async function migrate(): Promise<void> {

@@ -787,6 +787,27 @@ export const config = {
       1440,
     ),
   },
+  gst: {
+    // Story 11.5 (FR-AC-10, Binding Decision 9; 11.5 review D4-P): an e-way bill is required for an
+    // inter-GSTIN branch transfer whose CONSIGNMENT value exceeds Rs 50,000 by statute. The
+    // consignment value is the taxable value PLUS tax, and this platform holds no tax rate and
+    // computes none, so the gate compares the TAXABLE value - which is why this knob is named for
+    // the taxable value it is actually compared against, not for the statutory e-way-bill figure it
+    // is derived from. The default is 50,000 / 1.18 = 42,373 (rounded down), the taxable value that
+    // reaches a Rs 50,000 consignment value at the worst-case 18 percent IGST rate, so that every
+    // consignment which could legally need an e-way bill trips the gate. Over-triggering at a lower
+    // tax rate costs an unnecessary e-way bill; under-triggering costs a penalty and a detained
+    // truck. Do NOT "correct" this back to 50000. A knob with a default, never a literal in the gate
+    // (architecture spine: statutory thresholds are configuration). Only an ABSENT variable takes
+    // the default; a present-but-blank value fails closed at boot (the BSD-6 invariant). Integer
+    // rupees.
+    ewayBillTaxableValueThresholdInr: parsePositiveIntEnv(
+      'GST_EWAY_BILL_TAXABLE_VALUE_THRESHOLD_INR',
+      42_373,
+      1e12,
+      true,
+    ),
+  },
 } as const;
 
 // Story 9.5 (Task 2.1): the two breach-window lead days must be ordered outer > inner, or the

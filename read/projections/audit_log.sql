@@ -67,6 +67,20 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_trace_id ON audit_log (trace_id);
 -- Supports the auditor query's date-range scan when no user_id filter is supplied
 -- (idx_audit_log_user_timestamp cannot serve a timestamp-only predicate).
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log (timestamp);
+-- Story 11.5 code review (Q8). The two GST configuration routes resolve an idempotency replay with
+-- `endpoint = $1 AND details->>'idempotency_key' = $2` from INSIDE an open transaction, so without a
+-- matching index every configuration write sequentially scans the whole audit trail while holding
+-- BEGIN - and this table only grows (eight-year statutory retention). A plain btree on endpoint
+-- cannot serve the JSON extraction, so the index is composite over both halves of the predicate.
+-- PARTIAL on the key's presence: only the few routes that stamp an idempotency key are ever probed
+-- this way, so the index stays proportional to the replayable writes rather than to the retention
+-- window. IS NOT NULL (not `details ? 'idempotency_key'`) because that is the form the planner can
+-- prove from `details->>'idempotency_key' = $2`, which is what makes the partial index usable.
+-- Deliberately NOT UNIQUE: other routes stamp idempotency keys under their own conventions, and a
+-- uniqueness bar on the statutory audit trail could refuse a legitimate write.
+CREATE INDEX IF NOT EXISTS idx_audit_log_endpoint_idempotency_key
+  ON audit_log (endpoint, (details->>'idempotency_key'))
+  WHERE details->>'idempotency_key' IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_audit_log_tamper_created_at ON audit_log_tamper_attempt_log (created_at DESC);
 

@@ -478,7 +478,20 @@ import {
   shipTransferRequestHandler,
   receiveTransferRequestHandler,
   getInTransitHandler,
+  overrideTransferValuationHandler,
+  recordTransferGstDocumentHandler,
+  listTransferGstDocumentsHandler,
 } from './api/v1/transfer-requests.js';
+import {
+  postSiteGstinHandler,
+  closeSiteGstinHandler,
+  getSiteGstinHandler,
+} from './api/v1/sites.js';
+import {
+  postValuationConfigHandler,
+  closeValuationConfigHandler,
+  getValuationConfigHandler,
+} from './api/v1/gst.js';
 import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
 import { runExpiryCycle } from './notify/expire.js';
@@ -544,6 +557,33 @@ export function createAppRouter(): Router {
     receiveTransferRequestHandler,
   );
   router.get('/api/v1/stock/:sku/in-transit', getInTransitHandler);
+  // Story 11.5: branch transfer valuation and GST documents. The gst_officer's override and
+  // document recording ride the transfer resource; the site GSTIN registration and the per-pair
+  // valuation configuration are dated configuration. Static segments precede parameterised siblings.
+  router.post('/api/v1/gst/branch-transfer-valuation-config', postValuationConfigHandler);
+  router.get('/api/v1/gst/branch-transfer-valuation-config', getValuationConfigHandler);
+  // Story 11.5 code review E2-P (b): a wrong GSTIN or cost-plus percentage is otherwise
+  // permanent - the gist EXCLUDE constraints refuse an overlapping correction and app_user
+  // holds no DELETE grant - so each dated configuration has a route that CLOSES its window.
+  router.post(
+    '/api/v1/gst/branch-transfer-valuation-config/:configId/close',
+    closeValuationConfigHandler,
+  );
+  router.post('/api/v1/sites/:siteId/gstin', postSiteGstinHandler);
+  router.get('/api/v1/sites/:siteId/gstin', getSiteGstinHandler);
+  router.post('/api/v1/sites/:siteId/gstin/:registrationId/close', closeSiteGstinHandler);
+  router.post(
+    '/api/v1/transfer-requests/:transfer_request_id/valuation-override',
+    overrideTransferValuationHandler,
+  );
+  router.post(
+    '/api/v1/transfer-requests/:transfer_request_id/gst-documents',
+    recordTransferGstDocumentHandler,
+  );
+  router.get(
+    '/api/v1/transfer-requests/:transfer_request_id/gst-documents',
+    listTransferGstDocumentsHandler,
+  );
   // Story 2.6: Cycle Counting and Physical Inventory
   router.post('/api/v1/cycle-counts', createCycleCountHandler);
   router.get('/api/v1/cycle-counts', listCycleCountsHandler);

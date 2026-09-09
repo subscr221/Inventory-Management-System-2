@@ -7,6 +7,7 @@ import type {
   DispatchShippingDocumentsGeneratedEnvelope,
 } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
+import { IRN_EXT_REGEX, normalizeIrnExt, isValidIrpAcknowledgedAt } from './irn.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import {
   createPackingRecord,
@@ -627,29 +628,10 @@ const DISPATCH_IRN_ALLOWED_FIELDS = new Set([
   'site_id',
 ]);
 
-/**
- * Review decision D2 (2026-09-09): a GST IRN is the IRP's SHA-256 over the invoice, presented as 64
- * hexadecimal characters. Anything else cannot be an IRN, and accepting "any non-blank string" made
- * the statutory gate a formality. Both doors normalise to lower case before storage
- * (normalizeIrnExt) and the DB CHECK pins the same lower-case shape.
- */
-export const IRN_EXT_REGEX = /^[0-9a-f]{64}$/i;
-
-export function normalizeIrnExt(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-// Strict RFC 3339 / ISO 8601 instant: Date.parse alone accepts "1" and "March" in V8, which then
-// fail the TIMESTAMPTZ cast inside the transaction as a raw 500. The upper bound mirrors the
-// occurred_at rule from the deferred-work triage: an IRP acknowledgement cannot lie in the future.
-const ISO_INSTANT_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
-const IRP_ACK_FUTURE_SKEW_MS = 5 * 60 * 1000;
-
-export function isValidIrpAcknowledgedAt(value: unknown, now: number = Date.now()): boolean {
-  if (typeof value !== 'string' || !ISO_INSTANT_REGEX.test(value)) return false;
-  const parsed = Date.parse(value);
-  return !Number.isNaN(parsed) && parsed <= now + IRP_ACK_FUTURE_SKEW_MS;
-}
+// Story 11.5: the IRN validators moved to the leaf module ./irn.js so the transfer seam can reuse
+// them without importing this module (which reaches the event store, which imports the transfer
+// seam: a cycle that broke named imports under tsx). Re-exported here so 11.2 callers are unchanged.
+export { IRN_EXT_REGEX, normalizeIrnExt, isValidIrpAcknowledgedAt } from './irn.js';
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim() !== '';

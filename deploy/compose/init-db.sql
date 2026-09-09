@@ -225,6 +225,20 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_trace_id ON audit_log (trace_id);
 -- Supports the auditor query's date-range scan when no user_id filter is supplied
 -- (idx_audit_log_user_timestamp cannot serve a timestamp-only predicate).
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log (timestamp);
+-- Story 11.5 code review (Q8). The two GST configuration routes resolve an idempotency replay with
+-- `endpoint = $1 AND details->>'idempotency_key' = $2` from INSIDE an open transaction, so without a
+-- matching index every configuration write sequentially scans the whole audit trail while holding
+-- BEGIN - and this table only grows (eight-year statutory retention). A plain btree on endpoint
+-- cannot serve the JSON extraction, so the index is composite over both halves of the predicate.
+-- PARTIAL on the key's presence: only the few routes that stamp an idempotency key are ever probed
+-- this way, so the index stays proportional to the replayable writes rather than to the retention
+-- window. IS NOT NULL (not `details ? 'idempotency_key'`) because that is the form the planner can
+-- prove from `details->>'idempotency_key' = $2`, which is what makes the partial index usable.
+-- Deliberately NOT UNIQUE: other routes stamp idempotency keys under their own conventions, and a
+-- uniqueness bar on the statutory audit trail could refuse a legitimate write.
+CREATE INDEX IF NOT EXISTS idx_audit_log_endpoint_idempotency_key
+  ON audit_log (endpoint, (details->>'idempotency_key'))
+  WHERE details->>'idempotency_key' IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_audit_log_tamper_created_at ON audit_log_tamper_attempt_log (created_at DESC);
 
@@ -13264,5 +13278,479 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON dispatch_irn TO readonly_user;
+  END IF;
+END $$;
+
+-- Site GSTIN registration (Story 11.5, FR-AC-10). This file is the CANONICAL definition, applied
+-- by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It carries its
+-- OWN grants (guarded DO blocks) so a migrate-provisioned database can serve reads/writes as
+-- app_user without depending on deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates
+-- this content for first-boot container init - change both files together. Every statement is
+-- idempotent (IF NOT EXISTS / guarded DO blocks) so the file can be re-applied to a live database.
+--
+-- Binding decision 2: the site GSTIN is a DATED REGISTRATION TABLE, not a column on
+-- location_register. location_register is edge-synced, its site_id is a bare UUID with no site row
+-- behind it (a site "is" a level = 'site' row by convention only), and a GSTIN can change on
+-- re-registration. A row keyed by site_id with a validity window follows the
+-- compliance_bis_licence / transaction_tagging_rules dated-config shape and leaves the pinned
+-- Story 2.5 and location DDL untouched. site_id has no FK because there is no site table.
+--
+-- Binding decision 1: a cross-site transfer resolves BOTH sites through this table on the IST
+-- business date. A missing registration on either side is refused SITE_GSTIN_MISSING (the Story
+-- 8.6 default-enforce rule), so every site that ships or receives a transfer needs a row here.
+-- Overlapping windows for one site are refused at write time (409 GSTIN_CONFIG_OVERLAP); the
+-- UNIQUE below is the backstop for the exact-same-start-date case only.
+
+-- P8: overlapping windows for one site are refused by the DATABASE too, not only by the app-side
+-- read-then-write two concurrent writers can interleave past. btree_gist supplies the gist opclass
+-- for the scalar site_id half of the exclusion constraint below (the supplier.sql pg_trgm
+-- precedent for an extension declared inside a projection file).
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+CREATE TABLE IF NOT EXISTS site_gstin (
+  registration_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  site_id          UUID NOT NULL,
+  gstin_ext        TEXT NOT NULL,
+  legal_name_ext   TEXT,
+  state_code_ext   TEXT,
+  effective_from   DATE NOT NULL,
+  effective_to     DATE,
+  created_by       UUID NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_site_gstin_site_from UNIQUE (site_id, effective_from)
+);
+
+-- Guarded DROP-then-ADD constraint blocks (the bom_line precedent): the DROP + ADD pair is kept
+-- atomic in a DO block so a re-apply is idempotent and a drift in the CHECK body is corrected.
+-- The GSTIN shape is the one GSTIN_REGEX in src/compliance/supplier.ts pins on the app side.
+DO $$
+BEGIN
+  ALTER TABLE site_gstin DROP CONSTRAINT IF EXISTS chk_site_gstin_format;
+  ALTER TABLE site_gstin ADD CONSTRAINT chk_site_gstin_format CHECK (
+    gstin_ext ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'
+  );
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE site_gstin DROP CONSTRAINT IF EXISTS chk_site_gstin_window;
+  ALTER TABLE site_gstin ADD CONSTRAINT chk_site_gstin_window CHECK (
+    effective_to IS NULL OR effective_to >= effective_from
+  );
+END $$;
+
+-- The real overlap bar (the UNIQUE above catches identical start dates only). A NULL effective_to
+-- is open-ended, so it coalesces to 'infinity'; the range is inclusive at both ends because a
+-- registration is valid ON its effective_to date.
+DO $$
+BEGIN
+  ALTER TABLE site_gstin DROP CONSTRAINT IF EXISTS excl_site_gstin_window;
+  ALTER TABLE site_gstin ADD CONSTRAINT excl_site_gstin_window EXCLUDE USING gist (
+    site_id WITH =,
+    daterange(effective_from, COALESCE(effective_to, 'infinity'::date), '[]') WITH &&
+  );
+END $$;
+
+-- Resolution reads filter by site_id then apply the date-range predicate.
+CREATE INDEX IF NOT EXISTS idx_site_gstin_lookup ON site_gstin (site_id, effective_from);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT SELECT, INSERT, UPDATE ON site_gstin TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON site_gstin TO readonly_user;
+  END IF;
+END $$;
+
+-- Per-GSTIN-pair branch transfer valuation configuration (Story 11.5, FR-AC-10). This file is the
+-- CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned
+-- database can serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Binding decision 4: the four Rule 28 bases are exactly open_market_value, like_kind_quality,
+-- cost_plus (Rules 30/31) and invoice_value_full_itc (the second proviso). A pair's default basis
+-- is DATED configuration effective on the transfer's IST business date; a pair with no effective
+-- row is refused VALUATION_CONFIG_MISSING at create (fail closed). invoice_value_full_itc is only
+-- meaningful where the recipient GSTIN is eligible for full ITC, so a default of that basis
+-- without the eligibility flag is refused by CHECK. Overlapping windows for one pair are refused
+-- at write time (409 VALUATION_CONFIG_OVERLAP); the UNIQUE below is the backstop for the
+-- exact-same-start-date case only.
+
+-- P8: btree_gist supplies the gist opclass for the scalar GSTIN halves of the exclusion constraint
+-- below (the supplier.sql pg_trgm precedent for an extension declared inside a projection file).
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+CREATE TABLE IF NOT EXISTS branch_transfer_valuation_config (
+  config_id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  from_gstin_ext               TEXT NOT NULL,
+  to_gstin_ext                 TEXT NOT NULL,
+  default_basis                TEXT NOT NULL,
+  recipient_full_itc_eligible  BOOLEAN NOT NULL DEFAULT false,
+  cost_plus_percent            NUMERIC(7, 3) NOT NULL DEFAULT 110,
+  effective_from               DATE NOT NULL,
+  effective_to                 DATE,
+  created_by                   UUID NOT NULL,
+  created_at                   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_branch_transfer_valuation_config_pair_from UNIQUE (from_gstin_ext, to_gstin_ext, effective_from)
+);
+
+-- Guarded DROP-then-ADD constraint blocks (the bom_line precedent).
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation_config DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_config_basis;
+  ALTER TABLE branch_transfer_valuation_config ADD CONSTRAINT chk_branch_transfer_valuation_config_basis CHECK (
+    default_basis IN ('open_market_value', 'like_kind_quality', 'cost_plus', 'invoice_value_full_itc')
+  );
+END $$;
+
+-- P14: the same GSTIN shape site_gstin pins in chk_site_gstin_format, which is the one GSTIN_REGEX
+-- src/compliance/supplier.ts pins on the app side. A malformed or lower-cased seed here matches no
+-- resolved registration, and every transfer on that pair then fails closed with an invisible cause.
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation_config DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_config_gstin_format;
+  ALTER TABLE branch_transfer_valuation_config ADD CONSTRAINT chk_branch_transfer_valuation_config_gstin_format CHECK (
+    from_gstin_ext ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'
+    AND to_gstin_ext ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'
+  );
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation_config DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_config_pair;
+  ALTER TABLE branch_transfer_valuation_config ADD CONSTRAINT chk_branch_transfer_valuation_config_pair CHECK (
+    from_gstin_ext <> to_gstin_ext
+  );
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation_config DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_config_cost_plus;
+  ALTER TABLE branch_transfer_valuation_config ADD CONSTRAINT chk_branch_transfer_valuation_config_cost_plus CHECK (
+    cost_plus_percent >= 100
+  );
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation_config DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_config_window;
+  ALTER TABLE branch_transfer_valuation_config ADD CONSTRAINT chk_branch_transfer_valuation_config_window CHECK (
+    effective_to IS NULL OR effective_to >= effective_from
+  );
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation_config DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_config_itc_default;
+  ALTER TABLE branch_transfer_valuation_config ADD CONSTRAINT chk_branch_transfer_valuation_config_itc_default CHECK (
+    default_basis <> 'invoice_value_full_itc' OR recipient_full_itc_eligible
+  );
+END $$;
+
+-- The real overlap bar for one GSTIN pair (the UNIQUE above catches identical start dates only,
+-- and the app-side read-then-write can be interleaved past by two concurrent writers).
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation_config DROP CONSTRAINT IF EXISTS excl_branch_transfer_valuation_config_window;
+  ALTER TABLE branch_transfer_valuation_config ADD CONSTRAINT excl_branch_transfer_valuation_config_window EXCLUDE USING gist (
+    from_gstin_ext WITH =,
+    to_gstin_ext WITH =,
+    daterange(effective_from, COALESCE(effective_to, 'infinity'::date), '[]') WITH &&
+  );
+END $$;
+
+-- Resolution reads filter by the pair then apply the date-range predicate.
+CREATE INDEX IF NOT EXISTS idx_branch_transfer_valuation_config_lookup ON branch_transfer_valuation_config (from_gstin_ext, to_gstin_ext, effective_from);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT SELECT, INSERT, UPDATE ON branch_transfer_valuation_config TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON branch_transfer_valuation_config TO readonly_user;
+  END IF;
+END $$;
+
+-- Branch transfer valuation (Story 11.5, FR-AC-10). This file is the CANONICAL definition, applied
+-- by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It carries its
+-- OWN grants (guarded DO blocks) so a migrate-provisioned database can serve reads/writes as
+-- app_user without depending on deploy/compose/init-db.sql. deploy/compose/init-db.sql duplicates
+-- this content for first-boot container init - change both files together. Every statement is
+-- idempotent (IF NOT EXISTS / guarded DO blocks) so the file can be re-applied to a live database.
+--
+-- Binding decision 3: valuation lives in a SIBLING table keyed by transfer_request_id, not in new
+-- columns on transfer_request, so the pinned Story 2.5 DDL is untouched. One row exists ONLY for
+-- an inter-GSTIN transfer (a Schedule I supply between distinct persons, valued under Rule 28);
+-- intra-site and intra-GSTIN transfers have no row. Legacy inter-GSTIN rows created before this
+-- migration have no sibling either; the ship gate re-derives their class and refuses them as
+-- not_valued rather than assuming they are safe.
+--
+-- Binding decision 5: the override is a separate gst_officer event, never a field on create.
+-- basis_source records which path produced the value; overridden_by / override_reason_code are
+-- both null (config_default) or both present (override). The actor is the authenticated identity
+-- (metadata.actor.user_id), never a payload field - the Story 9.8-2 attribution class.
+-- transfer_request_id and the site / config ids are FK-shaped with no declared FK (house convention).
+
+CREATE TABLE IF NOT EXISTS branch_transfer_valuation (
+  transfer_request_id   UUID PRIMARY KEY,
+  from_site_id          UUID NOT NULL,
+  to_site_id            UUID NOT NULL,
+  from_gstin_ext        TEXT NOT NULL,
+  to_gstin_ext          TEXT NOT NULL,
+  business_date         DATE NOT NULL,
+  valuation_config_id   UUID,
+  valuation_basis       TEXT NOT NULL,
+  basis_source          TEXT NOT NULL,
+  cost_plus_percent     NUMERIC(7, 3),
+  declared_unit_value   NUMERIC(18, 6),
+  unit_value            NUMERIC(18, 6) NOT NULL,
+  taxable_value         NUMERIC(18, 2) NOT NULL,
+  currency              TEXT NOT NULL DEFAULT 'INR',
+  overridden_by         UUID,
+  override_reason_code  TEXT,
+  valued_at             TIMESTAMPTZ NOT NULL,
+  source_event_id       UUID NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Guarded DROP-then-ADD constraint blocks (the bom_line precedent).
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_basis;
+  ALTER TABLE branch_transfer_valuation ADD CONSTRAINT chk_branch_transfer_valuation_basis CHECK (
+    valuation_basis IN ('open_market_value', 'like_kind_quality', 'cost_plus', 'invoice_value_full_itc')
+  );
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_basis_source;
+  ALTER TABLE branch_transfer_valuation ADD CONSTRAINT chk_branch_transfer_valuation_basis_source CHECK (
+    basis_source IN ('config_default', 'declared', 'override')
+  );
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_taxable_value;
+  ALTER TABLE branch_transfer_valuation ADD CONSTRAINT chk_branch_transfer_valuation_taxable_value CHECK (
+    taxable_value > 0
+  );
+END $$;
+
+-- P5: a Schedule I supply valued at zero is not a valuation, it is a missing one. The per-unit
+-- figure and the resulting taxable value are both strictly positive; a nil-rated or exempt supply
+-- is still valued under Rule 28 and taxed at its rate, never recorded here at zero.
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_unit_value;
+  ALTER TABLE branch_transfer_valuation ADD CONSTRAINT chk_branch_transfer_valuation_unit_value CHECK (
+    unit_value > 0
+  );
+END $$;
+
+-- The override pair is all-or-nothing, and a present reason code is non-blank (the
+-- maintenance_warranty_override shape).
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_override_pair;
+  ALTER TABLE branch_transfer_valuation ADD CONSTRAINT chk_branch_transfer_valuation_override_pair CHECK (
+    (overridden_by IS NULL AND override_reason_code IS NULL)
+    OR (overridden_by IS NOT NULL AND override_reason_code IS NOT NULL AND btrim(override_reason_code) <> '')
+  );
+END $$;
+
+-- D3 / P6: basis_source is tied to the attribution column at the storage layer. An override
+-- REQUIRES the authenticated actor who made it (an unattributed override is the Story 9.8-2
+-- attribution class one layer down), and any other source carries no actor at all. 'declared' is
+-- the creator-supplied declared_unit_value path: a human's figure is recorded as declared, never
+-- as config_default, so the audit trail never presents it as system-derived.
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_valuation DROP CONSTRAINT IF EXISTS chk_branch_transfer_valuation_source_attribution;
+  ALTER TABLE branch_transfer_valuation ADD CONSTRAINT chk_branch_transfer_valuation_source_attribution CHECK (
+    (basis_source = 'override' AND overridden_by IS NOT NULL)
+    OR (basis_source <> 'override' AND overridden_by IS NULL)
+  );
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_branch_transfer_valuation_pair ON branch_transfer_valuation (from_gstin_ext, to_gstin_ext, business_date);
+CREATE INDEX IF NOT EXISTS idx_branch_transfer_valuation_source_event ON branch_transfer_valuation (source_event_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT SELECT, INSERT, UPDATE ON branch_transfer_valuation TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON branch_transfer_valuation TO readonly_user;
+  END IF;
+END $$;
+
+-- Branch transfer GST documents (Story 11.5, FR-AC-10). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can serve
+-- reads/writes as app_user without depending on deploy/compose/init-db.sql. deploy/compose/init-db.sql
+-- duplicates this content for first-boot container init - change both files together. Every
+-- statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file can be re-applied to a
+-- live database safely.
+--
+-- INT-GST-01: the ERP remains the invoice issuer and this platform RECORDS the returned documents.
+-- A gst_officer records the ERP-issued tax invoice (carrying the 64-hex IRN: every inter-GSTIN
+-- supply is e-invoiceable, the Story 11.2 ruling) and, where the taxable value exceeds the
+-- configured threshold, the e-way bill. One row per (transfer, kind); a replay with the SAME
+-- document number is a no-op and a DIFFERENT number for the same kind is refused
+-- GST_DOCUMENT_CONFLICT by the applier under the transfer row lock. The UNIQUE below is the
+-- backstop, never the primary classifier (the 11.2 review "let the PK raise" note was rejected).
+-- Document numbers are ERP-issued externals (_ext); the platform never mints them. recorded_by is
+-- the authenticated actor pinned by both doors, never a payload field. A document row LOCKS the
+-- valuation (the override is refused VALUATION_LOCKED once any row exists). GST documents are
+-- retained for eight years (architecture spine); no DELETE grant.
+
+CREATE TABLE IF NOT EXISTS branch_transfer_gst_document (
+  document_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  transfer_request_id  UUID NOT NULL,
+  document_kind        TEXT NOT NULL,
+  document_number_ext  TEXT NOT NULL,
+  irn_ext              TEXT,
+  irp_acknowledged_at  TIMESTAMPTZ,
+  ewb_valid_until      TIMESTAMPTZ,
+  issued_at            TIMESTAMPTZ NOT NULL,
+  site_id              UUID NOT NULL,
+  recorded_by          UUID NOT NULL,
+  source_event_id      UUID NOT NULL,
+  correlation_id       UUID,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_branch_transfer_gst_document_kind UNIQUE (transfer_request_id, document_kind)
+);
+
+-- Guarded DROP-then-ADD constraint blocks (the bom_line precedent).
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_gst_document DROP CONSTRAINT IF EXISTS chk_branch_transfer_gst_document_kind;
+  ALTER TABLE branch_transfer_gst_document ADD CONSTRAINT chk_branch_transfer_gst_document_kind CHECK (
+    document_kind IN ('tax_invoice', 'e_way_bill')
+  );
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_gst_document DROP CONSTRAINT IF EXISTS chk_branch_transfer_gst_document_number;
+  ALTER TABLE branch_transfer_gst_document ADD CONSTRAINT chk_branch_transfer_gst_document_number CHECK (
+    btrim(document_number_ext) <> ''
+  );
+END $$;
+
+-- The dispatch_irn.sql precedent: a tax invoice carries the IRP's 64-character hexadecimal IRN,
+-- lower-cased by both app doors.
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_gst_document DROP CONSTRAINT IF EXISTS chk_branch_transfer_gst_document_irn;
+  ALTER TABLE branch_transfer_gst_document ADD CONSTRAINT chk_branch_transfer_gst_document_irn CHECK (
+    document_kind <> 'tax_invoice' OR (irn_ext IS NOT NULL AND irn_ext ~ '^[0-9a-f]{64}$')
+  );
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_gst_document DROP CONSTRAINT IF EXISTS chk_branch_transfer_gst_document_ewb_validity;
+  ALTER TABLE branch_transfer_gst_document ADD CONSTRAINT chk_branch_transfer_gst_document_ewb_validity CHECK (
+    document_kind <> 'e_way_bill' OR ewb_valid_until IS NOT NULL
+  );
+END $$;
+
+-- Both indexes are PLAIN (non-unique) by design. Source event: the applier writes one row per
+-- event today and a later multi-document recording must not be broken by a UNIQUE. Document
+-- number: this follows the Story 11.2 dispatch_irn COVERAGE grain (ruled 2026-09-09) - one ERP
+-- tax invoice legitimately covers several movements (one invoice, three trucks, the same day), so
+-- the same document_number_ext across different transfer requests is correct, not a defect.
+CREATE INDEX IF NOT EXISTS idx_branch_transfer_gst_document_source_event ON branch_transfer_gst_document (source_event_id);
+CREATE INDEX IF NOT EXISTS idx_branch_transfer_gst_document_number ON branch_transfer_gst_document (document_number_ext);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT SELECT, INSERT, UPDATE ON branch_transfer_gst_document TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON branch_transfer_gst_document TO readonly_user;
+  END IF;
+END $$;
+
+-- Branch transfer statutory classification (Story 11.5, FR-AC-10). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned database can
+-- serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks) so the file
+-- can be re-applied to a live database safely.
+--
+-- Review decision D1: the supply class is STAMPED AT CREATE TIME and READ at the ship gate. The
+-- gate must never re-derive it from site_gstin / branch_transfer_valuation_config, because both are
+-- DATED, MUTABLE configuration: a registration edited between create and ship silently reclassifies
+-- a transfer that is already in flight, and an inter-GSTIN movement then ships with no tax invoice
+-- because the gate now believes it is intra-GSTIN. One row per transfer request, written by the
+-- create applier in the same transaction as the transfer row.
+--
+-- An intra_site movement resolves no registration and both GSTIN columns stay NULL. An intra_gstin
+-- movement resolves ONE shared registration, written to BOTH columns so a reader never has to know
+-- which end it came from. An inter_gstin movement resolves two distinct registrations and is the
+-- only class that carries a branch_transfer_valuation sibling. transfer_request_id and the site ids
+-- are FK-shaped with no declared FK (house convention, matching the sibling valuation table).
+
+CREATE TABLE IF NOT EXISTS branch_transfer_classification (
+  transfer_request_id   UUID PRIMARY KEY,
+  supply_class          TEXT NOT NULL,
+  from_site_id          UUID NOT NULL,
+  to_site_id            UUID NOT NULL,
+  from_gstin_ext        TEXT,
+  to_gstin_ext          TEXT,
+  business_date         DATE NOT NULL,
+  source_event_id       UUID NOT NULL,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Guarded DROP-then-ADD constraint blocks (the bom_line precedent).
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_classification DROP CONSTRAINT IF EXISTS chk_branch_transfer_classification_supply_class;
+  ALTER TABLE branch_transfer_classification ADD CONSTRAINT chk_branch_transfer_classification_supply_class CHECK (
+    supply_class IN ('intra_site', 'intra_gstin', 'inter_gstin')
+  );
+END $$;
+
+-- A stamped class that resolved no registration cannot later be read as if it had, and a stamped
+-- cross-GSTIN class cannot be half-resolved: the two legs are all-or-nothing per class.
+DO $$
+BEGIN
+  ALTER TABLE branch_transfer_classification DROP CONSTRAINT IF EXISTS chk_branch_transfer_classification_gstin_pair;
+  ALTER TABLE branch_transfer_classification ADD CONSTRAINT chk_branch_transfer_classification_gstin_pair CHECK (
+    (supply_class = 'intra_site' AND from_gstin_ext IS NULL AND to_gstin_ext IS NULL)
+    OR (supply_class <> 'intra_site' AND from_gstin_ext IS NOT NULL AND to_gstin_ext IS NOT NULL)
+  );
+END $$;
+
+-- PLAIN (non-unique) index on the source event, the sibling convention: one create event stamps one
+-- row today, and a later multi-row stamping must not be broken by a UNIQUE.
+CREATE INDEX IF NOT EXISTS idx_branch_transfer_classification_source_event ON branch_transfer_classification (source_event_id);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT SELECT, INSERT, UPDATE ON branch_transfer_classification TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON branch_transfer_classification TO readonly_user;
   END IF;
 END $$;

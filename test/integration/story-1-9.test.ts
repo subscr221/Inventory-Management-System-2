@@ -223,6 +223,16 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/transfer-requests/:transfer_request_id/ship',
       'POST /api/v1/transfer-requests/:transfer_request_id/receive',
       'GET /api/v1/stock/:sku/in-transit',
+      // Story 11.5: branch transfer valuation and GST documents
+      'POST /api/v1/gst/branch-transfer-valuation-config',
+      'POST /api/v1/gst/branch-transfer-valuation-config/:configId/close',
+      'GET /api/v1/gst/branch-transfer-valuation-config',
+      'POST /api/v1/sites/:siteId/gstin',
+      'POST /api/v1/sites/:siteId/gstin/:registrationId/close',
+      'GET /api/v1/sites/:siteId/gstin',
+      'POST /api/v1/transfer-requests/:transfer_request_id/valuation-override',
+      'POST /api/v1/transfer-requests/:transfer_request_id/gst-documents',
+      'GET /api/v1/transfer-requests/:transfer_request_id/gst-documents',
       // Story 2.6: Cycle Counting and Physical Inventory
       'POST /api/v1/cycle-counts',
       'GET /api/v1/cycle-counts',

@@ -21,6 +21,7 @@ import { getSupplierById } from '../read/projections/supplier.js';
 import { getPurchaseOrderById, getPurchaseOrderLines } from '../read/projections/purchase_order.js';
 import type { PurchaseOrderRow, PurchaseOrderLineRow } from '../read/projections/purchase_order.js';
 import { getSupplierMsmeContext, computeStatutoryDueDate } from './msme.js';
+import { GSTIN_REGEX } from './supplier.js';
 
 const PROCUREMENT_STREAM_TYPES = new Set(['procurement']);
 const SUPPLIER_INVOICE_EVENT_TYPES = new Set([
@@ -35,7 +36,6 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const DATE_REGEX = /^(\d{4})-(\d{2})-(\d{2})$/;
 const SHA256_REGEX = /^[0-9a-f]{64}$/i;
 // Same statutory GSTIN grammar as src/compliance/supplier.ts (state code + PAN + entity + Z + check).
-const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 // An IRN is the 64-character hex hash assigned by the e-invoice registry.
 const IRN_REGEX = /^[0-9a-f]{64}$/i;
 const MAX_NUMERIC_14_2 = 999_999_999_999.99;

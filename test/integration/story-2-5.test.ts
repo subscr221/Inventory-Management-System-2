@@ -130,6 +130,11 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
       '../../read/projections/lot_trace.sql',
       '../../read/projections/transfer_request.sql',
       '../../read/projections/in_transit.sql',
+      '../../read/projections/site_gstin.sql',
+      '../../read/projections/branch_transfer_classification.sql',
+      '../../read/projections/branch_transfer_valuation_config.sql',
+      '../../read/projections/branch_transfer_valuation.sql',
+      '../../read/projections/branch_transfer_gst_document.sql',
     ]) {
       await adminPool.query(readFileSync(resolve(__dirname, file), 'utf-8'));
     }
@@ -138,7 +143,7 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE in_transit, transfer_request, lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE branch_transfer_gst_document, branch_transfer_valuation, branch_transfer_classification, branch_transfer_valuation_config, site_gstin, in_transit, transfer_request, lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');
@@ -167,6 +172,15 @@ describe('Story 2.5 Inter-Location Transfer Requests Integration Tests', () => {
       ids.push(r.rows[0]!['location_id'] as string);
     }
     [locAId, locBId, locCId] = ids as [string, string, string];
+    // Story 11.5 fixture repair: every location here carries its own site_id, so every transfer
+    // is cross-site and would be refused SITE_GSTIN_MISSING. ONE shared GSTIN for every site makes
+    // them intra_gstin (the seam inserts nothing) so the assertions below stay untouched.
+    await adminPool.query(
+      `INSERT INTO site_gstin (site_id, gstin_ext, effective_from, created_by)
+         SELECT DISTINCT lr.site_id, '27AAACI1234A1Z5'::text, '2020-04-01'::date, '00000000-0000-0000-0000-000000000000'::uuid
+           FROM location_register lr
+          WHERE NOT EXISTS (SELECT 1 FROM site_gstin sg WHERE sg.site_id = lr.site_id)`,
+    );
 
     // Users / roles.
     await provisionUser(port, 'wh-2-5@example.com', [

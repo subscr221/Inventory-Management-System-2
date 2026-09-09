@@ -11,8 +11,28 @@ import { requireRole, permittedLocationsForModule } from '../../middleware/rbac.
 import { persistEvent } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
-import { lotNumberForUuid } from '../../compliance/transfer-request.js';
+import {
+  lotNumberForUuid,
+  classifyBranchTransfer,
+  dispatchGateGstDocuments,
+  isPositiveDecimal,
+} from '../../compliance/transfer-request.js';
 import { randomUUID } from 'node:crypto';
+import { toIstCalendarDate } from '../../lib/business-days.js';
+import { isRule28Basis } from '../../read/projections/branch_transfer_valuation_config.js';
+import {
+  getBranchTransferValuation,
+  listBranchTransferGstDocuments,
+  GST_DOCUMENT_KINDS,
+} from '../../read/projections/branch_transfer_gst.js';
+import { IRN_EXT_REGEX, normalizeIrnExt } from '../../compliance/irn.js';
+import {
+  getBranchTransferClassification,
+  getBranchTransferClassifications,
+} from '../../read/projections/branch_transfer_classification.js';
+// Story 11.5 chunk-2 review Q17: ONE definition of the 8.7 D8 (#AD-16) idempotency-key guard,
+// exported by the sibling GST route module rather than copied here.
+import { requireIdempotencyKey } from './sites.js';
 
 import type { TransferRequestRow } from '../../read/projections/transfer_request.js';
 import {
@@ -88,6 +108,22 @@ function auditCtxFor(
 // restricts these operations to specific roles.
 const CREATE_ROLES = ['warehouse_manager', 'logistics_manager', 'store_assistant'];
 const SHIP_RECEIVE_ROLES = ['warehouse_manager', 'store_assistant'];
+// Story 11.5: the valuation override and GST document recording are gst_officer actions (Binding
+// Decision 6, the access matrix of record). Transfer events live on `inventory`; no finance module.
+const GST_OFFICER_ROLES = ['gst_officer'];
+// Story 11.5 chunk-2 review Q21: free-text statutory fields carry a length cap so an unbounded
+// string cannot be persisted into the event log. Deliberately NOT a catalogue - the set of legal
+// reason codes is a product decision nobody has made; only the cap is uncontroversial.
+const REASON_CODE_MAX_LENGTH = 200;
+const DOCUMENT_NUMBER_EXT_MAX_LENGTH = 64;
+const CREATE_REFUSED_FIELDS = new Set([
+  'valuation_basis',
+  'taxable_value',
+  'unit_value',
+  'from_gstin_ext',
+  'to_gstin_ext',
+  'basis_source',
+]);
 
 /**
  * Enforces that the caller holds at least one of `allowedRoles` with inventory write access.
@@ -129,6 +165,63 @@ function assertWriteLocationAccess(req: IncomingMessage, locationId: string): vo
       `No role assignment grants access to location "${locationId}"`,
     );
   }
+}
+
+/**
+ * Story 11.5 chunk-2 review Q5/Q6. The two statutory GST routes took PRIVILEGE from one assignment
+ * (`assertRoleAllowed`, which matches any assignment holding gst_officer) and SITE SCOPE from a
+ * different one (`assertWriteLocationAccess`, which unions `permittedLocationsForModule` across ALL
+ * inventory assignments and never applies `satisfiesFunctionScope`) - so a read-only assignment at
+ * site B contributed site B to a statutory WRITE gate, and a gst_officer at site A could override
+ * site B's valuation. This resolves privilege and scope from the SAME assignment, mirroring
+ * `assertBranchTransferGstFunctionAccess` in `src/api/v1/events.ts`, and returns THAT assignment as
+ * the audited actor so `metadata.actor.role` / `location_id` and the audit row name the assignment
+ * that actually authorised the action rather than whichever one `requireRole` matched first (Q6).
+ */
+function gstOfficerActor(
+  req: IncomingMessage,
+  scope: { locationId: string; siteId: string },
+): ActorContext {
+  const authContext = getAuthContext(req);
+  if (!authContext) {
+    throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  }
+  const officerAssignments = authContext.roles.filter(
+    (r) =>
+      (r.module === 'inventory' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      GST_OFFICER_ROLES.includes(r.role),
+  );
+  if (officerAssignments.length === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${GST_OFFICER_ROLES.join(', ')}`,
+      { required_roles: GST_OFFICER_ROLES },
+    );
+  }
+  // The same assignment must also carry the scope: a wildcard, the transfer's source location, or
+  // its source site (the events door compares payload site_id against the assignment's location).
+  const matched =
+    officerAssignments.find((r) => r.locationId === '*') ??
+    officerAssignments.find(
+      (r) => r.locationId === scope.locationId || r.locationId === scope.siteId,
+    );
+  if (!matched) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No ${GST_OFFICER_ROLES.join('/')} assignment grants access to location "${scope.locationId}"`,
+      { location_id: scope.locationId, site_id: scope.siteId, required_roles: GST_OFFICER_ROLES },
+    );
+  }
+  const auditLocationId = matched.locationId;
+  return {
+    userId: authContext.userId,
+    role: matched.role,
+    auditLocationId,
+    eventLocationId: auditLocationId === '*' ? NO_LOCATION_UUID : auditLocationId,
+  };
 }
 
 /**
@@ -246,6 +339,36 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
     return;
   }
 
+  // Story 11.5 (Task 3.5): the valuation basis, taxable value, the two GSTINs and every *_by
+  // attribution field are server-derived and REFUSED on input (the 11.2 so_number_ext rule); the
+  // seam's shape assert refuses the same keys on the events door.
+  for (const key of Object.keys(body)) {
+    if (CREATE_REFUSED_FIELDS.has(key) || /_by$/.test(key)) {
+      sendRequestError(
+        req,
+        res,
+        400,
+        'INVALID_PARAMS',
+        `${key} is server-derived and must not be supplied`,
+      );
+      return;
+    }
+  }
+  if (
+    body['declared_unit_value'] !== undefined &&
+    !isPositiveDecimal(body['declared_unit_value'])
+  ) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'declared_unit_value must be a positive number or numeric string when supplied',
+    );
+    return;
+  }
+  const declaredUnitValue = body['declared_unit_value'] as string | number | undefined;
+
   const skuId = body['sku_id'] as string;
   const fromLocationId = body['from_location_id'] as string;
   const toLocationId = body['to_location_id'] as string;
@@ -305,6 +428,10 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
     // instead of persisting a second created event / re-allocating stock (Story 2.5 review).
     const existing = await getTransferRequestById(transferRequestId, client);
     if (existing) {
+      // Chunk-2 review Q16: the replay describes the SAME resource as the fresh create, so it
+      // carries the same `gst` shape - a concrete stamped supply_class, not a missing key.
+      const replayClass = await getBranchTransferClassification(transferRequestId, client);
+      const replayValuation = await getBranchTransferValuation(transferRequestId, client);
       await client.query('COMMIT');
       committed = true;
       sendJson(res, 200, {
@@ -312,6 +439,10 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
         status: existing.status,
         ...(existing.approver_actor_id ? { approver_actor_id: existing.approver_actor_id } : {}),
         correlation_id: existing.correlation_id,
+        gst: {
+          supply_class: replayClass?.supply_class ?? 'unclassified',
+          valuation: replayValuation,
+        },
       });
       return;
     }
@@ -432,6 +563,7 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
         ...(notes ? { notes } : {}),
         ...(approverActorId ? { approver_actor_id: approverActorId } : {}),
         status,
+        ...(declaredUnitValue !== undefined ? { declared_unit_value: declaredUnitValue } : {}),
       },
       metadata: {
         correlation_id: correlationId,
@@ -445,6 +577,13 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
     };
 
     await persistEvent(envelope, auditCtxFor(req, actor, 201), client);
+    // Story 11.5: surface the valuation the seam just wrote (null for intra classes) and the class
+    // it STAMPED. Chunk-2 review Q16: `supply_class` was `valuation ? 'inter_gstin' : undefined`
+    // and JSON drops undefined, so an intra transfer answered `{"gst":{"valuation":null}}` with no
+    // class at all while GET /:id returned a concrete `intra_site`. The stamp records the real
+    // class for EVERY transfer, so the two contracts now agree.
+    const createdClass = await getBranchTransferClassification(transferRequestId, client);
+    const valuation = await getBranchTransferValuation(transferRequestId, client);
     await client.query('COMMIT');
     committed = true;
 
@@ -453,6 +592,10 @@ const createTransferRequestBase: RouteHandler = async (req, res, _params) => {
       status,
       ...(approverActorId ? { approver_actor_id: approverActorId } : {}),
       correlation_id: correlationId,
+      gst: {
+        supply_class: createdClass?.supply_class ?? 'unclassified',
+        valuation,
+      },
     });
   } catch (err: unknown) {
     if (!committed) await client.query('ROLLBACK');
@@ -493,8 +636,74 @@ const getTransferRequestBase: RouteHandler = async (req, res, params) => {
     );
   }
 
-  sendJson(res, 200, transferRequestRowToJson(row));
+  sendJson(res, 200, { ...transferRequestRowToJson(row), gst: await gstBlockFor(row) });
 };
+
+/**
+ * Story 11.5 (Task 3.6): the `gst` block for ONE transfer.
+ *
+ * Chunk-2 review Q3: this used to re-derive the supply class by calling `classifyBranchTransfer` on
+ * TODAY's IST date - the exact fail-open that ruling D1 removed from the ship gate, left live on the
+ * read path. It diverged from the gate in both directions: an unstamped transfer (gate: blocked,
+ * `not_valued`) rendered as `intra_site`/`intra_gstin` with NO `ship_blockers`, and a transfer
+ * stamped `intra_gstin` whose sites were later registered under different GSTINs rendered
+ * `inter_gstin` with blockers the gate would never raise. The STAMP
+ * (`branch_transfer_classification`, the same row `dispatchGateGstDocuments` reads) is now the
+ * authority, and `ship_blockers` is verbatim what the ship gate returns right now - Task 3.6's
+ * requirement, made true rather than approximately true.
+ *
+ * Only a transfer with NO stamp at all (created before this story) falls back to a re-derivation,
+ * and then purely as an advisory `derived_supply_class`: `supply_class` stays `unclassified` and the
+ * gate's blockers are still reported, so the officer sees that it cannot ship. Q20: a failed
+ * re-derivation is likewise reported ALONGSIDE the blockers instead of replacing them, so a genuine
+ * SITE_GSTIN_MISSING no longer renders as a clean, unblocked transfer.
+ */
+async function gstBlockFor(row: TransferRequestRow): Promise<Record<string, unknown>> {
+  const classification = await getBranchTransferClassification(row.transfer_request_id);
+  const gate = await dispatchGateGstDocuments(row);
+
+  if (!classification) {
+    const block: Record<string, unknown> = {
+      supply_class: 'unclassified',
+      classification_stamped: false,
+      valuation: null,
+      documents: [],
+      ship_blockers: gate.reasons,
+      e_way_bill_threshold_inr: gate.threshold,
+    };
+    try {
+      const derived = await classifyBranchTransfer(
+        row.from_location_id,
+        row.to_location_id,
+        toIstCalendarDate(new Date()),
+      );
+      block['derived_supply_class'] = derived.supply_class;
+    } catch (err) {
+      if (!(err instanceof AppError)) throw err;
+      block['classification_error'] = err.errorCode;
+    }
+    return block;
+  }
+
+  if (classification.supply_class !== 'inter_gstin') {
+    return {
+      supply_class: classification.supply_class,
+      classification_stamped: true,
+      ship_blockers: gate.reasons,
+    };
+  }
+
+  const valuation = await getBranchTransferValuation(row.transfer_request_id);
+  const documents = await listBranchTransferGstDocuments(row.transfer_request_id);
+  return {
+    supply_class: 'inter_gstin',
+    classification_stamped: true,
+    valuation,
+    documents,
+    ship_blockers: gate.reasons,
+    e_way_bill_threshold_inr: gate.threshold,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/transfer-requests - List transfer requests
@@ -553,7 +762,24 @@ const listTransferRequestsBase: RouteHandler = async (req, res, _params) => {
     ...(skuId !== null ? { sku_id: skuId } : {}),
   });
 
-  sendJson(res, 200, rows.map(transferRequestRowToJson));
+  // Chunk-2 review E3-P: the LIST route used to await the full `gst` block per row - 3-5 further
+  // queries each, so a wildcard-scoped page of 5,000 transfers issued ~20,000 sequential round
+  // trips. RULED: no consumer reads a taxable value, a basis or a document list from a LIST
+  // response, so the block is gone from here (it stays on GET /:id) and the only GST field that
+  // survives is `supply_class`, resolved for the WHOLE page in ONE query. A transfer with no stamp
+  // is absent from the Map and reports `unclassified` - never a re-derivation (Q3).
+  const classifications = await getBranchTransferClassifications(
+    rows.map((r) => r.transfer_request_id),
+  );
+  sendJson(
+    res,
+    200,
+    rows.map((row) => ({
+      ...transferRequestRowToJson(row),
+      supply_class:
+        classifications.get(row.transfer_request_id.toLowerCase())?.supply_class ?? 'unclassified',
+    })),
+  );
 };
 
 function transferRequestRowToJson(row: TransferRequestRow): Record<string, unknown> {
@@ -1129,6 +1355,263 @@ const getInTransitBase: RouteHandler = async (req, res, params) => {
 };
 
 // ---------------------------------------------------------------------------
+// Story 11.5 Task 4.3: POST /api/v1/transfer-requests/{id}/valuation-override
+// ---------------------------------------------------------------------------
+
+/**
+ * Chunk-2 review Q15: `cost_centre` and `project_code` are in BOTH event payload allowlists
+ * (`src/compliance/transfer-request.ts`) but neither REST route forwarded them, so they were
+ * settable only through the events and edge doors and vanished silently from a REST call.
+ */
+function optionalTagFields(body: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of ['cost_centre', 'project_code'] as const) {
+    const value = body[field];
+    if (value === undefined) continue;
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `${field} must be a non-empty string when supplied`,
+        {
+          field,
+        },
+      );
+    }
+    out[field] = value.trim();
+  }
+  return out;
+}
+
+/** The transfer's FROM site (the site the officer must hold), from its source location. */
+async function fromSiteOf(row: TransferRequestRow): Promise<string> {
+  const fromLocation = await getLocationById(row.from_location_id);
+  if (!fromLocation) {
+    throw new AppError(400, 'LOCATION_NOT_FOUND', 'from_location_id does not exist', {
+      from_location_id: row.from_location_id,
+    });
+  }
+  return fromLocation.site_id;
+}
+
+const overrideValuationBase: RouteHandler = async (req, res, params) => {
+  const id = params['transfer_request_id']?.toLowerCase();
+  if (!id || !UUID_REGEX.test(id)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID');
+    return;
+  }
+  assertRoleAllowed(req, GST_OFFICER_ROLES);
+  const body = (getParsedBody(req) ?? {}) as Record<string, unknown>;
+  const idempotencyKey = requireIdempotencyKey(body);
+
+  // The overriding actor is the authenticated identity; a payload overridden_by is refused.
+  for (const key of Object.keys(body)) {
+    if (/_by$/.test(key)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `${key} is server-derived and must not be supplied`,
+      );
+    }
+  }
+  if (!isRule28Basis(body['valuation_basis'])) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'valuation_basis must be one of open_market_value, like_kind_quality, cost_plus, invoice_value_full_itc',
+    );
+  }
+  if (typeof body['reason_code'] !== 'string' || body['reason_code'].trim() === '') {
+    throw new AppError(400, 'INVALID_PARAMS', 'reason_code is required');
+  }
+  // Q21: capped, not catalogued.
+  if (body['reason_code'].trim().length > REASON_CODE_MAX_LENGTH) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `reason_code must be at most ${REASON_CODE_MAX_LENGTH} characters`,
+      { field: 'reason_code', max_length: REASON_CODE_MAX_LENGTH },
+    );
+  }
+  if (
+    body['declared_unit_value'] !== undefined &&
+    !isPositiveDecimal(body['declared_unit_value'])
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'declared_unit_value must be a positive number or numeric string when supplied',
+    );
+  }
+
+  const row = await getTransferRequestById(id);
+  if (!row) throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
+  // Site scope through the FROM location (the Story 2.5 idiom), resolved from the SAME gst_officer
+  // assignment that grants the privilege (Q5), and that assignment is the audited actor (Q6). The
+  // seam is the guard for every business refusal (NOT_A_BRANCH_TRANSFER, VALUATION_LOCKED,
+  // BASIS_NOT_ELIGIBLE).
+  const siteId = await fromSiteOf(row);
+  const actor = gstOfficerActor(req, { locationId: row.from_location_id, siteId });
+
+  const result = await persistEvent(
+    {
+      stream_type: 'inventory',
+      stream_id: id,
+      event_type: 'transfer_request.valuation_overridden',
+      idempotency_key: idempotencyKey,
+      payload: {
+        transfer_request_id: id,
+        site_id: siteId,
+        business_stream: row.business_stream,
+        valuation_basis: body['valuation_basis'],
+        ...(body['declared_unit_value'] !== undefined
+          ? { declared_unit_value: body['declared_unit_value'] }
+          : {}),
+        reason_code: (body['reason_code'] as string).trim(),
+        ...optionalTagFields(body),
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurred_at: new Date().toISOString(),
+      },
+    },
+    auditCtxFor(req, actor, 200),
+  );
+  const valuation = await getBranchTransferValuation(id);
+  sendJson(res, 200, { eventId: result.event_id, transfer_request_id: id, valuation });
+};
+
+// ---------------------------------------------------------------------------
+// Story 11.5 Task 5.4: POST / GET /api/v1/transfer-requests/{id}/gst-documents
+// ---------------------------------------------------------------------------
+
+const recordGstDocumentBase: RouteHandler = async (req, res, params) => {
+  const id = params['transfer_request_id']?.toLowerCase();
+  if (!id || !UUID_REGEX.test(id)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID');
+    return;
+  }
+  assertRoleAllowed(req, GST_OFFICER_ROLES);
+  const body = (getParsedBody(req) ?? {}) as Record<string, unknown>;
+  const idempotencyKey = requireIdempotencyKey(body);
+  for (const key of Object.keys(body)) {
+    if (/_by$/.test(key)) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `${key} is server-derived and must not be supplied`,
+      );
+    }
+  }
+  const kind = body['document_kind'];
+  if (typeof kind !== 'string' || !(GST_DOCUMENT_KINDS as readonly string[]).includes(kind)) {
+    throw new AppError(400, 'INVALID_PARAMS', 'document_kind must be tax_invoice or e_way_bill');
+  }
+  const documentNumber = body['document_number_ext'];
+  if (typeof documentNumber !== 'string' || documentNumber.trim() === '') {
+    throw new AppError(400, 'INVALID_PARAMS', 'document_number_ext is required');
+  }
+  // Q21: capped free text, no catalogue.
+  if (documentNumber.trim().length > DOCUMENT_NUMBER_EXT_MAX_LENGTH) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `document_number_ext must be at most ${DOCUMENT_NUMBER_EXT_MAX_LENGTH} characters`,
+      { field: 'document_number_ext', max_length: DOCUMENT_NUMBER_EXT_MAX_LENGTH },
+    );
+  }
+  const irnExt = body['irn_ext'] ?? body['irn'];
+  if (
+    kind === 'tax_invoice' &&
+    (typeof irnExt !== 'string' || !IRN_EXT_REGEX.test(irnExt.trim()))
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'irn_ext is required for a tax invoice and must be the 64-character hexadecimal IRN issued by the IRP',
+    );
+  }
+  // Q14: an IRN on an e-way bill used to be spread away silently (the field is forwarded only for a
+  // tax_invoice) while the events door 400s the identical payload. Refuse it here with the seam's
+  // own code and message (`assertTransferGstDocumentRecordedShape`) so the two doors agree.
+  if (
+    kind !== 'tax_invoice' &&
+    (irnExt !== undefined || body['irp_acknowledged_at'] !== undefined)
+  ) {
+    throw new AppError(400, 'INVALID_PARAMS', 'irn_ext applies to a tax_invoice only');
+  }
+
+  const row = await getTransferRequestById(id);
+  if (!row) throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
+  // Privilege and site scope from the SAME gst_officer assignment, which is also the audited
+  // actor (chunk-2 review Q5/Q6).
+  const siteId = await fromSiteOf(row);
+  const actor = gstOfficerActor(req, { locationId: row.from_location_id, siteId });
+
+  const result = await persistEvent(
+    {
+      stream_type: 'inventory',
+      stream_id: id,
+      event_type: 'transfer_request.gst_document_recorded',
+      idempotency_key: idempotencyKey,
+      payload: {
+        transfer_request_id: id,
+        site_id: siteId,
+        business_stream: row.business_stream,
+        document_kind: kind,
+        document_number_ext: documentNumber.trim(),
+        ...(kind === 'tax_invoice' ? { irn_ext: normalizeIrnExt(irnExt as string) } : {}),
+        ...(body['irp_acknowledged_at'] !== undefined
+          ? { irp_acknowledged_at: body['irp_acknowledged_at'] }
+          : {}),
+        ...(body['ewb_valid_until'] !== undefined
+          ? { ewb_valid_until: body['ewb_valid_until'] }
+          : {}),
+        issued_at: body['issued_at'] ?? new Date().toISOString(),
+        ...optionalTagFields(body),
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurred_at: new Date().toISOString(),
+      },
+    },
+    auditCtxFor(req, actor, 200),
+  );
+  const documents = await listBranchTransferGstDocuments(id);
+  const gate = await dispatchGateGstDocuments(row);
+  sendJson(res, 200, {
+    eventId: result.event_id,
+    transfer_request_id: id,
+    documents,
+    ship_blockers: gate.reasons,
+  });
+};
+
+const listGstDocumentsBase: RouteHandler = async (req, res, params) => {
+  const id = params['transfer_request_id']?.toLowerCase();
+  if (!id || !UUID_REGEX.test(id)) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'transfer_request_id must be a valid UUID');
+    return;
+  }
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  const row = await getTransferRequestById(id);
+  if (!row) throw new AppError(404, 'NOT_FOUND', `Transfer request "${id}" not found`);
+  // Any inventory reader at either end may see why a ship is blocked (the warehouse must).
+  const { wildcard, locations } = permittedLocationsForModule(authContext.roles, 'inventory');
+  if (!wildcard && !locations.has(row.from_location_id) && !locations.has(row.to_location_id)) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      'No role assignment grants access to the locations in this transfer',
+    );
+  }
+  sendJson(res, 200, { transfer_request_id: id, gst: await gstBlockFor(row) });
+};
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
@@ -1171,3 +1654,18 @@ export const getInTransitHandler: RouteHandler = requireRole({
   module: 'inventory',
   functionScope: 'read',
 })(getInTransitBase);
+
+export const overrideTransferValuationHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(overrideValuationBase);
+
+export const recordTransferGstDocumentHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'write',
+})(recordGstDocumentBase);
+
+export const listTransferGstDocumentsHandler: RouteHandler = requireRole({
+  module: 'inventory',
+  functionScope: 'read',
+})(listGstDocumentsBase);

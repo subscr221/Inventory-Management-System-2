@@ -1967,6 +1967,96 @@ const EXPECTED = [
     // UPDATE is the supersession path only (same invoice, regenerated IRN - review decision D1).
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 11.5: the four branch-transfer GST projections. Every CHECK is a guarded DROP-then-ADD
+  // block so a drift in a body (the GSTIN shape, the four Rule 28 bases, the override pair rule,
+  // the 64-hex IRN on a tax invoice) is corrected on re-apply, and every one is pinned here with
+  // its full body via the DO-block comparison. Source-event indexes are PLAIN, like dispatch_irn.
+  {
+    canonical: 'read/projections/site_gstin.sql',
+    table: 'site_gstin',
+    constraints: ['chk_site_gstin_format', 'chk_site_gstin_window', 'excl_site_gstin_window'],
+    indexes: ['idx_site_gstin_lookup'],
+    indexBodies: [
+      'CREATE INDEX IF NOT EXISTS idx_site_gstin_lookup ON site_gstin (site_id, effective_from)',
+    ],
+    appUserGrant: 'SELECT, INSERT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/branch_transfer_valuation_config.sql',
+    table: 'branch_transfer_valuation_config',
+    constraints: [
+      'chk_branch_transfer_valuation_config_basis',
+      'chk_branch_transfer_valuation_config_pair',
+      'chk_branch_transfer_valuation_config_cost_plus',
+      'chk_branch_transfer_valuation_config_window',
+      'chk_branch_transfer_valuation_config_itc_default',
+      // P14 / P8 (code review 2026-09-09): the GSTIN shape on both halves of the pair, and the
+      // real overlapping-window bar the app-side read-then-write cannot provide.
+      'chk_branch_transfer_valuation_config_gstin_format',
+      'excl_branch_transfer_valuation_config_window',
+    ],
+    indexes: ['idx_branch_transfer_valuation_config_lookup'],
+    indexBodies: [
+      'CREATE INDEX IF NOT EXISTS idx_branch_transfer_valuation_config_lookup ON branch_transfer_valuation_config (from_gstin_ext, to_gstin_ext, effective_from)',
+    ],
+    appUserGrant: 'SELECT, INSERT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/branch_transfer_valuation.sql',
+    table: 'branch_transfer_valuation',
+    constraints: [
+      'chk_branch_transfer_valuation_basis',
+      'chk_branch_transfer_valuation_basis_source',
+      'chk_branch_transfer_valuation_taxable_value',
+      'chk_branch_transfer_valuation_override_pair',
+      // P5 / D3-P (code review 2026-09-09): the per-unit figure is strictly positive, and
+      // basis_source is tied to the attribution column so an override always names its actor.
+      'chk_branch_transfer_valuation_unit_value',
+      'chk_branch_transfer_valuation_source_attribution',
+    ],
+    indexes: ['idx_branch_transfer_valuation_pair', 'idx_branch_transfer_valuation_source_event'],
+    indexBodies: [
+      'CREATE INDEX IF NOT EXISTS idx_branch_transfer_valuation_pair ON branch_transfer_valuation (from_gstin_ext, to_gstin_ext, business_date)',
+      'CREATE INDEX IF NOT EXISTS idx_branch_transfer_valuation_source_event ON branch_transfer_valuation (source_event_id)',
+    ],
+    appUserGrant: 'SELECT, INSERT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/branch_transfer_gst_document.sql',
+    table: 'branch_transfer_gst_document',
+    constraints: [
+      'chk_branch_transfer_gst_document_kind',
+      'chk_branch_transfer_gst_document_number',
+      'chk_branch_transfer_gst_document_irn',
+      'chk_branch_transfer_gst_document_ewb_validity',
+    ],
+    indexes: [
+      'idx_branch_transfer_gst_document_source_event',
+      'idx_branch_transfer_gst_document_number',
+    ],
+    indexBodies: [
+      'CREATE INDEX IF NOT EXISTS idx_branch_transfer_gst_document_source_event ON branch_transfer_gst_document (source_event_id)',
+      'CREATE INDEX IF NOT EXISTS idx_branch_transfer_gst_document_number ON branch_transfer_gst_document (document_number_ext)',
+    ],
+    appUserGrant: 'SELECT, INSERT, UPDATE',
+  },
+  // Story 11.5 code review (D1): the stamped statutory supply class. The ship gate READS this row
+  // instead of re-deriving the class from the dated site_gstin / valuation-config tables, so the
+  // table shape and its two CHECKs are what keep an in-flight transfer from being reclassified by a
+  // later configuration edit. Source-event index is PLAIN, like the sibling projections.
+  {
+    canonical: 'read/projections/branch_transfer_classification.sql',
+    table: 'branch_transfer_classification',
+    constraints: [
+      'chk_branch_transfer_classification_supply_class',
+      'chk_branch_transfer_classification_gstin_pair',
+    ],
+    indexes: ['idx_branch_transfer_classification_source_event'],
+    indexBodies: [
+      'CREATE INDEX IF NOT EXISTS idx_branch_transfer_classification_source_event ON branch_transfer_classification (source_event_id)',
+    ],
+    appUserGrant: 'SELECT, INSERT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -2855,6 +2945,116 @@ describe('Story 2.1 schema drift guard', () => {
       itemSql.includes('legal_metrology_required    BOOLEAN NOT NULL DEFAULT false,'),
       'item_master.sql CREATE TABLE missing legal_metrology_required',
     );
+  });
+
+  // Story 11.5 code review (2026-09-09). The EXPECTED loop compares canonical against init-db.sql,
+  // so it stays green if BOTH files drift the same way. The bodies below are the semantic content
+  // of the review patches - each one is a hole a name-only pin cannot see: a NULL IRN accepted on a
+  // tax invoice (a NULL leg makes the whole CHECK expression NULL and Postgres accepts the row), a
+  // zero-value Schedule I supply, a human's declared figure recorded as system-derived, an
+  // unattributed override, an unvalidated GSTIN seed that fails every transfer closed with an
+  // invisible cause, and the dated-window overlap bars that no app-side read-then-write can hold
+  // against two concurrent writers.
+  it('Story 11.5 code review: the hardened constraint bodies are canonical and mirrored', () => {
+    const files = {
+      'read/projections/branch_transfer_gst_document.sql': [
+        "document_kind <> 'tax_invoice' OR (irn_ext IS NOT NULL AND irn_ext ~ '^[0-9a-f]{64}$')",
+      ],
+      'read/projections/branch_transfer_valuation.sql': [
+        'taxable_value > 0',
+        'unit_value > 0',
+        "basis_source IN ('config_default', 'declared', 'override')",
+        "(basis_source = 'override' AND overridden_by IS NOT NULL)",
+        "OR (basis_source <> 'override' AND overridden_by IS NULL)",
+      ],
+      'read/projections/branch_transfer_valuation_config.sql': [
+        "from_gstin_ext ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'",
+        "AND to_gstin_ext ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'",
+        'CREATE EXTENSION IF NOT EXISTS btree_gist;',
+        'ADD CONSTRAINT excl_branch_transfer_valuation_config_window EXCLUDE USING gist (',
+        'from_gstin_ext WITH =,',
+        'to_gstin_ext WITH =,',
+        "daterange(effective_from, COALESCE(effective_to, 'infinity'::date), '[]') WITH &&",
+      ],
+      'read/projections/site_gstin.sql': [
+        'CREATE EXTENSION IF NOT EXISTS btree_gist;',
+        'ADD CONSTRAINT excl_site_gstin_window EXCLUDE USING gist (',
+        'site_id WITH =,',
+        "daterange(effective_from, COALESCE(effective_to, 'infinity'::date), '[]') WITH &&",
+      ],
+      'read/projections/branch_transfer_classification.sql': [
+        "supply_class IN ('intra_site', 'intra_gstin', 'inter_gstin')",
+        "(supply_class = 'intra_site' AND from_gstin_ext IS NULL AND to_gstin_ext IS NULL)",
+        "OR (supply_class <> 'intra_site' AND from_gstin_ext IS NOT NULL AND to_gstin_ext IS NOT NULL)",
+      ],
+    };
+    for (const [file, fragments] of Object.entries(files)) {
+      const canonicalSql = read(file);
+      for (const fragment of fragments) {
+        assert.ok(
+          normalizeSql(canonicalSql).includes(normalizeSql(fragment)),
+          `${file} missing constraint text: ${fragment}`,
+        );
+        assert.ok(
+          normalizeSql(initDb).includes(normalizeSql(fragment)),
+          `init-db.sql missing constraint text: ${fragment}`,
+        );
+      }
+    }
+    // The weaker bodies these patches replaced must not come back.
+    for (const stale of [
+      "document_kind <> 'tax_invoice' OR irn_ext ~ '^[0-9a-f]{64}$'",
+      "basis_source IN ('config_default', 'override')",
+    ]) {
+      assert.ok(
+        !normalizeSql(initDb).includes(normalizeSql(stale)),
+        `init-db.sql still carries the pre-review body: ${stale}`,
+      );
+    }
+    // taxable_value >= 0 is a legitimate body on other tables (the supplier invoice line), so the
+    // stale-body check for it is scoped to this constraint's own guarded block.
+    assert.ok(
+      !extractDoBlock(initDb, 'chk_branch_transfer_valuation_taxable_value').includes(
+        'taxable_value >= 0',
+      ),
+      'branch_transfer_valuation still accepts a zero taxable value',
+    );
+  });
+
+  // Story 11.5 code review (Q8). audit_log is not in EXPECTED (its grants live in a guarded role
+  // block, not the flat GRANT shape the loop asserts), so its index pins live here. The composite
+  // expression index is what keeps the two GST configuration routes' idempotency-replay lookup off
+  // a sequential scan of the eight-year statutory audit trail while they hold an open transaction.
+  // Pinned with its full body: a drift in the column list, the JSON extraction, or the partial
+  // predicate silently returns the scan, and a name-only pin cannot see any of the three.
+  it('Story 11.5 code review: the audit_log idempotency-replay index is canonical and mirrored', () => {
+    const auditSql = read('read/projections/audit_log.sql');
+    assert.ok(
+      migrateSource.includes('audit_log.sql'),
+      'src/events/migrate.ts must apply audit_log.sql',
+    );
+    const body =
+      'CREATE INDEX IF NOT EXISTS idx_audit_log_endpoint_idempotency_key ' +
+      "ON audit_log (endpoint, (details->>'idempotency_key')) " +
+      "WHERE details->>'idempotency_key' IS NOT NULL;";
+    assert.ok(
+      normalizeSql(auditSql).includes(normalizeSql(body)),
+      `audit_log.sql missing index body: ${body}`,
+    );
+    assert.ok(
+      normalizeSql(initDb).includes(normalizeSql(body)),
+      `init-db.sql missing index body: ${body}`,
+    );
+    // Never UNIQUE: other routes stamp idempotency keys under their own conventions, and a
+    // uniqueness bar on the statutory audit trail could refuse a legitimate write.
+    for (const sql of [auditSql, initDb]) {
+      assert.ok(
+        !normalizeSql(sql).includes(
+          normalizeSql('CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_log_endpoint_idempotency_key'),
+        ),
+        'the audit_log idempotency-replay index must not be UNIQUE',
+      );
+    }
   });
 
   for (const entry of EXPECTED) {

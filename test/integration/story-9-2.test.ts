@@ -167,6 +167,15 @@ describe('Story 9.2 Customer Material Receipt and Segregated Stock', () => {
         extra.quarantine ?? false,
       ],
     );
+    // Story 11.5 fixture repair: ONE shared GSTIN for every site this suite seeds, so its
+    // cross-site transfers are intra_gstin (the seam inserts nothing) rather than refused
+    // SITE_GSTIN_MISSING. Seeded here so a location added mid-suite is covered too.
+    await getAdminPool().query(
+      `INSERT INTO site_gstin (site_id, gstin_ext, effective_from, created_by)
+         SELECT DISTINCT lr.site_id, '27AAACI1234A1Z5'::text, '2020-04-01'::date, '00000000-0000-0000-0000-000000000000'::uuid
+           FROM location_register lr
+          WHERE NOT EXISTS (SELECT 1 FROM site_gstin sg WHERE sg.site_id = lr.site_id)`,
+    );
     return locationId;
   }
 
@@ -422,6 +431,11 @@ describe('Story 9.2 Customer Material Receipt and Segregated Stock', () => {
       '../../read/projections/lot_trace.sql',
       '../../read/projections/inventory_valuation.sql',
       '../../read/projections/transfer_request.sql',
+      '../../read/projections/site_gstin.sql',
+      '../../read/projections/branch_transfer_classification.sql',
+      '../../read/projections/branch_transfer_valuation_config.sql',
+      '../../read/projections/branch_transfer_valuation.sql',
+      '../../read/projections/branch_transfer_gst_document.sql',
       '../../read/projections/in_transit.sql',
       '../../read/projections/cycle_count.sql',
       '../../read/projections/physical_verification.sql',
@@ -451,7 +465,7 @@ describe('Story 9.2 Customer Material Receipt and Segregated Stock', () => {
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE jobwork_material_receipt, service_order, bom, pick_task, asn_line, asn, putaway_task, grn_line, grn, weighbridge_event, gate_event, integration_exception, erp_sync_state, erp_sales_order, erp_purchase_order_line, erp_purchase_order, ownership_agreement, obsolescence_flag, replenishment_recommendation, inventory_planning_params, physical_verification_line, physical_verification, cycle_count_line, cycle_count, in_transit, transfer_request, inventory_valuation, lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE jobwork_material_receipt, service_order, bom, pick_task, asn_line, asn, putaway_task, grn_line, grn, weighbridge_event, gate_event, integration_exception, erp_sync_state, erp_sales_order, erp_purchase_order_line, erp_purchase_order, ownership_agreement, obsolescence_flag, replenishment_recommendation, inventory_planning_params, physical_verification_line, physical_verification, cycle_count_line, cycle_count, branch_transfer_gst_document, branch_transfer_valuation, branch_transfer_classification, branch_transfer_valuation_config, site_gstin, in_transit, transfer_request, inventory_valuation, lot_master, serial_master, lot_trace, stock_balance, item_master, location_register, instrument_calibration_statuses, location_current, location_asserted_facts, location_expected_facts, transaction_tagging_rules, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');

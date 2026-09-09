@@ -254,6 +254,15 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
        VALUES ($1, $2, $3, $4, CASE WHEN $5::uuid IS NULL THEN $1 ELSE $5::uuid END, 'general', 'ambient', 'active') RETURNING location_id`,
       [locationId, code, level, parentId, siteId],
     );
+    // Story 11.5 fixture repair: ONE shared GSTIN for every site this suite seeds, so its
+    // cross-site transfers are intra_gstin (the seam inserts nothing) rather than refused
+    // SITE_GSTIN_MISSING. Seeded here so a location added mid-suite is covered too.
+    await getAdminPool().query(
+      `INSERT INTO site_gstin (site_id, gstin_ext, effective_from, created_by)
+         SELECT DISTINCT lr.site_id, '27AAACI1234A1Z5'::text, '2020-04-01'::date, '00000000-0000-0000-0000-000000000000'::uuid
+           FROM location_register lr
+          WHERE NOT EXISTS (SELECT 1 FROM site_gstin sg WHERE sg.site_id = lr.site_id)`,
+    );
     return r.rows[0]!['location_id'] as string;
   }
 
@@ -610,6 +619,11 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
       '../../read/projections/lot_trace.sql',
       '../../read/projections/inventory_valuation.sql',
       '../../read/projections/transfer_request.sql',
+      '../../read/projections/site_gstin.sql',
+      '../../read/projections/branch_transfer_classification.sql',
+      '../../read/projections/branch_transfer_valuation_config.sql',
+      '../../read/projections/branch_transfer_valuation.sql',
+      '../../read/projections/branch_transfer_gst_document.sql',
       '../../read/projections/in_transit.sql',
       '../../read/projections/integration_exception.sql',
       '../../read/projections/pick_task.sql',
@@ -651,7 +665,7 @@ describe('Story 8.1 Inspection Plans and QC Gate', () => {
     await adminPool.query('ALTER TABLE audit_log_archive DISABLE TRIGGER ALL');
     try {
       await adminPool.query(
-        'TRUNCATE qc_sampling_switching_state, qc_inspection_result, qc_sampling_plan, instrument_calibration_escalation, instrument_calibration_alert, instrument_calibration_certificate, instrument_register, instrument_calibration_statuses, asset, qc_lot_disposition, qc_deviation, qc_inspection_task, inspection_plan_approval, inspection_plan_characteristic, inspection_plan_version, inspection_plan, dispatch_document, packing_record, dispatch_order_status, pick_line, pick_task, in_transit, transfer_request, bom_alternate, bom_explosion, bom_explosion_line, bom_cost_rollup_line, bom_cost_rollup, bom_outbound_message, bom_structure, bom_line, bom_revision, bom, inventory_valuation, lot_trace, serial_master, lot_master, stock_balance, integration_exception, item_master, location_register, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
+        'TRUNCATE qc_sampling_switching_state, qc_inspection_result, qc_sampling_plan, instrument_calibration_escalation, instrument_calibration_alert, instrument_calibration_certificate, instrument_register, instrument_calibration_statuses, asset, qc_lot_disposition, qc_deviation, qc_inspection_task, inspection_plan_approval, inspection_plan_characteristic, inspection_plan_version, inspection_plan, dispatch_document, packing_record, dispatch_order_status, pick_line, pick_task, branch_transfer_gst_document, branch_transfer_valuation, branch_transfer_classification, branch_transfer_valuation_config, site_gstin, in_transit, transfer_request, bom_alternate, bom_explosion, bom_explosion_line, bom_cost_rollup_line, bom_cost_rollup, bom_outbound_message, bom_structure, bom_line, bom_revision, bom, inventory_valuation, lot_trace, serial_master, lot_master, stock_balance, integration_exception, item_master, location_register, notification_escalations, notification_escalation_defs, notification_deliveries, notification_dispatch_attempts, notification_dispatch_log, notifications, doa_vacation_delegations, doa_registry_entries, audit_log_tamper_attempt_log, audit_log_archive, audit_log, user_role_assignments, users, domain_events CASCADE',
       );
     } finally {
       await adminPool.query('ALTER TABLE audit_log ENABLE TRIGGER ALL');

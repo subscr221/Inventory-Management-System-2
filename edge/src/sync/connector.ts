@@ -130,6 +130,31 @@ const PERMANENT_ERROR_CODES = new Set([
   'DISPATCH_IRN_INVALID_PAYLOAD',
   'DISPATCH_ORDER_SITE_MISMATCH',
   'DISPATCH_ORDER_CLOSED',
+  // Story 11.5: branch transfer valuation and GST documents. GST_DOCUMENTS_REQUIRED is a structural
+  // bar at ship (documents must be recorded first; an offline retry can never clear it); the rest
+  // are structural refusals of the create, override, ship or recording itself. The twin block in
+  // src/sync/upload.ts carries the IDENTICAL list - change both together.
+  'GST_DOCUMENTS_REQUIRED',
+  'SITE_GSTIN_MISSING',
+  'VALUATION_CONFIG_MISSING',
+  'DECLARED_VALUE_REQUIRED',
+  'VALUATION_COST_UNAVAILABLE',
+  'BASIS_NOT_ELIGIBLE',
+  'VALUATION_LOCKED',
+  'NOT_A_BRANCH_TRANSFER',
+  'GST_DOCUMENT_CONFLICT',
+  'SHIP_QUANTITY_MISMATCH',
+  'VALUATION_BASIS_NOT_PERMITTED',
+  'TRANSFER_SITE_MISMATCH',
+  // The Story 11.5 late-document refusal in applyTransferGstDocumentRecorded carries its own code,
+  // GST_DOCUMENT_STATE_INVALID, precisely BECAUSE INVALID_STATE is a shared generic whose retry
+  // semantics must not change: it is thrown from thirteen sites across the transfer-request and
+  // cycle-count seams, including a transfer_request.received that arrives before its ship. That
+  // one self-heals on the next outbox drain, so classifying INVALID_STATE permanent would settle
+  // it needs_attention forever. Only the dedicated code is permanent.
+  'GST_DOCUMENT_STATE_INVALID',
+  'GSTIN_CONFIG_OVERLAP',
+  'VALUATION_CONFIG_OVERLAP',
   'CROSS_DOCK_TASK_NOT_FOUND',
   'CROSS_DOCK_TASK_NOT_READY',
   'CROSS_DOCK_TASK_ALREADY_COMPLETED',

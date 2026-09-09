@@ -29,6 +29,10 @@ import {
   applyTransferRequestProjection,
   applyTransferShipProjection,
   applyTransferReceiveProjection,
+  assertTransferValuationOverriddenShape,
+  assertTransferGstDocumentRecordedShape,
+  applyTransferValuationOverridden,
+  applyTransferGstDocumentRecorded,
 } from '../compliance/transfer-request.js';
 import { assertCycleCountShape, applyCycleCountProjection } from '../compliance/cycle-count.js';
 import {
@@ -575,6 +579,10 @@ export async function persistEvent(
   assertTransferRequestShape(envelope);
   assertTransferShipShape(envelope);
   assertTransferReceiveShape(envelope);
+  // Story 11.5: the valuation override and GST document recording shapes (closed allowlists;
+  // overridden_by / recorded_by are refused on input) run with the other pre-transaction asserts.
+  assertTransferValuationOverriddenShape(envelope);
+  assertTransferGstDocumentRecordedShape(envelope);
   // Story 2.6: cycle-count / physical-verification shape validation is non-DB and runs with the
   // other pre-transaction asserts, so a malformed count event never consumes an idempotency key.
   assertCycleCountShape(envelope);
@@ -874,9 +882,14 @@ export async function persistEvent(
     await applyInventoryValuationProjection(envelope, client, eventId);
     // Story 2.5: transfer-request, ship, and receive enforcement run inside the
     // same transaction as the domain_events insert so that allocation and event commit atomically.
-    await applyTransferRequestProjection(envelope, client);
-    await applyTransferShipProjection(envelope, client, eventId);
+    // Story 11.5: the create applier values an inter-GSTIN transfer (eventId stamps the valuation
+    // row), and the ship applier receives auditCtx so its GST_DOCUMENTS_REQUIRED refusal leaves a
+    // statutory audit row on BOTH doors (the 11.2 applier-self-audit pattern).
+    await applyTransferRequestProjection(envelope, client, eventId);
+    await applyTransferShipProjection(envelope, client, eventId, auditCtx);
     await applyTransferReceiveProjection(envelope, client);
+    await applyTransferValuationOverridden(envelope, client, eventId);
+    await applyTransferGstDocumentRecorded(envelope, client, eventId);
     // Story 2.6: cycle-count variance computation, DOA-gated adjustment lifecycle, approved
     // stock adjustments, and physical-verification evidence run inside this same transaction so
     // the projection and the domain_events insert commit or roll back together. The AC2 guard

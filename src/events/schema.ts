@@ -23,6 +23,11 @@ export interface TransferRequestCreatedPayload {
   notes?: string;
   approver_actor_id?: string;
   status: 'pending_approval' | 'approved' | 'rejected' | 'pending_shipment';
+  // Story 11.5: the creator's declared unit value for the three non-cost Rule 28 bases
+  // (open_market_value, like_kind_quality, invoice_value_full_itc). Numeric string or number > 0.
+  // valuation_basis, taxable_value, the two GSTINs and every *_by field are server-derived and
+  // REFUSED on input (assertTransferRequestShape).
+  declared_unit_value?: string | number;
 }
 
 export interface TransferRequestCreatedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -80,6 +85,46 @@ export interface ApprovalDecidedPayload {
 export interface ApprovalDecidedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'transfer_request.approval_decided';
   payload: ApprovalDecidedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 11.5: branch transfer valuation override and GST document recording
+// ---------------------------------------------------------------------------
+// Both ride the transfer's own 'inventory' stream (stream_id = transfer_request_id) with
+// requiresBusinessStream: true like their four Story 2.5 siblings. site_id is the FROM site so
+// assertPayloadSiteWriteAccess fires on the direct events door. There is NO overridden_by /
+// recorded_by field: the actor is metadata.actor.user_id, pinned by both doors (the Story 9.8-2
+// attribution class; do not reintroduce it).
+export interface TransferValuationOverriddenPayload {
+  transfer_request_id: string;
+  site_id: string;
+  business_stream: string;
+  valuation_basis:
+    'open_market_value' | 'like_kind_quality' | 'cost_plus' | 'invoice_value_full_itc';
+  declared_unit_value?: string | number;
+  reason_code: string;
+}
+
+export interface TransferValuationOverriddenEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'transfer_request.valuation_overridden';
+  payload: TransferValuationOverriddenPayload;
+}
+
+export interface TransferGstDocumentRecordedPayload {
+  transfer_request_id: string;
+  site_id: string;
+  business_stream: string;
+  document_kind: 'tax_invoice' | 'e_way_bill';
+  document_number_ext: string;
+  irn_ext?: string;
+  irp_acknowledged_at?: string;
+  ewb_valid_until?: string;
+  issued_at: string;
+}
+
+export interface TransferGstDocumentRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'transfer_request.gst_document_recorded';
+  payload: TransferGstDocumentRecordedPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -5073,6 +5118,16 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: true,
   },
   'transfer_receive.created': {
+    streamType: 'inventory',
+    requiresBusinessStream: true,
+  },
+  // Story 11.5: the gst_officer's valuation override and GST document recording share the
+  // transfer's inventory stream and its business-stream tagging requirement.
+  'transfer_request.valuation_overridden': {
+    streamType: 'inventory',
+    requiresBusinessStream: true,
+  },
+  'transfer_request.gst_document_recorded': {
     streamType: 'inventory',
     requiresBusinessStream: true,
   },

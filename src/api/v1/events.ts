@@ -203,6 +203,80 @@ function assertDispatchIrnFunctionAccess(
   }
 }
 
+/**
+ * Story 11.5 (Task 4.4): the gst_officer gate for the two branch-transfer GST event types. The
+ * REST routes restrict the valuation override and the document recording to gst_officer; this door
+ * authorises on module `inventory` + `write` alone, so without this gate a warehouse operator could
+ * re-value a Schedule I supply or record a document that lifts the GST_DOCUMENTS_REQUIRED wall.
+ * Privilege AND site scope come from the SAME assignment (the dispatch-IRN gate above is the
+ * template); the payload site_id is the transfer's FROM site, bound to the row by the applier.
+ */
+const BRANCH_TRANSFER_GST_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'transfer_request.valuation_overridden',
+  'transfer_request.gst_document_recorded',
+]);
+const BRANCH_TRANSFER_GST_ROLES: ReadonlySet<string> = new Set(['gst_officer']);
+
+function assertBranchTransferGstFunctionAccess(
+  authContext: NonNullable<ReturnType<typeof getAuthContext>>,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): void {
+  if (body.stream_type !== 'inventory' || !BRANCH_TRANSFER_GST_EVENT_TYPES.has(body.event_type))
+    return;
+  const officerRoles = authContext.roles.filter(
+    (r) =>
+      (r.module === 'inventory' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      BRANCH_TRANSFER_GST_ROLES.has(r.role),
+  );
+  if (officerRoles.length === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'Branch transfer valuation and GST documents require a GST officer assignment',
+      { required_roles: [...BRANCH_TRANSFER_GST_ROLES] },
+    );
+  }
+  const siteId = body.payload['site_id'];
+  if (typeof siteId === 'string') {
+    const wildcard = officerRoles.some((r) => r.locationId === '*');
+    if (!wildcard && !officerRoles.some((r) => r.locationId === siteId)) {
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        'No GST officer assignment grants access to the source site of this transfer',
+        { site_id: siteId, required_roles: [...BRANCH_TRANSFER_GST_ROLES] },
+      );
+    }
+  }
+}
+
+/**
+ * Story 11.5 chunk-2 code review: both REST routes (`POST /transfer-requests/{id}/valuation-override`
+ * and `.../gst-documents`) call `requireIdempotencyKey` per the Story 8.7 D8 (#AD-16) convention, so
+ * a retried post replays the SAME event. This door did not, and the envelope's `idempotency_key` is
+ * optional - so the same override posted twice under two different event ids APPLIED TWICE. The
+ * seam's `source_event_id` replay short-circuit does not catch that: it only recognises a replay of
+ * the same id. Error code, message and details shape are copied from `requireIdempotencyKey` so the
+ * two paths refuse identically.
+ *
+ * This is a shape requirement, not an authorisation one, so it runs outside the `authContext` block.
+ */
+function assertBranchTransferGstIdempotencyKey(body: {
+  stream_type: string;
+  event_type: string;
+  idempotency_key?: string | null;
+}): void {
+  if (body.stream_type !== 'inventory' || !BRANCH_TRANSFER_GST_EVENT_TYPES.has(body.event_type))
+    return;
+  const key = body.idempotency_key;
+  if (typeof key !== 'string' || !key.trim()) {
+    throw new AppError(400, 'INVALID_PARAMS', 'idempotency_key is required', {
+      field: 'idempotency_key',
+    });
+  }
+}
+
 function assertPlanningPayloadWriteLocation(
   authContext: NonNullable<ReturnType<typeof getAuthContext>>,
   body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
@@ -289,6 +363,8 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     return;
   }
 
+  assertBranchTransferGstIdempotencyKey(body);
+
   const authContext = getAuthContext(req);
   const authorizedAssignment = getAuthorizedAssignment(req);
   const auditLocationId = authorizedAssignment?.locationId ?? body.metadata.actor.location_id;
@@ -296,6 +372,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     assertPlanningPayloadWriteLocation(authContext, body);
     assertOffcutValuationFunctionAccess(authContext, body);
     assertDispatchIrnFunctionAccess(authContext, body);
+    assertBranchTransferGstFunctionAccess(authContext, body);
     assertPayloadSiteWriteAccess(authContext, body);
     body.metadata.actor.user_id = authContext.userId;
     const authorizedRole = getAuthorizedRole(req);

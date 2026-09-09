@@ -20,7 +20,9 @@ const SUPPLIER_EVENT_TYPES = new Set([
   'supplier.deactivated',
 ]);
 
-const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+// The ONE GSTIN shape in the codebase (Story 11.5 Task 1.2): supplier-invoice.ts imports it and
+// read/projections/site_gstin.sql pins the same body as a CHECK. Do not add another copy.
+export const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 const DECACTIVATION_REASONS = new Set([
   'fraud',
   'business_closure',
