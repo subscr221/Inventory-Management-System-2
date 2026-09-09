@@ -62,7 +62,55 @@ const PLANNING_EVENT_TYPES = new Set([
  * comparison reads through `.includes()` rather than as inline role literals, which the
  * doa/no-hardcoded-role-in-workflow lint rule rejects (it was failing `npm run lint` at HEAD).
  */
+const PAYLOAD_SITE_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Edge-door sweep (2026-09-09): the twin of `assertPayloadSiteWriteAccess` on the events door.
+ *
+ * The cross-site payload class was closed centrally on 2026-09-06 by adding that blanket check to
+ * POST /api/v1/events, where it guards EVERY event whose payload carries a site_id. This door was
+ * never swept, so the same payload uploaded through edge sync reached the appliers with no
+ * actor-to-site check at all - each per-event-type block here checks a role and, at most, a site
+ * it resolved for itself. Story 11.5 found it on the two GST event types; it was never specific to
+ * them.
+ *
+ * Same predicate as the events door deliberately: module = the event's stream, write scope,
+ * wildcard or an exact site match. Payload site ids that are not UUID-shaped are ignored here
+ * exactly as they are there - the shape asserts own that refusal.
+ */
+function assertEdgePayloadSiteWriteAccess(
+  authContext: NonNullable<ReturnType<typeof getAuthContext>>,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): void {
+  const siteId = body.payload['site_id'];
+  if (typeof siteId !== 'string' || !PAYLOAD_SITE_UUID_REGEX.test(siteId)) return;
+  const { wildcard, locations } = permittedLocationsForModuleScope(
+    authContext.roles,
+    body.stream_type,
+    'write',
+  );
+  if (!wildcard && !locations.has(siteId)) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No write assignment grants access to site "${siteId}"`,
+    );
+  }
+}
+
+// Story 11.2, corrected by the edge-door sweep (2026-09-09): recording the ERP-issued IRN lifts a
+// STATUTORY block, and the events door restricts it to an ALLOWLIST of dispatch_clerk /
+// warehouse_manager. This door used a denylist of two frontline roles, so gate_officer,
+// qc_inspector, gst_officer and every other role the REST route denies could lift the
+// IRN-before-dispatch wall through edge sync. Allowlist, matching the events door exactly.
+const DISPATCH_IRN_RECORDING_ROLES = ['dispatch_clerk', 'warehouse_manager'];
 const DISPATCH_DENIED_FRONTLINE_ROLES = ['store_assistant', 'warehouse_operator'];
+// Story 11.5: the only role that may value a branch transfer or record its GST documents.
+const BRANCH_TRANSFER_GST_ROLES = ['gst_officer'];
+const BRANCH_TRANSFER_GST_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'transfer_request.valuation_overridden',
+  'transfer_request.gst_document_recorded',
+]);
 const CROSS_DOCK_EXECUTE_ROLES = ['store_assistant', 'warehouse_operator'];
 
 function planningPayloadLocation(body: {
@@ -106,6 +154,69 @@ function assertPlanningPayloadWriteLocation(
       'LOCATION_ACCESS_DENIED',
       `No write assignment grants access to planning payload location "${locationId}"`,
     );
+  }
+}
+
+/**
+ * Story 11.5 (Task 4.4) / chunk-2 code review: the EDGE twin of `assertBranchTransferGstFunctionAccess`
+ * in `events.ts`.
+ *
+ * As shipped, this door gated the two branch-transfer GST event types on the SELECTED assignment's
+ * ROLE alone - no module, no functionScope, and no site at all. `assertPayloadSiteBound` in the seam
+ * does not close that: it binds the payload `site_id` to the TRANSFER's own site, never to the
+ * ACTOR's assignments. So a gst_officer assigned only at site A could upload a
+ * `transfer_request.valuation_overridden` or `transfer_request.gst_document_recorded` naming a
+ * site-B transfer - re-valuing that taxable supply or lifting its GST_DOCUMENTS_REQUIRED ship block -
+ * while the events door refused the identical post. That is the cross-site write class closed
+ * centrally on 2026-09-06 with `assertPayloadSiteWriteAccess`; this door was never swept (it still
+ * has no general payload-site gate - see the deferred ledger).
+ *
+ * Two deliberate choices, both making this the genuine twin of the events-door gate:
+ *
+ *  1. It filters across ALL of `authContext.roles`, not the single `getAuthorizedAssignment` /
+ *     `selectOperatingAssignment` pick this handler otherwise uses. `requireRole` hands back ONE
+ *     assignment (the first function-satisfying match, or the one matching the client-declared
+ *     actor location), so a user holding both `finance_controller` and `gst_officer` would be
+ *     refused whenever the wrong one happened to be selected - a false denial, not a safety
+ *     property. The cross-dock block below is the in-file precedent for a gate that re-filters the
+ *     full assignment list. The single-assignment model still governs the AUDIT actor, which is a
+ *     separate concern from authorisation.
+ *  2. Privilege AND site scope come from the SAME filtered list (the rule stated in the
+ *     events-door docblock): the site is checked only against the assignments that already
+ *     supplied the gst_officer privilege, so an officer at site A cannot borrow a site-B grant
+ *     held under some other role.
+ */
+function assertBranchTransferGstFunctionAccess(
+  authContext: AuthContext,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): void {
+  if (body.stream_type !== 'inventory' || !BRANCH_TRANSFER_GST_EVENT_TYPES.has(body.event_type))
+    return;
+  const officerRoles = authContext.roles.filter(
+    (r) =>
+      (r.module === 'inventory' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      BRANCH_TRANSFER_GST_ROLES.includes(r.role),
+  );
+  if (officerRoles.length === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      'Branch transfer valuation and GST documents require a GST officer assignment',
+      { required_roles: [...BRANCH_TRANSFER_GST_ROLES] },
+    );
+  }
+  const siteId = body.payload['site_id'];
+  if (typeof siteId === 'string') {
+    const wildcard = officerRoles.some((r) => r.locationId === '*');
+    if (!wildcard && !officerRoles.some((r) => r.locationId === siteId)) {
+      throw new AppError(
+        403,
+        'FUNCTION_ACCESS_DENIED',
+        'No GST officer assignment grants access to the source site of this transfer',
+        { site_id: siteId, required_roles: [...BRANCH_TRANSFER_GST_ROLES] },
+      );
+    }
   }
 }
 
@@ -403,15 +514,51 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   // recording clerk is metadata.actor.user_id, already pinned above; a payload recorded_by is
   // refused by the shape assert.
   if (body.stream_type === 'warehouse' && body.event_type === 'dispatch.irn_recorded') {
-    const role = assignment.role;
-    if (DISPATCH_DENIED_FRONTLINE_ROLES.includes(role)) {
+    // Filtered across ALL assignments, not the single arbitrarily-selected one: a user holding
+    // dispatch_clerk plus any other warehouse role was previously admitted or denied depending on
+    // which assignment happened to sort first.
+    const recordingRoles = authContext.roles.filter(
+      (r) =>
+        (r.module === 'warehouse' || r.module === '*') &&
+        r.functionScope === 'write' &&
+        DISPATCH_IRN_RECORDING_ROLES.includes(r.role),
+    );
+    if (recordingRoles.length === 0) {
       throw new AppError(
         403,
         'FUNCTION_ACCESS_DENIED',
-        `Role "${role}" is not authorized to record an IRN`,
+        'Recording an IRN requires a dispatch clerk or warehouse manager assignment',
+        { required_roles: [...DISPATCH_IRN_RECORDING_ROLES] },
       );
     }
+    // The site half, binding privilege and scope to the SAME assignment. Without it the blanket
+    // check below is the only site guard, and that one accepts ANY warehouse write assignment -
+    // so a dispatch_clerk at site A who also holds some other warehouse role at site B could lift
+    // site B's statutory block. Same predicate and same code as the events door's twin.
+    const siteId = body.payload['site_id'];
+    if (typeof siteId === 'string') {
+      const wildcard = recordingRoles.some((r) => r.locationId === '*');
+      if (!wildcard && !recordingRoles.some((r) => r.locationId === siteId)) {
+        throw new AppError(
+          403,
+          'FUNCTION_ACCESS_DENIED',
+          'No dispatch clerk or warehouse manager assignment grants access to the site of this order',
+          { site_id: siteId, required_roles: [...DISPATCH_IRN_RECORDING_ROLES] },
+        );
+      }
+    }
   }
+  // Story 11.5 (Task 4.4): the valuation override and the GST document recording are gst_officer
+  // actions. The gate is the twin of the events door's - same module / functionScope / site
+  // predicate, filtered across all assignments; see the docblock above. The actor is
+  // metadata.actor.user_id, pinned above; a payload overridden_by / recorded_by is refused by the
+  // shape asserts.
+  assertBranchTransferGstFunctionAccess(authContext, body);
+  // Ordered LAST of the door's gates, exactly as on the events door: the specific function gates
+  // answer first so a wrong-site GST officer or IRN recorder still gets the precise
+  // FUNCTION_ACCESS_DENIED, and this blanket check catches every OTHER event type carrying a
+  // site_id - which is the whole point of the sweep.
+  assertEdgePayloadSiteWriteAccess(authContext, body);
   // Story 4.1: supplier creation identity is the authenticated actor. Supplier GSTIN uniqueness
   // is enforced inside the compliance seam (not here), so both HTTP and edge paths are guarded.
   if (body.stream_type === 'procurement' && body.event_type === 'supplier.registered') {

@@ -701,3 +701,145 @@ Table 10: Deferred from the code review (2026-09-07) of story-9-8
 - 11.2R-5 No uniqueness on `irn_ext` across invoice numbers: the same IRN under two different
   `invoice_number_ext` values on different orders is accepted. The IRN is ERP-minted and the IRP
   guarantees uniqueness upstream; the platform records, it does not mint.
+
+
+## Deferred from: code review of story-11.5 chunk 1, valuation core (2026-09-09)
+
+- 11.5R-1 `metadata.occurred_at` is bounded only in the future (5 minutes, `src/events/store.ts:479`)
+  and has no lower bound, so any gate keyed on `gateBusinessDateOf` can be driven from a
+  caller-supplied backdated instant. Story 11.5 makes this load-bearing for statutory GSTIN
+  classification and dated valuation-config selection, but the contract is repo-wide (every quality,
+  dispatch and jobwork gate reads the same field) and belongs to a sweep, not one story.
+- 11.5R-2 `assertAndApplyTransferRequestCompliance` (`src/compliance/transfer-request.ts:1133`) is
+  dead code: the live dispatch is the hand-maintained applier list in `src/events/store.ts:584` and
+  `:888`. Nothing executes the seam, so the two lists can diverge silently. Story 11.5 doubled the
+  size of the duplicate by extending both in parallel.
+- 11.5R-3 Lock-order inversion: the transfer applier takes the `stock_balance` row
+  (`transfer-request.ts:576`) before `lockInventoryValuation` (`:429`), while
+  `src/compliance/inventory-valuation.ts:323` takes `inventory_valuation` first. A `cost_plus`
+  transfer concurrent with a `stock.issued` on the same SKU can deadlock. The `cost_plus` path is
+  new, but the ordering convention gap is repo-wide.
+- 11.5R-4 No intra-state versus inter-state discriminator, so the CGST and SGST versus IGST split has
+  no input from this platform. `site_gstin.state_code_ext` (`read/projections/site_gstin.sql:32`) is
+  nullable, never validated against the GSTIN's own first two digits, and never read. Outside the
+  Story 11.5 AC set (the ERP computes tax), but the platform presents itself as the system of record
+  for the document register.
+- 11.5R-5 A partial projection rebuild never rebuilds valuations: `applyTransferRequestProjection`
+  (`transfer-request.ts:470`) returns early when the `transfer_request` row already exists, before
+  any classification runs. Truncating `branch_transfer_valuation` alone and replaying leaves every
+  transfer unvalued. Matches the existing rebuild convention for sibling projections.
+- 11.5R-6 The valuation override overwrites `branch_transfer_valuation` in place
+  (`src/read/projections/branch_transfer_gst.ts:179`) including `source_event_id`, with no history
+  table, so a filed statutory figure is mutated and the prior value survives only in the event log.
+  Consistent with every other projection in the codebase; raised because the retention requirement
+  on this record is eight years.
+- 11.5R-7 An out-of-order `transfer_request.gst_document_recorded` or
+  `transfer_request.valuation_overridden` arriving before its `transfer_request.created` gets a 404
+  from `lockBranchTransfer` (`transfer-request.ts:1289`), which `PERMANENT_ERROR_CODES` treats as
+  terminal, so a legitimately early event is dead-lettered rather than retried. Pre-existing store
+  contract shared by every parent-child applier.
+
+## Deferred from: code review of story-11.5 chunk 2, doors and wiring (2026-09-09)
+
+- 11.5R-8 The two `PERMANENT_ERROR_CODES` sets are NOT identical, despite the comment Story 11.5
+  adds to both asserting the twin carries the identical list. Nine Epic 9 codes are in
+  `src/sync/upload.ts` and absent from `edge/src/sync/connector.ts`: `PROTOTYPE_NOT_SALEABLE`,
+  `KIT_LINE_MISMATCH`, `OFFCUT_ELECTION_MISSING`, `BILLING_NOT_READY`, `SOD_VIOLATION`,
+  `OFFCUT_NOT_RETAINED`, `CREDIT_NOTE_MISSING`, `CREDIT_NOTE_UNCITABLE`, `CREDIT_NOTE_SUPERSEDED`
+  (188 versus 179 entries). Edge queues retry those nine forever. Pre-existing Epic 9 drift, not
+  this story, but it is now provable in one command and should be swept before pilot.
+- 11.5R-9 GSTIN check digits are never verified anywhere in the platform. `GSTIN_REGEX`
+  (`src/compliance/supplier.ts:23`) is shape-only, so a transposed character yields a structurally
+  valid but statutorily invalid GSTIN, which then drives branch-transfer classification and supplier
+  three-way match alike. Shared with the supplier side, so it belongs to a sweep.
+- 11.5R-10 `effective_from` on a site GSTIN registration is unbounded in both directions
+  (`src/api/v1/sites.ts:244-262` validates only the calendar date and `to >= from`). A registration
+  dated 1900-01-01 or 2999-01-01 is accepted; the far-future one silently produces a site with no
+  CURRENTLY effective registration while returning 201.
+- 11.5R-11 The `gst` block on `GET /api/v1/transfer-requests/:id` exposes both GSTINs and the
+  taxable value to any inventory reader, while the configuration routes restrict GSTIN reads to
+  `finance_controller` and `gst_officer` (`src/api/v1/sites.ts:352`). The restriction on the
+  configuration route is therefore decorative.
+- 11.5R-12 `getTransferRequestById` is read OUTSIDE the persisting transaction in the valuation
+  override and GST document routes (`src/api/v1/transfer-requests.ts:1299, 1368`), so
+  `business_stream` and the site scope are decided against a snapshot the applier's `FOR UPDATE`
+  lock does not cover. Benign today only because the applier re-locks and re-validates everything
+  that matters.
+- 11.5R-13 `GET /api/v1/transfer-requests` has no pagination: no `limit`, no cursor, and the
+  underlying query has neither `LIMIT` nor `ORDER BY`. Review ruling E3 removed the per-row GST
+  fan-out that made this acute, so the route is now a single query returning rows - still unbounded,
+  but no longer a per-row connection storm. Adding `limit` and `cursor` changes an existing route's
+  contract and was ruled out of scope for a review; it belongs to a deliberate pagination sweep
+  across the list routes.
+- 11.5R-14 `branch_transfer_valuation` has no column naming the human behind a valuation except on
+  the override path. The table's CHECK reserves `overridden_by` for `basis_source = 'override'`, so
+  the GST officer's FIRST valuation of a transfer left unvalued by ruling E1 lands with
+  `basis_source` of `declared` or `config_default` and both attribution columns NULL - at row level
+  indistinguishable from a value the ordinary creator declared at create time. Auditing who set a
+  filed taxable value requires joining out to the event store through `source_event_id`; the table
+  alone cannot answer it. Worse, the `reason_code` that the payload requires and the shape check
+  enforces on `transfer_request.valuation_overridden` is validated and then DISCARDED on the
+  first-valuation path, which is worse than not asking for it.
+  Wanted shape: add `valued_by UUID NOT NULL` populated on EVERY write path from
+  `envelope.metadata.actor.user_id` (at create, at the officer's first valuation, and at override,
+  where it duplicates `overridden_by` - `overridden_by` then means "this row was re-valued, by
+  them" and `valued_by` means "the current value is theirs"), plus `valued_reason_code TEXT NULL`
+  so the reason code stops being dropped. Leave both existing CHECKs untouched; `valued_by` is
+  additive. Cost: one DDL migration, a backfill from `source_event_id` (the pilot has not gone live,
+  so the row count is test data), the mapper, row type and insert input in
+  `src/read/projections/branch_transfer_gst.ts`, both write sites in
+  `src/compliance/transfer-request.ts`, and a schema-drift pin.
+- 11.5R-15 CLOSED 2026-09-09 by the edge-door sweep (see the entry below this list). SECURITY, Story 11.2, found while fixing the Story 11.5 twin. The edge door's gate on
+  `dispatch.irn_recorded` (`src/api/v1/edge.ts`, the block just above the 11.5 gate) has TWO gaps
+  against its events-door twin `assertDispatchIrnFunctionAccess`. (1) It is a DENYLIST, not an
+  allowlist: the events door requires membership of `{dispatch_clerk, warehouse_manager}`, while the
+  edge door admits any role NOT named `store_assistant` or `warehouse_operator` - so `gate_officer`,
+  `qc_inspector` or `gst_officer` can record an IRN over edge sync and lift the statutory
+  IRN-before-dispatch block that the REST route denies them. (2) There is no site check at all, the
+  same cross-site class closed centrally on 2026-09-06 with `assertPayloadSiteWriteAccess`, which
+  appears nowhere in `edge.ts` - an operator at site A can record an IRN for a site-B dispatch. The
+  three older SoD blocks above it (`dispatch.packed`,
+  `dispatch.shipping_documents_generated`, `dispatch.dispatched`) share gap 2; gap 1 is by design
+  for those, since Story 3.7 deliberately shipped a denylist. This was NOT fixed because it is
+  outside Story 11.5, but it is a live privilege-escalation and cross-site hole on a statutory gate
+  and should be swept before pilot, alongside the general edge-door site sweep.
+
+## Edge-door site-scope sweep (2026-09-09) - CLOSES 11.5R-15
+
+Ran directly after the Story 11.5 review closed, on the finding that review produced. Three
+defects on `src/api/v1/edge.ts`, all fixed, all now pinned by
+`test/integration/story-11-2-edge-sweep.test.ts` (6 arms, both mutants proven to kill).
+
+1. THE GENERAL GAP. The events door has carried a BLANKET `assertPayloadSiteWriteAccess` since the
+   2026-09-06 cross-site fix - it guards EVERY event whose payload carries a UUID-shaped `site_id`.
+   The edge door had no equivalent, so the identical payload uploaded through edge sync reached the
+   appliers with no actor-to-site check at all; each per-event-type block checked a role and at most
+   a site it resolved for itself. Story 11.5 found this on two GST event types and it was never
+   specific to them. `assertEdgePayloadSiteWriteAccess` now mirrors it, deliberately ordered AFTER
+   the specific function gates so those still answer with their precise `FUNCTION_ACCESS_DENIED`.
+   Proven live by execution: a site-A compliance admin could write a site-B BIS licence
+   (`compliance.bis_licence_recorded` has no per-type gate and `master-data.ts` checks only that the
+   site EXISTS, never that the actor holds it).
+2. THE STATUTORY ONE. `dispatch.irn_recorded` lifts the Story 11.2 IRN-before-dispatch block. The
+   events door restricts it to an ALLOWLIST of `dispatch_clerk` / `warehouse_manager`; the edge door
+   used a DENYLIST of `store_assistant` / `warehouse_operator` and admitted everyone else, so
+   `gate_officer`, `qc_inspector`, `gst_officer` and every other role the REST route denies could
+   lift a statutory block through edge sync. Proven by execution before the fix: a `gate_officer`
+   upload returned 201 with the persisted envelope. Now the allowlist, filtered across ALL
+   assignments rather than one arbitrarily-selected one (which also caused false denials for users
+   holding more than one warehouse role).
+3. THE RESIDUAL, found by the agent writing the tests for 1 and 2. The edge IRN gate had no SITE
+   half, so a wrong-site recorder fell through to the blanket check - and that check accepts ANY
+   warehouse write assignment, not the dispatch-role ones. A `dispatch_clerk` at site A who also
+   held some other warehouse role at site B could lift site B's block. The site half now binds
+   privilege and scope to the SAME assignment, matching the events door exactly.
+
+NOT fixed, deliberately, and still open: the three Story 3.7 dispatch gates (`dispatch.packed`,
+`dispatch.shipping_documents_generated`, `dispatch.dispatched`) still use the frontline DENYLIST and
+a single arbitrarily-selected assignment. The denylist there is documented as by design (Task 7.3
+SOD guard), and their site scope is now covered by the blanket check, so this is a consistency and
+false-denial issue rather than a hole - but the single-assignment read means a user holding a denied
+role plus a permitted one is admitted or refused depending on assignment ordering. Worth a follow-up
+that converts all three to allowlists filtered across assignments.
+
+Suite after the sweep: 2105/2105, 0 failures.
