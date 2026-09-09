@@ -13,6 +13,20 @@
 #   owned variance, requireUuidParam lower-cased in all seven route files, duplicate ack-ref report
 #   count, ledger 9.6C-1/9.6C-2/9.8-1 closed; full suite 2006/2006);
 #   9-8 done, 9-1/9-2/9-3/9-4/9-5/9-6 done; 9-10 review, 9-9 ready-for-dev)
+# story 13-1 created 2026-09-10 via create-story workflow (baseline d9fb465, clean tree, suite
+#   2111/2111): Opening Stock Migration and Verification (FR-DM-01, SM-48). Opens Epic 13 (epic-13
+#   backlog -> in-progress). NEW central-only migration stream, five events (opening_stock.loaded per
+#   accepted row keyed on a content hash so resubmission dedupes as DUPLICATE_EVENT, import.completed,
+#   variance.explained, variance.explanation_approved, stage.promoted), six projections
+#   (migration_import, migration_import_rejection, migration_opening_stock_row, erp_stock_balance,
+#   migration_variance_explanation, migration_stage - the last domain-parameterised for 13.2/13.3),
+#   dependency-free RFC 4180 parser with a byte-exact v1 header contract, variances computed by one SQL
+#   function shared by the report and the promotion gate, approver server-resolved via
+#   resolveApprover and frozen, stream barred on both event doors, no PERMANENT_ERROR_CODES entries.
+#   Research found the epic dev-note claim that ERP balances come from the 2.9 staging views is not
+#   backed by code (no ERP balance projection exists), no stage/dry-run/go-live concept exists, no
+#   CSV tooling exists, and the architecture assigns Epic 13 no module; each is a binding decision.
+#   12 binding decisions, 8 open questions with defaults; ready-for-dev
 # story 8-7 created 2026-09-01 via create-story workflow: Compliance Master Data - BIS
 #   Licence Register and Label Masters (FR-Q-11, FR-Q-14, FR-AC-13). Layers governance on the
 #   Story 8.6 minimal enforcement-contract tables: licence CRUD + renewal on five central-only
@@ -374,7 +388,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: 2026-09-09
+last_updated: 2026-09-10
 # story 6-4 dev-story 2026-09-01: implemented all 9 tasks from baseline 905a48e (clean tree). Closes
 #   Epic 6. One new projection (production_consumption_variance, append-only, grain
 #   (production_order_id, bom_line_id)) plus two pure services: src/production/lot-genealogy.ts (no
@@ -1158,8 +1172,8 @@ development_status:
   epic-12-retrospective: optional
 
   # --- Epic 13: Data Migration Sign-Off Gate  [PILOT] ---
-  epic-13: backlog
-  13-1-opening-stock-migration-and-verification: backlog   # PILOT
+  epic-13: in-progress
+  13-1-opening-stock-migration-and-verification: ready-for-dev   # PILOT
   13-2-active-document-migration-boms-pos-challans-custody-registers: backlog   # PILOT
   13-3-go-live-reconciliation-sign-off-gate: backlog   # PILOT
   epic-13-retrospective: optional
