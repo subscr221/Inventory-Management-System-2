@@ -5155,11 +5155,7 @@ export interface MigrationImportRejection {
  * all five for the go-live gate.
  */
 export type MigrationDomain =
-  | 'opening_stock'
-  | 'active_boms'
-  | 'open_pos'
-  | 'jobwork_challans'
-  | 'custody_registers';
+  'opening_stock' | 'active_boms' | 'open_pos' | 'jobwork_challans' | 'custody_registers';
 
 export type MigrationDocumentDomain = Exclude<MigrationDomain, 'opening_stock'>;
 

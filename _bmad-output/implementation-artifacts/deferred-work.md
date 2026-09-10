@@ -807,61 +807,127 @@ Table 10: Deferred from the code review (2026-09-07) of story-9-8
   for those, since Story 3.7 deliberately shipped a denylist. This was NOT fixed because it is
   outside Story 11.5, but it is a live privilege-escalation and cross-site hole on a statutory gate
   and should be swept before pilot, alongside the general edge-door site sweep.
-
-## Edge-door site-scope sweep (2026-09-09) - CLOSES 11.5R-15
-
-Ran directly after the Story 11.5 review closed, on the finding that review produced. Three
-defects on `src/api/v1/edge.ts`, all fixed, all now pinned by
-`test/integration/story-11-2-edge-sweep.test.ts` (6 arms, both mutants proven to kill).
-
-1. THE GENERAL GAP. The events door has carried a BLANKET `assertPayloadSiteWriteAccess` since the
-   2026-09-06 cross-site fix - it guards EVERY event whose payload carries a UUID-shaped `site_id`.
-   The edge door had no equivalent, so the identical payload uploaded through edge sync reached the
-   appliers with no actor-to-site check at all; each per-event-type block checked a role and at most
-   a site it resolved for itself. Story 11.5 found this on two GST event types and it was never
-   specific to them. `assertEdgePayloadSiteWriteAccess` now mirrors it, deliberately ordered AFTER
-   the specific function gates so those still answer with their precise `FUNCTION_ACCESS_DENIED`.
-   Proven live by execution: a site-A compliance admin could write a site-B BIS licence
-   (`compliance.bis_licence_recorded` has no per-type gate and `master-data.ts` checks only that the
-   site EXISTS, never that the actor holds it).
-2. THE STATUTORY ONE. `dispatch.irn_recorded` lifts the Story 11.2 IRN-before-dispatch block. The
-   events door restricts it to an ALLOWLIST of `dispatch_clerk` / `warehouse_manager`; the edge door
-   used a DENYLIST of `store_assistant` / `warehouse_operator` and admitted everyone else, so
-   `gate_officer`, `qc_inspector`, `gst_officer` and every other role the REST route denies could
-   lift a statutory block through edge sync. Proven by execution before the fix: a `gate_officer`
-   upload returned 201 with the persisted envelope. Now the allowlist, filtered across ALL
-   assignments rather than one arbitrarily-selected one (which also caused false denials for users
-   holding more than one warehouse role).
-3. THE RESIDUAL, found by the agent writing the tests for 1 and 2. The edge IRN gate had no SITE
-   half, so a wrong-site recorder fell through to the blanket check - and that check accepts ANY
-   warehouse write assignment, not the dispatch-role ones. A `dispatch_clerk` at site A who also
-   held some other warehouse role at site B could lift site B's block. The site half now binds
-   privilege and scope to the SAME assignment, matching the events door exactly.
-
-FOLLOW-UP, same day: the three Story 3.7 dispatch gates (`dispatch.packed`,
-`dispatch.shipping_documents_generated`, `dispatch.dispatched`) were ALSO converted, from the
-frontline denylist on a single arbitrary assignment to allowlists filtered across all assignments,
-mirroring `DISPATCH_WRITE_ROLES` / `DISPATCH_DOC_WRITE_ROLES` in `src/api/v1/dispatch.ts` (the
-doc-generation list is deliberately wider - `inventory_controller` may generate shipping documents
-but may not pack or dispatch). The dead `DISPATCH_DENIED_FRONTLINE_ROLES` constant is gone.
-
-That conversion then exposed a LARGER hole, in the opposite direction from the sweep: the EVENTS
-door had no gate for those three event types AT ALL. They appeared nowhere in `src/api/v1/events.ts`,
-their payloads carry no `site_id` so `assertPayloadSiteWriteAccess` could not reach them, and
-`src/compliance/dispatch.ts` holds no role check either (its only `role` occurrence is a
-notification target). Any holder of `warehouse` write could pack, generate shipping documents for,
-and ship an order through `POST /api/v1/events`. Proven by execution twice: before the fix a
-`gate_officer` posting `dispatch.packed` passed authorisation entirely and was refused only by
-business state, and on a fully-picked order it PACKED. `assertDispatchSodFunctionAccess` now gates
-all three on this door with the same allowlists.
-
-Deliberate limitation on BOTH doors, recorded so it is not rediscovered as a bug: there is no site
-half for these three actions. The payloads carry no site id and resolving one would mean reading
-the dispatch order inside the door, so their site scope rests on the module assignment alone.
+
+
+## Edge-door site-scope sweep (2026-09-09) - CLOSES 11.5R-15
+
+
+
+Ran directly after the Story 11.5 review closed, on the finding that review produced. Three
+
+defects on `src/api/v1/edge.ts`, all fixed, all now pinned by
+
+`test/integration/story-11-2-edge-sweep.test.ts` (6 arms, both mutants proven to kill).
+
+
+
+1. THE GENERAL GAP. The events door has carried a BLANKET `assertPayloadSiteWriteAccess` since the
+
+   2026-09-06 cross-site fix - it guards EVERY event whose payload carries a UUID-shaped `site_id`.
+
+   The edge door had no equivalent, so the identical payload uploaded through edge sync reached the
+
+   appliers with no actor-to-site check at all; each per-event-type block checked a role and at most
+
+   a site it resolved for itself. Story 11.5 found this on two GST event types and it was never
+
+   specific to them. `assertEdgePayloadSiteWriteAccess` now mirrors it, deliberately ordered AFTER
+
+   the specific function gates so those still answer with their precise `FUNCTION_ACCESS_DENIED`.
+
+   Proven live by execution: a site-A compliance admin could write a site-B BIS licence
+
+   (`compliance.bis_licence_recorded` has no per-type gate and `master-data.ts` checks only that the
+
+   site EXISTS, never that the actor holds it).
+
+2. THE STATUTORY ONE. `dispatch.irn_recorded` lifts the Story 11.2 IRN-before-dispatch block. The
+
+   events door restricts it to an ALLOWLIST of `dispatch_clerk` / `warehouse_manager`; the edge door
+
+   used a DENYLIST of `store_assistant` / `warehouse_operator` and admitted everyone else, so
+
+   `gate_officer`, `qc_inspector`, `gst_officer` and every other role the REST route denies could
+
+   lift a statutory block through edge sync. Proven by execution before the fix: a `gate_officer`
+
+   upload returned 201 with the persisted envelope. Now the allowlist, filtered across ALL
+
+   assignments rather than one arbitrarily-selected one (which also caused false denials for users
+
+   holding more than one warehouse role).
+
+3. THE RESIDUAL, found by the agent writing the tests for 1 and 2. The edge IRN gate had no SITE
+
+   half, so a wrong-site recorder fell through to the blanket check - and that check accepts ANY
+
+   warehouse write assignment, not the dispatch-role ones. A `dispatch_clerk` at site A who also
+
+   held some other warehouse role at site B could lift site B's block. The site half now binds
+
+   privilege and scope to the SAME assignment, matching the events door exactly.
+
+
+
+FOLLOW-UP, same day: the three Story 3.7 dispatch gates (`dispatch.packed`,
+
+`dispatch.shipping_documents_generated`, `dispatch.dispatched`) were ALSO converted, from the
+
+frontline denylist on a single arbitrary assignment to allowlists filtered across all assignments,
+
+mirroring `DISPATCH_WRITE_ROLES` / `DISPATCH_DOC_WRITE_ROLES` in `src/api/v1/dispatch.ts` (the
+
+doc-generation list is deliberately wider - `inventory_controller` may generate shipping documents
+
+but may not pack or dispatch). The dead `DISPATCH_DENIED_FRONTLINE_ROLES` constant is gone.
+
+
+
+That conversion then exposed a LARGER hole, in the opposite direction from the sweep: the EVENTS
+
+door had no gate for those three event types AT ALL. They appeared nowhere in `src/api/v1/events.ts`,
+
+their payloads carry no `site_id` so `assertPayloadSiteWriteAccess` could not reach them, and
+
+`src/compliance/dispatch.ts` holds no role check either (its only `role` occurrence is a
+
+notification target). Any holder of `warehouse` write could pack, generate shipping documents for,
+
+and ship an order through `POST /api/v1/events`. Proven by execution twice: before the fix a
+
+`gate_officer` posting `dispatch.packed` passed authorisation entirely and was refused only by
+
+business state, and on a fully-picked order it PACKED. `assertDispatchSodFunctionAccess` now gates
+
+all three on this door with the same allowlists.
+
+
+
+Deliberate limitation on BOTH doors, recorded so it is not rediscovered as a bug: there is no site
+
+half for these three actions. The payloads carry no site id and resolving one would mean reading
+
+the dispatch order inside the door, so their site scope rests on the module assignment alone.
+
 Suite after the sweep and its follow-up: 2111/2111, 0 failures.
 
 ## Deferred from: code review of story-13-1 (2026-09-10)
 
-- Import stage check race — route-level `readMigrationStage` at `src/api/v1/migration.ts:624` runs outside a transaction; a concurrent promotion mid-import could flip the stage to `dry_run` after the check but before row events persist. The applier's locked re-check at `src/compliance/migration-opening-stock.ts:406-407` refuses with STAGE_LOCKED, so the failure is noisy (import aborts), not silent. A transaction-scoped lock on the stage row for the entire import duration (potentially minutes for 10,000 rows) has its own contention problems. Narrow race with acceptable failure mode.
-- Variance key pipe ambiguity — `computeOpeningStockVariances` at `src/read/projections/migration_variance.ts:208` builds the variance key with `|` as separator and no escaping. A `location_code`, `sku`, `lot_number`, or `serial_number` containing a literal `|` could produce an ambiguous key that collides two distinct variances under the partial unique index on `(site_id, variance_key)`. Master-data validation on `item_master` and `location_register` makes pipe characters in these fields unlikely in practice. Fix requires changing the separator across the variance SQL, the TypeScript key builder, and the explanation table's partial unique index.
-- ERP `snapshot_at` accepts future dates — `applyStockBalance` at `src/adapters/erp/sync.ts` validates `snapshot_at` for ISO-8601 parseability only, not whether the timestamp is in the future. A future-dated snapshot from the ERP adapter would become the "latest" in the variance SQL's `max(snapshot_at)` query, making all current snapshots stale until a later-dated sync arrives. The ERP adapter is a trusted boundary and the condition self-corrects on the next correct sync.
+- Import stage check race - route-level `readMigrationStage` at `src/api/v1/migration.ts:624` runs outside a transaction; a concurrent promotion mid-import could flip the stage to `dry_run` after the check but before row events persist. The applier's locked re-check at `src/compliance/migration-opening-stock.ts:406-407` refuses with STAGE_LOCKED, so the failure is noisy (import aborts), not silent. A transaction-scoped lock on the stage row for the entire import duration (potentially minutes for 10,000 rows) has its own contention problems. Narrow race with acceptable failure mode.
+- Variance key pipe ambiguity - `computeOpeningStockVariances` at `src/read/projections/migration_variance.ts:208` builds the variance key with `|` as separator and no escaping. A `location_code`, `sku`, `lot_number`, or `serial_number` containing a literal `|` could produce an ambiguous key that collides two distinct variances under the partial unique index on `(site_id, variance_key)`. Master-data validation on `item_master` and `location_register` makes pipe characters in these fields unlikely in practice. Fix requires changing the separator across the variance SQL, the TypeScript key builder, and the explanation table's partial unique index.
+- ERP `snapshot_at` accepts future dates - `applyStockBalance` at `src/adapters/erp/sync.ts` validates `snapshot_at` for ISO-8601 parseability only, not whether the timestamp is in the future. A future-dated snapshot from the ERP adapter would become the "latest" in the variance SQL's `max(snapshot_at)` query, making all current snapshots stale until a later-dated sync arrives. The ERP adapter is a trusted boundary and the condition self-corrects on the next correct sync.
+
+## Deferred from: story-13-2 (2026-09-10)
+
+- Receiving ignores legacy-received quantity - `src/compliance/receiving.ts:410-430` computes over-receipt from the cumulative `grn_line` sum against `ordered_qty` and never reads `erp_purchase_order_line.open_qty`, so a line partly received in the legacy system before cutover can be over-received post-cutover by the legacy amount. Story 13.2 reports the fact on the open-PO domain report (`received_qty` mismatch between the manifest and `ordered_qty - open_qty`) and does not change receiving. Ruling belongs to Epic 3 (Story 3.4).
+- Enterprise-wide `missing_in_source` for BOMs and ERP POs - `bom` and `erp_purchase_order` carry no `site_id`, so `computeDomainFindings` (`src/read/projections/migration_domain_verification.ts`) reports platform documents absent from the manifest across the enterprise for `active_boms` and `open_pos` unless the run body names a `document_ref_prefix` (Story 13.2 Open Question 1). A multi-site wave should scope the manifest, not add a site column to the projections.
+- Epic 10 loan registers are a second source kind for `custody_registers` - the pilot verifies job-work custody ledgers only (`custody_ledger_entry`, `ownership = 'customer'`). When Epic 10 ships, `computeCustodyRegisters` gains a second platform query behind the same domain name and template; no new domain, event or sign-off flow.
+- Verification findings are trusted from the event payload - the `migration.domain.verification_run` applier inserts the findings the route computed (Story 13.2 Binding Decision 4) and does not recompute; a re-run is a new event. A replay of `domain_events` on a database whose platform tables differ reproduces the original report, which is the intended audit semantics, not a live recomputation.
+- `SIGNED_NUMERIC_REGEX` in `src/adapters/erp/sync.ts` was declared by Story 13.1 and never read (`tsc --noEmit` TS6133 on the 13.1 tree); Story 13.2 removed it. The 13.1 record's "tsc 0" figure was taken before that constant landed.
+
+## Deferred from: code review of story-13-2 (2026-09-10)
+
+- Supplier references are never resolved in migration verification - `computeOpenPos` (`src/read/projections/migration_domain_verification.ts:388-394`) string-compares the manifest `supplier_ref_ext` against `erp_purchase_order.supplier_ref_ext` and emits a `field_mismatch`; it never resolves either to a governed supplier. The epic's AC 1 clause names supplier alongside item and location. This is the same wall Review 4.5 P12 hit and deferred on 2026-08-06: `erp_purchase_order` carries only the ERP's own supplier code while the governed supplier carries `gstin_ext` and `owner_party_code`, three namespaces with no mapping table, and `src/compliance/three-way-match.ts:226-234` plus `src/compliance/ownership.ts:221-226` explicitly forbid guessing the match. Resolving supplier in migration needs that mapping table first.
+- A verification run producing more than 10,000 findings can never complete - `computeJobworkChallans` and `computeCustodyRegisters` sweep every platform row for the site with no cap, the route builds the full findings array, and `assertMigrationDocumentEventShape` (`src/compliance/migration-documents.ts:141`) then refuses the event with a generic 400 `INVALID_PARAMS`. A site with more unmatched documents than the cap can never verify that domain. Needs a scale decision (cap and flag truncation, bound the platform sweep by manifest scope, or chunk the run) rather than a mechanical fix; pilot volumes are far below the cap.
+- Paged list routes report `total: 0` for an out-of-range offset - the `count(*) OVER ()` window returns no rows when the page is empty, so `GET /migration/documents/rows`, `/verification-runs` and `/verification-runs/:run_id` all tell a paging client the collection is empty instead of giving the true total. Story 13.1's `listOpeningStockRowsBase` has the identical pattern, so this is a pre-existing convention rather than a Story 13.2 regression.
+- A `legacy_kit` BOM whose `current_revision_id` is NULL produces component mismatches with no root cause - the `bom_line` join in `computeActiveBoms` yields nothing, so every manifest component reports `field_mismatch` on `component_sku` with no finding naming the missing revision. Not reachable through the Story 5.2 legacy-kit route, which always sets a revision.

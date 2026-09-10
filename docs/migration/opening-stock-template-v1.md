@@ -147,7 +147,10 @@ Table 5: Stages and owning stories
 | (none) to `staging` | Story 13.1 | First accepted import row |
 | `staging` to `dry_run` | Story 13.1 | `POST /api/v1/migration/opening-stock/promote`; refused with `VARIANCE_UNRESOLVED` while any variance is not `explained`, with `NOTHING_TO_PROMOTE` when no accepted rows exist, with `STAGE_LOCKED` when already promoted |
 | `dry_run` to go-live | Story 13.3 | Department-head and finance sign-off across every migrated domain |
-| Other domains (`active_boms`, `open_pos`, `jobwork_challans`, `custody_registers`) | Story 13.2 | Same stage table, one row per domain |
+| `active_boms`: manifest load, verification run, sign-off | Story 13.2 | Same stage table; stays `staging`; `verified` when the engineering head signs the latest run of the latest manifest. See [Document Manifest Templates v1](document-manifest-templates-v1.md) |
+| `open_pos`: manifest load, verification run, sign-off | Story 13.2 | As above, signed by the procurement head; open-PO lines reconcile against the ERP reference projection |
+| `jobwork_challans`: manifest load, verification run, sign-off | Story 13.2 | As above, signed by the job-work head; challans verify with their statutory return clock |
+| `custody_registers`: manifest load, verification run, sign-off | Story 13.2 | As above, signed by the job-work head; the customer-ownership custody balance per order and sku |
 
 Promotion posts every accepted row into the live ledger in one transaction: stock balances by bin,
 lot and class; the lot and serial registers; cost layers for `owned` rows by the item's valuation

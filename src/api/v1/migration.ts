@@ -27,7 +27,7 @@ import { resolveApprover } from './indents.js';
 import { parseCsv } from '../../migration/csv.js';
 import {
   MAX_IMPORT_BODY_BYTES,
-  MAX_OPENING_STOCK_IMPORT_ROWS,
+  MAX_IMPORT_ROWS,
   assertOpeningStockTemplateHeader,
   fileSha256,
   openingStockContentHash,
@@ -52,9 +52,34 @@ import {
   type OpeningStockVariance,
 } from '../../read/projections/migration_variance.js';
 import type {
+  MigrationDocumentManifestLoadedPayload,
+  MigrationDomainVerificationRunPayload,
+  MigrationDomainVerifiedPayload,
+  MigrationFindingWaiver,
   MigrationImportRejection,
+  MigrationManifestRow,
   MigrationOpeningStockLoadedPayload,
 } from '../../events/schema.js';
+import {
+  DOMAIN_MODULE,
+  DOMAIN_SIGNOFF_ROLES,
+  MIGRATION_DOMAINS,
+  assertDocumentTemplateHeader,
+  isDocumentDomain,
+  toManifestRow,
+  type DocumentDomain,
+} from '../../migration/document-templates.js';
+import {
+  MAX_WAIVER_NARRATIVE_CHARS,
+  assertDomainSignoffAllowed,
+  domainUnsupportedError,
+  manifestRequiredError,
+} from '../../compliance/migration-documents.js';
+import {
+  computeDomainFindings,
+  findingsSha256,
+  getDomainVerificationStatuses,
+} from '../../read/projections/migration_domain_verification.js';
 
 // ---------------------------------------------------------------------------
 // Story 13.1 (FR-DM-01, SM-48): opening-stock migration routes. These are the ONLY producers of
@@ -633,9 +658,9 @@ const postOpeningStockImportBase: RouteHandler = async (req, res) => {
   const parsed = parseCsv(csv);
   const columns = assertOpeningStockTemplateHeader(body['template_version'], parsed.header);
   const dataRowCount = parsed.rows.length + parsed.errors.length;
-  if (dataRowCount > MAX_OPENING_STOCK_IMPORT_ROWS) {
+  if (dataRowCount > MAX_IMPORT_ROWS) {
     throw new AppError(413, 'PAYLOAD_TOO_LARGE', 'The file exceeds the import row cap', {
-      max_rows: MAX_OPENING_STOCK_IMPORT_ROWS,
+      max_rows: MAX_IMPORT_ROWS,
       max_body_bytes: MAX_IMPORT_BODY_BYTES,
       row_count: dataRowCount,
     });
@@ -784,19 +809,21 @@ const listMigrationStagesBase: RouteHandler = async (req, res) => {
        FROM migration_stage WHERE site_id = $1 ORDER BY domain`,
     [siteId],
   );
-  const stages = r.rows as Record<string, unknown>[];
-  if (!stages.some((s) => s['domain'] === OPENING_STOCK_DOMAIN)) {
-    stages.unshift({
-      site_id: siteId,
-      domain: OPENING_STOCK_DOMAIN,
-      stage: 'staging',
-      promoted_at: null,
-      promoted_event_id: null,
-      promoted_by_actor_id: null,
-      posted_row_count: null,
-      updated_at: null,
-    });
-  }
+  const stored = r.rows as Record<string, unknown>[];
+  // Story 13.2 (Task 6.3): a default 'staging' row for every domain, in the fixed domain order.
+  const stages = MIGRATION_DOMAINS.map(
+    (domain) =>
+      stored.find((s) => s['domain'] === domain) ?? {
+        site_id: siteId,
+        domain,
+        stage: 'staging',
+        promoted_at: null,
+        promoted_event_id: null,
+        promoted_by_actor_id: null,
+        posted_row_count: null,
+        updated_at: null,
+      },
+  );
   sendJson(res, 200, { site_id: siteId, stages });
 };
 
@@ -1156,11 +1183,574 @@ const promoteOpeningStockBase: RouteHandler = async (req, res) => {
 };
 
 // ---------------------------------------------------------------------------
+// Story 13.2 (FR-DM-02): document-domain manifests, verification runs and sign-off
+// ---------------------------------------------------------------------------
+
+function requireDomainParam(params: Record<string, string> | undefined): DocumentDomain {
+  const value = params?.['domain'];
+  if (!isDocumentDomain(value)) throw domainUnsupportedError(value ?? null);
+  return value;
+}
+
+/**
+ * Binding Decision 6: the sign-off actor holds a role in DOMAIN_SIGNOFF_ROLES[domain] on a WRITE
+ * assignment for DOMAIN_MODULE[domain] (or '*') at the site (or '*'). Same shape as
+ * requireMigrationWriteActor: privilege and site scope come from ONE assignment.
+ */
+function requireDomainSignoffActor(
+  req: IncomingMessage,
+  domain: DocumentDomain,
+  siteId: string,
+): Actor {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  const roles = DOMAIN_SIGNOFF_ROLES[domain];
+  const module = DOMAIN_MODULE[domain];
+  const qualifying = authContext.roles.filter(
+    (r) =>
+      roles.has(r.role) && (r.module === module || r.module === '*') && r.functionScope === 'write',
+  );
+  if (qualifying.length === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `A ${[...roles].join(' or ')} write assignment on module ${module} is required to sign off ${domain}`,
+      { required_roles: [...roles], required_module: module, domain },
+    );
+  }
+  const granting = qualifying.find((r) => r.locationId === '*' || r.locationId === siteId);
+  if (!granting) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No ${module} write assignment grants sign-off for site "${siteId}"`,
+      { site_id: siteId, domain },
+    );
+  }
+  return { userId: authContext.userId, role: granting.role, auditLocationId: granting.locationId };
+}
+
+const postDocumentManifestImportBase: RouteHandler = async (req, res) => {
+  const body = requireObjectBody(req);
+  const siteId = requireUuidField(body, 'site_id');
+  const actor = requireMigrationWriteActor(req, siteId);
+  const idempotencyKey = requireIdempotencyKey(body);
+  const fileName = requireNonEmptyString(body, 'file_name');
+  const domain = body['domain'];
+  if (!isDocumentDomain(domain)) throw domainUnsupportedError(domain ?? null);
+  const csv = body['csv'];
+  if (typeof csv !== 'string' || csv.length === 0) {
+    throw new AppError(400, 'INVALID_PARAMS', 'csv must be a non-empty string', { field: 'csv' });
+  }
+
+  const replay = await loadImportHeader('idempotency_key = $1 AND site_id = $2', [
+    idempotencyKey,
+    siteId,
+  ]);
+  if (replay) {
+    sendJson(res, 200, {
+      ...replay,
+      rejections: await listRejections(replay['load_id'] as string),
+      replayed: true,
+    });
+    return;
+  }
+
+  const parsed = parseCsv(csv);
+  const columns = assertDocumentTemplateHeader(domain, body['template_version'], parsed.header);
+  const dataRowCount = parsed.rows.length + parsed.errors.length;
+  if (dataRowCount > MAX_IMPORT_ROWS) {
+    throw new AppError(413, 'PAYLOAD_TOO_LARGE', 'The file exceeds the import row cap', {
+      max_rows: MAX_IMPORT_ROWS,
+      max_body_bytes: MAX_IMPORT_BODY_BYTES,
+      row_count: dataRowCount,
+    });
+  }
+  if (dataRowCount === 0) {
+    throw new AppError(400, 'INVALID_PARAMS', 'The file carries a header and no data rows', {
+      field: 'csv',
+    });
+  }
+  const site = await getLocationById(siteId);
+  if (!site || site.level !== 'site') {
+    throw new AppError(404, 'NOT_FOUND', `Site "${siteId}" is not a registered site`, {
+      site_id: siteId,
+    });
+  }
+
+  const now = new Date();
+  const businessDate = toIstCalendarDate(now);
+  const occurredAt = now.toISOString();
+  const loadId = randomUUID();
+  const sha = fileSha256(csv);
+  const rejections: MigrationImportRejection[] = parsed.errors.map((e) => ({
+    line_no: e.line_no,
+    error_code: 'MALFORMED_ROW',
+    details: { column: null, reason: e.reason.toLowerCase() },
+    raw_row: e.raw,
+  }));
+  const rows: MigrationManifestRow[] = [];
+  const seenKeys = new Map<string, number>();
+  for (const csvRow of parsed.rows) {
+    const { line_no: lineNo, raw } = csvRow;
+    if (csvRow.cells.length !== columns.length) {
+      rejections.push({
+        line_no: lineNo,
+        error_code: 'MALFORMED_ROW',
+        details: {
+          column: null,
+          reason: 'cell_count',
+          expected: columns.length,
+          received: csvRow.cells.length,
+        },
+        raw_row: raw,
+      });
+      continue;
+    }
+    const typed = toManifestRow(domain, csvRow.cells);
+    if (!typed.ok) {
+      rejections.push({
+        line_no: lineNo,
+        error_code: 'MALFORMED_ROW',
+        details: { column: typed.column, reason: typed.reason, ...(typed.extra ?? {}) },
+        raw_row: raw,
+      });
+      continue;
+    }
+    // (b) the ONLY reference resolved at import is the site (Binding Decision 2).
+    if (typed.row.site_code !== site.location_code) {
+      rejections.push({
+        line_no: lineNo,
+        error_code: 'UNKNOWN_REFERENCE',
+        details: {
+          reference: 'site_code',
+          value: typed.row.site_code,
+          expected: site.location_code,
+        },
+        raw_row: raw,
+      });
+      continue;
+    }
+    // (c) in-file duplicate manifest key
+    const key = `${typed.row.document_ref_ext}${typed.row.line_ref}`;
+    const first = seenKeys.get(key);
+    if (first !== undefined) {
+      rejections.push({
+        line_no: lineNo,
+        error_code: 'MALFORMED_ROW',
+        details: { column: null, reason: 'duplicate_manifest_key', first_line_no: first },
+        raw_row: raw,
+      });
+      continue;
+    }
+    seenKeys.set(key, lineNo);
+    rows.push({
+      line_no: lineNo,
+      document_ref_ext: typed.row.document_ref_ext,
+      line_ref: typed.row.line_ref,
+      sku: typed.row.sku,
+      quantity: typed.row.quantity,
+      attributes: typed.row.attributes,
+      content_hash: openingStockContentHash(csvRow.cells),
+    });
+  }
+  rejections.sort((a, b) => a.line_no - b.line_no);
+
+  const auditCtx = auditCtxFor(req, actor, 201);
+  let manifestEventId: string | null = null;
+  if (rows.length > 0) {
+    const manifest: MigrationDocumentManifestLoadedPayload = {
+      site_id: siteId,
+      domain,
+      load_id: loadId,
+      template_version: body['template_version'] as string,
+      file_sha256: sha,
+      rows,
+      business_date: businessDate,
+    };
+    try {
+      const persisted = await persistEvent(
+        siteEnvelope(
+          siteId,
+          'migration.document_manifest.loaded',
+          manifest as unknown as Record<string, unknown>,
+          actor,
+          {
+            correlation_id: loadId,
+            causation_id: loadId,
+            idempotency_key: `migration:manifest:${siteId}:${domain}:${sha}`,
+            occurred_at: occurredAt,
+          },
+        ),
+        auditCtx,
+        undefined,
+        { strictDuplicate: true },
+      );
+      manifestEventId = persisted.event_id;
+    } catch (err) {
+      // An identical file already loaded for this site and domain: return its header untouched.
+      if (err instanceof AppError && err.errorCode === 'DUPLICATE_EVENT') {
+        const existing = await loadImportHeader(
+          'file_sha256 = $1 AND site_id = $2 AND domain = $3',
+          [sha, siteId, domain],
+        );
+        if (existing) {
+          sendJson(res, 200, {
+            ...existing,
+            rejections: await listRejections(existing['load_id'] as string),
+            replayed: true,
+            existing_event_id: String(err.details['existing_event_id'] ?? ''),
+          });
+          return;
+        }
+      }
+      throw err;
+    }
+  }
+
+  const summary = {
+    site_id: siteId,
+    load_id: loadId,
+    domain,
+    file_name: fileName,
+    file_sha256: sha,
+    template_version: body['template_version'] as string,
+    mode: 'initial' as const,
+    row_count: dataRowCount,
+    accepted_count: rows.length,
+    rejected_count: rejections.length,
+    suppressed_count: 0,
+    superseded_count: 0,
+    idempotency_key: idempotencyKey,
+    rejections,
+    business_date: businessDate,
+  };
+  const completed = await persistEvent(
+    siteEnvelope(siteId, 'migration.import.completed', summary, actor, {
+      correlation_id: loadId,
+      causation_id: loadId,
+      idempotency_key: `migration:import:${siteId}:${idempotencyKey}`,
+      occurred_at: occurredAt,
+    }),
+    auditCtx,
+  );
+  sendJson(res, 201, {
+    ...summary,
+    manifest_event_id: manifestEventId,
+    source_event_id: completed.event_id,
+  });
+};
+
+const listDocumentManifestRowsBase: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? '', 'http://localhost');
+  const siteId = requireQueryUuid(url, 'site_id');
+  requireSiteReadAccess(req, siteId);
+  const { limit, offset } = pageParams(url);
+  const domain = url.searchParams.get('domain');
+  if (domain !== null && !isDocumentDomain(domain)) throw domainUnsupportedError(domain);
+  const loadId = url.searchParams.get('load_id');
+  if (loadId !== null && !isUuid(loadId)) {
+    throw new AppError(400, 'INVALID_PARAMS', 'load_id must be a UUID', { load_id: loadId });
+  }
+  const r = await getPool().query(
+    `SELECT row_id, load_id, site_id, domain, line_no, document_ref_ext, line_ref, sku,
+            quantity::text AS quantity, attributes, content_hash, source_event_id, occurred_at,
+            business_date::text AS business_date, created_at, count(*) OVER () AS total_count
+       FROM migration_document_manifest_row
+      WHERE site_id = $1
+        AND ($2::text IS NULL OR domain = $2)
+        AND ($3::uuid IS NULL OR load_id = $3)
+      ORDER BY created_at, line_no
+      LIMIT $4 OFFSET $5`,
+    [siteId, domain, loadId?.toLowerCase() ?? null, limit, offset],
+  );
+  const total = r.rows.length > 0 ? Number(r.rows[0]!['total_count']) : 0;
+  const rows = r.rows.map((row) => {
+    const rest = { ...(row as Record<string, unknown>) };
+    delete rest['total_count'];
+    return rest;
+  });
+  sendJson(res, 200, { site_id: siteId, rows, limit, offset, total });
+};
+
+const RUN_COLUMNS = `run_id, site_id, domain, load_id, source_count, migrated_count, quarantined_count,
+  mismatch_count, waived_count, run_by_actor_id, findings_sha256, source_event_id, occurred_at,
+  business_date::text AS business_date, created_at`;
+
+async function loadRunHeader(runId: string): Promise<Record<string, unknown> | null> {
+  const r = await getPool().query(
+    `SELECT ${RUN_COLUMNS} FROM migration_domain_verification WHERE run_id = $1`,
+    [runId],
+  );
+  return (r.rows[0] as Record<string, unknown> | undefined) ?? null;
+}
+
+const postDomainVerificationRunBase: RouteHandler = async (req, res, params) => {
+  const domain = requireDomainParam(params);
+  const body = requireObjectBody(req);
+  const siteId = requireUuidField(body, 'site_id');
+  const actor = requireMigrationWriteActor(req, siteId);
+  const idempotencyKey = requireIdempotencyKey(body);
+  const prefixRaw = body['document_ref_prefix'];
+  if (prefixRaw !== undefined && prefixRaw !== null && typeof prefixRaw !== 'string') {
+    throw new AppError(400, 'INVALID_PARAMS', 'document_ref_prefix must be a string', {
+      field: 'document_ref_prefix',
+    });
+  }
+  const documentRefPrefix =
+    typeof prefixRaw === 'string' && prefixRaw.trim() ? prefixRaw.trim() : null;
+  const eventKey = `migration:verify:${siteId}:${domain}:${idempotencyKey}`;
+
+  const replay = await findEventByIdempotencyKey(eventKey);
+  if (replay) {
+    const header = await loadRunHeader(replay.payload['run_id'] as string);
+    sendJson(res, 200, { ...(header ?? {}), event_id: replay.event_id, replayed: true });
+    return;
+  }
+
+  const pool = getPool();
+  const stage = await pool.query(
+    `SELECT latest_load_id FROM migration_stage WHERE site_id = $1 AND domain = $2`,
+    [siteId, domain],
+  );
+  const loadId = (stage.rows[0]?.['latest_load_id'] as string | null) ?? null;
+  if (!loadId) throw manifestRequiredError(siteId, domain);
+
+  const runId = randomUUID();
+  const started = process.hrtime.bigint();
+  const computed = await computeDomainFindings(domain, siteId, loadId, pool, {
+    document_ref_prefix: documentRefPrefix,
+  });
+  const payload: MigrationDomainVerificationRunPayload = {
+    site_id: siteId,
+    domain,
+    run_id: runId,
+    load_id: loadId,
+    source_count: computed.source_count,
+    migrated_count: computed.migrated_count,
+    quarantined_count: computed.quarantined_count,
+    mismatch_count: computed.mismatch_count,
+    findings: computed.findings,
+    findings_sha256: findingsSha256(computed.findings),
+    business_date: toIstCalendarDate(new Date()),
+  };
+  const persisted = await persistEvent(
+    siteEnvelope(
+      siteId,
+      'migration.domain.verification_run',
+      {
+        ...(payload as unknown as Record<string, unknown>),
+        document_ref_prefix: documentRefPrefix,
+      },
+      actor,
+      { correlation_id: runId, causation_id: loadId, idempotency_key: eventKey },
+    ),
+    auditCtxFor(req, actor, 201),
+  );
+  const durationMs = Number(process.hrtime.bigint() - started) / 1_000_000;
+  const header = await loadRunHeader(runId);
+  sendJson(res, 201, {
+    ...(header ?? {}),
+    event_id: persisted.event_id,
+    document_ref_prefix: documentRefPrefix,
+    duration_ms: Math.round(durationMs),
+  });
+};
+
+const listDomainVerificationRunsBase: RouteHandler = async (req, res, params) => {
+  const domain = requireDomainParam(params);
+  const url = new URL(req.url ?? '', 'http://localhost');
+  const siteId = requireQueryUuid(url, 'site_id');
+  requireSiteReadAccess(req, siteId);
+  const { limit, offset } = pageParams(url);
+  const r = await getPool().query(
+    `SELECT ${RUN_COLUMNS}, count(*) OVER () AS total_count
+       FROM migration_domain_verification
+      WHERE site_id = $1 AND domain = $2
+      ORDER BY created_at DESC
+      LIMIT $3 OFFSET $4`,
+    [siteId, domain, limit, offset],
+  );
+  const total = r.rows.length > 0 ? Number(r.rows[0]!['total_count']) : 0;
+  const runs = r.rows.map((row) => {
+    const rest = { ...(row as Record<string, unknown>) };
+    delete rest['total_count'];
+    return rest;
+  });
+  sendJson(res, 200, { site_id: siteId, domain, runs, limit, offset, total });
+};
+
+const FINDING_KIND_FILTER = new Set([
+  'unknown_reference',
+  'missing_in_platform',
+  'missing_in_source',
+  'field_mismatch',
+  'state_mismatch',
+]);
+
+const getDomainVerificationRunBase: RouteHandler = async (req, res, params) => {
+  const domain = requireDomainParam(params);
+  const runId = requireUuidParam(params, 'run_id');
+  const header = await loadRunHeader(runId);
+  if (!header || header['domain'] !== domain) {
+    throw new AppError(404, 'NOT_FOUND', `Verification run "${runId}" not found`, {
+      run_id: runId,
+      domain,
+    });
+  }
+  requireSiteReadAccess(req, header['site_id'] as string);
+  const url = new URL(req.url ?? '', 'http://localhost');
+  const { limit, offset } = pageParams(url);
+  const kind = url.searchParams.get('kind');
+  const status = url.searchParams.get('status');
+  if (kind !== null && !FINDING_KIND_FILTER.has(kind)) {
+    throw new AppError(400, 'INVALID_PARAMS', 'kind is not a finding kind', {
+      kind,
+      allowed: [...FINDING_KIND_FILTER],
+    });
+  }
+  if (status !== null && !['open', 'waived'].includes(status)) {
+    throw new AppError(400, 'INVALID_PARAMS', 'status must be open or waived', { status });
+  }
+  const r = await getPool().query(
+    `SELECT finding_id, run_id, kind, error_code, document_ref_ext, line_ref, platform_ref, field,
+            source_value, platform_value, details, status, waiver_narrative, waived_event_id,
+            created_at, count(*) OVER () AS total_count
+       FROM migration_domain_verification_finding
+      WHERE run_id = $1
+        AND ($2::text IS NULL OR kind = $2)
+        AND ($3::text IS NULL OR status = $3)
+      ORDER BY kind, document_ref_ext, line_ref, field
+      LIMIT $4 OFFSET $5`,
+    [runId, kind, status, limit, offset],
+  );
+  const total = r.rows.length > 0 ? Number(r.rows[0]!['total_count']) : 0;
+  const findings = r.rows.map((row) => {
+    const rest = { ...(row as Record<string, unknown>) };
+    delete rest['total_count'];
+    return rest;
+  });
+  sendJson(res, 200, { ...header, findings, limit, offset, total });
+};
+
+const postDomainSignoffBase: RouteHandler = async (req, res, params) => {
+  const domain = requireDomainParam(params);
+  const body = requireObjectBody(req);
+  const siteId = requireUuidField(body, 'site_id');
+  const actor = requireDomainSignoffActor(req, domain, siteId);
+  const runId = requireUuidField(body, 'run_id');
+  const idempotencyKey = requireIdempotencyKey(body);
+  const waiversRaw = body['waivers'] ?? [];
+  if (!Array.isArray(waiversRaw)) {
+    throw new AppError(400, 'INVALID_PARAMS', 'waivers must be an array', { field: 'waivers' });
+  }
+  const waivers: MigrationFindingWaiver[] = waiversRaw.map((w, i) => {
+    const entry = (w ?? {}) as Record<string, unknown>;
+    if (!isUuid(entry['finding_id'])) {
+      throw new AppError(400, 'INVALID_PARAMS', 'waiver finding_id must be a UUID', {
+        field: `waivers[${i}].finding_id`,
+      });
+    }
+    const narrative = entry['narrative'];
+    if (
+      typeof narrative !== 'string' ||
+      !narrative.trim() ||
+      narrative.length > MAX_WAIVER_NARRATIVE_CHARS
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `waiver narrative must be 1 to ${MAX_WAIVER_NARRATIVE_CHARS} characters`,
+        { field: `waivers[${i}].narrative` },
+      );
+    }
+    return {
+      finding_id: (entry['finding_id'] as string).toLowerCase(),
+      narrative: narrative.trim(),
+    };
+  });
+  const eventKey = `migration:signoff:${siteId}:${domain}:${idempotencyKey}`;
+
+  const replay = await findEventByIdempotencyKey(eventKey);
+  if (replay) {
+    const statuses = await getDomainVerificationStatuses(siteId, getPool());
+    sendJson(res, 200, {
+      ...(statuses.find((s) => s.domain === domain) ?? {}),
+      event_id: replay.event_id,
+      replayed: true,
+    });
+    return;
+  }
+
+  // Handler-side pre-check; the applier repeats the gate under the stage lock.
+  const refusal = await assertDomainSignoffAllowed(
+    siteId,
+    domain,
+    runId,
+    waivers,
+    actor.userId,
+    getPool(),
+  );
+  if (refusal) throw refusal;
+
+  const payload: MigrationDomainVerifiedPayload = {
+    site_id: siteId,
+    domain,
+    run_id: runId,
+    waivers,
+    signed_off_by_actor_id: actor.userId,
+    signed_off_role: actor.role,
+    business_date: toIstCalendarDate(new Date()),
+  };
+  const persisted = await persistEvent(
+    siteEnvelope(
+      siteId,
+      'migration.domain.verified',
+      payload as unknown as Record<string, unknown>,
+      actor,
+      {
+        correlation_id: runId,
+        causation_id: runId,
+        idempotency_key: eventKey,
+      },
+    ),
+    auditCtxFor(req, actor, 201),
+  );
+  const statuses = await getDomainVerificationStatuses(siteId, getPool());
+  sendJson(res, 201, {
+    ...(statuses.find((s) => s.domain === domain) ?? {}),
+    event_id: persisted.event_id,
+  });
+};
+
+const listMigrationDomainsBase: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? '', 'http://localhost');
+  const siteId = requireQueryUuid(url, 'site_id');
+  requireSiteReadAccess(req, siteId);
+  const domains = await getDomainVerificationStatuses(siteId, getPool());
+  sendJson(res, 200, { site_id: siteId, domains });
+};
+
+// ---------------------------------------------------------------------------
 // Exports (RBAC-wrapped)
 // ---------------------------------------------------------------------------
 
 const write = requireRole({ module: MIGRATION_MODULE, functionScope: 'write' });
 const read = requireRole({ module: MIGRATION_MODULE, functionScope: 'read' });
+
+export const postDocumentManifestImportHandler: RouteHandler = write(
+  postDocumentManifestImportBase,
+);
+export const listDocumentManifestRowsHandler: RouteHandler = read(listDocumentManifestRowsBase);
+export const postDomainVerificationRunHandler: RouteHandler = write(postDomainVerificationRunBase);
+export const listDomainVerificationRunsHandler: RouteHandler = read(listDomainVerificationRunsBase);
+export const getDomainVerificationRunHandler: RouteHandler = read(getDomainVerificationRunBase);
+/**
+ * Sign-off is gated by role AND module inside the handler (requireDomainSignoffActor), like the
+ * approve route is gated by the DOA identity: the wrapper only asks for migration read.
+ */
+export const postDomainSignoffHandler: RouteHandler = read(postDomainSignoffBase);
+export const listMigrationDomainsHandler: RouteHandler = read(listMigrationDomainsBase);
 
 export const postOpeningStockImportHandler: RouteHandler = write(postOpeningStockImportBase);
 export const getOpeningStockImportHandler: RouteHandler = read(getOpeningStockImportBase);

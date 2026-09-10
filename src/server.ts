@@ -501,6 +501,13 @@ import {
   postVarianceExplanationsHandler,
   approveVarianceExplanationHandler,
   promoteOpeningStockHandler,
+  postDocumentManifestImportHandler,
+  listDocumentManifestRowsHandler,
+  postDomainVerificationRunHandler,
+  listDomainVerificationRunsHandler,
+  getDomainVerificationRunHandler,
+  postDomainSignoffHandler,
+  listMigrationDomainsHandler,
 } from './api/v1/migration.js';
 import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
@@ -589,6 +596,27 @@ export function createAppRouter(): Router {
   );
   router.post('/api/v1/migration/opening-stock/promote', promoteOpeningStockHandler);
   router.get('/api/v1/migration/stages', listMigrationStagesHandler);
+  // Story 13.2: document-domain verification - per-domain manifest import, verification run
+  // with quarantine and reconciliation counts, department-head sign-off, and the per-domain
+  // status Story 13.3's gate consumes. The import header route is the 13.1 handler widened to any
+  // domain. Static segments precede parameterised siblings.
+  router.post('/api/v1/migration/documents/imports', postDocumentManifestImportHandler);
+  router.get('/api/v1/migration/documents/imports/:load_id', getOpeningStockImportHandler);
+  router.get('/api/v1/migration/documents/rows', listDocumentManifestRowsHandler);
+  router.get('/api/v1/migration/domains', listMigrationDomainsHandler);
+  router.post(
+    '/api/v1/migration/domains/:domain/verification-runs',
+    postDomainVerificationRunHandler,
+  );
+  router.get(
+    '/api/v1/migration/domains/:domain/verification-runs',
+    listDomainVerificationRunsHandler,
+  );
+  router.get(
+    '/api/v1/migration/domains/:domain/verification-runs/:run_id',
+    getDomainVerificationRunHandler,
+  );
+  router.post('/api/v1/migration/domains/:domain/sign-off', postDomainSignoffHandler);
   // Story 11.5 code review E2-P (b): a wrong GSTIN or cost-plus percentage is otherwise
   // permanent - the gist EXCLUDE constraints refuse an overlapping correction and app_user
   // holds no DELETE grant - so each dated configuration has a route that CLOSES its window.

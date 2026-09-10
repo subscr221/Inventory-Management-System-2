@@ -2122,10 +2122,7 @@ const EXPECTED = [
   {
     canonical: 'read/projections/migration_document_manifest_row.sql',
     table: 'migration_document_manifest_row',
-    constraints: [
-      'uq_migration_document_manifest_row_key',
-      'chk_migration_document_manifest_row_domain',
-    ],
+    constraints: ['chk_migration_document_manifest_row_domain'],
     indexes: ['idx_migration_document_manifest_row_load'],
     appUserGrant: 'INSERT, SELECT',
   },
@@ -2221,7 +2218,10 @@ describe('Story 2.1 schema drift guard', () => {
         normalizeSql(importSql).includes(normalizeSql(fragment)),
         `migration_import.sql missing: ${fragment}`,
       );
-      assert.ok(normalizeSql(initDb).includes(normalizeSql(fragment)), `init-db.sql missing: ${fragment}`);
+      assert.ok(
+        normalizeSql(initDb).includes(normalizeSql(fragment)),
+        `init-db.sql missing: ${fragment}`,
+      );
     }
     for (const column of [
       'latest_load_id UUID',

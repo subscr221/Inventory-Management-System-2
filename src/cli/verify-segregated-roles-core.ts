@@ -58,6 +58,17 @@ export const SEGREGATED_ROLE_PAIRS: readonly SegregatedRolePair[] = [
     reason:
       'the finance controller sets the offcut acquisition rate and the CFO co-signs it, so nobody both prices a customer offcut and approves paying for it',
   },
+  // Story 13.2 (FR-DM-02, SOD-07): the migration lead loads a document manifest and runs the
+  // verification; the department head signs the domain off. The request-time twin is
+  // SIGNOFF_ACTOR_CONFLICT in the migration.domain.verified applier (signer differs from the
+  // runner and the loader); this pair refuses one person holding both hats at provisioning time.
+  {
+    transactionType: 'migration.domain_signoff',
+    setterRole: 'migration_lead',
+    approverRole: 'department_head',
+    reason:
+      'the migration lead loads and verifies a document domain and the department head signs it off, so nobody both migrates a domain and certifies their own migration',
+  },
   // Story 13.1 (SM-48, SOD-07): the migration lead explains an opening-stock variance and the
   // finance controller approves the explanation. The request-time twin is EXPLAINER_CANNOT_APPROVE
   // in the migration.variance.explanation_approved applier; this pair checks the same separation

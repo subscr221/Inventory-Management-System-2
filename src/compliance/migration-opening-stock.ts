@@ -21,6 +21,10 @@ import {
   upsertSerialCost,
 } from '../read/projections/inventory_valuation.js';
 import { computeOpeningStockVariances } from '../read/projections/migration_variance.js';
+import {
+  applyMigrationDocumentProjection,
+  assertMigrationDocumentEventShape,
+} from './migration-documents.js';
 
 /**
  * Story 13.1 (FR-DM-01): write-path rules for the opening-stock migration stream.
@@ -51,6 +55,18 @@ export const MIGRATION_EVENT_TYPES = new Set([
   'migration.variance.explained',
   'migration.variance.explanation_approved',
   'migration.stage.promoted',
+  // Story 13.2: document-domain verification (shape and appliers in migration-documents.ts).
+  'migration.document_manifest.loaded',
+  'migration.domain.verification_run',
+  'migration.domain.verified',
+]);
+
+export const MIGRATION_DOMAINS_WITH_IMPORT_HEADER = new Set([
+  'opening_stock',
+  'active_boms',
+  'open_pos',
+  'jobwork_challans',
+  'custody_registers',
 ]);
 
 export const MIGRATION_ERROR_CODES = {
@@ -121,6 +137,17 @@ export function assertMigrationEventShape(envelope: EventEnvelope): void {
   if (!isUuid(p['site_id'])) throw shapeError(type, 'site_id must be a UUID');
   if (!isIsoDate(p['business_date'])) {
     throw shapeError(type, 'business_date must be YYYY-MM-DD');
+  }
+
+  // Story 13.2: the three document-domain events share the common checks above and dispatch to
+  // their own pure assert; one seam entry point, nothing reordered.
+  if (
+    type === 'migration.document_manifest.loaded' ||
+    type === 'migration.domain.verification_run' ||
+    type === 'migration.domain.verified'
+  ) {
+    assertMigrationDocumentEventShape(envelope);
+    return;
   }
 
   if (type === 'migration.opening_stock.loaded') {
@@ -197,7 +224,12 @@ export function assertMigrationEventShape(envelope: EventEnvelope): void {
   if (type === 'migration.import.completed') {
     const q = p as Partial<MigrationImportCompletedPayload>;
     if (!isUuid(q.load_id)) throw shapeError(type, 'load_id must be a UUID');
-    if (q.domain !== OPENING_STOCK_DOMAIN) throw shapeError(type, 'domain must be opening_stock');
+    // Story 13.2 widened the header to the document domains; the CHECK on migration_import agrees.
+    if (!MIGRATION_DOMAINS_WITH_IMPORT_HEADER.has(String(q.domain))) {
+      throw shapeError(type, 'domain is not a migration domain', {
+        supported: [...MIGRATION_DOMAINS_WITH_IMPORT_HEADER],
+      });
+    }
     for (const field of ['file_name', 'file_sha256', 'template_version', 'idempotency_key']) {
       if (!isNonEmptyString(q[field as keyof typeof q])) {
         throw shapeError(type, `${field} must be a non-empty string`);
@@ -327,6 +359,12 @@ export async function applyMigrationProjection(
     case 'migration.stage.promoted':
       await applyStagePromoted(envelope, client, eventId, auditCtx);
       return;
+    case 'migration.document_manifest.loaded':
+    case 'migration.domain.verification_run':
+    case 'migration.domain.verified':
+      // Story 13.2: document-domain verification appliers live beside their shape assert.
+      await applyMigrationDocumentProjection(envelope, client, eventId, auditCtx);
+      return;
     default:
       return;
   }
@@ -415,7 +453,15 @@ async function applyOpeningStockLoaded(
           AND lot_number IS NOT DISTINCT FROM $6
           AND serial_number IS NOT DISTINCT FROM $7
         RETURNING row_id`,
-      [p.supersedes_row_id, p.row_id, p.site_id, p.location_id, p.sku, p.lot_number, p.serial_number],
+      [
+        p.supersedes_row_id,
+        p.row_id,
+        p.site_id,
+        p.location_id,
+        p.sku,
+        p.lot_number,
+        p.serial_number,
+      ],
     );
     if (superseded.rows.length === 0) {
       await refuse(

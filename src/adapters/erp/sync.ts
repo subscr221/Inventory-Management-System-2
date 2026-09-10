@@ -61,7 +61,6 @@ const ADVISORY_LOCK_KEYS: Record<'purchase_orders' | 'sales_orders' | 'stock_bal
 };
 
 const STOCK_BALANCE_SOURCE_SYSTEMS = new Set(['ERP', 'LEGACY']);
-const SIGNED_NUMERIC_REGEX = /^-?\d{1,12}(\.\d{1,6})?$/;
 const UNSIGNED_NUMERIC_REGEX = /^\d{1,12}(\.\d{1,6})?$/;
 
 export const ERP_ERROR_CODES = {

@@ -31,8 +31,11 @@ export const OPENING_STOCK_TEMPLATES: Readonly<Record<string, readonly string[]>
   v1: OPENING_STOCK_TEMPLATE_V1,
 };
 
-/** The file-level row cap (Open Question 3); the 10 MB body cap is src/middleware/body.ts's. */
-export const MAX_OPENING_STOCK_IMPORT_ROWS = 10_000;
+/**
+ * The file-level row cap (Open Question 3), shared by the opening-stock import and the Story 13.2
+ * document manifests; the 10 MB body cap is src/middleware/body.ts's.
+ */
+export const MAX_IMPORT_ROWS = 10_000;
 export const MAX_IMPORT_BODY_BYTES = 10 * 1024 * 1024;
 
 /** A v1 row with every cell trimmed; empty cells are empty strings, never undefined. */
@@ -93,10 +96,13 @@ export function toTemplateRowV1(cells: readonly string[]): OpeningStockTemplateR
  * correction mode. Trimming and the empty-cell canonical form mean whitespace edits do not mint
  * a new row.
  */
-export function openingStockContentHash(cells: readonly string[]): string {
+export function rowContentHash(cells: readonly string[]): string {
   const normalised = cells.map((c) => c.trim()).join('');
   return createHash('sha256').update(normalised, 'utf8').digest('hex');
 }
+
+/** The opening-stock name for the shared row hash (Story 13.2 generalised it; same bytes). */
+export const openingStockContentHash = rowContentHash;
 
 /** The per-row event idempotency key (Task 3.5 g). */
 export function openingStockRowIdempotencyKey(siteId: string, contentHash: string): string {
