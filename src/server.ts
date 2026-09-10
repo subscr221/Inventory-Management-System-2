@@ -492,6 +492,16 @@ import {
   closeValuationConfigHandler,
   getValuationConfigHandler,
 } from './api/v1/gst.js';
+import {
+  postOpeningStockImportHandler,
+  getOpeningStockImportHandler,
+  listOpeningStockRowsHandler,
+  listMigrationStagesHandler,
+  listOpeningStockVariancesHandler,
+  postVarianceExplanationsHandler,
+  approveVarianceExplanationHandler,
+  promoteOpeningStockHandler,
+} from './api/v1/migration.js';
 import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
 import { runExpiryCycle } from './notify/expire.js';
@@ -562,6 +572,23 @@ export function createAppRouter(): Router {
   // valuation configuration are dated configuration. Static segments precede parameterised siblings.
   router.post('/api/v1/gst/branch-transfer-valuation-config', postValuationConfigHandler);
   router.get('/api/v1/gst/branch-transfer-valuation-config', getValuationConfigHandler);
+  // Story 13.1: opening-stock migration - staging import, rejected-row report, variance report,
+  // DOA-approved variance explanations and the staging-to-dry-run promotion gate. Module
+  // `migration`; the `migration` event stream itself is barred on both event doors.
+  router.post('/api/v1/migration/opening-stock/imports', postOpeningStockImportHandler);
+  router.get('/api/v1/migration/opening-stock/imports/:load_id', getOpeningStockImportHandler);
+  router.get('/api/v1/migration/opening-stock/rows', listOpeningStockRowsHandler);
+  router.get('/api/v1/migration/opening-stock/variances', listOpeningStockVariancesHandler);
+  router.post(
+    '/api/v1/migration/opening-stock/variances/explanations',
+    postVarianceExplanationsHandler,
+  );
+  router.post(
+    '/api/v1/migration/opening-stock/variances/explanations/:explanation_id/approve',
+    approveVarianceExplanationHandler,
+  );
+  router.post('/api/v1/migration/opening-stock/promote', promoteOpeningStockHandler);
+  router.get('/api/v1/migration/stages', listMigrationStagesHandler);
   // Story 11.5 code review E2-P (b): a wrong GSTIN or cost-plus percentage is otherwise
   // permanent - the gist EXCLUDE constraints refuse an overlapping correction and app_user
   // holds no DELETE grant - so each dated configuration has a route that CLOSES its window.

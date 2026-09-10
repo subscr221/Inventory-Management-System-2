@@ -2057,6 +2057,102 @@ const EXPECTED = [
     ],
     appUserGrant: 'SELECT, INSERT, UPDATE',
   },
+  // Story 13.1: opening-stock migration. Six new projections, all tail-appended in migrate.ts.
+  // The import header and the staging row take UPDATE (the applier flips row status and the
+  // header is replayable); the rejected-row report is append-only; erp_stock_balance is an
+  // adapter-owned upsert (UPDATE); the explanation flips pending -> approved (UPDATE); the stage
+  // row moves staging -> dry_run (UPDATE). No table grants DELETE.
+  {
+    canonical: 'read/projections/migration_import.sql',
+    table: 'migration_import',
+    constraints: ['chk_migration_import_domain', 'chk_migration_import_mode'],
+    indexes: ['idx_migration_import_site'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/migration_import_rejection.sql',
+    table: 'migration_import_rejection',
+    constraints: ['chk_migration_import_rejection_error_code'],
+    indexes: ['idx_migration_import_rejection_load'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/migration_opening_stock_row.sql',
+    table: 'migration_opening_stock_row',
+    constraints: ['chk_migration_os_row_quantity_positive', 'chk_migration_os_row_status'],
+    indexes: ['uq_migration_os_row_live', 'idx_migration_os_row_sku', 'idx_migration_os_row_load'],
+    indexBodies: [
+      "CREATE UNIQUE INDEX IF NOT EXISTS uq_migration_os_row_live ON migration_opening_stock_row (site_id, location_id, sku, lot_number, serial_number) NULLS NOT DISTINCT WHERE status IN ('accepted', 'posted');",
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/erp_stock_balance.sql',
+    table: 'erp_stock_balance',
+    constraints: ['chk_erp_stock_balance_source_system'],
+    indexes: ['idx_erp_stock_balance_site'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/migration_variance_explanation.sql',
+    table: 'migration_variance_explanation',
+    constraints: [
+      'chk_migration_variance_explanation_cause_code',
+      'chk_migration_variance_explanation_status',
+    ],
+    indexes: [
+      'uq_migration_variance_explanation_approved',
+      'idx_migration_variance_explanation_key',
+    ],
+    indexBodies: [
+      "CREATE UNIQUE INDEX IF NOT EXISTS uq_migration_variance_explanation_approved ON migration_variance_explanation (site_id, variance_key) WHERE status = 'approved';",
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/migration_stage.sql',
+    table: 'migration_stage',
+    constraints: ['chk_migration_stage_stage'],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  // Story 13.2: document-domain verification. The manifest row is immutable (INSERT, SELECT only:
+  // a manifest is replaced by a later load, never edited); the run header takes UPDATE for
+  // waived_count and the finding for the open -> waived flip at sign-off. No table grants DELETE.
+  {
+    canonical: 'read/projections/migration_document_manifest_row.sql',
+    table: 'migration_document_manifest_row',
+    constraints: [
+      'uq_migration_document_manifest_row_key',
+      'chk_migration_document_manifest_row_domain',
+    ],
+    indexes: ['idx_migration_document_manifest_row_load'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/migration_domain_verification.sql',
+    table: 'migration_domain_verification',
+    constraints: ['chk_migration_domain_verification_domain'],
+    indexes: ['idx_migration_domain_verification_site'],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/migration_domain_verification_finding.sql',
+    table: 'migration_domain_verification_finding',
+    constraints: [
+      'chk_migration_domain_verification_finding_kind',
+      'chk_migration_domain_verification_finding_error_code',
+      'chk_migration_domain_verification_finding_status',
+    ],
+    indexes: [
+      'uq_migration_domain_verification_finding_key',
+      'idx_migration_domain_verification_finding_run',
+    ],
+    indexBodies: [
+      'CREATE UNIQUE INDEX IF NOT EXISTS uq_migration_domain_verification_finding_key ON migration_domain_verification_finding (run_id, kind, document_ref_ext, line_ref, field) NULLS NOT DISTINCT;',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -2112,6 +2208,35 @@ describe('Story 2.1 schema drift guard', () => {
   // was WIDENED. The Story 9.6 group-A lesson is that a name-only pin stays green when the
   // constraint body changes, so the semantic content of the widened constraint is pinned here as
   // text: an approved row must carry EXACTLY ONE event id, matching its kind.
+  it('Story 13.2 widens the migration_import domain CHECK (DROP-then-ADD) and adds the stage verification columns in both files', () => {
+    const importSql = read('read/projections/migration_import.sql');
+    const stageSql = read('read/projections/migration_stage.sql');
+    // A pin on the constraint NAME alone stays green if the vocabulary silently loses a domain;
+    // the widened list and the DROP that makes it propagate are the semantic content.
+    for (const fragment of [
+      "CHECK (domain IN ('opening_stock', 'active_boms', 'open_pos', 'jobwork_challans', 'custody_registers'))",
+      'ALTER TABLE migration_import DROP CONSTRAINT IF EXISTS chk_migration_import_domain;',
+    ]) {
+      assert.ok(
+        normalizeSql(importSql).includes(normalizeSql(fragment)),
+        `migration_import.sql missing: ${fragment}`,
+      );
+      assert.ok(normalizeSql(initDb).includes(normalizeSql(fragment)), `init-db.sql missing: ${fragment}`);
+    }
+    for (const column of [
+      'latest_load_id UUID',
+      'latest_run_id UUID',
+      'verified_run_id UUID',
+      'verified_at TIMESTAMPTZ',
+      'verified_event_id UUID',
+      'verified_by_actor_id UUID',
+    ]) {
+      const statement = `ALTER TABLE migration_stage ADD COLUMN IF NOT EXISTS ${column};`;
+      assert.ok(stageSql.includes(statement), `migration_stage.sql missing: ${statement}`);
+      assert.ok(initDb.includes(statement), `init-db.sql missing the upgrade path: ${statement}`);
+    }
+  });
+
   it('Story 9.9 mirrors the proposal kind columns and the widened lifecycle CHECK into init-db.sql', () => {
     const proposalSql = read('read/projections/job_work_offcut_acquisition_proposal.sql');
     for (const column of [
@@ -2502,7 +2627,7 @@ describe('Story 2.1 schema drift guard', () => {
     // FR-B-17: inbound BOM records queue as exceptions, so 'bom' joins the record-type vocabulary.
     // The one-open-row-per-grain index is deliberately untouched.
     for (const fragment of [
-      "CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom'))",
+      "CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom', 'stock_balance'))",
       'ALTER TABLE integration_exception DROP CONSTRAINT IF EXISTS chk_integration_exception_record_type;',
       "CREATE UNIQUE INDEX IF NOT EXISTS uq_integration_exception_open ON integration_exception (source_system, record_type, source_record_ref, error_code) NULLS NOT DISTINCT WHERE status = 'open';",
     ]) {

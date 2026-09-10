@@ -27,6 +27,16 @@
 #   backed by code (no ERP balance projection exists), no stage/dry-run/go-live concept exists, no
 #   CSV tooling exists, and the architecture assigns Epic 13 no module; each is a binding decision.
 #   12 binding decisions, 8 open questions with defaults; ready-for-dev
+# story 13-1 code review 2026-09-10 (adversarial pass: Blind Hunter + Edge Case Hunter + Acceptance
+#   Auditor, parallel over baseline 7e0f88c working tree; all three returned findings; Acceptance
+#   Auditor: no spec violations): 20 raw findings deduped to 9 actionable: 0 decision-needed,
+#   6 patch, 3 defer, 11 dismissed. Patches applied: content hash/grain key/serial key collision
+#   (empty-string join replaced by unit separator \x1f), ERP stock balance negative quantity
+#   rejected (UNSIGNED_NUMERIC_REGEX), promotion applier superseded-row grain check added (Story
+#   3.6 lesson: check in both handler and applier), promotion applier item_master.status re-check
+#   added (ITEM_INACTIVE 409). Deferred: import stage check race (noisy STAGE_LOCKED failure),
+#   variance key pipe ambiguity (master-data validation mitigates), ERP snapshot_at future dates
+#   (trusted boundary, self-correcting). Story status: review -> done
 # story 8-7 created 2026-09-01 via create-story workflow: Compliance Master Data - BIS
 #   Licence Register and Label Masters (FR-Q-11, FR-Q-14, FR-AC-13). Layers governance on the
 #   Story 8.6 minimal enforcement-contract tables: licence CRUD + renewal on five central-only
@@ -1173,8 +1183,8 @@ development_status:
 
   # --- Epic 13: Data Migration Sign-Off Gate  [PILOT] ---
   epic-13: in-progress
-  13-1-opening-stock-migration-and-verification: ready-for-dev   # PILOT
-  13-2-active-document-migration-boms-pos-challans-custody-registers: backlog   # PILOT
+  13-1-opening-stock-migration-and-verification: done   # PILOT  # code review 2026-09-10 (Blind Hunter + Edge Case Hunter + Acceptance Auditor, parallel over baseline 7e0f88c working tree; all three returned findings; Acceptance Auditor: no spec violations): 6 patches applied (content hash/grain key/serial key collision — empty-string join replaced by unit separator; ERP stock balance negative quantity rejected; promotion applier superseded-row grain check added; promotion applier item_master.status re-check added), 3 deferred (import stage check race — noisy failure mode; variance key pipe ambiguity — master-data validation mitigates; ERP snapshot_at future dates — trusted boundary), 11 dismissed; story-13-1 22/22, full suite 2151/2151
+  13-2-active-document-migration-boms-pos-challans-custody-registers: in-progress   # PILOT
   13-3-go-live-reconciliation-sign-off-gate: backlog   # PILOT
   epic-13-retrospective: optional
 

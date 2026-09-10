@@ -5101,6 +5101,237 @@ export interface JobworkOffcutRevaluationApprovedEnvelope extends Omit<EventEnve
 }
 
 // ---------------------------------------------------------------------------
+// Story 13.1: opening-stock migration (FR-DM-01). Five events on the NEW central-only 'migration'
+// stream. Every payload carries `site_id` (the site-level location_register.location_id) so the
+// events door's assertPayloadSiteWriteAccess would bind if the stream bar were ever lifted; today
+// both doors refuse the stream outright and the REST routes in src/api/v1/migration.ts are the only
+// producers. Quantities and costs are NUMERIC strings, never JS floats.
+// ---------------------------------------------------------------------------
+
+export interface MigrationOpeningStockLoadedPayload {
+  site_id: string;
+  load_id: string;
+  row_id: string;
+  line_no: number;
+  location_id: string;
+  location_code: string;
+  sku: string;
+  lot_number: string | null;
+  serial_number: string | null;
+  stock_class: string;
+  /** NUMERIC string, > 0. */
+  quantity: string;
+  uom: string;
+  /** NUMERIC string for stock_class 'owned'; null for every other class (Binding Decision 6). */
+  unit_cost: string | null;
+  /** The declared cell for a non-owned class; null for 'owned'. */
+  declared_unit_cost: string | null;
+  expiry_date: string | null;
+  counted_on: string;
+  pv_ref_ext: string;
+  pv_line_ref_ext: string | null;
+  content_hash: string;
+  mode: 'initial' | 'correction';
+  /** Set in correction mode: the live row this row supersedes. */
+  supersedes_row_id: string | null;
+  business_date: string;
+}
+
+export interface MigrationOpeningStockLoadedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'migration.opening_stock.loaded';
+  payload: MigrationOpeningStockLoadedPayload;
+}
+
+export interface MigrationImportRejection {
+  line_no: number;
+  error_code: 'MALFORMED_ROW' | 'UNKNOWN_REFERENCE' | 'DUPLICATE_LOT_SERIAL';
+  details: Record<string, unknown>;
+  raw_row: string;
+}
+
+/**
+ * Story 13.2: the migration domains. `opening_stock` promotes (Story 13.1); the four document
+ * domains are verified against a manifest and signed off per domain (Story 13.2); Story 13.3 reads
+ * all five for the go-live gate.
+ */
+export type MigrationDomain =
+  | 'opening_stock'
+  | 'active_boms'
+  | 'open_pos'
+  | 'jobwork_challans'
+  | 'custody_registers';
+
+export type MigrationDocumentDomain = Exclude<MigrationDomain, 'opening_stock'>;
+
+export interface MigrationImportCompletedPayload {
+  site_id: string;
+  load_id: string;
+  domain: MigrationDomain;
+  file_name: string;
+  file_sha256: string;
+  template_version: string;
+  mode: 'initial' | 'correction';
+  row_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  suppressed_count: number;
+  superseded_count: number;
+  idempotency_key: string;
+  rejections: MigrationImportRejection[];
+  business_date: string;
+}
+
+export interface MigrationImportCompletedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'migration.import.completed';
+  payload: MigrationImportCompletedPayload;
+}
+
+export interface MigrationVarianceExplainedPayload {
+  site_id: string;
+  explanation_id: string;
+  variance_key: string;
+  source_system: string;
+  cause_code: string;
+  narrative: string;
+  /** NUMERIC string: the quantity delta this explanation covers. */
+  explained_quantity_delta: string;
+  /** NUMERIC string: abs(variance_value) at explanation time, the DOA-banded amount. */
+  explained_value: string;
+  /** Frozen from resolveApprover by the route; never from the request body. */
+  approver_actor_id: string;
+  doa_entry_id: string | null;
+  business_date: string;
+}
+
+export interface MigrationVarianceExplainedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'migration.variance.explained';
+  payload: MigrationVarianceExplainedPayload;
+}
+
+export interface MigrationVarianceExplanationApprovedPayload {
+  site_id: string;
+  explanation_id: string;
+  business_date: string;
+}
+
+export interface MigrationVarianceExplanationApprovedEnvelope extends Omit<
+  EventEnvelope,
+  'payload'
+> {
+  event_type: 'migration.variance.explanation_approved';
+  payload: MigrationVarianceExplanationApprovedPayload;
+}
+
+export interface MigrationStagePromotedPayload {
+  site_id: string;
+  domain: 'opening_stock';
+  from_stage: 'staging';
+  to_stage: 'dry_run';
+  accepted_row_count: number;
+  business_date: string;
+}
+
+export interface MigrationStagePromotedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'migration.stage.promoted';
+  payload: MigrationStagePromotedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Story 13.2: document-domain verification (FR-DM-02). Three more events on the central-only
+// 'migration' stream, all with stream_id = site_id. The manifest is the SOURCE side of a
+// verification (one event per file, rows in the payload - nothing keys on a manifest row); the
+// verification run carries its findings and their digest so the event is the durable record of
+// what the department head signed off; the sign-off carries the head's waivers. Quantities are
+// NUMERIC strings.
+// ---------------------------------------------------------------------------
+
+export interface MigrationManifestRow {
+  line_no: number;
+  document_ref_ext: string;
+  line_ref: string;
+  sku: string | null;
+  /** NUMERIC string or null. */
+  quantity: string | null;
+  attributes: Record<string, string | null>;
+  content_hash: string;
+}
+
+export interface MigrationDocumentManifestLoadedPayload {
+  site_id: string;
+  domain: MigrationDocumentDomain;
+  load_id: string;
+  template_version: string;
+  file_sha256: string;
+  rows: MigrationManifestRow[];
+  business_date: string;
+}
+
+export interface MigrationDocumentManifestLoadedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'migration.document_manifest.loaded';
+  payload: MigrationDocumentManifestLoadedPayload;
+}
+
+export type MigrationFindingKind =
+  | 'unknown_reference'
+  | 'missing_in_platform'
+  | 'missing_in_source'
+  | 'field_mismatch'
+  | 'state_mismatch';
+
+export interface MigrationDomainFinding {
+  finding_id: string;
+  kind: MigrationFindingKind;
+  error_code: 'UNKNOWN_REFERENCE' | 'RECONCILIATION_MISMATCH';
+  document_ref_ext: string;
+  line_ref: string;
+  platform_ref: string | null;
+  field: string | null;
+  source_value: string | null;
+  platform_value: string | null;
+  details: Record<string, unknown>;
+}
+
+export interface MigrationDomainVerificationRunPayload {
+  site_id: string;
+  domain: MigrationDocumentDomain;
+  run_id: string;
+  load_id: string;
+  source_count: number;
+  migrated_count: number;
+  quarantined_count: number;
+  mismatch_count: number;
+  findings: MigrationDomainFinding[];
+  findings_sha256: string;
+  business_date: string;
+}
+
+export interface MigrationDomainVerificationRunEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'migration.domain.verification_run';
+  payload: MigrationDomainVerificationRunPayload;
+}
+
+export interface MigrationFindingWaiver {
+  finding_id: string;
+  narrative: string;
+}
+
+export interface MigrationDomainVerifiedPayload {
+  site_id: string;
+  domain: MigrationDocumentDomain;
+  run_id: string;
+  waivers: MigrationFindingWaiver[];
+  /** Taken from the authorising assignment by the route; never from the request body. */
+  signed_off_by_actor_id: string;
+  signed_off_role: string;
+  business_date: string;
+}
+
+export interface MigrationDomainVerifiedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'migration.domain.verified';
+  payload: MigrationDomainVerifiedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -6121,6 +6352,45 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'jobwork.offcut_revaluation_approved': {
     streamType: 'jobwork',
+    requiresBusinessStream: false,
+  },
+  // Story 13.1: opening-stock migration on a NEW 'migration' stream. Staging loads and their
+  // reconciliation are migration project records, not inventory movements, so business-stream
+  // tagging is not gated on them (the compliance-stream precedent above). All five are
+  // central-only: no edge sync set entries, no REBASE_SAFE entry, and both event doors refuse the
+  // stream outright - the REST routes in src/api/v1/migration.ts are the only producers.
+  'migration.opening_stock.loaded': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  'migration.import.completed': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  'migration.variance.explained': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  'migration.variance.explanation_approved': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  'migration.stage.promoted': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  // Story 13.2: document-domain verification (FR-DM-02). Same stream, same bars, same producers
+  // rule: the routes in src/api/v1/migration.ts are the only writers; no edge sync set entries.
+  'migration.document_manifest.loaded': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  'migration.domain.verification_run': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  'migration.domain.verified': {
+    streamType: 'migration',
     requiresBusinessStream: false,
   },
 } as const;

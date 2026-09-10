@@ -54,10 +54,15 @@ const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 // would otherwise cross-close each other's present rows (each soft-closes what is absent from ITS
 // feed). A pg_advisory_xact_lock serializes the read-decide-persist window per projection and is
 // released automatically on COMMIT/ROLLBACK. Values are arbitrary stable constants.
-const ADVISORY_LOCK_KEYS: Record<'purchase_orders' | 'sales_orders', number> = {
+const ADVISORY_LOCK_KEYS: Record<'purchase_orders' | 'sales_orders' | 'stock_balances', number> = {
   purchase_orders: 2_090_001,
   sales_orders: 2_090_002,
+  stock_balances: 2_090_003,
 };
+
+const STOCK_BALANCE_SOURCE_SYSTEMS = new Set(['ERP', 'LEGACY']);
+const SIGNED_NUMERIC_REGEX = /^-?\d{1,12}(\.\d{1,6})?$/;
+const UNSIGNED_NUMERIC_REGEX = /^\d{1,12}(\.\d{1,6})?$/;
 
 export const ERP_ERROR_CODES = {
   SOURCE_SYSTEM_READ_ONLY: 'SOURCE_SYSTEM_READ_ONLY',
@@ -109,10 +114,29 @@ export interface SourceBomRecord {
   lines?: unknown[];
 }
 
+/**
+ * Story 13.1 (FR-DM-01, Binding Decision 1): one ERP or legacy opening-balance snapshot row as the
+ * source extract delivers it. Quantities and costs are NUMERIC strings; `snapshot_at` is the
+ * physical-count cut-off instant the extract was taken at and is the row's freshness fact. The
+ * legacy side pushes the same shape with source_system 'LEGACY' (Open Question 7).
+ */
+export interface SourceStockBalance {
+  source_system: 'ERP' | 'LEGACY';
+  site_code_ext: string;
+  location_code: string;
+  sku: string;
+  lot_number_ext?: string | null;
+  serial_number_ext?: string | null;
+  quantity: string;
+  unit_cost?: string | null;
+  snapshot_at: string;
+}
+
 export interface ErpSyncBatch {
   purchase_orders?: SourcePurchaseOrder[];
   sales_orders?: SourceSalesOrderLine[];
   boms?: SourceBomRecord[];
+  stock_balances?: SourceStockBalance[];
 }
 
 /** One unconditionally rejected inbound BOM record (Story 5.6, AC 5). */
@@ -130,6 +154,8 @@ export interface ErpSyncResult {
   purchase_orders?: { applied: number; failed: number };
   sales_orders?: { applied: number; failed: number };
   boms?: { applied: number; failed: number; rejected: RejectedBomRecord[] };
+  /** Story 13.1: `unmapped` rows were stored AND routed to integration_exception (UNKNOWN_REFERENCE). */
+  stock_balances?: { applied: number; failed: number; unmapped: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +420,157 @@ async function rejectInboundBom(
 }
 
 // ---------------------------------------------------------------------------
+// Story 13.1: ERP / legacy opening-balance snapshot rows (erp_stock_balance)
+// ---------------------------------------------------------------------------
+
+function stockBalanceRef(record: Partial<SourceStockBalance>, index: number): string {
+  if (
+    !isNonEmptyString(record?.site_code_ext) ||
+    !isNonEmptyString(record?.location_code) ||
+    !isNonEmptyString(record?.sku)
+  ) {
+    return `stock_balance#${index}`;
+  }
+  return [
+    record.site_code_ext,
+    record.location_code,
+    record.sku,
+    record.lot_number_ext ?? '-',
+    record.serial_number_ext ?? '-',
+  ].join('|');
+}
+
+/**
+ * Upserts one snapshot row on its external grain. A row whose site, location or sku does not
+ * resolve is STILL stored (with NULL platform ids) so the variance report can show it as
+ * `unmapped_source_row`, AND routed to integration_exception as UNKNOWN_REFERENCE on the deduped
+ * open grain; a later sync that resolves it clears that exception. Returns whether it was unmapped.
+ */
+async function applyStockBalance(
+  record: SourceStockBalance,
+  index: number,
+  client: PoolClient,
+): Promise<{ unmapped: boolean }> {
+  if (
+    typeof record?.source_system !== 'string' ||
+    !STOCK_BALANCE_SOURCE_SYSTEMS.has(record.source_system)
+  ) {
+    throw new AppError(400, 'INVALID_PARAMS', 'source_system must be ERP or LEGACY');
+  }
+  for (const field of ['site_code_ext', 'location_code', 'sku'] as const) {
+    if (!isNonEmptyString(record[field])) {
+      throw new AppError(400, 'INVALID_PARAMS', `${field} is required`, { field });
+    }
+  }
+  if (typeof record.quantity !== 'string' || !UNSIGNED_NUMERIC_REGEX.test(record.quantity.trim())) {
+    throw new AppError(400, 'INVALID_PARAMS', 'quantity must be a NUMERIC string', {
+      field: 'quantity',
+    });
+  }
+  const unitCost =
+    record.unit_cost === undefined || record.unit_cost === null || record.unit_cost === ''
+      ? null
+      : record.unit_cost;
+  if (
+    unitCost !== null &&
+    (typeof unitCost !== 'string' || !UNSIGNED_NUMERIC_REGEX.test(unitCost.trim()))
+  ) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      'unit_cost must be a non-negative NUMERIC string or null',
+      {
+        field: 'unit_cost',
+      },
+    );
+  }
+  if (typeof record.snapshot_at !== 'string' || Number.isNaN(Date.parse(record.snapshot_at))) {
+    throw new AppError(400, 'INVALID_PARAMS', 'snapshot_at must be an ISO-8601 instant', {
+      field: 'snapshot_at',
+    });
+  }
+  const lotExt = isNonEmptyString(record.lot_number_ext) ? record.lot_number_ext.trim() : null;
+  const serialExt = isNonEmptyString(record.serial_number_ext)
+    ? record.serial_number_ext.trim()
+    : null;
+  if (
+    lotExt === null &&
+    record.lot_number_ext !== undefined &&
+    record.lot_number_ext !== null &&
+    record.lot_number_ext !== ''
+  ) {
+    throw new AppError(400, 'INVALID_PARAMS', 'lot_number_ext must be a string or null', {
+      field: 'lot_number_ext',
+    });
+  }
+
+  // The same ext-code-to-location_register resolution the sales-order path uses for
+  // ship_from_site_id; the location must be a bin of THAT site.
+  const site = await getLocationByCode(record.site_code_ext.trim(), client);
+  const siteId =
+    site && site.level === 'site' && site.status === 'active' ? site.location_id : null;
+  const location = await getLocationByCode(record.location_code.trim(), client);
+  const locationId =
+    siteId !== null && location && location.status === 'active' && location.site_id === siteId
+      ? location.location_id
+      : null;
+  const item = await getItemBySku(record.sku.trim(), client);
+  const skuKnown = item !== null && item.status === 'active';
+  const unresolved = [
+    ...(siteId === null ? ['site_code_ext'] : []),
+    ...(locationId === null ? ['location_code'] : []),
+    ...(skuKnown ? [] : ['sku']),
+  ];
+
+  await client.query(
+    `INSERT INTO erp_stock_balance (
+       source_system, site_code_ext, site_id, location_code, location_id, sku, lot_number_ext,
+       serial_number_ext, quantity, unit_cost, snapshot_at, last_synced_at, source_snapshot)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10::numeric, $11::timestamptz, now(), $12::jsonb)
+     ON CONFLICT (source_system, site_code_ext, location_code, sku, lot_number_ext, serial_number_ext)
+     DO UPDATE SET site_id = EXCLUDED.site_id, location_id = EXCLUDED.location_id,
+                   quantity = EXCLUDED.quantity, unit_cost = EXCLUDED.unit_cost,
+                   snapshot_at = EXCLUDED.snapshot_at, last_synced_at = now(),
+                   source_snapshot = EXCLUDED.source_snapshot, updated_at = now()`,
+    [
+      record.source_system,
+      record.site_code_ext.trim(),
+      siteId,
+      record.location_code.trim(),
+      locationId,
+      record.sku.trim(),
+      lotExt,
+      serialExt,
+      record.quantity.trim(),
+      unitCost === null ? null : unitCost.trim(),
+      record.snapshot_at,
+      JSON.stringify(record),
+    ],
+  );
+
+  const ref = stockBalanceRef(record, index);
+  if (unresolved.length > 0) {
+    await raiseException(
+      {
+        record_type: 'stock_balance',
+        source_system: record.source_system,
+        source_record_ref: ref,
+        error_code: 'UNKNOWN_REFERENCE',
+        reason: `Snapshot row references unknown ${unresolved.join(', ')}`,
+        details: { source_record: record, unresolved },
+      },
+      client,
+    );
+    return { unmapped: true };
+  }
+  await resolveOpenExceptionsByGrain(
+    { record_type: 'stock_balance', source_record_ref: ref, source_system: record.source_system },
+    client,
+  ).catch(() => undefined);
+  return { unmapped: false };
+}
+
+// ---------------------------------------------------------------------------
 // Sync entry point (in-process; driven by the POST /api/v1/erp/sync trigger)
 // ---------------------------------------------------------------------------
 
@@ -408,12 +585,14 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
   const syncsPo = Object.prototype.hasOwnProperty.call(batch, 'purchase_orders');
   const syncsSo = Object.prototype.hasOwnProperty.call(batch, 'sales_orders');
   const syncsBom = Object.prototype.hasOwnProperty.call(batch, 'boms');
+  const syncsSb = Object.prototype.hasOwnProperty.call(batch, 'stock_balances');
   const result: ErpSyncResult = {};
 
   // Attempt heartbeats stamped on their own statements (before the batch transaction) so they
   // survive a rollback of the batch itself.
   if (syncsPo) await markSyncAttempt('purchase_orders');
   if (syncsSo) await markSyncAttempt('sales_orders');
+  if (syncsSb) await markSyncAttempt('stock_balances');
 
   const pool = getPool();
   const client = await pool.connect();
@@ -431,6 +610,8 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
       await client.query('SELECT pg_advisory_xact_lock($1)', [ADVISORY_LOCK_KEYS.purchase_orders]);
     if (syncsSo)
       await client.query('SELECT pg_advisory_xact_lock($1)', [ADVISORY_LOCK_KEYS.sales_orders]);
+    if (syncsSb)
+      await client.query('SELECT pg_advisory_xact_lock($1)', [ADVISORY_LOCK_KEYS.stock_balances]);
 
     if (syncsPo) {
       const purchaseOrders = batch.purchase_orders ?? [];
@@ -548,6 +729,45 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
       result.boms = { applied: 0, failed: boms.length, rejected };
     }
 
+    if (syncsSb) {
+      // Story 13.1: each snapshot row under its own SAVEPOINT, exactly as PO lines are. A malformed
+      // row is queued as an exception with the validator's code; an unmapped row is stored AND
+      // queued (UNKNOWN_REFERENCE). Snapshots are replaced per grain, never soft-closed.
+      const balances = batch.stock_balances ?? [];
+      let applied = 0;
+      let failed = 0;
+      let unmapped = 0;
+      for (let index = 0; index < balances.length; index++) {
+        const record = balances[index]!;
+        try {
+          const outcome = await withSavepoint(client, `sp_${savepointSeq++}`, () =>
+            applyStockBalance(record, index, client),
+          );
+          applied += 1;
+          if (outcome.unmapped) unmapped += 1;
+        } catch (err) {
+          failed += 1;
+          const sourceSystem =
+            typeof record?.source_system === 'string' &&
+            STOCK_BALANCE_SOURCE_SYSTEMS.has(record.source_system)
+              ? record.source_system
+              : 'ERP';
+          await raiseException(
+            {
+              record_type: 'stock_balance',
+              source_system: sourceSystem,
+              source_record_ref: stockBalanceRef(record ?? {}, index),
+              error_code: errorCodeOf(err),
+              reason: reasonOf(err),
+              details: { source_record: record },
+            },
+            client,
+          ).catch(() => undefined);
+        }
+      }
+      result.stock_balances = { applied, failed, unmapped };
+    }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined);
@@ -555,6 +775,11 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
     // heartbeats and raise a deduped stale alert on fresh statements, then re-throw.
     if (syncsPo) await markSyncFailure('purchase_orders', reasonOf(err)).catch(() => undefined);
     if (syncsSo) await markSyncFailure('sales_orders', reasonOf(err)).catch(() => undefined);
+    if (syncsSb) await markSyncFailure('stock_balances', reasonOf(err)).catch(() => undefined);
+    // Story 13.1: 'stock_balances' is deliberately absent from the ERP_SYNC_STALE loop below - a
+    // balance snapshot is a point-in-time extract taken at the physical-count cut-off, and
+    // snapshot_at on each row is the freshness fact, so the 15-minute staleness alarm never
+    // attaches to this key.
     for (const projection of [
       ...(syncsPo ? ['purchase_orders'] : []),
       ...(syncsSo ? ['sales_orders'] : []),
@@ -602,6 +827,16 @@ export async function runErpSync(batch: ErpSyncBatch): Promise<ErpSyncResult> {
         () => undefined,
       );
     }
+  }
+
+  // Story 13.1 (Task 4.2, the Story 2.9 zero-row-aware rule inverted on purpose): the heartbeat
+  // for 'stock_balances' is stamped on EVERY batch that carried the array, including a zero-row
+  // batch - an empty snapshot is a legitimate statement that a site holds nothing - and there is
+  // no staleness alarm to clear.
+  if (syncsSb) {
+    await markSyncSuccess('stock_balances').catch((err) =>
+      markSyncFailure('stock_balances', reasonOf(err)).catch(() => undefined),
+    );
   }
 
   return result;

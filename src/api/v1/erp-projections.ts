@@ -265,6 +265,17 @@ const erpSyncTriggerBase: RouteHandler = async (req, res) => {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'boms must be an array when supplied');
     return;
   }
+  // Story 13.1: the opening-balance snapshot rides the same trigger and the same role gate.
+  if (body.stock_balances !== undefined && !Array.isArray(body.stock_balances)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'stock_balances must be an array when supplied',
+    );
+    return;
+  }
   const result = await runErpSync(body);
   // Story 5.6 (AC 5): the exception QUEUE is authoritative and already committed above; the event
   // is a DERIVED audit fact written after the batch commits. The adapter keeps its direct-SQL-only

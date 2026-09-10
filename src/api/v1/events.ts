@@ -402,7 +402,14 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   const body = getParsedBody(req);
   validateEnvelope(body);
 
-  if (body.stream_type === 'engineering' || body.stream_type === 'maintenance') {
+  // Story 13.1 (Task 7.3, Binding Decision 10): the 'migration' stream joins the bar. Its only
+  // producers are the REST routes in migration.ts, which parse, validate and site-scope every
+  // row; the refusal runs before any assert can consume an idempotency key.
+  if (
+    body.stream_type === 'engineering' ||
+    body.stream_type === 'maintenance' ||
+    body.stream_type === 'migration'
+  ) {
     sendRequestError(
       req,
       res,

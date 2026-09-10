@@ -127,9 +127,21 @@ export async function getCoverageById(
   forUpdate: boolean = false,
 ): Promise<CoverageRow | null> {
   if (!UUID_REGEX.test(coverageId)) return null;
-  const lockClause = forUpdate ? ' FOR UPDATE' : '';
+  if (forUpdate) {
+    // Story 13.1 baseline fix (2026-09-10): PostgreSQL requires the UPDATE privilege for EVERY
+    // row-level lock clause (FOR UPDATE / FOR SHARE), and app_user deliberately holds none on this
+    // append-only table (Story 7.7 review decision D3). The old `FOR UPDATE` only worked on
+    // databases provisioned before D3 revoked the grant in the DDL file - GRANT is additive and a
+    // migrate re-run never revokes - and failed 500 `permission denied for table asset_coverage`
+    // on every fresh init-db boot. A transaction-scoped advisory lock keyed on the coverage id
+    // serializes concurrent scans exactly as the row lock did, without the privilege.
+    await runner(client).query(
+      `SELECT pg_advisory_xact_lock(hashtext('asset_coverage'), hashtext($1))`,
+      [coverageId],
+    );
+  }
   const result = await runner(client).query(
-    `SELECT ${COVERAGE_COLUMNS} FROM asset_coverage WHERE coverage_id = $1${lockClause}`,
+    `SELECT ${COVERAGE_COLUMNS} FROM asset_coverage WHERE coverage_id = $1`,
     [coverageId],
   );
   return (result.rows[0] as CoverageRow) ?? null;

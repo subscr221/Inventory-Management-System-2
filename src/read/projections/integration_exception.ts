@@ -11,10 +11,18 @@ import { getPool } from '../../config/db.js';
  * duplicates - the Story 2.7/2.8 "one open per grain" pattern.
  */
 
-export type SyncProjectionName = 'purchase_orders' | 'sales_orders';
+// Story 13.1: 'stock_balances' is the third inbound record type (the ERP / legacy opening-balance
+// snapshot). erp_sync_state.projection_name carries no CHECK, so this union is the vocabulary.
+export type SyncProjectionName = 'purchase_orders' | 'sales_orders' | 'stock_balances';
 export type SyncStatus = 'never_synced' | 'success' | 'failed';
 /** Story 5.6 widens the vocabulary with 'bom' (FR-B-17 inbound BOM rejection). */
-export type ExceptionRecordType = 'purchase_order' | 'sales_order' | 'sync_batch' | 'bom';
+export type ExceptionRecordType =
+  | 'purchase_order'
+  | 'sales_order'
+  | 'sync_batch'
+  | 'bom'
+  // Story 13.1: an unresolvable ERP / legacy stock-balance snapshot row.
+  | 'stock_balance';
 export type ExceptionStatus = 'open' | 'resolved';
 
 export interface SyncStateRow {

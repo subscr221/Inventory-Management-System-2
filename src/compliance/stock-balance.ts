@@ -70,7 +70,7 @@ const STOCK_BALANCE_EVENT_KINDS: Record<string, StockBalanceEventKind> = {
  * permanent property of that balance row, which is why the bar below is structural rather than a
  * clearable flag.
  */
-const VALID_STOCK_CLASSES = new Set([
+export const VALID_STOCK_CLASSES = new Set([
   'owned',
   'consignment',
   'vmi',

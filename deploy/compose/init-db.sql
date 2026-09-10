@@ -2096,7 +2096,7 @@ CREATE TABLE IF NOT EXISTS integration_exception (
   raised_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom')),
+  CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom', 'stock_balance')),
   CONSTRAINT chk_integration_exception_status CHECK (status IN ('open', 'resolved'))
 );
 
@@ -2115,7 +2115,10 @@ BEGIN
   END IF;
 END $$;
 
--- Story 5.6 widens the record-type vocabulary with 'bom' (FR-B-17 inbound BOM rejection). The
+-- Story 5.6 widens the record-type vocabulary with 'bom' (FR-B-17 inbound BOM rejection) and
+-- Story 13.1 widens it again with 'stock_balance' (an ERP / legacy opening-balance snapshot row
+-- whose site, location or sku did not resolve - surfaced as unmapped_source_row on the variance
+-- report). The
 -- DROP + ADD pair is kept atomic in a DO block so a database created before Story 5.6 picks the
 -- new value up on re-migrate; uq_integration_exception_open is deliberately untouched - the
 -- one-open-row-per-grain contract carries over to BOM conflicts unchanged.
@@ -2123,7 +2126,7 @@ DO $$
 BEGIN
   ALTER TABLE integration_exception DROP CONSTRAINT IF EXISTS chk_integration_exception_record_type;
   ALTER TABLE integration_exception
-    ADD CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom'));
+    ADD CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom', 'stock_balance'));
 END $$;
 
 DO $$
@@ -10250,7 +10253,7 @@ CREATE TABLE IF NOT EXISTS qc_sampling_switching_state (
   CONSTRAINT pk_qc_sampling_switching_state PRIMARY KEY (plan_id, site_id),
   CONSTRAINT chk_qc_sampling_switching_state_severity CHECK (severity IN ('normal', 'tightened', 'reduced')),
   CONSTRAINT chk_qc_sampling_switching_state_counters CHECK (switching_score >= 0 AND consecutive_accepted_on_tightened >= 0 AND not_accepted_on_tightened >= 0 AND lots_counted >= 0),
-  CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(recent_original_outcomes) e WHERE jsonb_typeof(e) <> 'boolean'))
+  CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND recent_original_outcomes <@ '[true, false]'::jsonb)
 );
 
 DO $$
@@ -10277,7 +10280,7 @@ BEGIN
       AND conrelid = 'qc_sampling_switching_state'::regclass
   ) THEN
     ALTER TABLE qc_sampling_switching_state
-      ADD CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(recent_original_outcomes) e WHERE jsonb_typeof(e) <> 'boolean'));
+      ADD CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND recent_original_outcomes <@ '[true, false]'::jsonb);
   END IF;
 END $$;
 
@@ -13754,3 +13757,616 @@ BEGIN
     GRANT SELECT ON branch_transfer_classification TO readonly_user;
   END IF;
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- Story 13.1: opening-stock migration projections. Mirrors of the canonical files under
+-- read/projections/ (migration_import, migration_import_rejection, migration_opening_stock_row,
+-- erp_stock_balance, migration_variance_explanation, migration_stage) - change both together.
+-- ---------------------------------------------------------------------------
+
+-- Opening-stock migration import header (Story 13.1, FR-DM-01). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks). deploy/compose/init-db.sql duplicates
+-- this content for first-boot container init - change both files together. Every statement is
+-- idempotent (IF NOT EXISTS / guarded DO blocks).
+--
+-- One row per submitted import FILE, written by the `migration.import.completed` applier after the
+-- last row event of the file has been persisted. `load_id` is the stream_id every per-row
+-- `migration.opening_stock.loaded` event of that file rides on; a crash before the completion
+-- event leaves accepted rows queryable by load_id and NO header, which is the AC 6 resume signal.
+-- `idempotency_key` is the caller's key for the whole file: a replay returns this row untouched.
+-- `domain` is pinned to 'opening_stock' here; Story 13.2 adds its own import headers per domain.
+-- `mode` is explicit per file (Binding Decision 5): 'initial' refuses a differing row on a live
+-- grain (DUPLICATE_LOT_SERIAL), 'correction' supersedes it.
+
+CREATE TABLE IF NOT EXISTS migration_import (
+  load_id             UUID PRIMARY KEY,
+  site_id             UUID NOT NULL,
+  domain              TEXT NOT NULL,
+  file_name           TEXT NOT NULL,
+  file_sha256         TEXT NOT NULL,
+  template_version    TEXT NOT NULL,
+  mode                TEXT NOT NULL,
+  row_count           INTEGER,
+  accepted_count      INTEGER,
+  rejected_count      INTEGER,
+  suppressed_count    INTEGER,
+  superseded_count    INTEGER,
+  idempotency_key     TEXT NOT NULL,
+  created_by_actor_id UUID NOT NULL,
+  source_event_id     UUID,
+  source_event_type   TEXT,
+  occurred_at         TIMESTAMPTZ,
+  business_date       DATE,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_migration_import_idempotency_key UNIQUE (idempotency_key),
+  CONSTRAINT chk_migration_import_domain CHECK (domain IN ('opening_stock', 'active_boms', 'open_pos', 'jobwork_challans', 'custody_registers')),
+  CONSTRAINT chk_migration_import_mode CHECK (mode IN ('initial', 'correction'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_migration_import_site ON migration_import (site_id, domain, created_at);
+
+-- Story 13.2: widen the domain vocabulary on databases created by Story 13.1 (DROP-then-ADD).
+DO $$
+BEGIN
+  ALTER TABLE migration_import DROP CONSTRAINT IF EXISTS chk_migration_import_domain;
+  ALTER TABLE migration_import
+    ADD CONSTRAINT chk_migration_import_domain CHECK (domain IN ('opening_stock', 'active_boms', 'open_pos', 'jobwork_challans', 'custody_registers'));
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_import_mode'
+      AND conrelid = 'migration_import'::regclass
+  ) THEN
+    ALTER TABLE migration_import
+      ADD CONSTRAINT chk_migration_import_mode CHECK (mode IN ('initial', 'correction'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON migration_import TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_import TO readonly_user;
+  END IF;
+END $$;
+
+-- Opening-stock migration rejected-row report (Story 13.1, FR-DM-01 AC 4 / AC 5). This file is
+-- the CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks). deploy/compose/
+-- init-db.sql duplicates this content for first-boot container init - change both files together.
+-- Every statement is idempotent (IF NOT EXISTS / guarded DO blocks).
+--
+-- One row per REJECTED import line, written by the `migration.import.completed` applier from the
+-- rejections[] array the event carries. `error_code` is one of MALFORMED_ROW, UNKNOWN_REFERENCE,
+-- DUPLICATE_LOT_SERIAL; `details` carries the code-specific keys (column, reference,
+-- first_line_no, existing_row_id); `raw_row` is the source line verbatim so the migration lead can
+-- find it in the file. Append-only: a re-submitted file mints a new load_id and its own rows.
+
+CREATE TABLE IF NOT EXISTS migration_import_rejection (
+  rejection_id UUID PRIMARY KEY,
+  load_id      UUID NOT NULL,
+  line_no      INTEGER NOT NULL,
+  error_code   TEXT NOT NULL,
+  details      JSONB NOT NULL,
+  raw_row      TEXT NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_migration_import_rejection_error_code CHECK (error_code IN ('MALFORMED_ROW', 'UNKNOWN_REFERENCE', 'DUPLICATE_LOT_SERIAL'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_migration_import_rejection_load ON migration_import_rejection (load_id, line_no);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_import_rejection_error_code'
+      AND conrelid = 'migration_import_rejection'::regclass
+  ) THEN
+    ALTER TABLE migration_import_rejection
+      ADD CONSTRAINT chk_migration_import_rejection_error_code CHECK (error_code IN ('MALFORMED_ROW', 'UNKNOWN_REFERENCE', 'DUPLICATE_LOT_SERIAL'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON migration_import_rejection TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_import_rejection TO readonly_user;
+  END IF;
+END $$;
+
+-- Opening-stock staging rows (Story 13.1, FR-DM-01 AC 1 / AC 5 / AC 6). This file is the
+-- CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks). deploy/compose/
+-- init-db.sql duplicates this content for first-boot container init - change both files together.
+-- Every statement is idempotent (IF NOT EXISTS / guarded DO blocks).
+--
+-- The staging load is its OWN projection, not stock_balance (Binding Decision 2). One row per
+-- accepted import line, written by the `migration.opening_stock.loaded` applier. The live ledger
+-- (stock_balance, lot_master, serial_master, inventory_valuation, lot_trace) is written exactly
+-- once, by the `migration.stage.promoted` applier, which flips every accepted row to 'posted'.
+--
+-- `status` lifecycle: accepted (staging) -> superseded (a correction-mode row replaced it, see
+-- superseded_by_row_id) -> posted (promotion posted it to the ledger). The partial unique index
+-- uq_migration_os_row_live is the last line of defence against two LIVE rows on one physical
+-- grain (site, bin, sku, lot, serial); NULLS NOT DISTINCT so two un-lotted rows on one bin+sku
+-- collide too. `unit_cost` is populated only for stock_class 'owned' (Binding Decision 6); for
+-- every other class the declared cell lands in declared_unit_cost and unit_cost stays NULL.
+-- `pv_ref_ext` / `pv_line_ref_ext` are the physical-verification source references (Binding
+-- Decision 9); `content_hash` is the SHA-256 of the normalised cells and is the row's idempotency
+-- identity (Binding Decision 5).
+
+CREATE TABLE IF NOT EXISTS migration_opening_stock_row (
+  row_id               UUID PRIMARY KEY,
+  load_id              UUID NOT NULL,
+  site_id              UUID NOT NULL,
+  location_id          UUID NOT NULL,
+  location_code        TEXT NOT NULL,
+  sku                  TEXT NOT NULL,
+  lot_number           TEXT,
+  serial_number        TEXT,
+  stock_class          TEXT NOT NULL,
+  quantity             NUMERIC(18, 6) NOT NULL,
+  uom                  TEXT NOT NULL,
+  unit_cost            NUMERIC(18, 6),
+  declared_unit_cost   NUMERIC(18, 6),
+  expiry_date          DATE,
+  counted_on           DATE NOT NULL,
+  pv_ref_ext           TEXT NOT NULL,
+  pv_line_ref_ext      TEXT,
+  line_no              INTEGER NOT NULL,
+  content_hash         TEXT NOT NULL,
+  status               TEXT NOT NULL,
+  superseded_by_row_id UUID,
+  posted_event_id      UUID,
+  source_event_id      UUID NOT NULL,
+  source_event_type    TEXT NOT NULL,
+  occurred_at          TIMESTAMPTZ NOT NULL,
+  business_date        DATE NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_migration_os_row_quantity_positive CHECK (quantity > 0),
+  CONSTRAINT chk_migration_os_row_status CHECK (status IN ('accepted', 'superseded', 'posted'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_migration_os_row_live ON migration_opening_stock_row (site_id, location_id, sku, lot_number, serial_number) NULLS NOT DISTINCT WHERE status IN ('accepted', 'posted');
+CREATE INDEX IF NOT EXISTS idx_migration_os_row_sku ON migration_opening_stock_row (site_id, sku, lot_number);
+CREATE INDEX IF NOT EXISTS idx_migration_os_row_load ON migration_opening_stock_row (load_id, line_no);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_os_row_quantity_positive'
+      AND conrelid = 'migration_opening_stock_row'::regclass
+  ) THEN
+    ALTER TABLE migration_opening_stock_row
+      ADD CONSTRAINT chk_migration_os_row_quantity_positive CHECK (quantity > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_os_row_status'
+      AND conrelid = 'migration_opening_stock_row'::regclass
+  ) THEN
+    ALTER TABLE migration_opening_stock_row
+      ADD CONSTRAINT chk_migration_os_row_status CHECK (status IN ('accepted', 'superseded', 'posted'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON migration_opening_stock_row TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_opening_stock_row TO readonly_user;
+  END IF;
+END $$;
+
+-- ERP / legacy stock-balance snapshot projection (Story 13.1, FR-DM-01 AC 2). This file is the
+-- CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks) so a migrate-provisioned
+-- database can serve reads/writes as app_user without depending on deploy/compose/init-db.sql.
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks).
+--
+-- Reference data ONLY (INT-ERP-01, Binding Decision 1): like erp_purchase_order and unlike every
+-- event-sourced projection, this table is NOT event-sourced. It is populated by the inbound ERP
+-- sync adapter (src/adapters/erp/sync.ts, record type `stock_balances`) via direct SQL upsert; the
+-- ERP or legacy system remains the master of its own balance and nothing on this platform writes
+-- back. The grain is the source's own external identity: (source_system, site_code_ext,
+-- location_code, sku, lot_number_ext, serial_number_ext), NULLS NOT DISTINCT so an un-lotted
+-- source row is one grain, not a new row per sync. A snapshot is replaced per grain, never
+-- soft-closed: it is a point-in-time extract taken at the physical-count cut-off and `snapshot_at`
+-- on each row is the freshness fact (the 15-minute staleness alarm does not attach to this key).
+-- `site_id` / `location_id` are the platform's resolution of the external codes and stay NULL when
+-- the code does not resolve; such a row is ALSO routed to integration_exception (UNKNOWN_REFERENCE)
+-- and surfaces on the variance report as `unmapped_source_row`.
+
+CREATE TABLE IF NOT EXISTS erp_stock_balance (
+  balance_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_system     TEXT NOT NULL,
+  site_code_ext     TEXT NOT NULL,
+  site_id           UUID,
+  location_code     TEXT NOT NULL,
+  location_id       UUID,
+  sku               TEXT NOT NULL,
+  lot_number_ext    TEXT,
+  serial_number_ext TEXT,
+  quantity          NUMERIC(18, 6) NOT NULL,
+  unit_cost         NUMERIC(18, 6),
+  snapshot_at       TIMESTAMPTZ NOT NULL,
+  last_synced_at    TIMESTAMPTZ NOT NULL,
+  source_snapshot   JSONB,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_erp_stock_balance_grain UNIQUE NULLS NOT DISTINCT (source_system, site_code_ext, location_code, sku, lot_number_ext, serial_number_ext),
+  CONSTRAINT chk_erp_stock_balance_source_system CHECK (source_system IN ('ERP', 'LEGACY'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_erp_stock_balance_site ON erp_stock_balance (site_id, source_system, sku);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_erp_stock_balance_source_system'
+      AND conrelid = 'erp_stock_balance'::regclass
+  ) THEN
+    ALTER TABLE erp_stock_balance
+      ADD CONSTRAINT chk_erp_stock_balance_source_system CHECK (source_system IN ('ERP', 'LEGACY'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON erp_stock_balance TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON erp_stock_balance TO readonly_user;
+  END IF;
+END $$;
+
+-- Opening-stock variance explanations (Story 13.1, FR-DM-01 AC 3, SM-48). This file is the
+-- CANONICAL definition, applied by src/events/migrate.ts (npm run db:migrate) and the
+-- integration-test harness. It carries its OWN grants (guarded DO blocks). deploy/compose/
+-- init-db.sql duplicates this content for first-boot container init - change both files together.
+-- Every statement is idempotent (IF NOT EXISTS / guarded DO blocks).
+--
+-- Variances are COMPUTED, never stored (Binding Decision 7); explanations are stored and keyed by
+-- the deterministic variance_key '{source_system}|{location_code}|{sku}|{lot or -}|{serial or -}'
+-- and record the quantity delta they explain. An explanation whose explained_quantity_delta no
+-- longer equals the live delta reports `stale` and the promotion gate blocks again: SM-48 says
+-- unexplained, not once-explained. The approver is resolved server-side from the DOA registry
+-- (transaction type `migration.variance_explanation`) and FROZEN on the row (Binding Decision 8);
+-- approval is a second event by that actor, who must not be the explainer. The partial unique
+-- index allows one APPROVED explanation per variance key; when a later explanation for the same
+-- key is approved the earlier approved row is flipped to 'superseded' in the same transaction
+-- (app_user holds no DELETE), so the history stays readable and the live answer stays unique.
+
+CREATE TABLE IF NOT EXISTS migration_variance_explanation (
+  explanation_id           UUID PRIMARY KEY,
+  site_id                  UUID NOT NULL,
+  variance_key             TEXT NOT NULL,
+  source_system            TEXT NOT NULL,
+  cause_code               TEXT NOT NULL,
+  narrative                TEXT NOT NULL,
+  explained_quantity_delta NUMERIC(18, 6) NOT NULL,
+  explained_value          NUMERIC(18, 2) NOT NULL,
+  explained_by_actor_id    UUID NOT NULL,
+  approver_actor_id        UUID NOT NULL,
+  doa_entry_id             UUID,
+  status                   TEXT NOT NULL,
+  approved_at              TIMESTAMPTZ,
+  approved_event_id        UUID,
+  source_event_id          UUID NOT NULL,
+  occurred_at              TIMESTAMPTZ NOT NULL,
+  business_date            DATE NOT NULL,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_migration_variance_explanation_cause_code CHECK (cause_code IN ('legacy_unrecorded_receipt', 'legacy_unrecorded_issue', 'count_correction', 'unrecorded_scrap', 'lot_merge_or_split', 'uom_conversion', 'other')),
+  CONSTRAINT chk_migration_variance_explanation_status CHECK (status IN ('pending_approval', 'approved', 'superseded'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_migration_variance_explanation_approved ON migration_variance_explanation (site_id, variance_key) WHERE status = 'approved';
+CREATE INDEX IF NOT EXISTS idx_migration_variance_explanation_key ON migration_variance_explanation (site_id, variance_key, status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_variance_explanation_cause_code'
+      AND conrelid = 'migration_variance_explanation'::regclass
+  ) THEN
+    ALTER TABLE migration_variance_explanation
+      ADD CONSTRAINT chk_migration_variance_explanation_cause_code CHECK (cause_code IN ('legacy_unrecorded_receipt', 'legacy_unrecorded_issue', 'count_correction', 'unrecorded_scrap', 'lot_merge_or_split', 'uom_conversion', 'other'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_variance_explanation_status'
+      AND conrelid = 'migration_variance_explanation'::regclass
+  ) THEN
+    ALTER TABLE migration_variance_explanation
+      ADD CONSTRAINT chk_migration_variance_explanation_status CHECK (status IN ('pending_approval', 'approved', 'superseded'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON migration_variance_explanation TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_variance_explanation TO readonly_user;
+  END IF;
+END $$;
+
+-- Per-site, per-domain migration stage (Story 13.1, FR-DM-01 AC 3; consumed by Stories 13.2 and
+-- 13.3). This file is the CANONICAL definition, applied by src/events/migrate.ts (npm run
+-- db:migrate) and the integration-test harness. It carries its OWN grants (guarded DO blocks).
+-- deploy/compose/init-db.sql duplicates this content for first-boot container init - change both
+-- files together. Every statement is idempotent (IF NOT EXISTS / guarded DO blocks).
+--
+-- Promotion is the boundary between "data under review" (staging) and "data the system runs on"
+-- (dry_run). A row is inserted as 'staging' the first time a domain is promoted or locked and
+-- moves to 'dry_run' by the `migration.stage.promoted` applier, which also posts the domain's
+-- accepted rows to the live ledger in the same transaction. No row means 'staging' (the read
+-- route defaults it). `domain` is deliberately NOT constrained to 'opening_stock': Story 13.2 adds
+-- active_boms, open_pos, jobwork_challans and custody_registers, and Story 13.3 reads all of them
+-- for the go-live gate. Reverse promotion is unsupported (Open Question 5): a site promoted in
+-- error is a restore of the disposable staging environment.
+
+CREATE TABLE IF NOT EXISTS migration_stage (
+  site_id              UUID NOT NULL,
+  domain               TEXT NOT NULL,
+  stage                TEXT NOT NULL,
+  promoted_at          TIMESTAMPTZ,
+  promoted_event_id    UUID,
+  promoted_by_actor_id UUID,
+  posted_row_count     INTEGER,
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT pk_migration_stage PRIMARY KEY (site_id, domain),
+  CONSTRAINT chk_migration_stage_stage CHECK (stage IN ('staging', 'dry_run'))
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_stage_stage'
+      AND conrelid = 'migration_stage'::regclass
+  ) THEN
+    ALTER TABLE migration_stage
+      ADD CONSTRAINT chk_migration_stage_stage CHECK (stage IN ('staging', 'dry_run'));
+  END IF;
+END $$;
+
+-- Story 13.2 (FR-DM-02): document-domain verification state. `stage` keeps its 13.1 meaning and
+-- document domains never promote (they stay 'staging'); verification is derived, not flagged:
+-- a domain is `verified` iff verified_run_id = latest_run_id AND that run's load_id =
+-- latest_load_id (src/read/projections/migration_domain_verification.ts, the ONE derivation
+-- Story 13.3 imports). A new manifest load or a new run after sign-off makes it `unverified`.
+ALTER TABLE migration_stage ADD COLUMN IF NOT EXISTS latest_load_id UUID;
+ALTER TABLE migration_stage ADD COLUMN IF NOT EXISTS latest_run_id UUID;
+ALTER TABLE migration_stage ADD COLUMN IF NOT EXISTS verified_run_id UUID;
+ALTER TABLE migration_stage ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+ALTER TABLE migration_stage ADD COLUMN IF NOT EXISTS verified_event_id UUID;
+ALTER TABLE migration_stage ADD COLUMN IF NOT EXISTS verified_by_actor_id UUID;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON migration_stage TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_stage TO readonly_user;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Story 13.2: document-domain verification (mirrors of read/projections/
+-- migration_document_manifest_row.sql, migration_domain_verification.sql,
+-- migration_domain_verification_finding.sql) - change both together.
+-- ---------------------------------------------------------------------------
+
+-- Document-domain migration manifest rows (Story 13.2, FR-DM-02). This file is the CANONICAL
+-- definition, applied by src/events/migrate.ts (npm run db:migrate) and the integration-test
+-- harness. It carries its OWN grants (guarded DO blocks). deploy/compose/init-db.sql duplicates
+-- this content for first-boot container init - change both files together. Every statement is
+-- idempotent (IF NOT EXISTS / guarded DO blocks).
+--
+-- A manifest is the SOURCE side of a domain verification: the legacy extract listing what the
+-- module epic's migration path should have produced (legacy-kit BOMs, ERP open-PO lines, job-work
+-- challans, custody balances). One file is one `migration.document_manifest.loaded` event whose
+-- applier inserts every accepted row here (Binding Decision 3: no per-row events - nothing keys on
+-- a manifest row). A manifest is immutable once loaded and is REPLACED by a later load (the stage
+-- row's latest_load_id moves); earlier loads stay queryable by load_id. `document_ref_ext` and
+-- `line_ref` are the per-domain match keys (Table 2 of the story); `attributes` carries the typed
+-- template cells the verification SQL compares. app_user has no UPDATE and no DELETE.
+
+CREATE TABLE IF NOT EXISTS migration_document_manifest_row (
+  row_id           UUID PRIMARY KEY,
+  load_id          UUID NOT NULL,
+  site_id          UUID NOT NULL,
+  domain           TEXT NOT NULL,
+  line_no          INTEGER NOT NULL,
+  document_ref_ext TEXT NOT NULL,
+  line_ref         TEXT NOT NULL,
+  sku              TEXT,
+  quantity         NUMERIC(18,6),
+  attributes       JSONB NOT NULL,
+  content_hash     TEXT NOT NULL,
+  source_event_id  UUID NOT NULL,
+  occurred_at      TIMESTAMPTZ NOT NULL,
+  business_date    DATE NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_migration_document_manifest_row_key UNIQUE (load_id, document_ref_ext, line_ref),
+  CONSTRAINT chk_migration_document_manifest_row_domain CHECK (domain IN ('active_boms', 'open_pos', 'jobwork_challans', 'custody_registers'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_migration_document_manifest_row_load ON migration_document_manifest_row (site_id, domain, load_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_document_manifest_row_domain'
+      AND conrelid = 'migration_document_manifest_row'::regclass
+  ) THEN
+    ALTER TABLE migration_document_manifest_row
+      ADD CONSTRAINT chk_migration_document_manifest_row_domain CHECK (domain IN ('active_boms', 'open_pos', 'jobwork_challans', 'custody_registers'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON migration_document_manifest_row TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_document_manifest_row TO readonly_user;
+  END IF;
+END $$;
+
+-- Domain verification run header (Story 13.2, FR-DM-02). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks). deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent
+-- (IF NOT EXISTS / guarded DO blocks).
+--
+-- One row per `migration.domain.verification_run` event: the manifest it compared (load_id), the
+-- reconciliation counts the department head reviews (source records vs migrated records), and a
+-- SHA-256 over the sorted findings so the event is the durable record of exactly what was signed
+-- off. Findings live in migration_domain_verification_finding. The applier trusts the payload it
+-- was given (Binding Decision 4); a re-run is a new event and a new row. UPDATE is granted for
+-- waived_count, stamped by the `migration.domain.verified` applier.
+
+CREATE TABLE IF NOT EXISTS migration_domain_verification (
+  run_id            UUID PRIMARY KEY,
+  site_id           UUID NOT NULL,
+  domain            TEXT NOT NULL,
+  load_id           UUID NOT NULL,
+  source_count      INTEGER NOT NULL,
+  migrated_count    INTEGER NOT NULL,
+  quarantined_count INTEGER NOT NULL,
+  mismatch_count    INTEGER NOT NULL,
+  waived_count      INTEGER NOT NULL DEFAULT 0,
+  run_by_actor_id   UUID NOT NULL,
+  findings_sha256   TEXT NOT NULL,
+  source_event_id   UUID NOT NULL,
+  occurred_at       TIMESTAMPTZ NOT NULL,
+  business_date     DATE NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_migration_domain_verification_domain CHECK (domain IN ('active_boms', 'open_pos', 'jobwork_challans', 'custody_registers'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_migration_domain_verification_site ON migration_domain_verification (site_id, domain, created_at DESC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_domain_verification_domain'
+      AND conrelid = 'migration_domain_verification'::regclass
+  ) THEN
+    ALTER TABLE migration_domain_verification
+      ADD CONSTRAINT chk_migration_domain_verification_domain CHECK (domain IN ('active_boms', 'open_pos', 'jobwork_challans', 'custody_registers'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON migration_domain_verification TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_domain_verification TO readonly_user;
+  END IF;
+END $$;
+
+-- Domain verification findings (Story 13.2, FR-DM-02). This file is the CANONICAL definition,
+-- applied by src/events/migrate.ts (npm run db:migrate) and the integration-test harness. It
+-- carries its OWN grants (guarded DO blocks). deploy/compose/init-db.sql duplicates this content
+-- for first-boot container init - change both files together. Every statement is idempotent
+-- (IF NOT EXISTS / guarded DO blocks).
+--
+-- One row per finding of one run. `kind` 'unknown_reference' (error_code UNKNOWN_REFERENCE) is a
+-- QUARANTINE: the platform document's item, location or source-document reference does not
+-- resolve, it does not count as migrated, and it can never be waived (Binding Decision 5). The
+-- other four kinds carry RECONCILIATION_MISMATCH and may be waived by the department head with a
+-- narrative at sign-off; the `migration.domain.verified` applier flips them to 'waived'. UPDATE is
+-- granted for exactly that flip. `platform_ref` is the platform row's id (bom_id, po line key,
+-- receipt_id, service_order_id) as text; `source_value` / `platform_value` are NUMERIC strings or
+-- text, never JS floats.
+
+CREATE TABLE IF NOT EXISTS migration_domain_verification_finding (
+  finding_id        UUID PRIMARY KEY,
+  run_id            UUID NOT NULL,
+  site_id           UUID NOT NULL,
+  domain            TEXT NOT NULL,
+  kind              TEXT NOT NULL,
+  error_code        TEXT NOT NULL,
+  document_ref_ext  TEXT NOT NULL,
+  line_ref          TEXT NOT NULL,
+  platform_ref      TEXT,
+  field             TEXT,
+  source_value      TEXT,
+  platform_value    TEXT,
+  details           JSONB NOT NULL,
+  status            TEXT NOT NULL,
+  waiver_narrative  TEXT,
+  waived_event_id   UUID,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_migration_domain_verification_finding_kind CHECK (kind IN ('unknown_reference', 'missing_in_platform', 'missing_in_source', 'field_mismatch', 'state_mismatch')),
+  CONSTRAINT chk_migration_domain_verification_finding_error_code CHECK (error_code IN ('UNKNOWN_REFERENCE', 'RECONCILIATION_MISMATCH')),
+  CONSTRAINT chk_migration_domain_verification_finding_status CHECK (status IN ('open', 'waived'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_migration_domain_verification_finding_key ON migration_domain_verification_finding (run_id, kind, document_ref_ext, line_ref, field) NULLS NOT DISTINCT;
+CREATE INDEX IF NOT EXISTS idx_migration_domain_verification_finding_run ON migration_domain_verification_finding (run_id, status);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_domain_verification_finding_kind'
+      AND conrelid = 'migration_domain_verification_finding'::regclass
+  ) THEN
+    ALTER TABLE migration_domain_verification_finding
+      ADD CONSTRAINT chk_migration_domain_verification_finding_kind CHECK (kind IN ('unknown_reference', 'missing_in_platform', 'missing_in_source', 'field_mismatch', 'state_mismatch'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_domain_verification_finding_error_code'
+      AND conrelid = 'migration_domain_verification_finding'::regclass
+  ) THEN
+    ALTER TABLE migration_domain_verification_finding
+      ADD CONSTRAINT chk_migration_domain_verification_finding_error_code CHECK (error_code IN ('UNKNOWN_REFERENCE', 'RECONCILIATION_MISMATCH'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_domain_verification_finding_status'
+      AND conrelid = 'migration_domain_verification_finding'::regclass
+  ) THEN
+    ALTER TABLE migration_domain_verification_finding
+      ADD CONSTRAINT chk_migration_domain_verification_finding_status CHECK (status IN ('open', 'waived'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT, UPDATE ON migration_domain_verification_finding TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_domain_verification_finding TO readonly_user;
+  END IF;
+END $$;
+

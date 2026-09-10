@@ -288,6 +288,27 @@ const MIGRATIONS = [
   // branch_transfer_valuation_config configuration a later edit can move under an in-flight
   // transfer. Tail-appended after the four 11.5 files; no earlier file changes position.
   '../../read/projections/branch_transfer_classification.sql',
+  // Story 13.1: opening-stock migration (tail-append, six new projections). The import header,
+  // its rejected-row report and the staging rows are event-sourced from the new central-only
+  // 'migration' stream; erp_stock_balance is an adapter-owned direct-upsert snapshot like
+  // erp_purchase_order; the variance explanation is the keyed, DOA-approved record the promotion
+  // gate reads; migration_stage is domain-parameterised for Stories 13.2 and 13.3. FK-shaped
+  // site / location / load ids, no declared FK (house convention). No earlier file is edited by
+  // this story; the erp_sync_state key vocabulary is a TypeScript union, not a CHECK.
+  '../../read/projections/migration_import.sql',
+  '../../read/projections/migration_import_rejection.sql',
+  '../../read/projections/migration_opening_stock_row.sql',
+  '../../read/projections/erp_stock_balance.sql',
+  '../../read/projections/migration_variance_explanation.sql',
+  '../../read/projections/migration_stage.sql',
+  // Story 13.2: document-domain verification (tail-append, three new projections). The manifest
+  // row is the SOURCE side of a verification (immutable, replaced by a later load); the run header
+  // and its findings are the report the department head signs off. migration_import.sql (domain
+  // CHECK widened, DROP-then-ADD) and migration_stage.sql (six ADD COLUMN IF NOT EXISTS) are edited
+  // in place; both are idempotent and neither changes position.
+  '../../read/projections/migration_document_manifest_row.sql',
+  '../../read/projections/migration_domain_verification.sql',
+  '../../read/projections/migration_domain_verification_finding.sql',
 ];
 
 async function migrate(): Promise<void> {

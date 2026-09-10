@@ -376,6 +376,20 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
   assertPlanningPayloadWriteLocation(authContext, body);
 
+  // Story 13.1 (Task 7.3): the 'migration' stream never travels the edge. Staging loads,
+  // variance explanations and promotion are central migration-project acts produced only by the
+  // REST routes in migration.ts, so the refusal is explicit here - the events door bars the same
+  // stream - using the code this door already uses for central-only work, before any identity or
+  // version work and before any assert can consume an idempotency key.
+  if (body.stream_type === 'migration' || body.event_type.startsWith('migration.')) {
+    throw new AppError(
+      403,
+      'CENTRAL_ONLY_OPERATION',
+      'Migration events must be recorded centrally through the migration routes, not from an edge device',
+      { stream_type: body.stream_type, event_type: body.event_type },
+    );
+  }
+
   // Story 7.8 (Binding Decision 10): an explicit event-type allowlist for the maintenance stream.
   // Return-to-service and every other central-only maintenance operation reject 403
   // CENTRAL_ONLY_OPERATION here, before any identity or version work.

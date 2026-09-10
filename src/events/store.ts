@@ -36,6 +36,10 @@ import {
 } from '../compliance/transfer-request.js';
 import { assertCycleCountShape, applyCycleCountProjection } from '../compliance/cycle-count.js';
 import {
+  assertMigrationEventShape,
+  applyMigrationProjection,
+} from '../compliance/migration-opening-stock.js';
+import {
   assertInventoryPlanningShape,
   applyInventoryPlanningProjection,
 } from '../compliance/inventory-planning.js';
@@ -549,6 +553,11 @@ export async function persistEvent(
   // any other assert can give it a different, misleading rejection (or, for a non-inventory
   // stream, let it through to be silently ignored by every applier).
   assertQualityForeignStreamRejected(envelope);
+  // Story 13.1: the same rule for the 'migration' stream, and the migration shape assert itself -
+  // non-DB, so a malformed migration event never consumes an idempotency key. It runs FIRST so a
+  // `migration.*` name on a foreign stream (or a foreign name on the 'migration' stream) is refused
+  // INVALID_EVENT_STREAM before the tagging assert can answer UNTAGGED_TRANSACTION for it.
+  assertMigrationEventShape(envelope);
   await assertInventoryTagging(envelope);
   await assertCalibrationLockout(envelope);
   // Story 7.6 (FR-M-14, AC 2): the weighbridge trade-weighment lockout runs with the other
@@ -1250,6 +1259,12 @@ export async function persistEvent(
     // computed match result before the domain_events insert below, so the stored event carries
     // findings this process derived rather than anything the caller asserted.
     await applyThreeWayMatchProjection(envelope, client, eventId);
+    // Story 13.1: the opening-stock migration appliers (staging row, import header and rejected-row
+    // report, variance explanation and its approval, and the staging-to-dry-run promotion that
+    // posts the live ledger) run inside this same transaction, tail-appended so nothing above is
+    // reordered. The promotion gate and the approval identity checks live in the applier and
+    // self-audit their refusals through auditCtx.
+    await applyMigrationProjection(envelope, client, eventId, auditCtx);
 
     let nextVersion: number;
 

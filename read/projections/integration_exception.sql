@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS integration_exception (
   raised_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom')),
+  CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom', 'stock_balance')),
   CONSTRAINT chk_integration_exception_status CHECK (status IN ('open', 'resolved'))
 );
 
@@ -55,7 +55,10 @@ BEGIN
   END IF;
 END $$;
 
--- Story 5.6 widens the record-type vocabulary with 'bom' (FR-B-17 inbound BOM rejection). The
+-- Story 5.6 widens the record-type vocabulary with 'bom' (FR-B-17 inbound BOM rejection) and
+-- Story 13.1 widens it again with 'stock_balance' (an ERP / legacy opening-balance snapshot row
+-- whose site, location or sku did not resolve - surfaced as unmapped_source_row on the variance
+-- report). The
 -- DROP + ADD pair is kept atomic in a DO block so a database created before Story 5.6 picks the
 -- new value up on re-migrate; uq_integration_exception_open is deliberately untouched - the
 -- one-open-row-per-grain contract carries over to BOM conflicts unchanged.
@@ -63,7 +66,7 @@ DO $$
 BEGIN
   ALTER TABLE integration_exception DROP CONSTRAINT IF EXISTS chk_integration_exception_record_type;
   ALTER TABLE integration_exception
-    ADD CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom'));
+    ADD CONSTRAINT chk_integration_exception_record_type CHECK (record_type IN ('purchase_order', 'sales_order', 'sync_batch', 'bom', 'stock_balance'));
 END $$;
 
 DO $$

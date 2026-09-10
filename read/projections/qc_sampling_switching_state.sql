@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS qc_sampling_switching_state (
   CONSTRAINT pk_qc_sampling_switching_state PRIMARY KEY (plan_id, site_id),
   CONSTRAINT chk_qc_sampling_switching_state_severity CHECK (severity IN ('normal', 'tightened', 'reduced')),
   CONSTRAINT chk_qc_sampling_switching_state_counters CHECK (switching_score >= 0 AND consecutive_accepted_on_tightened >= 0 AND not_accepted_on_tightened >= 0 AND lots_counted >= 0),
-  CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(recent_original_outcomes) e WHERE jsonb_typeof(e) <> 'boolean'))
+  CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND recent_original_outcomes <@ '[true, false]'::jsonb)
 );
 
 DO $$
@@ -64,7 +64,7 @@ BEGIN
       AND conrelid = 'qc_sampling_switching_state'::regclass
   ) THEN
     ALTER TABLE qc_sampling_switching_state
-      ADD CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(recent_original_outcomes) e WHERE jsonb_typeof(e) <> 'boolean'));
+      ADD CONSTRAINT chk_qc_sampling_switching_state_window CHECK (jsonb_typeof(recent_original_outcomes) = 'array' AND jsonb_array_length(recent_original_outcomes) <= 5 AND recent_original_outcomes <@ '[true, false]'::jsonb);
   END IF;
 END $$;
 

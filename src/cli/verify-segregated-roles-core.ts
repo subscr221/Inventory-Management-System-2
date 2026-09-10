@@ -58,6 +58,17 @@ export const SEGREGATED_ROLE_PAIRS: readonly SegregatedRolePair[] = [
     reason:
       'the finance controller sets the offcut acquisition rate and the CFO co-signs it, so nobody both prices a customer offcut and approves paying for it',
   },
+  // Story 13.1 (SM-48, SOD-07): the migration lead explains an opening-stock variance and the
+  // finance controller approves the explanation. The request-time twin is EXPLAINER_CANNOT_APPROVE
+  // in the migration.variance.explanation_approved applier; this pair checks the same separation
+  // at provisioning time, before a single variance exists.
+  {
+    transactionType: 'migration.variance_explanation',
+    setterRole: 'migration_lead',
+    approverRole: 'finance_controller',
+    reason:
+      'the migration lead explains an opening-balance variance and the finance controller signs the explanation, so nobody both writes off a variance in their own load and approves the write-off',
+  },
 ];
 
 export type SegregationViolationCode =
