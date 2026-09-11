@@ -2123,7 +2123,7 @@ const EXPECTED = [
     canonical: 'read/projections/migration_document_manifest_row.sql',
     table: 'migration_document_manifest_row',
     constraints: ['chk_migration_document_manifest_row_domain'],
-    indexes: ['idx_migration_document_manifest_row_load'],
+    indexes: ['idx_migration_document_manifest_row_load', 'uq_migration_document_manifest_row_key'],
     appUserGrant: 'INSERT, SELECT',
   },
   {
@@ -2149,6 +2149,13 @@ const EXPECTED = [
       'CREATE UNIQUE INDEX IF NOT EXISTS uq_migration_domain_verification_finding_key ON migration_domain_verification_finding (run_id, kind, document_ref_ext, line_ref, field) NULLS NOT DISTINCT;',
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/migration_domain_platform_exclusion.sql',
+    table: 'migration_domain_platform_exclusion',
+    constraints: ['chk_migration_domain_platform_exclusion_domain'],
+    indexes: ['uq_migration_domain_platform_exclusion_key'],
+    appUserGrant: 'INSERT, SELECT',
   },
 ];
 

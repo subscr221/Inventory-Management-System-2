@@ -5,12 +5,20 @@ import { logRejectionAudit, type AuditEntryPayload } from '../read/projections/a
 import type {
   MigrationDocumentManifestLoadedPayload,
   MigrationDomainFinding,
+  MigrationDomainPlatformExclusionRegisteredPayload,
   MigrationDomainVerificationRunPayload,
   MigrationDomainVerifiedPayload,
   MigrationFindingWaiver,
 } from '../events/schema.js';
-import { isDocumentDomain, MIGRATION_DOCUMENT_DOMAINS } from '../migration/document-templates.js';
+import {
+  isDocumentDomain,
+  MIGRATION_DOCUMENT_DOMAINS,
+  MIGRATION_FINDING_KINDS,
+} from '../migration/document-templates.js';
 import { lockMigrationStage } from './migration-opening-stock.js';
+
+/** Open Question 1 default: only these two enterprise-wide domains need a site-scoping prefix. */
+export const PREFIX_SCOPED_DOMAINS = new Set(['active_boms', 'open_pos']);
 
 /**
  * Story 13.2 (FR-DM-02): write-path rules for the document-domain verification events.
@@ -30,6 +38,7 @@ export const MIGRATION_DOCUMENT_EVENT_TYPES = [
   'migration.document_manifest.loaded',
   'migration.domain.verification_run',
   'migration.domain.verified',
+  'migration.domain.platform_exclusion_registered',
 ] as const;
 
 export const MIGRATION_DOCUMENT_ERROR_CODES = {
@@ -43,13 +52,7 @@ export const MIGRATION_DOCUMENT_ERROR_CODES = {
 export const MAX_EVENT_ARRAY_ENTRIES = 10_000;
 export const MAX_WAIVER_NARRATIVE_CHARS = 2_000;
 
-const FINDING_KINDS = new Set([
-  'unknown_reference',
-  'missing_in_platform',
-  'missing_in_source',
-  'field_mismatch',
-  'state_mismatch',
-]);
+const FINDING_KINDS = new Set<string>(MIGRATION_FINDING_KINDS);
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NUMERIC_REGEX = /^\d{1,12}(\.\d{1,6})?$/;
 const SHA256_REGEX = /^[0-9a-f]{64}$/;
@@ -133,11 +136,26 @@ export function assertMigrationDocumentEventShape(envelope: EventEnvelope): void
       'quarantined_count',
       'mismatch_count',
     ] as const) {
-      if (!Number.isInteger(q[c]) || (q[c] as number) < 0)
-        throw shapeError(type, `${c} must be a non-negative integer`);
+      if (
+        !Number.isInteger(q[c]) ||
+        (q[c] as number) < 0 ||
+        (q[c] as number) > MAX_EVENT_ARRAY_ENTRIES
+      ) {
+        throw shapeError(type, `${c} must be an integer from 0 to ${MAX_EVENT_ARRAY_ENTRIES}`);
+      }
     }
     if (!SHA256_REGEX.test(String(q.findings_sha256)))
       throw shapeError(type, 'findings_sha256 must be a SHA-256 hex');
+    // NOTE: migrated_count + quarantined_count is NOT bounded by source_count - a platform-only
+    // orphan (never in any manifest) can add its own quarantine on top of the manifest's own
+    // documents (active_boms/open_pos "missing_in_source" sweep, jobwork/custody orphan sweep).
+    const prefixRequired = PREFIX_SCOPED_DOMAINS.has(p['domain'] as string);
+    if (prefixRequired && !isNonEmptyString(q.document_ref_prefix)) {
+      throw shapeError(type, 'document_ref_prefix is required for this domain');
+    }
+    if (!prefixRequired && q.document_ref_prefix !== null && q.document_ref_prefix !== undefined) {
+      throw shapeError(type, 'document_ref_prefix does not apply to this domain');
+    }
     if (!Array.isArray(q.findings) || q.findings.length > MAX_EVENT_ARRAY_ENTRIES) {
       throw shapeError(type, `findings must carry at most ${MAX_EVENT_ARRAY_ENTRIES} entries`);
     }
@@ -163,6 +181,9 @@ export function assertMigrationDocumentEventShape(envelope: EventEnvelope): void
     if (!isUuid(q.run_id)) throw shapeError(type, 'run_id must be a UUID');
     if (!isUuid(q.signed_off_by_actor_id))
       throw shapeError(type, 'signed_off_by_actor_id must be a UUID');
+    if (q.signed_off_by_actor_id!.toLowerCase() !== envelope.metadata.actor.user_id.toLowerCase()) {
+      throw shapeError(type, 'signed_off_by_actor_id must equal the envelope actor');
+    }
     if (!isNonEmptyString(q.signed_off_role)) throw shapeError(type, 'signed_off_role is required');
     if (!Array.isArray(q.waivers) || q.waivers.length > MAX_EVENT_ARRAY_ENTRIES) {
       throw shapeError(type, `waivers must carry at most ${MAX_EVENT_ARRAY_ENTRIES} entries`);
@@ -180,6 +201,17 @@ export function assertMigrationDocumentEventShape(envelope: EventEnvelope): void
       const id = w.finding_id.toLowerCase();
       if (seen.has(id)) throw shapeError(type, 'duplicate waiver finding_id', { finding_id: id });
       seen.add(id);
+    }
+    return;
+  }
+
+  if (type === 'migration.domain.platform_exclusion_registered') {
+    const q = p as Partial<MigrationDomainPlatformExclusionRegisteredPayload>;
+    if (!isDocumentDomain(q.domain)) throw domainUnsupportedError(q.domain);
+    if (!isUuid(q.exclusion_id)) throw shapeError(type, 'exclusion_id must be a UUID');
+    if (!isNonEmptyString(q.platform_ref)) throw shapeError(type, 'platform_ref is required');
+    if (!isNonEmptyString(q.reason) || q.reason.length > MAX_WAIVER_NARRATIVE_CHARS) {
+      throw shapeError(type, `reason must be 1 to ${MAX_WAIVER_NARRATIVE_CHARS} characters`);
     }
   }
 }
@@ -221,9 +253,38 @@ export async function applyMigrationDocumentProjection(
     case 'migration.domain.verified':
       await applyDomainVerified(envelope, client, eventId, auditCtx);
       return;
+    case 'migration.domain.platform_exclusion_registered':
+      await applyPlatformExclusionRegistered(envelope, client, eventId);
+      return;
     default:
       return;
   }
+}
+
+async function applyPlatformExclusionRegistered(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  const p = envelope.payload as unknown as MigrationDomainPlatformExclusionRegisteredPayload;
+  await client.query(
+    `INSERT INTO migration_domain_platform_exclusion
+       (exclusion_id, site_id, domain, platform_ref, reason, created_by_actor_id, source_event_id,
+        occurred_at, business_date)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9::date)
+     ON CONFLICT (site_id, domain, platform_ref) DO NOTHING`,
+    [
+      p.exclusion_id,
+      p.site_id,
+      p.domain,
+      p.platform_ref,
+      p.reason,
+      envelope.metadata.actor.user_id,
+      eventId,
+      envelope.metadata.occurred_at,
+      p.business_date,
+    ],
+  );
 }
 
 async function applyManifestLoaded(
@@ -294,9 +355,9 @@ async function applyVerificationRun(
   await client.query(
     `INSERT INTO migration_domain_verification
        (run_id, site_id, domain, load_id, source_count, migrated_count, quarantined_count,
-        mismatch_count, waived_count, run_by_actor_id, findings_sha256, source_event_id,
-        occurred_at, business_date)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12::timestamptz, $13::date)`,
+        mismatch_count, waived_count, run_by_actor_id, findings_sha256, document_ref_prefix,
+        source_event_id, occurred_at, business_date)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, $12, $13::timestamptz, $14::date)`,
     [
       p.run_id,
       p.site_id,
@@ -308,6 +369,7 @@ async function applyVerificationRun(
       p.mismatch_count,
       envelope.metadata.actor.user_id,
       p.findings_sha256,
+      p.document_ref_prefix,
       eventId,
       envelope.metadata.occurred_at,
       p.business_date,
@@ -359,8 +421,10 @@ interface RunRow {
   quarantined_count: number;
   run_by_actor_id: string;
   loader_actor_id: string | null;
+  loader_load_id: string | null;
   latest_load_id: string | null;
   latest_run_id: string | null;
+  verified_run_id: string | null;
 }
 
 interface OpenFinding {
@@ -386,7 +450,8 @@ export async function assertDomainSignoffAllowed(
 ): Promise<AppError | null> {
   const r = await client.query(
     `SELECT v.run_id, v.site_id, v.domain, v.load_id, v.quarantined_count, v.run_by_actor_id,
-            i.created_by_actor_id AS loader_actor_id, s.latest_load_id, s.latest_run_id
+            i.created_by_actor_id AS loader_actor_id, i.load_id AS loader_load_id,
+            s.latest_load_id, s.latest_run_id, s.verified_run_id
        FROM migration_domain_verification v
        LEFT JOIN migration_import i ON i.load_id = v.load_id
        LEFT JOIN migration_stage s ON s.site_id = v.site_id AND s.domain = v.domain
@@ -419,6 +484,24 @@ export async function assertDomainSignoffAllowed(
       },
     );
   }
+  if (run.verified_run_id === run.run_id) {
+    return new AppError(
+      409,
+      MIGRATION_DOCUMENT_ERROR_CODES.VERIFICATION_STALE,
+      'This run has already been signed off; a second certification is refused',
+      { run_id: runId, reason: 'already_verified' },
+    );
+  }
+  // Fail closed: without the loader's identity SOD-07 cannot be proven, so refuse rather than
+  // silently skip the loader-conflict check (the review's "fails open" finding).
+  if (run.loader_load_id === null) {
+    return new AppError(
+      500,
+      'INVALID_STATE',
+      "No manifest import header exists for this run's load; cannot verify SOD-07",
+      { run_id: runId, load_id: run.load_id },
+    );
+  }
   const signer = signerActorId.toLowerCase();
   if (signer === run.run_by_actor_id.toLowerCase()) {
     return new AppError(
@@ -445,33 +528,9 @@ export async function assertDomainSignoffAllowed(
   );
   const open = f.rows as OpenFinding[];
   const byId = new Map(open.map((x) => [x.finding_id.toLowerCase(), x]));
-  const waived = new Set<string>();
-  for (const w of waivers) {
-    const id = w.finding_id.toLowerCase();
-    const target = byId.get(id);
-    if (!target) {
-      return new AppError(
-        400,
-        'INVALID_PARAMS',
-        'A waiver names a finding that is not open on this run',
-        {
-          finding_id: w.finding_id,
-          run_id: runId,
-        },
-      );
-    }
-    if (target.kind === 'unknown_reference') {
-      return new AppError(
-        400,
-        'INVALID_PARAMS',
-        'A quarantined (UNKNOWN_REFERENCE) finding cannot be waived',
-        {
-          finding_id: w.finding_id,
-        },
-      );
-    }
-    waived.add(id);
-  }
+  // Quarantine is checked BEFORE waivers are validated: a body that tries to waive a quarantined
+  // finding must still see VERIFICATION_UNRESOLVED with the quarantine list (Task 8.3), not a 400
+  // about the waiver itself.
   const quarantined = open.filter((x) => x.kind === 'unknown_reference');
   if (quarantined.length > 0) {
     return new AppError(
@@ -488,6 +547,23 @@ export async function assertDomainSignoffAllowed(
         })),
       },
     );
+  }
+  const waived = new Set<string>();
+  for (const w of waivers) {
+    const id = w.finding_id.toLowerCase();
+    const target = byId.get(id);
+    if (!target) {
+      return new AppError(
+        400,
+        'INVALID_PARAMS',
+        'A waiver names a finding that is not open on this run',
+        {
+          finding_id: w.finding_id,
+          run_id: runId,
+        },
+      );
+    }
+    waived.add(id);
   }
   const unwaived = open.filter((x) => !waived.has(x.finding_id.toLowerCase()));
   if (unwaived.length > 0) {
@@ -517,13 +593,17 @@ async function applyDomainVerified(
   auditCtx: AuditCtx | undefined,
 ): Promise<void> {
   const p = envelope.payload as unknown as MigrationDomainVerifiedPayload;
+  // The envelope's authenticated actor is the trusted signer identity, never the payload's own
+  // claim of who signed (the review's "applier trusts the payload" finding): a payload is
+  // attacker-shaped data even though this route always sets it from the same actor.
+  const signerActorId = envelope.metadata.actor.user_id;
   await lockMigrationStage(p.site_id, p.domain, client);
   const refusal = await assertDomainSignoffAllowed(
     p.site_id,
     p.domain,
     p.run_id,
     p.waivers,
-    p.signed_off_by_actor_id,
+    signerActorId,
     client,
   );
   if (refusal) await refuse(refusal, auditCtx, null);
@@ -544,13 +624,6 @@ async function applyDomainVerified(
         SET verified_run_id = $3, verified_at = $4::timestamptz, verified_event_id = $5,
             verified_by_actor_id = $6, updated_at = now()
       WHERE site_id = $1 AND domain = $2`,
-    [
-      p.site_id,
-      p.domain,
-      p.run_id,
-      envelope.metadata.occurred_at,
-      eventId,
-      p.signed_off_by_actor_id,
-    ],
+    [p.site_id, p.domain, p.run_id, envelope.metadata.occurred_at, eventId, signerActorId],
   );
 }

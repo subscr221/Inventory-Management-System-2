@@ -1010,7 +1010,10 @@ describe('Story 13.2 Active Document Migration verification and sign-off', () =>
     assert.strictEqual(missingInSource.length, 1);
     assert.strictEqual(missingInSource[0]!['document_ref_ext'], PO2);
     assert.strictEqual(res.body['mismatch_count'], 7);
-    assert.strictEqual(res.body['migrated_count'], 1);
+    // "Migrated" means matched to a platform document and not quarantined (Story 13.2 review
+    // round): the mismatched-but-not-quarantined line still counts, only the missing_in_platform
+    // line (line 3) is excluded.
+    assert.strictEqual(res.body['migrated_count'], 2);
     assert.strictEqual(res.body['source_count'], 3);
   });
 
@@ -1024,7 +1027,10 @@ describe('Story 13.2 Active Document Migration verification and sign-off', () =>
       const res = await runVerification('open_pos');
       assert.strictEqual(res.status, 201, res.text);
       assert.strictEqual(res.body['quarantined_count'], 1);
-      assert.strictEqual(res.body['migrated_count'], 0);
+      // Line 1's own mismatches (from the prior AC 3 test) are matched and not quarantined, so
+      // under the "matched and not quarantined" rule only the quarantined line 2 and the
+      // missing_in_platform line 3 are excluded.
+      assert.strictEqual(res.body['migrated_count'], 1);
       const findings = await findingsOf(
         'open_pos',
         res.body['run_id'] as string,
@@ -1041,8 +1047,11 @@ describe('Story 13.2 Active Document Migration verification and sign-off', () =>
         procHeadHeaders,
         all.map((f) => ({ finding_id: f['finding_id'] as string, narrative: 'waive' })),
       );
-      assert.strictEqual(attempt.status, 400, attempt.text);
-      assert.strictEqual(attempt.body['error_code'], 'INVALID_PARAMS');
+      // Task 8.3: quarantine is checked before waivers are validated, so a body that tries to
+      // waive the quarantined finding still sees VERIFICATION_UNRESOLVED with the quarantine list.
+      assert.strictEqual(attempt.status, 409, attempt.text);
+      assert.strictEqual(attempt.body['error_code'], 'VERIFICATION_UNRESOLVED');
+      assert.strictEqual((detailsOf(attempt.body)['quarantined'] as unknown[]).length, 1);
       const withoutQuarantine = await signOff(
         'open_pos',
         res.body['run_id'] as string,
@@ -1094,6 +1103,65 @@ describe('Story 13.2 Active Document Migration verification and sign-off', () =>
       assert.strictEqual(findings[0]!['document_ref_ext'], `${CH1}-ORPHAN`);
       assert.strictEqual(detailsOf(findings[0]!)['reference'], 'service_order_id');
       assert.strictEqual(findings[0]!['platform_ref'], orphanId);
+    } finally {
+      await getAdminPool().query(`DELETE FROM jobwork_return_clock WHERE receipt_id = $1`, [
+        orphanId,
+      ]);
+      await getAdminPool().query(`DELETE FROM jobwork_material_receipt WHERE receipt_id = $1`, [
+        orphanId,
+      ]);
+    }
+  });
+
+  it('review round: registering a platform exclusion downgrades an unfixable platform-only orphan to a waivable mismatch', async () => {
+    const orphanId = await seedReceipt({
+      serviceOrderId: randomUUID(),
+      challan: `${CH1}-ORPHAN2`,
+      sku: JWI,
+      qty: 3,
+    });
+    try {
+      const first = await runVerification('jobwork_challans');
+      assert.strictEqual(first.status, 201, first.text);
+      assert.strictEqual(first.body['quarantined_count'], 1);
+      const before = await findingsOf('jobwork_challans', first.body['run_id'] as string);
+      const orphanFinding = before.find((f) => f['platform_ref'] === orphanId)!;
+      assert.strictEqual(orphanFinding['kind'], 'unknown_reference');
+
+      const excluded = await makeRequest(
+        port,
+        'POST',
+        '/api/v1/migration/domains/jobwork_challans/platform-exclusions',
+        {
+          site_id: siteAId,
+          platform_ref: orphanId,
+          reason: 'Pre-existing legacy receipt, no source-side fix possible',
+          idempotency_key: `13-2-exclude-${randomUUID()}`,
+        },
+        leadHeaders,
+      );
+      assert.strictEqual(excluded.status, 201, excluded.text);
+
+      const second = await runVerification('jobwork_challans');
+      assert.strictEqual(second.status, 201, second.text);
+      assert.strictEqual(second.body['quarantined_count'], 0);
+      const after = await findingsOf('jobwork_challans', second.body['run_id'] as string);
+      const downgraded = after.find((f) => f['platform_ref'] === orphanId)!;
+      assert.strictEqual(downgraded['kind'], 'state_mismatch');
+      assert.strictEqual(downgraded['error_code'], 'RECONCILIATION_MISMATCH');
+      assert.strictEqual(detailsOf(downgraded)['excluded_platform_ref'], true);
+
+      // The gate no longer treats this document as quarantined - the domain is signable again
+      // once every other open finding is waived, without deleting or editing the platform row.
+      const refusalWithoutWaiver = await signOff(
+        'jobwork_challans',
+        second.body['run_id'] as string,
+        jwHeadHeaders,
+        [],
+      );
+      assert.strictEqual(refusalWithoutWaiver.status, 409, refusalWithoutWaiver.text);
+      assert.strictEqual(refusalWithoutWaiver.body['error_code'], 'VERIFICATION_UNRESOLVED');
+      assert.ok(!('quarantined' in detailsOf(refusalWithoutWaiver.body)));
     } finally {
       await getAdminPool().query(`DELETE FROM jobwork_return_clock WHERE receipt_id = $1`, [
         orphanId,
@@ -1477,7 +1545,8 @@ describe('Story 13.2 Active Document Migration verification and sign-off', () =>
       assert.strictEqual(findings[0]!['field'], 'return_clock');
       assert.strictEqual(detailsOf(findings[0]!)['reason'], 'no_return_clock');
       assert.strictEqual(res.body['quarantined_count'], 0);
-      assert.strictEqual(res.body['migrated_count'], 2);
+      // state_mismatch is not quarantine: all 3 manifest challans count as migrated.
+      assert.strictEqual(res.body['migrated_count'], 3);
     } finally {
       await getAdminPool().query(`DELETE FROM jobwork_material_receipt WHERE receipt_id = $1`, [
         noClock,

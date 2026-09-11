@@ -143,7 +143,12 @@ async function loadManifest(loadId: string, client: Queryable): Promise<Manifest
 }
 
 function prefixClause(column: string, prefix: string | null | undefined, param: number): string {
-  return prefix ? ` AND ${column} LIKE $${param} || '%'` : '';
+  return prefix ? ` AND ${column} LIKE $${param} || '%' ESCAPE '\\'` : '';
+}
+
+/** Escapes LIKE metacharacters so a prefix containing `%` or `_` matches only literally. */
+function likeEscape(prefix: string): string {
+  return prefix.replace(/[\\%_]/g, '\\$&');
 }
 
 // ---------------------------------------------------------------------------
@@ -184,9 +189,11 @@ async function computeActiveBoms(
     [kitRefs],
   );
   const bomByKit = new Map<string, Record<string, unknown>>();
+  const duplicateBomKits = new Set<string>();
   for (const b of boms.rows as Record<string, unknown>[]) {
     const ref = b['kit_ref'] as string;
-    if (!bomByKit.has(ref)) bomByKit.set(ref, b);
+    if (bomByKit.has(ref)) duplicateBomKits.add(ref);
+    else bomByKit.set(ref, b);
   }
   const linesByBom = new Map<string, Record<string, unknown>[]>();
   for (const l of lines.rows as Record<string, unknown>[]) {
@@ -207,6 +214,14 @@ async function computeActiveBoms(
     }
     const bomId = bom['bom_id'] as string;
     const withRef = { ...base, platform_ref: bomId };
+    if (duplicateBomKits.has(kitRef)) {
+      sink.add({
+        ...withRef,
+        kind: 'field_mismatch',
+        field: 'kit_ref',
+        details: { reason: 'duplicate_platform_document' },
+      });
+    }
     if (bom['parent_item_status'] !== 'active') {
       sink.add({
         ...withRef,
@@ -243,15 +258,26 @@ async function computeActiveBoms(
     const parentSku = rows[0]?.attributes['parent_sku'] ?? null;
     sink.compare(withRef, 'parent_sku', parentSku, bom['parent_sku'] as string, false);
     const byComponent = new Map<string, Record<string, unknown>>();
+    const duplicateComponents = new Set<string>();
     for (const l of platformLines) {
       const sku = l['component_sku'] as string | null;
-      if (sku && !byComponent.has(sku)) byComponent.set(sku, l);
+      if (!sku) continue;
+      if (byComponent.has(sku)) duplicateComponents.add(sku);
+      else byComponent.set(sku, l);
     }
     const manifestSkus = new Set<string>();
     for (const row of rows) {
       const sku = row.line_ref;
       manifestSkus.add(sku);
       const lineBase = { document_ref_ext: kitRef, line_ref: sku, platform_ref: bomId };
+      if (duplicateComponents.has(sku)) {
+        sink.add({
+          ...lineBase,
+          kind: 'field_mismatch',
+          field: 'component_sku',
+          details: { reason: 'duplicate_platform_component' },
+        });
+      }
       const l = byComponent.get(sku);
       if (!l) {
         sink.add({
@@ -299,7 +325,7 @@ async function computeActiveBoms(
       WHERE origin = 'legacy_kit' AND kit_ref IS NOT NULL AND kit_ref <> ALL($1::text[])
       ${prefixClause('kit_ref', opts.document_ref_prefix, 2)}
       ORDER BY created_at`,
-    opts.document_ref_prefix ? [kitRefs, opts.document_ref_prefix] : [kitRefs],
+    opts.document_ref_prefix ? [kitRefs, likeEscape(opts.document_ref_prefix)] : [kitRefs],
   );
   for (const b of extra.rows as Record<string, unknown>[]) {
     sink.add({
@@ -403,7 +429,7 @@ async function computeOpenPos(
                  AND m.line_ref = l.line_no::text)
       ${prefixClause('l.po_number_ext', opts.document_ref_prefix, 2)}
       ORDER BY l.po_number_ext, l.line_no`,
-    opts.document_ref_prefix ? [loadId, opts.document_ref_prefix] : [loadId],
+    opts.document_ref_prefix ? [loadId, likeEscape(opts.document_ref_prefix)] : [loadId],
   );
   for (const l of extra.rows as Record<string, unknown>[]) {
     const ref = l['po_number_ext'] as string;
@@ -465,6 +491,7 @@ async function computeJobworkChallans(
     [siteId],
   );
   const byKey = new Map<string, ReceiptRow>();
+  const duplicateKeys = new Set<string>();
   const orphans: ReceiptRow[] = [];
   for (const row of receipts.rows as ReceiptRow[]) {
     if (row.order_number_ext === null) {
@@ -472,7 +499,8 @@ async function computeJobworkChallans(
       continue;
     }
     const key = [row.challan_number_ext, row.order_number_ext, row.sku].join(LINE_REF_SEPARATOR);
-    if (!byKey.has(key)) byKey.set(key, row);
+    if (byKey.has(key)) duplicateKeys.add(key);
+    else byKey.set(key, row);
   }
   const referentialFindings = (row: ReceiptRow, base: FindingInput): void => {
     if (row.item_status !== 'active') {
@@ -511,6 +539,14 @@ async function computeJobworkChallans(
     }
     matched.add(row.receipt_id);
     const withRef = { ...base, platform_ref: row.receipt_id };
+    if (duplicateKeys.has(key)) {
+      sink.add({
+        ...withRef,
+        kind: 'field_mismatch',
+        field: 'challan_number_ext',
+        details: { reason: 'duplicate_platform_document' },
+      });
+    }
     referentialFindings(row, withRef);
     sink.compare(withRef, 'challan_date', m.attributes['challan_date'], row.challan_date, false);
     sink.compare(withRef, 'challan_qty', m.attributes['challan_qty'], row.challan_qty, true);
@@ -571,11 +607,12 @@ async function computeCustodyRegisters(
   const manifest = await loadManifest(loadId, client);
   const balances = await client.query(
     `SELECT so.service_order_id, so.order_number_ext, so.customer_party_code, e.sku,
-            sum(e.quantity_delta)::text AS balance, min(e.uom) AS uom,
+            sum(e.quantity_delta)::text AS balance,
+            array_agg(DISTINCT e.uom) AS uoms,
             bool_or(im.status IS DISTINCT FROM 'active') AS item_bad,
             bool_or(e.location_id IS NOT NULL AND lr.location_id IS NULL) AS location_bad
        FROM custody_ledger_entry e
-       JOIN service_order so ON so.service_order_id = e.service_order_id
+       JOIN service_order so ON so.service_order_id = e.service_order_id AND so.site_id = e.site_id
        LEFT JOIN item_master im ON im.sku = e.sku
        LEFT JOIN location_register lr ON lr.location_id = e.location_id
       WHERE e.site_id = $1 AND e.ownership = 'customer'
@@ -608,7 +645,19 @@ async function computeCustodyRegisters(
     if (b['location_bad'] === true) {
       sink.add({ ...base, kind: 'unknown_reference', details: { reference: 'location_id' } });
     }
+    const uoms = b['uoms'] as string[];
+    if (uoms.length > 1) {
+      sink.add({
+        ...base,
+        kind: 'state_mismatch',
+        field: 'uom',
+        source_value: null,
+        platform_value: uoms.join(','),
+        details: { reason: 'mixed_uom_in_ledger', platform_uoms: uoms },
+      });
+    }
   };
+  const uomOf = (b: Record<string, unknown>): string => (b['uoms'] as string[])[0]!;
   for (const m of manifest) {
     const key = `${m.document_ref_ext}${LINE_REF_SEPARATOR}${m.line_ref}`;
     documents.set(key, m.line_ref);
@@ -626,7 +675,7 @@ async function computeCustodyRegisters(
     const withRef = { ...base, platform_ref: b['service_order_id'] as string };
     referential(b, withRef);
     sink.compare(withRef, 'custody_qty', m.attributes['custody_qty'], b['balance'] as string, true);
-    sink.compare(withRef, 'uom', m.attributes['uom'], b['uom'] as string, false);
+    sink.compare(withRef, 'uom', m.attributes['uom'], uomOf(b), false);
     sink.compare(
       withRef,
       'customer_party_code',
@@ -659,6 +708,19 @@ async function computeCustodyRegisters(
   return { source_count: manifest.length, documents };
 }
 
+/** The operational fix route (Story 13.2 review round): platform rows excluded from quarantine. */
+async function getExcludedPlatformRefs(
+  siteId: string,
+  domain: string,
+  client: Queryable,
+): Promise<Set<string>> {
+  const r = await client.query(
+    `SELECT platform_ref FROM migration_domain_platform_exclusion WHERE site_id = $1 AND domain = $2`,
+    [siteId, domain],
+  );
+  return new Set((r.rows as { platform_ref: string }[]).map((row) => row.platform_ref));
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher and shared post-processor
 // ---------------------------------------------------------------------------
@@ -688,19 +750,37 @@ export async function computeDomainFindings(
     default:
       throw new Error(`Unsupported migration document domain: ${String(domain)}`);
   }
-  const findings = sink.findings;
+  const excluded = await getExcludedPlatformRefs(siteId, domain, client);
+  const findings = sink.findings.map((f) => {
+    if (f.kind !== 'unknown_reference' || !f.platform_ref || !excluded.has(f.platform_ref)) {
+      return f;
+    }
+    // The operational fix route: a registered exclusion downgrades an otherwise-unwaivable
+    // platform-only orphan to a waivable mismatch, so the domain can still be signed off.
+    return {
+      ...f,
+      kind: 'state_mismatch' as const,
+      error_code: 'RECONCILIATION_MISMATCH' as const,
+      details: { ...f.details, excluded_platform_ref: true },
+    };
+  });
   const quarantined = new Set<string>();
-  const touched = new Set<string>();
+  const missingInPlatform = new Set<string>();
   for (const f of findings) {
     const docKey =
       domain === 'active_boms'
         ? f.document_ref_ext
         : `${f.document_ref_ext}${LINE_REF_SEPARATOR}${f.line_ref}`;
-    touched.add(docKey);
     if (f.kind === 'unknown_reference') quarantined.add(docKey);
+    if (f.kind === 'missing_in_platform') missingInPlatform.add(docKey);
   }
+  // "Migrated" means matched to a platform document and not quarantined (AC 2); a waivable
+  // mismatch still counts once its documents also cleared missing_in_platform and quarantine.
   let migrated = 0;
-  for (const key of result.documents.keys()) if (!touched.has(key)) migrated += 1;
+  for (const key of result.documents.keys()) {
+    if (quarantined.has(key) || missingInPlatform.has(key)) continue;
+    migrated += 1;
+  }
   return {
     source_count: result.source_count,
     migrated_count: migrated,

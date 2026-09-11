@@ -107,13 +107,27 @@ export const DOCUMENT_TEMPLATES: Readonly<
 };
 
 /** The line_ref separator for domains whose line identity is composite. */
-export const LINE_REF_SEPARATOR = '|';
+// Unit separator (0x1F), not a printable character a sku/order_number_ext could ever contain -
+// a literal '|' collided two distinct composite keys whenever either half held one (Story 13.2
+// review round 2).
+export const LINE_REF_SEPARATOR = '\x1F';
 
 export const CHALLAN_CLASSES = new Set(['input', 'capital_goods']);
 
 const NUMERIC_REGEX = /^\d{1,12}(\.\d{1,6})?$/;
+/** Custody balances can go negative (processor holds more than the customer's own record shows). */
+const SIGNED_NUMERIC_REGEX = /^-?\d{1,12}(\.\d{1,6})?$/;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const POSITIVE_INT_REGEX = /^[1-9]\d{0,8}$/;
+
+/** The one finding-kind vocabulary; shared by the shape assert and the report's kind filter. */
+export const MIGRATION_FINDING_KINDS = [
+  'unknown_reference',
+  'missing_in_platform',
+  'missing_in_source',
+  'field_mismatch',
+  'state_mismatch',
+] as const;
 
 export function assertDocumentTemplateHeader(
   domain: DocumentDomain,
@@ -190,11 +204,13 @@ function requireNonEmpty(row: Record<string, string>, columns: string[]): Manife
 function requireNumeric(
   row: Record<string, string>,
   column: string,
-  opts: { positive?: boolean; optional?: boolean } = {},
+  opts: { positive?: boolean; optional?: boolean; signed?: boolean } = {},
 ): ManifestRowResult | null {
   const v = row[column] ?? '';
   if (!v) return opts.optional ? null : bad(column, 'empty');
-  if (!NUMERIC_REGEX.test(v)) return bad(column, 'not_numeric');
+  if (!(opts.signed ? SIGNED_NUMERIC_REGEX : NUMERIC_REGEX).test(v)) {
+    return bad(column, 'not_numeric');
+  }
   if (opts.positive && Number(v) <= 0) return bad(column, 'not_positive_numeric');
   return null;
 }
@@ -317,7 +333,7 @@ export function toManifestRow(domain: DocumentDomain, cells: readonly string[]):
         'uom',
       ]);
       if (missing) return missing;
-      const q = requireNumeric(row, 'custody_qty');
+      const q = requireNumeric(row, 'custody_qty', { signed: true });
       if (q) return q;
       return {
         ok: true,

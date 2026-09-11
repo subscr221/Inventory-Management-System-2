@@ -5298,6 +5298,14 @@ export interface MigrationDomainVerificationRunPayload {
   mismatch_count: number;
   findings: MigrationDomainFinding[];
   findings_sha256: string;
+  /**
+   * Mandatory for the two enterprise-wide domains (`active_boms`, `open_pos`): `bom` and
+   * `erp_purchase_order` carry no site column, so this prefix scopes the `missing_in_source`
+   * platform sweep to this site's document-reference namespace (Open Question 1). Must be null
+   * for the two site-scoped domains (`jobwork_challans`, `custody_registers`), where it would do
+   * nothing.
+   */
+  document_ref_prefix: string | null;
   business_date: string;
 }
 
@@ -5325,6 +5333,29 @@ export interface MigrationDomainVerifiedPayload {
 export interface MigrationDomainVerifiedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'migration.domain.verified';
   payload: MigrationDomainVerifiedPayload;
+}
+
+/**
+ * Story 13.2 review round: the operational fix route for a platform-only referential problem (a
+ * row that was never in any manifest, so the department head has no source-side lever to fix and
+ * re-run). Registering an exclusion downgrades a matching UNKNOWN_REFERENCE finding to a waivable
+ * state_mismatch on every later run; it never deletes or edits the underlying platform row.
+ */
+export interface MigrationDomainPlatformExclusionRegisteredPayload {
+  site_id: string;
+  domain: MigrationDocumentDomain;
+  exclusion_id: string;
+  platform_ref: string;
+  reason: string;
+  business_date: string;
+}
+
+export interface MigrationDomainPlatformExclusionRegisteredEnvelope extends Omit<
+  EventEnvelope,
+  'payload'
+> {
+  event_type: 'migration.domain.platform_exclusion_registered';
+  payload: MigrationDomainPlatformExclusionRegisteredPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -6386,6 +6417,10 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'migration.domain.verified': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  'migration.domain.platform_exclusion_registered': {
     streamType: 'migration',
     requiresBusinessStream: false,
   },

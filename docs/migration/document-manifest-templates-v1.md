@@ -57,7 +57,8 @@ Rules per template:
 3. `jobwork_challans`: one row per challan line. `challan_date` is ISO `YYYY-MM-DD` and is the
    date the statutory return clock runs from; `challan_class` is `input` or `capital_goods`.
 4. `custody_registers`: one row per order and sku. `custody_qty` is the customer-owned balance
-   the platform must hold (receipts less consumption, returns, losses and offcuts).
+   the platform must hold (receipts less consumption, returns, losses and offcuts) and may be
+   negative.
 
 ## 3. Row Outcomes
 
@@ -89,13 +90,26 @@ run is refused with `MANIFEST_REQUIRED`. Table 4 lists the finding kinds.
 | `field_mismatch` | `RECONCILIATION_MISMATCH` | A compared field differs; `field`, `source_value` and `platform_value` name it. | Yes |
 | `state_mismatch` | `RECONCILIATION_MISMATCH` | A BOM that is not released or is flagged for remediation, or a challan without its return clock at the legacy date. | Yes |
 
-`migrated_count` counts manifest documents that matched with no finding of any kind. `bom` and
-the ERP purchase-order projection carry no site, so `missing_in_source` for `active_boms` and
-`open_pos` is enterprise-wide unless the run body names a `document_ref_prefix`; a pilot site with
-one legacy system needs none.
+`migrated_count` counts manifest documents that matched a platform document and are not
+quarantined; a document with only a waivable mismatch still counts. `bom` and the ERP
+purchase-order projection carry no site, so `missing_in_source` for `active_boms` and `open_pos`
+would otherwise be enterprise-wide: for these two domains the run body must name a
+`document_ref_prefix` (rejected with `INVALID_PARAMS` if missing), which scopes the platform sweep
+to this site's document-reference namespace. `jobwork_challans` and `custody_registers` are already
+site-scoped and refuse a `document_ref_prefix` with `INVALID_PARAMS` if one is sent.
 
 The report is read from `GET /api/v1/migration/domains/:domain/verification-runs/:run_id`, paged
 and filterable by `kind` and `status`.
+
+### Platform-Only Exclusions
+
+A platform document that was never in any manifest (a pre-existing job-work receipt with a
+deactivated item, for example) can still trigger `unknown_reference`, and because it is not part of
+the manifest the department head has no source-side lever to fix it and re-run. `POST
+/api/v1/migration/domains/:domain/platform-exclusions` with `site_id`, `platform_ref`, `reason` and
+an `idempotency_key` (migration write role) registers such a row's exclusion. Every later
+verification run downgrades the matching finding from `unknown_reference` to a waivable
+`state_mismatch`; the underlying platform row is never edited or deleted.
 
 ## 5. Department-Head Sign-Off
 
@@ -115,10 +129,13 @@ Sign-off rules, enforced in the route and again inside the event applier:
 
 1. Only the latest run of the latest manifest can be signed (`VERIFICATION_STALE`).
 2. A run with any quarantined document cannot be signed (`VERIFICATION_UNRESOLVED` with
-   `details.quarantined`); the reference is fixed at source and the domain re-run.
-3. Every other open finding must be waived in the body with a narrative of at most 2,000
+   `details.quarantined`), even if the body's `waivers` name that finding; the reference is fixed
+   at source and the domain re-run, or, for a platform-only orphan with no source-side fix, its
+   exclusion is registered (section 4) before the re-run.
+3. A run that is already signed off cannot be signed again (`VERIFICATION_STALE`).
+4. Every other open finding must be waived in the body with a narrative of at most 2,000
    characters (`VERIFICATION_UNRESOLVED` with `details.unwaived`).
-4. The signer must not be the actor who ran the verification nor the actor who loaded the
+5. The signer must not be the actor who ran the verification nor the actor who loaded the
    manifest (`SIGNOFF_ACTOR_CONFLICT`, SOD-07); `migration_lead` is never a signing role, and the
    provisioning check `npm run verify:roles` refuses one person holding both hats.
 

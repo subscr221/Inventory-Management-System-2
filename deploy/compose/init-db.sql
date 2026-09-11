@@ -14269,6 +14269,8 @@ CREATE TABLE IF NOT EXISTS migration_domain_verification (
 
 CREATE INDEX IF NOT EXISTS idx_migration_domain_verification_site ON migration_domain_verification (site_id, domain, created_at DESC);
 
+ALTER TABLE migration_domain_verification ADD COLUMN IF NOT EXISTS document_ref_prefix TEXT;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -14367,6 +14369,44 @@ BEGIN
   END IF;
   IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
     GRANT SELECT ON migration_domain_verification_finding TO readonly_user;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS migration_domain_platform_exclusion (
+  exclusion_id      UUID PRIMARY KEY,
+  site_id           UUID NOT NULL,
+  domain            TEXT NOT NULL,
+  platform_ref      TEXT NOT NULL,
+  reason            TEXT NOT NULL,
+  created_by_actor_id UUID NOT NULL,
+  source_event_id   UUID NOT NULL,
+  occurred_at       TIMESTAMPTZ NOT NULL,
+  business_date     DATE NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_migration_domain_platform_exclusion_domain CHECK (domain IN ('active_boms', 'open_pos', 'jobwork_challans', 'custody_registers'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_migration_domain_platform_exclusion_key ON migration_domain_platform_exclusion (site_id, domain, platform_ref);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_domain_platform_exclusion_domain'
+      AND conrelid = 'migration_domain_platform_exclusion'::regclass
+  ) THEN
+    ALTER TABLE migration_domain_platform_exclusion
+      ADD CONSTRAINT chk_migration_domain_platform_exclusion_domain CHECK (domain IN ('active_boms', 'open_pos', 'jobwork_challans', 'custody_registers'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON migration_domain_platform_exclusion TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_domain_platform_exclusion TO readonly_user;
   END IF;
 END $$;
 

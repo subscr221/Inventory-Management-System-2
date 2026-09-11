@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS migration_domain_verification (
 
 CREATE INDEX IF NOT EXISTS idx_migration_domain_verification_site ON migration_domain_verification (site_id, domain, created_at DESC);
 
+-- Story 13.2 review round: persisted so a later reader can see what scoped an enterprise-wide
+-- run (active_boms, open_pos); NULL for the two site-scoped domains.
+ALTER TABLE migration_domain_verification ADD COLUMN IF NOT EXISTS document_ref_prefix TEXT;
+
 DO $$
 BEGIN
   IF NOT EXISTS (

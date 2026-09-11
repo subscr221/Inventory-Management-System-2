@@ -1184,7 +1184,7 @@ development_status:
   # --- Epic 13: Data Migration Sign-Off Gate  [PILOT] ---
   epic-13: in-progress
   13-1-opening-stock-migration-and-verification: done   # PILOT  # code review 2026-09-10 (Blind Hunter + Edge Case Hunter + Acceptance Auditor, parallel over baseline 7e0f88c working tree; all three returned findings; Acceptance Auditor: no spec violations): 6 patches applied (content hash/grain key/serial key collision — empty-string join replaced by unit separator; ERP stock balance negative quantity rejected; promotion applier superseded-row grain check added; promotion applier item_master.status re-check added), 3 deferred (import stage check race — noisy failure mode; variance key pipe ambiguity — master-data validation mitigates; ERP snapshot_at future dates — trusted boundary), 11 dismissed; story-13-1 22/22, full suite 2151/2151
-  13-2-active-document-migration-boms-pos-challans-custody-registers: in-progress   # PILOT
+  13-2-active-document-migration-boms-pos-challans-custody-registers: done   # PILOT  # code review 2026-09-10 round addressed 2026-09-11: 3 Decision items resolved, 17/19 Patch items fixed (1 verified already-correct, 1 deferred - lot/GRN test coverage). Round 2 (2026-09-11) re-review of that round's own diff: 4/5 Patch items fixed (composite-key separator corrected to \x1F, platform-exclusion domain validated in shape assert, idempotency-replay ordering fixed, schema-drift appUserGrant pin restored), 1 reclassified to Defer (platform-exclusion re-registration no-op - DO UPDATE reverted, breaks documented no-UPDATE/no-DELETE design and app_user grant); story-13-2 21/21, full suite 2177/2177
   13-3-go-live-reconciliation-sign-off-gate: backlog   # PILOT
   epic-13-retrospective: optional
 

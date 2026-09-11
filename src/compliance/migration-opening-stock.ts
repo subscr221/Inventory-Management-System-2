@@ -25,6 +25,7 @@ import {
   applyMigrationDocumentProjection,
   assertMigrationDocumentEventShape,
 } from './migration-documents.js';
+import { MIGRATION_DOMAINS } from '../migration/document-templates.js';
 
 /**
  * Story 13.1 (FR-DM-01): write-path rules for the opening-stock migration stream.
@@ -59,15 +60,10 @@ export const MIGRATION_EVENT_TYPES = new Set([
   'migration.document_manifest.loaded',
   'migration.domain.verification_run',
   'migration.domain.verified',
+  'migration.domain.platform_exclusion_registered',
 ]);
 
-export const MIGRATION_DOMAINS_WITH_IMPORT_HEADER = new Set([
-  'opening_stock',
-  'active_boms',
-  'open_pos',
-  'jobwork_challans',
-  'custody_registers',
-]);
+export const MIGRATION_DOMAINS_WITH_IMPORT_HEADER = new Set<string>(MIGRATION_DOMAINS);
 
 export const MIGRATION_ERROR_CODES = {
   STAGE_LOCKED: 'STAGE_LOCKED',
@@ -362,6 +358,7 @@ export async function applyMigrationProjection(
     case 'migration.document_manifest.loaded':
     case 'migration.domain.verification_run':
     case 'migration.domain.verified':
+    case 'migration.domain.platform_exclusion_registered':
       // Story 13.2: document-domain verification appliers live beside their shape assert.
       await applyMigrationDocumentProjection(envelope, client, eventId, auditCtx);
       return;

@@ -508,6 +508,7 @@ import {
   getDomainVerificationRunHandler,
   postDomainSignoffHandler,
   listMigrationDomainsHandler,
+  postPlatformExclusionHandler,
 } from './api/v1/migration.js';
 import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
@@ -617,6 +618,11 @@ export function createAppRouter(): Router {
     getDomainVerificationRunHandler,
   );
   router.post('/api/v1/migration/domains/:domain/sign-off', postDomainSignoffHandler);
+  // Story 13.2 review round: the operational fix route for an unwaivable platform-only orphan.
+  router.post(
+    '/api/v1/migration/domains/:domain/platform-exclusions',
+    postPlatformExclusionHandler,
+  );
   // Story 11.5 code review E2-P (b): a wrong GSTIN or cost-plus percentage is otherwise
   // permanent - the gist EXCLUDE constraints refuse an overlapping correction and app_user
   // holds no DELETE grant - so each dated configuration has a route that CLOSES its window.

@@ -309,6 +309,8 @@ const MIGRATIONS = [
   '../../read/projections/migration_document_manifest_row.sql',
   '../../read/projections/migration_domain_verification.sql',
   '../../read/projections/migration_domain_verification_finding.sql',
+  // Story 13.2 review round: the operational fix route for an unwaivable platform-only orphan.
+  '../../read/projections/migration_domain_platform_exclusion.sql',
 ];
 
 async function migrate(): Promise<void> {

@@ -53,6 +53,7 @@ import {
 } from '../../read/projections/migration_variance.js';
 import type {
   MigrationDocumentManifestLoadedPayload,
+  MigrationDomainPlatformExclusionRegisteredPayload,
   MigrationDomainVerificationRunPayload,
   MigrationDomainVerifiedPayload,
   MigrationFindingWaiver,
@@ -64,6 +65,7 @@ import {
   DOMAIN_MODULE,
   DOMAIN_SIGNOFF_ROLES,
   MIGRATION_DOMAINS,
+  MIGRATION_FINDING_KINDS,
   assertDocumentTemplateHeader,
   isDocumentDomain,
   toManifestRow,
@@ -71,6 +73,7 @@ import {
 } from '../../migration/document-templates.js';
 import {
   MAX_WAIVER_NARRATIVE_CHARS,
+  PREFIX_SCOPED_DOMAINS,
   assertDomainSignoffAllowed,
   domainUnsupportedError,
   manifestRequiredError,
@@ -810,7 +813,9 @@ const listMigrationStagesBase: RouteHandler = async (req, res) => {
     [siteId],
   );
   const stored = r.rows as Record<string, unknown>[];
-  // Story 13.2 (Task 6.3): a default 'staging' row for every domain, in the fixed domain order.
+  // Story 13.2 (Task 6.3): a default 'staging' row for every known domain, in the fixed domain
+  // order, PLUS any stored row for a domain outside that set (never silently dropped).
+  const known = new Set<string>(MIGRATION_DOMAINS);
   const stages = MIGRATION_DOMAINS.map(
     (domain) =>
       stored.find((s) => s['domain'] === domain) ?? {
@@ -824,6 +829,7 @@ const listMigrationStagesBase: RouteHandler = async (req, res) => {
         updated_at: null,
       },
   );
+  for (const s of stored) if (!known.has(s['domain'] as string)) stages.push(s);
   sendJson(res, 200, { site_id: siteId, stages });
 };
 
@@ -1243,9 +1249,10 @@ const postDocumentManifestImportBase: RouteHandler = async (req, res) => {
     throw new AppError(400, 'INVALID_PARAMS', 'csv must be a non-empty string', { field: 'csv' });
   }
 
-  const replay = await loadImportHeader('idempotency_key = $1 AND site_id = $2', [
+  const replay = await loadImportHeader('idempotency_key = $1 AND site_id = $2 AND domain = $3', [
     idempotencyKey,
     siteId,
+    domain,
   ]);
   if (replay) {
     sendJson(res, 200, {
@@ -1408,9 +1415,14 @@ const postDocumentManifestImportBase: RouteHandler = async (req, res) => {
     }
   }
 
+  // When every row was rejected, no manifest was ever loaded (applyManifestLoaded never ran and
+  // migration_stage.latest_load_id was not advanced): `load_id` still identifies this import
+  // attempt's header and rejections, but `manifest_loaded: false` tells the caller it is NOT a
+  // usable manifest reference for a verification run.
   const summary = {
     site_id: siteId,
     load_id: loadId,
+    manifest_loaded: rows.length > 0,
     domain,
     file_name: fileName,
     file_sha256: sha,
@@ -1474,8 +1486,8 @@ const listDocumentManifestRowsBase: RouteHandler = async (req, res) => {
 };
 
 const RUN_COLUMNS = `run_id, site_id, domain, load_id, source_count, migrated_count, quarantined_count,
-  mismatch_count, waived_count, run_by_actor_id, findings_sha256, source_event_id, occurred_at,
-  business_date::text AS business_date, created_at`;
+  mismatch_count, waived_count, run_by_actor_id, findings_sha256, document_ref_prefix,
+  source_event_id, occurred_at, business_date::text AS business_date, created_at`;
 
 async function loadRunHeader(runId: string): Promise<Record<string, unknown> | null> {
   const r = await getPool().query(
@@ -1491,6 +1503,18 @@ const postDomainVerificationRunBase: RouteHandler = async (req, res, params) => 
   const siteId = requireUuidField(body, 'site_id');
   const actor = requireMigrationWriteActor(req, siteId);
   const idempotencyKey = requireIdempotencyKey(body);
+  const eventKey = `migration:verify:${siteId}:${domain}:${idempotencyKey}`;
+
+  // Replay check runs before document_ref_prefix validation: a retry of an already-accepted run
+  // must return the cached run even if this call's body reshapes or omits the prefix (Story 13.2
+  // review round 2).
+  const replay = await findEventByIdempotencyKey(eventKey);
+  if (replay) {
+    const header = await loadRunHeader(replay.payload['run_id'] as string);
+    sendJson(res, 200, { ...(header ?? {}), event_id: replay.event_id, replayed: true });
+    return;
+  }
+
   const prefixRaw = body['document_ref_prefix'];
   if (prefixRaw !== undefined && prefixRaw !== null && typeof prefixRaw !== 'string') {
     throw new AppError(400, 'INVALID_PARAMS', 'document_ref_prefix must be a string', {
@@ -1499,13 +1523,28 @@ const postDomainVerificationRunBase: RouteHandler = async (req, res, params) => 
   }
   const documentRefPrefix =
     typeof prefixRaw === 'string' && prefixRaw.trim() ? prefixRaw.trim() : null;
-  const eventKey = `migration:verify:${siteId}:${domain}:${idempotencyKey}`;
-
-  const replay = await findEventByIdempotencyKey(eventKey);
-  if (replay) {
-    const header = await loadRunHeader(replay.payload['run_id'] as string);
-    sendJson(res, 200, { ...(header ?? {}), event_id: replay.event_id, replayed: true });
-    return;
+  /**
+   * Open Question 1: `bom` and `erp_purchase_order` carry no site column, so a run for these two
+   * domains without a prefix would sweep `missing_in_source` across the whole enterprise and leak
+   * other sites' document references to this site's reader (2026-09-06 cross-site class). The
+   * other two domains are already site-scoped by their own tables, so the prefix does nothing
+   * there and is refused rather than silently accepted.
+   */
+  if (PREFIX_SCOPED_DOMAINS.has(domain) && documentRefPrefix === null) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `document_ref_prefix is required for domain "${domain}" because it carries no site column`,
+      { domain, field: 'document_ref_prefix' },
+    );
+  }
+  if (!PREFIX_SCOPED_DOMAINS.has(domain) && documentRefPrefix !== null) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `document_ref_prefix does not apply to domain "${domain}"`,
+      { domain, field: 'document_ref_prefix' },
+    );
   }
 
   const pool = getPool();
@@ -1532,16 +1571,14 @@ const postDomainVerificationRunBase: RouteHandler = async (req, res, params) => 
     mismatch_count: computed.mismatch_count,
     findings: computed.findings,
     findings_sha256: findingsSha256(computed.findings),
+    document_ref_prefix: documentRefPrefix,
     business_date: toIstCalendarDate(new Date()),
   };
   const persisted = await persistEvent(
     siteEnvelope(
       siteId,
       'migration.domain.verification_run',
-      {
-        ...(payload as unknown as Record<string, unknown>),
-        document_ref_prefix: documentRefPrefix,
-      },
+      payload as unknown as Record<string, unknown>,
       actor,
       { correlation_id: runId, causation_id: loadId, idempotency_key: eventKey },
     ),
@@ -1580,13 +1617,7 @@ const listDomainVerificationRunsBase: RouteHandler = async (req, res, params) =>
   sendJson(res, 200, { site_id: siteId, domain, runs, limit, offset, total });
 };
 
-const FINDING_KIND_FILTER = new Set([
-  'unknown_reference',
-  'missing_in_platform',
-  'missing_in_source',
-  'field_mismatch',
-  'state_mismatch',
-]);
+const FINDING_KIND_FILTER = new Set<string>(MIGRATION_FINDING_KINDS);
 
 const getDomainVerificationRunBase: RouteHandler = async (req, res, params) => {
   const domain = requireDomainParam(params);
@@ -1731,6 +1762,56 @@ const listMigrationDomainsBase: RouteHandler = async (req, res) => {
   sendJson(res, 200, { site_id: siteId, domains });
 };
 
+/**
+ * The operational fix route (Story 13.2 review round): a platform-only referential problem (a row
+ * never in any manifest) would otherwise quarantine its domain forever, since UNKNOWN_REFERENCE
+ * can never be waived and app_user has no DELETE. Registering the platform row's exclusion here
+ * downgrades a matching finding to a waivable state_mismatch on every later run.
+ */
+const postPlatformExclusionBase: RouteHandler = async (req, res, params) => {
+  const domain = requireDomainParam(params);
+  const body = requireObjectBody(req);
+  const siteId = requireUuidField(body, 'site_id');
+  const actor = requireMigrationWriteActor(req, siteId);
+  const idempotencyKey = requireIdempotencyKey(body);
+  const platformRef = requireNonEmptyString(body, 'platform_ref');
+  const reason = requireNonEmptyString(body, 'reason');
+  if (reason.length > MAX_WAIVER_NARRATIVE_CHARS) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `reason must be at most ${MAX_WAIVER_NARRATIVE_CHARS} characters`,
+      { field: 'reason' },
+    );
+  }
+  const eventKey = `migration:exclude:${siteId}:${domain}:${idempotencyKey}`;
+  const replay = await findEventByIdempotencyKey(eventKey);
+  if (replay) {
+    sendJson(res, 200, { ...replay.payload, event_id: replay.event_id, replayed: true });
+    return;
+  }
+  const exclusionId = randomUUID();
+  const payload: MigrationDomainPlatformExclusionRegisteredPayload = {
+    site_id: siteId,
+    domain,
+    exclusion_id: exclusionId,
+    platform_ref: platformRef,
+    reason,
+    business_date: toIstCalendarDate(new Date()),
+  };
+  const persisted = await persistEvent(
+    siteEnvelope(
+      siteId,
+      'migration.domain.platform_exclusion_registered',
+      payload as unknown as Record<string, unknown>,
+      actor,
+      { correlation_id: exclusionId, idempotency_key: eventKey },
+    ),
+    auditCtxFor(req, actor, 201),
+  );
+  sendJson(res, 201, { ...payload, event_id: persisted.event_id });
+};
+
 // ---------------------------------------------------------------------------
 // Exports (RBAC-wrapped)
 // ---------------------------------------------------------------------------
@@ -1751,6 +1832,7 @@ export const getDomainVerificationRunHandler: RouteHandler = read(getDomainVerif
  */
 export const postDomainSignoffHandler: RouteHandler = read(postDomainSignoffBase);
 export const listMigrationDomainsHandler: RouteHandler = read(listMigrationDomainsBase);
+export const postPlatformExclusionHandler: RouteHandler = write(postPlatformExclusionBase);
 
 export const postOpeningStockImportHandler: RouteHandler = write(postOpeningStockImportBase);
 export const getOpeningStockImportHandler: RouteHandler = read(getOpeningStockImportBase);
