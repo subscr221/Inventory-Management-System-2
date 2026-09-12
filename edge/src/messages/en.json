@@ -321,5 +321,14 @@
   "errors.RETURN_EXCEEDS_ISSUE": "You cannot return more than was issued to this order.",
   "errors.REASON_CODE_REQUIRED": "Choose a reason code before submitting.",
   "errors.WIP_COST_UNRESOLVED": "This component has no costed valuation yet, so it cannot be issued.",
-  "errors.QC_HOLD_REQUIRED": "Finished output must post into QC Hold, never straight to sellable stock."
+  "errors.QC_HOLD_REQUIRED": "Finished output must post into QC Hold, never straight to sellable stock.",
+  "errors.PROTOTYPE_NOT_SALEABLE": "This item is a prototype and can never be sold or dispatched as sellable stock.",
+  "errors.KIT_LINE_MISMATCH": "This consumption does not match a kit line on the order's current revision. Check the order revision with the office.",
+  "errors.OFFCUT_ELECTION_MISSING": "This order has no contractual offcut arrangement, so offcut cannot be captured against it. Ask the office to record the election first.",
+  "errors.BILLING_NOT_READY": "This order cannot be billed yet - its price basis or preconditions are missing. An office action, not a retry.",
+  "errors.SOD_VIOLATION": "The same person cannot both post and approve this action. Ask a different authorised person to complete it.",
+  "errors.OFFCUT_NOT_RETAINED": "This offcut holding is no longer retained, so it cannot be disposed of again.",
+  "errors.CREDIT_NOTE_MISSING": "No acknowledged service invoice exists to cite for this acquisition. An office action, not a retry.",
+  "errors.CREDIT_NOTE_UNCITABLE": "The credit note cited does not belong to this order's service invoice. Check the reference with the office.",
+  "errors.CREDIT_NOTE_SUPERSEDED": "This credit note has been superseded by a revaluation; the current document carries the value. Re-post against the latest document."
 }

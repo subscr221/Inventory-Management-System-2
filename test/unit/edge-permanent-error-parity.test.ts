@@ -36,20 +36,21 @@ function readEdgeMessageKeys(): Set<string> {
 }
 
 /**
- * Ledger item 11.5R-8: the server's PERMANENT_ERROR_CODES (src/sync/upload.ts) carries nine Epic 9
- * codes the edge connector's twin does not. Reconciling them is deferred, so this is pinned as the
- * KNOWN difference rather than asserted as equality - the test fails if the drift grows or changes.
+ * Ledger item 11.5R-8, CLOSED 2026-09-12 (pre-pilot sweep): the nine Epic 8/9 codes the server's
+ * PERMANENT_ERROR_CODES (src/sync/upload.ts) carried and the edge twin did not are now in both.
+ * This block pins them the way STORY_11_5_PERMANENT_CODES pins Story 11.5's, so dropping them from
+ * BOTH sets together (which the equality arm alone would not see) still fails.
  */
-const KNOWN_UPLOAD_ONLY_CODES_11_5R_8 = [
-  'BILLING_NOT_READY',
-  'CREDIT_NOTE_MISSING',
-  'CREDIT_NOTE_SUPERSEDED',
-  'CREDIT_NOTE_UNCITABLE',
+const EPIC_9_PERMANENT_CODES_11_5R_8 = [
+  'PROTOTYPE_NOT_SALEABLE',
   'KIT_LINE_MISMATCH',
   'OFFCUT_ELECTION_MISSING',
-  'OFFCUT_NOT_RETAINED',
-  'PROTOTYPE_NOT_SALEABLE',
+  'BILLING_NOT_READY',
   'SOD_VIOLATION',
+  'OFFCUT_NOT_RETAINED',
+  'CREDIT_NOTE_MISSING',
+  'CREDIT_NOTE_UNCITABLE',
+  'CREDIT_NOTE_SUPERSEDED',
 ];
 
 describe('edge permanent-error-code parity', () => {
@@ -65,7 +66,7 @@ describe('edge permanent-error-code parity', () => {
     );
   });
 
-  it('pins the known 11.5R-8 drift between the two PERMANENT_ERROR_CODES sets', () => {
+  it('the two PERMANENT_ERROR_CODES sets are identical (11.5R-8 closed 2026-09-12)', () => {
     const uploadCodes = new Set(readPermanentErrorCodes('src/sync/upload.ts'));
     const connectorCodes = new Set(readPermanentErrorCodes('edge/src/sync/connector.ts'));
 
@@ -74,18 +75,28 @@ describe('edge permanent-error-code parity', () => {
 
     assert.deepStrictEqual(
       uploadOnly,
-      [...KNOWN_UPLOAD_ONLY_CODES_11_5R_8].sort(),
-      'the server-only permanent codes changed. Reconciling the nine Epic 9 codes is deferred as ' +
-        'ledger item 11.5R-8; any OTHER difference means a new code was added to one set and not ' +
-        'the other, which the "change both together" comments forbid. Fix the set, or update this ' +
-        'pin only when 11.5R-8 is actioned.',
+      [],
+      'the server classifies codes the edge connector does not: an offline edge client retries ' +
+        'them forever instead of settling needs_attention. Add them to edge/src/sync/connector.ts ' +
+        'and an "errors.<CODE>" message to edge/src/messages/en.json ("change both together").',
     );
-
     assert.deepStrictEqual(
       connectorOnly,
       [],
-      'the edge connector classifies codes the server does not. See ledger item 11.5R-8.',
+      'the edge connector classifies codes the server does not ("change both together").',
     );
+  });
+
+  it('every Epic 9 permanent code (11.5R-8) is in BOTH sets, not just absent from the diff', () => {
+    for (const path of ['src/sync/upload.ts', 'edge/src/sync/connector.ts']) {
+      const codes = new Set(readPermanentErrorCodes(path));
+      const missing = EPIC_9_PERMANENT_CODES_11_5R_8.filter((code) => !codes.has(code));
+      assert.deepStrictEqual(
+        missing,
+        [],
+        `${path} lost Epic 9 permanent codes: ${missing.join(', ')}`,
+      );
+    }
   });
 
   /**

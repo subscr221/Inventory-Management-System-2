@@ -243,6 +243,21 @@ const PERMANENT_ERROR_CODES = new Set([
   // comment relies on had stopped holding for both of these.
   'JOBWORK_LOSS_REASON_CODE_INVALID',
   'CUSTODY_NOT_ZERO',
+  // Ledger item 11.5R-8, closed 2026-09-12 (pre-pilot sweep): the nine Epic 8/9 codes the server's
+  // PERMANENT_ERROR_CODES (src/sync/upload.ts) carries and this twin did not. Every one is a
+  // structural bar a retry of the same request can never clear (see the server comments); all but
+  // PROTOTYPE_NOT_SALEABLE are office actions with no edge scope, registered defensively so an
+  // edge queue that ever meets one settles needs_attention instead of retrying forever.
+  // test/unit/edge-permanent-error-parity.test.ts asserts the two sets are now identical.
+  'PROTOTYPE_NOT_SALEABLE',
+  'KIT_LINE_MISMATCH',
+  'OFFCUT_ELECTION_MISSING',
+  'BILLING_NOT_READY',
+  'SOD_VIOLATION',
+  'OFFCUT_NOT_RETAINED',
+  'CREDIT_NOTE_MISSING',
+  'CREDIT_NOTE_UNCITABLE',
+  'CREDIT_NOTE_SUPERSEDED',
 ]);
 
 const TRANSIENT_STATUS_CODES = new Set([408, 425, 429]);

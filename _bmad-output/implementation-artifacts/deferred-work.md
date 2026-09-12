@@ -947,3 +947,15 @@ Suite after the sweep and its follow-up: 2111/2111, 0 failures.
 - `computeGoLiveReconciliationReport`'s `source_count` re-derives Story 13.1's site-match and latest-snapshot CTEs instead of sharing them [src/compliance/migration-golive.ts:580-611]. Low risk today (the variance rule itself is imported, not copied), but if `VARIANCE_SQL` in `migration_variance.ts` changes its site or snapshot selection the report's source count silently describes different rows than the variances beside it. Fix: export the CTE fragment (or a count helper) from `migration_variance.ts` and consume it here.
 - The 20,000-row opening-stock promotion perf figure (item #800, Story 13.1 Task 7.2) is still owed; Story 13.3 measured 10,000 rows locally (import 62.7 s) and no staging figure exists. Pre-existing 13.1 item carried forward unchanged.
 - Story 13.3 test suite does not exercise a `pending_approval` or `stale` variance status blocking the go-live gate [test/integration/story-13-3.test.ts]. Needs a `doa_registry_entries` fixture and a resolvable approver (the 13.1 explanation route freezes one at post time). The gate filters on `status !== 'explained'`, which the 13.1 suite pins per status, so the gap is coverage, not behaviour.
+
+## Edge permanent-error parity (2026-09-12) - CLOSES 11.5R-8
+
+Pre-pilot sweep item 2. The nine Epic 8/9 codes the server's `PERMANENT_ERROR_CODES`
+(`src/sync/upload.ts`) carried and the edge twin (`edge/src/sync/connector.ts`) did not are now in
+both sets (188 and 188): `PROTOTYPE_NOT_SALEABLE`, `KIT_LINE_MISMATCH`, `OFFCUT_ELECTION_MISSING`,
+`BILLING_NOT_READY`, `SOD_VIOLATION`, `OFFCUT_NOT_RETAINED`, `CREDIT_NOTE_MISSING`,
+`CREDIT_NOTE_UNCITABLE`, `CREDIT_NOTE_SUPERSEDED`. Each has an operator message in
+`edge/src/messages/en.json`. `test/unit/edge-permanent-error-parity.test.ts` now asserts the two
+sets are IDENTICAL (the known-drift pin is gone) and pins the nine as a block so dropping them from
+both sets together still fails. Edge queues that meet one of these refusals settle
+`needs_attention` instead of retrying forever.
