@@ -243,8 +243,13 @@ describe('Story 7.8 offline technician capture builders', () => {
       assert.equal(table.localOnly, true, `${name} must be localOnly`);
     }
     assert.equal(
-      tables.filter((table) => !table.localOnly).map((table) => table.name).sort().join(','),
-      'bom,bom_alternate,bom_line,bom_revision,edge_outbox',
+      tables
+        .filter((table) => !table.localOnly)
+        .map((table) => table.name)
+        .sort()
+        .join(','),
+      // held_lot joined the synced set in Story 8.5 (quality holds); pin updated 2026-09-12.
+      'bom,bom_alternate,bom_line,bom_revision,edge_outbox,held_lot',
     );
   });
 });
