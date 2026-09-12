@@ -2157,6 +2157,23 @@ const EXPECTED = [
     indexes: ['uq_migration_domain_platform_exclusion_key'],
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 13.3: the go-live gate. Both records are attestations - written once by their applier,
+  // never edited (INSERT, SELECT only, no UPDATE, no DELETE), so a mistaken sign-off or unblock is
+  // corrected through the audit trail rather than by rewriting the row.
+  {
+    canonical: 'read/projections/migration_golive_signoff.sql',
+    table: 'migration_golive_signoff',
+    constraints: ['chk_migration_golive_signoff_type'],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/migration_golive_status.sql',
+    table: 'migration_golive_status',
+    constraints: [] as string[],
+    indexes: [] as string[],
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {

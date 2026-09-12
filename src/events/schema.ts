@@ -5359,6 +5359,46 @@ export interface MigrationDomainPlatformExclusionRegisteredEnvelope extends Omit
 }
 
 // ---------------------------------------------------------------------------
+// Story 13.3: the go-live reconciliation sign-off gate (FR-DM-03, SM-48). Two events on the same
+// central-only 'migration' stream, stream_id = site_id. The two final sign-offs (department head,
+// finance controller - access matrix section 3.7) are each their own event and their own
+// append-only row; the unblock is the durable record auditors check. Shape asserts and appliers
+// live in src/compliance/migration-golive.ts; the REST routes in src/api/v1/migration.ts are the
+// only producers. Nothing else reads the unblock flag yet (Story 13.1 Open Question 1).
+// ---------------------------------------------------------------------------
+
+export type MigrationGoLiveSignoffType = 'department_head_final' | 'finance_final';
+
+export interface MigrationSignoffRecordedPayload {
+  site_id: string;
+  signoff_type: MigrationGoLiveSignoffType;
+  /** Taken from the authorising assignment by the route; never from the request body. */
+  signed_off_by_actor_id: string;
+  signed_off_role: string;
+  business_date: string;
+}
+
+export interface MigrationSignoffRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'migration.signoff.recorded';
+  payload: MigrationSignoffRecordedPayload;
+}
+
+export interface MigrationGoLiveUnblockedPayload {
+  site_id: string;
+  /** The `migration.signoff.recorded` event ids the gate was satisfied by; re-verified by the applier. */
+  department_head_signoff_event_id: string;
+  finance_signoff_event_id: string;
+  /** Always 0 at the moment the applier accepts the event (SM-48); recorded for the audit trail. */
+  unexplained_variance_count: number;
+  business_date: string;
+}
+
+export interface MigrationGoLiveUnblockedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'migration.golive.unblocked';
+  payload: MigrationGoLiveUnblockedPayload;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -6421,6 +6461,17 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'migration.domain.platform_exclusion_registered': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  // Story 13.3: the go-live gate (FR-DM-03). Same stream, same bars, same producers rule. The
+  // unblock stays on 'migration' rather than a new stream: it is the last migration record, and
+  // the shape assert's name-to-stream pairing rule keeps every `migration.*` name on this stream.
+  'migration.signoff.recorded': {
+    streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  'migration.golive.unblocked': {
     streamType: 'migration',
     requiresBusinessStream: false,
   },

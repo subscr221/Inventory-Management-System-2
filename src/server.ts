@@ -509,6 +509,9 @@ import {
   postDomainSignoffHandler,
   listMigrationDomainsHandler,
   postPlatformExclusionHandler,
+  getGoLiveReconciliationHandler,
+  postGoLiveSignoffHandler,
+  postGoLiveUnblockHandler,
 } from './api/v1/migration.js';
 import { runDispatchCycle } from './notify/dispatch.js';
 import { runEscalationCycle } from './notify/escalate.js';
@@ -623,6 +626,12 @@ export function createAppRouter(): Router {
     '/api/v1/migration/domains/:domain/platform-exclusions',
     postPlatformExclusionHandler,
   );
+  // Story 13.3: the go-live reconciliation report (composes 13.1 variances and 13.2 domain
+  // statuses), the department-head and finance final sign-offs, and the go-live unblock that the
+  // dual sign-off plus zero unexplained opening-balance variance releases (FR-DM-03, SM-48).
+  router.get('/api/v1/migration/golive/reconciliation', getGoLiveReconciliationHandler);
+  router.post('/api/v1/migration/golive/sign-offs', postGoLiveSignoffHandler);
+  router.post('/api/v1/migration/golive/unblock', postGoLiveUnblockHandler);
   // Story 11.5 code review E2-P (b): a wrong GSTIN or cost-plus percentage is otherwise
   // permanent - the gist EXCLUDE constraints refuse an overlapping correction and app_user
   // holds no DELETE grant - so each dated configuration has a route that CLOSES its window.

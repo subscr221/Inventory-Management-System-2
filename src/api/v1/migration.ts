@@ -83,6 +83,22 @@ import {
   findingsSha256,
   getDomainVerificationStatuses,
 } from '../../read/projections/migration_domain_verification.js';
+import type {
+  MigrationGoLiveSignoffType,
+  MigrationGoLiveUnblockedPayload,
+  MigrationSignoffRecordedPayload,
+} from '../../events/schema.js';
+import {
+  GOLIVE_SIGNOFF_ROLES,
+  GOLIVE_SIGNOFF_TYPES,
+  assertGoLiveSignoffAllowed,
+  computeGoLiveReconciliationReport,
+  evaluateGoLiveGate,
+  isGoLiveSignoffType,
+  loadGoLiveSignoffByEventId,
+  loadGoLiveSignoffs,
+  loadGoLiveStatus,
+} from '../../compliance/migration-golive.js';
 
 // ---------------------------------------------------------------------------
 // Story 13.1 (FR-DM-01, SM-48): opening-stock migration routes. These are the ONLY producers of
@@ -1813,6 +1829,188 @@ const postPlatformExclusionBase: RouteHandler = async (req, res, params) => {
 };
 
 // ---------------------------------------------------------------------------
+// Story 13.3 (FR-DM-03, SM-48): the go-live reconciliation report, the two final sign-offs and
+// the go-live unblock. Read-then-gate: nothing here re-derives a variance or a verification
+// status; every rule is imported from src/compliance/migration-golive.ts, which the appliers
+// share.
+// ---------------------------------------------------------------------------
+
+/**
+ * Access matrix section 3.7: the department head signs off domain balances, the finance
+ * controller gives the final financial sign-off. Same shape as requireDomainSignoffActor
+ * (privilege and site scope from ONE write assignment), on module `migration` because the gate
+ * is not domain-specific. SOD-07 (the actor is a migration lead, loader, promoter or verification
+ * runner) is the database-provable check in assertGoLiveSignoffAllowed, not a role filter here.
+ */
+function requireGoLiveSignoffActor(
+  req: IncomingMessage,
+  signoffType: MigrationGoLiveSignoffType,
+  siteId: string,
+): Actor {
+  const authContext = getAuthContext(req);
+  if (!authContext) throw new AppError(401, 'UNAUTHORIZED', 'Authentication required');
+  const role = GOLIVE_SIGNOFF_ROLES[signoffType];
+  const qualifying = authContext.roles.filter(
+    (r) =>
+      r.role === role &&
+      (r.module === MIGRATION_MODULE || r.module === '*') &&
+      r.functionScope === 'write',
+  );
+  if (qualifying.length === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `A ${role} write assignment on module ${MIGRATION_MODULE} is required for the ${signoffType} sign-off`,
+      { required_roles: [role], required_module: MIGRATION_MODULE, signoff_type: signoffType },
+    );
+  }
+  const granting = qualifying.find((r) => r.locationId === '*' || r.locationId === siteId);
+  if (!granting) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      `No ${MIGRATION_MODULE} write assignment grants the ${signoffType} sign-off for site "${siteId}"`,
+      { site_id: siteId, signoff_type: signoffType },
+    );
+  }
+  return { userId: authContext.userId, role: granting.role, auditLocationId: granting.locationId };
+}
+
+const getGoLiveReconciliationBase: RouteHandler = async (req, res) => {
+  const url = new URL(req.url ?? '', 'http://localhost');
+  const siteId = requireQueryUuid(url, 'site_id');
+  requireSiteReadAccess(req, siteId);
+  await requireRegisteredSite(siteId);
+  const client: PoolClient = await getPool().connect();
+  try {
+    sendJson(res, 200, await computeGoLiveReconciliationReport(siteId, client));
+  } finally {
+    client.release();
+  }
+};
+
+/** A well-formed but unregistered site_id is 404, not an empty report or a spurious gate refusal. */
+async function requireRegisteredSite(siteId: string): Promise<void> {
+  const site = await getLocationById(siteId);
+  if (!site || site.level !== 'site') {
+    throw new AppError(404, 'NOT_FOUND', `Site "${siteId}" is not a registered site`, {
+      site_id: siteId,
+    });
+  }
+}
+
+const postGoLiveSignoffBase: RouteHandler = async (req, res) => {
+  const body = requireObjectBody(req);
+  const siteId = requireUuidField(body, 'site_id');
+  const signoffType = body['signoff_type'];
+  if (!isGoLiveSignoffType(signoffType)) {
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `signoff_type must be one of ${GOLIVE_SIGNOFF_TYPES.join(', ')}`,
+      { field: 'signoff_type', supported: [...GOLIVE_SIGNOFF_TYPES] },
+    );
+  }
+  const actor = requireGoLiveSignoffActor(req, signoffType, siteId);
+  const idempotencyKey = requireIdempotencyKey(body);
+  const eventKey = `migration:golive-signoff:${siteId}:${signoffType}:${idempotencyKey}`;
+
+  const replay = await findEventByIdempotencyKey(eventKey);
+  if (replay) {
+    // The row the replayed event wrote, not the effective row (a later re-attestation may have
+    // superseded it); the event id and the record always agree.
+    const record = await loadGoLiveSignoffByEventId(siteId, replay.event_id, getPool());
+    sendJson(res, 200, { ...(record ?? {}), event_id: replay.event_id, replayed: true });
+    return;
+  }
+  await requireRegisteredSite(siteId);
+  // Handler-side pre-check; the applier repeats it under the stage lock.
+  const refusal = await assertGoLiveSignoffAllowed(siteId, signoffType, actor.userId, getPool());
+  if (refusal) throw refusal;
+
+  const payload: MigrationSignoffRecordedPayload = {
+    site_id: siteId,
+    signoff_type: signoffType,
+    signed_off_by_actor_id: actor.userId,
+    signed_off_role: actor.role,
+    business_date: toIstCalendarDate(new Date()),
+  };
+  const persisted = await persistEvent(
+    siteEnvelope(
+      siteId,
+      'migration.signoff.recorded',
+      payload as unknown as Record<string, unknown>,
+      actor,
+      { idempotency_key: eventKey },
+    ),
+    auditCtxFor(req, actor, 201),
+  );
+  const signoffs = await loadGoLiveSignoffs(siteId, getPool());
+  sendJson(res, 201, { ...(signoffs[signoffType] ?? {}), event_id: persisted.event_id });
+};
+
+/**
+ * Task 4.2: the unblock writes the durable record and nothing else. No posting path reads it yet
+ * (Story 13.1 Open Question 1); wiring one is a later story's integration.
+ */
+const postGoLiveUnblockBase: RouteHandler = async (req, res) => {
+  const body = requireObjectBody(req);
+  const siteId = requireUuidField(body, 'site_id');
+  const actor = requireMigrationWriteActor(req, siteId);
+  const idempotencyKey = requireIdempotencyKey(body);
+  const eventKey = `migration:golive-unblock:${siteId}:${idempotencyKey}`;
+  await requireRegisteredSite(siteId);
+
+  // An unblocked site always carries its status row (the applier writes it in the event's own
+  // transaction), so "already unblocked" and "same idempotency key" collapse into one replay:
+  // the existing event is returned, never a fresh mutation (Task 4.1). Two unblocks racing on
+  // different keys serialise on the applier's stage lock; the loser gets the applier's 409
+  // `already_unblocked`, never a second row.
+  const existing = await loadGoLiveStatus(siteId, getPool());
+  if (existing) {
+    sendJson(res, 200, {
+      ...existing,
+      unblocked: true,
+      event_id: existing.unblocked_event_id,
+      replayed: true,
+    });
+    return;
+  }
+
+  // Handler-side pre-check, on a short-lived client; the applier repeats the gate under lock.
+  const client: PoolClient = await getPool().connect();
+  let gate: Awaited<ReturnType<typeof evaluateGoLiveGate>>;
+  try {
+    gate = await evaluateGoLiveGate(siteId, client);
+  } finally {
+    client.release();
+  }
+  if (gate.refusal) throw gate.refusal;
+  const head = gate.signoffs.department_head_final!;
+  const finance = gate.signoffs.finance_final!;
+
+  const payload: MigrationGoLiveUnblockedPayload = {
+    site_id: siteId,
+    department_head_signoff_event_id: head.source_event_id,
+    finance_signoff_event_id: finance.source_event_id,
+    unexplained_variance_count: 0,
+    business_date: toIstCalendarDate(new Date()),
+  };
+  const persisted = await persistEvent(
+    siteEnvelope(
+      siteId,
+      'migration.golive.unblocked',
+      payload as unknown as Record<string, unknown>,
+      actor,
+      { idempotency_key: eventKey, causation_id: finance.source_event_id },
+    ),
+    auditCtxFor(req, actor, 201),
+  );
+  const status = await loadGoLiveStatus(siteId, getPool());
+  sendJson(res, 201, { ...(status ?? {}), unblocked: true, event_id: persisted.event_id });
+};
+
+// ---------------------------------------------------------------------------
 // Exports (RBAC-wrapped)
 // ---------------------------------------------------------------------------
 
@@ -1843,3 +2041,11 @@ export const postVarianceExplanationsHandler: RouteHandler = write(postVarianceE
 /** Approval is gated by the DOA resolver's frozen identity, not by a role set (Task 6.3). */
 export const approveVarianceExplanationHandler: RouteHandler = read(approveVarianceExplanationBase);
 export const promoteOpeningStockHandler: RouteHandler = write(promoteOpeningStockBase);
+
+// Story 13.3: the report is a migration read; each sign-off is gated by role AND module inside
+// the handler (requireGoLiveSignoffActor) like the 13.2 domain sign-off, so the wrapper only asks
+// for migration read; the unblock request is a migration write (the gate, not the requester's
+// role, is what releases go-live).
+export const getGoLiveReconciliationHandler: RouteHandler = read(getGoLiveReconciliationBase);
+export const postGoLiveSignoffHandler: RouteHandler = read(postGoLiveSignoffBase);
+export const postGoLiveUnblockHandler: RouteHandler = write(postGoLiveUnblockBase);

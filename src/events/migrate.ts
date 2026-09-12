@@ -311,6 +311,11 @@ const MIGRATIONS = [
   '../../read/projections/migration_domain_verification_finding.sql',
   // Story 13.2 review round: the operational fix route for an unwaivable platform-only orphan.
   '../../read/projections/migration_domain_platform_exclusion.sql',
+  // Story 13.3: the go-live reconciliation sign-off gate (tail-append, two new projections). Both
+  // are append-only records (app_user INSERT, SELECT): the two final sign-offs and the per-site
+  // unblock. No upstream 13.1/13.2 file changes.
+  '../../read/projections/migration_golive_signoff.sql',
+  '../../read/projections/migration_golive_status.sql',
 ];
 
 async function migrate(): Promise<void> {

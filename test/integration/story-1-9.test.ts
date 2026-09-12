@@ -242,6 +242,10 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/migration/domains/:domain/sign-off',
       'POST /api/v1/migration/domains/:domain/platform-exclusions',
       'GET /api/v1/migration/domains',
+      // Story 13.3: go-live reconciliation report, final sign-offs and unblock
+      'GET /api/v1/migration/golive/reconciliation',
+      'POST /api/v1/migration/golive/sign-offs',
+      'POST /api/v1/migration/golive/unblock',
       // Story 11.5: branch transfer valuation and GST documents
       'POST /api/v1/gst/branch-transfer-valuation-config',
       'POST /api/v1/gst/branch-transfer-valuation-config/:configId/close',

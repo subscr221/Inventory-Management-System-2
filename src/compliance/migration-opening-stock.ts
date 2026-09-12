@@ -25,6 +25,10 @@ import {
   applyMigrationDocumentProjection,
   assertMigrationDocumentEventShape,
 } from './migration-documents.js';
+import {
+  applyMigrationGoLiveProjection,
+  assertMigrationGoLiveEventShape,
+} from './migration-golive.js';
 import { MIGRATION_DOMAINS } from '../migration/document-templates.js';
 
 /**
@@ -61,6 +65,9 @@ export const MIGRATION_EVENT_TYPES = new Set([
   'migration.domain.verification_run',
   'migration.domain.verified',
   'migration.domain.platform_exclusion_registered',
+  // Story 13.3: the go-live gate (shape and appliers in migration-golive.ts).
+  'migration.signoff.recorded',
+  'migration.golive.unblocked',
 ]);
 
 export const MIGRATION_DOMAINS_WITH_IMPORT_HEADER = new Set<string>(MIGRATION_DOMAINS);
@@ -143,6 +150,11 @@ export function assertMigrationEventShape(envelope: EventEnvelope): void {
     type === 'migration.domain.verified'
   ) {
     assertMigrationDocumentEventShape(envelope);
+    return;
+  }
+  // Story 13.3: the two go-live events dispatch the same way.
+  if (type === 'migration.signoff.recorded' || type === 'migration.golive.unblocked') {
+    assertMigrationGoLiveEventShape(envelope);
     return;
   }
 
@@ -361,6 +373,11 @@ export async function applyMigrationProjection(
     case 'migration.domain.platform_exclusion_registered':
       // Story 13.2: document-domain verification appliers live beside their shape assert.
       await applyMigrationDocumentProjection(envelope, client, eventId, auditCtx);
+      return;
+    case 'migration.signoff.recorded':
+    case 'migration.golive.unblocked':
+      // Story 13.3: the go-live gate appliers live beside their shape assert.
+      await applyMigrationGoLiveProjection(envelope, client, eventId, auditCtx);
       return;
     default:
       return;

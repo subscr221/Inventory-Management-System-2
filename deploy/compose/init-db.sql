@@ -14410,3 +14410,90 @@ BEGIN
   END IF;
 END $$;
 
+
+-- Story 13.3: go-live reconciliation sign-off gate (mirrors of read/projections/
+-- migration_golive_signoff.sql and migration_golive_status.sql) - change both together.
+
+-- migration_golive_signoff: MIRROR of read/projections/migration_golive_signoff.sql (the canonical
+-- definition, applied by src/events/migrate.ts and the test harness). This copy exists for
+-- first-boot container init only - change both files together. One row per sign-off EVENT;
+-- the effective sign-off of a type is the latest row, and a stale one is re-attested, never
+-- edited (app_user holds INSERT and SELECT only).
+CREATE TABLE IF NOT EXISTS migration_golive_signoff (
+  site_id                UUID NOT NULL,
+  signoff_type           TEXT NOT NULL,
+  signed_off_by_actor_id UUID NOT NULL,
+  signed_off_role        TEXT NOT NULL,
+  source_event_id        UUID NOT NULL,
+  occurred_at            TIMESTAMPTZ NOT NULL,
+  business_date          DATE NOT NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT pk_migration_golive_signoff PRIMARY KEY (site_id, signoff_type, source_event_id),
+  CONSTRAINT chk_migration_golive_signoff_type CHECK (signoff_type IN ('department_head_final', 'finance_final'))
+);
+
+-- Code review 2026-09-12: the first cut keyed the table on (site_id, signoff_type), which made a
+-- stale attestation permanent. Widen an existing two-column key in place (no deployed database
+-- carries rows yet; the guard is for local and test databases created from the first cut).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'pk_migration_golive_signoff'
+      AND conrelid = 'migration_golive_signoff'::regclass
+      AND array_length(conkey, 1) = 2
+  ) THEN
+    ALTER TABLE migration_golive_signoff DROP CONSTRAINT pk_migration_golive_signoff;
+    ALTER TABLE migration_golive_signoff
+      ADD CONSTRAINT pk_migration_golive_signoff PRIMARY KEY (site_id, signoff_type, source_event_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_migration_golive_signoff_type'
+      AND conrelid = 'migration_golive_signoff'::regclass
+  ) THEN
+    ALTER TABLE migration_golive_signoff
+      ADD CONSTRAINT chk_migration_golive_signoff_type CHECK (signoff_type IN ('department_head_final', 'finance_final'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON migration_golive_signoff TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_golive_signoff TO readonly_user;
+  END IF;
+END $$;
+
+-- migration_golive_status: MIRROR of read/projections/migration_golive_status.sql (the canonical
+-- definition, applied by src/events/migrate.ts and the test harness). This copy exists for
+-- first-boot container init only - change both files together. One row per site, written
+-- once by the `migration.golive.unblocked` applier when the widened gate is satisfied.
+CREATE TABLE IF NOT EXISTS migration_golive_status (
+  site_id                          UUID NOT NULL,
+  unblocked_at                     TIMESTAMPTZ NOT NULL,
+  unblocked_event_id               UUID NOT NULL,
+  unblocked_by_actor_id            UUID NOT NULL,
+  unblocked_by_role                TEXT NOT NULL,
+  department_head_signoff_event_id UUID NOT NULL,
+  finance_signoff_event_id         UUID NOT NULL,
+  business_date                    DATE NOT NULL,
+  created_at                       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT pk_migration_golive_status PRIMARY KEY (site_id)
+);
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
+    GRANT INSERT, SELECT ON migration_golive_status TO app_user;
+  END IF;
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'readonly_user') THEN
+    GRANT SELECT ON migration_golive_status TO readonly_user;
+  END IF;
+END $$;
