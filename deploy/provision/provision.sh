@@ -41,7 +41,7 @@ echo ""
 echo "Waiting for services to be healthy..."
 sleep 5
 
-HEALTH_URL="http://localhost:3000/api/v1/health"
+HEALTH_URL="http://127.0.0.1:${APP_HOST_PORT:-3000}/api/v1/health"
 MAX_RETRIES=30
 RETRY_COUNT=0
 
@@ -67,6 +67,6 @@ echo "=== Provisioning complete ==="
 echo "API: http://localhost/api/v1/health"
 echo "Edge PWA: http://localhost/"
 echo "PowerSync: http://localhost/powersync/"
-echo "PostgreSQL: localhost:5432"
-echo "Standby: localhost:5433"
+echo "PostgreSQL: 127.0.0.1:${POSTGRES_HOST_PORT:-5432}"
+echo "Standby (profile ha only): 127.0.0.1:${STANDBY_HOST_PORT:-5433}"
 echo "Nginx: http://localhost:80"

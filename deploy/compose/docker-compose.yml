@@ -3,6 +3,11 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      # Build-time only (VPS survey 2026-09-13): the staging box runs ufw with
+      # DEFAULT_FORWARD_POLICY=DROP, which starves bridge-network build containers of DNS and
+      # egress (npm ci failed EAI_AGAIN). Building on the host's network side-steps that without
+      # touching ufw or the Docker daemon; the running containers stay on the bridge.
+      network: host
     restart: unless-stopped
     depends_on:
       postgres:
@@ -24,6 +29,9 @@ services:
       AUTH_JWKS_URI: ${AUTH_JWKS_URI:?set AUTH_JWKS_URI to the IdP JWKS endpoint}
       AUTH_ISSUER: ${AUTH_ISSUER:?set AUTH_ISSUER to the IdP issuer}
       AUTH_AUDIENCE: ${AUTH_AUDIENCE:?set AUTH_AUDIENCE to this API's audience}
+      # Which token claim names the directory record (staging Keycloak: the email, so the roles
+      # file's email IS the identity; default sub).
+      AUTH_SUBJECT_CLAIM: ${AUTH_SUBJECT_CLAIM:-sub}
       SCIM_BEARER_TOKEN: ${SCIM_BEARER_TOKEN:?set SCIM_BEARER_TOKEN to a long random secret}
       EDGE_SITE_NAME: ${EDGE_SITE_NAME:-Pilot Gate Site}
       POWERSYNC_URL: ${POWERSYNC_URL:-/powersync}
@@ -32,7 +40,9 @@ services:
       POWERSYNC_TOKEN_SECRET: ${POWERSYNC_TOKEN_SECRET:?set POWERSYNC_TOKEN_SECRET to a long random secret}
       POWERSYNC_TOKEN_TTL: ${POWERSYNC_TOKEN_TTL:-15m}
     ports:
-      - "3000:3000"
+      # Loopback only (round table 2026-09-13, public VPS): reachable from the host for the
+      # health probe, never from the internet; nginx is the only public door.
+      - "127.0.0.1:${APP_HOST_PORT:-3000}:3000"
     networks:
       - backend
 
@@ -40,6 +50,11 @@ services:
     build:
       context: ../..
       dockerfile: edge/Dockerfile
+      # Build-time only (VPS survey 2026-09-13): the staging box runs ufw with
+      # DEFAULT_FORWARD_POLICY=DROP, which starves bridge-network build containers of DNS and
+      # egress (npm ci failed EAI_AGAIN). Building on the host's network side-steps that without
+      # touching ufw or the Docker daemon; the running containers stay on the bridge.
+      network: host
     restart: unless-stopped
     depends_on:
       app:
@@ -48,6 +63,10 @@ services:
       NODE_ENV: production
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
+    ports:
+      # Loopback only; a host-level nginx (deploy/host-nginx) proxies to it when the stack's own
+      # nginx is not started (VPS survey 2026-09-13: the box's nginx owns 80 and 443).
+      - "127.0.0.1:${EDGE_HOST_PORT:-3001}:3000"
     networks:
       - backend
 
@@ -74,6 +93,8 @@ services:
       - ../../sync/powersync.yaml:/config/powersync.yaml:ro
       - ../../sync/sync-rules.yaml:/config/sync-rules.yaml:ro
     command: ["start", "-c", "/config/powersync.yaml"]
+    ports:
+      - "127.0.0.1:${POWERSYNC_HOST_PORT:-8080}:8080"
     networks:
       - backend
 
@@ -88,6 +109,14 @@ services:
       # locale must not change lower() or ORDER BY semantics under the uniqueness checks. initdb
       # reads this on FIRST boot only; an existing volume keeps the locale it was created with.
       POSTGRES_INITDB_ARGS: "--locale=C.UTF-8"
+      # Read by init-role-passwords.sh on first boot: init-db.sql creates the four runtime roles
+      # with placeholders, this replaces them (deferred-work 94, the SQL half, 2026-09-13).
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD (app_user) to a long random secret}
+      READONLY_PASSWORD: ${READONLY_PASSWORD:?set READONLY_PASSWORD (readonly_user) to a long random secret}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?set REPLICATION_PASSWORD (replication_user) to a long random secret}
+      POWERSYNC_SOURCE_PASSWORD: ${POWERSYNC_SOURCE_PASSWORD:?set POWERSYNC_SOURCE_PASSWORD (svc_powersync) to a long random secret}
+      # Read by init-keycloak-db.sh on first boot to create Keycloak's own role and database.
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD to a long random secret}
     volumes:
       # postgres:18+ images store data in a major-version-specific subdirectory under a
       # single /var/lib/postgresql mount (not /var/lib/postgresql/data directly) - see
@@ -95,7 +124,9 @@ services:
       - pg_data:/var/lib/postgresql
       - ./init-wal-archive.sh:/docker-entrypoint-initdb.d/00-init-wal-archive.sh
       - ./init-db.sql:/docker-entrypoint-initdb.d/01-init-db.sql
+      - ./init-role-passwords.sh:/docker-entrypoint-initdb.d/01b-init-role-passwords.sh
       - ./init-pg-hba.sh:/docker-entrypoint-initdb.d/02-init-pg-hba.sh
+      - ./init-keycloak-db.sh:/docker-entrypoint-initdb.d/03-init-keycloak-db.sh
     command:
       - "postgres"
       # IST pin (deferred-work 215/616, applied 2026-09-13): the server default matches the
@@ -137,16 +168,25 @@ services:
       - "-c"
       - "log_connections=on"
     ports:
-      - "5432:5432"
+      # Loopback only (round table 2026-09-13): a database must never listen on a public interface.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin_user -d inventory_events"]
       interval: 5s
       timeout: 5s
       retries: 10
+      # First boot runs init-db.sql (14,000 lines), the role-password and Keycloak init scripts
+      # before the server accepts connections; on the staging VPS that outran 10 x 5 s and the
+      # dependents (keycloak, edge) were created but never started (2026-09-13). Failures inside
+      # the start period do not count against retries.
+      start_period: 120s
     networks:
       - backend
 
   postgres-standby:
+    # Opt-in (`--profile ha`): a hot standby is a production concern; on the shared staging VPS it
+    # would only cost memory (VPS survey 2026-09-13).
+    profiles: ["ha"]
     image: postgres:18.4
     restart: unless-stopped
     depends_on:
@@ -171,17 +211,62 @@ services:
       exec docker-entrypoint.sh postgres -c 'hot_standby=on' -c 'timezone=Asia/Kolkata'
       "
     ports:
-      - "5433:5432"
+      - "127.0.0.1:${STANDBY_HOST_PORT:-5433}:5432"
+    networks:
+      - backend
+
+  keycloak:
+    # Staging identity provider (round table 2026-09-13): the platform refuses AUTH_MODE=local
+    # outside development, and the company has no external identity provider, so Keycloak runs
+    # on the same box behind nginx at https://auth.${PUBLIC_DOMAIN}. Realm "ims" and the public
+    # client "ims-app" are imported from deploy/keycloak/realm-ims.json on every start (import is
+    # idempotent for an existing realm). People are created in the Keycloak console with their
+    # email as username; their hats come from deploy/provision/roles.json via provision:roles.
+    image: quay.io/keycloak/keycloak:26.3
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD to a long random secret}
+      KC_HOSTNAME: https://auth.${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN, e.g. ancorlabs.org}
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"
+      # First-boot admin only; rotate in the console after the first login.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?set KC_BOOTSTRAP_ADMIN_PASSWORD to a long random secret}
+      # Heap cap (VPS survey 2026-09-13: 16 GB box with Elasticsearch already holding 8.5 GB).
+      JAVA_OPTS_KC_HEAP: ${KEYCLOAK_JAVA_HEAP:--Xms128m -Xmx512m}
+    volumes:
+      - ../keycloak/realm-ims.json:/opt/keycloak/data/import/realm-ims.json:ro
+    ports:
+      - "127.0.0.1:${KEYCLOAK_HOST_PORT:-8081}:8080"
     networks:
       - backend
 
   nginx:
+    # Opt-in (`--profile standalone`): only for a host with no web server of its own. The staging
+    # VPS already runs nginx 1.24 on 80 and 443 with certbot; deploy/host-nginx carries the vhosts
+    # that proxy to the loopback ports above instead.
+    profiles: ["standalone"]
     image: nginx:alpine
     restart: unless-stopped
     depends_on:
       - app
+      - keycloak
+    environment:
+      # Substituted into nginx.conf.template by the image's envsubst step on start.
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN, e.g. ancorlabs.org}
     volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      # Cloudflare Origin CA certificate and key for *.${PUBLIC_DOMAIN}; git-ignored, placed by
+      # the operator (runbook section 2). Valid only behind the Cloudflare proxy.
+      - ./certs:/etc/nginx/certs:ro
     ports:
       - "80:80"
       - "443:443"
