@@ -1007,3 +1007,23 @@ Vex, Yui, Grumbal, Ravi). Two commits, each with its own full-suite run (Murat's
   `test/integration/story-9-1.test.ts` AC3 now sees `INVALID_EVENT_STREAM` at the door instead of
   the 9.1 envelope assert's `INVALID_EVENT_ENVELOPE` (pin updated, same refusal). Both suites
   28/28 after; the two changes are test-only.
+
+## Receiving versus the ERP's open_qty (2026-09-13) - CLOSES the 13.2 ledger bullet, rank 2
+
+User's answer to the room's question: the ERP "sometimes" learns a platform GRN (a person retypes
+it). So neither clean formula is safe and the platform trusts the ERP exactly once:
+
+- `erp_purchase_order_line.legacy_received_qty` (canonical and init-db mirror) is stamped on
+  INSERT as `GREATEST(ordered_qty - open_qty, 0)` by `upsertPurchaseOrderLine` and is absent from
+  the DO UPDATE list, so no later sync moves it.
+- `applyGoodsReceivedProjection` counts it in the tolerance band: cumulative = legacy plus the
+  platform's own non-rejected GRN lines plus the receipt in hand. Exact when nobody retypes;
+  fail-closed (blocks a legitimate receipt, never admits a second one) when someone does.
+- When the ERP's current `open_qty` implies more received than the frozen figure, the excess is
+  written to the event payload as `erp_receipt_overlap_qty`, echoed on both GRN responses and
+  logged. Runbook section 4 now tells the site to stop retyping platform GRNs into the ERP from the
+  freeze onward, and names the warning as the paper trail.
+- Arms: story-3-4 (band counts legacy, a later open_qty leaves the freeze alone, overlap echoed on
+  response and stored event), story-2-9 (the sync route freezes 60.250 on PO-2026-0042 line 1 and a
+  re-sync with open_qty 0 keeps it).
+

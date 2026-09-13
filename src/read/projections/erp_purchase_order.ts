@@ -170,10 +170,15 @@ export async function upsertPurchaseOrderLine(
   client: PoolClient,
 ): Promise<void> {
   await client.query(
+    // legacy_received_qty is set ONCE, on the insert (what the ERP had received before the platform
+    // ever saw the line), and deliberately absent from the DO UPDATE list: a later sync must not
+    // move it, whatever open_qty says by then (pilot triage 2026-09-13).
     `INSERT INTO erp_purchase_order_line
        (po_number_ext, line_no, sku, ordered_qty, open_qty, unit_price,
-        over_receipt_tolerance_pct, under_receipt_tolerance_pct, source_system, last_synced_at)
-     VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6::numeric, $7::numeric, $8::numeric, 'ERP', now())
+        over_receipt_tolerance_pct, under_receipt_tolerance_pct, source_system, last_synced_at,
+        legacy_received_qty)
+     VALUES ($1, $2, $3, $4::numeric, $5::numeric, $6::numeric, $7::numeric, $8::numeric, 'ERP', now(),
+             GREATEST($4::numeric - $5::numeric, 0))
      ON CONFLICT (po_number_ext, line_no) DO UPDATE SET
        sku = EXCLUDED.sku,
        ordered_qty = EXCLUDED.ordered_qty,

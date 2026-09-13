@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAppRouter, createAppServer } from '../../src/server.js';
+import { upsertPurchaseOrderLine } from '../../src/read/projections/erp_purchase_order.js';
 import { closePool, getPool, getAdminPool, closeAdminPool } from '../../src/config/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -674,5 +675,67 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     );
     assert.strictEqual(afterLine.rows[0]!['c'], beforeLine.rows[0]!['c']);
     assert.strictEqual(afterLine.rows[0]!['q'], beforeLine.rows[0]!['q']);
+  });
+  it('Pilot triage 2026-09-13: the legacy-received quantity frozen at first sync counts toward the band, a later ERP open_qty never moves it, and any excess the ERP claims is surfaced as erp_receipt_overlap_qty', async () => {
+    // Ordered 100; the ERP says 40 still open the first time the platform sees the line, so 60
+    // were received in the legacy system before go-live. Seeded through the real upsert path.
+    await getPool().query(
+      `INSERT INTO erp_purchase_order (po_number_ext, supplier_ref_ext, currency, expected_delivery_date, status, source_system, last_synced_at)
+       VALUES ('PO-LEG', 'SUP-1', 'INR', '2026-08-01', 'open', 'ERP', now())`,
+    );
+    const line = {
+      po_number_ext: 'PO-LEG',
+      line_no: 1,
+      sku: 'SKU-RCV-1',
+      ordered_qty: 100,
+      open_qty: 40,
+      unit_price: 1,
+      over_receipt_tolerance_pct: 5,
+      under_receipt_tolerance_pct: 5,
+    };
+    const client = await getPool().connect();
+    try {
+      await upsertPurchaseOrderLine(line, client);
+      // A later sync in which the ERP claims everything received (someone retyped the platform's
+      // GRNs into it, or received there): open_qty moves, the frozen figure does not.
+      await upsertPurchaseOrderLine({ ...line, open_qty: 0 }, client);
+    } finally {
+      client.release();
+    }
+    const frozen = await getPool().query(
+      `SELECT legacy_received_qty::text AS legacy, open_qty::text AS open FROM erp_purchase_order_line WHERE po_number_ext = 'PO-LEG' AND line_no = 1`,
+    );
+    assert.strictEqual(frozen.rows[0]!['legacy'], '60.000');
+    assert.strictEqual(frozen.rows[0]!['open'], '0.000');
+
+    // 60 legacy + 50 now = 110 > 105: refused, even though the platform itself has received nothing.
+    const over = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/grn-lines',
+      grnBody(await seedToken('PO-LEG'), { po_ref_ext: 'PO-LEG', received_qty: 50 }),
+      storeHeaders,
+    );
+    assert.strictEqual(over.status, 200, JSON.stringify(over.body));
+    assert.strictEqual(over.body['error_code'], 'RECEIPT_TOLERANCE_EXCEEDED');
+
+    // 60 legacy + 40 now = 100: accepted. The ERP's open_qty of 0 implies 100 received, 40 more
+    // than the frozen legacy figure, and that excess rides the stored event and the response.
+    const ok = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/grn-lines',
+      grnBody(await seedToken('PO-LEG'), { po_ref_ext: 'PO-LEG', received_qty: 40 }),
+      storeHeaders,
+    );
+    assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
+    assert.strictEqual(ok.body['erp_receipt_overlap_qty'], '40.000');
+    const grnId = (ok.body['grn'] as Record<string, unknown>)['grn_id'] as string;
+    const stored = await getPool().query(
+      `SELECT payload->>'erp_receipt_overlap_qty' AS overlap FROM domain_events
+        WHERE stream_type = 'receiving' AND event_type = 'goods.received' AND stream_id = $1`,
+      [grnId],
+    );
+    assert.strictEqual(stored.rows[0]!['overlap'], '40.000');
   });
 });

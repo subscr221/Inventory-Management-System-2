@@ -98,6 +98,13 @@ Table 3: Rehearsal timing
    approves it through the `/approve` route. `pending_approval`, `stale` and `open` all block.
 5. Promote through `POST /api/v1/migration/opening-stock/promote`. The stage moves to `dry_run`
    and the rows post to the live ledger. Promotion refuses on any unexplained variance.
+6. From the physical freeze onward, nobody retypes a platform GRN into the ERP and nobody
+   receives against a migrated PO in the ERP. The platform froze each PO line's legacy-received
+   quantity the first time it synced the line and counts it toward the over-receipt band; a later
+   ERP `open_qty` that claims more was received is surfaced on the receipt as
+   `erp_receipt_overlap_qty` and logged. Treat every such warning as an ERP-side reconciliation
+   item, not as permission to receive again. The migration lead reads the overlap warnings daily
+   until the ERP team confirms in writing that the retyping has stopped.
 
 ## 5. Active documents (Story 13.2)
 

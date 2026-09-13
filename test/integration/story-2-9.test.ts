@@ -882,4 +882,21 @@ describe('Story 2.9 ERP Inbound Reference Projections', () => {
       '2.7 fails closed without ERP-derived lead time - 2.9 is not a hard dependency',
     );
   });
+  it('Pilot triage 2026-09-13: the sync route freezes legacy_received_qty on the first sight of a PO line and never moves it', async () => {
+    const first = await getAdminPool().query(
+      `SELECT legacy_received_qty::text AS legacy FROM erp_purchase_order_line WHERE po_number_ext = 'PO-2026-0042' AND line_no = 1`,
+    );
+    // ordered 100.5, open 40.25 on the first sync above: 60.25 were received before the platform.
+    assert.strictEqual(first.rows[0]!['legacy'], '60.250');
+
+    const batch = poBatch() as { purchase_orders: Array<{ lines: Array<{ open_qty: number }> }> };
+    batch.purchase_orders[0]!.lines[0]!.open_qty = 0;
+    const sync = await makeRequest(port, 'POST', '/api/v1/erp/sync', batch, adminHeaders);
+    assert.strictEqual(sync.status, 200, JSON.stringify(sync.body));
+    const after = await getAdminPool().query(
+      `SELECT legacy_received_qty::text AS legacy, open_qty::text AS open FROM erp_purchase_order_line WHERE po_number_ext = 'PO-2026-0042' AND line_no = 1`,
+    );
+    assert.strictEqual(after.rows[0]!['legacy'], '60.250');
+    assert.strictEqual(after.rows[0]!['open'], '0.000');
+  });
 });

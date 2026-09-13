@@ -195,7 +195,7 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
   let committed = false;
   try {
     await client.query('BEGIN');
-    await persistEvent(
+    const persisted = await persistEvent(
       {
         stream_type: 'receiving',
         stream_id: grnId,
@@ -223,6 +223,13 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
     const crossDockTask = await getCrossDockTaskByGrnLine(grnLineId, client);
     await client.query('COMMIT');
     committed = true;
+    // Pilot triage 2026-09-13: the applier derives erp_receipt_overlap_qty when the ERP's open_qty
+    // implies more received than the frozen legacy figure (a platform GRN was recorded in the ERP
+    // as well); it rides the stored event and is echoed here for the reconciliation trail.
+    const overlap =
+      typeof persisted.payload['erp_receipt_overlap_qty'] === 'string'
+        ? { erp_receipt_overlap_qty: persisted.payload['erp_receipt_overlap_qty'] }
+        : {};
     // AC5: an over-tolerance line is a committed business outcome, not a rollback - surface the code
     // in a 2xx body alongside the durable rejected line.
     if (line && line.status === 'rejected') {
@@ -232,6 +239,7 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
         error_code: 'RECEIPT_TOLERANCE_EXCEEDED',
         cross_dock_task: crossDockTask,
         cross_dock_nonqualification_reason: line.cross_dock_nonqualification_reason ?? null,
+        ...overlap,
       });
       return;
     }
@@ -241,6 +249,7 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
       putaway_task: putaway,
       cross_dock_task: crossDockTask,
       cross_dock_nonqualification_reason: line?.cross_dock_nonqualification_reason ?? null,
+      ...overlap,
     });
   } catch (err) {
     if (!committed) await client.query('ROLLBACK');

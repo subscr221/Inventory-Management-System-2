@@ -412,17 +412,29 @@ export async function applyGoodsReceivedProjection(
   //    lines cannot both pass the band and over-receive.
   await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${poRef}:${matchedLineNo}`]);
   const calc = await client.query(
+    // Pilot triage 2026-09-13 (13.2 ledger): the band counts what the ERP had ALREADY received
+    // against the line before the platform first saw it (legacy_received_qty, frozen at first sync)
+    // plus the platform's own GRN lines. The ERP's CURRENT open_qty is never trusted for the band:
+    // "sometimes" someone retypes a platform GRN into the ERP, so open_qty may or may not reflect
+    // platform receipts. When it implies more received than the frozen legacy figure, that excess is
+    // reported as erp_receipt_overlap_qty (and logged) for reconciliation - fail-closed, never a
+    // second door for the same hundred kilos.
     `WITH pol AS (
-        SELECT ordered_qty, over_receipt_tolerance_pct, under_receipt_tolerance_pct
+        SELECT ordered_qty, open_qty, legacy_received_qty,
+               over_receipt_tolerance_pct, under_receipt_tolerance_pct
           FROM erp_purchase_order_line WHERE po_number_ext = $1 AND line_no = $2
       ),
       cum AS (
-        SELECT COALESCE(SUM(received_qty), 0) + $3::numeric AS cumulative
-          FROM grn_line WHERE po_ref_ext = $1 AND line_no = $2 AND status <> 'rejected'
+        SELECT (SELECT COALESCE(SUM(received_qty), 0)
+                  FROM grn_line WHERE po_ref_ext = $1 AND line_no = $2 AND status <> 'rejected')
+               + $3::numeric + pol.legacy_received_qty AS cumulative
+          FROM pol
       )
       SELECT
         cum.cumulative::text AS cumulative,
         pol.ordered_qty::text AS ordered,
+        pol.legacy_received_qty::text AS legacy_received,
+        GREATEST((pol.ordered_qty - pol.open_qty) - pol.legacy_received_qty, 0)::text AS erp_overlap,
         (cum.cumulative > pol.ordered_qty * (1 + COALESCE(pol.over_receipt_tolerance_pct, 0) / 100)) AS is_over,
         (cum.cumulative < pol.ordered_qty) AS is_short,
         (pol.ordered_qty - cum.cumulative)::text AS shortage
@@ -441,6 +453,14 @@ export async function applyGoodsReceivedProjection(
   const band = calc.rows[0]!;
   const isOver = band['is_over'] === true;
   const isShort = band['is_short'] === true;
+  const erpOverlap = band['erp_overlap'] as string;
+  if (Number(erpOverlap) > 0) {
+    // The stored event carries what THIS process derived; the route echoes it on the response.
+    envelope.payload['erp_receipt_overlap_qty'] = erpOverlap;
+    console.warn(
+      `receiving ${poRef} line ${matchedLineNo}: the ERP's open_qty implies ${erpOverlap} more received than the frozen legacy figure ${band['legacy_received'] as string} - a platform GRN was recorded in the ERP as well; the band counted legacy plus platform receipts only (cumulative ${band['cumulative'] as string} of ${band['ordered'] as string}), reconcile the ERP`,
+    );
+  }
 
   // AC5: over-receipt is a committed business outcome, NOT a rollback. Record the rejected line and a
   //      durable discrepancy notification, then let the handler surface RECEIPT_TOLERANCE_EXCEEDED.

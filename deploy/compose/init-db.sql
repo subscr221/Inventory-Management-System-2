@@ -1925,6 +1925,14 @@ CREATE TABLE IF NOT EXISTS erp_purchase_order_line (
 
 CREATE INDEX IF NOT EXISTS idx_erp_purchase_order_line_sku ON erp_purchase_order_line (sku);
 
+-- Pilot triage 2026-09-13 (13.2 ledger, receiving vs open_qty): the quantity the ERP had already
+-- received against this line when the platform FIRST saw it (ordered_qty - open_qty at insert).
+-- Frozen on insert, never updated by a later sync: it is the one number the ERP is authoritative on
+-- exactly once. The receiving tolerance band counts it as received; a later ERP open_qty that
+-- implies more was received than this (someone retyped a platform GRN into the ERP) is surfaced as
+-- erp_receipt_overlap_qty on the receipt, never trusted.
+ALTER TABLE erp_purchase_order_line ADD COLUMN IF NOT EXISTS legacy_received_qty NUMERIC(18, 3) NOT NULL DEFAULT 0;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
