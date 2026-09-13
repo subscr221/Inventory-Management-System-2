@@ -37,6 +37,16 @@ function parsePowerSyncTokenTtlSeconds(raw: string): number {
 
 const rawNodeEnv = process.env['NODE_ENV'];
 const nodeEnv = rawNodeEnv ?? 'development';
+function resolveSubjectClaim(): string {
+  const raw = process.env['AUTH_SUBJECT_CLAIM'] ?? 'sub';
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw)) {
+    throw new Error(
+      `Invalid AUTH_SUBJECT_CLAIM "${raw}": must be a plain claim name such as sub, email or preferred_username`,
+    );
+  }
+  return raw;
+}
+
 const authMode = resolveAuthMode();
 
 /**
@@ -297,6 +307,10 @@ export const config = {
     issuer: process.env['AUTH_ISSUER'] ?? '',
     audience: process.env['AUTH_AUDIENCE'] ?? '',
     localSecret: process.env['AUTH_LOCAL_SECRET'] ?? '',
+    // Which verified-token claim names the directory record (users.external_id). Default `sub`.
+    // Staging Keycloak (round table 2026-09-13) sets `email`, so the roles file's email is the
+    // identity and nobody copies UUIDs out of the console. Mailboxes must then never be recycled.
+    subjectClaim: resolveSubjectClaim(),
   },
   scim: {
     bearerToken: process.env['SCIM_BEARER_TOKEN'] ?? '',

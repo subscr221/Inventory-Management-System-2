@@ -1,1 +1,10 @@
 *.sql text eol=lf
+# Deferred-work 620, forced by the first staging deploy 2026-09-13: anything that runs on the Linux
+# host must never leave a Windows checkout with CRLF (the docker-entrypoint refuses a script whose
+# shebang ends in a carriage return: "required file not found").
+*.sh text eol=lf
+*.template text eol=lf
+*.conf text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf

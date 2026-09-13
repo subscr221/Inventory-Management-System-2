@@ -1,0 +1,33 @@
+{
+  "clientId": "ims-cli",
+  "name": "IMS operator command-line client (rehearsal only)",
+  "description": "Rehearsal-only operator CLI client (direct access grant, public). Operators only; delete after the pilot. See deploy/keycloak/README in the runbook.",
+  "enabled": true,
+  "publicClient": true,
+  "protocol": "openid-connect",
+  "standardFlowEnabled": false,
+  "implicitFlowEnabled": false,
+  "directAccessGrantsEnabled": true,
+  "serviceAccountsEnabled": false,
+  "fullScopeAllowed": true,
+  "defaultClientScopes": [
+    "email",
+    "profile",
+    "roles"
+  ],
+  "optionalClientScopes": [],
+  "protocolMappers": [
+    {
+      "name": "ims-app audience",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "consentRequired": false,
+      "config": {
+        "included.client.audience": "ims-app",
+        "id.token.claim": "false",
+        "access.token.claim": "true",
+        "introspection.token.claim": "true"
+      }
+    }
+  ]
+}

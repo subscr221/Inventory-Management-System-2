@@ -1,0 +1,124 @@
+# STANDALONE PROFILE (`docker compose --profile standalone up`). On the staging VPS the box's
+# ports 80 and 443 belong to the Webuzo panel's own nginx, so this container is published on
+# ${NGINX_HTTPS_HOST_PORT} (8443) and Cloudflare's proxy sends 443 traffic there through an
+# Origin Rule (survey 2026-09-13). TLS_CERT_PATH and TLS_KEY_PATH point at the Let's Encrypt
+# files certbot issued in standalone mode on the free port 80, mounted read-only from
+# /etc/letsencrypt; the Cloudflare Origin CA alternative is documented in the runbook.
+#
+# Rendered by the nginx image's envsubst step from /etc/nginx/templates/default.conf.template on
+# container start. Only variables present in the container environment are substituted
+# (PUBLIC_DOMAIN); nginx's own $host, $remote_addr and friends are untouched.
+#
+# Staging topology (round table 2026-09-13): two names on ${PUBLIC_DOMAIN}, both proxied through
+# Cloudflare, which terminates public TLS. This box presents a Cloudflare Origin CA certificate
+# (deploy/compose/certs/origin.pem and origin.key, git-ignored) that is valid ONLY behind the
+# Cloudflare proxy; Cloudflare SSL/TLS mode must be "Full (strict)". Port 80 answers the health
+# probe and redirects everything else to HTTPS.
+
+upstream app {
+    server app:3000;
+}
+
+upstream edge {
+    server edge:3000;
+}
+
+upstream powersync {
+    server powersync:8080;
+}
+
+upstream keycloak {
+    server keycloak:8080;
+}
+
+server {
+    listen 80;
+    server_name ims-staging.${PUBLIC_DOMAIN} auth.${PUBLIC_DOMAIN} _;
+
+    # Unencrypted on purpose: the host-local health probe (provision.sh, deploy.sh HEALTH_URL).
+    location = /api/v1/health {
+        proxy_pass http://app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        access_log off;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ims-staging.${PUBLIC_DOMAIN};
+
+    ssl_certificate     ${TLS_CERT_PATH};
+    ssl_certificate_key ${TLS_KEY_PATH};
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 10m;
+
+    location /api/ {
+        proxy_pass http://app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+    }
+
+    location /powersync/ {
+        proxy_pass http://powersync/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    location / {
+        proxy_pass http://edge;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name auth.${PUBLIC_DOMAIN};
+
+    ssl_certificate     ${TLS_CERT_PATH};
+    ssl_certificate_key ${TLS_KEY_PATH};
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    # Keycloak runs plain HTTP behind this proxy (KC_HTTP_ENABLED=true, KC_PROXY_HEADERS=xforwarded)
+    # and needs the forwarded scheme, host and port to mint issuer URLs on https://auth.<domain>.
+    location / {
+        proxy_pass http://keycloak;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_buffer_size 16k;
+        proxy_buffers 4 32k;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+}

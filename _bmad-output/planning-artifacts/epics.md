@@ -348,7 +348,39 @@ No UX design contract documents were found in `_bmad-output/planning-artifacts/u
 
 ---
 
-### Epic 2: Core Inventory and Multi-Location Stock Visibility
+#### Story 1.12: Edge UI Sign-In Through Keycloak (PKCE)
+
+As a warehouse worker, technician, gate guard or migration lead,
+I want to sign in to the edge UI with my own Keycloak account and stay signed in across the shift,
+So that every screen I use presents my identity to the API and my actions are attributed to me.
+
+**Acceptance Criteria:**
+
+**Given** an unauthenticated browser opens the edge UI (NFR-SEC-01)
+**When** any screen loads
+**Then** the user is redirected to Keycloak's login page for the `ims` realm using the authorization code flow with PKCE (client `ims-app`, no client secret), and returns to the screen they asked for
+
+**Given** a signed-in user (Story 1.2)
+**When** the UI calls any `/api/v1/...` endpoint, including PowerSync credentials and edge sync uploads
+**Then** the request carries `Authorization: Bearer <access token>` whose `aud` is `ims-app` and whose email claim names the user's directory record, so `src/middleware/auth.ts` resolves the same role assignments the SCIM seam provisioned
+
+**Given** an access token about to expire (15 minutes, realm setting)
+**When** the user keeps working, online or after reconnecting
+**Then** the token is refreshed silently with the refresh token; a refresh that fails sends the user back to the login page with their unsent captures preserved in the outbox
+
+**Given** a signed-in user on a shared tablet
+**When** they sign out
+**Then** the Keycloak session ends (front-channel logout), tokens are cleared from the device, and the next user must sign in as themselves
+
+**Given** a device that is offline (FR-M-17, Story 7.8)
+**When** the UI starts with a still-valid token cached
+**Then** capture continues offline and the token is used when the sync connector reconnects; no login is demanded until the token is actually rejected
+
+**Note:** Created 2026-09-13 from the staging deployment (round table). Story 1.2 delivered the server side of SSO; the browser never obtained a token because development ran with `AUTH_MODE=local`. Pre-pilot blocking: without it the pilot week is API-only. The rehearsal uses the temporary `ims-cli` direct-access client for operator scripts; that client is deleted when this story ships.
+
+---
+
+## Epic 2: Core Inventory and Multi-Location Stock Visibility
 
 **Goal:** Stock controllers and managers can answer "what do we hold, where is it, and what is it worth" in real time across all locations. Lot and serial traceability enables FEFO/FIFO picking, expiry management, and recall readiness. Consignment and VMI stock is segregated from owned inventory. Valuation is Ind AS 2 compliant (FIFO, weighted average, specific identification; LIFO blocked).
 

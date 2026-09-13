@@ -1027,3 +1027,38 @@ it). So neither clean formula is safe and the platform trusts the ERP exactly on
   response and stored event), story-2-9 (the sync route freezes 60.250 on PO-2026-0042 line 1 and a
   re-sync with open_qty 0 keeps it).
 
+## Site answers 2026-09-13 - RE-RULES 800, ACCEPTS 118, 138, 304, 495 and the 13.2 findings-cap bullet for the pilot
+
+Round table, one question at a time, answers from the site: pilot window ONE WEEK; no calibration
+certificates and no spare re-levelling in it (Stories 7.9 and 7.10 post-pilot, runbook section 7a
+forbids both for the week); fast movers in one lot per location and picks never larger than a lot
+(118 accepted, runbook operating note); open challans and custody entries in the hundreds, POs a
+few, mismatch under a tenth (13.2 findings cap accepted, runbook Table 3a expected-versus-actual);
+two or three POs with dead lines (138 accepted for the pilot with a runbook procedure and Table 3b);
+opening stock in the hundreds (item 800's 20,000-row figure is a Phase 2 platform item, Table 2
+step 2.8 downgraded from gate to measurement). 304 and 495 accepted on the window.
+
+## Row 94, the SQL half (2026-09-13) - CLOSES 94 completely
+
+The 2026-09-04 fix batch closed the compose half of row 94 (no `${VAR:-default}` password
+fallbacks). The SQL half was still open and was found at the moment of the first staging deploy:
+`deploy/compose/init-db.sql` lines 1-6 create `app_user`, `readonly_user`, `replication_user` and
+`svc_powersync` with the literal placeholder passwords the test harness expects. New first-boot
+script `deploy/compose/init-role-passwords.sh` (mounted as `01b-init-role-passwords.sh`, i.e.
+right after the SQL) replaces all four from `DB_PASSWORD`, `READONLY_PASSWORD`,
+`REPLICATION_PASSWORD` and `POWERSYNC_SOURCE_PASSWORD`, which the postgres service now requires
+(`${VAR:?}`); the SQL stays a plain file the test harness applies verbatim. `READONLY_PASSWORD` is
+new in `.env.example`.
+
+## First staging boot on the VPS (2026-09-13) - CLOSES 620, two entrypoint lessons
+
+- 620: `.gitattributes` now pins LF for `*.sh`, `*.template`, `*.conf`, `*.yml`, `*.yaml` and
+  `Dockerfile` (it already pinned `*.sql`). The first boot on the VPS failed at
+  `00-init-wal-archive.sh` with "cannot execute: required file not found": a CRLF shebang. The
+  entrypoint aborted, the container restarted on an initialised but EMPTY volume, and every client
+  then failed authentication against roles that did not exist. Tainted volumes were wiped.
+- Init-script ordering: the postgres image's entrypoint globs `/docker-entrypoint-initdb.d/*` under
+  its en_US locale, which ignores punctuation, so `01b-...` ran BEFORE `01-init-db.sql`. The
+  role-password script is mounted as `01-zz-init-role-passwords.sh`, which sorts after the SQL
+  under every collation. Postgres healthcheck gained `start_period: 120s` because the 14,000-line
+  init outran 10 x 5 s and left dependents created-but-not-started.

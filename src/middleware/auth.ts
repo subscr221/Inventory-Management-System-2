@@ -57,6 +57,21 @@ function extractBearerToken(req: IncomingMessage): string {
   return token;
 }
 
+/**
+ * The directory identity a verified token names: the claim AUTH_SUBJECT_CLAIM selects (`sub` by
+ * default; staging Keycloak uses `email`). Pure and exported for the unit test. A claim that is
+ * absent, empty or not a string yields undefined and the caller answers 401.
+ */
+export function subjectFromPayload(
+  payload: Record<string, unknown>,
+  claim: string,
+): string | undefined {
+  const value = payload[claim];
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : claim === 'email' ? trimmed.toLowerCase() : trimmed;
+}
+
 async function verifyTokenSubject(token: string): Promise<string> {
   let sub: string | undefined;
   try {
@@ -67,13 +82,13 @@ async function verifyTokenSubject(token: string): Promise<string> {
         algorithms: OIDC_ALGORITHMS,
         clockTolerance: CLOCK_TOLERANCE,
       });
-      sub = payload.sub;
+      sub = subjectFromPayload(payload, config.auth.subjectClaim);
     } else {
       const { payload } = await jwtVerify(token, getLocalSecretKey(), {
         algorithms: ['HS256'],
         clockTolerance: CLOCK_TOLERANCE,
       });
-      sub = payload.sub;
+      sub = subjectFromPayload(payload, config.auth.subjectClaim);
     }
   } catch {
     throw new AppError(401, 'UNAUTHORIZED', 'Invalid or expired token');

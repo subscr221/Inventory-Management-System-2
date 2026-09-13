@@ -1,0 +1,89 @@
+{
+  "site_id": "00000000-0000-0000-0000-000000000000",
+  "people": {
+    "migration.lead@example.com": { "display_name": "Current migration lead" },
+    "department.head@example.com": { "display_name": "Current department head" },
+    "finance.controller@example.com": { "display_name": "Current finance controller" },
+    "cfo@example.com": { "display_name": "Current CFO" },
+    "site.head@example.com": { "display_name": "Current site head" }
+  },
+  "roles": [
+    {
+      "role": "migration_lead",
+      "module": "migration",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "migration.lead@example.com"
+    },
+    {
+      "role": "migration_lead",
+      "module": "migration",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "migration.lead@example.com"
+    },
+    {
+      "role": "department_head",
+      "module": "migration",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "department.head@example.com"
+    },
+    {
+      "role": "department_head",
+      "module": "engineering",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "department.head@example.com"
+    },
+    {
+      "role": "department_head",
+      "module": "procurement",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "department.head@example.com"
+    },
+    {
+      "role": "department_head",
+      "module": "jobwork",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "department.head@example.com"
+    },
+    {
+      "role": "department_head",
+      "module": "custody",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "department.head@example.com"
+    },
+    {
+      "role": "finance_controller",
+      "module": "migration",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "finance.controller@example.com"
+    },
+    {
+      "role": "finance_controller",
+      "module": "jobwork",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "finance.controller@example.com"
+    },
+    {
+      "role": "cfo",
+      "module": "jobwork",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "cfo@example.com"
+    },
+    {
+      "role": "warehouse_manager",
+      "module": "warehouse",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "site.head@example.com"
+    }
+  ]
+}

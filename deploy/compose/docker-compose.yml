@@ -124,7 +124,9 @@ services:
       - pg_data:/var/lib/postgresql
       - ./init-wal-archive.sh:/docker-entrypoint-initdb.d/00-init-wal-archive.sh
       - ./init-db.sql:/docker-entrypoint-initdb.d/01-init-db.sql
-      - ./init-role-passwords.sh:/docker-entrypoint-initdb.d/01b-init-role-passwords.sh
+      # Named 01-zz so it sorts AFTER 01-init-db.sql under every collation: the image's en_US
+      # locale ignores punctuation and ran a "01b-" name before "01-init" (2026-09-13).
+      - ./init-role-passwords.sh:/docker-entrypoint-initdb.d/01-zz-init-role-passwords.sh
       - ./init-pg-hba.sh:/docker-entrypoint-initdb.d/02-init-pg-hba.sh
       - ./init-keycloak-db.sh:/docker-entrypoint-initdb.d/03-init-keycloak-db.sh
     command:
@@ -262,14 +264,23 @@ services:
     environment:
       # Substituted into nginx.conf.template by the image's envsubst step on start.
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN, e.g. ancorlabs.org}
+      # Certificate files as seen INSIDE the container. Staging: the Let's Encrypt live files under
+      # the read-only /etc/letsencrypt mount below. Standalone hosts with a Cloudflare Origin CA
+      # certificate point these at /etc/nginx/certs/origin.pem and origin.key instead.
+      TLS_CERT_PATH: ${TLS_CERT_PATH:-/etc/nginx/certs/origin.pem}
+      TLS_KEY_PATH: ${TLS_KEY_PATH:-/etc/nginx/certs/origin.key}
     volumes:
       - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
       # Cloudflare Origin CA certificate and key for *.${PUBLIC_DOMAIN}; git-ignored, placed by
-      # the operator (runbook section 2). Valid only behind the Cloudflare proxy.
+      # the operator. Valid only behind the Cloudflare proxy.
       - ./certs:/etc/nginx/certs:ro
+      # Let's Encrypt live files (symlinks resolve inside the mount). Staging VPS 2026-09-13.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     ports:
-      - "80:80"
-      - "443:443"
+      # Staging VPS: 80 and 443 belong to the panel's nginx; Cloudflare's Origin Rule targets
+      # NGINX_HTTPS_HOST_PORT. A host that owns 80 and 443 sets both to their natural values.
+      - "${NGINX_HTTP_HOST_PORT:-80}:80"
+      - "${NGINX_HTTPS_HOST_PORT:-443}:443"
     networks:
       - backend
 

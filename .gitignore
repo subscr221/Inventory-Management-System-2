@@ -10,3 +10,7 @@ spine-acceptance-contract-results.xml
 !.env.example
 !.env.test
 graphify-out/
+# Pilot cutover roles file: real holder emails live only on the operator's machine (template: roles.example.json)
+deploy/provision/roles.json
+# Cloudflare Origin CA certificate for the staging nginx; placed by the operator, never committed
+deploy/compose/certs/

@@ -21,8 +21,8 @@ Table 1: Rulings not yet implemented
 
 | Ref | Story | Item | Recorded decision | Proposed action |
 | --- | --- | --- | --- | --- |
-| 326 | 7-4 | A catalogued spare's min-max levels cannot be edited; a second POST on the key is 409 | "Min-max edit route is required before go-live; stocking levels change monthly. Backlog story." | Create the story; small (one edit route, one event) |
-| 343 | 7-5 | A calibration certificate cannot be voided or superseded; a wrong validity date locks or unlocks a machine | "Certificate void or supersede route is required before go-live. Backlog story." | Create the story; small-medium |
+| 326 | 7-4 | A catalogued spare's min-max levels cannot be edited; a second POST on the key is 409 | "Min-max edit route is required before go-live; stocking levels change monthly. Backlog story." | Story 7.9 created 2026-09-12; RULED 2026-09-13 post-pilot (one-week window, site confirms no re-levelling in it) |
+| 343 | 7-5 | A calibration certificate cannot be voided or superseded; a wrong validity date locks or unlocks a machine | "Certificate void or supersede route is required before go-live. Backlog story." | Story 7.10 created 2026-09-12; RULED 2026-09-13 post-pilot (site confirms no certificates recorded in the window; runbook forbids it for the week) |
 | 215 and 616 | 4-7, 8-4 | DONE 2026-09-13: both pools open with `-c TimeZone=Asia/Kolkata -c DateStyle=ISO`, DATE (OID 1082) parsed as its string; compose postgres and replica carry `-c timezone=Asia/Kolkata`; `test/integration/db-session-pin.test.ts`; full suite 2209/2209 on the pin alone | "One IST-pin commit: pg DATE parser plus pool TimeZone, with its own full-suite run." | Do the commit before the staging deploy; every `business_date` on the platform depends on it |
 
 ## 2. Blocking candidates found by this pass
@@ -43,14 +43,14 @@ Table 2: Candidates for ruling
 | 6 | 11.2R-1 | 11.2 | ALREADY CLOSED (commit d9fb465): `DISPATCH_SOD_ROLES` and `assertDispatchSodFunctionAccess` gate the three dispatch events on the events door; pinned by the 11.2 edge-sweep suite | A store assistant with events-door access can pack, document and dispatch | Fix: mirror `DISPATCH_DENIED_FRONTLINE_ROLES` on the events door; small |
 | 7 | 761 | 9-5 | DONE 2026-09-12: a return may declare `challan_class`; `orderClocksForDrain` drains that class first, then oldest live, then breached (unit and 9.5 arms) | Section 143 clock drained in the wrong order; ITC-04 figures wrong for mixed-class orders | Implement the decided lock-query fix; small |
 | 8 | 768 and 769 | 9-5 | Return-clock counters only ever add; the classification correction records no actor or reason | The first mis-posted return in the pilot has no correction path and no audit | Runbook: name the manual correction owner; schedule the reversal-event design |
-| 9 | 118 | 2-3 | FEFO/FIFO cannot split one request across lots; `NO_AVAILABLE_LOT` even when combined stock suffices | Pickers hit refusals daily on any SKU held in several lots | Runbook and training: split the request by lot; or fix if the site's lot profile makes this frequent (ask the site) |
+| 9 | 118 | 2-3 | FEFO/FIFO cannot split one request across lots; `NO_AVAILABLE_LOT` even when combined stock suffices | Pickers hit refusals daily on any SKU held in several lots | ACCEPTED 2026-09-13: site confirms fast movers sit in one lot per location and picks never exceed a lot; one runbook line for the day that changes |
 | 10 | 706 | 8-7 | ALREADY CLOSED for the active check: `findActiveDelegation` joins `users` on `active = true`; single-hop remains by design | An inactive user can be resolved as BIS compliance authority | Fix: add the active check; small |
 | 11 | 604 | 8-3 | `supplier-scorecards.ts` writes a scorecard metric with no site-access assertion | Cross-site write; one pilot site limits the blast radius | Accept for pilot; fix with the procurement write-site guard (row 208) |
-| 12 | 495 | 7-8 | Only `open` work orders are swept to `overdue`; `in_progress` and `on_hold` never are | Overdue escalations silent for in-flight maintenance | Fix if the site runs statutory maintenance in the pilot window; else accept |
-| 13 | 304 | 7-2 | A failed overdue notification is never retried; the work order stays `overdue` with no alert | One notification outage loses escalations permanently | Runbook: a daily read of the overdue list until the outbox design lands |
+| 12 | 495 | 7-8 | Only `open` work orders are swept to `overdue`; `in_progress` and `on_hold` never are | Overdue escalations silent for in-flight maintenance | ACCEPTED 2026-09-13 on the one-week window |
+| 13 | 304 | 7-2 | A failed overdue notification is never retried; the work order stays `overdue` with no alert | One notification outage loses escalations permanently | ACCEPTED 2026-09-13 on the one-week window; the migration lead's daily read covers it |
 | 14 | 792 | 9-6 | `parsePositiveIntEnv` has no lower bound; `JOBWORK_BILLING_RETRY_WINDOW_MS=1` empties the backlog into the exception queue | One mistyped env value on the staging host | Runbook: freeze the sweep env values in Table 2 of the runbook; fix the helper later |
-| 15 | 13-2 bullet | 13-2 | A verification run producing more than 10,000 findings can never complete | Depends on the pilot site's challan and custody row counts | Ask the site for counts before the rehearsal; fix only if within a factor of two |
-| 16 | 138 | 2-9 | Dropped ERP PO lines persist as phantoms (decided: a line status column) | Open-PO verification (13.2) and receiving both see lines the ERP has dropped | Implement with the 2-9 closure feed if any pilot PO has dropped lines; else accept |
+| 15 | 13-2 bullet | 13-2 | A verification run producing more than 10,000 findings can never complete | Depends on the pilot site's challan and custody row counts | ACCEPTED 2026-09-13: site estimates hundreds of challans, custody entries the same, a few POs, under a tenth mismatching; two orders of magnitude below the cap; expected figures written into the runbook so the load can contradict them |
+| 16 | 138 | 2-9 | Dropped ERP PO lines persist as phantoms (decided: a line status column) | Open-PO verification (13.2) and receiving both see lines the ERP has dropped | ACCEPTED 2026-09-13 for the pilot: the site names two or three such POs; runbook procedure (close in ERP before the final extract, else drop from the manifest, register the platform exclusion, and a written do-not-receive list at the dock); the status column stays the Phase 2 fix |
 | 17 | 543 | 8-2 | The Story 1.7 synthetic `qc.result_recorded` shape is still accepted on both doors with no task binding | A QC result can be recorded outside any inspection task | Verify (spine test 4 pins it); accept if the role gate holds, else fix |
 
 ## 3. Accepted for the pilot without action
@@ -77,6 +77,11 @@ Everything else in Open and Decided. Representative groups, with the reason:
 - Story 7.8 edge test pin (`held_lot` synced table): updated 2026-09-12, edge suite 45/45.
 
 ## 5. Information needed from the site before ruling
+
+Answered 2026-09-13 (round table, one question at a time): pilot window is ONE WEEK from the physical freeze; no calibration certificate will be recorded in it; no critical spare will be re-levelled in it. Stories 7.9 and 7.10 therefore post-pilot; ranks 12 and 13 accepted.
+Q2 answered 2026-09-13: fast-moving SKUs are held in one lot per location and picks never exceed one lot; rank 9 accepted.
+Q3 answered 2026-09-13: open job-work challans in the hundreds, custody ledger entries the same scale, open purchase orders a few, expected first-verification mismatch under one in ten; rank 15 accepted.
+Q4 answered 2026-09-13: two or three open POs carry lines the ERP has dropped but the extract shows open (rank 16 accepted with a runbook procedure and a named list); the opening-stock count file carries hundreds of lines, so deferred-work item 800 (the 20,000-row promotion figure) is a Phase 2 platform item, not a pilot gate; the local 10,000-row run covers the pilot many times over.
 
 - Row counts for job-work challans and custody ledger entries at the pilot site (Table 2 rank 15).
 - Whether any open PO at the site was partly received in the legacy system (rank 2), and whether any has dropped lines (rank 16).
