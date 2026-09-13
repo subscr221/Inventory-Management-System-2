@@ -2316,6 +2316,58 @@ So that maintenance work continues uninterrupted in the plant and every closure 
 
 ---
 
+### Story 7.9: Spare Min-Max Level Amendment
+
+As a maintenance storekeeper,
+I want to amend the min-max levels of a catalogued critical spare without re-cataloguing it,
+So that stocking levels that change monthly stay current and the same-day breach alert (Story 7.4) keeps firing against the right thresholds.
+
+**Acceptance Criteria:**
+
+**Given** a spare already catalogued under Story 7.4 (FR-M-09)
+**When** the storekeeper submits new min and max levels for it
+**Then** an amendment event is recorded against the existing catalogue row, the alert evaluation uses the new levels from the next sweep, and the previous levels remain readable in the row's history
+
+**Given** an amendment whose min is not below its max, or whose spare is not catalogued
+**When** it is submitted
+**Then** it is refused with an explicit `error_code` and no row changes
+
+**Given** a second POST of the original catalogue shape on an occupied (sku, location) key
+**When** it is submitted
+**Then** it is still refused `SPARE_ALREADY_CATALOGUED`; amendment is the only edit path
+
+**Note:** Created 2026-09-12 from the pilot-blocking triage (deferred-work ledger row 326, ruled 2026-09-04 "required before go-live"). Same role and module gate as the Story 7.4 catalogue route; no edge scope.
+
+---
+
+### Story 7.10: Calibration Certificate Void and Supersede
+
+As a QC manager,
+I want to void a wrongly recorded calibration certificate or supersede it with a corrected one,
+So that a wrong validity date neither locks a good instrument nor unlocks an expired one, without weakening the non-overridable lockout (Story 7.5).
+
+**Acceptance Criteria:**
+
+**Given** a certificate recorded under Story 7.5 (FR-M-12, FR-M-13)
+**When** the QC manager voids it with a reason
+**Then** a void event is recorded, the certificate no longer counts toward the instrument's calibration status, the lockout is re-evaluated from the remaining certificates, and the voided row stays readable with its reason and actor
+
+**Given** a certificate with a wrong validity date
+**When** the QC manager supersedes it with a corrected certificate
+**Then** the corrected certificate is recorded, the original is marked superseded in the same transaction, and the 30/14/7-day alert schedule is recomputed from the corrected dates
+
+**Given** an instrument whose only valid certificate is voided
+**When** the void is recorded
+**Then** the `CALIBRATION_LOCKOUT` bar applies immediately and no role can override it
+
+**Given** a void or supersede on a certificate the actor did not record
+**When** it is submitted
+**Then** it is accepted only from the QC manager role; the recording inspector cannot void their own certificate (segregation, same shape as SOD-07)
+
+**Note:** Created 2026-09-12 from the pilot-blocking triage (deferred-work ledger row 343, ruled 2026-09-04 "required before go-live"). Certificates remain append-only; void and supersede are new events, never edits.
+
+---
+
 ## Epic 8: Quality Control and Batch Release
 
 QC inspectors and heads disposition every finished goods lot before it reaches sellable stock — there is no bypass, and urgency is served by conditional release, not by skipping the gate (FR-Q-02). AQL sampling, calibration-locked result capture, CoA/CoC, NCR/CAPA, BIS and Legal Metrology hooks, and customer-witnessed inspections are all enforced workflows. Quality holds propagate everywhere within 15 minutes (FR-Q-09). Instrument records from Epic 7 (C-12) must exist before the calibration lockout activates here.

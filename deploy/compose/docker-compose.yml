@@ -84,6 +84,10 @@ services:
       POSTGRES_DB: inventory_events
       POSTGRES_USER: admin_user
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      # Collation pin (deferred-work 432, applied 2026-09-13): a restore to a host with another
+      # locale must not change lower() or ORDER BY semantics under the uniqueness checks. initdb
+      # reads this on FIRST boot only; an existing volume keeps the locale it was created with.
+      POSTGRES_INITDB_ARGS: "--locale=C.UTF-8"
     volumes:
       # postgres:18+ images store data in a major-version-specific subdirectory under a
       # single /var/lib/postgresql mount (not /var/lib/postgresql/data directly) - see
@@ -94,6 +98,11 @@ services:
       - ./init-pg-hba.sh:/docker-entrypoint-initdb.d/02-init-pg-hba.sh
     command:
       - "postgres"
+      # IST pin (deferred-work 215/616, applied 2026-09-13): the server default matches the
+      # session pin src/config/db.ts sets on every app connection, so psql and pgBackRest tooling
+      # see the same calendar the application does.
+      - "-c"
+      - "timezone=Asia/Kolkata"
       - "-c"
       - "wal_level=logical"
       - "-c"
@@ -159,7 +168,7 @@ services:
         echo 'Initializing standby from primary...'
         pg_basebackup -h postgres -U replication_user -D /var/lib/postgresql/data -Fp -Xs -P -R
       fi
-      exec docker-entrypoint.sh postgres -c 'hot_standby=on'
+      exec docker-entrypoint.sh postgres -c 'hot_standby=on' -c 'timezone=Asia/Kolkata'
       "
     ports:
       - "5433:5432"

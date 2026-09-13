@@ -4736,6 +4736,12 @@ export interface CustodyReturnRecordedPayload {
   site_id: string;
   return_challan_number_ext: string;
   posted_by: string;
+  /**
+   * Ledger 761 (2026-09-12): the class of the challan the material goes back under. OPTIONAL;
+   * when present the return drains the return clocks of that class first (Section 143 keeps one
+   * clock per class), otherwise the oldest live clock drains first as before.
+   */
+  challan_class?: 'input' | 'capital_goods';
   custody_balance_after?: string;
 }
 

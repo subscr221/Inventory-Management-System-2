@@ -1570,4 +1570,37 @@ describe('Story 13.1 Opening Stock Migration and Verification', () => {
     assert.ok(importMs < 5 * 60_000, `import took ${importMs.toFixed(0)} ms`);
     assert.strictEqual(binC1Id.length, 36);
   });
+  it('Pilot triage 2026-09-12: a future-dated snapshot_at is refused per row and never becomes the latest snapshot', async () => {
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    const res = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/erp/sync',
+      {
+        stock_balances: [
+          {
+            source_system: 'ERP',
+            site_code_ext: SITE_A,
+            location_code: BIN_A1,
+            sku: PLAIN,
+            quantity: '1',
+            snapshot_at: future,
+          },
+        ],
+      },
+      erpHeaders,
+    );
+    assert.strictEqual(res.status, 200, res.text);
+    const result = res.body['stock_balances'] as Record<string, number>;
+    assert.strictEqual(result['failed'], 1);
+    assert.strictEqual(result['applied'], 0);
+    const latest = await getAdminPool().query(
+      `SELECT max(snapshot_at) AS latest FROM erp_stock_balance WHERE site_code_ext = $1`,
+      [SITE_A],
+    );
+    assert.ok(
+      (latest.rows[0]!['latest'] as Date).getTime() < Date.now() + 60_000,
+      'the future snapshot must not become the latest snapshot',
+    );
+  });
 });

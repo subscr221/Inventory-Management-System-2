@@ -1534,7 +1534,12 @@ describe('Story 9.8 Offcut Acquisition CFO Approval', () => {
       cfoHeaders,
     );
     assert.strictEqual(backdated.status, 400, JSON.stringify(backdated.body));
-    assert.strictEqual(backdated.body['error_code'], 'INVALID_PARAMS');
+    // Pilot triage 2026-09-12 (ledger 11.5R-1): the envelope now carries a floor on occurred_at
+    // (EVENT_OCCURRED_AT_MAX_AGE_DAYS, 3650 in this environment), so a year-2000 instant is refused
+    // at the door as INVALID_EVENT_ENVELOPE before the approval seam's own INVALID_PARAMS check
+    // runs. Same outcome this arm exists for: a clean 400, never a raw 500, nothing mutated.
+    assert.strictEqual(backdated.body['error_code'], 'INVALID_EVENT_ENVELOPE');
+    assert.match(String(backdated.body['message'] ?? ''), /days in the past/);
     assert.strictEqual((await proposalRow(proposalId))['status'], 'pending');
     assert.strictEqual((await holdingRow(holdingId))['status'], 'retained');
 

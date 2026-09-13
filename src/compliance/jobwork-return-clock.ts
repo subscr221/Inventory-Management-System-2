@@ -164,6 +164,25 @@ export function allocateFifo(
   return { allocations, unallocated: remaining };
 }
 
+/**
+ * Drain order for a reconciliation (ledger 761, decided 2026-09-04, implemented 2026-09-12): a
+ * return that declares its challan class drains the clocks of THAT class first, then the oldest
+ * live clock, then breached clocks (whose deemed supply is already recorded). Within a tier the
+ * challan-date FIFO the lock query already established is kept. Pure; the SQL lock order is
+ * untouched so lock acquisition stays deterministic.
+ */
+export function orderClocksForDrain<
+  T extends { challan_class: ChallanClass; status: ReturnClockStatus },
+>(rows: readonly T[], preferChallanClass?: ChallanClass): T[] {
+  const tier = (row: T): number =>
+    (preferChallanClass !== undefined && row.challan_class !== preferChallanClass ? 2 : 0) +
+    (row.status === 'breached' ? 1 : 0);
+  return rows
+    .map((row, index) => ({ row, index, tier: tier(row) }))
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map((entry) => entry.row);
+}
+
 export type ReconcileCounter = 'reconciled_qty' | 'loss_qty';
 /** The only ledger categories that stop the clock. `offcut` is forward-declared for Story 9.6. */
 export type ReconcileCategory = 'dispatch' | 'return' | 'loss' | 'offcut';
@@ -184,6 +203,8 @@ export interface ReconcileReturnClocksInput {
    * closure gate. Never over-reconciles in either mode.
    */
   strict: boolean;
+  /** The return challan's class, when the caller declared one: its clocks drain first. */
+  preferChallanClass?: ChallanClass;
 }
 
 export interface ReconcileReturnClocksResult {
@@ -232,7 +253,10 @@ export async function reconcileReturnClocks(
     return { allocated: '0.000', unallocated: '0.000', clocks_touched: [] };
   }
 
-  const rows = await lockReturnClocksWithCapacity(input.serviceOrderId, input.sku, client);
+  const rows = orderClocksForDrain(
+    await lockReturnClocksWithCapacity(input.serviceOrderId, input.sku, client),
+    input.preferChallanClass,
+  );
   const { allocations, unallocated } = allocateFifo(
     rows.map((row) => ({ clock_id: row.clock_id, capacity: capacityOf(row) })),
     requested,

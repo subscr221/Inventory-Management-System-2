@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getPool } from '../config/db.js';
+import { config } from '../config/index.js';
 import { AppError } from '../middleware/error.js';
 import type { PoolClient } from 'pg';
 import { logAuditEntry } from '../read/projections/audit_log.js';
@@ -306,6 +307,7 @@ import type {
   CrossDockTaskAssignedEnvelope,
   CrossDockTaskCompletedEnvelope,
 } from './schema.js';
+import { SUPPORTED_EVENT_TYPES } from './schema.js';
 import { assertErpReadOnly } from '../compliance/erp-readonly.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -349,6 +351,59 @@ export interface PersistedEvent extends EventEnvelope {
   created_at: string;
 }
 
+/**
+ * Registered type, wrong stream, refused (deferred-work 285, pilot triage rank 5, applied
+ * 2026-09-13). Every entry in SUPPORTED_EVENT_TYPES names exactly one stream; an envelope that
+ * carries a registered event_type on any other stream_type is INVALID_EVENT_STREAM at both doors
+ * and again inside persistEvent, so no stream-keyed assert can be stepped around by relabelling
+ * the stream. Unregistered event types are untouched here: what to do with them is a separate
+ * platform decision the ledger still carries.
+ */
+export function assertRegisteredStream(envelope: {
+  stream_type: string;
+  event_type: string;
+}): void {
+  const registered = (SUPPORTED_EVENT_TYPES as Record<string, { streamType: string } | undefined>)[
+    envelope.event_type
+  ];
+  if (registered && registered.streamType !== envelope.stream_type) {
+    throw new AppError(
+      400,
+      'INVALID_EVENT_STREAM',
+      `Event type "${envelope.event_type}" is registered on stream "${registered.streamType}", not "${envelope.stream_type}"`,
+      {
+        event_type: envelope.event_type,
+        stream_type: envelope.stream_type,
+        registered_stream_type: registered.streamType,
+      },
+    );
+  }
+}
+
+export const OCCURRED_AT_FUTURE_SKEW_MS = 5 * 60_000;
+
+/**
+ * Both bounds on metadata.occurred_at, pure so the unit test can drive `nowMs` and the floor.
+ * Upper: nothing happens in the future (5 minutes of clock skew allowed). Lower: offline uploads
+ * are legitimately old, but a backdated instant beyond `maxAgeDays` is a forged business date
+ * (pilot triage 2026-09-12, ledger 11.5R-1: the GST and valuation gates key on it). Returns the
+ * refusal message, or null when the instant is inside both bounds.
+ */
+export function occurredAtBoundViolation(
+  occurredAt: string,
+  nowMs: number,
+  maxAgeDays: number,
+): string | null {
+  const at = Date.parse(occurredAt);
+  if (at > nowMs + OCCURRED_AT_FUTURE_SKEW_MS) {
+    return 'metadata.occurred_at must not be more than 5 minutes in the future';
+  }
+  if (at < nowMs - maxAgeDays * 86_400_000) {
+    return `metadata.occurred_at must not be more than ${maxAgeDays} days in the past (EVENT_OCCURRED_AT_MAX_AGE_DAYS)`;
+  }
+  return null;
+}
+
 export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
   if (typeof body !== 'object' || body === null) {
     throw new AppError(400, 'INVALID_EVENT_ENVELOPE', 'Request body must be a JSON object');
@@ -383,6 +438,10 @@ export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
       'event_type is required and must be a non-empty string',
     );
   }
+  assertRegisteredStream({
+    stream_type: obj['stream_type'] as string,
+    event_type: obj['event_type'] as string,
+  });
 
   if (
     obj['event_version'] !== undefined &&
@@ -479,14 +538,12 @@ export function validateEnvelope(body: unknown): asserts body is EventEnvelope {
       'metadata.occurred_at is required and must be a valid ISO-8601 timestamp',
     );
   }
-  // Upper bound only: offline uploads are legitimately old, but nothing happens in the future.
-  if (Date.parse(meta['occurred_at']) > Date.now() + 5 * 60_000) {
-    throw new AppError(
-      400,
-      'INVALID_EVENT_ENVELOPE',
-      'metadata.occurred_at must not be more than 5 minutes in the future',
-    );
-  }
+  const bound = occurredAtBoundViolation(
+    meta['occurred_at'],
+    Date.now(),
+    config.events.occurredAtMaxAgeDays,
+  );
+  if (bound) throw new AppError(400, 'INVALID_EVENT_ENVELOPE', bound);
 
   if (
     meta['causation_id'] !== undefined &&
@@ -557,6 +614,7 @@ export async function persistEvent(
   // non-DB, so a malformed migration event never consumes an idempotency key. It runs FIRST so a
   // `migration.*` name on a foreign stream (or a foreign name on the 'migration' stream) is refused
   // INVALID_EVENT_STREAM before the tagging assert can answer UNTAGGED_TRANSACTION for it.
+  assertRegisteredStream(envelope);
   assertMigrationEventShape(envelope);
   await assertInventoryTagging(envelope);
   await assertCalibrationLockout(envelope);

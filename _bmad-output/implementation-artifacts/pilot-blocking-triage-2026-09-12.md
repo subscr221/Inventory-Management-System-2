@@ -23,7 +23,7 @@ Table 1: Rulings not yet implemented
 | --- | --- | --- | --- | --- |
 | 326 | 7-4 | A catalogued spare's min-max levels cannot be edited; a second POST on the key is 409 | "Min-max edit route is required before go-live; stocking levels change monthly. Backlog story." | Create the story; small (one edit route, one event) |
 | 343 | 7-5 | A calibration certificate cannot be voided or superseded; a wrong validity date locks or unlocks a machine | "Certificate void or supersede route is required before go-live. Backlog story." | Create the story; small-medium |
-| 215 and 616 | 4-7, 8-4 | DATE columns serialise as shifted timestamps on a non-UTC host; `TimeZone` and `DateStyle` are not pinned on the pool | "One IST-pin commit: pg DATE parser plus pool TimeZone, with its own full-suite run." | Do the commit before the staging deploy; every `business_date` on the platform depends on it |
+| 215 and 616 | 4-7, 8-4 | DONE 2026-09-13: both pools open with `-c TimeZone=Asia/Kolkata -c DateStyle=ISO`, DATE (OID 1082) parsed as its string; compose postgres and replica carry `-c timezone=Asia/Kolkata`; `test/integration/db-session-pin.test.ts`; full suite 2209/2209 on the pin alone | "One IST-pin commit: pg DATE parser plus pool TimeZone, with its own full-suite run." | Do the commit before the staging deploy; every `business_date` on the platform depends on it |
 
 ## 2. Blocking candidates found by this pass
 
@@ -35,16 +35,16 @@ Table 2: Candidates for ruling
 
 | Rank | Ref | Story | Item (verified against current tree) | Pilot consequence | Proposed |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 13-1 bullet | 13-1 | ERP `snapshot_at` accepts future dates (`src/adapters/erp/sync.ts`, no guard as of today) | Since 2026-09-12 a future-dated snapshot makes BOTH final sign-offs permanently `SIGNOFF_STALE`; the site cannot unblock until the ERP row is corrected | Fix: refuse `snapshot_at` later than now plus a small skew in the sync adapter; one arm in the 2.9 suite |
+| 1 | 13-1 bullet | 13-1 | DONE 2026-09-12: ERP `snapshot_at` later than now plus 5 minutes is refused per row in `src/adapters/erp/sync.ts` (13.1 suite arm) | Since 2026-09-12 a future-dated snapshot makes BOTH final sign-offs permanently `SIGNOFF_STALE`; the site cannot unblock until the ERP row is corrected | Fix: refuse `snapshot_at` later than now plus a small skew in the sync adapter; one arm in the 2.9 suite |
 | 2 | 13-2 bullet | 13-2 | Receiving computes over-receipt from `grn_line` sums against `ordered_qty` and never reads `erp_purchase_order_line.open_qty` | Every migrated PO that was partly received in the legacy system accepts a full second receipt on day one | Fix before the rehearsal; medium |
-| 3 | 432 | 7-7 | No `LC_COLLATE`, `POSTGRES_INITDB_ARGS` or `COLLATE` anywhere under `deploy/` (confirmed) | Pairs with Table 1 row 3: a restore to a different-locale host changes `lower()` semantics on uniqueness checks | Runbook: pin `POSTGRES_INITDB_ARGS` and `TZ` in the compose files in the same commit as the IST pin |
-| 4 | 11.5R-1 | 11.5 | `metadata.occurred_at` has a 5-minute future bound and no lower bound | A backdated instant drives the GST and valuation gates; statutory | Fix: a lower bound (for example 7 days) at the events door, with the 11.5 suite arm |
-| 5 | 285 | 7-1 | `persistEvent` has no registry-membership or stream-to-event consistency check outside the migration stream (the ledger's own re-check, 2026-09-04) | A mismatched `stream_type` skips shape validation and the direct-writes guard | Verify first (30 minutes); if still open, fix at the persist path before the rehearsal |
-| 6 | 11.2R-1 | 11.2 | `POST /api/v1/events` has no frontline-role denial for the three dispatch events; only the edge door has one | A store assistant with events-door access can pack, document and dispatch | Fix: mirror `DISPATCH_DENIED_FRONTLINE_ROLES` on the events door; small |
-| 7 | 761 | 9-5 | Return-clock FIFO ignores `challan_class` (decided, not implemented) | Section 143 clock drained in the wrong order; ITC-04 figures wrong for mixed-class orders | Implement the decided lock-query fix; small |
+| 3 | 432 | 7-7 | DONE 2026-09-13: `POSTGRES_INITDB_ARGS: --locale=C.UTF-8` on the compose postgres service (first-boot only; an existing volume keeps its locale, noted inline) | Pairs with Table 1 row 3: a restore to a different-locale host changes `lower()` semantics on uniqueness checks | Runbook: pin `POSTGRES_INITDB_ARGS` and `TZ` in the compose files in the same commit as the IST pin |
+| 4 | 11.5R-1 | 11.5 | DONE 2026-09-12: `metadata.occurred_at` floor `EVENT_OCCURRED_AT_MAX_AGE_DAYS` (default 30, test env 3650) in `validateEnvelope`, pure check unit-tested | A backdated instant drives the GST and valuation gates; statutory | Fix: a lower bound (for example 7 days) at the events door, with the 11.5 suite arm |
+| 5 | 285 | 7-1 | DONE 2026-09-13 (narrow form): `assertRegisteredStream` refuses a registered event_type on any stream but its registered one, at both doors and inside `persistEvent`; unregistered types untouched (still the ledger's platform decision); unit-pinned | A mismatched `stream_type` skips shape validation and the direct-writes guard | Verify first (30 minutes); if still open, fix at the persist path before the rehearsal |
+| 6 | 11.2R-1 | 11.2 | ALREADY CLOSED (commit d9fb465): `DISPATCH_SOD_ROLES` and `assertDispatchSodFunctionAccess` gate the three dispatch events on the events door; pinned by the 11.2 edge-sweep suite | A store assistant with events-door access can pack, document and dispatch | Fix: mirror `DISPATCH_DENIED_FRONTLINE_ROLES` on the events door; small |
+| 7 | 761 | 9-5 | DONE 2026-09-12: a return may declare `challan_class`; `orderClocksForDrain` drains that class first, then oldest live, then breached (unit and 9.5 arms) | Section 143 clock drained in the wrong order; ITC-04 figures wrong for mixed-class orders | Implement the decided lock-query fix; small |
 | 8 | 768 and 769 | 9-5 | Return-clock counters only ever add; the classification correction records no actor or reason | The first mis-posted return in the pilot has no correction path and no audit | Runbook: name the manual correction owner; schedule the reversal-event design |
 | 9 | 118 | 2-3 | FEFO/FIFO cannot split one request across lots; `NO_AVAILABLE_LOT` even when combined stock suffices | Pickers hit refusals daily on any SKU held in several lots | Runbook and training: split the request by lot; or fix if the site's lot profile makes this frequent (ask the site) |
-| 10 | 706 | 8-7 | Compliance-authority delegation is single-hop and never checks the delegate is active | An inactive user can be resolved as BIS compliance authority | Fix: add the active check; small |
+| 10 | 706 | 8-7 | ALREADY CLOSED for the active check: `findActiveDelegation` joins `users` on `active = true`; single-hop remains by design | An inactive user can be resolved as BIS compliance authority | Fix: add the active check; small |
 | 11 | 604 | 8-3 | `supplier-scorecards.ts` writes a scorecard metric with no site-access assertion | Cross-site write; one pilot site limits the blast radius | Accept for pilot; fix with the procurement write-site guard (row 208) |
 | 12 | 495 | 7-8 | Only `open` work orders are swept to `overdue`; `in_progress` and `on_hold` never are | Overdue escalations silent for in-flight maintenance | Fix if the site runs statutory maintenance in the pilot window; else accept |
 | 13 | 304 | 7-2 | A failed overdue notification is never retried; the work order stays `overdue` with no alert | One notification outage loses escalations permanently | Runbook: a daily read of the overdue list until the outbox design lands |
@@ -66,6 +66,10 @@ Everything else in Open and Decided. Representative groups, with the reason:
 - Cosmetic or contract-stable (499, 9.9-3, 11.2R-4, 11.2R-5, 11.5R-14, 13-2 paging total).
 
 ## 4. Closed since the round table, confirm and strike
+
+- Table 1 rows 1 and 2: Stories 7.9 and 7.10 created 2026-09-12 (`epics.md`, `sprint-status.yaml`, status `backlog`, tagged PRE-PILOT).
+- Table 2 ranks 1, 4 and 7: fixed 2026-09-12 with test arms (see the rows).
+- Table 2 ranks 6 and 10: found already closed in code on inspection (see the rows).
 
 - 11.5R-8 edge `PERMANENT_ERROR_CODES` parity: closed 2026-09-12, both sets 188, parity test asserts equality.
 - 11.5R-15 and row 172 (edge and dispatch appliers, cross-site): closed 2026-09-09 by the edge-door site-scope sweep.

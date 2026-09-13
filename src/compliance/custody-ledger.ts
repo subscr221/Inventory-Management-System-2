@@ -25,7 +25,7 @@ import { applyStockBalanceProjection } from './stock-balance.js';
 import { isPositiveQtyString, JOB_WORK_STOCK_CLASS } from './jobwork-receipt.js';
 import { qtyAdd, qtyCompare, qtyFromScaled, qtyNegate, qtyToScaled } from './custody-statement.js';
 import { resolveApprover } from '../api/v1/indents.js';
-import { reconcileReturnClocks } from './jobwork-return-clock.js';
+import { isChallanClass, reconcileReturnClocks } from './jobwork-return-clock.js';
 
 /**
  * Story 9.3: custody ledger consumption and own-material seam (FR-JW-05, FR-JW-06, FR-JW-07).
@@ -191,6 +191,7 @@ const RETURN_FIELDS = new Set([
   'site_id',
   'return_challan_number_ext',
   'posted_by',
+  'challan_class',
 ]);
 const RETURN_DERIVED_FIELDS = ['custody_balance_after'] as const;
 
@@ -494,6 +495,12 @@ export function assertCustodyReturnShape(envelope: EventEnvelope): void {
     );
   }
   p['return_challan_number_ext'] = (p['return_challan_number_ext'] as string).trim();
+  if (p['challan_class'] !== undefined && !isChallanClass(p['challan_class'])) {
+    reject('INVALID_PARAMS', 'challan_class must be input or capital_goods when supplied', {
+      field: 'challan_class',
+      supplied: p['challan_class'],
+    });
+  }
 }
 
 /**
@@ -1445,6 +1452,7 @@ export async function applyCustodyReturnProjection(
       counter: 'reconciled_qty',
       category: 'return',
       strict: false,
+      ...(p.challan_class !== undefined ? { preferChallanClass: p.challan_class } : {}),
     },
     client,
   );

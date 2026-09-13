@@ -180,9 +180,12 @@ describe('Story 3.10 cross-dock feeds packing and dispatch on staging stock', ()
   });
 
   it('packs the confirmed cross-dock pick line and dispatches from the staging bin', async () => {
+    // Deferred-work 285 (2026-09-13): the three dispatch.* events are registered on the
+    // 'warehouse' stream (src/api/v1/dispatch.ts writes them there); this fixture used to say
+    // 'dispatch', which nothing enforced until assertRegisteredStream landed and refused it.
     await persistEvent({
       event_id: randomUUID(),
-      stream_type: 'dispatch',
+      stream_type: 'warehouse',
       stream_id: soId,
       event_type: 'dispatch.packed',
       payload: {
@@ -201,7 +204,7 @@ describe('Story 3.10 cross-dock feeds packing and dispatch on staging stock', ()
     });
     await persistEvent({
       event_id: randomUUID(),
-      stream_type: 'dispatch',
+      stream_type: 'warehouse',
       stream_id: soId,
       event_type: 'dispatch.shipping_documents_generated',
       payload: { dispatch_order_id: soId, document_types: ['bol'] },
@@ -229,7 +232,7 @@ describe('Story 3.10 cross-dock feeds packing and dispatch on staging stock', ()
     );
     await persistEvent({
       event_id: randomUUID(),
-      stream_type: 'dispatch',
+      stream_type: 'warehouse',
       stream_id: soId,
       event_type: 'dispatch.dispatched',
       payload: { dispatch_order_id: soId },

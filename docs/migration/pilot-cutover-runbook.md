@@ -54,10 +54,12 @@ Table 2: Environment checklist
 | 2.1 | Provision the host with `deploy/provision/provision.sh` (Docker Compose v2 plugin required) | script exit 0 |
 | 2.2 | Deploy the immutable images with `deploy/pipeline/deploy.sh staging`, then `production` with the same `IMAGE_TAG` | health check at `HEALTH_URL` returns 200 |
 | 2.3 | Run `npm run db:migrate` against the target; confirm it is re-runnable (second run, no error) | migrate log, two clean runs |
+| 2.3a | Confirm `SHOW timezone` on the database returns `Asia/Kolkata` and `SHOW lc_collate` returns `C.UTF-8` (first-boot pins; a restored volume keeps its own) | psql output |
 | 2.4 | Confirm the backup job (`deploy/backup/backup.sh`, pgBackRest) has produced one full backup and one WAL archive segment | backup listing |
 | 2.5 | Run `deploy/pipeline/verify.sh` (read-only) against the repository | exit 0 |
 | 2.6 | Confirm `AUTH_MODE`, `AUTH_JWKS_URI`, `AUTH_ISSUER`, `AUTH_AUDIENCE`, `SCIM_BEARER_TOKEN` are the production identity provider's values, not the dev-token values | `.env` review, two people |
 | 2.7 | Confirm `ERP_SYNC_FRESHNESS_MS` and the ERP sync schedule; record the sync window | schedule document |
+| 2.7a | Confirm `EVENT_OCCURRED_AT_MAX_AGE_DAYS` (default 30) covers the longest offline period a technician device can have; an older upload is refused `INVALID_EVENT_ENVELOPE` | `.env` review |
 | 2.8 | Record the 20,000-row opening-stock promotion timing on staging (deferred-work item 800) | figure written into deferred-work |
 
 Step 2.8 is still owed as of this draft: only a 10,000-row local run exists. Do not proceed to

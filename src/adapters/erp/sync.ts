@@ -54,6 +54,8 @@ const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 // would otherwise cross-close each other's present rows (each soft-closes what is absent from ITS
 // feed). A pg_advisory_xact_lock serializes the read-decide-persist window per projection and is
 // released automatically on COMMIT/ROLLBACK. Values are arbitrary stable constants.
+const SNAPSHOT_AT_FUTURE_SKEW_MS = 5 * 60_000;
+
 const ADVISORY_LOCK_KEYS: Record<'purchase_orders' | 'sales_orders' | 'stock_balances', number> = {
   purchase_orders: 2_090_001,
   sales_orders: 2_090_002,
@@ -486,6 +488,15 @@ async function applyStockBalance(
   if (typeof record.snapshot_at !== 'string' || Number.isNaN(Date.parse(record.snapshot_at))) {
     throw new AppError(400, 'INVALID_PARAMS', 'snapshot_at must be an ISO-8601 instant', {
       field: 'snapshot_at',
+    });
+  }
+  // Pilot triage 2026-09-12 (13.1 ledger): a future-dated snapshot would become the "latest"
+  // snapshot for every variance comparison and, since Story 13.3, would make both final go-live
+  // sign-offs permanently SIGNOFF_STALE. Nothing is extracted in the future; 5 minutes of skew.
+  if (Date.parse(record.snapshot_at) > Date.now() + SNAPSHOT_AT_FUTURE_SKEW_MS) {
+    throw new AppError(400, 'INVALID_PARAMS', 'snapshot_at must not be in the future', {
+      field: 'snapshot_at',
+      snapshot_at: record.snapshot_at,
     });
   }
   const lotExt = isNonEmptyString(record.lot_number_ext) ? record.lot_number_ext.trim() : null;

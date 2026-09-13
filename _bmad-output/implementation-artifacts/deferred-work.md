@@ -959,3 +959,51 @@ both sets (188 and 188): `PROTOTYPE_NOT_SALEABLE`, `KIT_LINE_MISMATCH`, `OFFCUT_
 sets are IDENTICAL (the known-drift pin is gone) and pins the nine as a block so dropping them from
 both sets together still fails. Edge queues that meet one of these refusals settle
 `needs_attention` instead of retrying forever.
+
+## Pilot triage fixes (2026-09-12) - CLOSES 761, 11.5R-1, the 13.1 snapshot_at bullet; CONFIRMS 11.2R-1 and 706 closed
+
+Pre-pilot sweep item 4, first ruling. Triage document:
+`_bmad-output/implementation-artifacts/pilot-blocking-triage-2026-09-12.md`.
+
+- 761 (9-5): `custody.return_recorded` accepts an optional `challan_class`; `orderClocksForDrain`
+  (`src/compliance/jobwork-return-clock.ts`) drains the declared class first, then the oldest live
+  clock, then breached clocks. The SQL lock order is unchanged. Unit arms plus a 9.5 integration arm.
+- 11.5R-1: `metadata.occurred_at` now has a floor, `EVENT_OCCURRED_AT_MAX_AGE_DAYS` (default 30,
+  maximum 3650; `.env.test` sets 3650 because fixtures carry fixed dates). Pure
+  `occurredAtBoundViolation` in `src/events/store.ts`, unit-tested in
+  `test/unit/event-envelope-age.test.ts`.
+- 13.1 snapshot_at: `applyStockBalance` refuses a `snapshot_at` later than now plus 5 minutes per
+  row (queued as an integration exception like any other malformed row). Since Story 13.3 a future
+  snapshot would have made both final sign-offs permanently `SIGNOFF_STALE`.
+- 11.2R-1: confirmed closed by commit d9fb465 (`DISPATCH_SOD_ROLES` on the events door).
+- 706: the "inactive delegate" half is closed - `findActiveDelegation` joins `users` on
+  `active = true`; single-hop resolution stays by design.
+- Rows 326 and 343: Stories 7.9 and 7.10 created (`backlog`, PRE-PILOT).
+
+## Round table 2026-09-13 on the open pilot items - CLOSES 215, 616, 432; NARROWS 285
+
+Party-mode session on the triage sheet's remaining engineering rows (Winston, Amelia, Murat, John,
+Vex, Yui, Grumbal, Ravi). Two commits, each with its own full-suite run (Murat's clause):
+
+- 215 and 616, the IST pin: `src/config/db.ts` opens every session on both pools with
+  `-c TimeZone=Asia/Kolkata -c DateStyle=ISO` and parses DATE (OID 1082) as its YYYY-MM-DD string,
+  so `CURRENT_DATE` and `now()::date` in SQL agree with `toIstCalendarDate`. The compose postgres
+  and replica services carry `-c timezone=Asia/Kolkata`. `test/integration/db-session-pin.test.ts`
+  pins zone, DateStyle, the string parser and the calendar-date agreement on both pools.
+- 432, the collation pin: `POSTGRES_INITDB_ARGS: --locale=C.UTF-8` on the compose postgres
+  service. initdb reads it on first boot only; an existing volume keeps the locale it was created
+  with (comment inline).
+- 285, narrowed: `assertRegisteredStream` (`src/events/store.ts`) refuses a REGISTERED
+  event_type on any stream_type other than the one SUPPORTED_EVENT_TYPES names, at both doors
+  (`validateEnvelope`) and in the persistEvent pre-transaction chain. Unregistered event types are
+  untouched; that half stays open as the platform decision the row always was.
+- Rank 2 (receiving ignores `erp_purchase_order_line.open_qty`) is PARKED on one floor fact the
+  room could not settle: whether anything on the customer side ever pushes a platform GRN back into
+  the ERP (feed or retyped). No outbound GRN adapter exists today (Yui); head office re-syncs POs by
+  hand (Ravi). The formula differs by the answer. Question handed to the user.
+- Suite oracle for 285 (Murat's clause): the first full run after the stream check failed twice.
+  `test/integration/story-3-10-dispatch.test.ts` persisted the three dispatch.* events on stream
+  `dispatch` while `src/api/v1/dispatch.ts` writes every one on `warehouse` (fixture corrected);
+  `test/integration/story-9-1.test.ts` AC3 now sees `INVALID_EVENT_STREAM` at the door instead of
+  the 9.1 envelope assert's `INVALID_EVENT_ENVELOPE` (pin updated, same refusal). Both suites
+  28/28 after; the two changes are test-only.

@@ -808,6 +808,14 @@ export const config = {
       true,
     ),
   },
+  events: {
+    // Pilot triage 2026-09-12 (ledger 11.5R-1): metadata.occurred_at had a 5-minute future bound
+    // and no lower bound, so any gate keyed on gateBusinessDateOf could be driven from a
+    // caller-supplied backdated instant. Offline edge uploads are legitimately old, so the floor
+    // is generous (default 30 days) and configurable; the test environment sets 3650 because its
+    // fixtures carry fixed calendar dates.
+    occurredAtMaxAgeDays: parsePositiveIntEnv('EVENT_OCCURRED_AT_MAX_AGE_DAYS', 30, 3650),
+  },
 } as const;
 
 // Story 9.5 (Task 2.1): the two breach-window lead days must be ordered outer > inner, or the

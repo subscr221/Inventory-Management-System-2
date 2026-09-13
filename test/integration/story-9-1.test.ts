@@ -872,7 +872,10 @@ describe('Story 9.1 Job-Work Service Order Creation', () => {
       coordinatorHeaders,
     );
     assert.strictEqual(res.status, 400, JSON.stringify(res.body));
-    assert.strictEqual(res.body['error_code'], 'INVALID_EVENT_ENVELOPE');
+    // Deferred-work 285 (2026-09-13): the door now refuses a registered jobwork.* type on a
+    // foreign stream as INVALID_EVENT_STREAM before the 9.1 envelope assert can answer; same
+    // outcome this arm pins (refused at the door, no applier reached).
+    assert.strictEqual(res.body['error_code'], 'INVALID_EVENT_STREAM');
   });
 
   // -------------------------------------------------------------------------

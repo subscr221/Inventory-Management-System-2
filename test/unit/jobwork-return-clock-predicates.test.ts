@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   allocateFifo,
+  orderClocksForDrain,
   calendarDaysUntil,
   deemedSupplyQty,
   dueClockSweepStage,
@@ -294,6 +295,47 @@ describe('Story 9.5 allocateFifo (AC2: the older challan fills first)', () => {
     const result = allocateFifo([{ clock_id: 'A', capacity: 10n }], 0n);
     assert.deepEqual(result.allocations, []);
     assert.equal(result.unallocated, 0n);
+  });
+});
+
+describe('Story 9.5 orderClocksForDrain (ledger 761: matching class, then oldest live, then breached)', () => {
+  const rows = [
+    {
+      clock_id: 'old-input-breached',
+      challan_class: 'input' as const,
+      status: 'breached' as const,
+    },
+    { clock_id: 'old-input', challan_class: 'input' as const, status: 'open' as const },
+    { clock_id: 'mid-capital', challan_class: 'capital_goods' as const, status: 'open' as const },
+    {
+      clock_id: 'new-input',
+      challan_class: 'input' as const,
+      status: 'partially_reconciled' as const,
+    },
+  ];
+
+  it('keeps the lock order (oldest live first, breached last) when no class is declared', () => {
+    assert.deepEqual(
+      orderClocksForDrain(rows).map((r) => r.clock_id),
+      ['old-input', 'mid-capital', 'new-input', 'old-input-breached'],
+    );
+  });
+
+  it('drains the declared class first, live before breached, then the rest in lock order', () => {
+    assert.deepEqual(
+      orderClocksForDrain(rows, 'capital_goods').map((r) => r.clock_id),
+      ['mid-capital', 'old-input', 'new-input', 'old-input-breached'],
+    );
+    assert.deepEqual(
+      orderClocksForDrain(rows, 'input').map((r) => r.clock_id),
+      ['old-input', 'new-input', 'old-input-breached', 'mid-capital'],
+    );
+  });
+
+  it('does not mutate its input', () => {
+    const copy = [...rows];
+    orderClocksForDrain(rows, 'capital_goods');
+    assert.deepEqual(rows, copy);
   });
 });
 

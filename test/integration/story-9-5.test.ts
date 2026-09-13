@@ -1018,6 +1018,52 @@ describe('Story 9.5 Statutory Return Clocks and Closure Gate', () => {
     assert.ok((stored.rows[0]!['challan'] as string).startsWith('RET-'));
   });
 
+  it('Ledger 761: a return that declares its challan class drains that class first; an undeclared return keeps oldest-live-first; an unknown class is refused', async () => {
+    const orderId = await confirmedOrder();
+    const older = await receive(orderId, { qty: '100', challanDate: shiftDays(TODAY, -120) });
+    const newer = await receive(orderId, {
+      qty: '100',
+      challanDate: shiftDays(TODAY, -60),
+      challanClass: 'capital_goods',
+    });
+
+    const bad = await postReturn(orderId, {
+      lot_id: newer.lot,
+      quantity: '10',
+      challan_class: 'scrap',
+    });
+    assert.strictEqual(bad.status, 400, JSON.stringify(bad.body));
+    assert.strictEqual(bad.body['error_code'], 'INVALID_PARAMS');
+
+    // Declared capital_goods: the NEWER (capital) clock drains, the older input clock is untouched.
+    const classed = await postReturn(orderId, {
+      lot_id: newer.lot,
+      quantity: '40',
+      challan_class: 'capital_goods',
+    });
+    assert.strictEqual(classed.status, 201, JSON.stringify(classed.body));
+    let clocks = await clocksFor(orderId);
+    let olderClock = clocks.find((c) => c['receipt_id'] === older.receiptId)!;
+    let newerClock = clocks.find((c) => c['receipt_id'] === newer.receiptId)!;
+    assert.strictEqual(olderClock['reconciled_qty'], '0.000');
+    assert.strictEqual(newerClock['reconciled_qty'], '40.000');
+    assert.strictEqual(newerClock['challan_class'], 'capital_goods');
+
+    // Undeclared: the oldest live clock drains first, exactly as before.
+    const plain = await postReturn(orderId, { lot_id: older.lot, quantity: '30' });
+    assert.strictEqual(plain.status, 201, JSON.stringify(plain.body));
+    clocks = await clocksFor(orderId);
+    olderClock = clocks.find((c) => c['receipt_id'] === older.receiptId)!;
+    newerClock = clocks.find((c) => c['receipt_id'] === newer.receiptId)!;
+    assert.strictEqual(olderClock['reconciled_qty'], '30.000');
+    assert.strictEqual(newerClock['reconciled_qty'], '40.000');
+    const stored = await getAdminPool().query(
+      `SELECT payload->>'challan_class' AS challan_class FROM domain_events WHERE event_id = $1`,
+      [classed.body['event_id']],
+    );
+    assert.strictEqual(stored.rows[0]!['challan_class'], 'capital_goods');
+  });
+
   it('AC2: a return refuses a blank return_challan_number_ext (400); an over-tolerance excess drains in full with the clock capped', async () => {
     const orderId = await confirmedOrder();
     // Received 105 against a challan of 100 (a flagged over-tolerance receipt): the custody balance

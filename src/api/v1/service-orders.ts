@@ -1002,7 +1002,8 @@ const postServiceOrderReturnBase: RouteHandler = (req, res, params) =>
     eventType: CUSTODY_RETURN_RECORDED,
     idField: 'return_id',
     // The delivery challan the material leaves under - mandatory, enforced in the seam's assert.
-    extraFields: ['return_challan_number_ext'],
+    // challan_class is optional (ledger 761): when declared, that class's return clocks drain first.
+    extraFields: ['return_challan_number_ext', 'challan_class'],
     derivedFields: ['custody_balance_after'],
   });
 
