@@ -37,6 +37,10 @@ const PERMANENT_ERROR_CODES = new Set([
   'ITEM_NOT_FOUND',
   'FUNCTION_ACCESS_DENIED',
   'LOCATION_ACCESS_DENIED',
+  // Staging 2026-09-14: a role with no access to the event's module is refused on every retry;
+  // as a bare 403 it parked the row auth_required, told a signed-in user to sign in again, and
+  // (Story 1.12) blocked their sign-out. Settles needs_attention like the two denials above.
+  'MODULE_ACCESS_DENIED',
   'VALUATION_METHOD_NOT_PERMITTED',
   'NRV_RECOVERY_EXCEEDS_ORIGINAL_COST',
   'APPROVAL_REQUIRED',

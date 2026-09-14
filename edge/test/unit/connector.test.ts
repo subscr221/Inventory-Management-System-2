@@ -68,6 +68,12 @@ describe('edge upload failure classification', () => {
   });
 
   it('separates permanent, auth, and retryable failures', () => {
+    // An authorization denial is not a sign-in problem: only a bare 401/403 halts as auth_required.
+    for (const code of ['FUNCTION_ACCESS_DENIED', 'LOCATION_ACCESS_DENIED', 'MODULE_ACCESS_DENIED']) {
+      assert.equal(classifyServerUploadFailure(403, { error_code: code }).localStatus, 'needs_attention');
+    }
+    assert.equal(classifyServerUploadFailure(403, {}).localStatus, 'auth_required');
+    assert.equal(classifyServerUploadFailure(401, { error_code: 'UNAUTHORIZED' }).localStatus, 'auth_required');
     assert.equal(
       classifyServerUploadFailure(400, { error_code: 'UNTAGGED_TRANSACTION' }).localStatus,
       'needs_attention',
