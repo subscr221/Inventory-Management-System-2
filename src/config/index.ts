@@ -323,6 +323,9 @@ export const config = {
     tokenIssuer: process.env['POWERSYNC_TOKEN_ISSUER'] ?? 'inventory-edge',
     tokenAudience: process.env['POWERSYNC_TOKEN_AUDIENCE'] ?? 'powersync',
     tokenSecret: process.env['POWERSYNC_TOKEN_SECRET'] ?? '',
+    // The `kid` header of the sync token; must equal the key id in sync/powersync.yaml
+    // `client_auth.jwks` (PowerSync matches the verification key by kid).
+    tokenKid: process.env['POWERSYNC_TOKEN_KID'] ?? 'inventory-edge-hs256',
     tokenTtl: powerSyncTokenTtl,
     tokenTtlSeconds: powerSyncTokenTtlSeconds,
   },

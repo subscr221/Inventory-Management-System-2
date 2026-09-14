@@ -224,6 +224,10 @@ describe('Story 1.8 backend edge sync contract', () => {
     assert.equal(typeof res.body['token'], 'string');
     assert.ok((res.body['token'] as string).length > 20);
     assert.strictEqual(res.body['expires_in_seconds'], 900);
+    // PowerSync picks the verification key by kid (sync/powersync.yaml client_auth.jwks).
+    const [headerB64] = (res.body['token'] as string).split('.');
+    const header = JSON.parse(Buffer.from(headerB64!, 'base64url').toString('utf-8')) as Record<string, unknown>;
+    assert.deepStrictEqual(header, { alg: 'HS256', kid: 'inventory-edge-hs256' });
   });
 
   it('bootstrap and PowerSync token select the same concrete operating location', async () => {

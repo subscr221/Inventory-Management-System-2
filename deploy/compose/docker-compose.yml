@@ -39,6 +39,7 @@ services:
       POWERSYNC_TOKEN_AUDIENCE: ${POWERSYNC_TOKEN_AUDIENCE:-powersync}
       POWERSYNC_TOKEN_SECRET: ${POWERSYNC_TOKEN_SECRET:?set POWERSYNC_TOKEN_SECRET to a long random secret}
       POWERSYNC_TOKEN_TTL: ${POWERSYNC_TOKEN_TTL:-15m}
+      POWERSYNC_TOKEN_KID: ${POWERSYNC_TOKEN_KID:-inventory-edge-hs256}
     ports:
       # Loopback only (round table 2026-09-13, public VPS): reachable from the host for the
       # health probe, never from the internet; nginx is the only public door.
@@ -96,10 +97,20 @@ services:
       PS_TOKEN_ISSUER: ${POWERSYNC_TOKEN_ISSUER:-inventory-edge}
       PS_TOKEN_AUDIENCE: ${POWERSYNC_TOKEN_AUDIENCE:-powersync}
       PS_TOKEN_SECRET: ${POWERSYNC_TOKEN_SECRET:?set POWERSYNC_TOKEN_SECRET to a long random secret}
+      PS_TOKEN_KID: ${POWERSYNC_TOKEN_KID:-inventory-edge-hs256}
     volumes:
       - ../../sync/powersync.yaml:/config/powersync.yaml:ro
       - ../../sync/sync-rules.yaml:/config/sync-rules.yaml:ro
-    command: ["start", "-c", "/config/powersync.yaml"]
+    # client_auth.jwks needs the shared secret as a base64url JWK `k`; derive it from the one
+    # secret at start (the image ships node) instead of keeping a second encoded copy in .env.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        PS_TOKEN_JWK_K="$$(node -e 'process.stdout.write(Buffer.from(process.env.PS_TOKEN_SECRET, "utf8").toString("base64url"))')"
+        && export PS_TOKEN_JWK_K
+        && exec node service/lib/entry.js start -c /config/powersync.yaml
+    command: []
     ports:
       - "127.0.0.1:${POWERSYNC_HOST_PORT:-8080}:8080"
     networks:

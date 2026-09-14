@@ -349,7 +349,7 @@ const powerSyncCredentialsBase: RouteHandler = async (req, res) => {
     site_id: assignment.locationId,
     site_name: edgeSiteName(),
   })
-    .setProtectedHeader({ alg: 'HS256' })
+    .setProtectedHeader({ alg: 'HS256', kid: config.powerSync.tokenKid })
     .setSubject(authContext.externalId)
     .setIssuer(config.powerSync.tokenIssuer)
     .setAudience(config.powerSync.tokenAudience)

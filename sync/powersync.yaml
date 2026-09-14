@@ -11,11 +11,21 @@ storage:
   uri: !env PS_STORAGE_URI
   sslmode: disable
 
-jwt:
-  issuer: !env PS_TOKEN_ISSUER
-  audience: !env PS_TOKEN_AUDIENCE
-  algorithm: HS256
-  secret: !env PS_TOKEN_SECRET
+# Sync-token verification. The app signs HS256 tokens with POWERSYNC_TOKEN_SECRET
+# (src/api/v1/edge.ts); PowerSync reads verification keys only from `client_auth.jwks`, as an
+# `oct` JWK whose `k` is the base64url of the secret's bytes. The compose entrypoint derives
+# PS_TOKEN_JWK_K from PS_TOKEN_SECRET at start, so there is one secret to rotate. (A top-level
+# `jwt:` block, used here until 2026-09-14, is ignored by the service: its keystore was empty and
+# every sync stream was refused with PSYNC_S2101.)
+client_auth:
+  audience:
+    - !env PS_TOKEN_AUDIENCE
+  jwks:
+    keys:
+      - kty: oct
+        alg: HS256
+        kid: !env PS_TOKEN_KID
+        k: !env PS_TOKEN_JWK_K
 
 sync_rules:
   path: /config/sync-rules.yaml
