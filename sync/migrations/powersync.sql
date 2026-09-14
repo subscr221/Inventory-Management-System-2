@@ -7,16 +7,26 @@ END $$;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync_publication') THEN
-    CREATE PUBLICATION powersync_publication FOR TABLE domain_events;
+  -- powersync-service replicates only through a publication named exactly "powersync"
+  -- (module-postgres PUBLICATION_NAME); databases created before 2026-09-14 carry the old name.
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync_publication')
+     AND NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync') THEN
+    ALTER PUBLICATION powersync_publication RENAME TO powersync;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync') THEN
+    CREATE PUBLICATION powersync FOR TABLE domain_events;
   ELSIF NOT EXISTS (
     SELECT 1
     FROM pg_publication_tables
-    WHERE pubname = 'powersync_publication'
+    WHERE pubname = 'powersync'
       AND schemaname = 'public'
       AND tablename = 'domain_events'
   ) THEN
-    ALTER PUBLICATION powersync_publication ADD TABLE domain_events;
+    ALTER PUBLICATION powersync ADD TABLE domain_events;
   END IF;
 END $$;
 

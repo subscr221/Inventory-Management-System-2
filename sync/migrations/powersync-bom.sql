@@ -24,18 +24,18 @@ DO $$
 DECLARE
   target_table text;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync_publication') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync') THEN
     RETURN;
   END IF;
   FOREACH target_table IN ARRAY ARRAY['bom', 'bom_revision', 'bom_line', 'bom_alternate'] LOOP
     IF NOT EXISTS (
       SELECT 1
       FROM pg_publication_tables
-      WHERE pubname = 'powersync_publication'
+      WHERE pubname = 'powersync'
         AND schemaname = 'public'
         AND tablename = target_table
     ) THEN
-      EXECUTE format('ALTER PUBLICATION powersync_publication ADD TABLE %I', target_table);
+      EXECUTE format('ALTER PUBLICATION powersync ADD TABLE %I', target_table);
     END IF;
   END LOOP;
 END $$;
