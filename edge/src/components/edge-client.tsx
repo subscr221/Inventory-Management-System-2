@@ -25,11 +25,15 @@ import { t } from '../i18n/locale';
 import { createEdgeDatabase } from '../local-db/database';
 import {
   cacheContext,
+  clearCachedUserContext,
+  countUnsettled,
   hasAuthRequired,
   insertCaptureEvent,
   readCachedContext,
   readFailures,
   readOutboxCounts,
+  readWaitingForOtherOwners,
+  resetAuthRequired,
 } from '../local-db/outbox';
 import {
   applyWorklistSnapshot,
@@ -44,6 +48,9 @@ import {
 import { EdgePowerSyncConnector } from '../sync/connector';
 import { deriveSyncUiState, type SyncUiState } from '../sync/sync-status';
 import { refreshWorklist } from '../sync/worklist-refresh';
+import { authorizedFetch } from '../session/api-fetch';
+import { AuthConfigUnavailableError, loadAuthConfig } from '../session/auth-config';
+import { createBrowserSession, setActiveSession, type EdgeSession } from '../session/session';
 
 interface BootstrapResponse {
   user_id: string;
@@ -73,6 +80,14 @@ interface RuntimeState {
   authRequired: boolean;
   firstSyncRequired: boolean;
   setupError: boolean;
+  // Story 1.12: offline with no cached sign-in; unsettled captures that blocked a sign-out.
+  offlineNoSession: boolean;
+  signOutBlockedCount: number;
+  signOutAvailable: boolean;
+  signingOut: boolean;
+  signOutIncomplete: boolean;
+  // Story 1.12 (review decision 1): captures parked for people other than the signed-in user.
+  waitingForOthers: Array<{ userName: string; count: number }>;
   syncState: SyncUiState;
   // Story 7.8: the cached technician worklist.
   workOrders: CachedWorkOrderRow[];
@@ -95,6 +110,12 @@ const initialState: RuntimeState = {
   authRequired: false,
   firstSyncRequired: false,
   setupError: false,
+  offlineNoSession: false,
+  signOutBlockedCount: 0,
+  signOutAvailable: false,
+  signingOut: false,
+  signOutIncomplete: false,
+  waitingForOthers: [],
   syncState: 'offline',
   workOrders: [],
   worklistMeta: { total: 0, truncated: false, fetchedAt: null },
@@ -104,6 +125,26 @@ const initialState: RuntimeState = {
 };
 
 const WORKLIST_META_KEY = 'inventory-edge-worklist-meta';
+// Story 1.12: display names of everyone who has signed in on this device, so captures parked for
+// another person can say whose they are after that person's cached context was replaced.
+const KNOWN_USERS_KEY = 'inventory-edge-known-users';
+
+function readKnownUsers(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(KNOWN_USERS_KEY) ?? '{}') as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberKnownUser(userId: string, userName: string): void {
+  try {
+    localStorage.setItem(KNOWN_USERS_KEY, JSON.stringify({ ...readKnownUsers(), [userId]: userName }));
+  } catch {
+    // Storage unavailable: the notice falls back to a generic owner label.
+  }
+}
 
 function deviceId(): string {
   const key = 'inventory-edge-device-id';
@@ -141,14 +182,33 @@ function parseMeters(raw: string | undefined): WorklistMeter[] {
 
 export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maintenance' }) {
   const database = useRef<PowerSyncDatabase | null>(null);
+  // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
+  const session = useRef<EdgeSession | null>(null);
+  const redirecting = useRef(false);
+  // Story 1.12: the user the API confirmed at bootstrap; the connector uploads only their rows.
+  const signedInUserId = useRef<string | null>(null);
+  // Story 1.12: the API rejected the token (survives outbox-driven recomputes of `authRequired`).
+  const sessionAuthLost = useRef(false);
+  // Story 1.12: no capture may start between the sign-out count and the identity being cleared.
+  const signingOut = useRef(false);
   const [state, setState] = useState(initialState);
 
+  const insertOwnCapture = useCallback(async (db: PowerSyncDatabase, event: Parameters<typeof insertCaptureEvent>[1]) => {
+    if (signingOut.current) throw new Error('Signing out: capture is closed');
+    await insertCaptureEvent(db, event);
+  }, []);
+
   const refreshLocalState = useCallback(async (db: PowerSyncDatabase) => {
-    const [counts, failures, authRequired] = await Promise.all([
+    const currentUser = signedInUserId.current;
+    const [counts, failures, rowsAuthRequired, waiting, ownUnsettled] = await Promise.all([
       readOutboxCounts(db),
       readFailures(db),
-      hasAuthRequired(db),
+      hasAuthRequired(db, currentUser ?? undefined),
+      currentUser ? readWaitingForOtherOwners(db, currentUser) : Promise.resolve([]),
+      currentUser ? countUnsettled(db, currentUser) : Promise.resolve(0),
     ]);
+    const authRequired = rowsAuthRequired || sessionAuthLost.current;
+    const knownUsers = readKnownUsers();
     const online = navigator.onLine;
     const syncing = Boolean(db.currentStatus.dataFlowStatus.uploading);
     setState((current) => ({
@@ -161,6 +221,12 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
         failedAt: failure.created_at,
       })),
       authRequired,
+      waitingForOthers: waiting.map((entry) => ({
+        userName: knownUsers[entry.userId] ?? '',
+        count: entry.count,
+      })),
+      // Story 1.12 (AC4): once nothing is left to upload, the sign-out gate notice goes away.
+      signOutBlockedCount: ownUnsettled === 0 ? 0 : current.signOutBlockedCount,
       syncState: authRequired
         ? 'error'
         : deriveSyncUiState({ online, syncing, ...counts }),
@@ -212,6 +278,30 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
   useEffect(() => {
     let cancelled = false;
     let stopWatching: (() => void) | undefined;
+    let stopAuthLost: (() => void) | undefined;
+
+    // Story 1.12 (AC3): the API rejected the token after a refresh, or the refresh itself failed.
+    // Online: back to the login page, remembering this screen; the outbox keeps every capture
+    // (nothing here touches edge_outbox). Offline: only the sync banner changes; capture continues
+    // and the parked rows are re-queued after the next sign-in.
+    function redirectToSignIn() {
+      const current = session.current;
+      if (!current || current.mode !== 'oidc' || !navigator.onLine || redirecting.current) return;
+      redirecting.current = true;
+      void current
+        .requestSignIn(window.location.pathname + window.location.search)
+        .catch(() => {
+          redirecting.current = false;
+        });
+    }
+
+    function onAuthLost() {
+      // Local mode has no sign-in page to recover through; a rejected dev token is not a banner.
+      if (session.current?.mode !== 'oidc') return;
+      sessionAuthLost.current = true;
+      setState((current) => ({ ...current, authRequired: true, syncState: 'error' }));
+      redirectToSignIn();
+    }
 
     async function start() {
       try {
@@ -234,8 +324,47 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
         }
         await loadWorklistFromCache(db);
 
+        // Story 1.12: sign in AFTER the cached context has rendered and BEFORE any API call, so an
+        // offline start never blocks on auth (AC5) and every call below carries the bearer (AC2).
+        let sessionReady = false;
         try {
-          const response = await fetch('/api/v1/edge/bootstrap', { credentials: 'include' });
+          const config = await loadAuthConfig();
+          const edgeSession = await createBrowserSession(config);
+          if (cancelled) {
+            edgeSession.dispose();
+            return;
+          }
+          session.current = edgeSession;
+          setActiveSession(edgeSession);
+          stopAuthLost = edgeSession.onAuthLost(onAuthLost);
+          const outcome = await edgeSession.ensureSignedIn(
+            window.location.pathname + window.location.search,
+          );
+          if (cancelled) return;
+          if (outcome.kind === 'redirecting') {
+            redirecting.current = true;
+            return; // the page is leaving for the login screen
+          }
+          if (outcome.kind === 'offline_no_session') {
+            setState((current) => ({ ...current, offlineNoSession: true }));
+          } else {
+            sessionReady = (await edgeSession.getAccessToken()) !== null;
+          }
+        } catch (error) {
+          if (cancelled) return;
+          if (error instanceof AuthConfigUnavailableError) {
+            // No config and nothing cached: only possible on a first-ever offline open.
+            if (!cached) setState((current) => ({ ...current, offlineNoSession: true }));
+          } else {
+            // The login redirect itself failed (IdP unreachable while online): say so, and retry
+            // the redirect when connectivity changes, instead of running silently unauthenticated.
+            sessionAuthLost.current = true;
+            setState((current) => ({ ...current, authRequired: true, syncState: 'error' }));
+          }
+        }
+
+        try {
+          const response = await authorizedFetch('/api/v1/edge/bootstrap', { credentials: 'include' });
           if (!response.ok) throw new Error('bootstrap unavailable');
           const bootstrap = (await response.json()) as BootstrapResponse;
           await cacheContext(
@@ -247,6 +376,13 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
             },
             { siteId: bootstrap.site_id, siteName: bootstrap.site_name },
           );
+          if (cancelled) return;
+          // Story 1.12 (review decision 1): the API has confirmed who is signed in. Only THEIR
+          // rows parked on an earlier 401 are re-queued; anyone else's wait for that person.
+          signedInUserId.current = bootstrap.user_id;
+          sessionAuthLost.current = false;
+          rememberKnownUser(bootstrap.user_id, bootstrap.user_name);
+          await resetAuthRequired(db, bootstrap.user_id);
           setState((current) => ({
             ...current,
             userId: bootstrap.user_id,
@@ -256,8 +392,12 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
             siteName: bootstrap.site_name,
             navigation: bootstrap.navigation,
             firstSyncRequired: false,
+            authRequired: false,
+            signOutAvailable: sessionReady,
           }));
-          void db.connect(new EdgePowerSyncConnector()).catch(() => undefined);
+          void db
+            .connect(new EdgePowerSyncConnector('', () => signedInUserId.current))
+            .catch(() => undefined);
           if (navigator.onLine) void refreshWorklistNow(db).catch(() => undefined);
         } catch {
           if (!cached) setState((current) => ({ ...current, firstSyncRequired: true }));
@@ -282,6 +422,8 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
 
     function onOnline() {
       refreshConnectivity();
+      // Story 1.12: an auth loss that happened offline redirects once the network is back.
+      if (sessionAuthLost.current) redirectToSignIn();
       const db = database.current;
       if (db) void refreshWorklistNow(db).catch(() => undefined);
     }
@@ -294,13 +436,66 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', refreshConnectivity);
       stopWatching?.();
+      stopAuthLost?.();
+      session.current?.dispose();
+      session.current = null;
+      setActiveSession(null);
     };
   }, [loadWorklistFromCache, refreshLocalState, refreshWorklistNow]);
+
+  // Story 1.12 (AC4): shared-tablet sign-out. Refused while captures would still upload (the
+  // server attributes uploads to the bearer, not to the device-stamped actor); when online the
+  // parked rows are re-queued so the live connection drains them, and the notice clears itself
+  // once the outbox watch sees nothing pending.
+  const signOut = useCallback(async () => {
+    const db = database.current;
+    const current = session.current;
+    const userId = signedInUserId.current;
+    if (!db || !current || !userId || signingOut.current) return;
+    signingOut.current = true;
+    setState((prev) => ({ ...prev, signingOut: true }));
+    let result: Awaited<ReturnType<EdgeSession['signOut']>>;
+    try {
+      result = await current.signOut({
+        countUnsettled: () => countUnsettled(db, userId),
+        clearCachedUser: () => clearCachedUserContext(db),
+      });
+    } catch {
+      signingOut.current = false;
+      setState((prev) => ({ ...prev, signingOut: false }));
+      return;
+    }
+    if (result.blocked) {
+      signingOut.current = false;
+      setState((prev) => ({ ...prev, signingOut: false, signOutBlockedCount: result.count }));
+      if (navigator.onLine) {
+        await resetAuthRequired(db, userId);
+        await refreshLocalState(db);
+      }
+      return;
+    }
+    // Signed out. In oidc mode the page is normally leaving for Keycloak; local mode, or a logout
+    // redirect that could not reach the IdP, stays here, so the shell must stop showing this user.
+    // Capture stays closed (signingOut) until the next start signs somebody in.
+    signedInUserId.current = null;
+    sessionAuthLost.current = false;
+    setActiveSession(null);
+    setState((prev) => ({
+      ...prev,
+      userId: '',
+      userName: '',
+      role: '',
+      signOutAvailable: false,
+      signingOut: false,
+      signOutBlockedCount: 0,
+      signOutIncomplete: result.redirectFailed === true,
+    }));
+  }, [refreshLocalState]);
 
   const capture = useCallback(async () => {
     const db = database.current;
     if (!db || !state.userId || !state.siteId) return;
-    await insertCaptureEvent(
+    await insertOwnCapture(
       db,
       createTestCaptureEvent({
         userId: state.userId,
@@ -313,7 +508,7 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
   }, [refreshLocalState, state.role, state.siteId, state.userId]);
 
   const loadCrossDockTask = useCallback(async (taskId: string): Promise<CrossDockTaskContext | null> => {
-    const response = await fetch(`/api/v1/cross-dock-tasks/${encodeURIComponent(taskId)}`, { credentials: 'include' });
+    const response = await authorizedFetch(`/api/v1/cross-dock-tasks/${encodeURIComponent(taskId)}`, { credentials: 'include' });
     if (!response.ok) return null;
     const body = (await response.json()) as { task?: CrossDockTaskContext };
     return body.task ?? null;
@@ -338,7 +533,7 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
       correlationId: task.correlation_id,
       deviceId: deviceId(),
     });
-    await insertCaptureEvent(db, event);
+    await insertOwnCapture(db, event);
     await refreshLocalState(db);
     return event.event_id;
   }, [refreshLocalState, state.role, state.siteId, state.userId]);
@@ -355,7 +550,7 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
       siteId: state.siteId,
       deviceId: deviceId(),
     });
-    await insertCaptureEvent(db, event);
+    await insertOwnCapture(db, event);
     await refreshLocalState(db);
     return event.event_id;
   }, [refreshLocalState, state.role, state.siteId, state.userId]);
@@ -388,7 +583,7 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
   const submitFaultReport = useCallback(async (input: FaultReportSubmitInput): Promise<string> => {
     const db = requireReady();
     const event = createFaultReportedEvent({ ...input, ...actor() });
-    await insertCaptureEvent(db, event);
+    await insertOwnCapture(db, event);
     await refreshLocalState(db);
     return event.event_id;
   }, [actor, refreshLocalState, requireReady]);
@@ -406,7 +601,7 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
       eventVersion,
       ...actor(),
     });
-    await insertCaptureEvent(db, event);
+    await insertOwnCapture(db, event);
     await refreshLocalState(db);
     return event.event_id;
   }, [actor, refreshLocalState, requireReady, state.workOrders]);
@@ -421,7 +616,7 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
       readingValue: input.readingValue,
       ...actor(),
     });
-    await insertCaptureEvent(db, event);
+    await insertOwnCapture(db, event);
     await refreshLocalState(db);
     return event.event_id;
   }, [actor, refreshLocalState, requireReady, state.selectedWorkOrderId, state.workOrders]);
@@ -439,7 +634,7 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
       eventVersion,
       ...actor(),
     });
-    await insertCaptureEvent(db, event);
+    await insertOwnCapture(db, event);
     await refreshLocalState(db);
     return event.event_id;
   }, [actor, refreshLocalState, requireReady, state.selectedReservations]);
@@ -458,7 +653,7 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
       eventVersion,
       ...actor(),
     });
-    await insertCaptureEvent(db, event);
+    await insertOwnCapture(db, event);
     await refreshLocalState(db);
     return event.event_id;
   }, [actor, refreshLocalState, requireReady, state.workOrders]);
@@ -478,6 +673,12 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
       failedCount={state.failedCount}
       authRequired={state.authRequired}
       setupError={state.setupError}
+      offlineNoSession={state.offlineNoSession}
+      signOutBlockedCount={state.signOutBlockedCount}
+      signingOut={state.signingOut}
+      signOutIncomplete={state.signOutIncomplete}
+      waitingForOthers={state.waitingForOthers}
+      {...(state.signOutAvailable ? { onSignOut: () => void signOut() } : {})}
       onCapture={() => void capture()}
       onLoadCrossDockTask={loadCrossDockTask}
       onConfirmCrossDock={confirmCrossDock}

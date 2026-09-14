@@ -13,6 +13,9 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^crossDock\./,
   // Story 7.8: the maintenance worklist and the five technician capture forms.
   /^maintenance\./,
+  // Story 1.12: sign-in, sign-out and the Keycloak callback page.
+  /^auth\./,
+  /^auth-(callback-heading|sign-out-blocked)$/,
   /^Promise$/,
   /^Dashboard$/,
   /^Frontline$/,

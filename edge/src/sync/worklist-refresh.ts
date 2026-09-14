@@ -1,4 +1,5 @@
 import type { WorklistSnapshot } from '../local-db/worklist';
+import { authorizedFetch } from '../session/api-fetch';
 
 /**
  * Story 7.8 (Binding Decision 11): fetches the technician worklist. Called on app start when
@@ -8,7 +9,7 @@ import type { WorklistSnapshot } from '../local-db/worklist';
 export async function refreshWorklist(apiBaseUrl = ''): Promise<WorklistSnapshot | null> {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return null;
   try {
-    const response = await fetch(`${apiBaseUrl}/api/v1/edge/maintenance/worklist`, {
+    const response = await authorizedFetch(`${apiBaseUrl}/api/v1/edge/maintenance/worklist`, {
       credentials: 'include',
     });
     if (!response.ok) return null;

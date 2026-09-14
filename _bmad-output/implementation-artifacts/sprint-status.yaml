@@ -398,7 +398,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-09-12'
+last_updated: '2026-09-13'
 # story 6-4 dev-story 2026-09-01: implemented all 9 tasks from baseline 905a48e (clean tree). Closes
 #   Epic 6. One new projection (production_consumption_variance, append-only, grain
 #   (production_order_id, bom_line_id)) plus two pure services: src/production/lot-genealogy.ts (no
@@ -906,7 +906,7 @@ development_status:
   1-9-spine-acceptance-contract-ci-gate: done   # PILOT
   1-10-ci-cd-pipeline-construction: done   # PILOT
   1-11-notification-and-alerting-foundation: done   # PILOT
-  1-12-edge-ui-sign-in-through-keycloak-pkce: backlog   # PRE-PILOT BLOCKING  # created 2026-09-13 during the staging deployment (round table): the edge UI sends no bearer token and has no login flow; Story 1.2 delivered the server side only. Story text in epics.md Story 1.12. Until it ships, the rehearsal uses the temporary ims-cli direct-access Keycloak client for operator scripts (deploy/provision/ims-token.sh); delete that client when 1.12 ships.
+  1-12-edge-ui-sign-in-through-keycloak-pkce: in-progress   # PRE-PILOT BLOCKING  # created 2026-09-13 during the staging deployment (round table): Story 1.2 delivered the server side only. Story text in epics.md Story 1.12. Implemented and code-reviewed 2026-09-13 (4 decisions, 16 patches applied, 2 deferred): browser sign-in through ims-app (PKCE). Remaining: staging checklist, runbook 2.10 to 2.10b (Task 6.6).
   epic-1-retrospective: optional
 
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---

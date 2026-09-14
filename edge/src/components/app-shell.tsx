@@ -68,6 +68,22 @@ export interface AppShellProps {
   /** Story 7.8: 'frontline' (default, the Story 1.8 shell) or 'maintenance' (the technician page). */
   view?: 'frontline' | 'maintenance';
   maintenance?: MaintenanceShellProps;
+  /** Story 1.12 (AC4): shared-tablet sign-out. Rendered only when the edge client provides it. */
+  onSignOut?: () => void;
+  /** Story 1.12 (AC4): unsettled captures that blocked the last sign-out attempt (0 = none). */
+  signOutBlockedCount?: number;
+  /** Story 1.12 (AC5): offline with no cached sign-in; nothing can be done until the network returns. */
+  offlineNoSession?: boolean;
+  /** Story 1.12: a sign-out is in progress (the button is disabled). */
+  signingOut?: boolean;
+  /** Story 1.12: tokens were cleared but the Keycloak logout redirect could not be reached. */
+  signOutIncomplete?: boolean;
+  /** Story 1.12: captures parked for people other than the signed-in user (userName '' = unknown). */
+  waitingForOthers?: Array<{ userName: string; count: number }>;
+}
+
+function countMessage(count: number, one: MessageKey, many: MessageKey): string {
+  return t(count === 1 ? one : many).replace('{count}', String(count));
 }
 
 export function AppShell({
@@ -88,6 +104,12 @@ export function AppShell({
   onSubmitIndent,
   view = 'frontline',
   maintenance,
+  onSignOut,
+  signOutBlockedCount = 0,
+  offlineNoSession = false,
+  signingOut = false,
+  signOutIncomplete = false,
+  waitingForOthers = [],
 }: AppShellProps) {
   const links = navigation.flatMap((item) => (NAVIGATION[item] ? [NAVIGATION[item]] : []));
   return (
@@ -103,8 +125,39 @@ export function AppShell({
             {userName} · {siteName}
           </p>
         </div>
-        <SyncStatusBadge state={syncState} />
+        <div className="edge-header-actions">
+          <SyncStatusBadge state={syncState} />
+          {onSignOut ? (
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={onSignOut}
+              disabled={signingOut}
+              aria-busy={signingOut}
+            >
+              {t('auth.signOut')}
+            </button>
+          ) : null}
+        </div>
       </header>
+      {signOutBlockedCount > 0 ? (
+        <p className="auth-sign-out-blocked" role="status" aria-live="polite">
+          {countMessage(signOutBlockedCount, 'auth.signOutBlockedOne', 'auth.signOutBlocked')}
+        </p>
+      ) : null}
+      {signOutIncomplete ? (
+        <p className="auth-sign-out-blocked" role="alert">
+          {t('auth.signOutIncomplete')}
+        </p>
+      ) : null}
+      {waitingForOthers.map((entry, index) => (
+        <p key={`${entry.userName}-${index}`} className="auth-sign-out-blocked" role="status">
+          {countMessage(entry.count, 'auth.waitingForOwnerOne', 'auth.waitingForOwner').replace(
+            '{name}',
+            entry.userName || t('auth.unknownOwner'),
+          )}
+        </p>
+      ))}
       {links.length > 0 ? (
         <nav className="edge-nav" aria-label={t('nav.label')}>
           {links.map((link) => (
@@ -123,6 +176,11 @@ export function AppShell({
         {setupError ? (
           <div className="auth-required" role="alert">
             {t('sync.setupError')}
+          </div>
+        ) : null}
+        {offlineNoSession ? (
+          <div className="auth-required" role="alert">
+            {t('auth.offlineNoSession')}
           </div>
         ) : null}
         {firstSyncRequired ? (

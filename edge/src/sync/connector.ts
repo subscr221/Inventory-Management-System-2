@@ -5,7 +5,8 @@ import {
   type PowerSyncCredentials,
 } from '@powersync/web';
 import type { EdgeLocalStatus } from '../local-db/schema';
-import { hasUpstreamStreamConflict } from '../local-db/outbox';
+import { hasUpstreamStreamConflict, outboxRowOwner } from '../local-db/outbox';
+import { authorizedFetch } from '../session/api-fetch';
 
 export interface UploadFailureClassification {
   action: 'complete' | 'retry' | 'halt';
@@ -265,6 +266,7 @@ const SETTLED_STATUSES = new Set<EdgeLocalStatus>(['synced', 'needs_attention'])
 
 interface OutboxStatusRow {
   local_status: EdgeLocalStatus;
+  metadata?: string | null;
 }
 
 function withErrorCode(
@@ -372,22 +374,31 @@ async function markOutboxSynced(
   );
 }
 
-async function currentLocalStatus(
+async function currentOutboxRow(
   database: AbstractPowerSyncDatabase,
   eventId: string,
-): Promise<EdgeLocalStatus | null> {
-  const row = await database.getOptional<OutboxStatusRow>(
-    `SELECT local_status FROM edge_outbox WHERE id = ?`,
+): Promise<OutboxStatusRow | null> {
+  return database.getOptional<OutboxStatusRow>(
+    `SELECT local_status, metadata FROM edge_outbox WHERE id = ?`,
     [eventId],
   );
-  return row ? row.local_status : null;
 }
 
 export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
-  constructor(private readonly apiBaseUrl = '') {}
+  /**
+   * @param currentUserId Story 1.12: the signed-in user (bootstrap `user_id`), or null when nobody
+   *   is. When given, a row uploads only under its owner's session: nothing uploads with nobody
+   *   signed in, and another person's rows are parked `auth_required` and leave the queue until
+   *   `resetAuthRequired` re-queues them for that person. Omitted (tests, pre-1.12 callers): no gate.
+   */
+  constructor(
+    private readonly apiBaseUrl = '',
+    private readonly currentUserId?: () => string | null,
+  ) {}
 
   async fetchCredentials(): Promise<PowerSyncCredentials> {
-    const response = await fetch(`${this.apiBaseUrl}/api/v1/edge/powersync-credentials`, {
+    // Story 1.12: identity travels as a bearer header on every API call (authorizedFetch).
+    const response = await authorizedFetch(`${this.apiBaseUrl}/api/v1/edge/powersync-credentials`, {
       credentials: 'include',
     });
     if (!response.ok) throw new Error('Unable to fetch PowerSync credentials');
@@ -402,7 +413,28 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
     for (const op of transaction.crud) {
       if (op.table !== 'edge_outbox' || op.op !== UpdateType.PUT) continue;
 
-      const localStatus = await currentLocalStatus(database, op.id);
+      const row = await currentOutboxRow(database, op.id);
+      const localStatus = row ? row.local_status : null;
+
+      // Story 1.12 (review decision 1): the server attributes an upload to the bearer, so a row
+      // never uploads under someone else's session.
+      if (this.currentUserId) {
+        const signedIn = this.currentUserId();
+        if (signedIn === null) return;
+        const owner = outboxRowOwner(row?.metadata ?? op.opData?.['metadata']);
+        if (owner !== null && owner !== signedIn) {
+          if (localStatus !== null && !SETTLED_STATUSES.has(localStatus) && localStatus !== 'auth_required') {
+            await recordUploadOutcome(
+              database,
+              op.id,
+              { action: 'complete', localStatus: 'auth_required', retryable: false },
+              { error_code: 'OWNER_NOT_SIGNED_IN', details: { owner_user_id: owner } },
+            );
+          }
+          continue;
+        }
+      }
+
       if (localStatus === 'auth_required') return;
       if (localStatus && SETTLED_STATUSES.has(localStatus)) continue;
 
@@ -435,7 +467,7 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
       const envelope: Record<string, unknown> = { ...op.opData, event_id: op.id };
       if (envelope['event_version'] === null) delete envelope['event_version'];
 
-      const response = await fetch(`${this.apiBaseUrl}/api/v1/edge/events`, {
+      const response = await authorizedFetch(`${this.apiBaseUrl}/api/v1/edge/events`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

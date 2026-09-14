@@ -2,11 +2,16 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cacheContext,
+  clearCachedUserContext,
+  countUnsettled,
   hasAuthRequired,
   insertCaptureEvent,
+  outboxRowOwner,
   readCachedContext,
   readFailures,
   readOutboxCounts,
+  readWaitingForOtherOwners,
+  resetAuthRequired,
   type QueryExecutor,
 } from '../../src/local-db/outbox';
 import {
@@ -23,22 +28,38 @@ interface Row {
   event_type: string;
   server_error_code: string | null;
   created_at: string;
+  metadata?: string;
+}
+
+/** Story 1.12: outbox metadata naming the capturing user, as the capture builders stamp it. */
+function ownedBy(userId: string): string {
+  return JSON.stringify({ actor: { user_id: userId, role: 'r', location_id: 's1' } });
 }
 
 class FakeDb implements QueryExecutor {
   outbox: Row[] = [];
   user: Record<string, unknown> | null = null;
   site: Record<string, unknown> | null = null;
+  transactions = 0;
+
+  async writeTransaction<T>(callback: (tx: QueryExecutor) => Promise<T>): Promise<T> {
+    this.transactions += 1;
+    return callback(this);
+  }
 
   async execute(sql: string, params: unknown[] = []): Promise<unknown> {
     if (sql.startsWith('INSERT INTO edge_outbox')) {
       this.outbox.push({
         id: params[0] as string,
         event_type: params[3] as string,
+        metadata: params[6] as string,
         local_status: params[9] as string,
         server_error_code: params[10] as string | null,
         created_at: params[12] as string,
       });
+    } else if (sql.startsWith('DELETE FROM edge_outbox WHERE id = ?')) {
+      // Story 1.12: resetAuthRequired re-queues by delete and re-insert, addressed by id.
+      this.outbox = this.outbox.filter((row) => row.id !== params[0]);
     } else if (sql.startsWith('DELETE FROM cached_user_context')) {
       this.user = null;
     } else if (sql.startsWith('INSERT INTO cached_user_context')) {
@@ -57,6 +78,14 @@ class FakeDb implements QueryExecutor {
       for (const row of this.outbox)
         counts.set(row.local_status, (counts.get(row.local_status) ?? 0) + 1);
       return [...counts].map(([local_status, count]) => ({ local_status, count })) as T[];
+    }
+    if (sql.startsWith('SELECT id, stream_type')) {
+      return this.outbox.filter((r) => r.local_status === params[0]).map((r) => ({ ...r })) as T[];
+    }
+    if (sql.startsWith('SELECT metadata FROM edge_outbox')) {
+      return this.outbox
+        .filter((r) => params.includes(r.local_status))
+        .map((r) => ({ metadata: r.metadata ?? null })) as T[];
     }
     if (sql.includes("local_status = ?") && params[0] === 'auth_required') {
       return [{ count: this.outbox.filter((r) => r.local_status === 'auth_required').length }] as T[];
@@ -109,6 +138,68 @@ describe('edge outbox local data', () => {
     const restored = await readCachedContext(db);
     assert.equal(restored?.user.userName, 'Officer');
     assert.equal(restored?.site.siteName, 'Pilot Site');
+  });
+
+  // Story 1.12: sign-in and shared-tablet sign-out helpers.
+  it('counts only the signed-in user\'s rows that would still upload as unsettled', async () => {
+    const db = new FakeDb();
+    db.outbox.push(
+      { id: 'a', event_type: 'e', local_status: 'needs_attention', server_error_code: 'STREAM_CONFLICT', created_at: 'now', metadata: ownedBy('u1') },
+      { id: 'b', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
+      { id: 'c', event_type: 'e', local_status: 'pending_sync', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
+      { id: 'd', event_type: 'e', local_status: 'synced', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
+      { id: 'e', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u2') },
+    );
+    assert.equal(await countUnsettled(db, 'u1'), 2);
+    assert.equal(await countUnsettled(db, 'u2'), 1);
+  });
+
+  it('re-queues only the signing-in owner\'s auth_required rows and leaves every other row alone', async () => {
+    const db = new FakeDb();
+    db.outbox.push(
+      { id: 'a', event_type: 'e', local_status: 'needs_attention', server_error_code: 'UNTAGGED_TRANSACTION', created_at: 'now', metadata: ownedBy('u1') },
+      { id: 'b', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
+      { id: 'c', event_type: 'e', local_status: 'synced', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
+      { id: 'd', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u2') },
+    );
+    await resetAuthRequired(db, 'u1');
+    const status = Object.fromEntries(db.outbox.map((row) => [row.id, row.local_status]));
+    assert.deepEqual(status, { a: 'needs_attention', b: 'pending_sync', c: 'synced', d: 'auth_required' });
+    assert.equal(db.transactions, 1, 'one delete-and-reinsert transaction per re-queued row');
+    assert.equal(db.outbox.find((row) => row.id === 'b')?.metadata, ownedBy('u1'));
+    assert.equal(await hasAuthRequired(db, 'u1'), false);
+    assert.equal(await hasAuthRequired(db, 'u2'), true);
+  });
+
+  it('groups unsettled captures waiting for other people by owner', async () => {
+    const db = new FakeDb();
+    db.outbox.push(
+      { id: 'a', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u2') },
+      { id: 'b', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u2') },
+      { id: 'c', event_type: 'e', local_status: 'pending_sync', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
+      { id: 'd', event_type: 'e', local_status: 'synced', server_error_code: null, created_at: 'now', metadata: ownedBy('u3') },
+    );
+    assert.deepEqual(await readWaitingForOtherOwners(db, 'u1'), [{ userId: 'u2', count: 2 }]);
+  });
+
+  it('reads the owner from outbox metadata and tolerates anything malformed', () => {
+    assert.equal(outboxRowOwner(ownedBy('u1')), 'u1');
+    assert.equal(outboxRowOwner('{not json'), null);
+    assert.equal(outboxRowOwner(JSON.stringify({ actor: {} })), null);
+    assert.equal(outboxRowOwner(undefined), null);
+  });
+
+  it('clears the cached user on sign-out but keeps the site context', async () => {
+    const db = new FakeDb();
+    await cacheContext(
+      db,
+      { userId: 'u1', userName: 'Officer', role: 'gate_officer' },
+      { siteId: 's1', siteName: 'Pilot Site' },
+    );
+    await clearCachedUserContext(db);
+    assert.equal(await readCachedContext(db), null);
+    assert.equal(db.user, null);
+    assert.deepEqual(db.site, { site_id: 's1', site_name: 'Pilot Site' });
   });
 });
 

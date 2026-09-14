@@ -11,6 +11,7 @@ import {
   classifyServerUploadFailure,
 } from '../../src/sync/connector';
 import { edgeOutbox, type EdgeLocalStatus } from '../../src/local-db/schema';
+import { EdgeSession, setActiveSession, type SessionManager } from '../../src/session/session';
 
 function put(id: string, clientId: number): CrudEntry {
   return new CrudEntry(clientId, UpdateType.PUT, 'edge_outbox', id, 1, {
@@ -434,5 +435,107 @@ describe('edge upload connector', () => {
     assert.equal(statuses['permanent'], 'needs_attention');
     assert.equal(statuses['retry'], 'synced');
     assert.equal(activity.at(-1), 'complete');
+  });
+});
+
+// Story 1.12 (AC2): with an active session, both connector calls carry the bearer header and
+// nothing else about the requests changes.
+describe('Story 1.12 connector identity', () => {
+  function sessionWithToken(token: string): EdgeSession {
+    const manager: SessionManager = {
+      getUser: async () => ({ access_token: token }),
+      signinRedirect: async () => undefined,
+      signinCallback: async () => undefined,
+      signinSilent: async () => null,
+      signoutRedirect: async () => undefined,
+      removeUser: async () => undefined,
+      events: { addUserSignedOut: () => undefined },
+    };
+    return new EdgeSession({
+      config: { mode: 'oidc', authority: 'https://a/realms/ims', clientId: 'ims-app' },
+      manager,
+    });
+  }
+
+  it('sends Authorization: Bearer on credentials and upload calls', async (t) => {
+    setActiveSession(sessionWithToken('tok'));
+    try {
+      const seen: Array<{ url: string; auth: string | null; contentType: string | null }> = [];
+      t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        seen.push({
+          url: String(input),
+          auth: headers.get('authorization'),
+          contentType: headers.get('content-type'),
+        });
+        return String(input).endsWith('/powersync-credentials')
+          ? Response.json({ endpoint: 'https://ps', token: 'ps-token' })
+          : new Response(null, { status: 201 });
+      });
+      const activity: string[] = [];
+      const statuses: Record<string, EdgeLocalStatus> = {};
+      const connector = new EdgePowerSyncConnector();
+
+      assert.deepEqual(await connector.fetchCredentials(), { endpoint: 'https://ps', token: 'ps-token' });
+      await connector.uploadData(createDatabase([put('event1', 1)], statuses, activity));
+
+      assert.deepEqual(seen, [
+        { url: '/api/v1/edge/powersync-credentials', auth: 'Bearer tok', contentType: null },
+        { url: '/api/v1/edge/events', auth: 'Bearer tok', contentType: 'application/json' },
+      ]);
+      assert.equal(statuses['event1'], 'synced');
+    } finally {
+      setActiveSession(null);
+    }
+  });
+
+  // Review decision 1: a row uploads only under its owner's session.
+  function ownedPut(id: string, clientId: number, owner: string): CrudEntry {
+    return new CrudEntry(clientId, UpdateType.PUT, 'edge_outbox', id, 1, {
+      stream_type: 'maintenance',
+      local_status: 'pending_sync',
+      metadata: JSON.stringify({ actor: { user_id: owner, role: 'r', location_id: 's1' } }),
+    });
+  }
+
+  it('parks another person\'s rows out of the queue and uploads the signed-in user\'s', async (t) => {
+    const requested: string[] = [];
+    t.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requested.push((JSON.parse(String(init?.body)) as { event_id: string }).event_id);
+      return new Response(null, { status: 201 });
+    });
+    const activity: string[] = [];
+    const statuses: Record<string, EdgeLocalStatus> = {
+      theirs: 'pending_sync',
+      parked: 'auth_required',
+      mine: 'pending_sync',
+    };
+    const database = createDatabase(
+      [ownedPut('theirs', 1, 'u2'), ownedPut('parked', 2, 'u2'), ownedPut('mine', 3, 'u1')],
+      statuses,
+      activity,
+    );
+
+    await new EdgePowerSyncConnector('', () => 'u1').uploadData(database);
+
+    assert.deepEqual(requested, ['mine']);
+    assert.equal(statuses['theirs'], 'auth_required');
+    assert.equal(statuses['parked'], 'auth_required');
+    assert.equal(activity.filter((entry) => entry.startsWith('write:parked')).length, 0);
+    assert.equal(statuses['mine'], 'synced');
+    assert.equal(activity.at(-1), 'complete');
+  });
+
+  it('uploads nothing and keeps the queue when nobody is signed in', async (t) => {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 201 }));
+    const activity: string[] = [];
+    const statuses: Record<string, EdgeLocalStatus> = { mine: 'pending_sync' };
+    const database = createDatabase([ownedPut('mine', 1, 'u1')], statuses, activity);
+
+    await new EdgePowerSyncConnector('', () => null).uploadData(database);
+
+    assert.equal(fetchMock.mock.callCount(), 0);
+    assert.equal(statuses['mine'], 'pending_sync');
+    assert.equal(activity.includes('complete'), false);
   });
 });

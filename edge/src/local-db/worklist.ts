@@ -223,8 +223,10 @@ export async function readCachedReservations(
 export async function readClosureCatalogue(
   db: QueryExecutor,
 ): Promise<{ fault: string[]; cause: string[]; remedy: string[] }> {
+  // PowerSync views expose no rowid ("no such column: rowid" broke every app start since Story 7.8
+  // and with it the offline e2e gate); order by the two real columns instead.
   const rows = await db.getAll<{ kind: string; code: string }>(
-    `SELECT kind, code FROM cached_closure_code ORDER BY kind ASC, rowid ASC`,
+    `SELECT kind, code FROM cached_closure_code ORDER BY kind ASC, code ASC`,
   );
   const catalogue = { fault: [] as string[], cause: [] as string[], remedy: [] as string[] };
   for (const row of rows) {

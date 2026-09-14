@@ -81,12 +81,147 @@ export async function readOutboxCounts(db: QueryExecutor): Promise<OutboxCounts>
   return { pendingCount, failedCount };
 }
 
-export async function hasAuthRequired(db: QueryExecutor): Promise<boolean> {
-  const rows = await db.getAll<{ count: number }>(
-    `SELECT COUNT(*) AS count FROM edge_outbox WHERE local_status = ?`,
+/**
+ * True when rows are parked on a 401. Given the signed-in user, only THEIR parked rows count
+ * (Story 1.12: another person's parked rows wait for that person and are not a sign-in problem).
+ */
+export async function hasAuthRequired(db: QueryExecutor, currentUserId?: string): Promise<boolean> {
+  if (currentUserId === undefined) {
+    const rows = await db.getAll<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM edge_outbox WHERE local_status = ?`,
+      ['auth_required'],
+    );
+    return (rows[0]?.count ?? 0) > 0;
+  }
+  const rows = await db.getAll<{ metadata: string }>(
+    `SELECT metadata FROM edge_outbox WHERE local_status = ?`,
     ['auth_required'],
   );
-  return (rows[0]?.count ?? 0) > 0;
+  return rows.some((row) => {
+    const owner = outboxRowOwner(row.metadata);
+    return owner === null || owner === currentUserId;
+  });
+}
+
+/**
+ * Story 1.12: the user who captured an outbox row (`metadata.actor.user_id`). The server pins an
+ * uploaded event's actor to the bearer identity, so a row may only upload under its owner's token.
+ */
+export function outboxRowOwner(metadata: unknown): string | null {
+  if (typeof metadata !== 'string') return null;
+  try {
+    const parsed = JSON.parse(metadata) as { actor?: { user_id?: unknown } } | null;
+    const owner = parsed?.actor?.user_id;
+    return typeof owner === 'string' && owner !== '' ? owner : null;
+  } catch {
+    return null;
+  }
+}
+
+interface OutboxRecordRow {
+  id: string;
+  stream_type: string;
+  stream_id: string;
+  event_type: string;
+  event_version: number | null;
+  payload: string;
+  metadata: string;
+  schema_version: number;
+  idempotency_key: string;
+  local_status: EdgeLocalStatus;
+  server_error_code: string | null;
+  server_error_details: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const OUTBOX_COLUMNS = `id, stream_type, stream_id, event_type, event_version, payload, metadata,
+      schema_version, idempotency_key, local_status, server_error_code,
+      server_error_details, created_at, updated_at`;
+
+/**
+ * Story 1.12 (review decision 1): rows parked on a 401 become eligible again once THEIR OWNER has
+ * signed in; rows captured by someone else stay parked until that person signs in on this device.
+ *
+ * Each row is deleted and re-inserted rather than updated: the connector only uploads PUT
+ * operations, and a row parked for another owner has already left the upload queue (its
+ * transaction was completed so the signed-in user's captures could flow). The re-insert queues a
+ * fresh PUT; when the original PUT is still at the head of the queue it simply uploads first and
+ * the fresh one is skipped as settled (the server's idempotency key covers the rest).
+ */
+export async function resetAuthRequired(db: QueryExecutor, ownerUserId: string): Promise<void> {
+  const rows = await db.getAll<OutboxRecordRow>(
+    `SELECT ${OUTBOX_COLUMNS} FROM edge_outbox WHERE local_status = ?`,
+    ['auth_required'],
+  );
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    if (outboxRowOwner(row.metadata) !== ownerUserId) continue;
+    const requeue = async (tx: QueryExecutor) => {
+      // PowerSync exposes edge_outbox as a view: address rows by id only.
+      await tx.execute(`DELETE FROM edge_outbox WHERE id = ?`, [row.id]);
+      await tx.execute(
+        `INSERT INTO edge_outbox (${OUTBOX_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          row.id,
+          row.stream_type,
+          row.stream_id,
+          row.event_type,
+          row.event_version,
+          row.payload,
+          row.metadata,
+          row.schema_version,
+          row.idempotency_key,
+          'pending_sync',
+          null,
+          null,
+          row.created_at,
+          now,
+        ],
+      );
+    };
+    if (db.writeTransaction) await db.writeTransaction(requeue);
+    else await requeue(db);
+  }
+}
+
+async function readUnsettledOwners(db: QueryExecutor): Promise<Array<string | null>> {
+  const rows = await db.getAll<{ metadata: string }>(
+    `SELECT metadata FROM edge_outbox WHERE local_status IN (?, ?, ?)`,
+    ['pending_sync', 'syncing', 'auth_required'],
+  );
+  return rows.map((row) => outboxRowOwner(row.metadata));
+}
+
+/**
+ * Story 1.12 (AC4): the signed-in user's rows that would still upload - under whoever signs in
+ * next. They must drain before a sign-out. Rows owned by someone else never upload under this
+ * user (the connector parks them) and so never block; `needs_attention` and `synced` are settled.
+ */
+export async function countUnsettled(db: QueryExecutor, ownerUserId: string): Promise<number> {
+  const owners = await readUnsettledOwners(db);
+  return owners.filter((owner) => owner === ownerUserId).length;
+}
+
+/**
+ * Story 1.12 (review decision 1): unsettled captures waiting for a DIFFERENT person to sign in on
+ * this device, grouped by owner, so the shell can say whose they are.
+ */
+export async function readWaitingForOtherOwners(
+  db: QueryExecutor,
+  currentUserId: string,
+): Promise<Array<{ userId: string; count: number }>> {
+  const counts = new Map<string, number>();
+  for (const owner of await readUnsettledOwners(db)) {
+    if (owner === null || owner === currentUserId) continue;
+    counts.set(owner, (counts.get(owner) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([userId, count]) => ({ userId, count }));
+}
+
+/** Story 1.12 (AC4): forget the signed-out user's identity; site context and caches stay. */
+export async function clearCachedUserContext(db: QueryExecutor): Promise<void> {
+  await db.execute(`DELETE FROM cached_user_context`);
 }
 
 /**

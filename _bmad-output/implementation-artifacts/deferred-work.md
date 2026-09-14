@@ -1062,3 +1062,8 @@ new in `.env.example`.
   role-password script is mounted as `01-zz-init-role-passwords.sh`, which sorts after the SQL
   under every collation. Postgres healthcheck gained `start_period: 120s` because the 14,000-line
   init outran 10 x 5 s and left dependents created-but-not-started.
+
+## Deferred from: code review of 1-12-edge-ui-sign-in-through-keycloak-pkce (2026-09-13)
+
+- Closure codes (`cached_closure_code`) are now read `ORDER BY kind, code` because PowerSync views expose no `rowid`; server-curated fault/cause/remedy order is lost. Needs an explicit position column in the snapshot (edge/src/local-db/worklist.ts:229).
+- After an offline start, `db.connect` never runs until reload (the `online` handler only refreshes local state and the worklist), so the blocked sign-out drain and any queued upload wait for a reload (edge/src/components/edge-client.tsx:327). Pre-existing since Story 7.8.

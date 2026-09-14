@@ -67,6 +67,21 @@ input:focus-visible {
   background: white;
 }
 
+/* Story 1.12: sync badge and sign-out side by side; the sign-out gate notice sits under the header. */
+.edge-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.auth-sign-out-blocked {
+  margin: 0;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--neutral-500);
+  background: var(--neutral-100, #f5f5f5);
+}
+
 .edge-brand h1 {
   margin: 0;
   font-size: 1.5rem;

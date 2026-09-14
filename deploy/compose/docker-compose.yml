@@ -63,6 +63,13 @@ services:
       NODE_ENV: production
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
+      # Story 1.12: the browser's sign-in config, served by the edge container at /auth/config
+      # (read per request; never NEXT_PUBLIC_* because the image is promoted by digest). Same
+      # fail-closed form as the app's AUTH_* above: the authority defaults to AUTH_ISSUER (itself
+      # required) so the two cannot drift, and an existing .env needs no new variables.
+      EDGE_AUTH_MODE: oidc
+      EDGE_OIDC_AUTHORITY: ${EDGE_OIDC_AUTHORITY:-${AUTH_ISSUER:?set AUTH_ISSUER to the IdP issuer}}
+      EDGE_OIDC_CLIENT_ID: ${EDGE_OIDC_CLIENT_ID:-ims-app}
     ports:
       # Loopback only; a host-level nginx (deploy/host-nginx) proxies to it when the stack's own
       # nginx is not started (VPS survey 2026-09-13: the box's nginx owns 80 and 443).
