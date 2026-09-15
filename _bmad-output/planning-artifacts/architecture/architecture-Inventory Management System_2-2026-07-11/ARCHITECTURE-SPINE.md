@@ -169,6 +169,15 @@ graph TD
 - **Prevents:** a notification-emission failure aborting a business write that already succeeded; business-critical decisions committing without the notification record that is part of the decision itself
 - **Rule:** modules emit through exactly two entry points. `emitNotification()` is the default: decoupled, never throws, never joins the caller's transaction (Story 1.11 AC4). `emitNotificationInTransaction()` is the transactional-outbox opt-in: the notification event commits atomically with the caller's business write. Flows where the notification is part of the business fact (approval and rejection decisions, DOA delegation notices, statutory communications) MUST use the transactional entry point. Full decision record, consequences, and dissent: [ADR-001](../../../../docs/adr/ADR-001-notification-emission-coupling.md). [ADOPTED]
 
+### AD-18 - Device-Only Data Lives in Local-Only Tables; Refusals Are Recorded Centrally
+
+- **Binds:** edge local schema (`edge/src/local-db/schema.ts`), upload connector (`edge/src/sync/connector.ts`), edge upload API, PowerSync service configuration
+- **Prevents:** captures the central plane refused, or that are parked for another signed-in user, being silently deleted on the device when PowerSync applies a checkpoint; refusals leaving no trace when a device is reset or changes hands
+- **Rule:** a synced (non-`localOnly`) PowerSync table is a replica of server state: at every checkpoint the device keeps only what the server holds. Data that exists only on the device (settled or parked outbox rows, failure lists, cached context) must live in `localOnly` tables. `edge_outbox` stays synced solely to ride the upload queue; before a row's queue entry completes without the server holding it, the connector copies it into a `localOnly` retention table. Independently, the central plane records every permanent edge-upload refusal (all modules) as an event-sourced refused-capture record, so a refusal survives the device (AD-14).
+- **Service configuration (self-hosted PowerSync 1.23.x):** sync-token keys go under `client_auth.jwks` (an HS256 `oct` key with a `kid` matching the token header); the replication source goes under `replication.connections`; the Postgres publication must be named exactly `powersync`. Unknown top-level blocks such as `jwt:` or `source:` are ignored silently.
+- **Verified by:** at least one test driving a real PowerSync service through a refuse-then-checkpoint cycle (Story 1.13); runbook section 2 row 2.10c.
+- **Origin:** `sprint-change-proposal-2026-09-15.md` (staging evidence 2026-09-14).
+
 ## Consistency Conventions
 
 | Concern | Convention |

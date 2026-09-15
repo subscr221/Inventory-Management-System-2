@@ -378,6 +378,67 @@ So that every screen I use presents my identity to the API and my actions are at
 
 **Note:** Created 2026-09-13 from the staging deployment (round table). Story 1.2 delivered the server side of SSO; the browser never obtained a token because development ran with `AUTH_MODE=local`. Pre-pilot blocking: without it the pilot week is API-only. The rehearsal uses the temporary `ims-cli` direct-access client for operator scripts; that client is deleted when this story ships.
 
+
+#### Story 1.13: Refused and Parked Captures Are Never Lost
+
+As a site supervisor,
+I want every capture the central system refuses to stay visible on the device and to land in a central refused-captures queue,
+So that no stock movement silently disappears when a tablet syncs, is reset, or changes hands.
+
+**Acceptance Criteria:**
+
+**Given** a capture the central system permanently refuses
+**When** PowerSync applies its next checkpoint
+**Then** the capture is still listed as "Needs attention" on the device (local-only retention, AD-18), with its `error_code`
+
+**Given** the same refusal
+**When** the server rejects the upload
+**Then** a refused-capture record (event_id, envelope, actor, site, error_code, trace_id, time) is written centrally for every module, event-sourced like the Story 7.8 sync-conflict queue
+
+**Given** captures parked for another person on a shared device (Story 1.12)
+**When** checkpoints apply
+**Then** they survive and re-queue when that person signs in
+
+**Given** a supervisor for the site
+**When** they call the refused-captures API
+**Then** they can list open refusals and mark one resolved with a note (DOA-gated)
+
+**Given** the edge test suite
+**When** it runs
+**Then** at least one test drives a real PowerSync service through a refuse-then-checkpoint cycle, and runbook section 2 gains the same manual check (row 2.10c)
+
+**Note:** PRE-PILOT BLOCKING. Created 2026-09-15 by `sprint-change-proposal-2026-09-15.md`: on staging (2026-09-14) a refused capture showed "Needs attention" and was deleted about 240 ms later when PowerSync applied a checkpoint, because `edge_outbox` is a synced table. This remedies the Story 1.8 "visible needs attention" criterion without reopening Story 1.8.
+
+#### Story 1.14: Refused-Captures Supervisor Screen
+
+As a site supervisor,
+I want a screen listing the captures the central system refused at my site,
+So that I can see who captured what, why it was refused, and close each one with a note without calling an API by hand.
+
+**Acceptance Criteria:**
+
+**Given** a signed-in user holding a supervisor role for the site (Story 1.2 role assignments)
+**When** they open `/supervisor/refused-captures` in the edge app
+**Then** they see open refusals for their site only: time, person, device, capture type, and `error_code` with its operator message (`en.json` `errors.*`), newest first
+
+**Given** a user without a supervisor role
+**When** they open the page
+**Then** it is not shown in navigation and the API returns 403
+
+**Given** an open refusal
+**When** the supervisor marks it resolved with a mandatory note
+**Then** the Story 1.13 resolve API is called (DOA-gated), the row leaves the open list, and the resolution (who, when, note) stays visible under "Resolved"
+
+**Given** the page
+**When** it is checked by the CI accessibility audit and a keyboard-only pass
+**Then** it meets the same WCAG 2.1 AA bar as the Story 1.8 shell (NFR-U-02), with all copy from `en.json`
+
+**Given** the device is offline
+**When** the page is opened
+**Then** it states that the list needs a connection, and no stale cache is shown as current
+
+**Note:** PILOT (ships before go-live, does not block the rehearsal). Depends on Story 1.13. Until it ships, supervisors use the Story 1.13 API or a runbook report query. Created 2026-09-15 by `sprint-change-proposal-2026-09-15.md`.
+
 ---
 
 ## Epic 2: Core Inventory and Multi-Location Stock Visibility

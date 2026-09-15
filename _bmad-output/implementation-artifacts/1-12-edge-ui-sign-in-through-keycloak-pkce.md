@@ -55,6 +55,7 @@ so that every screen I use presents my identity to the API and my actions are at
   - [x] 6.4 `edge/test/unit/auth-config.test.ts`: `parseAuthConfig` rejects `oidc` without authority or client id, accepts `local` without subject.
   - [x] 6.5 Gates: `npm run edge:typecheck`, `edge:lint`, `edge:build`, `edge:test`, `edge:test:e2e`, `edge:accessibility` (the two Playwright specs run with no env and must stay unchanged and green), then root `npm test` to prove zero server impact (no route added, so `test/integration/story-1-9.test.ts` route allowlist is untouched). `git diff --check`.
   - [ ] 6.6 Staging verification checklist (manual, record results in Completion Notes): open `https://ims-staging.ancorlabs.org/maintenance` unauthenticated, land on Keycloak, sign in as a CMF-ALIGARH account that has changed its temporary password, return to `/maintenance`; confirm `/api/v1/edge/bootstrap` returns 200 with a bearer in DevTools; leave the tab 16 minutes and confirm a silent token refresh with no redirect; toggle airplane mode, capture, reconnect, confirm upload; sign out and confirm the next load demands login.
+    - Scope note (sprint-change-proposal-2026-09-15): the owner re-queue check (review decision 1) cannot pass until Story 1.13 retains parked rows across PowerSync checkpoints; it moves to Story 1.13 AC3. Story 1.12 is done once the remaining 6.6 items and runbook 2.10a/2.10b pass. Confirmed on staging 2026-09-14: AC1 redirect and return to the requested screen, AC2 bearer (aud ims-app, email claim), AC3 silent refresh.
 
 ### Review Findings
 
