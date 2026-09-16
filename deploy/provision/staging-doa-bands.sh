@@ -13,8 +13,10 @@ API=https://ims-staging.ancorlabs.org
 AUTH=https://auth.ancorlabs.org
 RESOLVE=(--resolve ims-staging.ancorlabs.org:8443:127.0.0.1 --resolve auth.ancorlabs.org:8443:127.0.0.1)
 cd "$COMPOSE_DIR"
-FIN_PW="$(grep "^${FIN} " "$PW_FILE" | head -1 | cut -d' ' -f2)"
-[ -n "$FIN_PW" ] || { echo "no password on file for ${FIN}"; exit 2; }
+# Password: FIN_PW from the environment, else the first-passwords file (gone once people set their own).
+FIN_PW="${FIN_PW:-}"
+[ -n "$FIN_PW" ] || FIN_PW="$( { grep "^${FIN} " "$PW_FILE" 2>/dev/null || true; } | head -1 | cut -d' ' -f2)"
+[ -n "$FIN_PW" ] || { echo "no password for ${FIN}: set FIN_PW or add a line to ${PW_FILE}"; exit 2; }
 TOKEN="$(curl -sS -m 20 "${RESOLVE[@]}" -X POST "${AUTH}:8443/realms/ims/protocol/openid-connect/token" \
   -d grant_type=password -d client_id=ims-cli --data-urlencode "username=${FIN}" --data-urlencode "password=${FIN_PW}" \
   | python3 -c 'import sys,json; print(json.load(sys.stdin).get("access_token",""))')"
