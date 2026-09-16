@@ -835,11 +835,14 @@ describe('Story 5.2 BOM Lifecycle and Immutability Integration Tests', () => {
       '3.000000',
       'base_quantity_per equals quantity_per when no conversion',
     );
+    // "Today" is the database server's CURRENT_DATE, not the test process's clock: CI runs in UTC
+    // while Postgres is pinned to IST, so the two disagree for five and a half hours every night.
     const effectiveFrom = new Date(lines.rows[0]!.effective_from as string | Date);
-    const today = new Date();
+    const dbToday = await pool.query('SELECT CURRENT_DATE AS today');
+    const today = new Date(dbToday.rows[0]!.today as string | Date);
     assert.ok(
       effectiveFrom.toDateString() === today.toDateString(),
-      `effective_from should default to today, got ${effectiveFrom.toISOString()}`,
+      `effective_from should default to the database's today ${today.toISOString()}, got ${effectiveFrom.toISOString()}`,
     );
   });
 
