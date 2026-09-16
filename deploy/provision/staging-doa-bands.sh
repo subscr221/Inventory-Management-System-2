@@ -25,6 +25,11 @@ unset FIN_PW
 
 band() { # role transaction_type idempotency-suffix
   local code
+  # An active band for this type+role already in the projection is "present" whatever key made it
+  # (the 2026-09-13 bands were created with other keys, so the 409 path alone duplicated them).
+  if [ "$(docker compose exec -T postgres psql -U admin_user -d inventory_events -At         -c "select count(*) from doa_registry_entries where transaction_type='$2' and role='$1' and active")" != "0" ]; then
+    echo "band $2 -> $1: already present"; return 0
+  fi
   code="$(curl -sS -m 20 "${RESOLVE[@]}" -o /tmp/doa-band.out -w '%{http_code}' -X POST "${API}:8443/api/v1/doa/entries" \
     -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
     -d "{\"role\":\"$1\",\"transaction_type\":\"$2\",\"idempotency_key\":\"pilot-band-$3\"}")"
