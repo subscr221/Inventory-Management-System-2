@@ -907,7 +907,7 @@ development_status:
   1-10-ci-cd-pipeline-construction: done   # PILOT
   1-11-notification-and-alerting-foundation: done   # PILOT
   1-12-edge-ui-sign-in-through-keycloak-pkce: in-progress   # PRE-PILOT BLOCKING  # created 2026-09-13 during the staging deployment (round table): Story 1.2 delivered the server side only. Story text in epics.md Story 1.12. Implemented and code-reviewed 2026-09-13 (4 decisions, 16 patches applied, 2 deferred): browser sign-in through ims-app (PKCE). Remaining: staging checklist, runbook 2.10 to 2.10b (Task 6.6). Closes after runbook 2.10a/2.10b; owner re-queue check verified under Story 1.13 AC3.
-  1-13-refused-and-parked-captures-are-never-lost: done   # PRE-PILOT BLOCKING  # sprint-change-proposal-2026-09-15; AD-18; blocks runbook 2.10c and the rehearsal. Second code review 2026-09-17 (eight finders): 2 patches (DOA band for edge.refused_capture_resolution in staging script + runbook 2.9a; salvage failure no longer skips db.connect), 2 defers + cleanups in deferred-work.md. Re-run runbook 2.9a on staging before 2.10c.
+  1-13-refused-and-parked-captures-are-never-lost: done   # PRE-PILOT BLOCKING  # sprint-change-proposal-2026-09-15; AD-18; blocks runbook 2.10c and the rehearsal. Second code review 2026-09-17 (eight finders): 2 patches (DOA band for edge.refused_capture_resolution in staging script + runbook 2.9a; salvage failure no longer skips db.connect), 2 defers + cleanups in deferred-work.md. Runbook 2.9a re-run and 2.10c PASSED on staging 2026-09-17 (Task 8.5 closed).
   1-14-refused-captures-supervisor-screen: backlog   # PILOT  # depends on 1-13
   epic-1-retrospective: optional
 
