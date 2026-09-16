@@ -1,6 +1,6 @@
 #!/bin/bash
 # DOA approval bands for the pilot (round table 2026-09-13). verify:roles refuses go-live while the
-# three sign-off transaction types have no active band, because "no band" means postings of any
+# three sign-off transaction types have no active band (Story 1.13 adds a fourth: refusal resolution), because "no band" means postings of any
 # value proceed unsigned. The finance controller (who holds `compliance` write, see the roles file)
 # registers one unbounded band per type: every posting of that type needs the named role's
 # signature. A band that already exists answers 409 and is kept. Runs as root on the box.
@@ -36,6 +36,9 @@ band() { # role transaction_type idempotency-suffix
 band department_head    migration.domain_signoff        domain-signoff
 band finance_controller migration.variance_explanation  variance-explanation
 band cfo                jobwork.offcut_acquisition      offcut-acquisition
+# Story 1.13: the applier resolves this type under the row lock; with no band every resolve is
+# 409 APPROVAL_UNRESOLVED. The department head holds write on every edge module at the site.
+band department_head    edge.refused_capture_resolution refused-capture-resolution
 unset TOKEN
 echo "=== verify:roles"
 docker compose exec -T app node dist/src/cli/verify-segregated-roles.js 2>&1 | tail -8

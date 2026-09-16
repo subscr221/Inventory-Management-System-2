@@ -317,9 +317,21 @@ Claude Opus 5 (1M context), dev-story workflow, 2026-09-16.
 - `test/integration/story-1-9.test.ts`
 - `test/unit/schema-drift.test.ts`
 
+Second code review 2026-09-17 (`/code-review`, eight finders). Two pilot-blocking patches applied; the rest recorded in `deferred-work.md`.
+
+- [x] [Review][Patch] No DOA band was provisioned for `edge.refused_capture_resolution`, so every resolve on staging answered 409 `APPROVAL_UNRESOLVED` [deploy/provision/staging-doa-bands.sh, runbook 2.9a]
+- [x] [Review][Patch] `salvageUnheldOutboxRows` ran unguarded before `db.connect`; one salvage failure skipped connect for the whole session with nothing shown [edge/src/components/edge-client.tsx:387]
+- [x] [Review][Defer] Refusals raised before the route (413, 400 from the body stage) and tails parked locally behind a STREAM_CONFLICT head are retained on the device but never recorded centrally
+- [x] [Review][Defer] `refused-captures.ts` re-implements the RBAC grant match from `middleware/rbac.ts` and lower-cases location ids where the original does not
+
 ## Change Log
+
+The Change Log table lists every revision of this story.
+
+Table 4: Change log
 
 | Date | Change |
 | --- | --- |
+| 2026-09-17 | Second code review (eight finders): DOA band for `edge.refused_capture_resolution` added to the staging script and runbook 2.9a; salvage failure no longer skips `db.connect`; 2 findings and 30-odd cleanups deferred. CI postgres port fix (9b67221). |
 | 2026-09-16 | Code review (3 adversarial layers): 12 patches applied - resolve replay guard, byte-accurate 64 KB cap, unretained `needs_attention` still counted and listed, no refusal row for a device write on the `sync` stream, bounded `offset`, lower-cased location grants, null-envelope guard, non-object JSON guard, lost-update details, `pg` declared in the edge workspace, and tests for `LOCATION_ACCESS_DENIED`, the replay guard, the offset bound and the UNION watch. 7 items deferred (see Review Findings). |
 | 2026-09-16 | Story 1.13 implemented: local-only retention of refused and parked captures on the edge, the central `edge_refused_capture` queue with its API and DOA-gated resolution, a real PowerSync refuse-then-checkpoint test, and two defects that test exposed (connector JSON text columns, `node:sqlite` driver). |

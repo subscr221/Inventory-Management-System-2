@@ -384,7 +384,11 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
           sessionAuthLost.current = false;
           rememberKnownUser(bootstrap.user_id, bootstrap.user_name);
           // Story 1.13: rescue rows an older build left unretained, before anything is re-queued.
-          await salvageUnheldOutboxRows(db, bootstrap.user_id);
+          // Review fix: a salvage failure must not skip db.connect below, or the session never
+          // uploads and the unretained rows stay exposed to the next checkpoint.
+          await salvageUnheldOutboxRows(db, bootstrap.user_id).catch((error: unknown) => {
+            console.warn('salvageUnheldOutboxRows failed; continuing to connect', error);
+          });
           await resetAuthRequired(db, bootstrap.user_id);
           setState((current) => ({
             ...current,
