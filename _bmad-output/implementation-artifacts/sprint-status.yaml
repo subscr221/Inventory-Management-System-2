@@ -398,7 +398,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-09-15'
+last_updated: '2026-09-16'
 # story 6-4 dev-story 2026-09-01: implemented all 9 tasks from baseline 905a48e (clean tree). Closes
 #   Epic 6. One new projection (production_consumption_variance, append-only, grain
 #   (production_order_id, bom_line_id)) plus two pure services: src/production/lot-genealogy.ts (no
@@ -907,7 +907,7 @@ development_status:
   1-10-ci-cd-pipeline-construction: done   # PILOT
   1-11-notification-and-alerting-foundation: done   # PILOT
   1-12-edge-ui-sign-in-through-keycloak-pkce: in-progress   # PRE-PILOT BLOCKING  # created 2026-09-13 during the staging deployment (round table): Story 1.2 delivered the server side only. Story text in epics.md Story 1.12. Implemented and code-reviewed 2026-09-13 (4 decisions, 16 patches applied, 2 deferred): browser sign-in through ims-app (PKCE). Remaining: staging checklist, runbook 2.10 to 2.10b (Task 6.6). Closes after runbook 2.10a/2.10b; owner re-queue check verified under Story 1.13 AC3.
-  1-13-refused-and-parked-captures-are-never-lost: backlog   # PRE-PILOT BLOCKING  # sprint-change-proposal-2026-09-15; AD-18; blocks runbook 2.10c and the rehearsal
+  1-13-refused-and-parked-captures-are-never-lost: done   # PRE-PILOT BLOCKING  # sprint-change-proposal-2026-09-15; AD-18; blocks runbook 2.10c and the rehearsal
   1-14-refused-captures-supervisor-screen: backlog   # PILOT  # depends on 1-13
   epic-1-retrospective: optional
 

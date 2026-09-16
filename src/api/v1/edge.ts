@@ -18,6 +18,7 @@ import {
   assertEdgeProductionEventAllowed,
   assertEdgeQcEventAllowed,
   isPermanentUploadErrorCode,
+  classifyUploadFailure,
   REBASE_SAFE_EVENT_TYPES,
 } from '../../sync/upload.js';
 import {
@@ -29,6 +30,8 @@ import { logRejectionAudit } from '../../read/projections/audit_log.js';
 import { raiseMaintenanceSyncConflict } from '../../maintenance/sync-conflicts.js';
 import type { SyncConflictCause } from '../../maintenance/sync-conflicts.js';
 import { notifyFaultReported } from '../../maintenance/fault-notifications.js';
+import { recordRefusedCapture } from '../../sync/refused-captures.js';
+import { REFUSED_CAPTURE_STREAM_TYPE } from '../../compliance/edge-refused-capture.js';
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 import { config } from '../../config/index.js';
@@ -386,6 +389,15 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
       403,
       'CENTRAL_ONLY_OPERATION',
       'Migration events must be recorded centrally through the migration routes, not from an edge device',
+      { stream_type: body.stream_type, event_type: body.event_type },
+    );
+  }
+  // Story 1.13: the refused-captures queue ('sync' stream) is written only by the server.
+  if (body.stream_type === 'sync' || body.event_type.startsWith('sync.')) {
+    throw new AppError(
+      403,
+      'CENTRAL_ONLY_OPERATION',
+      'Refused-capture records are written by the server, not from an edge device',
       { stream_type: body.stream_type, event_type: body.event_type },
     );
   }
@@ -915,11 +927,61 @@ const edgeMaintenanceWorklistBase: RouteHandler = async (req, res) => {
 export const edgeBootstrapHandler: RouteHandler = edgeBootstrapBase;
 export const powerSyncCredentialsHandler: RouteHandler = powerSyncCredentialsBase;
 
-export const edgeEventUploadHandler: RouteHandler = requireRole({
-  module: resolveModuleFromBody,
-  functionScope: 'write',
-  locationId: resolveLocationFromBody,
-})(edgeEventUploadBase);
+const UPLOAD_EVENT_ID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Story 1.13 (AD-18, Binding Decisions 3 to 5): wraps the WHOLE upload route, outside requireRole,
+ * so middleware refusals are recorded too. A refusal the device settles as needs_attention (the
+ * server classifier mirrors the device's) is written to the central refused-captures queue after
+ * the inner transaction has rolled back. The ORIGINAL error object is rethrown unchanged, so the
+ * device response - including Story 7.8's details.conflict_id - is byte-for-byte what it was.
+ */
+export function withRefusedCaptureRecord(handler: RouteHandler): RouteHandler {
+  return async (req, res, params) => {
+    const body = getParsedBody(req);
+    // The handler rewrites metadata.actor and stamps payload fields: snapshot what the device sent.
+    const snapshot =
+      typeof body === 'object' && body !== null ? (structuredClone(body) as Record<string, unknown>) : null;
+    try {
+      await handler(req, res, params);
+    } catch (err: unknown) {
+      const authContext = getAuthContext(req);
+      const eventId = snapshot?.['event_id'];
+      const classification = classifyUploadFailure(err);
+      // The 'sync' stream is the server's own (Story 1.13): a device may never write it, and a
+      // refusal row on it would carry a module no RBAC assignment names, so only a wildcard-module
+      // caller could ever see or resolve it. Refuse it, record nothing.
+      if (
+        snapshot !== null &&
+        snapshot['stream_type'] !== REFUSED_CAPTURE_STREAM_TYPE &&
+        authContext &&
+        err instanceof AppError &&
+        typeof eventId === 'string' &&
+        UPLOAD_EVENT_ID_REGEX.test(eventId) &&
+        classification.action === 'complete' &&
+        classification.localStatus === 'needs_attention'
+      ) {
+        const assignment = getAuthorizedAssignment(req);
+        await recordRefusedCapture(snapshot, err, {
+          trace_id: getTraceId(req) ?? '',
+          endpoint: req.url ?? '',
+          method: req.method ?? 'POST',
+          user_id: authContext.userId,
+          assignment: assignment ? { role: assignment.role, locationId: assignment.locationId } : undefined,
+        });
+      }
+      throw err;
+    }
+  };
+}
+
+export const edgeEventUploadHandler: RouteHandler = withRefusedCaptureRecord(
+  requireRole({
+    module: resolveModuleFromBody,
+    functionScope: 'write',
+    locationId: resolveLocationFromBody,
+  })(edgeEventUploadBase),
+);
 
 export const edgeMaintenanceWorklistHandler: RouteHandler = requireRole({
   module: 'maintenance',

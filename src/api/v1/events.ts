@@ -408,7 +408,9 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
   if (
     body.stream_type === 'engineering' ||
     body.stream_type === 'maintenance' ||
-    body.stream_type === 'migration'
+    body.stream_type === 'migration' ||
+    // Story 1.13: the refused-captures queue is written only by the server.
+    body.stream_type === 'sync'
   ) {
     sendRequestError(
       req,

@@ -5,7 +5,13 @@ import {
   type PowerSyncCredentials,
 } from '@powersync/web';
 import type { EdgeLocalStatus } from '../local-db/schema';
-import { hasUpstreamStreamConflict, outboxRowOwner } from '../local-db/outbox';
+import {
+  hasUpstreamStreamConflict,
+  outboxRowOwner,
+  retainOutboxRow,
+  type QueryExecutor,
+  type RetainedReason,
+} from '../local-db/outbox';
 import { authorizedFetch } from '../session/api-fetch';
 
 export interface UploadFailureClassification {
@@ -340,7 +346,7 @@ export function classifyServerUploadFailure(
 }
 
 async function recordUploadOutcome(
-  database: AbstractPowerSyncDatabase,
+  database: Pick<QueryExecutor, 'execute'>,
   eventId: string,
   classification: UploadFailureClassification,
   details: ErrorEnvelope,
@@ -357,6 +363,25 @@ async function recordUploadOutcome(
       eventId,
     ],
   );
+}
+
+/**
+ * Story 1.13 (AD-18): settle a row whose queue entry will complete although the server does not hold
+ * it (refused, or parked for another owner). The status update and the local-only retention copy
+ * share one write transaction, before complete(): a checkpoint can delete the edge_outbox row right
+ * after. A failed write throws, so uploadData retries instead of completing. `outcome` is omitted
+ * when the row already carries the status to keep.
+ */
+async function settleUnheld(
+  database: AbstractPowerSyncDatabase,
+  eventId: string,
+  reason: RetainedReason,
+  outcome?: { classification: UploadFailureClassification; details: ErrorEnvelope },
+): Promise<void> {
+  await database.writeTransaction(async (tx) => {
+    if (outcome) await recordUploadOutcome(tx, eventId, outcome.classification, outcome.details);
+    await retainOutboxRow(tx, eventId, reason);
+  });
 }
 
 async function markOutboxSynced(
@@ -427,12 +452,17 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
         if (signedIn === null) return;
         const owner = outboxRowOwner(row?.metadata ?? op.opData?.['metadata']);
         if (owner !== null && owner !== signedIn) {
-          if (localStatus !== null && !SETTLED_STATUSES.has(localStatus) && localStatus !== 'auth_required') {
-            await recordUploadOutcome(
+          if (localStatus !== null && !SETTLED_STATUSES.has(localStatus)) {
+            await settleUnheld(
               database,
               op.id,
-              { action: 'complete', localStatus: 'auth_required', retryable: false },
-              { error_code: 'OWNER_NOT_SIGNED_IN', details: { owner_user_id: owner } },
+              'parked_for_owner',
+              localStatus === 'auth_required'
+                ? undefined
+                : {
+                    classification: { action: 'complete', localStatus: 'auth_required', retryable: false },
+                    details: { error_code: 'OWNER_NOT_SIGNED_IN', details: { owner_user_id: owner } },
+                  },
             );
           }
           continue;
@@ -451,17 +481,15 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
       if (typeof streamId === 'string' && typeof createdAt === 'string') {
         const upstream = await hasUpstreamStreamConflict(database, op.id, streamId, createdAt);
         if (upstream) {
-          await recordUploadOutcome(
-            database,
-            op.id,
-            {
+          await settleUnheld(database, op.id, 'refused', {
+            classification: {
               action: 'complete',
               localStatus: 'needs_attention',
               retryable: false,
               serverErrorCode: 'STREAM_CONFLICT',
             },
-            { error_code: 'STREAM_CONFLICT', details: upstream },
-          );
+            details: { error_code: 'STREAM_CONFLICT', details: upstream },
+          });
           continue;
         }
       }
@@ -470,6 +498,23 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
       // readings); the field is stripped so the server's envelope validation sees it as absent.
       const envelope: Record<string, unknown> = { ...op.opData, event_id: op.id };
       if (envelope['event_version'] === null) delete envelope['event_version'];
+      // Story 1.13 (found by the real PowerSync test): payload and metadata are TEXT columns, so
+      // opData holds JSON strings. A string that does not parse is sent as-is: the server refuses
+      // it permanently (INVALID_EVENT_ENVELOPE) and the row is retained, instead of retrying forever.
+      for (const key of ['payload', 'metadata']) {
+        const value = envelope[key];
+        if (typeof value !== 'string') continue;
+        try {
+          const parsed: unknown = JSON.parse(value);
+          // Only a plain object is an envelope field; a bare null, number or quoted string parses
+          // cleanly but is not one, and uploading it would answer a misleading error code.
+          if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+            envelope[key] = parsed;
+          }
+        } catch {
+          // left as the string
+        }
+      }
 
       const response = await authorizedFetch(`${this.apiBaseUrl}/api/v1/edge/events`, {
         method: 'POST',
@@ -488,8 +533,15 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
         throw new Error(classification.serverErrorCode ?? 'retryable upload failure');
       }
 
-      await recordUploadOutcome(database, op.id, classification, errorBody);
-      if (classification.action === 'halt') return;
+      if (classification.action === 'halt') {
+        await recordUploadOutcome(database, op.id, classification, errorBody);
+        return;
+      }
+      if (classification.localStatus === 'needs_attention') {
+        await settleUnheld(database, op.id, 'refused', { classification, details: errorBody });
+      } else {
+        await recordUploadOutcome(database, op.id, classification, errorBody);
+      }
     }
     await transaction.complete();
   }

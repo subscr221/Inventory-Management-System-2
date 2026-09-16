@@ -316,6 +316,8 @@ const MIGRATIONS = [
   // unblock. No upstream 13.1/13.2 file changes.
   '../../read/projections/migration_golive_signoff.sql',
   '../../read/projections/migration_golive_status.sql',
+  // Story 1.13 (AD-18): the edge refused-captures queue. Appended at the tail; no FK.
+  '../../read/projections/edge_refused_capture.sql',
 ];
 
 async function migrate(): Promise<void> {

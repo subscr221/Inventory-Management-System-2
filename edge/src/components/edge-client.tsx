@@ -34,6 +34,7 @@ import {
   readOutboxCounts,
   readWaitingForOtherOwners,
   resetAuthRequired,
+  salvageUnheldOutboxRows,
 } from '../local-db/outbox';
 import {
   applyWorklistSnapshot,
@@ -382,6 +383,8 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
           signedInUserId.current = bootstrap.user_id;
           sessionAuthLost.current = false;
           rememberKnownUser(bootstrap.user_id, bootstrap.user_name);
+          // Story 1.13: rescue rows an older build left unretained, before anything is re-queued.
+          await salvageUnheldOutboxRows(db, bootstrap.user_id);
           await resetAuthRequired(db, bootstrap.user_id);
           setState((current) => ({
             ...current,
@@ -403,12 +406,20 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
           if (!cached) setState((current) => ({ ...current, firstSyncRequired: true }));
         }
 
+        // Story 1.13: one watch over both the outbox and the local-only retention table.
+        const watchAbort = new AbortController();
         db.watch(
-          `SELECT id, local_status, server_error_code, updated_at FROM edge_outbox`,
+          `SELECT id, local_status, server_error_code, updated_at FROM edge_outbox
+           UNION ALL
+           SELECT id, retained_reason, server_error_code, retained_at FROM edge_outbox_retained`,
           [],
           { onResult: () => void refreshLocalState(db) },
+          { signal: watchAbort.signal },
         );
-        stopWatching = () => db.disconnect().catch(() => undefined);
+        stopWatching = () => {
+          watchAbort.abort();
+          void db.disconnect().catch(() => undefined);
+        };
         await refreshLocalState(db);
       } catch {
         if (!cancelled) setState((current) => ({ ...current, setupError: true }));

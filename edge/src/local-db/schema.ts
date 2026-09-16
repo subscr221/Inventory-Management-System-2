@@ -19,6 +19,19 @@ export const edgeOutbox = new Table(
   { indexes: { status: ['local_status'], idempotency: ['idempotency_key'] } },
 );
 
+// Story 1.13 (AD-18): a PowerSync checkpoint deletes every edge_outbox row whose upload-queue entry
+// has completed, because no bucket sends edge_outbox down. Rows the server does not hold (refused,
+// or parked for another person) are copied here first. localOnly: never uploaded, never touched by
+// a checkpoint. Row id equals the edge_outbox id.
+export const edgeOutboxRetained = new Table(
+  {
+    ...edgeOutbox.columnMap,
+    retained_reason: column.text,
+    retained_at: column.text,
+  },
+  { localOnly: true, indexes: { reason: ['retained_reason'], stream: ['stream_id'] } },
+);
+
 export const cachedUserContext = new Table(
   {
     user_id: column.text,
@@ -191,6 +204,7 @@ export const heldLot = new Table({
 
 export const EdgeSchema = new Schema({
   edge_outbox: edgeOutbox,
+  edge_outbox_retained: edgeOutboxRetained,
   cached_user_context: cachedUserContext,
   cached_site_context: cachedSiteContext,
   sync_failures: syncFailures,

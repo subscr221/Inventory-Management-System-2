@@ -203,6 +203,11 @@ import {
   resolveSyncConflictDuplicateConflict,
 } from '../compliance/maintenance-sync-conflict.js';
 import {
+  assertRefusedCaptureShape,
+  applyRefusedCaptureProjection,
+  resolveRefusedCaptureDuplicateConflict,
+} from '../compliance/edge-refused-capture.js';
+import {
   assertProductionOrderShape,
   applyProductionOrderProjection,
   resolveProductionOrderNumberDuplicateConflict,
@@ -822,6 +827,9 @@ export async function persistEvent(
   // the other pre-transaction asserts, so a malformed conflict event never consumes an idempotency
   // key. The Story 7.8 work_order_status_updated shape rides assertMaintenancePlanShape above.
   assertMaintenanceSyncConflictShape(envelope);
+  // Story 1.13 (AD-18): refused-capture record / resolve shape, including the actor derivation
+  // checks, is non-DB and runs with the other pre-transaction asserts.
+  assertRefusedCaptureShape(envelope);
   // Story 6.1: production order lifecycle shape validation (strict UUIDs, exact decimal order
   // quantity, the source-reference enum, the state vocabulary, the expediting pairing) is non-DB
   // and runs with the other pre-transaction asserts, so a malformed production event never
@@ -1218,6 +1226,9 @@ export async function persistEvent(
     // (AD-12). The Story 7.8 status transition and closure ledger ride
     // applyMaintenancePlanProjection above.
     await applyMaintenanceSyncConflictProjection(envelope, client);
+    // Story 1.13 (AD-18): the refused-capture queue row and its DOA-gated resolution commit or roll
+    // back with the domain_events insert (AD-12).
+    await applyRefusedCaptureProjection(envelope, client);
     // Story 6.1: the production order projection runs inside this same transaction, so the order
     // row (create, release with its re-run release gate, state transitions, cancel with the
     // unreversed-transactions guard) and the domain_events insert commit or roll back together.
@@ -1830,6 +1841,15 @@ export async function persistEvent(
           'A warranty override has already been recorded for this work order',
           await resolveWarrantyOverrideDuplicateConflict(envelope.payload),
         );
+      } else if (constraint === 'uq_edge_refused_capture_event') {
+        // Story 1.13: one queue row per refused capture event_id; same code and existing_refusal_id
+        // as the sequential pre-check.
+        throw new AppError(
+          409,
+          'DUPLICATE_REFUSED_CAPTURE',
+          'A refusal has already been recorded for this capture',
+          await resolveRefusedCaptureDuplicateConflict(envelope.payload),
+        );
       } else if (constraint === 'uq_maintenance_sync_conflict_event') {
         // Story 7.8: one queue row per conflicting edge event (Binding Decision 4). The race path
         // returns the same code and the same existing_conflict_id as the sequential pre-check.
@@ -2092,7 +2112,9 @@ export async function persistEvent(
         constraint === 'maintenance_warranty_override_pkey' ||
         // Story 7.8: server-minted conflict_id makes this practically unreachable; mapped for the
         // same completeness reason, naming its OWN id field below.
-        constraint === 'maintenance_sync_conflict_pkey'
+        constraint === 'maintenance_sync_conflict_pkey' ||
+        // Story 1.13: server-minted refusal_id; mapped for the same completeness reason.
+        constraint === 'edge_refused_capture_pkey'
       ) {
         // Story 7.3: server-minted UUIDs make these practically unreachable; mapped for
         // completeness per the maintenance_plan_pkey precedent, so a direct-event duplicate id
@@ -2222,6 +2244,13 @@ export async function persistEvent(
                                                       conflict_id:
                                                         typeof p['conflict_id'] === 'string'
                                                           ? p['conflict_id']
+                                                          : null,
+                                                    }
+                                                  : constraint === 'edge_refused_capture_pkey'
+                                                  ? {
+                                                      refusal_id:
+                                                        typeof p['refusal_id'] === 'string'
+                                                          ? p['refusal_id']
                                                           : null,
                                                     }
                                                   : {

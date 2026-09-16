@@ -511,6 +511,10 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/maintenance/work-orders/:workOrderId/status',
       'GET /api/v1/maintenance/assets/:assetId/closures',
       'GET /api/v1/edge/maintenance/worklist',
+      // Story 1.13: the central refused-captures queue (AD-18)
+      'GET /api/v1/edge/refused-captures',
+      'GET /api/v1/edge/refused-captures/:refusalId',
+      'POST /api/v1/edge/refused-captures/:refusalId/resolve',
       // Story 8.1: Inspection Plans and QC Gate
       'POST /api/v1/qc/inspection-plans',
       'GET /api/v1/qc/inspection-plans',

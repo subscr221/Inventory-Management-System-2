@@ -68,14 +68,35 @@ export async function insertCaptureEvent(
   );
 }
 
+/**
+ * Story 1.13 (AD-18) source-of-truth rule: edge_outbox answers for rows still in the upload queue;
+ * edge_outbox_retained answers for refused and parked rows. Between a settle and the next checkpoint
+ * a row lives in both tables, so every edge_outbox read excludes retained ids.
+ */
+const NOT_RETAINED = `id NOT IN (SELECT id FROM edge_outbox_retained)`;
+
+export type RetainedReason = 'refused' | 'parked_for_owner';
+
+async function inWriteTransaction(db: QueryExecutor, work: (tx: QueryExecutor) => Promise<void>): Promise<void> {
+  if (db.writeTransaction) await db.writeTransaction(work);
+  else await work(db);
+}
+
 export async function readOutboxCounts(db: QueryExecutor): Promise<OutboxCounts> {
   const rows = await db.getAll<{ local_status: EdgeLocalStatus; count: number }>(
-    `SELECT local_status, COUNT(*) AS count FROM edge_outbox GROUP BY local_status`,
+    `SELECT local_status, COUNT(*) AS count FROM edge_outbox WHERE ${NOT_RETAINED} GROUP BY local_status`,
+  );
+  const refused = await db.getAll<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM edge_outbox_retained WHERE retained_reason = ?`,
+    ['refused'],
   );
   let pendingCount = 0;
-  let failedCount = 0;
+  let failedCount = refused[0]?.count ?? 0;
   for (const row of rows) {
     if (isPendingStatus(row.local_status)) pendingCount += row.count;
+    // Belt and braces: a needs_attention row an older build settled without retaining is salvaged
+    // at start, but salvage runs after a successful bootstrap. Until then it still counts as
+    // failed rather than vanishing from both numbers.
     else if (row.local_status === 'needs_attention') failedCount += row.count;
   }
   return { pendingCount, failedCount };
@@ -88,13 +109,13 @@ export async function readOutboxCounts(db: QueryExecutor): Promise<OutboxCounts>
 export async function hasAuthRequired(db: QueryExecutor, currentUserId?: string): Promise<boolean> {
   if (currentUserId === undefined) {
     const rows = await db.getAll<{ count: number }>(
-      `SELECT COUNT(*) AS count FROM edge_outbox WHERE local_status = ?`,
+      `SELECT COUNT(*) AS count FROM edge_outbox WHERE local_status = ? AND ${NOT_RETAINED}`,
       ['auth_required'],
     );
     return (rows[0]?.count ?? 0) > 0;
   }
   const rows = await db.getAll<{ metadata: string }>(
-    `SELECT metadata FROM edge_outbox WHERE local_status = ?`,
+    `SELECT metadata FROM edge_outbox WHERE local_status = ? AND ${NOT_RETAINED}`,
     ['auth_required'],
   );
   return rows.some((row) => {
@@ -150,14 +171,18 @@ const OUTBOX_COLUMNS = `id, stream_type, stream_id, event_type, event_version, p
  * the fresh one is skipped as settled (the server's idempotency key covers the rest).
  */
 export async function resetAuthRequired(db: QueryExecutor, ownerUserId: string): Promise<void> {
+  // Story 1.13: parked rows are read from the retention table (the edge_outbox copy is deleted at
+  // the next checkpoint) and from edge_outbox for halts that never left the queue.
   const rows = await db.getAll<OutboxRecordRow>(
-    `SELECT ${OUTBOX_COLUMNS} FROM edge_outbox WHERE local_status = ?`,
-    ['auth_required'],
+    `SELECT ${OUTBOX_COLUMNS} FROM edge_outbox_retained WHERE retained_reason = ?
+     UNION ALL
+     SELECT ${OUTBOX_COLUMNS} FROM edge_outbox WHERE local_status = ? AND ${NOT_RETAINED}`,
+    ['parked_for_owner', 'auth_required'],
   );
   const now = new Date().toISOString();
   for (const row of rows) {
     if (outboxRowOwner(row.metadata) !== ownerUserId) continue;
-    const requeue = async (tx: QueryExecutor) => {
+    await inWriteTransaction(db, async (tx) => {
       // PowerSync exposes edge_outbox as a view: address rows by id only.
       await tx.execute(`DELETE FROM edge_outbox WHERE id = ?`, [row.id]);
       await tx.execute(
@@ -179,16 +204,56 @@ export async function resetAuthRequired(db: QueryExecutor, ownerUserId: string):
           now,
         ],
       );
-    };
-    if (db.writeTransaction) await db.writeTransaction(requeue);
-    else await requeue(db);
+      await tx.execute(`DELETE FROM edge_outbox_retained WHERE id = ?`, [row.id]);
+    });
   }
+}
+
+/**
+ * Story 1.13 (AD-18): copy one edge_outbox row into edge_outbox_retained, inside the caller's write
+ * transaction and before its upload-queue entry completes. PowerSync tables are views, so there is
+ * no upsert: delete then insert, and only when the source row still exists, so a repeat never drops
+ * a copy whose edge_outbox row a checkpoint already removed.
+ */
+export async function retainOutboxRow(tx: QueryExecutor, id: string, reason: RetainedReason): Promise<void> {
+  await tx.execute(
+    `DELETE FROM edge_outbox_retained WHERE id = ? AND EXISTS (SELECT 1 FROM edge_outbox WHERE id = ?)`,
+    [id, id],
+  );
+  await tx.execute(
+    `INSERT INTO edge_outbox_retained (${OUTBOX_COLUMNS}, retained_reason, retained_at)
+     SELECT ${OUTBOX_COLUMNS}, ?, ? FROM edge_outbox WHERE id = ?`,
+    [reason, new Date().toISOString(), id],
+  );
+}
+
+/**
+ * Story 1.13: rescue rows an older build settled without retaining. Runs at start, before any
+ * re-queue or connect. Rows earlier checkpoints already deleted cannot be recovered.
+ */
+export async function salvageUnheldOutboxRows(db: QueryExecutor, signedInUserId: string): Promise<void> {
+  await inWriteTransaction(db, async (tx) => {
+    const rows = await tx.getAll<{ id: string; local_status: EdgeLocalStatus; metadata: string }>(
+      `SELECT id, local_status, metadata FROM edge_outbox
+        WHERE local_status IN ('needs_attention', 'auth_required') AND ${NOT_RETAINED}`,
+    );
+    for (const row of rows) {
+      if (row.local_status === 'needs_attention') {
+        await retainOutboxRow(tx, row.id, 'refused');
+        continue;
+      }
+      const owner = outboxRowOwner(row.metadata);
+      if (owner !== null && owner !== signedInUserId) await retainOutboxRow(tx, row.id, 'parked_for_owner');
+    }
+  });
 }
 
 async function readUnsettledOwners(db: QueryExecutor): Promise<Array<string | null>> {
   const rows = await db.getAll<{ metadata: string }>(
-    `SELECT metadata FROM edge_outbox WHERE local_status IN (?, ?, ?)`,
-    ['pending_sync', 'syncing', 'auth_required'],
+    `SELECT metadata FROM edge_outbox WHERE local_status IN (?, ?, ?) AND ${NOT_RETAINED}
+     UNION ALL
+     SELECT metadata FROM edge_outbox_retained WHERE retained_reason = ?`,
+    ['pending_sync', 'syncing', 'auth_required', 'parked_for_owner'],
   );
   return rows.map((row) => outboxRowOwner(row.metadata));
 }
@@ -240,9 +305,10 @@ export async function hasUpstreamStreamConflict(
   createdAt: string,
 ): Promise<{ parked_behind_event_id: string } | null> {
   const rows = await db.getAll<{ id: string }>(
-    `SELECT id FROM edge_outbox
+    // Story 1.13: read the retention table; the edge_outbox copy is gone after the next checkpoint.
+    `SELECT id FROM edge_outbox_retained
       WHERE stream_id = ? AND id <> ?
-        AND local_status = 'needs_attention'
+        AND retained_reason = 'refused'
         AND server_error_code = 'STREAM_CONFLICT'
         AND created_at <= ?
       ORDER BY created_at ASC, id ASC
@@ -254,10 +320,15 @@ export async function hasUpstreamStreamConflict(
 }
 
 export async function readFailures(db: QueryExecutor): Promise<FailureRow[]> {
+  // Retained refusals, plus any needs_attention row not yet salvaged (see readOutboxCounts).
   return db.getAll<FailureRow>(
     `SELECT id, event_type, server_error_code, created_at
-     FROM edge_outbox WHERE local_status = ? ORDER BY created_at DESC`,
-    ['needs_attention'],
+       FROM edge_outbox_retained WHERE retained_reason = ?
+     UNION ALL
+     SELECT id, event_type, server_error_code, created_at
+       FROM edge_outbox WHERE local_status = ? AND ${NOT_RETAINED}
+     ORDER BY created_at DESC`,
+    ['refused', 'needs_attention'],
   );
 }
 

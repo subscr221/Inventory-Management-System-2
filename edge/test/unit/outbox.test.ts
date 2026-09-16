@@ -5,6 +5,7 @@ import {
   clearCachedUserContext,
   countUnsettled,
   hasAuthRequired,
+  hasUpstreamStreamConflict,
   insertCaptureEvent,
   outboxRowOwner,
   readCachedContext,
@@ -12,6 +13,8 @@ import {
   readOutboxCounts,
   readWaitingForOtherOwners,
   resetAuthRequired,
+  retainOutboxRow,
+  salvageUnheldOutboxRows,
   type QueryExecutor,
 } from '../../src/local-db/outbox';
 import {
@@ -21,87 +24,20 @@ import {
   type WorklistSnapshot,
 } from '../../src/local-db/worklist';
 import { createTestCaptureEvent } from '../../src/capture/test-capture';
-
-interface Row {
-  id: string;
-  local_status: string;
-  event_type: string;
-  server_error_code: string | null;
-  created_at: string;
-  metadata?: string;
-}
+import { SqliteDb } from './sqlite-db';
 
 /** Story 1.12: outbox metadata naming the capturing user, as the capture builders stamp it. */
 function ownedBy(userId: string): string {
   return JSON.stringify({ actor: { user_id: userId, role: 'r', location_id: 's1' } });
 }
 
-class FakeDb implements QueryExecutor {
-  outbox: Row[] = [];
-  user: Record<string, unknown> | null = null;
-  site: Record<string, unknown> | null = null;
-  transactions = 0;
-
-  async writeTransaction<T>(callback: (tx: QueryExecutor) => Promise<T>): Promise<T> {
-    this.transactions += 1;
-    return callback(this);
-  }
-
-  async execute(sql: string, params: unknown[] = []): Promise<unknown> {
-    if (sql.startsWith('INSERT INTO edge_outbox')) {
-      this.outbox.push({
-        id: params[0] as string,
-        event_type: params[3] as string,
-        metadata: params[6] as string,
-        local_status: params[9] as string,
-        server_error_code: params[10] as string | null,
-        created_at: params[12] as string,
-      });
-    } else if (sql.startsWith('DELETE FROM edge_outbox WHERE id = ?')) {
-      // Story 1.12: resetAuthRequired re-queues by delete and re-insert, addressed by id.
-      this.outbox = this.outbox.filter((row) => row.id !== params[0]);
-    } else if (sql.startsWith('DELETE FROM cached_user_context')) {
-      this.user = null;
-    } else if (sql.startsWith('INSERT INTO cached_user_context')) {
-      this.user = { user_id: params[1], user_name: params[2], role: params[3] };
-    } else if (sql.startsWith('DELETE FROM cached_site_context')) {
-      this.site = null;
-    } else if (sql.startsWith('INSERT INTO cached_site_context')) {
-      this.site = { site_id: params[1], site_name: params[2] };
-    }
-    return {};
-  }
-
-  async getAll<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-    if (sql.includes('GROUP BY local_status')) {
-      const counts = new Map<string, number>();
-      for (const row of this.outbox)
-        counts.set(row.local_status, (counts.get(row.local_status) ?? 0) + 1);
-      return [...counts].map(([local_status, count]) => ({ local_status, count })) as T[];
-    }
-    if (sql.startsWith('SELECT id, stream_type')) {
-      return this.outbox.filter((r) => r.local_status === params[0]).map((r) => ({ ...r })) as T[];
-    }
-    if (sql.startsWith('SELECT metadata FROM edge_outbox')) {
-      return this.outbox
-        .filter((r) => params.includes(r.local_status))
-        .map((r) => ({ metadata: r.metadata ?? null })) as T[];
-    }
-    if (sql.includes("local_status = ?") && params[0] === 'auth_required') {
-      return [{ count: this.outbox.filter((r) => r.local_status === 'auth_required').length }] as T[];
-    }
-    if (sql.includes("local_status = ?") && params[0] === 'needs_attention') {
-      return this.outbox.filter((r) => r.local_status === 'needs_attention') as T[];
-    }
-    if (sql.includes('FROM cached_user_context')) return (this.user ? [this.user] : []) as T[];
-    if (sql.includes('FROM cached_site_context')) return (this.site ? [this.site] : []) as T[];
-    return [];
-  }
+function statusById(db: SqliteDb, table = 'edge_outbox'): Record<string, unknown> {
+  return Object.fromEntries(db.rows(table).map((row) => [row['id'], row['local_status']]));
 }
 
 describe('edge outbox local data', () => {
   it('inserts a capture event and reports pending counts', async () => {
-    const db = new FakeDb();
+    const db = new SqliteDb();
     await insertCaptureEvent(
       db,
       createTestCaptureEvent({
@@ -117,19 +53,18 @@ describe('edge outbox local data', () => {
   });
 
   it('separates failures and auth-required from pending counts', async () => {
-    const db = new FakeDb();
-    db.outbox.push(
-      { id: 'a', event_type: 'e', local_status: 'needs_attention', server_error_code: 'UNTAGGED_TRANSACTION', created_at: 'now' },
-      { id: 'b', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now' },
-      { id: 'c', event_type: 'e', local_status: 'pending_sync', server_error_code: null, created_at: 'now' },
-    );
+    const db = new SqliteDb();
+    db.seed({ id: 'a', local_status: 'needs_attention', server_error_code: 'UNTAGGED_TRANSACTION' });
+    db.seed({ id: 'b', local_status: 'auth_required' });
+    db.seed({ id: 'c', local_status: 'pending_sync' });
+    await retainOutboxRow(db, 'a', 'refused');
     assert.deepEqual(await readOutboxCounts(db), { pendingCount: 1, failedCount: 1 });
     assert.equal(await hasAuthRequired(db), true);
     assert.equal((await readFailures(db)).length, 1);
   });
 
   it('caches and restores user and site context', async () => {
-    const db = new FakeDb();
+    const db = new SqliteDb();
     await cacheContext(
       db,
       { userId: 'u1', userName: 'Officer', role: 'gate_officer' },
@@ -142,43 +77,36 @@ describe('edge outbox local data', () => {
 
   // Story 1.12: sign-in and shared-tablet sign-out helpers.
   it('counts only the signed-in user\'s rows that would still upload as unsettled', async () => {
-    const db = new FakeDb();
-    db.outbox.push(
-      { id: 'a', event_type: 'e', local_status: 'needs_attention', server_error_code: 'STREAM_CONFLICT', created_at: 'now', metadata: ownedBy('u1') },
-      { id: 'b', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
-      { id: 'c', event_type: 'e', local_status: 'pending_sync', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
-      { id: 'd', event_type: 'e', local_status: 'synced', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
-      { id: 'e', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u2') },
-    );
+    const db = new SqliteDb();
+    db.seed({ id: 'a', local_status: 'needs_attention', server_error_code: 'STREAM_CONFLICT', metadata: ownedBy('u1') });
+    db.seed({ id: 'b', local_status: 'auth_required', metadata: ownedBy('u1') });
+    db.seed({ id: 'c', local_status: 'pending_sync', metadata: ownedBy('u1') });
+    db.seed({ id: 'd', local_status: 'synced', metadata: ownedBy('u1') });
+    db.seed({ id: 'e', local_status: 'auth_required', metadata: ownedBy('u2') });
     assert.equal(await countUnsettled(db, 'u1'), 2);
     assert.equal(await countUnsettled(db, 'u2'), 1);
   });
 
   it('re-queues only the signing-in owner\'s auth_required rows and leaves every other row alone', async () => {
-    const db = new FakeDb();
-    db.outbox.push(
-      { id: 'a', event_type: 'e', local_status: 'needs_attention', server_error_code: 'UNTAGGED_TRANSACTION', created_at: 'now', metadata: ownedBy('u1') },
-      { id: 'b', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
-      { id: 'c', event_type: 'e', local_status: 'synced', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
-      { id: 'd', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u2') },
-    );
+    const db = new SqliteDb();
+    db.seed({ id: 'a', local_status: 'needs_attention', server_error_code: 'UNTAGGED_TRANSACTION', metadata: ownedBy('u1') });
+    db.seed({ id: 'b', local_status: 'auth_required', metadata: ownedBy('u1') });
+    db.seed({ id: 'c', local_status: 'synced', metadata: ownedBy('u1') });
+    db.seed({ id: 'd', local_status: 'auth_required', metadata: ownedBy('u2') });
     await resetAuthRequired(db, 'u1');
-    const status = Object.fromEntries(db.outbox.map((row) => [row.id, row.local_status]));
-    assert.deepEqual(status, { a: 'needs_attention', b: 'pending_sync', c: 'synced', d: 'auth_required' });
+    assert.deepEqual(statusById(db), { a: 'needs_attention', b: 'pending_sync', c: 'synced', d: 'auth_required' });
     assert.equal(db.transactions, 1, 'one delete-and-reinsert transaction per re-queued row');
-    assert.equal(db.outbox.find((row) => row.id === 'b')?.metadata, ownedBy('u1'));
+    assert.equal(db.rows('edge_outbox').find((row) => row['id'] === 'b')?.['metadata'], ownedBy('u1'));
     assert.equal(await hasAuthRequired(db, 'u1'), false);
     assert.equal(await hasAuthRequired(db, 'u2'), true);
   });
 
   it('groups unsettled captures waiting for other people by owner', async () => {
-    const db = new FakeDb();
-    db.outbox.push(
-      { id: 'a', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u2') },
-      { id: 'b', event_type: 'e', local_status: 'auth_required', server_error_code: null, created_at: 'now', metadata: ownedBy('u2') },
-      { id: 'c', event_type: 'e', local_status: 'pending_sync', server_error_code: null, created_at: 'now', metadata: ownedBy('u1') },
-      { id: 'd', event_type: 'e', local_status: 'synced', server_error_code: null, created_at: 'now', metadata: ownedBy('u3') },
-    );
+    const db = new SqliteDb();
+    db.seed({ id: 'a', local_status: 'auth_required', metadata: ownedBy('u2') });
+    db.seed({ id: 'b', local_status: 'auth_required', metadata: ownedBy('u2') });
+    db.seed({ id: 'c', local_status: 'pending_sync', metadata: ownedBy('u1') });
+    db.seed({ id: 'd', local_status: 'synced', metadata: ownedBy('u3') });
     assert.deepEqual(await readWaitingForOtherOwners(db, 'u1'), [{ userId: 'u2', count: 2 }]);
   });
 
@@ -190,7 +118,7 @@ describe('edge outbox local data', () => {
   });
 
   it('clears the cached user on sign-out but keeps the site context', async () => {
-    const db = new FakeDb();
+    const db = new SqliteDb();
     await cacheContext(
       db,
       { userId: 'u1', userName: 'Officer', role: 'gate_officer' },
@@ -198,8 +126,95 @@ describe('edge outbox local data', () => {
     );
     await clearCachedUserContext(db);
     assert.equal(await readCachedContext(db), null);
-    assert.equal(db.user, null);
-    assert.deepEqual(db.site, { site_id: 's1', site_name: 'Pilot Site' });
+    assert.equal(db.rows('cached_user_context').length, 0);
+    assert.deepEqual(
+      db.rows('cached_site_context').map((row) => [row['site_id'], row['site_name']]),
+      [['s1', 'Pilot Site']],
+    );
+  });
+});
+
+// Story 1.13 (AD-18): refused and parked rows are copied to the local-only edge_outbox_retained
+// table, because a PowerSync checkpoint deletes every edge_outbox row whose queue entry completed.
+describe('Story 1.13 retention of unheld outbox rows', () => {
+  it('retains a full copy idempotently and keeps it through a checkpoint', async () => {
+    const db = new SqliteDb();
+    db.seed({ id: 'a', local_status: 'needs_attention', server_error_code: 'MODULE_ACCESS_DENIED', metadata: ownedBy('u1') });
+    await retainOutboxRow(db, 'a', 'refused');
+    await retainOutboxRow(db, 'a', 'refused');
+    db.checkpoint();
+    const retained = db.rows('edge_outbox_retained');
+    assert.equal(retained.length, 1);
+    assert.equal(retained[0]!['retained_reason'], 'refused');
+    assert.equal(retained[0]!['server_error_code'], 'MODULE_ACCESS_DENIED');
+    assert.equal(retained[0]!['metadata'], ownedBy('u1'));
+    assert.equal(retained[0]!['idempotency_key'], 'key-a');
+    assert.deepEqual(await readOutboxCounts(db), { pendingCount: 0, failedCount: 1 });
+    assert.equal((await readFailures(db))[0]?.server_error_code, 'MODULE_ACCESS_DENIED');
+  });
+
+  it('never drops an existing retained copy when the outbox row is already gone', async () => {
+    const db = new SqliteDb();
+    db.seed({ id: 'a', local_status: 'needs_attention' });
+    await retainOutboxRow(db, 'a', 'refused');
+    db.checkpoint();
+    await retainOutboxRow(db, 'a', 'refused');
+    assert.equal(db.rows('edge_outbox_retained').length, 1);
+  });
+
+  it('never double counts a row present in both tables', async () => {
+    const db = new SqliteDb();
+    db.seed({ id: 'r', local_status: 'needs_attention', server_error_code: 'X' });
+    db.seed({ id: 'p', local_status: 'auth_required', metadata: ownedBy('u2') });
+    await retainOutboxRow(db, 'r', 'refused');
+    await retainOutboxRow(db, 'p', 'parked_for_owner');
+    assert.deepEqual(await readOutboxCounts(db), { pendingCount: 0, failedCount: 1 });
+    assert.equal((await readFailures(db)).length, 1);
+    assert.deepEqual(await readWaitingForOtherOwners(db, 'u1'), [{ userId: 'u2', count: 1 }]);
+    assert.equal(await hasAuthRequired(db), false, 'a parked row is not a sign-in problem');
+    db.checkpoint();
+    assert.deepEqual(await readWaitingForOtherOwners(db, 'u1'), [{ userId: 'u2', count: 1 }]);
+    assert.equal(await countUnsettled(db, 'u2'), 1);
+  });
+
+  it('finds a retained STREAM_CONFLICT head after the outbox row is gone', async () => {
+    const db = new SqliteDb();
+    db.seed({ id: 'head', local_status: 'needs_attention', server_error_code: 'STREAM_CONFLICT', stream_id: 'wo-1', created_at: '2026-08-28T09:00:00.000Z' });
+    await retainOutboxRow(db, 'head', 'refused');
+    db.checkpoint();
+    assert.deepEqual(
+      await hasUpstreamStreamConflict(db, 'dep', 'wo-1', '2026-08-28T09:05:00.000Z'),
+      { parked_behind_event_id: 'head' },
+    );
+    assert.equal(await hasUpstreamStreamConflict(db, 'dep', 'wo-2', '2026-08-28T09:05:00.000Z'), null);
+  });
+
+  it('re-queues a retained parked row for its owner and removes the retained copy', async () => {
+    const db = new SqliteDb();
+    db.seed({ id: 'p', local_status: 'auth_required', metadata: ownedBy('u2') });
+    db.seed({ id: 'q', local_status: 'auth_required', metadata: ownedBy('u3') });
+    await retainOutboxRow(db, 'p', 'parked_for_owner');
+    await retainOutboxRow(db, 'q', 'parked_for_owner');
+    db.checkpoint();
+    await resetAuthRequired(db, 'u2');
+    assert.deepEqual(statusById(db), { p: 'pending_sync' });
+    assert.equal(db.rows('edge_outbox')[0]!['idempotency_key'], 'key-p');
+    assert.deepEqual(db.rows('edge_outbox_retained').map((row) => row['id']), ['q']);
+  });
+
+  it('salvages refused and other people\'s parked rows once, and nothing else', async () => {
+    const db = new SqliteDb();
+    db.seed({ id: 'r', local_status: 'needs_attention', server_error_code: 'X', metadata: ownedBy('u1') });
+    db.seed({ id: 'mine', local_status: 'auth_required', metadata: ownedBy('u1') });
+    db.seed({ id: 'theirs', local_status: 'auth_required', metadata: ownedBy('u2') });
+    db.seed({ id: 'anon', local_status: 'auth_required' });
+    db.seed({ id: 'pending', local_status: 'pending_sync', metadata: ownedBy('u2') });
+    await salvageUnheldOutboxRows(db, 'u1');
+    await salvageUnheldOutboxRows(db, 'u1');
+    assert.deepEqual(
+      db.rows('edge_outbox_retained').map((row) => [row['id'], row['retained_reason']]),
+      [['r', 'refused'], ['theirs', 'parked_for_owner']],
+    );
   });
 });
 

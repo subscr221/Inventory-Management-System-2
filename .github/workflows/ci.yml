@@ -125,6 +125,28 @@ jobs:
       - run: npm run edge:build
       - run: npm run edge:test
 
+  # Story 1.13 (AC 5): a real PowerSync service applies real checkpoints to a real edge database
+  # (refuse-then-checkpoint). Not yet a required check: add it to branch protection by hand.
+  edge-sync-real:
+    name: edge-sync-real
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Start PostgreSQL and PowerSync
+        run: docker compose --env-file .env.test -f deploy/compose/docker-compose.sync-test.yml up -d --wait
+      - run: npm run edge:test:sync-real
+      - name: PowerSync logs
+        if: failure()
+        run: docker compose --env-file .env.test -f deploy/compose/docker-compose.sync-test.yml logs powersync
+      - name: Tear down
+        if: always()
+        run: docker compose --env-file .env.test -f deploy/compose/docker-compose.sync-test.yml down -v
+
   edge-accessibility:
     name: edge-accessibility
     runs-on: ubuntu-latest

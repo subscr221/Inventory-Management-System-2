@@ -24,6 +24,7 @@ function createDatabase(
   crud: CrudEntry[],
   statuses: Record<string, EdgeLocalStatus>,
   activity: string[],
+  failRetain = false,
 ): AbstractPowerSyncDatabase {
   const transaction = {
     crud,
@@ -33,14 +34,21 @@ function createDatabase(
     transactionId: 1,
   } as CrudTransaction;
 
-  return {
+  const database = {
     getNextCrudTransaction: async () => transaction,
     getOptional: async (_sql: string, parameters: unknown[]) => {
       const id = parameters[0] as string;
       activity.push(`read:${id}:${statuses[id] ?? 'missing'}`);
       return statuses[id] ? { local_status: statuses[id] } : null;
     },
-    execute: async (_sql: string, parameters: unknown[]) => {
+    writeTransaction: async <T>(callback: (tx: unknown) => Promise<T>) => callback(database),
+    execute: async (sql: string, parameters: unknown[]) => {
+      // Story 1.13: the retention copy (delete then insert-select) is routed explicitly.
+      if (sql.includes('edge_outbox_retained')) {
+        if (failRetain) throw new Error('retain failed');
+        if (sql.trimStart().startsWith('INSERT')) activity.push(`retain:${String(parameters[2])}:${String(parameters[0])}`);
+        return { rowsAffected: 1 };
+      }
       const status = parameters[0] as EdgeLocalStatus;
       const id = parameters[4] as string;
       statuses[id] = status;
@@ -48,6 +56,7 @@ function createDatabase(
       return { rowsAffected: 1 };
     },
   } as unknown as AbstractPowerSyncDatabase;
+  return database;
 }
 
 describe('edge upload failure classification', () => {
@@ -268,7 +277,8 @@ describe('edge upload connector', () => {
       transactionId: 1,
     } as CrudTransaction;
     const byId = new Map(rows.map((row) => [row.id, row]));
-    return {
+    const retained = new Set<string>();
+    const database = {
       getNextCrudTransaction: async () => transaction,
       getOptional: async (_sql: string, parameters: unknown[]) => {
         const row = byId.get(parameters[0] as string);
@@ -280,6 +290,7 @@ describe('edge upload connector', () => {
         return rows
           .filter(
             (row) =>
+              retained.has(row.id) &&
               row.stream_id === streamId &&
               row.id !== eventId &&
               row.local_status === 'needs_attention' &&
@@ -290,7 +301,15 @@ describe('edge upload connector', () => {
           .slice(0, 1)
           .map((row) => ({ id: row.id }));
       },
-      execute: async (_sql: string, parameters: unknown[]) => {
+      writeTransaction: async <T>(callback: (tx: unknown) => Promise<T>) => callback(database),
+      execute: async (sql: string, parameters: unknown[]) => {
+        if (sql.includes('edge_outbox_retained')) {
+          if (sql.trimStart().startsWith('INSERT')) {
+            retained.add(parameters[2] as string);
+            activity.push(`retain:${String(parameters[2])}:${String(parameters[0])}`);
+          }
+          return { rowsAffected: 1 };
+        }
         const row = byId.get(parameters[4] as string);
         if (row) {
           row.local_status = parameters[0] as EdgeLocalStatus;
@@ -300,6 +319,7 @@ describe('edge upload connector', () => {
         return { rowsAffected: 1 };
       },
     } as unknown as AbstractPowerSyncDatabase;
+    return database;
   }
 
   function streamPut(row: ParkRow, clientId: number, eventVersion: number | null = 2): CrudEntry {
@@ -351,6 +371,9 @@ describe('edge upload connector', () => {
       activity.join('\n'),
     );
     assert.ok(activity.includes('write:dep2:needs_attention:{"parked_behind_event_id":"head"}'));
+    // Story 1.13: the head and both parked dependents are retained; the other stream is not.
+    for (const id of ['head', 'dep1', 'dep2']) assert.ok(activity.includes(`retain:${id}:refused`), id);
+    assert.equal(activity.includes('retain:other:refused'), false);
     assert.equal(activity.at(-1), 'complete');
   });
 
@@ -406,6 +429,40 @@ describe('edge upload connector', () => {
     assert.equal(bodies[1]!['event_version'], 5);
   });
 
+  // Story 1.13 (found by the real PowerSync test): payload and metadata are TEXT columns, so opData
+  // carries them as JSON strings; the server's envelope validation needs objects.
+  it('posts payload and metadata as objects, and a malformed one unchanged', async (t) => {
+    const activity: string[] = [];
+    const rows: ParkRow[] = [
+      { id: 'ok', stream_id: 's-1', created_at: '2026-09-16T00:00:00.000Z', local_status: 'pending_sync', server_error_code: null },
+      { id: 'bad', stream_id: 's-2', created_at: '2026-09-16T00:00:01.000Z', local_status: 'pending_sync', server_error_code: null },
+    ];
+    const textPut = (row: ParkRow, clientId: number, payload: string) =>
+      new CrudEntry(clientId, UpdateType.PUT, 'edge_outbox', row.id, 1, {
+        stream_type: 'maintenance',
+        stream_id: row.stream_id,
+        created_at: row.created_at,
+        payload,
+        metadata: JSON.stringify({ actor: { user_id: 'u1' } }),
+      });
+    const database = createParkingDatabase(
+      [textPut(rows[0]!, 1, '{"capture_kind":"shell_test"}'), textPut(rows[1]!, 2, '{not json')],
+      rows,
+      activity,
+    );
+    const bodies: Record<string, unknown>[] = [];
+    t.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(null, { status: 201 });
+    });
+
+    await new EdgePowerSyncConnector().uploadData(database);
+
+    assert.deepEqual(bodies[0]!['payload'], { capture_kind: 'shell_test' });
+    assert.deepEqual(bodies[0]!['metadata'], { actor: { user_id: 'u1' } });
+    assert.equal(bodies[1]!['payload'], '{not json');
+  });
+
   it('preserves a settled permanent outcome when a later operation retries', async (t) => {
     const activity: string[] = [];
     const statuses: Record<string, EdgeLocalStatus> = {
@@ -441,6 +498,60 @@ describe('edge upload connector', () => {
     assert.equal(statuses['permanent'], 'needs_attention');
     assert.equal(statuses['retry'], 'synced');
     assert.equal(activity.at(-1), 'complete');
+  });
+});
+
+// Story 1.13 (AD-18): every settle that completes the queue entry without the server holding the
+// row retains it first, in the same write transaction; a failed retain becomes a retry.
+describe('Story 1.13 connector retention', () => {
+  it('retains a permanent server refusal before completing', async (t) => {
+    const activity: string[] = [];
+    const statuses: Record<string, EdgeLocalStatus> = { event1: 'pending_sync' };
+    t.mock.method(globalThis, 'fetch', async () =>
+      Response.json({ error_code: 'MODULE_ACCESS_DENIED' }, { status: 403 }),
+    );
+
+    await new EdgePowerSyncConnector().uploadData(createDatabase([put('event1', 1)], statuses, activity));
+
+    assert.deepEqual(activity, [
+      'read:event1:pending_sync',
+      'write:event1:needs_attention',
+      'retain:event1:refused',
+      'complete',
+    ]);
+  });
+
+  it('throws without completing when the retain write fails', async (t) => {
+    const activity: string[] = [];
+    const statuses: Record<string, EdgeLocalStatus> = { event1: 'pending_sync' };
+    t.mock.method(globalThis, 'fetch', async () =>
+      Response.json({ error_code: 'INVALID_EVENT_ENVELOPE' }, { status: 400 }),
+    );
+
+    await assert.rejects(
+      () => new EdgePowerSyncConnector().uploadData(createDatabase([put('event1', 1)], statuses, activity, true)),
+      /retain failed/,
+    );
+    assert.equal(activity.includes('complete'), false);
+  });
+
+  it('retains nothing for accepted, duplicate, halted or retried uploads', async (t) => {
+    const responses = [
+      new Response(null, { status: 201 }),
+      Response.json({ error_code: 'DUPLICATE_EVENT', details: { existing_event_id: 'x' } }, { status: 409 }),
+      Response.json({ error_code: 'UNAUTHORIZED' }, { status: 401 }),
+      Response.json({}, { status: 403 }),
+      Response.json({ error_code: 'INTERNAL_ERROR' }, { status: 503 }),
+    ];
+    for (const response of responses) {
+      const activity: string[] = [];
+      t.mock.method(globalThis, 'fetch', async () => response);
+      await new EdgePowerSyncConnector()
+        .uploadData(createDatabase([put('event1', 1)], { event1: 'pending_sync' }, activity))
+        .catch(() => undefined);
+      assert.equal(activity.some((entry) => entry.startsWith('retain:')), false, String(response.status));
+      t.mock.restoreAll();
+    }
   });
 });
 
@@ -528,6 +639,11 @@ describe('Story 1.12 connector identity', () => {
     assert.equal(statuses['theirs'], 'auth_required');
     assert.equal(statuses['parked'], 'auth_required');
     assert.equal(activity.filter((entry) => entry.startsWith('write:parked')).length, 0);
+    // Story 1.13: both of u2's rows leave the queue, so both are retained for u2.
+    assert.ok(activity.includes('retain:theirs:parked_for_owner'));
+    assert.ok(activity.includes('retain:parked:parked_for_owner'));
+    assert.equal(activity.includes('retain:mine:parked_for_owner'), false);
+    assert.ok(activity.indexOf('retain:theirs:parked_for_owner') < activity.indexOf('complete'));
     assert.equal(statuses['mine'], 'synced');
     assert.equal(activity.at(-1), 'complete');
   });

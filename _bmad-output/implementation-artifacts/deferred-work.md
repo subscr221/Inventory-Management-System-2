@@ -1067,3 +1067,21 @@ new in `.env.example`.
 
 - Closure codes (`cached_closure_code`) are now read `ORDER BY kind, code` because PowerSync views expose no `rowid`; server-curated fault/cause/remedy order is lost. Needs an explicit position column in the snapshot (edge/src/local-db/worklist.ts:229).
 - After an offline start, `db.connect` never runs until reload (the `online` handler only refreshes local state and the worklist), so the blocked sign-out drain and any queued upload wait for a reload (edge/src/components/edge-client.tsx:327). Pre-existing since Story 7.8.
+
+## Deferred from: dev of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)
+
+- The local-only `sync_failures` table (edge/src/local-db/schema.ts) has never been written and holds no payload or metadata, so it cannot re-queue anything. Superseded by `edge_outbox_retained`; removable in a later story.
+- Retained `refused` rows stay on the device forever: there is no dismiss or clear action. Story 1.14 (supervisor screen) or later decides who may dismiss one and when.
+- `resolveApprover` has no site dimension, so one company-wide approver (or their delegate) resolves refusals for every site through `edge.refused_capture_resolution`. Fine for the single-site pilot; same limitation as Story 7.8.
+- `sync.refused_capture_recorded` events carry the refusal site in `metadata.actor.location_id`, so the `edge_site_events` bucket replicates them to every device at that site (into `ps_untyped`). Story 7.8 raises already do the same. Exposure and device storage growth are accepted for the pilot; excluding the `sync` stream from the bucket needs a sync-rules change.
+- The `edge-sync-real` CI job is not a required check yet: it must be added to branch protection (and `deploy/pipeline/branch-protection.json`) by a repository admin.
+
+## Deferred from: code review of 1-13-refused-and-parked-captures-are-never-lost (2026-09-16)
+
+- A retained `STREAM_CONFLICT` head parks its stream on the device forever: `hasUpstreamStreamConflict` reads `edge_outbox_retained`, a `refused` retained row is never deleted, and a central resolution changes nothing on the device (Binding Decision 7). Before Story 1.13 the head was deleted at the next checkpoint and the park self-cleared. Deferred 2026-09-16 by user decision: Story 1.14 owns the dismiss action, so the clear path belongs there; this is a reason 1.14 is pilot-blocking.
+- `edge_outbox_retained` grows without bound and has no dismiss path; each row is a full outbox copy including payload and metadata. Story 1.14 or later needs an acknowledge-and-drop or an age cap.
+- A crud entry whose `edge_outbox` row has vanished retains nothing and still completes the queue entry (`retainOutboxRow` is `INSERT ... SELECT` from a row that is gone). Unreachable today; harden by retaining from `op.opData` or throwing.
+- `recordRefusedCapture` swallows every failure into a `console.warn` (Binding Decision 3 says never throw), so a central-record loss is invisible: no metric, no counter, no dead-letter.
+- No per-device rate limit on refusal records: an authenticated device looping distinct `event_id`s with 64 KB envelopes writes unbounded `domain_events` plus `edge_refused_capture` rows. Same exposure shape as the Story 7.8 raise.
+- A refusal with no resolvable site stamps the record event's `metadata.actor.location_id` with the nil UUID while the payload keeps `location_id: null` (Binding Decisions 5 and 10 name the actor field). Harmless today (the nil site matches no bucket) but undocumented.
+- The `disconnectAndClear({ clearLocal: false })` rule protecting every retained capture is a comment in `edge/src/local-db/database.ts` with no lint rule, wrapper or test behind it.

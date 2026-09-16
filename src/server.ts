@@ -520,6 +520,11 @@ import { runRetentionExpiryCycle } from './notify/retention-expiry.js';
 import { runBisLicenceExpiryCycle } from './compliance/bis-licence-expiry.js';
 import { runJobworkClockSweepCycle } from './notify/jobwork-clock-sweep.js';
 import { runJobWorkBillingFeedSweepCycle } from './notify/jobwork-billing-sweep.js';
+import {
+  listRefusedCapturesHandler,
+  getRefusedCaptureHandler,
+  resolveRefusedCaptureHandler,
+} from './api/v1/refused-captures.js';
 
 export function createAppRouter(): Router {
   const router = new Router();
@@ -1345,6 +1350,10 @@ export function createAppRouter(): Router {
   router.post('/api/v1/edge/events', edgeEventUploadHandler);
   // Story 7.8: the technician's offline working set (FR-M-17, Binding Decision 11).
   router.get('/api/v1/edge/maintenance/worklist', edgeMaintenanceWorklistHandler);
+  // Story 1.13 (AD-18): the central refused-captures queue. Static list before the param routes.
+  router.get('/api/v1/edge/refused-captures', listRefusedCapturesHandler);
+  router.get('/api/v1/edge/refused-captures/:refusalId', getRefusedCaptureHandler);
+  router.post('/api/v1/edge/refused-captures/:refusalId/resolve', resolveRefusedCaptureHandler);
   router.get('/api/v1/notifications', listNotificationsHandler);
   router.get('/api/v1/notifications/unread-count', getUnreadCountHandler);
   router.patch('/api/v1/notifications/:id', updateNotificationHandler);

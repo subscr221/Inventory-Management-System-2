@@ -5404,6 +5404,48 @@ export interface MigrationGoLiveUnblockedEnvelope extends Omit<EventEnvelope, 'p
   payload: MigrationGoLiveUnblockedPayload;
 }
 
+// Story 1.13 (AD-18): the edge refused-captures queue, on the central-only 'sync' stream with
+// stream_id = refusal_id. Recorded by the edge upload wrapper after a permanent refusal has rolled
+// back; resolved by a DOA-gated supervisor decision (edge.refused_capture_resolution, value 0).
+export interface RefusedCaptureRecordedPayload {
+  refusal_id: string;
+  event_id: string;
+  stream_type: string;
+  stream_id: string | null;
+  event_type: string | null;
+  idempotency_key: string | null;
+  device_id: string | null;
+  captured_by: string;
+  captured_role: string | null;
+  location_id: string | null;
+  location_source: 'authorized' | 'declared' | 'none';
+  http_status: number;
+  error_code: string;
+  error_details: Record<string, unknown> | null;
+  envelope: Record<string, unknown> | null;
+  envelope_truncated: boolean;
+  trace_id: string;
+  occurred_at: string | null;
+  refused_at: string;
+}
+
+export interface RefusedCaptureRecordedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'sync.refused_capture_recorded';
+  payload: RefusedCaptureRecordedPayload;
+}
+
+export interface RefusedCaptureResolvedPayload {
+  refusal_id: string;
+  resolved_by: string;
+  note: string;
+  resolved_at: string;
+}
+
+export interface RefusedCaptureResolvedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'sync.refused_capture_resolved';
+  payload: RefusedCaptureResolvedPayload;
+}
+
 // ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
@@ -6479,6 +6521,16 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'migration.golive.unblocked': {
     streamType: 'migration',
+    requiresBusinessStream: false,
+  },
+  // Story 1.13 (AD-18): central-only. Both event doors refuse the 'sync' stream; the edge upload
+  // wrapper and the refused-captures routes are the only producers.
+  'sync.refused_capture_recorded': {
+    streamType: 'sync',
+    requiresBusinessStream: false,
+  },
+  'sync.refused_capture_resolved': {
+    streamType: 'sync',
     requiresBusinessStream: false,
   },
 } as const;

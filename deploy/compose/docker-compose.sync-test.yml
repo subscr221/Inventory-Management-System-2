@@ -1,0 +1,60 @@
+# Story 1.13 (AC 5): the throwaway stack for edge/test/sync-real - PostgreSQL from init-db.sql and
+# the real PowerSync service with the production sync/powersync.yaml and sync/sync-rules.yaml. The
+# central API is started by the test itself (AUTH_MODE=local, dev tokens). Test-only: the role
+# passwords stay init-db.sql's placeholders, the token secret comes from .env.test, every port is
+# on loopback, and there is no volume (down -v leaves nothing). Never used by the production stack.
+#
+#   docker compose --env-file .env.test -f deploy/compose/docker-compose.sync-test.yml up -d --wait
+#   npm run edge:test:sync-real
+#   docker compose --env-file .env.test -f deploy/compose/docker-compose.sync-test.yml down -v
+name: ims-sync-test
+
+services:
+  postgres:
+    image: postgres:18.4
+    environment:
+      POSTGRES_DB: inventory_events
+      POSTGRES_USER: admin_user
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD}
+    volumes:
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init-db.sql:ro
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_wal_senders=10", "-c", "max_replication_slots=10"]
+    ports:
+      - "127.0.0.1:5452:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_user -d inventory_events"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  powersync:
+    image: journeyapps/powersync-service:1.23.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PS_SOURCE_URI: postgresql://svc_powersync:svc_powersync_password@postgres:5432/inventory_events
+      PS_STORAGE_URI: postgresql://admin_user:${DB_ADMIN_PASSWORD}@postgres:5432/inventory_events
+      PS_TOKEN_ISSUER: ${POWERSYNC_TOKEN_ISSUER}
+      PS_TOKEN_AUDIENCE: ${POWERSYNC_TOKEN_AUDIENCE}
+      PS_TOKEN_SECRET: ${POWERSYNC_TOKEN_SECRET}
+      PS_TOKEN_KID: inventory-edge-hs256
+    volumes:
+      - ../../sync/powersync.yaml:/config/powersync.yaml:ro
+      - ../../sync/sync-rules.yaml:/config/sync-rules.yaml:ro
+    # Same entrypoint as docker-compose.yml: derive the JWK `k` from the one shared secret.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        PS_TOKEN_JWK_K="$$(node -e 'process.stdout.write(Buffer.from(process.env.PS_TOKEN_SECRET, "utf8").toString("base64url"))')"
+        && export PS_TOKEN_JWK_K
+        && exec node service/lib/entry.js start -c /config/powersync.yaml
+    command: []
+    ports:
+      - "127.0.0.1:8090:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:8080/probes/liveness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 3s
+      timeout: 5s
+      retries: 40

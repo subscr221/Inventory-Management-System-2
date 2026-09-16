@@ -2174,6 +2174,22 @@ const EXPECTED = [
     indexes: [] as string[],
     appUserGrant: 'INSERT, SELECT',
   },
+  // Story 1.13 (AD-18): the edge refused-captures queue. Resolution mutates status (UPDATE).
+  {
+    canonical: 'read/projections/edge_refused_capture.sql',
+    table: 'edge_refused_capture',
+    constraints: [
+      'chk_edge_refused_capture_status',
+      'chk_edge_refused_capture_location_source',
+      'chk_edge_refused_capture_resolution_note',
+    ],
+    indexes: [
+      'uq_edge_refused_capture_event',
+      'idx_edge_refused_capture_location',
+      'idx_edge_refused_capture_stream',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -3317,5 +3333,17 @@ describe('Story 9.9 event-type registry', () => {
       streamType: 'jobwork',
       requiresBusinessStream: false,
     });
+  });
+});
+
+// Story 1.13 (AD-18): the refused-captures queue events live on the central-only 'sync' stream.
+describe('Story 1.13 event-type registry', () => {
+  it('registers the refused-capture record and resolution on the sync stream', () => {
+    for (const type of ['sync.refused_capture_recorded', 'sync.refused_capture_resolved'] as const) {
+      assert.deepStrictEqual(SUPPORTED_EVENT_TYPES[type], {
+        streamType: 'sync',
+        requiresBusinessStream: false,
+      });
+    }
   });
 });
