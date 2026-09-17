@@ -188,7 +188,13 @@ function parseMeters(raw: string | undefined): WorklistMeter[] {
 export function EdgeClient({
   view = 'frontline',
 }: {
-  view?: 'frontline' | 'maintenance' | 'refused-captures';
+  view?:
+    | 'frontline'
+    | 'maintenance'
+    | 'refused-captures'
+    | 'workflows'
+    | 'access-control'
+    | 'reports';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.

@@ -20,6 +20,9 @@ import {
 } from './work-order-closure-capture';
 import { EnhancedDashboard } from './dashboard/enhanced-dashboard';
 import { HierarchicalNavigation } from './navigation/hierarchical-navigation';
+import { WorkflowsView } from './enterprise/workflows-view';
+import { AccessControlView } from './enterprise/access-control-view';
+import { ReportsView } from './enterprise/reports-view';
 import { t, type MessageKey } from '../i18n/locale';
 import type { SyncUiState } from '../sync/sync-status';
 import type { CachedReservationRow, CachedWorkOrderRow, WorklistMeter } from '../local-db/worklist';
@@ -67,8 +70,15 @@ export interface AppShellProps {
   /**
    * Story 7.8: 'frontline' (default, the Story 1.8 shell) or 'maintenance' (the technician page).
    * Story 1.14: 'refused-captures' (the site supervisor's screen).
+   * Enterprise: 'workflows', 'access-control', and 'reports' (Phase 3/4 management views).
    */
-  view?: 'frontline' | 'maintenance' | 'refused-captures';
+  view?:
+    | 'frontline'
+    | 'maintenance'
+    | 'refused-captures'
+    | 'workflows'
+    | 'access-control'
+    | 'reports';
   maintenance?: MaintenanceShellProps;
   /** Story 1.14: what the refused-captures screen needs, injected by the edge client. */
   refusedCaptures?: RefusedCapturesScreenProps;
@@ -260,6 +270,12 @@ export function AppShell({
               </section>
             )}
           </div>
+        ) : view === 'workflows' ? (
+          <WorkflowsView currentUserName={userName} />
+        ) : view === 'access-control' ? (
+          <AccessControlView />
+        ) : view === 'reports' ? (
+          <ReportsView currentUserName={userName} />
         ) : (
           <>
             <EnhancedDashboard

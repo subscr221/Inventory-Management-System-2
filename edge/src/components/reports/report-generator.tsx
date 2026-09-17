@@ -20,7 +20,7 @@ interface ReportData {
   createdBy: string;
 }
 
-interface ReportParams {
+export interface ReportParams {
   startDate?: string;
   endDate?: string;
   includeCharts?: boolean;

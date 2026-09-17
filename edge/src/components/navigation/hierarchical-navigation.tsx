@@ -116,12 +116,29 @@ export function HierarchicalNavigation({
         {
           id: 'inventory-summary',
           label: t('nav.inventorySummary'),
-          href: '#inventory-summary',
+          href: '/reports',
         },
         {
           id: 'movement-history',
           label: t('nav.movementHistory'),
-          href: '#movement-history',
+          href: '/reports',
+        }
+      ]
+    },
+    {
+      id: 'administration',
+      label: t('nav.administration'),
+      icon: 'administration',
+      children: [
+        {
+          id: 'workflows',
+          label: t('nav.workflows'),
+          href: '/workflows',
+        },
+        {
+          id: 'access-control',
+          label: t('nav.accessControl'),
+          href: '/access-control',
         }
       ]
     }
