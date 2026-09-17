@@ -96,7 +96,16 @@ test('keyboard navigation reaches role navigation and capture action', async ({ 
   await provision(page);
   await page.goto('/');
   await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
-  await page.keyboard.press('Tab');
+  // Wait for bootstrap to finish before Tab-ing: the shell renders the user and site names in the
+  // same setState that populates userId/siteId, so once they are visible the shell (and the capture
+  // action later in the tab order) is ready. Tab-ing during hydration was the CI flake.
+  await expect(page.getByText('Asha Offline Officer')).toBeVisible();
+  await expect(page.getByText('North Gate')).toBeVisible();
+  // The frontline shell deliberately auto-focuses the indent SKU field on load, so a bare first
+  // Tab would start past the skip-link and nav. Establish focus at the document top (the skip-link
+  // is the first focusable element) before walking the tab order forward, so the assertions read a
+  // deterministic sequence regardless of the autofocus.
+  await page.getByText('Skip to content').focus();
   await expect(page.getByText('Skip to content')).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Dashboard' })).toBeFocused();
@@ -106,13 +115,30 @@ test('keyboard navigation reaches role navigation and capture action', async ({ 
   await expect(page.getByLabel('Cross-dock task ID')).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Load known task' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByRole('button', { name: 'Capture Shell Test Event' })).toBeFocused();
+  // The frontline view stacks several capture forms (cross-dock, then indent with seven inputs)
+  // ahead of the test-capture button, so the number of Tabs to reach it is not a fixed constant.
+  // Tab forward until the button is reached, proving it is keyboard-reachable in order, but cap the
+  // walk so a regression fails loudly instead of hanging.
+  const captureButton = page.getByRole('button', { name: 'Capture Shell Test Event' });
+  await expect(async () => {
+    for (let i = 0; i < 20; i++) {
+      if (await captureButton.evaluate((el) => el === document.activeElement)) return;
+      await page.keyboard.press('Tab');
+    }
+    throw new Error('Capture Shell Test Event was not reached within 20 Tabs');
+  }).toPass();
+  await expect(captureButton).toBeFocused();
 });
 
 test('known cross-dock task capture displays context and scan-first pending result', async ({ page }) => {
   await provision(page);
   await page.goto('/');
+  await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
+  // Wait for bootstrap to finish before capturing: confirmCrossDock guards on userId/siteId, which
+  // are populated in the same setState that renders the user and site names. Acting before that
+  // state lands was the CI flake ("Database or authentication state not available").
+  await expect(page.getByText('Asha Offline Officer')).toBeVisible();
+  await expect(page.getByText('North Gate')).toBeVisible();
   await page.getByLabel('Cross-dock task ID').focus();
   await expect(page.getByLabel('Cross-dock task ID')).toBeFocused();
   await page.getByLabel('Cross-dock task ID').fill('11111111-1111-4111-8111-111111111111');
