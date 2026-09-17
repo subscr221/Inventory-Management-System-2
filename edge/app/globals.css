@@ -1,5 +1,6 @@
 @import '../src/components/dashboard/dashboard.css';
 @import '../src/components/navigation/navigation.css';
+@import '../src/components/search/search.css';
 
 :root {
   --primary: #1f47d9;

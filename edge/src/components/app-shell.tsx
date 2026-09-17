@@ -20,6 +20,7 @@ import {
 } from './work-order-closure-capture';
 import { EnhancedDashboard } from './dashboard/enhanced-dashboard';
 import { HierarchicalNavigation } from './navigation/hierarchical-navigation';
+import { GlobalSearch } from './search/global-search';
 import { WorkflowsView } from './enterprise/workflows-view';
 import { AccessControlView } from './enterprise/access-control-view';
 import { ReportsView } from './enterprise/reports-view';
@@ -144,6 +145,7 @@ export function AppShell({
           </p>
         </div>
         <div className="edge-header-actions">
+          <GlobalSearch currentRole={role} allowedItems={navigation} />
           <SyncStatusBadge state={syncState} />
           {onSignOut ? (
             <button
