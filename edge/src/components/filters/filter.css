@@ -1,0 +1,151 @@
+/* Advanced Filter Styles */
+
+.advanced-filter {
+  background: white;
+  border: 1px solid var(--neutral-500);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.filter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.filter-header h3 {
+  margin: 0;
+  color: var(--neutral-900);
+  font-size: 18px;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.filter-actions .secondary-action {
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.saved-filters {
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: var(--neutral-50);
+  border-radius: 8px;
+}
+
+.saved-filters h4 {
+  margin: 0 0 10px 0;
+  color: var(--neutral-900);
+  font-size: 16px;
+}
+
+.saved-filters-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.saved-filter-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--neutral-100);
+}
+
+.saved-filter-item:last-child {
+  border-bottom: none;
+}
+
+.saved-filter-name {
+  font-weight: 500;
+  color: var(--neutral-900);
+}
+
+.saved-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.saved-filter-actions .secondary-action.small {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.filter-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.filter-option {
+  display: flex;
+  flex-direction: column;
+}
+
+.filter-option label {
+  margin-bottom: 5px;
+  font-weight: 500;
+  color: var(--neutral-900);
+  font-size: 14px;
+}
+
+.filter-option input,
+.filter-option select {
+  padding: 10px;
+  border: 1px solid var(--neutral-500);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.filter-option input:focus,
+.filter-option select:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.filter-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.filter-buttons .primary-action,
+.filter-buttons .secondary-action {
+  padding: 10px 20px;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .filter-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .filter-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  
+  .filter-options {
+    grid-template-columns: 1fr;
+  }
+  
+  .filter-buttons {
+    flex-direction: column;
+  }
+  
+  .filter-buttons .primary-action,
+  .filter-buttons .secondary-action {
+    width: 100%;
+  }
+}

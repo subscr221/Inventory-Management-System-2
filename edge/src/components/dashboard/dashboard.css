@@ -1,0 +1,214 @@
+@import '../dashboard/chart.css';
+@import '../filters/filter.css';
+@import '../rbac/rbac.css';
+@import '../workflow/workflow.css';
+@import '../reports/report.css';
+
+/* Enhanced Dashboard Styles */
+
+.enhanced-dashboard {
+  width: 100%;
+  padding: 20px;
+}
+
+.dashboard-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.view-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.view-selector label {
+  font-weight: 600;
+}
+
+.view-selector select {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--neutral-500);
+  background-color: white;
+  font-size: 14px;
+}
+
+.dashboard-header h2 {
+  margin: 0 0 8px 0;
+  font-size: 24px;
+  color: var(--neutral-900);
+}
+
+.dashboard-header p {
+  margin: 0;
+  color: var(--neutral-500);
+  font-size: 16px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.dashboard-grid-item {
+  min-height: 200px;
+}
+
+.dashboard-grid-item.size-1x1 {
+  grid-column: span 1;
+  grid-row: span 1;
+}
+
+.dashboard-grid-item.size-2x1 {
+  grid-column: span 2;
+  grid-row: span 1;
+}
+
+.dashboard-grid-item.size-1x2 {
+  grid-column: span 1;
+  grid-row: span 2;
+}
+
+.dashboard-grid-item.size-2x2 {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
+.dashboard-widget {
+  background: white;
+  border: 1px solid var(--neutral-500);
+  border-radius: 12px;
+  padding: 20px;
+  height: 100%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.dashboard-widget:hover {
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
+}
+
+.dashboard-widget h3 {
+  margin: 0 0 15px 0;
+  font-size: 18px;
+  color: var(--neutral-900);
+  font-weight: 600;
+}
+
+/* KPI Widget Styles */
+.kpi-widget .kpi-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: calc(100% - 30px);
+  text-align: center;
+}
+
+.kpi-widget .kpi-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 5px;
+}
+
+.kpi-widget .kpi-label {
+  font-size: 14px;
+  color: var(--neutral-500);
+  margin-bottom: 10px;
+}
+
+.kpi-widget .kpi-trend {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 12px;
+}
+
+.kpi-widget .kpi-trend.up {
+  background-color: rgba(16, 185, 129, 0.1);
+  color: var(--success);
+}
+
+.kpi-widget .kpi-trend.down {
+  background-color: rgba(245, 158, 11, 0.1);
+  color: var(--warning);
+}
+
+.kpi-widget .kpi-trend.neutral {
+  background-color: rgba(138, 149, 161, 0.1);
+  color: var(--neutral-500);
+}
+
+/* List Widget Styles */
+.list-widget .activity-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.activity-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--neutral-100);
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+}
+
+.activity-action {
+  font-weight: 500;
+  color: var(--neutral-900);
+  flex: 2;
+}
+
+.activity-user {
+  color: var(--neutral-500);
+  font-size: 14px;
+  flex: 1;
+  text-align: center;
+}
+
+.activity-time {
+  color: var(--neutral-500);
+  font-size: 14px;
+  flex: 1;
+  text-align: right;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .dashboard-controls {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .dashboard-grid-item.size-2x1,
+  .dashboard-grid-item.size-2x2 {
+    grid-column: span 1;
+  }
+  
+  .activity-item {
+    flex-direction: column;
+    gap: 5px;
+  }
+  
+  .activity-user,
+  .activity-time {
+    text-align: left;
+  }
+}

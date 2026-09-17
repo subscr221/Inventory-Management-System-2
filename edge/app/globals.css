@@ -1,3 +1,6 @@
+@import '../src/components/dashboard/dashboard.css';
+@import '../src/components/navigation/navigation.css';
+
 :root {
   --primary: #1f47d9;
   --primary-strong: #1a3ab3;
@@ -144,6 +147,20 @@ input:focus-visible {
   width: min(100%, 1280px);
   margin: 0 auto;
   padding: 32px;
+}
+
+.edge-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.edge-main {
+  flex: 1;
+  width: min(100%, 1280px);
+  margin: 0 auto;
+  padding: 32px;
+  overflow-y: auto;
 }
 
 .card-grid {

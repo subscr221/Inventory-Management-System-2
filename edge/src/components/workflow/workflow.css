@@ -1,0 +1,353 @@
+/* Workflow Manager Styles */
+
+.workflow-manager {
+  background: white;
+  border: 1px solid var(--neutral-500);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.workflow-header {
+  margin-bottom: 20px;
+}
+
+.workflow-header h2 {
+  margin: 0 0 10px 0;
+  color: var(--neutral-900);
+  font-size: 24px;
+}
+
+.workflow-header p {
+  margin: 0;
+  color: var(--neutral-500);
+  font-size: 16px;
+}
+
+.workflow-content {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 20px;
+}
+
+.workflow-list-section,
+.workflow-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.workflow-list-section h3,
+.workflow-detail-section h3 {
+  margin: 0;
+  color: var(--neutral-900);
+  font-size: 18px;
+  border-bottom: 1px solid var(--neutral-100);
+  padding-bottom: 10px;
+}
+
+.workflow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.workflow-item {
+  padding: 15px;
+  border: 1px solid var(--neutral-100);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.workflow-item:hover {
+  border-color: var(--primary);
+  background-color: var(--neutral-50);
+}
+
+.workflow-item.selected {
+  border-color: var(--primary);
+  background-color: var(--primary-strong);
+  color: white;
+}
+
+.workflow-item.selected .workflow-item-header h4,
+.workflow-item.selected .workflow-description,
+.workflow-item.selected .workflow-meta span {
+  color: white;
+}
+
+.workflow-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.workflow-item-header h4 {
+  margin: 0;
+  color: var(--neutral-900);
+  font-size: 16px;
+}
+
+.workflow-description {
+  margin: 0 0 10px 0;
+  color: var(--neutral-500);
+  font-size: 14px;
+}
+
+.workflow-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--neutral-500);
+}
+
+.workflow-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--neutral-500);
+}
+
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  background-color: var(--neutral-100);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: var(--primary);
+  border-radius: 3px;
+}
+
+.workflow-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.workflow-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--neutral-100);
+}
+
+.workflow-detail-header h3 {
+  margin: 0;
+  color: var(--neutral-900);
+  font-size: 20px;
+}
+
+.workflow-detail-description {
+  color: var(--neutral-500);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.workflow-steps h4 {
+  margin: 0 0 15px 0;
+  color: var(--neutral-900);
+  font-size: 18px;
+}
+
+.steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.step-item {
+  padding: 15px;
+  border: 1px solid var(--neutral-100);
+  border-radius: 8px;
+}
+
+.step-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 15px;
+  margin-bottom: 10px;
+}
+
+.step-number {
+  min-width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background-color: var(--primary);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+}
+
+.step-info {
+  flex: 1;
+}
+
+.step-info h5 {
+  margin: 0 0 5px 0;
+  color: var(--neutral-900);
+  font-size: 16px;
+}
+
+.step-info p {
+  margin: 0;
+  color: var(--neutral-500);
+  font-size: 14px;
+}
+
+.step-status {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.step-assignee {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--neutral-500);
+}
+
+.step-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.step-actions .primary-action,
+.step-actions .secondary-action {
+  padding: 8px 15px;
+  font-size: 14px;
+}
+
+.rejection-note {
+  margin-top: 10px;
+  padding: 10px;
+  background-color: var(--error-strong);
+  color: white;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.workflow-actions {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--neutral-100);
+}
+
+.workflow-detail-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--neutral-500);
+  font-size: 16px;
+}
+
+/* Status Colors */
+.status-pending {
+  background-color: var(--warning);
+  color: var(--neutral-950);
+}
+
+.status-in-progress {
+  background-color: var(--info-strong);
+  color: white;
+}
+
+.status-completed {
+  background-color: var(--success);
+  color: var(--neutral-950);
+}
+
+.status-rejected {
+  background-color: var(--error-strong);
+  color: white;
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.modal {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  width: 90%;
+  max-width: 500px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+}
+
+.modal-header {
+  margin-bottom: 15px;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: var(--neutral-900);
+  font-size: 18px;
+}
+
+.modal-body textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--neutral-500);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.modal-body textarea:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.modal-footer .primary-action,
+.modal-footer .secondary-action {
+  padding: 10px 20px;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .workflow-content {
+    grid-template-columns: 1fr;
+  }
+  
+  .modal {
+    width: 95%;
+    margin: 20px;
+  }
+}
