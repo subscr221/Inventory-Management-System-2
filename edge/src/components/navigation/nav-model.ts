@@ -9,7 +9,7 @@ export interface NavEntry {
 }
 
 export const NAV_ENTRIES: NavEntry[] = [
-  { name: 'Dashboard', href: '#dashboard', label: 'nav.dashboard' },
+  { name: 'Dashboard', href: '/dashboard', label: 'nav.dashboard' },
   { name: 'Frontline', href: '#frontline', label: 'nav.frontline' },
   // Story 1.14 (Binding Decision 4): a real path, rendered only when the bootstrap names it.
   { name: 'Refused captures', href: '/supervisor/refused-captures', label: 'nav.refusedCaptures' },

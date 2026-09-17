@@ -457,7 +457,7 @@
   "report.formatExcel": "Excel",
   "report.formatCsv": "CSV",
   "dashboard.title": "Inventory Management Dashboard",
-  "dashboard.welcomeMessage": "Welcome back, {userName}",
+  "dashboard.welcomeMessage": "Welcome to your inventory overview.",
   "dashboard.inventoryLevels": "Inventory Levels",
   "dashboard.pendingTasks": "Pending Tasks",
   "dashboard.inventoryTrend": "Inventory Trend",

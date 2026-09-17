@@ -19,6 +19,7 @@ import {
   type WorkOrderClosureSubmitInput,
 } from './work-order-closure-capture';
 import { GlobalSearch } from './search/global-search';
+import { EnhancedDashboard } from './dashboard/enhanced-dashboard';
 import { WorkflowsView } from './enterprise/workflows-view';
 import { AccessControlView } from './enterprise/access-control-view';
 import { ReportsView } from './enterprise/reports-view';
@@ -74,6 +75,7 @@ export interface AppShellProps {
    */
   view?:
     | 'frontline'
+    | 'dashboard'
     | 'maintenance'
     | 'refused-captures'
     | 'workflows'
@@ -276,6 +278,12 @@ export function AppShell({
               </section>
             )}
           </div>
+        ) : view === 'dashboard' ? (
+          <EnhancedDashboard
+            role={role}
+            pendingCount={pendingCount}
+            failedCount={failedCount}
+          />
         ) : view === 'workflows' ? (
           <WorkflowsView currentUserName={userName} />
         ) : view === 'access-control' ? (

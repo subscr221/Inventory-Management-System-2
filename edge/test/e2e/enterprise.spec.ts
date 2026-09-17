@@ -1,6 +1,25 @@
 import { test, expect } from '@playwright/test';
 import { provisionEnterprise } from '../fixtures/enterprise-stub';
 
+test('dashboard route renders KPI widgets, a chart, and recent activity', async ({ page }) => {
+  await provisionEnterprise(page);
+  await page.goto('/dashboard');
+  await expect(page.getByText('Asha Operations Lead')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Inventory Management Dashboard' })).toBeVisible();
+  await expect(page.getByText('Storage Utilization')).toBeVisible();
+  await expect(page.getByRole('img', { name: 'Inventory Trend' })).toBeVisible();
+  await expect(page.getByText('Recent Activity')).toBeVisible();
+  await expect(page.getByText('Cross-dock task completed')).toBeVisible();
+});
+
+test('dashboard nav link points at the dashboard route', async ({ page }) => {
+  await provisionEnterprise(page);
+  await page.goto('/');
+  await expect(page.getByText('Asha Operations Lead')).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Primary navigation' })
+    .getByRole('link', { name: 'Dashboard' })).toHaveAttribute('href', '/dashboard');
+});
+
 test('workflows route renders the approval workflow list and detail', async ({ page }) => {
   await provisionEnterprise(page);
   await page.goto('/workflows');

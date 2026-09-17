@@ -190,6 +190,7 @@ export function EdgeClient({
 }: {
   view?:
     | 'frontline'
+    | 'dashboard'
     | 'maintenance'
     | 'refused-captures'
     | 'workflows'
@@ -704,6 +705,7 @@ export function EdgeClient({
     <AppShell
       userName={state.userName || t('app.defaultUserName')}
       siteName={state.siteName || t('app.defaultSiteName')}
+      role={state.role}
       syncState={state.syncState}
       firstSyncRequired={state.firstSyncRequired}
       failures={state.failures}

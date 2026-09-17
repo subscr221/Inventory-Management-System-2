@@ -46,12 +46,10 @@ const ACTIVITY_ITEMS: ActivityItem[] = [
 ];
 
 export function EnhancedDashboard({
-  userName,
   role,
   pendingCount = 0,
   failedCount = 0,
 }: {
-  userName: string;
   role: string;
   pendingCount?: number;
   failedCount?: number;
@@ -234,7 +232,7 @@ export function EnhancedDashboard({
 
         <div className="dashboard-header">
           <h2>{t('dashboard.title')}</h2>
-          <p>{t('dashboard.welcomeMessage').replace('{userName}', userName)}</p>
+          <p>{t('dashboard.welcomeMessage')}</p>
         </div>
       </div>
 

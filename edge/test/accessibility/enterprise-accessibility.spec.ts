@@ -4,7 +4,7 @@ import { provisionEnterprise } from '../fixtures/enterprise-stub';
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 
-for (const path of ['/workflows', '/access-control', '/reports']) {
+for (const path of ['/dashboard', '/workflows', '/access-control', '/reports']) {
   test(`enterprise screen ${path} has no automated WCAG 2.1 AA violations`, async ({ page }) => {
     await provisionEnterprise(page);
     await page.goto(path);
