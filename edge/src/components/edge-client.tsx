@@ -27,6 +27,7 @@ import {
   cacheContext,
   clearCachedUserContext,
   countUnsettled,
+  dismissRetainedRow,
   hasAuthRequired,
   insertCaptureEvent,
   readCachedContext,
@@ -90,6 +91,8 @@ interface RuntimeState {
   // Story 1.12 (review decision 1): captures parked for people other than the signed-in user.
   waitingForOthers: Array<{ userName: string; count: number }>;
   syncState: SyncUiState;
+  // Story 1.14 (AC 5): navigator.onLine as of the last outbox refresh or online/offline event.
+  online: boolean;
   // Story 7.8: the cached technician worklist.
   workOrders: CachedWorkOrderRow[];
   worklistMeta: WorklistMeta;
@@ -118,6 +121,7 @@ const initialState: RuntimeState = {
   signOutIncomplete: false,
   waitingForOthers: [],
   syncState: 'offline',
+  online: true,
   workOrders: [],
   worklistMeta: { total: 0, truncated: false, fetchedAt: null },
   closureCatalogue: { fault: [], cause: [], remedy: [] },
@@ -181,7 +185,11 @@ function parseMeters(raw: string | undefined): WorklistMeter[] {
   }
 }
 
-export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maintenance' }) {
+export function EdgeClient({
+  view = 'frontline',
+}: {
+  view?: 'frontline' | 'maintenance' | 'refused-captures';
+}) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
   const session = useRef<EdgeSession | null>(null);
@@ -228,6 +236,7 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
       })),
       // Story 1.12 (AC4): once nothing is left to upload, the sign-out gate notice goes away.
       signOutBlockedCount: ownUnsettled === 0 ? 0 : current.signOutBlockedCount,
+      online,
       syncState: authRequired
         ? 'error'
         : deriveSyncUiState({ online, syncing, ...counts }),
@@ -507,6 +516,15 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
     }));
   }, [refreshLocalState]);
 
+  // Story 1.14 (AC 6): drop the device's retained copy of one refused capture, then recompute the
+  // counts and failure list from the tables (the STREAM_CONFLICT park is read from the same table).
+  const dismissFailure = useCallback(async (eventId: string) => {
+    const db = database.current;
+    if (!db) throw new Error('Database not available');
+    await dismissRetainedRow(db, eventId);
+    await refreshLocalState(db);
+  }, [refreshLocalState]);
+
   const capture = useCallback(async () => {
     const db = database.current;
     if (!db || !state.userId || !state.siteId) return;
@@ -703,6 +721,8 @@ export function EdgeClient({ view = 'frontline' }: { view?: 'frontline' | 'maint
         if (db) void refreshLocalState(db);
       }}
       view={view}
+      refusedCaptures={{ siteId: state.siteId, userId: state.userId, online: state.online }}
+      onDismissFailure={dismissFailure}
       maintenance={{
         workOrders: state.workOrders,
         total: state.worklistMeta.total,

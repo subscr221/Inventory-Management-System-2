@@ -207,7 +207,9 @@ describe('Story 1.8 backend edge sync contract', () => {
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body['user_name'], 'Raman Gate Officer');
     assert.strictEqual(res.body['site_name'], 'Pilot Gate Site');
-    assert.deepStrictEqual(res.body['navigation'], ['Dashboard', 'Frontline']);
+    // Story 1.14 (AC 2): a concrete site assignment grants read there, so the supervisor screen
+    // is advertised after the two Story 1.8 entries.
+    assert.deepStrictEqual(res.body['navigation'], ['Dashboard', 'Frontline', 'Refused captures']);
     assert.strictEqual(res.body['offline_ready'], true);
   });
 

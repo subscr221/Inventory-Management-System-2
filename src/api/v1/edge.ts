@@ -31,6 +31,7 @@ import { raiseMaintenanceSyncConflict } from '../../maintenance/sync-conflicts.j
 import type { SyncConflictCause } from '../../maintenance/sync-conflicts.js';
 import { notifyFaultReported } from '../../maintenance/fault-notifications.js';
 import { recordRefusedCapture } from '../../sync/refused-captures.js';
+import { hasRefusedCaptureReadScope } from './refused-captures.js';
 import { REFUSED_CAPTURE_STREAM_TYPE } from '../../compliance/edge-refused-capture.js';
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
@@ -328,13 +329,20 @@ const edgeBootstrapBase: RouteHandler = async (req, res) => {
 
   const assignment = selectOperatingAssignment(authContext);
 
+  // Story 1.14 (AC 2, Binding Decisions 2 and 4): the edge renders only the names listed here, so
+  // the supervisor screen is advertised to whoever may read a refusal at their operating site.
+  const navigation = ['Dashboard', 'Frontline'];
+  if (hasRefusedCaptureReadScope(authContext.roles, assignment.locationId)) {
+    navigation.push('Refused captures');
+  }
+
   sendJson(res, 200, {
     user_id: authContext.userId,
     user_name: authContext.displayName ?? authContext.externalId,
     site_id: assignment.locationId,
     site_name: edgeSiteName(),
     role: assignment.role,
-    navigation: ['Dashboard', 'Frontline'],
+    navigation,
     offline_ready: true,
   });
 };

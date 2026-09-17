@@ -46,6 +46,17 @@ function grantLocation(assignment: RoleAssignment): string {
   return assignment.locationId === '*' ? '*' : assignment.locationId.toLowerCase();
 }
 
+/**
+ * Story 1.14 (Binding Decision 2): may this caller see any refusal at `locationId`? Decides whether
+ * the edge bootstrap advertises the supervisor screen. Built on the list route's own scope rule
+ * (any assignment grants read on its module, at its site or everywhere) so there is one matcher,
+ * and never on a role name.
+ */
+export function hasRefusedCaptureReadScope(roles: RoleAssignment[], locationId: string): boolean {
+  const site = locationId.toLowerCase();
+  return scopesOf(roles, 'read').some((scope) => scope.location_id === '*' || scope.location_id === site);
+}
+
 function grants(scope: RefusedCaptureScope, row: RefusedCaptureRow): boolean {
   return (
     (scope.stream_type === '*' || scope.stream_type === row.stream_type) &&

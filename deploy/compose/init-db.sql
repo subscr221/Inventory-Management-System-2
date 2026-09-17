@@ -14550,6 +14550,9 @@ CREATE TABLE IF NOT EXISTS edge_refused_capture (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_edge_refused_capture_event ON edge_refused_capture (event_id);
 CREATE INDEX IF NOT EXISTS idx_edge_refused_capture_location ON edge_refused_capture (location_id, status, refused_at DESC);
 CREATE INDEX IF NOT EXISTS idx_edge_refused_capture_stream ON edge_refused_capture (stream_type, status);
+-- Story 1.14 (Task 1.4): the list's ORDER BY (refused_at DESC, refusal_id) under a status filter
+-- with no site narrowing (wildcard-site callers), found missing by the Story 1.13 review.
+CREATE INDEX IF NOT EXISTS idx_edge_refused_capture_status_refused_at ON edge_refused_capture (status, refused_at DESC, refusal_id);
 
 DO $$
 BEGIN

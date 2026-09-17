@@ -398,7 +398,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-09-16'
+last_updated: '2026-09-17'
 # story 6-4 dev-story 2026-09-01: implemented all 9 tasks from baseline 905a48e (clean tree). Closes
 #   Epic 6. One new projection (production_consumption_variance, append-only, grain
 #   (production_order_id, bom_line_id)) plus two pure services: src/production/lot-genealogy.ts (no
@@ -908,7 +908,7 @@ development_status:
   1-11-notification-and-alerting-foundation: done   # PILOT
   1-12-edge-ui-sign-in-through-keycloak-pkce: done   # PRE-PILOT BLOCKING  # closed 2026-09-17: runbook 2.10, 2.10a, 2.10b, 2.10c all passed on staging (Task 6.6). # created 2026-09-13 during the staging deployment (round table): Story 1.2 delivered the server side only. Story text in epics.md Story 1.12. Implemented and code-reviewed 2026-09-13 (4 decisions, 16 patches applied, 2 deferred): browser sign-in through ims-app (PKCE). Remaining: staging checklist, runbook 2.10 to 2.10b (Task 6.6). Closes after runbook 2.10a/2.10b; owner re-queue check verified under Story 1.13 AC3.
   1-13-refused-and-parked-captures-are-never-lost: done   # PRE-PILOT BLOCKING  # sprint-change-proposal-2026-09-15; AD-18; blocks runbook 2.10c and the rehearsal. Second code review 2026-09-17 (eight finders): 2 patches (DOA band for edge.refused_capture_resolution in staging script + runbook 2.9a; salvage failure no longer skips db.connect), 2 defers + cleanups in deferred-work.md. Runbook 2.9a re-run and 2.10c PASSED on staging 2026-09-17 (Task 8.5 closed).
-  1-14-refused-captures-supervisor-screen: ready-for-dev   # PILOT  # depends on 1-13 (done 2026-09-17); story file created 2026-09-17, AC 6 carries the device dismiss and STREAM_CONFLICT clear path from the 1.13 review
+   1-14-refused-captures-supervisor-screen: done          # PILOT  # depends on 1-13 (done 2026-09-17); story file created 2026-09-17, AC 6 carries the device dismiss and STREAM_CONFLICT clear path from the 1.13 review. Code review 2026-09-17 (3 layers): 11 patches applied, 1 deferred, 8 dismissed. Task 6.5 staging check (runbook 2.10d) remains pending on deploy and the operator.
   epic-1-retrospective: optional
 
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---

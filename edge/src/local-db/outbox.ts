@@ -248,6 +248,30 @@ export async function salvageUnheldOutboxRows(db: QueryExecutor, signedInUserId:
   });
 }
 
+/**
+ * Story 1.14 (AC 6, Binding Decision 8): drop the device's retained copy of one refused capture.
+ * The central edge_refused_capture row is the durable record (AD-18) and is untouched; nothing
+ * pushes a dismiss up. Only `refused` copies are dismissable: a row parked for another owner
+ * belongs to that person and re-queues when they sign in. Removing a retained STREAM_CONFLICT
+ * head is what un-parks its stream, because hasUpstreamStreamConflict reads this table: rows
+ * still waiting in the upload queue behind it go out on the next uploadData.
+ */
+export async function dismissRetainedRow(db: QueryExecutor, id: string): Promise<void> {
+  await inWriteTransaction(db, async (tx) => {
+    // Only a retained `refused` copy is dismissable. An unsalvaged needs_attention row lives in
+    // edge_outbox (not the retained table) and a parked row belongs to someone else; deleting
+    // nothing must not be reported as success, so fail closed instead of silently no-op'ing.
+    const rows = await tx.getAll<{ id: string }>(
+      `SELECT id FROM edge_outbox_retained WHERE id = ? AND retained_reason = ?`,
+      [id, 'refused'],
+    );
+    if (rows.length === 0) {
+      throw new Error(`No dismissable refused copy for id ${id}`);
+    }
+    await tx.execute(`DELETE FROM edge_outbox_retained WHERE id = ? AND retained_reason = ?`, [id, 'refused']);
+  });
+}
+
 async function readUnsettledOwners(db: QueryExecutor): Promise<Array<string | null>> {
   const rows = await db.getAll<{ metadata: string }>(
     `SELECT metadata FROM edge_outbox WHERE local_status IN (?, ?, ?) AND ${NOT_RETAINED}

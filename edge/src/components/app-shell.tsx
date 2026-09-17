@@ -5,6 +5,7 @@ import { ServiceWorkerRegistration } from './service-worker-registration';
 import { CrossDockCapture, type CrossDockTaskContext } from './cross-dock-capture';
 import { IndentCapture, type IndentSubmitInput } from './indent-capture';
 import { MaintenanceWorklist } from './maintenance-worklist';
+import { RefusedCapturesScreen, type RefusedCapturesScreenProps } from './refused-captures-screen';
 import { FaultReportCapture, type FaultReportSubmitInput } from './fault-report-capture';
 import {
   WorkOrderStatusCapture,
@@ -24,6 +25,9 @@ import type { CachedReservationRow, CachedWorkOrderRow, WorklistMeter } from '..
 const NAVIGATION: Record<string, { href: string; label: MessageKey }> = {
   Dashboard: { href: '#dashboard', label: 'nav.dashboard' },
   Frontline: { href: '#frontline', label: 'nav.frontline' },
+  // Story 1.14 (Binding Decision 4): a real path, rendered only when the server's bootstrap
+  // `navigation` names it (the filter below drops every name the server did not send).
+  'Refused captures': { href: '/supervisor/refused-captures', label: 'nav.refusedCaptures' },
 };
 
 /**
@@ -65,9 +69,16 @@ export interface AppShellProps {
   onLoadCrossDockTask?: (taskId: string) => Promise<CrossDockTaskContext | null>;
   onConfirmCrossDock?: (task: CrossDockTaskContext, stagingBinCode: string) => Promise<string>;
   onSubmitIndent?: (input: IndentSubmitInput) => Promise<string>;
-  /** Story 7.8: 'frontline' (default, the Story 1.8 shell) or 'maintenance' (the technician page). */
-  view?: 'frontline' | 'maintenance';
+  /**
+   * Story 7.8: 'frontline' (default, the Story 1.8 shell) or 'maintenance' (the technician page).
+   * Story 1.14: 'refused-captures' (the site supervisor's screen).
+   */
+  view?: 'frontline' | 'maintenance' | 'refused-captures';
   maintenance?: MaintenanceShellProps;
+  /** Story 1.14: what the refused-captures screen needs, injected by the edge client. */
+  refusedCaptures?: RefusedCapturesScreenProps;
+  /** Story 1.14 (AC 6): drop the device's retained copy of one refused capture. */
+  onDismissFailure?: (eventId: string) => Promise<void>;
   /** Story 1.12 (AC4): shared-tablet sign-out. Rendered only when the edge client provides it. */
   onSignOut?: () => void;
   /** Story 1.12 (AC4): unsettled captures that blocked the last sign-out attempt (0 = none). */
@@ -104,6 +115,8 @@ export function AppShell({
   onSubmitIndent,
   view = 'frontline',
   maintenance,
+  refusedCaptures,
+  onDismissFailure,
   onSignOut,
   signOutBlockedCount = 0,
   offlineNoSession = false,
@@ -191,6 +204,15 @@ export function AppShell({
               {t('bootstrap.checkConnection')}
             </button>
           </section>
+        ) : view === 'refused-captures' ? (
+          refusedCaptures ? (
+            <RefusedCapturesScreen {...refusedCaptures} />
+          ) : (
+            <section className="edge-card" id="refused-captures" aria-labelledby="refused-unavailable-heading">
+              <h2 id="refused-unavailable-heading">{t('refused.title')}</h2>
+              <p>{t('refused.needsConnection')}</p>
+            </section>
+          )
         ) : view === 'maintenance' ? (
           <div className="card-grid" id="maintenance">
             {maintenance ? (
@@ -280,7 +302,11 @@ export function AppShell({
             </section>
           </div>
         )}
-        <SyncFailureList failures={failures} {...(onRetry ? { onRetry } : {})} />
+        <SyncFailureList
+          failures={failures}
+          {...(onRetry ? { onRetry } : {})}
+          {...(onDismissFailure ? { onDismiss: onDismissFailure } : {})}
+        />
       </main>
     </div>
   );

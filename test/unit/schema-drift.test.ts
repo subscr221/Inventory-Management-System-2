@@ -2187,6 +2187,8 @@ const EXPECTED = [
       'uq_edge_refused_capture_event',
       'idx_edge_refused_capture_location',
       'idx_edge_refused_capture_stream',
+      // Story 1.14 (Task 1.4): the status-ordered index the 1.13 review found missing.
+      'idx_edge_refused_capture_status_refused_at',
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },

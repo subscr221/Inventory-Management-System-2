@@ -4,6 +4,7 @@ import {
   cacheContext,
   clearCachedUserContext,
   countUnsettled,
+  dismissRetainedRow,
   hasAuthRequired,
   hasUpstreamStreamConflict,
   insertCaptureEvent,
@@ -200,6 +201,50 @@ describe('Story 1.13 retention of unheld outbox rows', () => {
     assert.deepEqual(statusById(db), { p: 'pending_sync' });
     assert.equal(db.rows('edge_outbox')[0]!['idempotency_key'], 'key-p');
     assert.deepEqual(db.rows('edge_outbox_retained').map((row) => row['id']), ['q']);
+  });
+
+  // Story 1.14 (AC 6, Binding Decision 8): the dismiss action Story 1.13 deferred here.
+  it('dismisses only the named refused copy, never a parked-for-owner row, and un-parks the stream', async () => {
+    const db = new SqliteDb();
+    db.seed({ id: 'head', local_status: 'needs_attention', server_error_code: 'STREAM_CONFLICT', stream_id: 'wo-1', created_at: '2026-09-17T09:00:00.000Z' });
+    db.seed({ id: 'other', local_status: 'needs_attention', server_error_code: 'ASSET_NOT_FOUND', stream_id: 'wo-2' });
+    db.seed({ id: 'parked', local_status: 'auth_required', stream_id: 'wo-1', metadata: ownedBy('u2') });
+    await retainOutboxRow(db, 'head', 'refused');
+    await retainOutboxRow(db, 'other', 'refused');
+    await retainOutboxRow(db, 'parked', 'parked_for_owner');
+    db.checkpoint();
+    assert.deepEqual(
+      await hasUpstreamStreamConflict(db, 'tail', 'wo-1', '2026-09-17T09:05:00.000Z'),
+      { parked_behind_event_id: 'head' },
+    );
+
+    await dismissRetainedRow(db, 'head');
+    assert.deepEqual(
+      db.rows('edge_outbox_retained').map((row) => [row['id'], row['retained_reason']]),
+      [['other', 'refused'], ['parked', 'parked_for_owner']],
+      'only the named refused row is gone',
+    );
+    assert.equal(db.transactions, 1, 'one write transaction');
+    assert.equal(await hasUpstreamStreamConflict(db, 'tail', 'wo-1', '2026-09-17T09:05:00.000Z'), null, 'the stream is no longer parked');
+    assert.deepEqual(await readOutboxCounts(db), { pendingCount: 0, failedCount: 1 });
+    assert.deepEqual((await readFailures(db)).map((row) => row.id), ['other']);
+
+    // A parked-for-owner row is never dismissable: it belongs to someone else and re-queues on their sign-in.
+    await assert.rejects(dismissRetainedRow(db, 'parked'));
+    assert.deepEqual(db.rows('edge_outbox_retained').map((row) => row['id']), ['other', 'parked']);
+    assert.deepEqual(await readWaitingForOtherOwners(db, 'u1'), [{ userId: 'u2', count: 1 }]);
+  });
+
+  it('rejects dismissing an unsalvaged needs_attention row (no retained copy) and a missing id', async () => {
+    const db = new SqliteDb();
+    db.seed({ id: 'head', local_status: 'needs_attention', server_error_code: 'STREAM_CONFLICT', stream_id: 'wo-1' });
+    db.seed({ id: 'other', local_status: 'needs_attention', server_error_code: 'ASSET_NOT_FOUND', stream_id: 'wo-2' });
+    await retainOutboxRow(db, 'other', 'refused');
+    db.checkpoint();
+
+    await assert.rejects(dismissRetainedRow(db, 'head'));
+    await assert.rejects(dismissRetainedRow(db, 'missing'));
+    assert.deepEqual(db.rows('edge_outbox_retained').map((row) => row['id']), ['other']);
   });
 
   it('salvages refused and other people\'s parked rows once, and nothing else', async () => {

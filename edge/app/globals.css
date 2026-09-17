@@ -279,3 +279,75 @@ input:focus-visible {
     padding: 16px;
   }
 }
+
+/* Story 1.14: the refused-captures supervisor screen and the dismiss controls. Cards, not a table
+   (DESIGN.md:404). Error and status text uses the error colour token as text on white, never a
+   bare colour without words. */
+.refused-screen {
+  display: grid;
+  gap: 24px;
+}
+
+.refused-notice {
+  margin: 0;
+  min-height: 24px;
+  font-weight: 700;
+}
+
+.refused-list {
+  display: grid;
+  gap: 16px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.refused-card {
+  padding: 16px;
+  border: 1px solid var(--neutral-500);
+  border-radius: 8px;
+}
+
+.refused-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.refused-facts dd {
+  margin: 4px 0 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.refused-resolve-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.refused-resolve-form textarea {
+  width: 100%;
+  min-height: 88px;
+  border: 2px solid var(--neutral-500);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.refused-resolve-form textarea:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.refused-note-hint {
+  margin: 0;
+}
+
+.refused-card-status {
+  margin: 8px 0 0;
+  min-height: 24px;
+  color: var(--error-strong);
+  font-weight: 700;
+}

@@ -16,6 +16,9 @@ const ALLOWED_LITERAL_PATTERNS = [
   // Story 1.12: sign-in, sign-out and the Keycloak callback page.
   /^auth\./,
   /^auth-(callback-heading|sign-out-blocked)$/,
+  // Story 1.14: the refused-captures supervisor screen and the device dismiss control.
+  /^refused\./,
+  /^refused-/,
   /^Promise$/,
   /^Dashboard$/,
   /^Frontline$/,
