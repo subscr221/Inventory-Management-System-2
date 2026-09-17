@@ -10,7 +10,8 @@ set -euo pipefail
 # Usage: deploy/pipeline/deploy.sh <staging|production>
 # Required env: APP_IMAGE, EDGE_IMAGE, IMAGE_TAG, POSTGRES_ADMIN_PASSWORD, AUTH_JWKS_URI,
 #   AUTH_ISSUER, AUTH_AUDIENCE, SCIM_BEARER_TOKEN, POWERSYNC_TOKEN_SECRET (this environment's).
-# Optional env: HEALTH_URL (default http://localhost/api/v1/health).
+# Optional env: HEALTH_URL (default http://localhost/api/v1/health),
+#   HEALTH_CHECK_RETRIES (default 90, at 2s apart = 180s budget per wait_for_health call).
 
 ENVIRONMENT="${1:?usage: deploy.sh <staging|production>}"
 case "$ENVIRONMENT" in
@@ -66,7 +67,9 @@ fi
 
 wait_for_health() {
   local label="$1"
-  local max_retries=30
+  # Bumped from 30 (2026-09-18): a cold image pull plus first-boot warm-up on staging took longer
+  # than the old 60s budget and tripped a false-positive rollback while the app was still starting.
+  local max_retries="${HEALTH_CHECK_RETRIES:-90}"
   echo "Waiting for ${HEALTH_URL} (${label}) ..."
   for ((i = 1; i <= max_retries; i++)); do
     if curl -sf "$HEALTH_URL" >/dev/null 2>&1; then
