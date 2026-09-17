@@ -152,6 +152,8 @@ test('keyboard-only: tab order reaches every Resolve, Confirm and Cancel control
   await page.keyboard.press('Tab');
   await expect(page.getByText('Skip to content')).toBeFocused();
   await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Open search' })).toBeFocused();
+  await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Dashboard' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Frontline' })).toBeFocused();
@@ -195,6 +197,8 @@ test('keyboard-only: Tab reaches the Check connection control on the offline car
 
   await page.keyboard.press('Tab');
   await expect(page.getByText('Skip to content')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Open search' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Dashboard' })).toBeFocused();
   await page.keyboard.press('Tab');

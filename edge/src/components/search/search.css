@@ -13,7 +13,7 @@
   border: 1px solid var(--neutral-500);
   border-radius: 8px;
   background: var(--neutral-50);
-  color: var(--neutral-500);
+  color: var(--neutral-900);
   font: inherit;
   cursor: pointer;
   min-width: 260px;
@@ -31,6 +31,7 @@
 .search-placeholder {
   flex: 1;
   text-align: left;
+  color: var(--neutral-900);
 }
 
 .search-kbd {
@@ -38,7 +39,7 @@
   border: 1px solid var(--neutral-500);
   border-radius: 4px;
   background: white;
-  color: var(--neutral-500);
+  color: var(--neutral-900);
   font-family: inherit;
   font-size: 12px;
 }
@@ -122,7 +123,7 @@
 
 .search-result-path {
   font-size: 13px;
-  color: var(--neutral-500);
+  color: var(--neutral-900);
 }
 
 .search-result.active .search-result-path {
@@ -132,7 +133,7 @@
 .search-empty {
   padding: 24px;
   text-align: center;
-  color: var(--neutral-500);
+  color: var(--neutral-900);
 }
 
 .search-footer {
@@ -143,7 +144,7 @@
   padding: 10px 16px;
   border-top: 1px solid var(--neutral-100);
   font-size: 13px;
-  color: var(--neutral-500);
+  color: var(--neutral-900);
 }
 
 .search-close {

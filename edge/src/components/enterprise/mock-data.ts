@@ -79,7 +79,7 @@ export const MOCK_WORKFLOWS: Workflow[] = [
         name: 'Procurement approval',
         description: 'Authorise the requisition and release the PO.',
         status: 'pending',
-        assignee: 'Procurement Specialist',
+        assignee: 'Asha Operations Lead',
         dueDate: '2026-09-20T00:00:00Z',
       },
       {

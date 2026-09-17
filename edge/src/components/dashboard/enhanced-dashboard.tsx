@@ -244,7 +244,7 @@ export function EnhancedDashboard({
         onResetFilters={handleResetFilters}
       />
 
-      <div className="sync-counts" aria-live="polite">
+      <dl className="sync-counts" aria-live="polite">
         <div>
           <dt>{t('sync.pendingCount')}</dt>
           <dd>{pendingCount}</dd>
@@ -259,7 +259,7 @@ export function EnhancedDashboard({
             <dd>{activeFilters.length}</dd>
           </div>
         ) : null}
-      </div>
+      </dl>
 
       <div className="dashboard-grid">
         {widgets

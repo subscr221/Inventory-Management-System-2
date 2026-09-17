@@ -1,5 +1,4 @@
 @import '../src/components/dashboard/dashboard.css';
-@import '../src/components/navigation/navigation.css';
 @import '../src/components/search/search.css';
 
 :root {
@@ -7,7 +6,7 @@
   --primary-strong: #1a3ab3;
   --neutral-50: #f8f9fa;
   --neutral-100: #f0f2f5;
-  --neutral-500: #8a95a1;
+  --neutral-500: #6b7280;
   --neutral-900: #1f2937;
   --neutral-950: #000000;
   --success: #10b981;

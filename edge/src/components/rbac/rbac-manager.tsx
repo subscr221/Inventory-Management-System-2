@@ -119,10 +119,10 @@ export function RBACManager({
                   <h4>{user.name}</h4>
                   <p>{user.email}</p>
                   <div className="user-role">
-                    <span className="role-label">{t('rbac.role')}:</span>
                     <select 
                       value={user.roleId}
                       onChange={(e) => assignUserRole(user.id, e.target.value)}
+                      aria-label={`${t('rbac.role')} - ${user.name}`}
                     >
                       {roles.map(role => (
                         <option key={role.id} value={role.id}>

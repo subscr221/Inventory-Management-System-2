@@ -135,17 +135,17 @@
 
 .kpi-widget .kpi-trend.up {
   background-color: rgba(16, 185, 129, 0.1);
-  color: var(--success);
+  color: #047857;
 }
 
 .kpi-widget .kpi-trend.down {
   background-color: rgba(245, 158, 11, 0.1);
-  color: var(--warning);
+  color: #b45309;
 }
 
 .kpi-widget .kpi-trend.neutral {
-  background-color: rgba(138, 149, 161, 0.1);
-  color: var(--neutral-500);
+  background-color: rgba(107, 114, 128, 0.1);
+  color: var(--neutral-900);
 }
 
 /* List Widget Styles */

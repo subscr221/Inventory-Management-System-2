@@ -108,6 +108,8 @@ test('keyboard navigation reaches role navigation and capture action', async ({ 
   await page.getByText('Skip to content').focus();
   await expect(page.getByText('Skip to content')).toBeFocused();
   await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Open search' })).toBeFocused();
+  await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Dashboard' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByRole('link', { name: 'Frontline' })).toBeFocused();

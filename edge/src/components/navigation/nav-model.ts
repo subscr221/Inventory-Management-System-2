@@ -1,134 +1,28 @@
-import { t } from '../../i18n/locale';
+// The flat navigation registry: the single source of truth for the on-device nav and the global
+// search. Each entry is advertised by the server's bootstrap `navigation` array by `name`; an entry
+// is shown only when the server sent that exact name. `label` is the i18n key rendered to the user.
 
-export interface NavItem {
-  id: string;
+export interface NavEntry {
+  name: string;
+  href: string;
   label: string;
-  href?: string;
-  icon?: string;
-  children?: NavItem[];
-  roleAccess?: string[];
 }
 
-// Maps a navigation item id to the name the bootstrap `navigation` allow-list uses.
-export const KNOWN_ALIASES: Record<string, string> = {
-  dashboard: 'Dashboard',
-  production: 'Frontline',
-};
+export const NAV_ENTRIES: NavEntry[] = [
+  { name: 'Dashboard', href: '#dashboard', label: 'nav.dashboard' },
+  { name: 'Frontline', href: '#frontline', label: 'nav.frontline' },
+  // Story 1.14 (Binding Decision 4): a real path, rendered only when the bootstrap names it.
+  { name: 'Refused captures', href: '/supervisor/refused-captures', label: 'nav.refusedCaptures' },
+  // Enterprise views (Phase 2/4): real paths, rendered only when the bootstrap names them.
+  { name: 'Workflows', href: '/workflows', label: 'nav.workflows' },
+  { name: 'Access control', href: '/access-control', label: 'nav.accessControl' },
+  { name: 'Reports', href: '/reports', label: 'nav.inventorySummary' },
+];
 
-export function buildNavigationStructure(): NavItem[] {
-  return [
-    {
-      id: 'dashboard',
-      label: t('nav.dashboard'),
-      href: '#dashboard',
-      icon: 'dashboard',
-    },
-    {
-      id: 'inventory',
-      label: t('nav.inventory'),
-      icon: 'inventory',
-      children: [
-        {
-          id: 'stock-management',
-          label: t('nav.stockManagement'),
-          href: '#stock-management',
-        },
-        {
-          id: 'cycle-counts',
-          label: t('nav.cycleCounts'),
-          href: '#cycle-counts',
-        },
-        {
-          id: 'transfers',
-          label: t('nav.transfers'),
-          href: '#transfers',
-        },
-      ],
-    },
-    {
-      id: 'procurement',
-      label: t('nav.procurement'),
-      icon: 'procurement',
-      children: [
-        {
-          id: 'requisitions',
-          label: t('nav.requisitions'),
-          href: '#requisitions',
-        },
-        {
-          id: 'suppliers',
-          label: t('nav.suppliers'),
-          href: '#suppliers',
-        },
-      ],
-    },
-    {
-      id: 'production',
-      label: t('nav.production'),
-      icon: 'production',
-      children: [
-        {
-          id: 'work-orders',
-          label: t('nav.workOrders'),
-          href: '/maintenance',
-        },
-        {
-          id: 'bom',
-          label: t('nav.bom'),
-          href: '#bom',
-        },
-      ],
-    },
-    {
-      id: 'quality',
-      label: t('nav.quality'),
-      icon: 'quality',
-      children: [
-        {
-          id: 'inspections',
-          label: t('nav.inspections'),
-          href: '#inspections',
-        },
-        {
-          id: 'non-conformances',
-          label: t('nav.nonConformances'),
-          href: '#non-conformances',
-        },
-      ],
-    },
-    {
-      id: 'reports',
-      label: t('nav.reports'),
-      icon: 'reports',
-      children: [
-        {
-          id: 'inventory-summary',
-          label: t('nav.inventorySummary'),
-          href: '/reports',
-        },
-        {
-          id: 'movement-history',
-          label: t('nav.movementHistory'),
-          href: '/reports',
-        },
-      ],
-    },
-    {
-      id: 'administration',
-      label: t('nav.administration'),
-      icon: 'administration',
-      children: [
-        {
-          id: 'workflows',
-          label: t('nav.workflows'),
-          href: '/workflows',
-        },
-        {
-          id: 'access-control',
-          label: t('nav.accessControl'),
-          href: '/access-control',
-        },
-      ],
-    },
-  ];
+/** The nav entries the bootstrap advertised, in the order the server sent them. */
+export function entriesFor(navigation: string[]): NavEntry[] {
+  return navigation.flatMap((name) => {
+    const entry = NAV_ENTRIES.find((candidate) => candidate.name === name);
+    return entry ? [entry] : [];
+  });
 }

@@ -58,6 +58,7 @@ export function ChartComponent({ type, data, options, title }: ChartComponentPro
     return (
       <div className="chart-container">
         <Line
+          aria-label={title}
           data={data as ChartData<'line'>}
           options={mergedOptions as ChartOptions<'line'>}
         />
@@ -69,6 +70,7 @@ export function ChartComponent({ type, data, options, title }: ChartComponentPro
     return (
       <div className="chart-container">
         <Pie
+          aria-label={title}
           data={data as ChartData<'pie'>}
           options={mergedOptions as ChartOptions<'pie'>}
         />
@@ -79,6 +81,7 @@ export function ChartComponent({ type, data, options, title }: ChartComponentPro
   return (
     <div className="chart-container">
       <Bar
+        aria-label={title}
         data={data as ChartData<'bar'>}
         options={mergedOptions as ChartOptions<'bar'>}
       />

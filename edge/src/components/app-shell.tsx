@@ -18,12 +18,11 @@ import {
   type ClosureCatalogue,
   type WorkOrderClosureSubmitInput,
 } from './work-order-closure-capture';
-import { EnhancedDashboard } from './dashboard/enhanced-dashboard';
-import { HierarchicalNavigation } from './navigation/hierarchical-navigation';
 import { GlobalSearch } from './search/global-search';
 import { WorkflowsView } from './enterprise/workflows-view';
 import { AccessControlView } from './enterprise/access-control-view';
 import { ReportsView } from './enterprise/reports-view';
+import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import type { SyncUiState } from '../sync/sync-status';
 import type { CachedReservationRow, CachedWorkOrderRow, WorklistMeter } from '../local-db/worklist';
@@ -131,6 +130,7 @@ export function AppShell({
   signOutIncomplete = false,
   waitingForOthers = [],
 }: AppShellProps) {
+  const navEntries = entriesFor(navigation);
   return (
     <div className="edge-shell">
       <ServiceWorkerRegistration />
@@ -145,7 +145,7 @@ export function AppShell({
           </p>
         </div>
         <div className="edge-header-actions">
-          <GlobalSearch currentRole={role} allowedItems={navigation} />
+          <GlobalSearch currentRole={role} navigation={navigation} />
           <SyncStatusBadge state={syncState} />
           {onSignOut ? (
             <button
@@ -178,12 +178,16 @@ export function AppShell({
           )}
         </p>
       ))}
-      <div className="edge-layout">
-        <HierarchicalNavigation 
-          currentRole={role} 
-          allowedItems={navigation}
-        />
-        <main id="main-content" className="edge-main" tabIndex={-1}>
+      {navEntries.length > 0 ? (
+        <nav className="edge-nav" aria-label={t('nav.label')}>
+          {navEntries.map((link) => (
+            <a key={link.href} href={link.href}>
+              {t(link.label as MessageKey)}
+            </a>
+          ))}
+        </nav>
+      ) : null}
+      <main id="main-content" className="edge-main" tabIndex={-1}>
         {authRequired ? (
           <div className="auth-required" role="alert">
             {t('sync.authRequired')}
@@ -279,39 +283,44 @@ export function AppShell({
         ) : view === 'reports' ? (
           <ReportsView currentUserName={userName} />
         ) : (
-          <>
-            <EnhancedDashboard
-              userName={userName}
-              role={role}
-              pendingCount={pendingCount}
-              failedCount={failedCount}
-            />
-            <div className="card-grid">
-              <section id="frontline">
-                <CrossDockCapture
-                  syncState={syncState}
-                  {...(onLoadCrossDockTask ? { onLoad: onLoadCrossDockTask } : {})}
-                  {...(onConfirmCrossDock ? { onConfirm: onConfirmCrossDock } : {})}
-                />
-                <IndentCapture
-                  syncState={syncState}
-                  {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
-                />
-                <TestCaptureButton {...(onCapture ? { onCapture } : {})} />
-                <a className="secondary-action" href="/maintenance">
-                  {t('maintenance.nav')}
-                </a>
-              </section>
-            </div>
-          </>
+          <div className="card-grid">
+            <section className="edge-card" id="dashboard" aria-labelledby="ready-heading">
+              <h2 id="ready-heading">{t('bootstrap.readyTitle')}</h2>
+              <p>{t('sync.offline')}</p>
+              <dl className="sync-counts">
+                <div>
+                  <dt>{t('sync.pendingCount')}</dt>
+                  <dd>{pendingCount}</dd>
+                </div>
+                <div>
+                  <dt>{t('sync.failedCount')}</dt>
+                  <dd>{failedCount}</dd>
+                </div>
+              </dl>
+            </section>
+            <section id="frontline">
+              <CrossDockCapture
+                syncState={syncState}
+                {...(onLoadCrossDockTask ? { onLoad: onLoadCrossDockTask } : {})}
+                {...(onConfirmCrossDock ? { onConfirm: onConfirmCrossDock } : {})}
+              />
+              <IndentCapture
+                syncState={syncState}
+                {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
+              />
+              <TestCaptureButton {...(onCapture ? { onCapture } : {})} />
+              <a className="secondary-action" href="/maintenance">
+                {t('maintenance.nav')}
+              </a>
+            </section>
+          </div>
         )}
         <SyncFailureList
           failures={failures}
           {...(onRetry ? { onRetry } : {})}
           {...(onDismissFailure ? { onDismiss: onDismissFailure } : {})}
         />
-        </main>
-      </div>
+      </main>
     </div>
   );
 }
