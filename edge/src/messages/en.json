@@ -464,6 +464,8 @@
   "dashboard.recentActivity": "Recent Activity",
   "dashboard.viewByRole": "View by Role",
   "dashboard.activeFilters": "Active filters",
+  "sampleData.label": "Sample data.",
+  "sampleData.body": "The figures on this page are examples, not live stock. Do not act on them.",
   "roles.warehouseManager": "Warehouse Manager",
   "roles.procurementSpecialist": "Procurement Specialist",
   "roles.logisticsCoordinator": "Logistics Coordinator",

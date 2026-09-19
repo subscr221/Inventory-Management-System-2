@@ -23,6 +23,7 @@ import { EnhancedDashboard } from './dashboard/enhanced-dashboard';
 import { WorkflowsView } from './enterprise/workflows-view';
 import { AccessControlView } from './enterprise/access-control-view';
 import { ReportsView } from './enterprise/reports-view';
+import { SampleDataNotice } from './enterprise/sample-data-notice';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import type { SyncUiState } from '../sync/sync-status';
@@ -279,17 +280,29 @@ export function AppShell({
             )}
           </div>
         ) : view === 'dashboard' ? (
-          <EnhancedDashboard
-            role={role}
-            pendingCount={pendingCount}
-            failedCount={failedCount}
-          />
+          <>
+            <SampleDataNotice />
+            <EnhancedDashboard
+              role={role}
+              pendingCount={pendingCount}
+              failedCount={failedCount}
+            />
+          </>
         ) : view === 'workflows' ? (
-          <WorkflowsView currentUserName={userName} />
+          <>
+            <SampleDataNotice />
+            <WorkflowsView currentUserName={userName} />
+          </>
         ) : view === 'access-control' ? (
-          <AccessControlView />
+          <>
+            <SampleDataNotice />
+            <AccessControlView />
+          </>
         ) : view === 'reports' ? (
-          <ReportsView currentUserName={userName} />
+          <>
+            <SampleDataNotice />
+            <ReportsView currentUserName={userName} />
+          </>
         ) : (
           <div className="card-grid">
             <section className="edge-card" id="dashboard" aria-labelledby="ready-heading">
