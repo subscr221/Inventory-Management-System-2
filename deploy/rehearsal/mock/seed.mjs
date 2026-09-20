@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Seeds the platform side of a mock rehearsal pack (world.json, written by generate.mjs) with the
-// same direct inserts the Story 13.2 integration test uses: site and bins, item master, the ERP
+// same direct inserts the Story 13.2 integration test uses: site and the location tree (site > zone
+// > aisle > rack > bin, from world.json locations, with zone type, quarantine flag and pick
+// sequence; there IS a POST /api/v1/locations, but the site must exist before anybody can hold a
+// site-scoped role to call it, and pick_sequence has no API field), item master, the ERP
 // purchase-order projection, service orders, job-work receipts with their return clocks, and the
 // custody ledger. Idempotent: a second run skips what it finds.
 //
@@ -11,6 +14,11 @@
 // another site, is refused). Packs written with generate.mjs --tag carry run-scoped identifiers,
 // so several packs seed side by side. --dry-run does all of it inside the transaction, prints what
 // it would create and skip, and rolls back.
+//
+// --sales-order-ids seeds nothing: it prints the dispatch-order ids (erp_sales_order.id) of the
+// site's open sales-order lines as JSON, for operations-smoke.ts --sales-order-ids <file> in remote
+// mode. GET /api/v1/erp/sales-orders does not return that id (src/api/v1/erp-projections.ts:210)
+// and pick generation takes nothing else, so without database access a remote client cannot pick.
 //
 // Connection: DB_HOST, DB_PORT, DB_NAME, DB_ADMIN_USER, DB_ADMIN_PASSWORD (as src/config/index.ts).
 // NOT seeded here, because they go through the API in the rehearsal itself: the ERP stock-balance
@@ -29,10 +37,15 @@ import pg from 'pg';
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 function parseArgs(argv) {
-  const args = { siteCode: 'MOCK-SITE', actorEmail: null, pack: null, dryRun: false };
+  const args = { siteCode: 'MOCK-SITE', actorEmail: null, pack: null, dryRun: false, salesOrderIds: false };
   for (let i = 2; i < argv.length; i += 2) {
     if (argv[i] === '--dry-run') {
       args.dryRun = true;
+      i -= 1;
+      continue;
+    }
+    if (argv[i] === '--sales-order-ids') {
+      args.salesOrderIds = true;
       i -= 1;
       continue;
     }
@@ -43,7 +56,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--pack') args.pack = value;
     else throw new Error(`unknown argument ${argv[i]}`);
   }
-  if (!args.actorEmail) throw new Error('--actor-email is required: a provisioned user the seeded receipts are attributed to');
+  if (!args.actorEmail && !args.salesOrderIds) throw new Error('--actor-email is required: a provisioned user the seeded receipts are attributed to');
   args.pack ??= join(HERE, 'out', args.siteCode);
   return args;
 }
@@ -62,6 +75,17 @@ const client = new pg.Client({
 });
 await client.connect();
 
+if (args.salesOrderIds) {
+  const rows = await client.query(
+    `SELECT id, so_number_ext, line_no, sku, quantity::text AS quantity FROM erp_sales_order
+     WHERE ship_from_site_code_ext = $1 AND status = 'open' ORDER BY so_number_ext, line_no`,
+    [args.siteCode],
+  );
+  console.log(JSON.stringify({ site_code: args.siteCode, sales_orders: rows.rows }, null, 2));
+  await client.end();
+  process.exit(0);
+}
+
 const counts = {};
 const tally = (name, created) => {
   counts[name] ??= { created: 0, skipped: 0 };
@@ -75,23 +99,45 @@ try {
   const actor = await one(`SELECT user_id FROM users WHERE lower(email) = lower($1) AND active`, [args.actorEmail]);
   if (!actor) throw new Error(`no active user with email ${args.actorEmail}; provision the accounts first (runbook 2.9)`);
 
-  async function location(level, code, siteId) {
-    const found = await one(`SELECT location_id, level, site_id FROM location_register WHERE location_code = $1`, [code]);
-    if (found && found.level !== level) throw new Error(`location ${code} exists as a ${found.level}, not a ${level}`);
-    if (found && siteId && found.site_id !== siteId) throw new Error(`bin ${code} already belongs to another site (${found.site_id}); generate the pack with a --tag`);
-    tally(level, !found);
+  /** Returns the location_id, or null when the code is taken by ANOTHER site and may be skipped. */
+  async function location(l, parentId, siteId) {
+    const found = await one(`SELECT location_id, level, site_id, parent_location_id FROM location_register WHERE location_code = $1`, [l.location_code]);
+    if (found && found.level !== l.level) throw new Error(`location ${l.location_code} exists as a ${found.level}, not a ${l.level}`);
+    if (found && siteId && found.site_id !== siteId) {
+      // The QC-hold zone code is a platform literal, so only one site of a database can own it.
+      if (l.location_code === world.operations?.qc_hold_zone) {
+        console.warn(`warning: ${l.location_code} already belongs to site ${found.site_id}; this site gets no QC-hold zone (receipts that need a hold will answer RECEIVING_QC_HOLD_ZONE_NOT_FOUND)`);
+        return null;
+      }
+      throw new Error(`${l.level} ${l.location_code} already belongs to another site (${found.site_id}); generate the pack with a --tag`);
+    }
+    // Locations are never re-parented: a bin seeded flat under the site by an older pack stays there.
+    if (found && parentId && found.parent_location_id !== parentId)
+      console.warn(`warning: ${l.level} ${l.location_code} exists under another parent and is left there; pick generation needs a zone ancestor`);
+    tally(l.level, !found);
     if (found) return found.location_id;
     const id = randomUUID();
     await client.query(
-      `INSERT INTO location_register (location_id, location_code, level, parent_location_id, site_id, zone_type, temperature_class, quarantine, status)
-       VALUES ($1, $2, $3, $4, $5, 'general', 'ambient', false, 'active')`,
-      [id, code, level, siteId, siteId ?? id],
+      `INSERT INTO location_register (location_id, location_code, level, parent_location_id, site_id, zone_type, temperature_class, quarantine, pick_sequence, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'ambient', $7, $8, 'active')`,
+      [id, l.location_code, l.level, parentId, siteId ?? id, l.zone_type ?? 'general', l.quarantine ?? false, l.pick_sequence ?? null],
     );
     return id;
   }
-  const siteId = await location('site', world.site_code, null);
-  const binIds = new Map();
-  for (const bin of world.bins) binIds.set(bin, await location('bin', bin, siteId));
+  const siteId = await location({ location_code: world.site_code, level: 'site' }, null, null);
+  // Parents come before children in world.json locations. Packs older than the operations layer
+  // have no tree: their bins go directly under the site, as before.
+  const tree = world.locations ?? world.bins.map((bin) => ({ location_code: bin, level: 'bin', parent_code: null }));
+  const locationIds = new Map();
+  for (const l of tree) {
+    const parentId = l.parent_code === null ? siteId : locationIds.get(l.parent_code);
+    if (parentId === undefined || parentId === null) {
+      locationIds.set(l.location_code, null); // parent skipped: skip the subtree
+      continue;
+    }
+    locationIds.set(l.location_code, await location(l, parentId, siteId));
+  }
+  const binIds = new Map(world.bins.map((bin) => [bin, locationIds.get(bin)]));
 
   for (const it of world.items) {
     const found = await one(`SELECT uom, lot_controlled, serial_controlled FROM item_master WHERE sku = $1`, [it.sku]);

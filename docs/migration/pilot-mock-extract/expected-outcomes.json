@@ -172,7 +172,7 @@
     ]
   },
   "open_pos": {
-    "manifest_rows": 10,
+    "manifest_rows": 14,
     "planted": [
       {
         "defect": "received_qty_off",

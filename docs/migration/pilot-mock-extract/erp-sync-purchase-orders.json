@@ -108,6 +108,49 @@
           "under_receipt_tolerance_pct": 5
         }
       ]
+    },
+    {
+      "po_number_ext": "MK-PO-0005",
+      "supplier_ref_ext": "SUP-ACME",
+      "currency": "INR",
+      "lines": [
+        {
+          "line_no": 1,
+          "sku": "BRG-6204",
+          "ordered_qty": 400,
+          "open_qty": 400,
+          "unit_price": 113.25,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        },
+        {
+          "line_no": 2,
+          "sku": "RM-COIL-2MM",
+          "ordered_qty": 5000,
+          "open_qty": 5000,
+          "unit_price": 62,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        },
+        {
+          "line_no": 3,
+          "sku": "SEAL-35MM",
+          "ordered_qty": 600,
+          "open_qty": 600,
+          "unit_price": 155.25,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        },
+        {
+          "line_no": 4,
+          "sku": "FAST-M8-BOLT",
+          "ordered_qty": 20000,
+          "open_qty": 20000,
+          "unit_price": 1.5,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        }
+      ]
     }
   ]
 }

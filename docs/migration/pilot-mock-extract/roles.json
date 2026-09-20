@@ -1,0 +1,441 @@
+{
+  "site_id": "9e4a90a8-5e35-4ca9-b988-d563cff74de3",
+  "people": {
+    "info@ancorlabs.org": {
+      "display_name": "Gagan Kumar"
+    },
+    "accounts@ancorlabs.org": {
+      "display_name": "Finance Controller"
+    },
+    "subscr@ancorlabs.org": {
+      "display_name": "Department Head"
+    },
+    "anupam@ancorlabs.org": {
+      "display_name": "CFO"
+    },
+    "cmf_supervisor@ancorlabs.org": {
+      "display_name": "Site Head"
+    },
+    "dev1@ancorlabs.org": {
+      "display_name": "Devender"
+    },
+    "erp1@ancorlabs.org": {
+      "display_name": "ERP adapter service"
+    },
+    "gate1@ancorlabs.org": {
+      "display_name": "Ramesh Yadav"
+    },
+    "store1@ancorlabs.org": {
+      "display_name": "Suresh Verma"
+    },
+    "unload1@ancorlabs.org": {
+      "display_name": "Mahesh Tyagi"
+    },
+    "qc1@ancorlabs.org": {
+      "display_name": "Neha Saxena"
+    },
+    "picker1@ancorlabs.org": {
+      "display_name": "Imran Khan"
+    },
+    "invctl1@ancorlabs.org": {
+      "display_name": "Pooja Sharma"
+    },
+    "planner1@ancorlabs.org": {
+      "display_name": "Vikas Gupta"
+    },
+    "maint1@ancorlabs.org": {
+      "display_name": "Arif Ansari"
+    },
+    "maintsup1@ancorlabs.org": {
+      "display_name": "Deepak Chauhan"
+    },
+    "indent1@ancorlabs.org": {
+      "display_name": "Kavita Singh"
+    },
+    "audit1@ancorlabs.org": {
+      "display_name": "Rohit Mathur"
+    },
+    "qchead1@ancorlabs.org": {
+      "display_name": "Sunita Rawat"
+    },
+    "dispatch1@ancorlabs.org": {
+      "display_name": "Sanjay Mishra"
+    },
+    "notify1@ancorlabs.org": {
+      "display_name": "Anita Joshi"
+    }
+  },
+  "roles": [
+    {
+      "role": "migration_lead",
+      "module": "migration",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "info@ancorlabs.org"
+    },
+    {
+      "role": "migration_lead",
+      "module": "migration",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "info@ancorlabs.org"
+    },
+    {
+      "role": "finance_controller",
+      "module": "migration",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "accounts@ancorlabs.org"
+    },
+    {
+      "role": "finance_controller",
+      "module": "jobwork",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "accounts@ancorlabs.org"
+    },
+    {
+      "role": "finance_controller",
+      "module": "compliance",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "accounts@ancorlabs.org"
+    },
+    {
+      "role": "finance_controller",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "*",
+      "holder": "accounts@ancorlabs.org"
+    },
+    {
+      "role": "department_head",
+      "module": "migration",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "subscr@ancorlabs.org"
+    },
+    {
+      "role": "department_head",
+      "module": "engineering",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "subscr@ancorlabs.org"
+    },
+    {
+      "role": "department_head",
+      "module": "procurement",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "subscr@ancorlabs.org"
+    },
+    {
+      "role": "department_head",
+      "module": "jobwork",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "subscr@ancorlabs.org"
+    },
+    {
+      "role": "department_head",
+      "module": "custody",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "subscr@ancorlabs.org"
+    },
+    {
+      "role": "department_head",
+      "module": "production",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "subscr@ancorlabs.org"
+    },
+    {
+      "role": "department_head",
+      "module": "maintenance",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "subscr@ancorlabs.org"
+    },
+    {
+      "role": "department_head",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "subscr@ancorlabs.org"
+    },
+    {
+      "role": "cfo",
+      "module": "jobwork",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "anupam@ancorlabs.org"
+    },
+    {
+      "role": "cfo",
+      "module": "migration",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "anupam@ancorlabs.org"
+    },
+    {
+      "role": "warehouse_manager",
+      "module": "warehouse",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "cmf_supervisor@ancorlabs.org"
+    },
+    {
+      "role": "warehouse_manager",
+      "module": "inventory",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "cmf_supervisor@ancorlabs.org"
+    },
+    {
+      "role": "warehouse_manager",
+      "module": "receiving",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "cmf_supervisor@ancorlabs.org"
+    },
+    {
+      "role": "engineering_admin",
+      "module": "engineering",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "dev1@ancorlabs.org"
+    },
+    {
+      "role": "engineering_admin",
+      "module": "engineering",
+      "function_scope": "read",
+      "location_id": "*",
+      "holder": "dev1@ancorlabs.org"
+    },
+    {
+      "role": "svc_erp_adapter",
+      "module": "inventory",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "erp1@ancorlabs.org"
+    },
+    {
+      "role": "gate_officer",
+      "module": "inventory",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "gate1@ancorlabs.org"
+    },
+    {
+      "role": "weighbridge_operator",
+      "module": "inventory",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "gate1@ancorlabs.org"
+    },
+    {
+      "role": "store_assistant",
+      "module": "receiving",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "store1@ancorlabs.org"
+    },
+    {
+      "role": "store_assistant",
+      "module": "inventory",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "store1@ancorlabs.org"
+    },
+    {
+      "role": "store_assistant",
+      "module": "warehouse",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "store1@ancorlabs.org"
+    },
+    {
+      "role": "unloading_supervisor",
+      "module": "receiving",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "unload1@ancorlabs.org"
+    },
+    {
+      "role": "unloading_supervisor",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "unload1@ancorlabs.org"
+    },
+    {
+      "role": "qc_inspector",
+      "module": "qc",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "qc1@ancorlabs.org"
+    },
+    {
+      "role": "qc_inspector",
+      "module": "quality",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "qc1@ancorlabs.org"
+    },
+    {
+      "role": "qc_inspector",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "qc1@ancorlabs.org"
+    },
+    {
+      "role": "warehouse_operator",
+      "module": "warehouse",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "picker1@ancorlabs.org"
+    },
+    {
+      "role": "warehouse_operator",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "picker1@ancorlabs.org"
+    },
+    {
+      "role": "inventory_controller",
+      "module": "inventory",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "invctl1@ancorlabs.org"
+    },
+    {
+      "role": "inventory_controller",
+      "module": "warehouse",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "invctl1@ancorlabs.org"
+    },
+    {
+      "role": "production_planner",
+      "module": "production",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "planner1@ancorlabs.org"
+    },
+    {
+      "role": "production_planner",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "planner1@ancorlabs.org"
+    },
+    {
+      "role": "production_planner",
+      "module": "engineering",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "planner1@ancorlabs.org"
+    },
+    {
+      "role": "production_planner",
+      "module": "qc",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "planner1@ancorlabs.org"
+    },
+    {
+      "role": "maintenance_technician",
+      "module": "maintenance",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "maint1@ancorlabs.org"
+    },
+    {
+      "role": "maintenance_supervisor",
+      "module": "maintenance",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "maintsup1@ancorlabs.org"
+    },
+    {
+      "role": "procurement_officer",
+      "module": "procurement",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "indent1@ancorlabs.org"
+    },
+    {
+      "role": "procurement_officer",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "indent1@ancorlabs.org"
+    },
+    {
+      "role": "internal_auditor",
+      "module": "audit",
+      "function_scope": "read",
+      "location_id": "*",
+      "holder": "audit1@ancorlabs.org"
+    },
+    {
+      "role": "internal_auditor",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "audit1@ancorlabs.org"
+    },
+    {
+      "role": "qc_head",
+      "module": "qc",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "qchead1@ancorlabs.org"
+    },
+    {
+      "role": "qc_head",
+      "module": "quality",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "qchead1@ancorlabs.org"
+    },
+    {
+      "role": "qc_head",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "qchead1@ancorlabs.org"
+    },
+    {
+      "role": "dispatch_clerk",
+      "module": "warehouse",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "dispatch1@ancorlabs.org"
+    },
+    {
+      "role": "dispatch_clerk",
+      "module": "inventory",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "dispatch1@ancorlabs.org"
+    },
+    {
+      "role": "notification_admin",
+      "module": "notification",
+      "function_scope": "write",
+      "location_id": "*",
+      "holder": "notify1@ancorlabs.org"
+    },
+    {
+      "role": "notification_admin",
+      "module": "notification",
+      "function_scope": "read",
+      "location_id": "*",
+      "holder": "notify1@ancorlabs.org"
+    }
+  ]
+}

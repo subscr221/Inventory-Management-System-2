@@ -13,6 +13,291 @@
     "BIN-R01",
     "BIN-R02"
   ],
+  "locations": [
+    {
+      "location_code": "ZONE-RECV",
+      "level": "zone",
+      "parent_code": null,
+      "zone_type": "staging",
+      "quarantine": false
+    },
+    {
+      "location_code": "RECV-A1",
+      "level": "aisle",
+      "parent_code": "ZONE-RECV",
+      "zone_type": "staging",
+      "quarantine": false
+    },
+    {
+      "location_code": "RECV-A1-R1",
+      "level": "rack",
+      "parent_code": "RECV-A1",
+      "zone_type": "staging",
+      "quarantine": false
+    },
+    {
+      "location_code": "RECV-DOCK",
+      "level": "bin",
+      "parent_code": "RECV-A1-R1",
+      "zone_type": "staging",
+      "quarantine": false,
+      "pick_sequence": 10
+    },
+    {
+      "location_code": "RECV-DOCK-02",
+      "level": "bin",
+      "parent_code": "RECV-A1-R1",
+      "zone_type": "staging",
+      "quarantine": false,
+      "pick_sequence": 20
+    },
+    {
+      "location_code": "ZONE-QC-HOLD",
+      "level": "zone",
+      "parent_code": null,
+      "zone_type": "quarantine",
+      "quarantine": true
+    },
+    {
+      "location_code": "QCH-A1",
+      "level": "aisle",
+      "parent_code": "ZONE-QC-HOLD",
+      "zone_type": "quarantine",
+      "quarantine": true
+    },
+    {
+      "location_code": "QCH-A1-R1",
+      "level": "rack",
+      "parent_code": "QCH-A1",
+      "zone_type": "quarantine",
+      "quarantine": true
+    },
+    {
+      "location_code": "QCH-BIN-01",
+      "level": "bin",
+      "parent_code": "QCH-A1-R1",
+      "zone_type": "quarantine",
+      "quarantine": true,
+      "pick_sequence": 30
+    },
+    {
+      "location_code": "QCH-BIN-02",
+      "level": "bin",
+      "parent_code": "QCH-A1-R1",
+      "zone_type": "quarantine",
+      "quarantine": true,
+      "pick_sequence": 40
+    },
+    {
+      "location_code": "ZONE-STORE-A",
+      "level": "zone",
+      "parent_code": null,
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "STA-A",
+      "level": "aisle",
+      "parent_code": "ZONE-STORE-A",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "STA-A-R1",
+      "level": "rack",
+      "parent_code": "STA-A",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "BIN-A01",
+      "level": "bin",
+      "parent_code": "STA-A-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 50
+    },
+    {
+      "location_code": "BIN-A02",
+      "level": "bin",
+      "parent_code": "STA-A-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 60
+    },
+    {
+      "location_code": "BIN-A03",
+      "level": "bin",
+      "parent_code": "STA-A-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 70
+    },
+    {
+      "location_code": "STA-B",
+      "level": "aisle",
+      "parent_code": "ZONE-STORE-A",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "STA-B-R1",
+      "level": "rack",
+      "parent_code": "STA-B",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "BIN-B01",
+      "level": "bin",
+      "parent_code": "STA-B-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 80
+    },
+    {
+      "location_code": "BIN-B02",
+      "level": "bin",
+      "parent_code": "STA-B-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 90
+    },
+    {
+      "location_code": "STA-C",
+      "level": "aisle",
+      "parent_code": "ZONE-STORE-A",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "STA-C-R1",
+      "level": "rack",
+      "parent_code": "STA-C",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "BIN-C01",
+      "level": "bin",
+      "parent_code": "STA-C-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 100
+    },
+    {
+      "location_code": "BIN-C02",
+      "level": "bin",
+      "parent_code": "STA-C-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 110
+    },
+    {
+      "location_code": "ZONE-STORE-B",
+      "level": "zone",
+      "parent_code": null,
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "STB-J",
+      "level": "aisle",
+      "parent_code": "ZONE-STORE-B",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "STB-J-R1",
+      "level": "rack",
+      "parent_code": "STB-J",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "BIN-J01",
+      "level": "bin",
+      "parent_code": "STB-J-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 120
+    },
+    {
+      "location_code": "BIN-J02",
+      "level": "bin",
+      "parent_code": "STB-J-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 130
+    },
+    {
+      "location_code": "STB-R",
+      "level": "aisle",
+      "parent_code": "ZONE-STORE-B",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "STB-R-R1",
+      "level": "rack",
+      "parent_code": "STB-R",
+      "zone_type": "general",
+      "quarantine": false
+    },
+    {
+      "location_code": "BIN-R01",
+      "level": "bin",
+      "parent_code": "STB-R-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 140
+    },
+    {
+      "location_code": "BIN-R02",
+      "level": "bin",
+      "parent_code": "STB-R-R1",
+      "zone_type": "general",
+      "quarantine": false,
+      "pick_sequence": 150
+    },
+    {
+      "location_code": "ZONE-DISPATCH",
+      "level": "zone",
+      "parent_code": null,
+      "zone_type": "staging",
+      "quarantine": false
+    },
+    {
+      "location_code": "DISP-A1",
+      "level": "aisle",
+      "parent_code": "ZONE-DISPATCH",
+      "zone_type": "staging",
+      "quarantine": false
+    },
+    {
+      "location_code": "DISP-A1-R1",
+      "level": "rack",
+      "parent_code": "DISP-A1",
+      "zone_type": "staging",
+      "quarantine": false
+    },
+    {
+      "location_code": "DISP-STAGE-01",
+      "level": "bin",
+      "parent_code": "DISP-A1-R1",
+      "zone_type": "staging",
+      "quarantine": false,
+      "pick_sequence": 160
+    },
+    {
+      "location_code": "DISP-STAGE-02",
+      "level": "bin",
+      "parent_code": "DISP-A1-R1",
+      "zone_type": "staging",
+      "quarantine": false,
+      "pick_sequence": 170
+    }
+  ],
   "items": [
     {
       "sku": "RM-COIL-2MM",
@@ -344,5 +629,653 @@
       "consumed_qty": 203,
       "custody_qty": 1649
     }
-  ]
+  ],
+  "people": [
+    {
+      "email": "info@ancorlabs.org",
+      "display_name": "Gagan Kumar",
+      "fictitious": false,
+      "roles": [
+        "migration_lead"
+      ]
+    },
+    {
+      "email": "accounts@ancorlabs.org",
+      "display_name": "Finance Controller",
+      "fictitious": false,
+      "roles": [
+        "finance_controller"
+      ]
+    },
+    {
+      "email": "subscr@ancorlabs.org",
+      "display_name": "Department Head",
+      "fictitious": false,
+      "roles": [
+        "department_head"
+      ]
+    },
+    {
+      "email": "anupam@ancorlabs.org",
+      "display_name": "CFO",
+      "fictitious": false,
+      "roles": [
+        "cfo"
+      ]
+    },
+    {
+      "email": "cmf_supervisor@ancorlabs.org",
+      "display_name": "Site Head",
+      "fictitious": false,
+      "roles": [
+        "warehouse_manager"
+      ]
+    },
+    {
+      "email": "dev1@ancorlabs.org",
+      "display_name": "Devender",
+      "fictitious": false,
+      "roles": [
+        "engineering_admin"
+      ]
+    },
+    {
+      "email": "erp1@ancorlabs.org",
+      "display_name": "ERP adapter service",
+      "fictitious": false,
+      "roles": [
+        "svc_erp_adapter"
+      ]
+    },
+    {
+      "email": "gate1@ancorlabs.org",
+      "display_name": "Ramesh Yadav",
+      "fictitious": false,
+      "roles": [
+        "gate_officer",
+        "weighbridge_operator"
+      ]
+    },
+    {
+      "email": "store1@ancorlabs.org",
+      "display_name": "Suresh Verma",
+      "fictitious": false,
+      "roles": [
+        "store_assistant"
+      ]
+    },
+    {
+      "email": "unload1@ancorlabs.org",
+      "display_name": "Mahesh Tyagi",
+      "fictitious": false,
+      "roles": [
+        "unloading_supervisor"
+      ]
+    },
+    {
+      "email": "qc1@ancorlabs.org",
+      "display_name": "Neha Saxena",
+      "fictitious": false,
+      "roles": [
+        "qc_inspector"
+      ]
+    },
+    {
+      "email": "picker1@ancorlabs.org",
+      "display_name": "Imran Khan",
+      "fictitious": false,
+      "roles": [
+        "warehouse_operator"
+      ]
+    },
+    {
+      "email": "invctl1@ancorlabs.org",
+      "display_name": "Pooja Sharma",
+      "fictitious": false,
+      "roles": [
+        "inventory_controller"
+      ]
+    },
+    {
+      "email": "planner1@ancorlabs.org",
+      "display_name": "Vikas Gupta",
+      "fictitious": false,
+      "roles": [
+        "production_planner"
+      ]
+    },
+    {
+      "email": "maint1@ancorlabs.org",
+      "display_name": "Arif Ansari",
+      "fictitious": false,
+      "roles": [
+        "maintenance_technician"
+      ]
+    },
+    {
+      "email": "maintsup1@ancorlabs.org",
+      "display_name": "Deepak Chauhan",
+      "fictitious": false,
+      "roles": [
+        "maintenance_supervisor"
+      ]
+    },
+    {
+      "email": "indent1@ancorlabs.org",
+      "display_name": "Kavita Singh",
+      "fictitious": false,
+      "roles": [
+        "procurement_officer"
+      ]
+    },
+    {
+      "email": "audit1@ancorlabs.org",
+      "display_name": "Rohit Mathur",
+      "fictitious": false,
+      "roles": [
+        "internal_auditor"
+      ]
+    },
+    {
+      "email": "qchead1@ancorlabs.org",
+      "display_name": "Sunita Rawat",
+      "fictitious": true,
+      "roles": [
+        "qc_head"
+      ]
+    },
+    {
+      "email": "dispatch1@ancorlabs.org",
+      "display_name": "Sanjay Mishra",
+      "fictitious": true,
+      "roles": [
+        "dispatch_clerk"
+      ]
+    },
+    {
+      "email": "notify1@ancorlabs.org",
+      "display_name": "Anita Joshi",
+      "fictitious": true,
+      "roles": [
+        "notification_admin"
+      ]
+    }
+  ],
+  "operations": {
+    "receiving_dock": "RECV-DOCK",
+    "qc_hold_zone": "ZONE-QC-HOLD",
+    "quarantine_bin": "QCH-BIN-01",
+    "putaway_bin": "BIN-A03",
+    "dispatch_staging_bin": "DISP-STAGE-01",
+    "operations_po": "MK-PO-0005",
+    "actors": {
+      "erp": "erp1@ancorlabs.org",
+      "compliance": "accounts@ancorlabs.org",
+      "gate": "gate1@ancorlabs.org",
+      "weighbridge": "gate1@ancorlabs.org",
+      "store": "store1@ancorlabs.org",
+      "picker": "picker1@ancorlabs.org",
+      "invctl": "invctl1@ancorlabs.org",
+      "whmanager": "cmf_supervisor@ancorlabs.org",
+      "dispatch": "dispatch1@ancorlabs.org",
+      "planner": "planner1@ancorlabs.org",
+      "engineer": "dev1@ancorlabs.org",
+      "qc": "qc1@ancorlabs.org",
+      "qchead": "qchead1@ancorlabs.org",
+      "maint": "maint1@ancorlabs.org",
+      "maintsup": "maintsup1@ancorlabs.org",
+      "indent": "indent1@ancorlabs.org",
+      "depthead": "subscr@ancorlabs.org"
+    },
+    "doa_entries": [
+      {
+        "transaction_type": "inventory.count_adjustment",
+        "role": "warehouse_manager",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "indent_approval",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "purchase_order_approval",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "supplier_onboarding",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "transfer_request",
+        "role": "warehouse_manager",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "receiving.quarantine",
+        "role": "warehouse_manager",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "receiving.putaway_release",
+        "role": "warehouse_manager",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "qc.inspection_plan_approval",
+        "role": "qc_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "qc.conditional_release",
+        "role": "qc_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "qc.witnessed_inspection_waiver",
+        "role": "qc_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "compliance.label_master_approval",
+        "role": "qc_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "production_order.release_override",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "production_order.over_completion",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "production_order.short_close",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "bom_substitution",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "eco_approval",
+        "role": "department_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "maintenance.return_to_service",
+        "role": "maintenance_supervisor",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "maintenance.warranty_override",
+        "role": "maintenance_supervisor",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "maintenance.sync_conflict_resolution",
+        "role": "maintenance_supervisor",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "edge.refused_capture_resolution",
+        "role": "warehouse_manager",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "jobwork.over_norm_loss",
+        "role": "finance_controller",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "jobwork.offcut_acquisition",
+        "role": "cfo",
+        "value_min": null,
+        "value_max": null
+      }
+    ],
+    "sla_policies": [
+      {
+        "criticality_class": "critical",
+        "safety_flag": true,
+        "priority": "p1",
+        "response_minutes": 15,
+        "resolution_hours": 4
+      },
+      {
+        "criticality_class": "critical",
+        "safety_flag": false,
+        "priority": "p1",
+        "response_minutes": 30,
+        "resolution_hours": 8
+      },
+      {
+        "criticality_class": "high",
+        "safety_flag": true,
+        "priority": "p1",
+        "response_minutes": 30,
+        "resolution_hours": 8
+      },
+      {
+        "criticality_class": "high",
+        "safety_flag": false,
+        "priority": "p2",
+        "response_minutes": 60,
+        "resolution_hours": 24
+      },
+      {
+        "criticality_class": "medium",
+        "safety_flag": true,
+        "priority": "p2",
+        "response_minutes": 60,
+        "resolution_hours": 24
+      },
+      {
+        "criticality_class": "medium",
+        "safety_flag": false,
+        "priority": "p3",
+        "response_minutes": 240,
+        "resolution_hours": 72
+      },
+      {
+        "criticality_class": "low",
+        "safety_flag": true,
+        "priority": "p3",
+        "response_minutes": 240,
+        "resolution_hours": 72
+      },
+      {
+        "criticality_class": "low",
+        "safety_flag": false,
+        "priority": "p4",
+        "response_minutes": 480,
+        "resolution_hours": 168
+      }
+    ],
+    "assets": [
+      {
+        "asset_tag": "AST-PRESS-01",
+        "asset_name": "Hydraulic press 100 T",
+        "criticality_class": "high",
+        "manufacturer": "Mock Machines Ltd",
+        "model": "PRESS-01",
+        "meter": {
+          "meter_code": "MTR-PRESS-01",
+          "unit": "hours",
+          "silent_after_days": 30,
+          "alert_role": "maintenance_supervisor"
+        }
+      },
+      {
+        "asset_tag": "AST-LATHE-02",
+        "asset_name": "CNC lathe",
+        "criticality_class": "medium",
+        "manufacturer": "Mock Machines Ltd",
+        "model": "LATHE-02",
+        "meter": {
+          "meter_code": "MTR-LATHE-02",
+          "unit": "hours",
+          "silent_after_days": 30,
+          "alert_role": "maintenance_supervisor"
+        }
+      },
+      {
+        "asset_tag": "AST-FORKLIFT-01",
+        "asset_name": "Forklift 3 T",
+        "criticality_class": "medium",
+        "manufacturer": "Mock Machines Ltd",
+        "model": "FORKLIFT-01",
+        "meter": {
+          "meter_code": "MTR-FORKLIFT-01",
+          "unit": "km",
+          "silent_after_days": 30,
+          "alert_role": "maintenance_supervisor"
+        }
+      },
+      {
+        "asset_tag": "AST-COMPRESSOR-01",
+        "asset_name": "Screw compressor",
+        "criticality_class": "low",
+        "manufacturer": "Mock Machines Ltd",
+        "model": "COMPRESSOR-01",
+        "meter": {
+          "meter_code": "MTR-COMPRESSOR-01",
+          "unit": "hours",
+          "silent_after_days": 30,
+          "alert_role": "maintenance_supervisor"
+        }
+      }
+    ],
+    "inspection_plans": [
+      {
+        "sku": "FG-PUMP-12",
+        "scope": "standard",
+        "aql": "1.000",
+        "inspection_level": "II",
+        "characteristics": [
+          {
+            "line_no": 1,
+            "characteristic_name": "Visual finish",
+            "characteristic_class": "minor",
+            "test_method_ref": "WI-QC-001",
+            "instrument_type": null,
+            "result_kind": "attribute",
+            "lower_limit": null,
+            "upper_limit": null,
+            "limit_uom": null,
+            "acceptance_criteria": "No dents, burrs or rust",
+            "sample_handling": "Return to lot"
+          },
+          {
+            "line_no": 2,
+            "characteristic_name": "Assembly completeness",
+            "characteristic_class": "major",
+            "test_method_ref": "WI-QC-002",
+            "instrument_type": null,
+            "result_kind": "attribute",
+            "lower_limit": null,
+            "upper_limit": null,
+            "limit_uom": null,
+            "acceptance_criteria": "All components fitted per BOM",
+            "sample_handling": "Return to lot"
+          }
+        ]
+      },
+      {
+        "sku": "FG-FRAME-A",
+        "scope": "standard",
+        "aql": "1.000",
+        "inspection_level": "II",
+        "characteristics": [
+          {
+            "line_no": 1,
+            "characteristic_name": "Visual finish",
+            "characteristic_class": "minor",
+            "test_method_ref": "WI-QC-001",
+            "instrument_type": null,
+            "result_kind": "attribute",
+            "lower_limit": null,
+            "upper_limit": null,
+            "limit_uom": null,
+            "acceptance_criteria": "No dents, burrs or rust",
+            "sample_handling": "Return to lot"
+          },
+          {
+            "line_no": 2,
+            "characteristic_name": "Assembly completeness",
+            "characteristic_class": "major",
+            "test_method_ref": "WI-QC-002",
+            "instrument_type": null,
+            "result_kind": "attribute",
+            "lower_limit": null,
+            "upper_limit": null,
+            "limit_uom": null,
+            "acceptance_criteria": "All components fitted per BOM",
+            "sample_handling": "Return to lot"
+          }
+        ]
+      },
+      {
+        "sku": "FG-BRACKET-H",
+        "scope": "standard",
+        "aql": "1.000",
+        "inspection_level": "II",
+        "characteristics": [
+          {
+            "line_no": 1,
+            "characteristic_name": "Visual finish",
+            "characteristic_class": "minor",
+            "test_method_ref": "WI-QC-001",
+            "instrument_type": null,
+            "result_kind": "attribute",
+            "lower_limit": null,
+            "upper_limit": null,
+            "limit_uom": null,
+            "acceptance_criteria": "No dents, burrs or rust",
+            "sample_handling": "Return to lot"
+          },
+          {
+            "line_no": 2,
+            "characteristic_name": "Assembly completeness",
+            "characteristic_class": "major",
+            "test_method_ref": "WI-QC-002",
+            "instrument_type": null,
+            "result_kind": "attribute",
+            "lower_limit": null,
+            "upper_limit": null,
+            "limit_uom": null,
+            "acceptance_criteria": "All components fitted per BOM",
+            "sample_handling": "Return to lot"
+          }
+        ]
+      }
+    ],
+    "ownership_agreement_locations": [
+      "RECV-DOCK",
+      "RECV-DOCK-02",
+      "BIN-A03",
+      "BIN-A01",
+      "BIN-A02",
+      "BIN-B01",
+      "BIN-B02",
+      "BIN-C01",
+      "BIN-C02",
+      "BIN-J01",
+      "BIN-J02",
+      "BIN-R01",
+      "BIN-R02"
+    ],
+    "ownership_agreements": [
+      {
+        "sku": "FAST-M8-BOLT",
+        "stock_class": "consignment",
+        "business_stream": "production",
+        "owner_party_code": "SUP-NORTHERN-FAST"
+      },
+      {
+        "sku": "FAST-M10-NUT",
+        "stock_class": "consignment",
+        "business_stream": "production",
+        "owner_party_code": "SUP-NORTHERN-FAST"
+      },
+      {
+        "sku": "WELD-WIRE-1.2",
+        "stock_class": "vmi",
+        "business_stream": "production",
+        "owner_party_code": "SUP-NORTHERN-FAST",
+        "vmi_min_qty": 50
+      }
+    ],
+    "suppliers": [
+      {
+        "owner_party_code": "SUP-ACME",
+        "legal_name": "Acme Industrial Supplies Pvt Ltd",
+        "gstin_ext": "09AAACA1111A1Z5",
+        "credit_period_days": 30,
+        "contacts": [
+          {
+            "name": "Accounts desk",
+            "email": "accounts@sup-acme.example"
+          }
+        ],
+        "onboarding_documents": [
+          {
+            "type": "gst_certificate",
+            "reference": "GST-09AAACA1111A1Z5",
+            "file_hash": "09a84c512db656b179fd16055ff52173c07136ac5439621e003cb5a95f8f84a4"
+          }
+        ]
+      },
+      {
+        "owner_party_code": "SUP-BHARAT-STEEL",
+        "legal_name": "Bharat Steel Traders",
+        "gstin_ext": "09AAACB2222B1Z3",
+        "credit_period_days": 30,
+        "contacts": [
+          {
+            "name": "Accounts desk",
+            "email": "accounts@sup-bharat-steel.example"
+          }
+        ],
+        "onboarding_documents": [
+          {
+            "type": "gst_certificate",
+            "reference": "GST-09AAACB2222B1Z3",
+            "file_hash": "e45ae3966e374d1b50354e33e9af95069dec9db2af57ac34d25b43fb594965f4"
+          }
+        ]
+      },
+      {
+        "owner_party_code": "SUP-NORTHERN-FAST",
+        "legal_name": "Northern Fasteners LLP",
+        "gstin_ext": "09AAACN3333C1Z1",
+        "credit_period_days": 30,
+        "contacts": [
+          {
+            "name": "Accounts desk",
+            "email": "accounts@sup-northern-fast.example"
+          }
+        ],
+        "onboarding_documents": [
+          {
+            "type": "gst_certificate",
+            "reference": "GST-09AAACN3333C1Z1",
+            "file_hash": "672457a5fe79692ec97a3c701a0ae0520c85b6b2efc770f7d3cbc888ee30198d"
+          }
+        ]
+      }
+    ],
+    "production": {
+      "output_sku": "FG-PUMP-12",
+      "kit_ref": "MK-KIT-001",
+      "order_quantity": "2"
+    }
+  }
 }
