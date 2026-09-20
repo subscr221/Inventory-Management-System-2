@@ -4,7 +4,13 @@
 // purchase-order projection, service orders, job-work receipts with their return clocks, and the
 // custody ledger. Idempotent: a second run skips what it finds.
 //
-//   node deploy/rehearsal/mock/seed.mjs --site-code MOCK-SITE --actor-email lead@example.org
+//   node deploy/rehearsal/mock/seed.mjs --site-code MOCK-SITE --actor-email lead@example.org [--dry-run]
+//
+// The site is looked up by location_code: when it ALREADY exists it is reused and the pack's bins
+// are parented to it (a code that exists at another level, or a bin code that already belongs to
+// another site, is refused). Packs written with generate.mjs --tag carry run-scoped identifiers,
+// so several packs seed side by side. --dry-run does all of it inside the transaction, prints what
+// it would create and skip, and rolls back.
 //
 // Connection: DB_HOST, DB_PORT, DB_NAME, DB_ADMIN_USER, DB_ADMIN_PASSWORD (as src/config/index.ts).
 // NOT seeded here, because they go through the API in the rehearsal itself: the ERP stock-balance
@@ -23,8 +29,13 @@ import pg from 'pg';
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 function parseArgs(argv) {
-  const args = { siteCode: 'MOCK-SITE', actorEmail: null, pack: null };
+  const args = { siteCode: 'MOCK-SITE', actorEmail: null, pack: null, dryRun: false };
   for (let i = 2; i < argv.length; i += 2) {
+    if (argv[i] === '--dry-run') {
+      args.dryRun = true;
+      i -= 1;
+      continue;
+    }
     const value = argv[i + 1];
     if (value === undefined) throw new Error(`missing value for ${argv[i]}`);
     if (argv[i] === '--site-code') args.siteCode = value;
@@ -65,7 +76,9 @@ try {
   if (!actor) throw new Error(`no active user with email ${args.actorEmail}; provision the accounts first (runbook 2.9)`);
 
   async function location(level, code, siteId) {
-    const found = await one(`SELECT location_id FROM location_register WHERE location_code = $1`, [code]);
+    const found = await one(`SELECT location_id, level, site_id FROM location_register WHERE location_code = $1`, [code]);
+    if (found && found.level !== level) throw new Error(`location ${code} exists as a ${found.level}, not a ${level}`);
+    if (found && siteId && found.site_id !== siteId) throw new Error(`bin ${code} already belongs to another site (${found.site_id}); generate the pack with a --tag`);
     tally(level, !found);
     if (found) return found.location_id;
     const id = randomUUID();
@@ -81,8 +94,11 @@ try {
   for (const bin of world.bins) binIds.set(bin, await location('bin', bin, siteId));
 
   for (const it of world.items) {
-    const found = await one(`SELECT 1 FROM item_master WHERE sku = $1`, [it.sku]);
+    const found = await one(`SELECT uom, lot_controlled, serial_controlled FROM item_master WHERE sku = $1`, [it.sku]);
     tally('item', !found);
+    // SKUs are global, not run-scoped: an existing item is reused as it is, so say when it differs.
+    if (found && (found.uom !== it.uom || found.lot_controlled !== it.lot_controlled || found.serial_controlled !== it.serial_controlled))
+      console.warn(`warning: item ${it.sku} exists with uom ${found.uom}, lot ${found.lot_controlled}, serial ${found.serial_controlled}; the pack expects ${it.uom}, ${it.lot_controlled}, ${it.serial_controlled}`);
     if (found) continue;
     await client.query(
       `INSERT INTO item_master (sku, uom, lot_controlled, serial_controlled, hazmat, quarantine_required, bis_licence_required, valuation_method, business_stream, status)
@@ -149,8 +165,8 @@ try {
     await custody('consumption', so.challans[0].sku, -so.consumed_qty, null);
   }
 
-  await client.query('COMMIT');
-  console.log(`seeded ${world.site_code} (site_id ${siteId})`);
+  await client.query(args.dryRun ? 'ROLLBACK' : 'COMMIT');
+  console.log(`${args.dryRun ? 'DRY RUN, rolled back: would seed' : 'seeded'} ${world.site_code} (site_id ${args.dryRun && counts.site.created ? 'new' : siteId})`);
   console.table(counts);
 } catch (error) {
   await client.query('ROLLBACK');

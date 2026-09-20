@@ -1,0 +1,18 @@
+{
+  "api_base": "https://ims-staging.example.org",
+  "token_url": "https://sso.example.org/realms/ims/protocol/openid-connect/token",
+  "client_id": "ims-rehearsal-password-grant",
+  "scope": "openid",
+  "site_code": "MOCK-STG1",
+  "site_id": "00000000-0000-0000-0000-000000000000",
+  "actors": {
+    "erp": { "email": "svc-erp@example.org", "password_env": "REHEARSAL_PW_ERP" },
+    "engineer": { "email": "engineer@example.org", "password_env": "REHEARSAL_PW_ENGINEER" },
+    "lead": { "email": "migration.lead@example.org", "password_env": "REHEARSAL_PW_LEAD" },
+    "eng-head": { "email": "dept.head@example.org", "password_env": "REHEARSAL_PW_DEPT_HEAD" },
+    "proc-head": { "email": "dept.head@example.org", "password_env": "REHEARSAL_PW_DEPT_HEAD" },
+    "jw-head": { "email": "dept.head@example.org", "password_env": "REHEARSAL_PW_DEPT_HEAD" },
+    "dept-head": { "email": "dept.head@example.org", "password_env": "REHEARSAL_PW_DEPT_HEAD" },
+    "finance": { "email": "finance.controller@example.org", "password_env": "REHEARSAL_PW_FINANCE" }
+  }
+}

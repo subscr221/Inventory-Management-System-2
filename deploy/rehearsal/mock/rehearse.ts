@@ -7,6 +7,28 @@
 //
 // The harness (makeRequest, provisionUser, authFor, approver resolution) is the closure of the
 // Story 13.1 to 13.3 integration tests. Exit code 0 only when every defect and step line is PASS.
+//
+// REMOTE mode drives a deployed stack as real, already-provisioned people. It starts no app,
+// provisions no user, role or DOA band and seeds nothing: run generate.mjs and seed.mjs for the
+// site first, then point at that pack.
+//
+//   node --import tsx deploy/rehearsal/mock/rehearse.ts --print-required-roles      (no network)
+//   node --import tsx deploy/rehearsal/mock/rehearse.ts --remote cfg.json --pack <dir> --dry-run
+//   node --import tsx deploy/rehearsal/mock/rehearse.ts --remote cfg.json --pack <dir>
+//        [--stop-before-unblock | --through-unblock]
+//
+// --dry-run fetches a token per actor and makes one authenticated GET each: no write. A remote run
+// STOPS BEFORE the final sign-offs and the unblock unless told otherwise, because the go-live
+// records are append-only and permanent on a shared database: --stop-before-unblock records the
+// two final sign-offs and stops, --through-unblock goes all the way. Idempotency keys derive from
+// the site code, so a remote re-run replays what it already wrote instead of duplicating it.
+//
+// Config (remote.example.json): api_base, token_url (OIDC token endpoint), client_id (a
+// password-grant client), optional scope, site_code, site_id, and actors: a map from each logical
+// actor (erp, engineer, lead, eng-head, proc-head, jw-head, dept-head, finance) to
+// { "email", "password_env" }. Passwords are read from the named environment variables, never
+// from the file. Logical actors may share one real person except where the platform forbids it
+// (CONFLICTS below); a forbidden pairing fails before any network call.
 
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -15,8 +37,6 @@ import { request as httpRequest, type IncomingMessage, type Server } from 'node:
 import type { AddressInfo } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createAppRouter, createAppServer } from '../../../src/server.js';
-import { closeAdminPool, closePool, getAdminPool } from '../../../src/config/db.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '../../..');
@@ -44,11 +64,235 @@ function argOf(name: string, fallback: string): string {
   return i > 0 && process.argv[i + 1] ? process.argv[i + 1]! : fallback;
 }
 
+const hasFlag = (name: string) => process.argv.includes(name);
+
+// ---------------------------------------------------------------- actors and remote config
+
+// What each logical actor holds: [role, module, function scope, location]. 'site' is the
+// rehearsal site's location_id, '*' every location. Local mode provisions exactly this for its
+// throwaway users; remote mode prints it for comparison with the real accounts.
+type Grant = readonly [string, string, 'read' | 'write', 'site' | '*'];
+const REQUIRED: Record<string, { steps: string; grants: Grant[]; localOnly?: true }> = {
+  erp: {
+    steps: '2 ERP stock-balance sync (remote: also item lookups for step 3)',
+    grants: [['svc_erp_adapter', 'inventory', 'write', '*']],
+  },
+  lead: {
+    steps: '4 import, 5 variances, 6 explain, 7 promote, 8 manifests + verification, 9 unblock',
+    grants: [
+      ['migration_lead', 'migration', 'write', 'site'],
+      ['migration_lead', 'migration', 'read', 'site'],
+    ],
+  },
+  engineer: {
+    steps: '3 legacy kit migration',
+    grants: [
+      ['engineering_admin', 'engineering', 'write', '*'],
+      ['engineering_admin', 'engineering', 'read', '*'],
+    ],
+  },
+  'eng-head': {
+    steps: '8 sign off active_boms',
+    grants: [
+      ['department_head', 'engineering', 'write', '*'],
+      ['department_head', 'migration', 'read', '*'],
+    ],
+  },
+  'proc-head': {
+    steps: '8 sign off open_pos',
+    grants: [
+      ['department_head', 'procurement', 'write', 'site'],
+      ['department_head', 'migration', 'read', 'site'],
+    ],
+  },
+  'jw-head': {
+    steps: '8 sign off jobwork_challans, custody_registers',
+    grants: [
+      ['department_head', 'jobwork', 'write', 'site'],
+      ['department_head', 'migration', 'read', 'site'],
+    ],
+  },
+  'dept-head': {
+    steps: '9 department_head_final sign-off',
+    grants: [['department_head', 'migration', 'write', 'site']],
+  },
+  finance: {
+    steps: '6 approve variance explanations, 9 finance_final sign-off',
+    grants: [['finance_controller', 'migration', 'write', '*']],
+  },
+  compliance: {
+    steps: '1 create the DOA band when none is active (local mode only)',
+    grants: [['compliance_admin', 'compliance', 'write', '*']],
+    localOnly: true,
+  },
+};
+const REMOTE_ACTORS = Object.keys(REQUIRED).filter((who) => !REQUIRED[who]!.localOnly);
+
+// Pairs the platform refuses as one person, with the refusing check.
+const SIGNERS = ['eng-head', 'proc-head', 'jw-head'];
+const CONFLICTS: [string, string, string][] = [
+  ['lead', 'finance', 'explainer cannot approve (src/api/v1/migration.ts:1083) and SOD-07'],
+  ...SIGNERS.map((s): [string, string, string] => [
+    'lead',
+    s,
+    'manifest loader / verification runner cannot sign the domain off, SOD-07 (src/compliance/migration-documents.ts:506,514)',
+  ]),
+  [
+    'lead',
+    'dept-head',
+    'migration lead, loader, promoter, runner cannot give a final sign-off, SOD-07 (src/compliance/migration-golive.ts:413)',
+  ],
+  [
+    'dept-head',
+    'finance',
+    'the two final sign-offs must come from two people (src/compliance/migration-golive.ts:430)',
+  ],
+];
+
+function printRequiredRoles(): void {
+  const pad = (s: string, n: number) => s.padEnd(n);
+  console.log(
+    '\nRequired role assignments per logical actor (site = the rehearsal site location_id)',
+  );
+  console.log(
+    `${pad('actor', 11)}${pad('role', 20)}${pad('module', 13)}${pad('scope', 7)}location`,
+  );
+  for (const [who, { grants, localOnly }] of Object.entries(REQUIRED)) {
+    for (const [role, module, scope, location] of grants) {
+      console.log(
+        `${pad(who, 11)}${pad(role, 20)}${pad(module, 13)}${pad(scope, 7)}${location}${localOnly ? '   (local mode only)' : ''}`,
+      );
+    }
+  }
+  console.log(
+    `\nAlso required on the platform: an active DOA band for transaction type ${DOA_TYPE} held by\n` +
+      'finance_controller (remote mode does not create one). The approver frozen on each explanation is\n' +
+      'the OLDEST active finance_controller in the database, who also needs migration read; the\n' +
+      'configured finance actor must be that person. A write assignment satisfies read. Neither final\n' +
+      'signer may hold migration_lead reaching the site (src/compliance/migration-golive.ts:389).',
+  );
+  console.log('\nMust be different people:');
+  for (const [a, b, why] of CONFLICTS) console.log(`  ${a} / ${b}: ${why}`);
+}
+
+interface RemoteConfig {
+  api_base: string;
+  token_url: string;
+  client_id: string;
+  scope?: string;
+  site_code: string;
+  site_id: string;
+  actors: Record<string, { email: string; password_env: string }>;
+}
+
+/** Loads and checks the remote config; every failure here happens before any network call. */
+function loadRemote(path: string): RemoteConfig {
+  const cfg = JSON.parse(readFileSync(path, 'utf8')) as RemoteConfig;
+  const problems: string[] = [];
+  for (const key of ['api_base', 'token_url', 'client_id', 'site_code', 'site_id'] as const) {
+    if (typeof cfg[key] !== 'string' || !cfg[key]) problems.push(`${key} is required`);
+  }
+  for (const who of REMOTE_ACTORS) {
+    const actor = cfg.actors?.[who];
+    if (!actor?.email || !actor.password_env) {
+      problems.push(`actors.${who} needs email and password_env`);
+    } else if ('password' in actor) {
+      problems.push(`actors.${who}: passwords go in the environment, not the file`);
+    } else if (!process.env[actor.password_env]) {
+      problems.push(`actors.${who}: environment variable ${actor.password_env} is not set`);
+    }
+  }
+  const emailOf = (who: string) => cfg.actors?.[who]?.email?.toLowerCase();
+  for (const [a, b, why] of CONFLICTS) {
+    if (emailOf(a) && emailOf(a) === emailOf(b))
+      problems.push(`${a} and ${b} are both ${emailOf(a)}: ${why}`);
+  }
+  if (problems.length > 0)
+    throw new Error(`remote config ${path} refused, nothing was sent:\n  ${problems.join('\n  ')}`);
+  return cfg;
+}
+
+if (hasFlag('--print-required-roles')) {
+  printRequiredRoles();
+  process.exit(0);
+}
+
+const remotePath = argOf('--remote', '');
+const remote: RemoteConfig | null = remotePath ? loadRemote(remotePath) : null;
+if (!remote && hasFlag('--dry-run')) throw new Error('--dry-run needs --remote <config.json>');
+// Where the flow stops: local runs go through the unblock as before; a remote run stops before
+// the final sign-offs unless asked, because those records are permanent.
+const stopBefore: 'signoffs' | 'unblock' | null = hasFlag('--through-unblock')
+  ? null
+  : hasFlag('--stop-before-unblock')
+    ? 'unblock'
+    : remote
+      ? 'signoffs'
+      : null;
+
 const TAG = Date.now().toString(36).toUpperCase();
-const SITE_CODE = `MOCK-${TAG}`;
-const PACK = join(HERE, 'out', SITE_CODE);
-const run = TAG.toLowerCase();
+const SITE_CODE = remote ? remote.site_code : `MOCK-${TAG}`;
+const PACK = resolve(argOf('--pack', join(HERE, 'out', SITE_CODE)));
+const run = remote ? remote.site_code.toLowerCase() : TAG.toLowerCase();
 let port = 0;
+
+async function remoteRequest(
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Headers,
+): Promise<HttpResult> {
+  const res = await fetch(remote!.api_base.replace(/\/$/, '') + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(600000),
+  });
+  const raw = await res.text();
+  let parsed: Json = {};
+  if (raw) {
+    try {
+      parsed = JSON.parse(raw) as Json;
+    } catch {
+      parsed = { error_code: 'NON_JSON_BODY', raw };
+    }
+  }
+  return { status: res.status, body: parsed, text: raw };
+}
+
+// OIDC password grant, one token per real person, renewed shortly before it expires.
+const tokens = new Map<string, { token: string; expiresAt: number }>();
+async function remoteAuth(who: string): Promise<Headers> {
+  const actor = remote!.actors[who];
+  if (!actor) throw new Error(`no remote actor configured for ${who}`);
+  const key = actor.email.toLowerCase();
+  let hit = tokens.get(key);
+  if (!hit || hit.expiresAt - 30000 < Date.now()) {
+    const res = await fetch(remote!.token_url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'password',
+        client_id: remote!.client_id,
+        username: actor.email,
+        password: process.env[actor.password_env] ?? '',
+        ...(remote!.scope ? { scope: remote!.scope } : {}),
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    const body = (await res.json().catch(() => ({}))) as Json;
+    if (!res.ok || typeof body['access_token'] !== 'string')
+      throw new Error(
+        `token for ${who} (${actor.email}): ${res.status} ${String(body['error'] ?? '')} ${String(body['error_description'] ?? '')}`,
+      );
+    hit = {
+      token: body['access_token'],
+      expiresAt: Date.now() + Number(body['expires_in'] ?? 60) * 1000,
+    };
+    tokens.set(key, hit);
+  }
+  return { Authorization: `Bearer ${hit.token}` };
+}
 
 function makeRequest(
   method: string,
@@ -56,6 +300,7 @@ function makeRequest(
   body?: unknown,
   headers?: Headers,
 ): Promise<HttpResult> {
+  if (remote) return remoteRequest(method, path, body, headers);
   return new Promise((resolvePromise, reject) => {
     const data = body ? JSON.stringify(body) : undefined;
     const req = httpRequest(
@@ -99,6 +344,12 @@ function must(res: HttpResult, status: number, what: string): Json {
   if (res.status !== status)
     throw new Error(`${what}: expected ${status}, got ${res.status} ${res.text.slice(0, 600)}`);
   return res.body;
+}
+
+/** A 201, or on a remote re-run the 200 replay of the record the first run already wrote. */
+function created(res: HttpResult, what: string): Json {
+  if (remote && res.status === 200 && res.body['replayed'] === true) return res.body;
+  return must(res, 201, what);
 }
 
 async function provisionUser(externalId: string, roles: Role[]): Promise<string> {
@@ -176,8 +427,45 @@ function printTables(): boolean {
 
 // ---------------------------------------------------------------- the flow
 
+/** --dry-run: a token and one harmless authenticated GET per actor, then out. No write. */
+async function dryRun(): Promise<boolean> {
+  const world = JSON.parse(readFileSync(join(PACK, 'world.json'), 'utf8')) as Json;
+  const sku = (world['items'] as { sku: string }[])[0]!.sku;
+  const probes: Record<string, string> = {
+    erp: `/api/v1/items/${encodeURIComponent(sku)}`,
+    engineer: '/api/v1/boms/migration-exceptions?limit=1',
+  };
+  const pad = (s: string, n: number) => s.padEnd(n);
+  let ok = true;
+  console.log(`\nDry run against ${remote!.api_base} (site ${SITE_CODE}): no write is made`);
+  console.log(`${pad('result', 7)}${pad('actor', 11)}${pad('person', 36)}probe`);
+  for (const who of REMOTE_ACTORS) {
+    const path = probes[who] ?? `/api/v1/migration/stages?site_id=${remote!.site_id}`;
+    let note: string;
+    let pass = false;
+    try {
+      const res = await makeRequest('GET', path, undefined, await remoteAuth(who));
+      pass = res.status === 200;
+      note = `GET ${path} ${res.status}${pass ? '' : ' ' + String(res.body['error_code'] ?? '') + ' ' + res.text.slice(0, 160)}`;
+    } catch (error) {
+      note = (error as Error).message;
+    }
+    ok &&= pass;
+    console.log(
+      `${pad(pass ? 'PASS' : 'FAIL', 7)}${pad(who, 11)}${pad(remote!.actors[who]!.email, 36)}${note}`,
+    );
+  }
+  console.log(
+    `\n${ok ? 'PASS' : 'FAIL'}: a 401 is a token the API does not accept, a 403 a missing role assignment,` +
+      ` a 404 on the erp item probe a pack that was not seeded (seed.mjs).`,
+  );
+  return ok;
+}
+
 async function main(): Promise<void> {
-  const adminPool = getAdminPool();
+  const db = remote ? null : await import('../../../src/config/db.js');
+  if (db) closers.push(db.closePool, db.closeAdminPool);
+  const adminPool = db?.getAdminPool();
   const node = (script: string, args: string[]) =>
     execFileSync(process.execPath, [join(HERE, script), ...args], {
       cwd: ROOT,
@@ -195,108 +483,116 @@ async function main(): Promise<void> {
     userIds[who] = await provisionUser(email(who), roles);
     h[who] = await authFor(email(who));
   };
-
-  await step('0 start app, projections', async () => {
-    for (const name of [
-      'integration_exception',
-      'migration_import',
-      'migration_import_rejection',
-      'migration_opening_stock_row',
-      'erp_stock_balance',
-      'migration_variance_explanation',
-      'migration_stage',
-      'migration_document_manifest_row',
-      'migration_domain_verification',
-      'migration_domain_verification_finding',
-      'migration_domain_platform_exclusion',
-      'migration_golive_signoff',
-      'migration_golive_status',
-    ]) {
-      await adminPool.query(readFileSync(join(ROOT, 'read/projections', `${name}.sql`), 'utf-8'));
-    }
-    const server: Server = createAppServer(createAppRouter());
-    await new Promise<void>((done) => server.listen(0, () => done()));
-    port = (server.address() as AddressInfo).port;
-    closers.push(() => new Promise<void>((done) => server.close(() => done())));
-  });
-
-  await step('1 generate pack, seed, provision people', async () => {
-    node('generate.mjs', [
-      '--site-code',
-      SITE_CODE,
-      '--tag',
-      TAG,
-      '--lines',
-      argOf('--lines', '300'),
-      '--seed',
-      argOf('--seed', '42'),
-    ]);
-    expected = JSON.parse(readFileSync(join(PACK, 'expected-outcomes.json'), 'utf8')) as Json;
-    world = JSON.parse(readFileSync(join(PACK, 'world.json'), 'utf8')) as Json;
-    // The seeder needs an existing actor before the site exists, so the wildcard-scoped ERP
-    // service account is provisioned first and owns the seeded receipts.
-    await person('erp', [
-      { role: 'svc_erp_adapter', module: 'inventory', functionScope: 'write', locationId: '*' },
-    ]);
-    node('seed.mjs', ['--site-code', SITE_CODE, '--actor-email', email('erp')]);
-    const site = await adminPool.query(
-      `SELECT location_id FROM location_register WHERE location_code = $1`,
-      [SITE_CODE],
-    );
-    siteId = site.rows[0]!['location_id'] as string;
-
-    const at = (
-      module: string,
-      scope: 'read' | 'write',
-      locationId = siteId,
-      role = 'department_head',
-    ): Role => ({
+  // The request headers of a logical actor: the provisioned throwaway user locally, the mapped
+  // real person's bearer token remotely.
+  const as = async (who: string): Promise<Headers> => (remote ? remoteAuth(who) : h[who]!);
+  const grantsOf = (who: string): Role[] =>
+    REQUIRED[who]!.grants.map(([role, module, functionScope, location]) => ({
       role,
       module,
-      functionScope: scope,
-      locationId,
-    });
-    await person('lead', [
-      at('migration', 'write', siteId, 'migration_lead'),
-      at('migration', 'read', siteId, 'migration_lead'),
-    ]);
-    await person('engineer', [
-      at('engineering', 'write', '*', 'engineering_admin'),
-      at('engineering', 'read', '*', 'engineering_admin'),
-    ]);
-    await person('eng-head', [at('engineering', 'write', '*'), at('migration', 'read', '*')]);
-    await person('proc-head', [at('procurement', 'write'), at('migration', 'read')]);
-    await person('jw-head', [at('jobwork', 'write'), at('migration', 'read')]);
-    await person('dept-head', [at('migration', 'write')]);
-    await person('finance', [at('migration', 'write', '*', 'finance_controller')]);
-    await person('compliance', [at('compliance', 'write', '*', 'compliance_admin')]);
+      functionScope,
+      locationId: location === 'site' ? siteId : '*',
+    }));
 
-    // One DOA band for the variance explanations; the transaction type is global, so reuse it.
-    const band = await adminPool.query(
-      `SELECT entry_id FROM doa_registry_entries WHERE transaction_type = $1 AND active = true`,
-      [DOA_TYPE],
-    );
-    if (band.rows.length === 0) {
-      must(
-        await makeRequest(
-          'POST',
-          '/api/v1/doa/entries',
-          { role: 'finance_controller', transaction_type: DOA_TYPE, value_min: 0, value_max: null },
-          h['compliance'],
-        ),
-        201,
-        'DOA band',
+  if (remote) {
+    await step('0 remote preflight: pack, a token per actor', async () => {
+      expected = JSON.parse(readFileSync(join(PACK, 'expected-outcomes.json'), 'utf8')) as Json;
+      world = JSON.parse(readFileSync(join(PACK, 'world.json'), 'utf8')) as Json;
+      if (world['site_code'] !== SITE_CODE)
+        throw new Error(`pack ${PACK} is for ${String(world['site_code'])}, not ${SITE_CODE}`);
+      siteId = remote.site_id;
+      for (const who of REMOTE_ACTORS) await remoteAuth(who);
+      return `${tokens.size} people for ${REMOTE_ACTORS.length} actors, site_id ${siteId}`;
+    });
+  }
+
+  if (!remote)
+    await step('0 start app, projections', async () => {
+      for (const name of [
+        'integration_exception',
+        'migration_import',
+        'migration_import_rejection',
+        'migration_opening_stock_row',
+        'erp_stock_balance',
+        'migration_variance_explanation',
+        'migration_stage',
+        'migration_document_manifest_row',
+        'migration_domain_verification',
+        'migration_domain_verification_finding',
+        'migration_domain_platform_exclusion',
+        'migration_golive_signoff',
+        'migration_golive_status',
+      ]) {
+        await adminPool!.query(
+          readFileSync(join(ROOT, 'read/projections', `${name}.sql`), 'utf-8'),
+        );
+      }
+      const { createAppRouter, createAppServer } = await import('../../../src/server.js');
+      const server: Server = createAppServer(createAppRouter());
+      await new Promise<void>((done) => server.listen(0, () => done()));
+      port = (server.address() as AddressInfo).port;
+      closers.unshift(() => new Promise<void>((done) => server.close(() => done())));
+    });
+
+  if (!remote)
+    await step('1 generate pack, seed, provision people', async () => {
+      node('generate.mjs', [
+        '--site-code',
+        SITE_CODE,
+        '--tag',
+        TAG,
+        '--lines',
+        argOf('--lines', '300'),
+        '--seed',
+        argOf('--seed', '42'),
+      ]);
+      expected = JSON.parse(readFileSync(join(PACK, 'expected-outcomes.json'), 'utf8')) as Json;
+      world = JSON.parse(readFileSync(join(PACK, 'world.json'), 'utf8')) as Json;
+      // The seeder needs an existing actor before the site exists, so the wildcard-scoped ERP
+      // service account is provisioned first and owns the seeded receipts.
+      await person('erp', grantsOf('erp'));
+      node('seed.mjs', ['--site-code', SITE_CODE, '--actor-email', email('erp')]);
+      const site = await adminPool!.query(
+        `SELECT location_id FROM location_register WHERE location_code = $1`,
+        [SITE_CODE],
       );
-    }
-    return `site_id ${siteId}`;
-  });
+      siteId = site.rows[0]!['location_id'] as string;
+
+      for (const who of Object.keys(REQUIRED)) {
+        if (who !== 'erp') await person(who, grantsOf(who));
+      }
+
+      // One DOA band for the variance explanations; the transaction type is global, so reuse it.
+      const band = await adminPool!.query(
+        `SELECT entry_id FROM doa_registry_entries WHERE transaction_type = $1 AND active = true`,
+        [DOA_TYPE],
+      );
+      if (band.rows.length === 0) {
+        must(
+          await makeRequest(
+            'POST',
+            '/api/v1/doa/entries',
+            {
+              role: 'finance_controller',
+              transaction_type: DOA_TYPE,
+              value_min: 0,
+              value_max: null,
+            },
+            await as('compliance'),
+          ),
+          201,
+          'DOA band',
+        );
+      }
+      return `site_id ${siteId}`;
+    });
 
   await step('2 ERP stock-balance snapshot', async () => {
     const body = JSON.parse(readFileSync(join(PACK, 'erp-sync-stock-balances.json'), 'utf8')) as {
       stock_balances: unknown[];
     };
     const res = must(
-      await makeRequest('POST', '/api/v1/erp/sync', body, h['erp']),
+      await makeRequest('POST', '/api/v1/erp/sync', body, await as('erp')),
       200,
       'erp sync',
     );
@@ -312,11 +608,32 @@ async function main(): Promise<void> {
       parent_sku: string;
       components: { component_sku: string; quantity_per: number; line_uom: string }[];
     }[];
-    const ids = await adminPool.query(
-      `SELECT sku, item_id FROM item_master WHERE sku = ANY($1::text[])`,
-      [kits.flatMap((k) => [k.parent_sku, ...k.components.map((c) => c.component_sku)])],
-    );
-    const idOf = new Map(ids.rows.map((r) => [r['sku'] as string, r['item_id'] as string]));
+    const skus = [
+      ...new Set(kits.flatMap((k) => [k.parent_sku, ...k.components.map((c) => c.component_sku)])),
+    ];
+    const idOf = new Map<string, string>();
+    if (remote) {
+      // No database here: the item ids come from the item API, as the inventory-scoped actor.
+      for (const sku of skus) {
+        const item = must(
+          await makeRequest(
+            'GET',
+            `/api/v1/items/${encodeURIComponent(sku)}`,
+            undefined,
+            await as('erp'),
+          ),
+          200,
+          `item ${sku} (was the pack seeded?)`,
+        );
+        idOf.set(sku, ((item['item'] as Json | undefined) ?? item)['item_id'] as string);
+      }
+    } else {
+      const ids = await adminPool!.query(
+        `SELECT sku, item_id FROM item_master WHERE sku = ANY($1::text[])`,
+        [skus],
+      );
+      for (const r of ids.rows) idOf.set(r['sku'] as string, r['item_id'] as string);
+    }
     const res = must(
       await makeRequest(
         'POST',
@@ -332,7 +649,7 @@ async function main(): Promise<void> {
             })),
           })),
         },
-        h['engineer'],
+        await as('engineer'),
       ),
       200,
       'legacy kit migration',
@@ -347,7 +664,7 @@ async function main(): Promise<void> {
 
   const stock = expected['opening_stock'] as { file_rows: number; planted: Json[] };
   await step('4 import opening_stock.csv, rejections', async () => {
-    const imported = must(
+    const imported = created(
       await makeRequest(
         'POST',
         '/api/v1/migration/opening-stock/imports',
@@ -359,9 +676,8 @@ async function main(): Promise<void> {
           csv: readFileSync(join(PACK, 'opening_stock.csv'), 'utf8'),
           idempotency_key: `mock-import-${run}`,
         },
-        h['lead'],
+        await as('lead'),
       ),
-      201,
       'opening stock import',
     );
     const report = must(
@@ -369,7 +685,7 @@ async function main(): Promise<void> {
         'GET',
         `/api/v1/migration/opening-stock/imports/${imported['load_id'] as string}?limit=500`,
         undefined,
-        h['lead'],
+        await as('lead'),
       ),
       200,
       'import report',
@@ -405,7 +721,7 @@ async function main(): Promise<void> {
         'GET',
         `/api/v1/migration/opening-stock/variances?site_id=${siteId}&limit=500`,
         undefined,
-        h['lead'],
+        await as('lead'),
       ),
       200,
       'variances',
@@ -431,7 +747,7 @@ async function main(): Promise<void> {
   });
 
   await step('6 explain, self-approval refused, approve', async () => {
-    const explained = must(
+    const explained = created(
       await makeRequest(
         'POST',
         '/api/v1/migration/opening-stock/variances/explanations',
@@ -442,40 +758,53 @@ async function main(): Promise<void> {
           narrative: `Mock rehearsal ${SITE_CODE}: planted defect, explained by the migration lead`,
           idempotency_key: `mock-explain-${run}`,
         },
-        h['lead'],
+        await as('lead'),
       ),
-      201,
       'explain',
     );
     const explanations = explained['explanations'] as Json[];
     // findRoleHolder froze the OLDEST active finance_controller in the whole database as the
     // approver, which need not be this run's finance user: resolve that person and act as them.
     const approverId = explanations[0]!['approver_actor_id'] as string;
-    const approver = await adminPool.query(`SELECT external_id FROM users WHERE user_id = $1`, [
-      approverId,
-    ]);
-    const approverExternalId = approver.rows[0]!['external_id'] as string;
-    const hasRead = await adminPool.query(
-      `SELECT 1 FROM user_role_assignments WHERE user_id = $1 AND module = 'migration' AND location_id = '*'`,
-      [approverId],
-    );
-    if (hasRead.rows.length === 0) {
-      await adminPool.query(
-        `INSERT INTO user_role_assignments (user_id, role, module, function_scope, location_id)
-         VALUES ($1, 'finance_controller', 'migration', 'read', '*')`,
+    let approverExternalId: string;
+    let approverHeaders: Headers;
+    if (remote) {
+      // No user lookup is exposed by the API, so the configured finance actor is tried and the
+      // platform's own refusal (it names both user ids) tells whether that is the frozen approver.
+      approverExternalId = remote.actors['finance']!.email;
+      approverHeaders = await as('finance');
+    } else {
+      const approver = await adminPool!.query(`SELECT external_id FROM users WHERE user_id = $1`, [
+        approverId,
+      ]);
+      approverExternalId = approver.rows[0]!['external_id'] as string;
+      const hasRead = await adminPool!.query(
+        `SELECT 1 FROM user_role_assignments WHERE user_id = $1 AND module = 'migration' AND location_id = '*'`,
         [approverId],
       );
+      if (hasRead.rows.length === 0) {
+        await adminPool!.query(
+          `INSERT INTO user_role_assignments (user_id, role, module, function_scope, location_id)
+           VALUES ($1, 'finance_controller', 'migration', 'read', '*')`,
+          [approverId],
+        );
+      }
+      if (approverId === userIds['lead']) throw new Error('the approver resolved to the explainer');
+      approverHeaders = await authFor(approverExternalId);
     }
-    if (approverId === userIds['lead']) throw new Error('the approver resolved to the explainer');
-    const approverHeaders = await authFor(approverExternalId);
+    // Remote keys are per explanation and actor, so a re-run replays the approval it already made.
     const approve = (id: string, headers: Headers) =>
       makeRequest(
         'POST',
         `/api/v1/migration/opening-stock/variances/explanations/${id}/approve`,
-        { idempotency_key: `mock-approve-${randomUUID()}` },
+        {
+          idempotency_key: remote
+            ? `mock-approve-${id}-${headers === approverHeaders ? 'approver' : 'self'}`
+            : `mock-approve-${randomUUID()}`,
+        },
         headers,
       );
-    const self = await approve(explanations[0]!['explanation_id'] as string, h['lead']!);
+    const self = await approve(explanations[0]!['explanation_id'] as string, await as('lead'));
     check(
       'explainer approves own explanation',
       'EXPLAINER_CANNOT_APPROVE',
@@ -483,6 +812,13 @@ async function main(): Promise<void> {
     );
     for (const e of explanations) {
       const res = await approve(e['explanation_id'] as string, approverHeaders);
+      if (remote && res.body['error_code'] === 'APPROVAL_REQUIRED') {
+        const details = (res.body['details'] ?? res.body) as Json;
+        throw new Error(
+          `the configured finance actor ${approverExternalId} (user ${String(details['caller_user_id'])}) is not the approver the platform froze on the explanations (user ${approverId}, the oldest active finance_controller). ` +
+            `Map actors.finance to that person and re-run: the explanations stay pending and the re-run replays up to here.`,
+        );
+      }
       if (res.status < 200 || res.status >= 300)
         throw new Error(`approve: ${res.status} ${res.text.slice(0, 400)}`);
     }
@@ -495,7 +831,7 @@ async function main(): Promise<void> {
         'POST',
         '/api/v1/migration/opening-stock/promote',
         { site_id: siteId, idempotency_key: `mock-promote-${run}` },
-        h['lead'],
+        await as('lead'),
       ),
       200,
       'promote',
@@ -512,7 +848,7 @@ async function main(): Promise<void> {
   const prefix = world['document_ref_prefix'] as string;
   for (const domain of DOMAINS) {
     await step(`8 ${domain}: import, verify, waive, sign off`, async () => {
-      const imported = must(
+      const imported = created(
         await makeRequest(
           'POST',
           '/api/v1/migration/documents/imports',
@@ -524,14 +860,13 @@ async function main(): Promise<void> {
             csv: readFileSync(join(PACK, `${domain}.csv`), 'utf8'),
             idempotency_key: `mock-doc-${domain}-${run}`,
           },
-          h['lead'],
+          await as('lead'),
         ),
-        201,
         `${domain} import`,
       );
       check(`${domain} manifest rejections`, '0', String(imported['rejected_count']));
       const scoped = domain === 'active_boms' || domain === 'open_pos';
-      const verification = must(
+      const verification = created(
         await makeRequest(
           'POST',
           `/api/v1/migration/domains/${domain}/verification-runs`,
@@ -540,9 +875,8 @@ async function main(): Promise<void> {
             idempotency_key: `mock-run-${domain}-${run}`,
             ...(scoped ? { document_ref_prefix: prefix } : {}),
           },
-          h['lead'],
+          await as('lead'),
         ),
-        201,
         `${domain} verification`,
       );
       const runId = verification['run_id'] as string;
@@ -551,7 +885,7 @@ async function main(): Promise<void> {
           'GET',
           `/api/v1/migration/domains/${domain}/verification-runs/${runId}?limit=500`,
           undefined,
-          h['lead'],
+          await as('lead'),
         ),
         200,
         `${domain} findings`,
@@ -595,64 +929,79 @@ async function main(): Promise<void> {
             })),
           idempotency_key: `mock-signoff-${domain}-${run}`,
         },
-        h[authority[domain]],
+        await as(authority[domain]),
       );
-      must(signed, 201, `${domain} sign-off`);
+      created(signed, `${domain} sign-off`);
       return `${findings.length} findings waived, signed by ${authority[domain]}`;
     });
   }
 
   await step('9 reconciliation, final sign-offs, unblock', async () => {
-    const report = () =>
+    const report = async () =>
       makeRequest(
         'GET',
         `/api/v1/migration/golive/reconciliation?site_id=${siteId}`,
         undefined,
-        h['lead'],
+        await as('lead'),
       );
     const before = must(await report(), 200, 'reconciliation report');
+    const blocking = JSON.stringify((before['gate'] as Json)['blocking']).slice(0, 60);
+    if (stopBefore === 'signoffs')
+      return `gate before sign-offs: ${blocking}; STOPPED before the final sign-offs and the unblock (permanent records): pass --stop-before-unblock or --through-unblock to go further`;
     for (const [who, type] of [
       ['dept-head', 'department_head_final'],
       ['finance', 'finance_final'],
     ] as const) {
-      must(
+      created(
         await makeRequest(
           'POST',
           '/api/v1/migration/golive/sign-offs',
           { site_id: siteId, signoff_type: type, idempotency_key: `mock-final-${type}-${run}` },
-          h[who],
+          await as(who),
         ),
-        201,
         `${type} sign-off`,
       );
     }
     const gate = must(await report(), 200, 'reconciliation report')['gate'] as Json;
     if (gate['satisfied'] !== true)
       throw new Error(`gate not satisfied: ${JSON.stringify(gate).slice(0, 600)}`);
-    const unblocked = must(
+    if (stopBefore === 'unblock')
+      return `gate before sign-offs: ${blocking}; gate satisfied; STOPPED before unblock (--stop-before-unblock)`;
+    const unblocked = created(
       await makeRequest(
         'POST',
         '/api/v1/migration/golive/unblock',
         { site_id: siteId, idempotency_key: `mock-unblock-${run}` },
-        h['lead'],
+        await as('lead'),
       ),
-      201,
       'unblock',
     );
-    return `gate before sign-offs: ${JSON.stringify((before['gate'] as Json)['blocking']).slice(0, 60)}; unblocked ${String(unblocked['unblocked'])}`;
+    return `gate before sign-offs: ${blocking}; unblocked ${String(unblocked['unblocked'])}`;
   });
 }
 
 const closers: (() => Promise<void>)[] = [];
 let crashed: unknown = null;
+let ok = true;
 try {
-  await main();
+  if (remote) {
+    printRequiredRoles();
+    const pad = (s: string, n: number) => s.padEnd(n);
+    console.log(`
+Who performs what on ${remote.api_base} (site ${SITE_CODE}, ${remote.site_id})`);
+    for (const who of REMOTE_ACTORS)
+      console.log(`${pad(who, 11)}${pad(remote.actors[who]!.email, 36)}${REQUIRED[who]!.steps}`);
+    console.log(
+      `
+This run ${hasFlag('--dry-run') ? 'is a DRY RUN: tokens and one GET per actor, no write' : stopBefore === 'signoffs' ? 'STOPS BEFORE the final sign-offs and the unblock' : stopBefore === 'unblock' ? 'records the final sign-offs and STOPS BEFORE the unblock' : 'goes THROUGH the unblock'}.`,
+    );
+  }
+  if (remote && hasFlag('--dry-run')) ok = await dryRun();
+  else await main();
 } catch (error) {
   crashed = error;
 }
-const ok = printTables();
+if (!(remote && hasFlag('--dry-run'))) ok = printTables();
 if (crashed) console.error(`\nstopped: ${(crashed as Error).message}`);
 for (const close of closers) await close();
-await closePool();
-await closeAdminPool();
 process.exit(ok && !crashed ? 0 : 1);
