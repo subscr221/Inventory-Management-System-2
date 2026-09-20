@@ -28,8 +28,11 @@ tar xzOf "${OUT}.partial" backup_label | grep -q 'START WAL LOCATION'
 mv "${OUT}.partial" "$OUT"
 echo "backup   ${OUT} ($(du -h "$OUT" | cut -f1))"
 
-# Retention: the newest $KEEP backups stay, and the archive is cut at the oldest one kept.
-ls -1t "$BACKUP_DIR"/ims-basebackup-*.tar.gz | tail -n "+$((KEEP + 1))" | while read -r old; do
+# Retention: only the scheduled `nightly` backups rotate (newest $KEEP stay). A backup taken by
+# hand carries a label because somebody means to restore to it; rotation expired `pre-pilot-load`
+# within hours on 2026-09-20, so labelled backups are kept until an operator deletes them. The
+# archive is cut at the oldest backup still on disk.
+ls -1t "$BACKUP_DIR"/ims-basebackup-*-nightly.tar.gz 2>/dev/null | tail -n "+$((KEEP + 1))" | while read -r old; do
   rm -f "$old"; echo "expired  ${old}"
 done
 OLDEST="$(ls -1t "$BACKUP_DIR"/ims-basebackup-*.tar.gz | tail -1)"
