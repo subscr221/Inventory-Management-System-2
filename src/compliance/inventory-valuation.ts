@@ -13,6 +13,8 @@ import {
   lockInventoryValuation,
   applyValuationReceipt,
   applyValuationIssue,
+  applyValuationReturnValue,
+  depleteFifoLayersUpTo,
   applyValuationNrvDelta,
   insertFifoLayer,
   lockOpenFifoLayers,
@@ -326,6 +328,295 @@ async function applyReceiptOrIssue(
       (current.running_average_cost !== null ? monToNum(current.running_average_cost) : 0);
   }
   await applyValuationIssue(sku, quantity, cost, client);
+}
+
+/**
+ * Owner ruling 2026-09-20 ("valuation must follow outgoing stock"; supersedes Story 6.2 Binding
+ * Decision 9, closes deferred-work row 474). What an outflow took out of inventory_valuation,
+ * frozen onto the event payload as NUMERIC strings BEFORE the domain_events insert (the Pilot B4
+ * receipt precedent). The block is the AUDIT RECORD of the relief and the basis of a later return.
+ * It is NOT a replay input: this repo has no projection rebuild path (nothing re-runs appliers
+ * over domain_events), so inventory_valuation is not rebuildable today, and a block a client puts
+ * on a live post is always overwritten by the seam, never applied.
+ */
+export interface ValuationOutflow {
+  sku: string;
+  valuation_method: string | null;
+  /** Unit cost the valued part left at; null when nothing was valued. */
+  unit_cost: string | null;
+  valued_quantity: string;
+  /** Physical quantity that carried no cost basis (see applyValuationOutflow). */
+  unvalued_quantity: string;
+  /** The amount ACTUALLY taken out of carrying_value (after the clamp to what was carried). */
+  value: string;
+}
+
+/**
+ * Relieves inventory_valuation for a TRUE outflow of OWNED stock posted by a seam that moves stock
+ * directly (production issue/backflush, job-work own material, spares issue, customer dispatch,
+ * cycle-count loss, quality scrap, return to vendor) - the top-level seam above only sees
+ * inventory-stream stock.issued. Callers decide ownership and direction: relocations, inter-site
+ * transfers (the grain is SKU, enterprise-wide) and non-owned classes must never call this. Must
+ * run inside the event transaction, AFTER the stock drain (the persistEvent lock order: stock rows,
+ * then the valuation row); a seam that relieves several SKUs drains ALL its stock rows first and
+ * then calls this in ascending SKU order, so two opposite-order transactions cannot deadlock.
+ *
+ * Rule for stock with no cost basis (sites loaded before the ruling, unpriced/foreign-currency
+ * receipts, unvalued production output): the outflow NEVER fails. Valuation is relieved for
+ * min(quantity, valued quantity on hand) and the rest is recorded as unvalued_quantity.
+ * - weighted_average: at the CARRYING cost per unit (carrying_value / quantity_on_hand) of the
+ *   locked row - the running average until an NRV write-down, the written-down cost after it
+ *   (owner default D2) - so the last unit out takes exactly the last of the carrying value.
+ * - fifo: oldest layers first, as far as they reach, scaled down to the carrying value when a
+ *   write-down has taken it below the layer cost. The walk is one SQL NUMERIC statement.
+ * - specific_identification: these seams carry no serials, so nothing is relieved and all of it
+ *   is unvalued; quantity_on_hand still drops at cost 0, exactly as a serial-less inventory-stream
+ *   stock.issued leaves the row.
+ */
+export async function applyValuationOutflow(
+  input: { sku: string; quantity: string | number },
+  client: PoolClient,
+): Promise<ValuationOutflow> {
+  const { sku } = input;
+  const quantity = String(input.quantity);
+  const item = await getItemBySku(sku, client);
+  const method = item?.valuation_method ?? null;
+
+  const none: ValuationOutflow = {
+    sku,
+    valuation_method: method,
+    unit_cost: null,
+    valued_quantity: '0',
+    unvalued_quantity: quantity,
+    value: '0',
+  };
+  if (!item) return none;
+
+  const current = await lockInventoryValuation(sku, client);
+  if (method === 'specific_identification') {
+    await applyValuationIssue(sku, quantity, '0', client);
+    return none;
+  }
+  if (cmpMonetary(current.quantity_on_hand, '0') <= 0) return none;
+
+  // fifo: the layers decide how much is valued and at what cost; null for a weighted average.
+  const walk =
+    method === 'fifo'
+      ? await depleteFifoLayersUpTo(sku, quantity, current.quantity_on_hand, client)
+      : null;
+  // $1 quantity, $2 quantity_on_hand, $3 carrying_value, $4-$6 the fifo walk. A full drain takes
+  // the whole carrying value, so no rounding dust is left behind on an empty row.
+  const settled = await client.query(
+    `SELECT v::text AS valued, ($1::numeric - v)::text AS unvalued, value::text AS value,
+            CASE WHEN v > 0 THEN round(value / v, 6)::text END AS unit_cost
+       FROM (SELECT v, LEAST($3::numeric, CASE
+                      WHEN v >= $2::numeric THEN $3::numeric
+                      WHEN $5::numeric IS NULL THEN round(v * $3::numeric / $2::numeric, 6)
+                      WHEN $6::numeric > $3::numeric
+                        THEN round($5::numeric * $3::numeric / $6::numeric, 6)
+                      ELSE round($5::numeric, 6) END) AS value
+               FROM (SELECT round(LEAST($1::numeric, $2::numeric,
+                                        COALESCE($4::numeric, $1::numeric)), 6) AS v) q) s`,
+    [
+      quantity,
+      current.quantity_on_hand,
+      current.carrying_value,
+      walk?.costed ?? null,
+      walk?.cost ?? null,
+      walk?.layer_total ?? null,
+    ],
+  );
+  const row = settled.rows[0] as Record<string, string | null>;
+  if (cmpMonetary(row['valued']!, '0') <= 0) return none;
+
+  await applyValuationIssue(sku, row['valued']!, row['value']!, client);
+  return {
+    sku,
+    valuation_method: method,
+    unit_cost: row['unit_cost'] ?? null,
+    valued_quantity: row['valued']!,
+    unvalued_quantity: row['unvalued']!,
+    value: row['value']!,
+  };
+}
+
+/**
+ * Splits one relieved block over the parts of the movement it covers (the drained balance rows of
+ * a production issue, in drain order), in SQL NUMERIC: the valued quantity fills the parts in
+ * order, each part's value is the difference of two cumulative shares, so the parts add up to the
+ * block EXACTLY and whatever is left over is unvalued at zero (owner default D1). `blended_unit_cost`
+ * is the part's value over its WHOLE quantity - the cost a ledger that prices quantity x unit_cost
+ * (the WIP ledger) must carry so it holds the relieved value and nothing more.
+ */
+export async function splitValuationOutflow(
+  block: ValuationOutflow,
+  quantities: string[],
+  client: PoolClient,
+): Promise<Array<{ valuation: ValuationOutflow; blended_unit_cost: string }>> {
+  const result = await client.query(
+    `WITH part AS (
+       SELECT ord, q::numeric AS q, SUM(q::numeric) OVER (ORDER BY ord) AS cum_q
+         FROM unnest($1::text[]) WITH ORDINALITY AS t(q, ord)),
+     cum AS (
+       SELECT ord, q, LEAST(cum_q, $2::numeric) AS cum_v,
+              CASE WHEN $2::numeric <= 0 THEN 0
+                   WHEN cum_q >= $2::numeric THEN $3::numeric
+                   ELSE round($3::numeric * cum_q / $2::numeric, 6) END AS cum_value
+         FROM part),
+     share AS (
+       SELECT ord, q, cum_v - COALESCE(LAG(cum_v) OVER (ORDER BY ord), 0) AS v,
+              cum_value - COALESCE(LAG(cum_value) OVER (ORDER BY ord), 0) AS value
+         FROM cum)
+     SELECT v::text AS valued, (q - v)::text AS unvalued, value::text AS value,
+            CASE WHEN v > 0 THEN round(value / v, 6)::text END AS unit_cost,
+            round(value / q, 6)::text AS blended
+       FROM share ORDER BY ord`,
+    [quantities, block.valued_quantity, block.value],
+  );
+  return (result.rows as Array<Record<string, string | null>>).map((row) => ({
+    valuation: {
+      sku: block.sku,
+      valuation_method: block.valuation_method,
+      unit_cost: row['unit_cost'] ?? null,
+      valued_quantity: row['valued']!,
+      unvalued_quantity: row['unvalued']!,
+      value: row['value']!,
+    },
+    blended_unit_cost: row['blended']!,
+  }));
+}
+
+/**
+ * Return to stock of something applyValuationOutflow relieved (production material return, spare
+ * return): adds back the value the matching issue took out, never today's average, or the average
+ * drifts - and never more than that, so a return cannot reverse an NRV write-down (owner default
+ * D2). Only the valued share of the issue comes back, so an issue that relieved nothing (one that
+ * predates the ruling included: `issue` null) restores nothing.
+ *
+ * `returned_before` is the quantity already returned against this issue. Each return restores the
+ * DIFFERENCE of two cumulative shares of the issue's frozen figures, so N partial returns never
+ * drift: the last one restores exactly what is left of the issue's valued quantity and value.
+ */
+export async function applyValuationReturn(
+  input: {
+    sku: string;
+    quantity: string | number;
+    issue: ValuationOutflow | null;
+    returned_before: string;
+  },
+  client: PoolClient,
+  eventId: string,
+): Promise<ValuationOutflow> {
+  const { sku, issue } = input;
+  const quantity = String(input.quantity);
+  const none: ValuationOutflow = {
+    sku,
+    valuation_method: issue?.valuation_method ?? null,
+    unit_cost: null,
+    valued_quantity: '0',
+    unvalued_quantity: quantity,
+    value: '0',
+  };
+  if (!issue || cmpMonetary(issue.valued_quantity, '0') <= 0) return none;
+
+  // $1 this return, $2 returned before, $3/$4 the issue's valued/unvalued quantity, $5 its value.
+  const settled = await client.query(
+    `SELECT v::text AS valued, ($1::numeric - v)::text AS unvalued, value::text AS value,
+            CASE WHEN v > 0 THEN round(value / v, 6)::text END AS unit_cost
+       FROM (SELECT
+               CASE WHEN aft >= total THEN $3::numeric ELSE round($3::numeric * aft / total, 6) END
+             - CASE WHEN bef >= total THEN $3::numeric ELSE round($3::numeric * bef / total, 6) END
+               AS v,
+               CASE WHEN aft >= total THEN $5::numeric ELSE round($5::numeric * aft / total, 6) END
+             - CASE WHEN bef >= total THEN $5::numeric ELSE round($5::numeric * bef / total, 6) END
+               AS value
+               FROM (SELECT $2::numeric AS bef, $2::numeric + $1::numeric AS aft,
+                            $3::numeric + $4::numeric AS total) q) s`,
+    [quantity, input.returned_before, issue.valued_quantity, issue.unvalued_quantity, issue.value],
+  );
+  const row = settled.rows[0] as Record<string, string | null>;
+  if (cmpMonetary(row['valued']!, '0') <= 0) return none;
+
+  await applyValuationReturnValue(sku, row['valued']!, row['value']!, client);
+  if (issue.valuation_method === 'fifo') {
+    await insertFifoLayer(
+      { sku, unit_cost: row['unit_cost']!, quantity: row['valued']!, event_id: eventId },
+      client,
+    );
+  }
+  return {
+    sku,
+    valuation_method: issue.valuation_method,
+    unit_cost: row['unit_cost'] ?? null,
+    valued_quantity: row['valued']!,
+    unvalued_quantity: row['unvalued']!,
+    value: row['value']!,
+  };
+}
+
+/**
+ * A quantity gain with no purchase price (cycle-count positive adjustment, owner default D3): the
+ * units come in at the CURRENT carrying cost per unit when valuation has one, so the average does
+ * not move; with no cost basis on hand they are recorded unvalued - a price is never invented.
+ */
+export async function applyValuationGainAtCarryingCost(
+  input: { sku: string; quantity: string | number },
+  client: PoolClient,
+  eventId: string,
+): Promise<ValuationOutflow> {
+  const { sku } = input;
+  const quantity = String(input.quantity);
+  const item = await getItemBySku(sku, client);
+  const method = item?.valuation_method ?? null;
+  const none: ValuationOutflow = {
+    sku,
+    valuation_method: method,
+    unit_cost: null,
+    valued_quantity: '0',
+    unvalued_quantity: quantity,
+    value: '0',
+  };
+  if (!item || method === 'specific_identification') return none;
+  const current = await lockInventoryValuation(sku, client);
+  if (cmpMonetary(current.quantity_on_hand, '0') <= 0) return none;
+
+  const settled = await client.query(
+    `SELECT round($1::numeric * $3::numeric / $2::numeric, 6)::text AS value,
+            round($3::numeric / $2::numeric, 6)::text AS unit_cost`,
+    [quantity, current.quantity_on_hand, current.carrying_value],
+  );
+  const row = settled.rows[0] as Record<string, string>;
+  await applyValuationReturnValue(sku, quantity, row['value']!, client);
+  if (method === 'fifo') {
+    await insertFifoLayer(
+      { sku, unit_cost: row['unit_cost']!, quantity, event_id: eventId },
+      client,
+    );
+  }
+  return {
+    sku,
+    valuation_method: method,
+    unit_cost: row['unit_cost']!,
+    valued_quantity: quantity,
+    unvalued_quantity: '0',
+    value: row['value']!,
+  };
+}
+
+/** Reads a frozen valuation block back off a persisted payload value (null when absent/malformed). */
+export function asValuationOutflow(value: unknown): ValuationOutflow | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v['sku'] !== 'string' || typeof v['valued_quantity'] !== 'string') return null;
+  if (typeof v['unvalued_quantity'] !== 'string' || typeof v['value'] !== 'string') return null;
+  return {
+    sku: v['sku'],
+    valuation_method: typeof v['valuation_method'] === 'string' ? v['valuation_method'] : null,
+    unit_cost: typeof v['unit_cost'] === 'string' ? v['unit_cost'] : null,
+    valued_quantity: v['valued_quantity'],
+    unvalued_quantity: v['unvalued_quantity'],
+    value: v['value'],
+  };
 }
 
 async function applyNrvWriteDown(

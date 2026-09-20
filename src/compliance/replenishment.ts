@@ -484,7 +484,11 @@ export async function applyReplenishmentTaskCompletedProjection(
 
   const completedBy = envelope.metadata.actor.user_id;
 
-  await applyStockIssue(
+  // Pilot review R6: a task is generated lot-less (the check job sizes it on the bin's balance, no
+  // lot ranking), so the lot is decided HERE by the drain - which skips QC-gated and held lots -
+  // and every drained (lot, quantity) grain is received under the SAME lot. Receiving the total
+  // lot-less, as this did, erased the lot identity of lot-controlled stock at the destination.
+  const drained = await applyStockIssue(
     // Pilot F2: a replenishment move is a relocation, not a consumption - the issue clock stays.
     {
       sku: task.sku,
@@ -494,15 +498,18 @@ export async function applyReplenishmentTaskCompletedProjection(
     },
     client,
   );
-  await applyStockReceipt(
-    {
-      sku: task.sku,
-      location_id: destination.location_id,
-      location_code: destination.location_code,
-      quantity: Number(task.quantity),
-    },
-    client,
-  );
+  for (const grain of drained) {
+    await applyStockReceipt(
+      {
+        sku: task.sku,
+        location_id: destination.location_id,
+        location_code: destination.location_code,
+        lot_id: grain.lot_id,
+        quantity: grain.quantity,
+      },
+      client,
+    );
+  }
 
   const completed = await completeReplenishmentTask(
     {

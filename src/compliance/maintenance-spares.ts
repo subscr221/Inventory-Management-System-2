@@ -34,6 +34,11 @@ import {
   applyStockReceipt,
   getOwnedOnHandAndBelowMin,
 } from '../read/projections/stock_balance.js';
+import {
+  applyValuationOutflow,
+  applyValuationReturn,
+  asValuationOutflow,
+} from './inventory-valuation.js';
 
 /**
  * Story 7.4 compliance seam for spare cataloguing, the maintenance-owned asset parts list, the
@@ -363,6 +368,7 @@ export function deriveReturnDueDate(issuedAt: string | Date): string {
 export async function applyMaintenanceSpareProjection(
   envelope: EventEnvelope,
   client: PoolClient,
+  eventId: string,
 ): Promise<void> {
   const type = maintenanceSpareEventType(envelope);
   if (!type) return;
@@ -381,7 +387,7 @@ export async function applyMaintenanceSpareProjection(
       await applySpareIssued(envelope, client);
       break;
     case 'maintenance.spare_returned':
-      await applySpareReturned(envelope, client);
+      await applySpareReturned(envelope, client, eventId);
       break;
     case 'maintenance.spare_reservation_cancelled':
       await applySpareReservationCancelled(envelope, client);
@@ -685,9 +691,21 @@ async function applySpareIssued(envelope: EventEnvelope, client: PoolClient): Pr
   };
   await applyStockDeallocation(ledgerInput, client);
   await applyStockIssue({ ...ledgerInput, occurred_at: toIsoString(issuedAt) }, client);
+
+  // Owner ruling 2026-09-20: a spare issue is an owned outflow and relieves inventory valuation.
+  // The relieved figures are frozen onto the payload (NUMERIC strings): the audit record of the
+  // relief and the basis of the return below.
+  p['valuation'] = await applyValuationOutflow(
+    { sku: reservation.sku, quantity: reservation.quantity },
+    client,
+  );
 }
 
-async function applySpareReturned(envelope: EventEnvelope, client: PoolClient): Promise<void> {
+async function applySpareReturned(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
   if (await alreadyPersisted(envelope, client)) return;
 
   const p = envelope.payload as Record<string, unknown>;
@@ -755,6 +773,27 @@ async function applySpareReturned(envelope: EventEnvelope, client: PoolClient): 
       quantity: quantityReturned,
     },
     client,
+  );
+
+  // Owner ruling 2026-09-20: the return restores what the issue relieved, as a share of the issue's
+  // frozen figures net of what earlier returns already put back (the row read above, before this
+  // return was applied), so the closing return restores exactly the rest. An issue that predates
+  // the ruling carries no block and restores nothing.
+  const issued = await client.query(
+    `SELECT payload->'valuation' AS valuation FROM domain_events
+      WHERE event_type = 'maintenance.spare_issued' AND payload->>'reservation_id' = $1
+      ORDER BY created_at DESC LIMIT 1`,
+    [reservationId],
+  );
+  p['valuation'] = await applyValuationReturn(
+    {
+      sku: reservation.sku,
+      quantity: quantityReturned,
+      issue: asValuationOutflow(issued.rows[0]?.['valuation']),
+      returned_before: String(reservation.quantity_returned),
+    },
+    client,
+    eventId,
   );
 }
 

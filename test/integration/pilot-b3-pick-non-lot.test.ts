@@ -304,6 +304,46 @@ describe('Pilot B3: stock that is not lot-controlled can be picked', () => {
     assert.deepStrictEqual(p2, { on_hand: 50, allocated: 0, picked: 4, available: 46 });
   });
 
+  it('review R8: the sales-order list returns the line id a pick generation needs', async () => {
+    const sku = `B3-R8-${run}`;
+    await seedStock(sku, binP1, null, 10);
+    const seededId = await seedOrderLine(`SO-B3-R8-${run}`, sku, 4);
+    // A client with no database access: the id must come from the API.
+    await provisionUser(port, `b3-planner-${run}@example.com`, [
+      { role: 'warehouse_manager', module: 'inventory', functionScope: 'read', locationId: siteId },
+      {
+        role: 'warehouse_manager',
+        module: 'warehouse',
+        functionScope: 'write',
+        locationId: siteId,
+      },
+    ]);
+    const plannerHeaders = await authFor(port, `b3-planner-${run}@example.com`);
+    const list = await makeRequest(
+      port,
+      'GET',
+      '/api/v1/erp/sales-orders?status=open',
+      undefined,
+      plannerHeaders,
+    );
+    assert.strictEqual(list.status, 200, list.raw);
+    const orders = list.body['sales_orders'] as Array<Record<string, unknown>>;
+    // Site filtering is unchanged: only this caller's site is listed.
+    assert.ok(orders.every((o) => o['ship_from_site_code'] === 'site-B3'));
+    const line = orders.find((o) => o['so_number_ext'] === `SO-B3-R8-${run}`);
+    assert.ok(line, list.raw);
+    assert.strictEqual(line['dispatch_order_line_id'], seededId);
+
+    const gen = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/pick-tasks/generate',
+      { dispatchOrderLineIds: [line['dispatch_order_line_id']], strategy: 'single' },
+      plannerHeaders,
+    );
+    assert.strictEqual(gen.status, 201, gen.raw);
+  });
+
   it('insufficient plain stock is still refused with no partial allocation', async () => {
     const sku = `PLAIN-SHORT-${run}`;
     await seedStock(sku, binP1, null, 5);
@@ -531,6 +571,125 @@ describe('Pilot B3: stock that is not lot-controlled can be picked', () => {
       picked: 15,
       available: 31,
     });
+  });
+
+  async function seedValuation(sku: string, quantity: number, value: number): Promise<void> {
+    await getPool().query(
+      `INSERT INTO inventory_valuation (sku, quantity_on_hand, running_average_cost, carrying_value)
+       VALUES ($1, $2::numeric, $3::numeric / $2::numeric, $3::numeric)`,
+      [sku, quantity, value],
+    );
+  }
+
+  async function valuationOf(sku: string): Promise<Record<string, unknown>> {
+    const r = await getPool().query(
+      `SELECT quantity_on_hand::text AS quantity, carrying_value::text AS value
+         FROM inventory_valuation WHERE sku = $1`,
+      [sku],
+    );
+    return r.rows[0]!;
+  }
+
+  it('owner ruling 2026-09-20: a dispatch carrying two SKUs relieves valuation for each, in SKU order', async () => {
+    const skuB = `PLAIN-MULTI-B-${run}`;
+    const skuA = `PLAIN-MULTI-A-${run}`;
+    await getPool().query(
+      `INSERT INTO item_master (sku, uom, lot_controlled, valuation_method, business_stream)
+       VALUES ($1, 'EA', false, 'weighted_average', 'production'),
+              ($2, 'EA', false, 'weighted_average', 'production')`,
+      [skuA, skuB],
+    );
+    await seedStock(skuB, binP1, null, 10);
+    await seedValuation(skuB, 10, 40);
+    await seedValuation(skuA, 10, 90);
+    const orderId = await seedOrderLine(`SOB3-MULTI-${run}`, skuB, 4);
+    await pickAll(orderId, null);
+    const pack = await post(`/api/v1/dispatch/${orderId}/pack`, {
+      dispatchOrderId: orderId,
+      packingLines: [{ sku: skuB, packed_qty: '4', lot_id: null, carton_count: 1 }],
+    });
+    assert.strictEqual(pack.status, 200, pack.raw);
+    // The order's second SKU (a substituted line): its confirmed pick, picked balance and packing
+    // record, as the pick and pack appliers leave them.
+    await getPool().query(
+      `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand, picked)
+       VALUES ($1, $2, NULL, 'owned', 10, 3)`,
+      [skuA, binP2],
+    );
+    await getPool().query(
+      `INSERT INTO pick_line (pick_line_id, pick_task_id, dispatch_order_line_id, sku,
+                              directed_quantity, confirmed_quantity, location_id, pick_sequence,
+                              status, capture_method, confirmed_by, confirmed_at)
+       SELECT gen_random_uuid(), pick_task_id, dispatch_order_line_id, $2, 3, 3, $3,
+              pick_sequence + 1, 'substituted', capture_method, confirmed_by, confirmed_at
+         FROM pick_line WHERE dispatch_order_line_id = $1 LIMIT 1`,
+      [orderId, skuA, binP2],
+    );
+    await getPool().query(
+      `INSERT INTO packing_record (packing_record_id, dispatch_order_id, sku, packed_qty, lot_id,
+                                   carton_count, packed_by)
+       SELECT gen_random_uuid(), dispatch_order_id, $2, 3, NULL, 1, packed_by
+         FROM packing_record WHERE dispatch_order_id = $1 LIMIT 1`,
+      [orderId, skuA],
+    );
+
+    await documentsThenDispatch(orderId, 'MULTI');
+
+    assert.deepStrictEqual(await valuationOf(skuA), { quantity: '7.000000', value: '63.000000' });
+    assert.deepStrictEqual(await valuationOf(skuB), { quantity: '6.000000', value: '24.000000' });
+    const stored = await getPool().query(
+      `SELECT payload->'valuation' AS valuation FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'dispatch.dispatched'`,
+      [orderId],
+    );
+    const blocks = stored.rows[0]!['valuation'] as Array<Record<string, unknown>>;
+    assert.deepStrictEqual(
+      blocks.map((b) => [b['sku'], b['value']]),
+      [
+        [skuA, '27.000000'],
+        [skuB, '16.000000'],
+      ],
+    );
+  });
+
+  it('a dispatch whose picked stock is not owned is refused 409 DISPATCH_STOCK_NOT_OWNED, never a 500, and valuation is untouched', async () => {
+    const sku = `PLAIN-CONSIGN-${run}`;
+    await getPool().query(
+      `INSERT INTO item_master (sku, uom, lot_controlled, valuation_method, business_stream)
+       VALUES ($1, 'EA', false, 'weighted_average', 'production')`,
+      [sku],
+    );
+    await seedStock(sku, binP1, null, 10);
+    await seedValuation(sku, 10, 70);
+    const orderId = await seedOrderLine(`SOB3-CONSIGN-${run}`, sku, 4);
+    await pickAll(orderId, null);
+    const pack = await post(`/api/v1/dispatch/${orderId}/pack`, {
+      dispatchOrderId: orderId,
+      packingLines: [{ sku, packed_qty: '4', lot_id: null, carton_count: 1 }],
+    });
+    assert.strictEqual(pack.status, 200, pack.raw);
+    // Picking only ever allocates owned stock, so the one way a picked balance is consignment is a
+    // reclassification after the pick. The dispatch must refuse it cleanly.
+    await getPool().query(
+      `UPDATE stock_balance SET stock_class = 'consignment' WHERE sku = $1 AND location_id = $2`,
+      [sku, binP1],
+    );
+    const docs = await post(`/api/v1/dispatch/${orderId}/generate-documents`, {
+      dispatchOrderId: orderId,
+    });
+    assert.strictEqual(docs.status, 200, docs.raw);
+    const irn = await post(`/api/v1/dispatch/${orderId}/irn`, {
+      idempotency_key: randomUUID(),
+      invoice_number_ext: `INV-B3-CONSIGN-${run}`,
+      irn_ext: createHash('sha256').update(`IRN-B3-CONSIGN-${run}`).digest('hex'),
+    });
+    assert.strictEqual(irn.status, 200, irn.raw);
+    const dispatched = await post(`/api/v1/dispatch/${orderId}/dispatch`, {
+      dispatchOrderId: orderId,
+    });
+    assert.strictEqual(dispatched.status, 409, dispatched.raw);
+    assert.strictEqual(dispatched.body['error_code'], 'DISPATCH_STOCK_NOT_OWNED');
+    assert.deepStrictEqual(await valuationOf(sku), { quantity: '10.000000', value: '70.000000' });
   });
 
   it('a lot-controlled item still needs a lot on the packing record; with it the lot path is unchanged', async () => {

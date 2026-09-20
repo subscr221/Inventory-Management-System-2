@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
+import { applyValuationOutflow, applyValuationGainAtCarryingCost } from './inventory-valuation.js';
 import { CUSTOMER_OWNED_STOCK_CLASSES } from './stock-balance.js';
 import { getItemBySku } from '../read/projections/item_master.js';
 import {
@@ -1250,39 +1251,19 @@ async function applyStockAdjusted(
     }
   }
 
-  // Owned-stock valuation (Task 6): quantity and carrying value move consistently with on_hand.
-  // Non-owned stock classes never change owned carrying value.
+  // Owned-stock valuation (Task 6; owner default D3, 2026-09-20): a count LOSS is an outflow like
+  // any other - it goes through the shared helper (carrying cost per unit, fifo layers, never
+  // refused because part of the stock carries no cost basis). A count GAIN has no purchase price:
+  // it comes in at the current carrying cost per unit, or unvalued when valuation has none - a
+  // price is never invented. The block is frozen on the event; the stock row above is locked
+  // before the valuation row (the persistEvent lock order). Non-owned classes never touch it, and
+  // a block declared by the caller is dropped either way.
+  delete (envelope.payload as Record<string, unknown>)['valuation'];
   if (stockClass === 'owned') {
-    const val = await client.query(
-      `UPDATE inventory_valuation
-       SET quantity_on_hand = quantity_on_hand + $2::numeric,
-           carrying_value = carrying_value + ($2::numeric * COALESCE(running_average_cost, 0)),
-           updated_at = now()
-       WHERE sku = $1
-         AND quantity_on_hand + $2::numeric >= 0
-         AND carrying_value + ($2::numeric * COALESCE(running_average_cost, 0)) >= 0`,
-      [sku, delta],
-    );
-    if (val.rowCount === 0) {
-      const current = await client.query(
-        `SELECT quantity_on_hand::text AS quantity_on_hand, carrying_value::text AS carrying_value
-         FROM inventory_valuation WHERE sku = $1`,
-        [sku],
-      );
-      if (current.rows.length > 0) {
-        throw new AppError(
-          409,
-          CYCLE_COUNT_ERROR_CODES.STOCK_ADJUSTMENT_NEGATIVE_BALANCE,
-          'Adjustment would drive owned valuation below zero',
-          {
-            sku,
-            quantity_on_hand: current.rows[0]!['quantity_on_hand'],
-            carrying_value: current.rows[0]!['carrying_value'],
-            delta_quantity: delta,
-          },
-        );
-      }
-    }
+    (envelope.payload as Record<string, unknown>)['valuation'] =
+      delta < 0
+        ? await applyValuationOutflow({ sku, quantity: String(-delta) }, client)
+        : await applyValuationGainAtCarryingCost({ sku, quantity: String(delta) }, client, eventId);
   }
 
   await markAdjustmentApplied(adjustmentId, eventId, client);

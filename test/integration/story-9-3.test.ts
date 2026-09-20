@@ -970,6 +970,7 @@ describe('Story 9.3 Custody Ledger and Consumption', () => {
           target_location_id: dockId,
           quantity: 20,
           lot_id: ownedLot,
+          unit_cost: 10,
         },
         metadata: {
           correlation_id: randomUUID(),
@@ -1000,6 +1001,26 @@ describe('Story 9.3 Custody Ledger and Consumption', () => {
     assert.strictEqual(entry['quantity_delta'], '5.500');
     assert.strictEqual(entry['posted_by'], coordinatorUserId);
     assert.strictEqual(await balance(SKU_OWNED, ownedLot, 'owned'), '14.500000');
+    // Owner ruling 2026-09-20: the processor's own material is an owned outflow - it relieves
+    // inventory valuation at the average (20 @ 10 received, 5.5 consumed) and freezes the figures.
+    const valued = await getAdminPool().query(
+      `SELECT quantity_on_hand::float AS quantity, carrying_value::float AS value
+         FROM inventory_valuation WHERE sku = $1`,
+      [SKU_OWNED],
+    );
+    assert.deepStrictEqual(valued.rows[0], { quantity: 14.5, value: 145 });
+    const frozen = await getAdminPool().query(
+      `SELECT payload->'valuation'->>'value' AS value FROM domain_events
+        WHERE event_type = 'custody.own_material_added' AND payload->>'own_material_id' = $1`,
+      [ownId],
+    );
+    assert.strictEqual(Number(frozen.rows[0]!['value']), 55);
+    // Customer-owned job_work material is never valued, in or out.
+    const customerValued = await getAdminPool().query(
+      `SELECT 1 FROM inventory_valuation WHERE sku = $1 AND quantity_on_hand > 0`,
+      [SKU],
+    );
+    assert.strictEqual(customerValued.rows.length, 0);
 
     // Excluded from the customer balance: the SQL SUM over ownership = 'customer' sees nothing.
     const sum = await getAdminPool().query(

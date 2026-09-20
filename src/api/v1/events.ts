@@ -11,6 +11,7 @@ import {
 } from '../../middleware/context.js';
 import {
   requireRole,
+  assignmentCoversLocation,
   auditLocationFor,
   permittedLocationsForModule,
   permittedLocationsForModuleScope,
@@ -20,6 +21,8 @@ import { getPool } from '../../config/db.js';
 import { logTamperAttempt } from '../../read/projections/audit_log.js';
 import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/inventory-master.js';
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
+import { BIN_MOVE_ROLES } from '../../compliance/bin-move.js';
+import type { RoleAssignment } from '../../read/projections/users.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const PLANNING_EVENT_TYPES = new Set([
@@ -256,6 +259,49 @@ function assertDispatchIrnFunctionAccess(
 }
 
 /**
+ * Pilot G3 review R1/R2: the bin-move role wall, which lived on the REST route alone. This door
+ * authorises on module `warehouse` + `write`, so a dispatch_clerk with a site grant could post
+ * stock.bin_moved and move stock between any two bins of the site. Privilege AND scope come from
+ * the SAME assignment (the offcut-valuation gate above): one bin-move assignment must reach BOTH
+ * bins. It is returned so the handler stamps actor.role from it - the applier re-checks that role.
+ */
+const BIN_MOVE_EVENT_TYPE = 'stock.bin_moved';
+
+function assertBinMoveFunctionAccess(
+  authContext: NonNullable<ReturnType<typeof getAuthContext>>,
+  body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
+): RoleAssignment | undefined {
+  if (body.stream_type !== 'warehouse' || body.event_type !== BIN_MOVE_EVENT_TYPE) return undefined;
+  const moverRoles = authContext.roles.filter(
+    (r) =>
+      (r.module === 'warehouse' || r.module === '*') &&
+      r.functionScope === 'write' &&
+      BIN_MOVE_ROLES.includes(r.role),
+  );
+  if (moverRoles.length === 0) {
+    throw new AppError(
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${BIN_MOVE_ROLES.join(', ')}`,
+      { required_roles: [...BIN_MOVE_ROLES] },
+    );
+  }
+  const ends = [body.payload['from_location_id'], body.payload['to_location_id']].filter(
+    (id): id is string => typeof id === 'string',
+  );
+  const assignment = moverRoles.find((r) => ends.every((id) => assignmentCoversLocation(r, id)));
+  if (!assignment) {
+    throw new AppError(
+      403,
+      'LOCATION_ACCESS_DENIED',
+      'No bin-move assignment grants access to both bins of this move',
+      { required_roles: [...BIN_MOVE_ROLES] },
+    );
+  }
+  return assignment;
+}
+
+/**
  * Story 11.5 (Task 4.4): the gst_officer gate for the two branch-transfer GST event types. The
  * REST routes restrict the valuation override and the document recording to gst_officer; this door
  * authorises on module `inventory` + `write` alone, so without this gate a warehouse operator could
@@ -439,9 +485,10 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     assertDispatchIrnFunctionAccess(authContext, body);
     assertDispatchSodFunctionAccess(authContext, body);
     assertBranchTransferGstFunctionAccess(authContext, body);
+    const binMoveAssignment = assertBinMoveFunctionAccess(authContext, body);
     assertPayloadSiteWriteAccess(authContext, body);
     body.metadata.actor.user_id = authContext.userId;
-    const authorizedRole = getAuthorizedRole(req);
+    const authorizedRole = binMoveAssignment?.role ?? getAuthorizedRole(req);
     if (authorizedRole) {
       body.metadata.actor.role = authorizedRole;
     }

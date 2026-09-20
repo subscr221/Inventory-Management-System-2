@@ -104,6 +104,7 @@ describe('Pilot B2 putaway completion moves stock', () => {
   let server: Server;
   let port: number;
   let storeHeaders: Record<string, string>;
+  let qualityHeaders: Record<string, string>;
   let supervisorId: string;
 
   const run = randomUUID().slice(0, 8);
@@ -325,6 +326,10 @@ describe('Pilot B2 putaway completion moves stock', () => {
       { role: 'store_assistant', module: 'warehouse', functionScope: 'write', locationId: siteId },
     ]);
     storeHeaders = await authFor(port, `b2-store-${run}@example.com`);
+    await provisionUser(port, `b2-quality-${run}@example.com`, [
+      { role: 'quality_officer', module: 'quality', functionScope: 'write', locationId: '*' },
+    ]);
+    qualityHeaders = await authFor(port, `b2-quality-${run}@example.com`);
   });
 
   after(async () => {
@@ -580,6 +585,79 @@ describe('Pilot B2 putaway completion moves stock', () => {
     assert.deepStrictEqual(await balances(sku, zoneBinId), [
       { lot_id: lotNumber, stock_class: 'owned', on_hand: 5 },
     ]);
+  });
+
+  // Follow-up G1: a lot held by hand (lot_master.quality_hold_status) obeys the same rule as a gate.
+  function manualHold(lotNumber: string, method: 'PUT' | 'DELETE'): Promise<HttpResult> {
+    return makeRequest(
+      port,
+      method,
+      `/api/v1/lots/${lotNumber}/quality-hold`,
+      method === 'PUT' ? { hold_reason: 'pilot G1 manual hold' } : undefined,
+      qualityHeaders,
+    );
+  }
+
+  it('a manually held lot is refused into a normal bin', async () => {
+    const sku = `B2-MHN-${run}`;
+    const lotNumber = `B2MHN-${run}`;
+    await seedItem(sku, true);
+    const { taskId } = await receive(sku, 5, { lot_id: lotNumber, expiry_date: '2030-01-01' });
+    assert.strictEqual((await manualHold(lotNumber, 'PUT')).status, 200);
+
+    const res = await complete(taskId);
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+    assert.strictEqual(res.body['error_code'], 'PUTAWAY_QC_HOLD_QUARANTINE_REQUIRED');
+    assert.strictEqual(await completedEventCount(taskId), 0);
+    assert.strictEqual(await onHandAt(sku, dockId), 5);
+    assert.strictEqual(await onHandAt(sku, binId), 0);
+  });
+
+  it('a manually held lot moves into a quarantine bin (own flag)', async () => {
+    const sku = `B2-MHQ-${run}`;
+    const lotNumber = `B2MHQ-${run}`;
+    await seedItem(sku, true);
+    const { taskId } = await receive(sku, 5, { lot_id: lotNumber, expiry_date: '2030-01-01' });
+    assert.strictEqual((await manualHold(lotNumber, 'PUT')).status, 200);
+
+    const res = await complete(taskId, quarantineBinCode);
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(await balances(sku, dockId), []);
+    assert.deepStrictEqual(await balances(sku, quarantineBinId), [
+      { lot_id: lotNumber, stock_class: 'owned', on_hand: 5 },
+    ]);
+  });
+
+  it('a manually held lot moves into an unflagged bin beneath a quarantine ZONE', async () => {
+    const sku = `B2-MHZ-${run}`;
+    const lotNumber = `B2MHZ-${run}`;
+    const quarantineZoneId = randomUUID();
+    const zoneBinId = randomUUID();
+    const zoneBinCode = `B2MHZBIN-${run}`;
+    await seedLocation(quarantineZoneId, `B2MHZONE-${run}`, 'zone', siteId, { quarantine: true });
+    await seedLocation(zoneBinId, zoneBinCode, 'bin', quarantineZoneId);
+    await seedItem(sku, true);
+    const { taskId } = await receive(sku, 5, { lot_id: lotNumber, expiry_date: '2030-01-01' });
+    assert.strictEqual((await manualHold(lotNumber, 'PUT')).status, 200);
+
+    const res = await complete(taskId, zoneBinCode);
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(await balances(sku, zoneBinId), [
+      { lot_id: lotNumber, stock_class: 'owned', on_hand: 5 },
+    ]);
+  });
+
+  it('a lot whose manual hold is released moves into a normal bin', async () => {
+    const sku = `B2-MHR-${run}`;
+    const lotNumber = `B2MHR-${run}`;
+    await seedItem(sku, true);
+    const { taskId } = await receive(sku, 5, { lot_id: lotNumber, expiry_date: '2030-01-01' });
+    assert.strictEqual((await manualHold(lotNumber, 'PUT')).status, 200);
+    assert.strictEqual((await manualHold(lotNumber, 'DELETE')).status, 200);
+
+    const res = await complete(taskId);
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(await onHandAt(sku, binId), 5);
   });
 
   // Follow-up F2: a relocation is not a consumption, so the obsolescence clock must not move.

@@ -208,6 +208,9 @@ const listSalesOrdersBase: RouteHandler = async (req, res) => {
   }
   sendJson(res, 200, {
     sales_orders: rows.map((row) => ({
+      // Pilot review R8: the line's id is what POST /pick-tasks/generate takes as a
+      // dispatchOrderLineId; without it a client with no database access could not start a pick.
+      dispatch_order_line_id: row.id,
       so_number_ext: row.so_number_ext,
       line_no: row.line_no,
       sku: row.sku,

@@ -415,6 +415,18 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     );
   }
 
+  // Pilot G3 review R1: no offline capture for bin moves in this release. The move is gated to the
+  // storekeeping roles on the REST route and the events door; this door selects ONE operating
+  // assignment and would stamp whatever role that is, so the event is refused outright.
+  if (body.stream_type === 'warehouse' && body.event_type === 'stock.bin_moved') {
+    throw new AppError(
+      403,
+      'CENTRAL_ONLY_OPERATION',
+      'Bin moves must be recorded online through the bin-move route, not from an edge device',
+      { stream_type: body.stream_type, event_type: body.event_type },
+    );
+  }
+
   // Story 7.8 (Binding Decision 10): an explicit event-type allowlist for the maintenance stream.
   // Return-to-service and every other central-only maintenance operation reject 403
   // CENTRAL_ONLY_OPERATION here, before any identity or version work.

@@ -824,6 +824,26 @@ describe('Story 7.4 Spare Parts Cataloguing, Reservation and Critical-Spares Ale
     ]!;
     assert.strictEqual((await issue(reservationId)).status, 200);
     await assertLedgerInvariant(sku, storeLocId, { on_hand: 6, allocated: 0 }, 'after issue');
+    // Owner ruling 2026-09-20: the issue relieves inventory valuation (10 @ 5 received, 4 issued)
+    // and freezes what it took as NUMERIC strings on the stored event.
+    const valuationOf = async (): Promise<Record<string, unknown>> =>
+      (
+        await getPool().query(
+          `SELECT quantity_on_hand::float AS quantity, carrying_value::float AS value
+             FROM inventory_valuation WHERE sku = $1`,
+          [sku],
+        )
+      ).rows[0]!;
+    assert.deepStrictEqual(await valuationOf(), { quantity: 6, value: 30 });
+    const frozen = (
+      await getPool().query(
+        `SELECT payload->'valuation' AS valuation FROM domain_events
+          WHERE event_type = 'maintenance.spare_issued' AND payload->>'reservation_id' = $1`,
+        [reservationId],
+      )
+    ).rows[0]!['valuation'] as Record<string, unknown>;
+    assert.strictEqual(typeof frozen['value'], 'string');
+    assert.strictEqual(Number(frozen['value']), 20);
 
     const returned = await returnSpare(reservationId);
     assert.strictEqual(returned.status, 200, JSON.stringify(returned.body));
@@ -831,6 +851,7 @@ describe('Story 7.4 Spare Parts Cataloguing, Reservation and Critical-Spares Ale
     assert.strictEqual(reservation['status'], 'returned');
     assert.strictEqual(reservation['quantity_returned'], '4.000000');
     await assertLedgerInvariant(sku, storeLocId, { on_hand: 10, allocated: 0 }, 'after return');
+    assert.deepStrictEqual(await valuationOf(), { quantity: 10, value: 50 }, 'restored at cost');
   });
 
   it('AC2: a partial return leaves the reservation open until the balance comes back', async () => {
@@ -842,6 +863,13 @@ describe('Story 7.4 Spare Parts Cataloguing, Reservation and Critical-Spares Ale
     const reservationId = (reserved.body['reservation'] as Record<string, string>)[
       'reservation_id'
     ]!;
+    // Owner defaults D1/D2 (2026-09-20): 3 of the 10 units carry 10 of value (3.333333 each, which
+    // does not divide evenly); the issue relieves those and the two returns below must put back
+    // exactly 10 between them, with no rounding drift.
+    await getPool().query(
+      `UPDATE inventory_valuation SET quantity_on_hand = 3, carrying_value = 10 WHERE sku = $1`,
+      [sku],
+    );
     assert.strictEqual((await issue(reservationId)).status, 200);
 
     const partial = await returnSpare(reservationId, { quantity_returned: '1' });
@@ -856,6 +884,12 @@ describe('Story 7.4 Spare Parts Cataloguing, Reservation and Critical-Spares Ale
     assert.strictEqual(rest.status, 200, JSON.stringify(rest.body));
     assert.strictEqual((rest.body['reservation'] as Record<string, unknown>)['status'], 'returned');
     await assertLedgerInvariant(sku, storeLocId, { on_hand: 10, allocated: 0 }, 'after balance');
+    const valuation = await getPool().query(
+      `SELECT quantity_on_hand::text AS quantity, carrying_value::text AS value
+         FROM inventory_valuation WHERE sku = $1`,
+      [sku],
+    );
+    assert.deepStrictEqual(valuation.rows[0], { quantity: '3.000000', value: '10.000000' });
   });
 
   it('AC2: cancelling a reservation releases the allocation instead of stranding it', async () => {
@@ -1411,6 +1445,16 @@ describe('Story 7.4 Spare Parts Cataloguing, Reservation and Critical-Spares Ale
     const replayIssue = await issue(reservationId, istToday(), { idempotency_key: issueKey });
     assert.strictEqual(replayIssue.status, 200, JSON.stringify(replayIssue.body));
     await assertLedgerInvariant(sku, storeLocId, { on_hand: 7, allocated: 0 }, 'replayed issue');
+    // Owner ruling 2026-09-20: the replayed issue relieved valuation once (10 @ 5, 3 issued).
+    const valuationOf = async (): Promise<Record<string, unknown>> =>
+      (
+        await getPool().query(
+          `SELECT quantity_on_hand::text AS quantity, carrying_value::text AS value
+             FROM inventory_valuation WHERE sku = $1`,
+          [sku],
+        )
+      ).rows[0]!;
+    assert.deepStrictEqual(await valuationOf(), { quantity: '7.000000', value: '35.000000' });
 
     const returnKey = randomUUID();
     const returned = await returnSpare(reservationId, {
@@ -1424,6 +1468,7 @@ describe('Story 7.4 Spare Parts Cataloguing, Reservation and Critical-Spares Ale
     });
     assert.strictEqual(replayReturn.status, 200, JSON.stringify(replayReturn.body));
     await assertLedgerInvariant(sku, storeLocId, { on_hand: 10, allocated: 0 }, 'replayed return');
+    assert.deepStrictEqual(await valuationOf(), { quantity: '10.000000', value: '50.000000' });
   });
 
   it('idempotency: reusing a key across event types is DUPLICATE_EVENT', async () => {

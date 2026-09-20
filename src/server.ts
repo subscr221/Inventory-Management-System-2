@@ -126,6 +126,7 @@ import {
   handleListVelocityClassification,
   handleReslottingJob,
 } from './api/v1/putaway.js';
+import { createBinMoveHandler } from './api/v1/bin-moves.js';
 import {
   handleListWarehouseTasks,
   handleGetProductivity,
@@ -738,6 +739,8 @@ export function createAppRouter(): Router {
   router.post('/api/v1/putaway-tasks/:putawayTaskId/complete', handleCompletePutaway);
   router.get('/api/v1/velocity-classification', handleListVelocityClassification);
   router.post('/api/v1/velocity-classification/reslot', handleReslottingJob);
+  // Pilot G3: same-site bin-to-bin move
+  router.post('/api/v1/stock/bin-moves', createBinMoveHandler);
 
   // Story 3.8: Warehouse Task Management and Productivity Tracking
   router.post('/api/v1/putaway-tasks/:putawayTaskId/assign', handleAssignPutawayTask);

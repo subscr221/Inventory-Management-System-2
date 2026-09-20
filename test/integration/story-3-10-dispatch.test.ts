@@ -230,18 +230,65 @@ describe('Story 3.10 cross-dock feeds packing and dispatch on staging stock', ()
         randomUUID(),
       ],
     );
-    await persistEvent({
-      event_id: randomUUID(),
-      stream_type: 'warehouse',
-      stream_id: soId,
-      event_type: 'dispatch.dispatched',
-      payload: { dispatch_order_id: soId },
-      metadata: {
-        correlation_id: soId,
-        actor: actor(clerkId, 'dispatch_clerk'),
-        occurred_at: '2026-07-31T09:10:00.000Z',
+    // Owner ruling 2026-09-20: a customer dispatch relieves inventory valuation. The 10 received
+    // units are given a cost basis of 70 here so the relief is visible whatever the receipt priced.
+    await getPool().query(
+      `INSERT INTO inventory_valuation (sku, quantity_on_hand, running_average_cost, carrying_value)
+       VALUES ($1, 10, 7, 70)
+       ON CONFLICT (sku) DO UPDATE
+         SET quantity_on_hand = 10, running_average_cost = 7, carrying_value = 70`,
+      [sku],
+    );
+    const dispatchKey = randomUUID();
+    const dispatchOnce = (): Promise<unknown> =>
+      persistEvent({
+        event_id: randomUUID(),
+        stream_type: 'warehouse',
+        stream_id: soId,
+        event_type: 'dispatch.dispatched',
+        idempotency_key: dispatchKey,
+        payload: { dispatch_order_id: soId },
+        metadata: {
+          correlation_id: soId,
+          actor: actor(clerkId, 'dispatch_clerk'),
+          occurred_at: '2026-07-31T09:10:00.000Z',
+        },
+      });
+    await dispatchOnce();
+    const valuationOf = async (): Promise<Record<string, unknown>> =>
+      (
+        await getPool().query(
+          `SELECT quantity_on_hand::text AS quantity, carrying_value::text AS value
+             FROM inventory_valuation WHERE sku = $1`,
+          [sku],
+        )
+      ).rows[0]!;
+    assert.deepStrictEqual(await valuationOf(), { quantity: '0.000000', value: '0.000000' });
+    const stored = await getPool().query(
+      `SELECT payload->'valuation' AS valuation FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'dispatch.dispatched'`,
+      [soId],
+    );
+    assert.strictEqual(stored.rows.length, 1);
+    assert.deepStrictEqual(stored.rows[0]!['valuation'], [
+      {
+        sku,
+        valuation_method: 'weighted_average',
+        unit_cost: '7.000000',
+        valued_quantity: '10.000000',
+        unvalued_quantity: '0.000000',
+        value: '70.000000',
       },
-    });
+    ]);
+
+    // An idempotent re-post through the dispatch seam relieves nothing more. New value arrives in
+    // between so a second relief could not hide behind an empty row.
+    await getPool().query(
+      `UPDATE inventory_valuation SET quantity_on_hand = 5, carrying_value = 35 WHERE sku = $1`,
+      [sku],
+    );
+    await dispatchOnce();
+    assert.deepStrictEqual(await valuationOf(), { quantity: '5.000000', value: '35.000000' });
 
     const staged = await getPool().query(
       `SELECT on_hand::text, picked::text FROM stock_balance WHERE sku = $1 AND location_id = $2 AND lot_id = $3`,

@@ -65,6 +65,7 @@ import {
   assertLocationOverrideShape,
   applyPutawayCompletedProjection,
 } from '../compliance/putaway.js';
+import { assertStockBinMovedShape, applyStockBinMovedProjection } from '../compliance/bin-move.js';
 import {
   assertPickTaskCreatedShape,
   assertPickLineConfirmedShape,
@@ -304,6 +305,7 @@ import type {
   DispatchIrnRecordedEnvelope,
   TaskSlaConfigUpdatedEnvelope,
   PutawayTaskAssignedEnvelope,
+  StockBinMovedEnvelope,
   PickTaskAssignedEnvelope,
   ForwardPickConfigUpdatedEnvelope,
   ReplenishmentTaskCreatedEnvelope,
@@ -733,6 +735,10 @@ export async function persistEvent(
   if (envelope.event_type === 'pick_task.assigned') {
     assertPickTaskAssignedShape(envelope as unknown as PickTaskAssignedEnvelope);
   }
+  // Pilot G3: bin-move shape validation is non-DB and runs with the other pre-transaction asserts.
+  if (envelope.event_type === 'stock.bin_moved') {
+    assertStockBinMovedShape(envelope as unknown as StockBinMovedEnvelope);
+  }
   // Story 3.9: forward-pick replenishment shape validation (config threshold, task creation,
   // task completion) is non-DB and runs with the other pre-transaction asserts, so a malformed
   // payload never consumes an idempotency key.
@@ -1098,6 +1104,11 @@ export async function persistEvent(
         client,
       );
     }
+    // Pilot G3: a same-site bin-to-bin move relocates the balance inside this transaction, under
+    // the same destination and QC rules as the putaway completion above.
+    if (envelope.event_type === 'stock.bin_moved') {
+      await applyStockBinMovedProjection(envelope as unknown as StockBinMovedEnvelope, client);
+    }
     // Story 3.9: forward-pick config upsert, replenishment task creation, and task completion
     // (which moves stock via applyStockIssue/applyStockReceipt directly) - all inside this same
     // transaction so the projections, the stock movement, and the domain_events insert commit or
@@ -1203,7 +1214,7 @@ export async function persistEvent(
     // issue, receipt on return, deallocate on cancel) commit or roll back together. A ledger
     // rejection - INSUFFICIENT_STOCK from applyStockAllocation - therefore rolls back the
     // reservation row too, and no maintenance event is ever stored for a movement that failed.
-    await applyMaintenanceSpareProjection(envelope, client);
+    await applyMaintenanceSpareProjection(envelope, client, eventId);
     // Story 7.5: the calibration register projections run inside this same transaction, so the
     // register/certificate/escalation row and the instrument_calibration_statuses write the
     // lockout gate reads commit or roll back together. eventId is passed through because the

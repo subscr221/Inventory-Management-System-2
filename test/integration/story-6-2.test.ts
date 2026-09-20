@@ -1129,6 +1129,32 @@ describe('Story 6.2 Material Staging, Issue, and WIP Ledger', () => {
     await assertNumericEqual(String(issuePosting['unit_cost']), '5.000', 'issued at 5.000');
     assert.strictEqual(issuePosting['lot_number'], lotNumber, 'posting carries the lot grain');
 
+    // Owner ruling 2026-09-20 (supersedes Binding Decision 9): the issue relieves inventory
+    // valuation by exactly what WIP took in, and freezes the figures on the event as strings.
+    const valuationOf = async (): Promise<Record<string, unknown>> =>
+      (
+        await getPool().query(
+          `SELECT quantity_on_hand::text AS quantity, carrying_value::text AS value
+             FROM inventory_valuation WHERE sku = $1`,
+          [fx.c1Sku],
+        )
+      ).rows[0]!;
+    const afterIssue = await valuationOf();
+    await assertNumericEqual(String(afterIssue['quantity']), '0', 'valuation quantity relieved');
+    await assertNumericEqual(String(afterIssue['value']), '0', 'valuation value relieved');
+    const frozen = (
+      await getPool().query(
+        `SELECT payload->'valuation' AS valuation FROM domain_events
+          WHERE event_type = 'production_order.material_issued'
+            AND payload->'postings'->0->>'posting_id' = $1`,
+        [sourcePostingId],
+      )
+    ).rows[0]!['valuation'] as Record<string, unknown>;
+    assert.strictEqual(typeof frozen['value'], 'string', 'frozen value is a NUMERIC string');
+    assert.strictEqual(typeof frozen['unit_cost'], 'string', 'frozen cost is a NUMERIC string');
+    await assertNumericEqual(String(frozen['value']), '100', 'what left valuation = WIP 20 x 5');
+    await assertNumericEqual(String(frozen['unvalued_quantity']), '0', 'fully valued');
+
     // Raise today's average: a new receipt at a higher cost moves running_average_cost up.
     await receiveStock(fx.c1Sku, binLocId, 20, null, 50);
 
@@ -1175,6 +1201,10 @@ describe('Story 6.2 Material Staging, Issue, and WIP Ledger', () => {
     ).rows[0]!;
     await assertNumericEqual(String(returnRow['unit_cost']), '5.000', 'return at the issued cost');
     await assertNumericEqual(String(returnRow['posting_value']), '100.000', '20 x 5.000');
+    // The return restores valuation at the ISSUE cost: 20 x 50 on hand + 20 x 5 back = 40 / 1100.
+    const afterReturn = await valuationOf();
+    await assertNumericEqual(String(afterReturn['quantity']), '40', 'valuation quantity restored');
+    await assertNumericEqual(String(afterReturn['value']), '1100', 'restored at the issued cost');
     assert.strictEqual(returnRow['source_posting_id'], sourcePostingId);
     assert.strictEqual(returnRow['reason_code'], 'SURPLUS_TO_ORDER');
     assert.strictEqual(returnRow['open_quantity'], null, 'return rows carry NULL open_quantity');
@@ -1392,6 +1422,16 @@ describe('Story 6.2 Material Staging, Issue, and WIP Ledger', () => {
     );
     assert.strictEqual(issue2.status, 200, JSON.stringify(issue2.body));
     assert.strictEqual((await wipPostingsForOrder(orderId)).length, 1, 'no second issue posting');
+    // Owner ruling 2026-09-20: the replayed issue relieved valuation once (20 @ 5 received).
+    const valuationOfC1 = async (): Promise<Record<string, unknown>> =>
+      (
+        await getPool().query(
+          `SELECT quantity_on_hand::text AS quantity, carrying_value::text AS value
+             FROM inventory_valuation WHERE sku = $1`,
+          [fx.c1Sku],
+        )
+      ).rows[0]!;
+    assert.deepStrictEqual(await valuationOfC1(), { quantity: '0.000000', value: '0.000000' });
 
     // Confirmation replay.
     const confirmBody = { idempotency_key: randomUUID(), confirmed_quantity: '5' };
@@ -1465,6 +1505,8 @@ describe('Story 6.2 Material Staging, Issue, and WIP Ledger', () => {
       '0',
       'source posting closed exactly once',
     );
+    // ...and the replayed return restored it once.
+    assert.deepStrictEqual(await valuationOfC1(), { quantity: '20.000000', value: '100.000000' });
   });
 
   // -------------------------------------------------------------------------
@@ -1701,8 +1743,209 @@ describe('Story 6.2 Material Staging, Issue, and WIP Ledger', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Owner defaults 2026-09-20 (D1, D4): WIP takes in exactly what left valuation
+  // -------------------------------------------------------------------------
+
+  async function stagedIssueFixture(
+    suffix: string,
+  ): Promise<{ orderId: string; stageId: string; c1Sku: string; c2Sku: string }> {
+    const fx = await releasedMixedBom(suffix);
+    await receiveStock(fx.c1Sku, binLocId, 100, null, 100);
+    await receiveStock(fx.c2Sku, binLocId, 50);
+    const created = await createOrder({
+      output_item_id: fx.itemOut,
+      bom_id: fx.bom.bomId,
+      order_quantity: '25',
+    });
+    const orderId = created.body['production_order_id'] as string;
+    assert.strictEqual((await releaseOrder(orderId)).status, 200);
+    const staged = await stageOrder(orderId, [
+      { bom_line_id: fx.c1LineId, source_location_id: binLocId },
+    ]);
+    const stageId = (staged.body['lines'] as Record<string, unknown>[])[0]!['stage_id'] as string;
+    return { orderId, stageId, c1Sku: fx.c1Sku, c2Sku: fx.c2Sku };
+  }
+
+  async function issuePayloadOf(orderId: string): Promise<Record<string, unknown>> {
+    const result = await getPool().query(
+      `SELECT payload FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'production_order.material_issued'`,
+      [orderId],
+    );
+    return result.rows[0]!['payload'] as Record<string, unknown>;
+  }
+
+  async function wipPostedValue(orderId: string): Promise<string> {
+    const result = await getPool().query(
+      `SELECT COALESCE(SUM(posting_value), 0)::text AS value FROM production_wip_ledger
+        WHERE production_order_id = $1 AND posting_type = 'directed_issue'`,
+      [orderId],
+    );
+    return String(result.rows[0]!['value']);
+  }
+
+  it('D1: a partly-unvalued issue (10 valued @ 100 of 100 physical, issue 50) puts 1000 into WIP, not 5000', async () => {
+    const fx = await stagedIssueFixture('d1-part');
+    // Only 10 of the 100 physical units carry a cost basis (a site loaded before the ruling).
+    await getAdminPool().query(
+      `UPDATE inventory_valuation SET quantity_on_hand = 10, carrying_value = 1000 WHERE sku = $1`,
+      [fx.c1Sku],
+    );
+    const issued = await issueMaterial(fx.orderId, fx.stageId, '50');
+    assert.strictEqual(issued.status, 200, JSON.stringify(issued.body));
+
+    const payload = await issuePayloadOf(fx.orderId);
+    const block = payload['valuation'] as Record<string, unknown>;
+    await assertNumericEqual(String(block['value']), '1000', 'what left valuation');
+    await assertNumericEqual(String(block['unvalued_quantity']), '40', 'unvalued part recorded');
+    await assertNumericEqual(
+      await wipPostedValue(fx.orderId),
+      '1000',
+      'WIP value = relieved value',
+    );
+    const wip = await wipSummaryDb(fx.orderId);
+    await assertNumericEqual(wip.net_open_value, '1000', 'open WIP value = relieved value');
+    await assertNumericEqual(wip.net_open_quantity, '50', 'the full quantity is in WIP');
+    assert.strictEqual(payload['wip_cost_unresolved'], true, 'finance can find the event');
+  });
+
+  it('D4: an issue of stock with no cost basis goes through, enters WIP at zero, and is flagged', async () => {
+    const fx = await stagedIssueFixture('d4-none');
+    await getAdminPool().query(`DELETE FROM inventory_valuation WHERE sku = $1`, [fx.c1Sku]);
+    const issued = await issueMaterial(fx.orderId, fx.stageId, '50');
+    assert.strictEqual(issued.status, 200, JSON.stringify(issued.body));
+
+    const payload = await issuePayloadOf(fx.orderId);
+    const block = payload['valuation'] as Record<string, unknown>;
+    await assertNumericEqual(String(block['valued_quantity']), '0', 'nothing was valued');
+    assert.strictEqual(payload['wip_cost_unresolved'], true);
+    await assertNumericEqual(await wipPostedValue(fx.orderId), '0', 'WIP at zero value');
+
+    // The return of a zero-value posting restores the stock and no value.
+    const postingId = (issued.body['postings'] as Record<string, unknown>[])[0]![
+      'posting_id'
+    ] as string;
+    const returned = await returnMaterial(fx.orderId, postingId, '50', 'SURPLUS_TO_ORDER');
+    assert.strictEqual(returned.status, 200, JSON.stringify(returned.body));
+    const row = await getPool().query(
+      `SELECT carrying_value::text AS value FROM inventory_valuation WHERE sku = $1`,
+      [fx.c1Sku],
+    );
+    assert.ok(row.rows.length === 0 || row.rows[0]!['value'] === '0.000000');
+
+    // A confirmation of an unvalued backflush component goes through the same way.
+    await getAdminPool().query(`DELETE FROM inventory_valuation WHERE sku = $1`, [fx.c2Sku]);
+    const confirmed = await confirmProduction(fx.orderId, '5');
+    assert.strictEqual(confirmed.status, 200, JSON.stringify(confirmed.body));
+    const line = (confirmed.body['backflush_lines'] as Record<string, unknown>[])[0]!;
+    assert.strictEqual(line['wip_cost_unresolved'], true);
+  });
+
+  it('F6: a valuation block declared on a direct confirmation event is never trusted by a later return', async () => {
+    const fx = await releasedBackflushOnlyBom('forged-valuation');
+    await receiveStock(fx.c2Sku, binLocId, 10);
+    const created = await createOrder({ output_item_id: fx.itemOut, bom_id: fx.bom.bomId });
+    const orderId = created.body['production_order_id'] as string;
+    assert.strictEqual((await releaseOrder(orderId)).status, 200);
+    const forged = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'production',
+        stream_id: orderId,
+        event_type: 'production_order.confirmation_recorded',
+        payload: {
+          production_order_id: orderId,
+          confirmed_quantity: '5',
+          revision_id: fx.bom.revisionId,
+          business_date: new Date().toISOString().slice(0, 10),
+          confirmed_by: plannerUserId,
+          confirmed_at: new Date().toISOString(),
+          backflush_lines: [],
+          valuation: {
+            sku: fx.c2Sku,
+            valuation_method: 'weighted_average',
+            unit_cost: '1000.000000',
+            valued_quantity: '5.000000',
+            unvalued_quantity: '0.000000',
+            value: '5000.000000',
+          },
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: plannerUserId, role: 'production_planner', location_id: binLocId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      plannerHeaders,
+    );
+    assert.ok(forged.status >= 200 && forged.status < 300, JSON.stringify(forged.body));
+    const stored = await getPool().query(
+      `SELECT payload FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'production_order.confirmation_recorded'`,
+      [orderId],
+    );
+    const payload = stored.rows[0]!['payload'] as Record<string, unknown>;
+    assert.strictEqual(payload['valuation'], undefined, 'the declared block is stripped');
+
+    const posting = (await wipPostingsForOrder(orderId))[0]!;
+    const returned = await returnMaterial(
+      orderId,
+      posting['posting_id'] as string,
+      String(posting['quantity']),
+      'SURPLUS_TO_ORDER',
+    );
+    assert.strictEqual(returned.status, 200, JSON.stringify(returned.body));
+    const row = await getPool().query(
+      `SELECT quantity_on_hand::text AS quantity, carrying_value::text AS value
+         FROM inventory_valuation WHERE sku = $1`,
+      [fx.c2Sku],
+    );
+    assert.deepStrictEqual(row.rows[0], { quantity: '10.000000', value: '50.000000' });
+  });
+
+  // -------------------------------------------------------------------------
   // Concurrency
   // -------------------------------------------------------------------------
+
+  it('concurrency: confirmations whose backflush lines run in opposite SKU order never deadlock', async () => {
+    const itemX = await createItem(`BX-${run}-dl`);
+    const itemY = await createItem(`BY-${run}-dl`);
+    const bf = { quantity_per: '1.0', supply_method: 'backflush' };
+    const outXY = await createItem(`FG-${run}-dl-xy`);
+    const outYX = await createItem(`FG-${run}-dl-yx`);
+    const bomXY = await draftAndRelease(outXY, [
+      componentLine(1, itemX, bf),
+      componentLine(2, itemY, bf),
+    ]);
+    const bomYX = await draftAndRelease(outYX, [
+      componentLine(1, itemY, bf),
+      componentLine(2, itemX, bf),
+    ]);
+    await receiveStock(await skuOf(itemX), binLocId, 1000);
+    await receiveStock(await skuOf(itemY), binLocId, 1000);
+    const orderIds: string[] = [];
+    for (const [out, bom] of [
+      [outXY, bomXY],
+      [outYX, bomYX],
+    ] as const) {
+      const created = await createOrder({
+        output_item_id: out,
+        bom_id: bom.bomId,
+        order_quantity: '100',
+      });
+      const orderId = created.body['production_order_id'] as string;
+      assert.strictEqual((await releaseOrder(orderId)).status, 200);
+      orderIds.push(orderId);
+    }
+    for (let round = 0; round < 12; round += 1) {
+      const results = await Promise.all(orderIds.map((id) => confirmProduction(id, '1')));
+      for (const res of results) {
+        assert.strictEqual(res.status, 200, `round ${round}: ${JSON.stringify(res.body)}`);
+      }
+    }
+  });
 
   it('concurrency: two parallel stagings of the same line resolve to one winner and one stable 409 DUPLICATE_EVENT', async () => {
     const fx = await releasedMixedBom('conc-stage');
@@ -1902,7 +2145,7 @@ describe('Story 6.2 Material Staging, Issue, and WIP Ledger', () => {
     assert.strictEqual(noStage.body['error_code'], 'STAGE_NOT_FOUND');
   });
 
-  it('Table 8: NO_BACKFLUSH_LINES, WIP_COST_UNRESOLVED, POSTING_NOT_FOUND, RETURN_SOURCE_MISMATCH, RETURN_REASON_CODE_INVALID, INVALID_PARAMS', async () => {
+  it('Table 8: NO_BACKFLUSH_LINES, POSTING_NOT_FOUND, RETURN_SOURCE_MISMATCH, RETURN_REASON_CODE_INVALID, INVALID_PARAMS', async () => {
     // NO_BACKFLUSH_LINES: an order whose BOM has no backflush lines cannot confirm.
     const itemOut = await createItem(`FG-${run}-t8b`);
     const itemC1 = await createItem(`C1-${run}-t8b`);
@@ -1916,13 +2159,10 @@ describe('Story 6.2 Material Staging, Issue, and WIP Ledger', () => {
     assert.strictEqual(noBfConfirm.status, 409, JSON.stringify(noBfConfirm.body));
     assert.strictEqual(noBfConfirm.body['error_code'], 'NO_BACKFLUSH_LINES');
 
-    // WIP_COST_UNRESOLVED: an unpriced receipt leaves running_average_cost NULL, so issuing
-    // against that component fails closed.
+    // Owner default D4 (2026-09-20): WIP_COST_UNRESOLVED no longer refuses an issue; the unvalued
+    // issue is pinned in its own test below.
     const fx = await releasedMixedBom('t8b2');
-    await receiveStock(fx.c1Sku, binLocId, 20, null, 0);
-    // Force the valuation row to an unpriced state: running_average_cost stays NULL when the
-    // receipt is unpriced, so drop the row the priced path would have created.
-    await getAdminPool().query(`DELETE FROM inventory_valuation WHERE sku = $1`, [fx.c1Sku]);
+    await receiveStock(fx.c1Sku, binLocId, 40, null, 5);
     await receiveStock(fx.c2Sku, binLocId, 10);
     const created = await createOrder({ output_item_id: fx.itemOut, bom_id: fx.bom.bomId });
     const orderId = created.body['production_order_id'] as string;
@@ -1931,9 +2171,6 @@ describe('Story 6.2 Material Staging, Issue, and WIP Ledger', () => {
       { bom_line_id: fx.c1LineId, source_location_id: binLocId },
     ]);
     const stageId = (staged.body['lines'] as Record<string, unknown>[])[0]!['stage_id'] as string;
-    const noCost = await issueMaterial(orderId, stageId, '20');
-    assert.strictEqual(noCost.status, 409, JSON.stringify(noCost.body));
-    assert.strictEqual(noCost.body['error_code'], 'WIP_COST_UNRESOLVED');
 
     // POSTING_NOT_FOUND: a random source posting on the return route.
     const noPosting = await returnMaterial(orderId, randomUUID(), '1', 'SURPLUS_TO_ORDER');
@@ -1942,8 +2179,6 @@ describe('Story 6.2 Material Staging, Issue, and WIP Ledger', () => {
 
     // RETURN_SOURCE_MISMATCH: return against another order's posting. Issue on THIS order, then
     // point a return on a SECOND order at this posting.
-    await getAdminPool().query(`DELETE FROM inventory_valuation WHERE sku = $1`, [fx.c1Sku]);
-    await receiveStock(fx.c1Sku, binLocId, 20, null, 5);
     const priced = await issueMaterial(orderId, stageId, '20');
     assert.strictEqual(priced.status, 200, JSON.stringify(priced.body));
     const sourcePostingId = (priced.body['postings'] as Record<string, unknown>[])[0]![

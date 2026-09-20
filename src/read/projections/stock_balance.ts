@@ -81,10 +81,11 @@ export interface StockIssueInput {
   /** Story 8.1 (Task 6): see StockAllocationInput.qc_gate_cleared. */
   qc_gate_cleared?: boolean;
   /**
-   * Pilot B2 review: set ONLY by the putaway seam for a lot-scoped relocation of a QC-gated lot
-   * into a quarantine bin, after it has checked the gate and the destination itself. A relocation
-   * is not a consumption, so the drain-window QC predicate is dropped for this one issue. Ignored
-   * without a lot_id - a lot-less drain can never see gated stock.
+   * Pilot B2 review: set ONLY by the relocation seams (putaway, bin move) for a lot-scoped
+   * relocation of a QC-gated or manually held lot into a quarantine bin, after the seam has checked
+   * the hold and the destination itself. A relocation is not a consumption, so the drain-window QC
+   * predicate is dropped for this one issue. Ignored without a lot_id - a lot-less drain can never
+   * see gated or held stock.
    */
   qc_gate_relocation?: boolean;
   /**

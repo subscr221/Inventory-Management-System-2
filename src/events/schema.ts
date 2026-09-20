@@ -1,4 +1,5 @@
 import type { EventEnvelope } from './store.js';
+import type { ValuationOutflow } from '../compliance/inventory-valuation.js';
 
 /**
  * Event types introduced by Story 2.5: Inter-Location Transfer Requests.
@@ -697,6 +698,30 @@ export interface PutawayTaskAssignedPayload {
 export interface PutawayTaskAssignedEnvelope extends Omit<EventEnvelope, 'payload'> {
   event_type: 'putaway_task.assigned';
   payload: PutawayTaskAssignedPayload;
+}
+
+// ---------------------------------------------------------------------------
+// Pilot G3 (owner ruling 2026-09-20): same-site bin-to-bin move
+// ---------------------------------------------------------------------------
+export interface StockBinMovedPayload {
+  /** The one site both bins belong to; validated against the register in the compliance seam. */
+  site_id: string;
+  sku: string;
+  from_location_id: string;
+  to_location_id: string;
+  quantity: number | string;
+  /** The lot NUMBER (the stock_balance.lot_id key). Required for a lot-controlled item only. */
+  lot_id?: string | null;
+  /** One serial number per unit moved, for a serial-controlled item only. */
+  serials?: string[];
+  /** Defaults to 'owned'; a move never changes the class. */
+  stock_class?: 'owned' | 'consignment' | 'vmi' | 'job_work' | 'prototype' | 'offcut';
+  reason?: string | null;
+}
+
+export interface StockBinMovedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'stock.bin_moved';
+  payload: StockBinMovedPayload;
 }
 
 export interface PickTaskAssignedPayload {
@@ -3042,6 +3067,9 @@ export interface ProductionOrderCancelledEnvelope extends Omit<EventEnvelope, 'p
  * applyStockIssue / applyStockIssueUnderSite, which RETURN their drained-row detail; the seam
  * writes ONE posting per drained row (Binding Decision 7) so a return can restore the exact
  * (location, lot) grain the drain took. posting_value is computed in SQL NUMERIC, never in JS.
+ * Owner defaults 2026-09-20 (D1): `valuation` is this posting's share of what the issue relieved
+ * from inventory valuation; posting_value equals its value and unit_cost is that value over the
+ * whole quantity, so an unvalued part sits in WIP at zero. A later return reads this block.
  */
 export interface ProductionMaterialPosting {
   posting_id: string;
@@ -3053,6 +3081,8 @@ export interface ProductionMaterialPosting {
   quantity: string;
   unit_cost: string;
   posting_value: string;
+  /** Write-back; absent on events that predate the 2026-09-20 ruling. */
+  valuation?: ValuationOutflow;
 }
 
 /**
@@ -3097,8 +3127,9 @@ export interface ProductionOrderMaterialStagedEnvelope extends Omit<EventEnvelop
  * Story 6.2 (FR-MO-05): issues staged material to the order. stream_id is production_order_id.
  * The applier locks the stage row FOR UPDATE, deallocates BEFORE issuing (the 7.4 binding order),
  * and writes one WIP posting per drained balance row (write-back). quantity is bounded by the
- * stage's remaining quantity; unit_cost is server-derived from the Story 2.4 running average
- * (WIP_COST_UNRESOLVED fail-closed).
+ * stage's remaining quantity. Owner defaults 2026-09-20 (D1, D4): the issue relieves inventory
+ * valuation and WIP takes in exactly that value; stock with no cost basis still issues, at zero,
+ * and wip_cost_unresolved flags the event for finance (WIP_COST_UNRESOLVED no longer refuses it).
  */
 export interface ProductionOrderMaterialIssuedPayload {
   production_order_id: string;
@@ -3109,6 +3140,10 @@ export interface ProductionOrderMaterialIssuedPayload {
   issued_at: string;
   /** Write-back: one entry per drained balance row. */
   postings: ProductionMaterialPosting[];
+  /** Write-back: what the issue took out of inventory valuation (the audit record). */
+  valuation?: ValuationOutflow;
+  /** Write-back: true when any part of the issue had no cost basis and entered WIP at zero. */
+  wip_cost_unresolved?: boolean;
 }
 
 export interface ProductionOrderMaterialIssuedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -5586,6 +5621,13 @@ export const SUPPORTED_EVENT_TYPES = {
     requiresBusinessStream: false,
   },
   'pick_task.completed': {
+    streamType: 'warehouse',
+    requiresBusinessStream: false,
+  },
+  // Pilot G3: a same-site bin-to-bin move on the 'warehouse' stream. Like the putaway completion
+  // it relocates the balance through its own projection apply and posts no valuated movement, so
+  // tagging is not gated on it and the valuation projection never sees it.
+  'stock.bin_moved': {
     streamType: 'warehouse',
     requiresBusinessStream: false,
   },

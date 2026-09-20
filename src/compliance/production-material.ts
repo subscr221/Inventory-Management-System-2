@@ -16,7 +16,13 @@ import {
   applyStockReceipt,
   type StockDrainRow,
 } from '../read/projections/stock_balance.js';
-import { getInventoryValuation } from '../read/projections/inventory_valuation.js';
+import {
+  applyValuationOutflow,
+  splitValuationOutflow,
+  applyValuationReturn,
+  asValuationOutflow,
+  type ValuationOutflow,
+} from './inventory-valuation.js';
 import { getItemById } from '../read/projections/item_master.js';
 import { assertQcGateAllows, gateBusinessDateOf } from './quality.js';
 import {
@@ -49,7 +55,8 @@ import { toIstCalendarDate } from '../lib/business-days.js';
  * Locking contract (Table 6): every applier takes the production order row FOR UPDATE FIRST
  * (404 PRODUCTION_ORDER_NOT_FOUND when absent), then the stage row (issue) or the source posting
  * (return), then the stock_balance rows - which are locked ONLY inside the Epic 2 helpers and
- * always LAST (the 7.4 rule). inventory_valuation is read WITHOUT a lock (Binding Decision 8:
+ * always LAST (the 7.4 rule; since the 2026-09-20 owner ruling the valuation row is locked after
+ * them, by applyValuationOutflow). inventory_valuation is read WITHOUT a lock (Binding Decision 8:
  * an unlocked advisory cost basis; locking it would make every issue serialize on a hot row).
  *
  * Re-derivation contract: every declared-and-checked field (revision_id, per-line
@@ -553,14 +560,26 @@ export async function isLocationDescendantOf(
   return result.rows.length > 0;
 }
 
-function drainRowsToPostings(
+/**
+ * One WIP posting per drained balance row (Binding Decision 7). Owner default D1 (2026-09-20): the
+ * relieved block is split over the rows in drain order, each posting freezes its own share, and
+ * its unit_cost is that share over the row's whole quantity - so WIP holds EXACTLY what left
+ * valuation, and the unvalued part of an issue sits in WIP at zero.
+ */
+async function drainRowsToPostings(
   drained: StockDrainRow[],
   componentItemId: string,
   componentSku: string,
   bomLineId: string,
-  unitCost: string,
-): Array<Record<string, string | null>> {
-  return drained.map((row) => ({
+  relieved: ValuationOutflow,
+  client: PoolClient,
+): Promise<Array<Record<string, unknown>>> {
+  const parts = await splitValuationOutflow(
+    relieved,
+    drained.map((row) => row.quantity),
+    client,
+  );
+  return drained.map((row, index) => ({
     posting_id: randomUUID(),
     bom_line_id: bomLineId,
     component_item_id: componentItemId,
@@ -568,8 +587,34 @@ function drainRowsToPostings(
     lot_number: row.lot_id,
     source_location_id: row.location_id,
     quantity: row.quantity,
-    unit_cost: unitCost,
+    unit_cost: parts[index]!.blended_unit_cost,
+    valuation: parts[index]!.valuation,
   }));
+}
+
+/**
+ * The valuation share frozen on the posting `postingId` by the issue/confirmation event that minted
+ * it. Only the server-written per-posting block is read: a top-level block on the event is never
+ * trusted (a direct confirmation post could declare one). A posting without a block (an event that
+ * predates the ruling) restores nothing.
+ */
+async function issueValuationOfPosting(
+  sourceEventId: string | null,
+  postingId: string,
+  client: PoolClient,
+): Promise<ValuationOutflow | null> {
+  if (sourceEventId === null) return null;
+  const result = await client.query(`SELECT payload FROM domain_events WHERE event_id = $1`, [
+    sourceEventId,
+  ]);
+  if (result.rows.length === 0) return null;
+  const payload = result.rows[0]!['payload'] as Record<string, unknown>;
+  const lines = Array.isArray(payload['backflush_lines']) ? payload['backflush_lines'] : [];
+  const postings = [payload, ...(lines as Array<Record<string, unknown>>)].flatMap((holder) =>
+    Array.isArray(holder['postings']) ? (holder['postings'] as Array<Record<string, unknown>>) : [],
+  );
+  const minted = postings.find((x) => x['posting_id'] === postingId);
+  return minted ? asValuationOutflow(minted['valuation']) : null;
 }
 
 export async function applyProductionMaterialProjection(
@@ -877,24 +922,6 @@ async function applyMaterialIssued(
     );
   }
 
-  // Binding Decision 8: unit_cost is server-derived from the Story 2.4 running average (an
-  // unlocked advisory read inside the transaction - the valuation row is never locked). Fail
-  // closed: no valuation row or NULL running_average_cost rejects WIP_COST_UNRESOLVED.
-  const valuation = await getInventoryValuation(stage.component_sku, client);
-  const unitCost = valuation?.running_average_cost ?? null;
-  if (unitCost === null) {
-    reject(
-      'WIP_COST_UNRESOLVED',
-      'No priced valuation basis exists for the issued component',
-      {
-        production_order_id: productionOrderId,
-        stage_id: stage.stage_id,
-        component_sku: stage.component_sku,
-      },
-      409,
-    );
-  }
-
   // Binding Decision 5: DEALLOCATE FIRST, THEN ISSUE - applyStockIssue gates on SUM(available),
   // which is net of the staging allocation, so issuing before deallocating would fail with a
   // spurious INSUFFICIENT_STOCK whenever the staged quantity is the only free stock.
@@ -925,14 +952,23 @@ async function applyMaterialIssued(
     client,
   );
 
-  // One WIP posting per drained balance row (Binding Decision 7); posting_value is computed in SQL
-  // NUMERIC by insertWipPosting.
-  const postings = drainRowsToPostings(
+  // Owner ruling 2026-09-20 (supersedes Binding Decisions 8 and 9): the issue relieves inventory
+  // valuation under the row lock, and the value that leaves it is the value WIP takes in - for a
+  // fifo item the layer cost, after an NRV write-down the carrying cost. Owner default D4: stock
+  // with no cost basis still issues (WIP_COST_UNRESOLVED no longer refuses it); that part enters
+  // WIP at zero and the event is flagged so finance can find it.
+  const relieved = await applyValuationOutflow({ sku: stage.component_sku, quantity }, client);
+  p['valuation'] = relieved;
+  p['wip_cost_unresolved'] = Number(relieved.unvalued_quantity) > 0;
+
+  // One WIP posting per drained balance row (Binding Decision 7).
+  const postings = await drainRowsToPostings(
     drained,
     stage.component_item_id,
     stage.component_sku,
     stage.bom_line_id,
-    unitCost,
+    relieved,
+    client,
   );
   for (const posting of postings) {
     const postingValue = await insertWipPosting(
@@ -948,6 +984,7 @@ async function applyMaterialIssued(
         quantity: posting['quantity'] as string,
         open_quantity: posting['quantity'] as string,
         unit_cost: posting['unit_cost'] as string,
+        posting_value: (posting['valuation'] as ValuationOutflow).value,
         reason_code: null,
         source_posting_id: null,
         source_event_id: eventId,
@@ -977,6 +1014,10 @@ async function applyConfirmationRecorded(
   const productionOrderId = p['production_order_id'] as string;
   const order = await lockOrderForMaterial(envelope, client);
   await assertActorPlantAccess(envelope, order, client);
+
+  // The valuation figures live on the server-written lines and postings only: a block declared at
+  // the top level of a direct post is dropped before the event is stored.
+  delete p['valuation'];
 
   // backflush_lines are server-derived write-back: a declared set is a fabrication attempt.
   if (Array.isArray(p['backflush_lines']) && p['backflush_lines'].length > 0) {
@@ -1072,38 +1113,56 @@ async function applyConfirmationRecorded(
   // Drain pass: applyStockIssueUnderSite per line (owned class default); the drain detail becomes
   // WIP postings exactly like the issue applier. All-or-nothing holds by construction: the
   // pre-check passed for every line and this applier runs inside the persistEvent transaction.
+  // Lock order: EVERY stock row first, lines taken in ascending component SKU, and only then the
+  // valuation rows, in the same order - two confirmations whose BOM lines run in opposite order
+  // (X,Y against Y,X) would otherwise each hold one row the other needs and deadlock.
+  const lockOrder = [...requirementSet.lines].sort((left, right) =>
+    left.component_sku === right.component_sku
+      ? left.bom_line_id < right.bom_line_id
+        ? -1
+        : 1
+      : left.component_sku < right.component_sku
+        ? -1
+        : 1,
+  );
+  const drainedByLine = new Map<string, StockDrainRow[]>();
+  for (const line of lockOrder) {
+    drainedByLine.set(
+      line.bom_line_id,
+      await applyStockIssueUnderSite(
+        {
+          sku: line.component_sku,
+          site_location_id: order.plant_location_id,
+          quantity: line.required_quantity,
+          occurred_at: p['confirmed_at'] as string,
+        },
+        client,
+      ),
+    );
+  }
+  // Owner ruling 2026-09-20: as the issue applier - valuation is relieved, WIP takes in exactly
+  // that value, and a component with no cost basis backflushes at zero and is flagged (D4).
+  const relievedByLine = new Map<string, ValuationOutflow>();
+  for (const line of lockOrder) {
+    relievedByLine.set(
+      line.bom_line_id,
+      await applyValuationOutflow(
+        { sku: line.component_sku, quantity: line.required_quantity },
+        client,
+      ),
+    );
+  }
+
   const backflushLines: Array<Record<string, unknown>> = [];
   for (const line of requirementSet.lines) {
-    // Binding Decision 8 resolved BEFORE the drain (the code-review fix mirroring the issue
-    // applier): an unresolved valuation rejects WIP_COST_UNRESOLVED before any stock moves.
-    const unitCostResult = await getInventoryValuation(line.component_sku, client);
-    const unitCost = unitCostResult?.running_average_cost ?? null;
-    if (unitCost === null) {
-      reject(
-        'WIP_COST_UNRESOLVED',
-        'No priced valuation basis exists for the backflushed component',
-        {
-          production_order_id: productionOrderId,
-          component_sku: line.component_sku,
-        },
-        409,
-      );
-    }
-    const drained = await applyStockIssueUnderSite(
-      {
-        sku: line.component_sku,
-        site_location_id: order.plant_location_id,
-        quantity: line.required_quantity,
-        occurred_at: p['confirmed_at'] as string,
-      },
-      client,
-    );
-    const postings = drainRowsToPostings(
-      drained,
+    const relieved = relievedByLine.get(line.bom_line_id)!;
+    const postings = await drainRowsToPostings(
+      drainedByLine.get(line.bom_line_id)!,
       line.component_item_id,
       line.component_sku,
       line.bom_line_id,
-      unitCost,
+      relieved,
+      client,
     );
     // Story 6.4 (FR-MO-11, AC 2): backflush resolves its own lots from the FEFO drain, so the
     // normal case satisfies the rule by construction - but un-lotted balance rows of a
@@ -1134,6 +1193,7 @@ async function applyConfirmationRecorded(
           quantity: posting['quantity'] as string,
           open_quantity: posting['quantity'] as string,
           unit_cost: posting['unit_cost'] as string,
+          posting_value: (posting['valuation'] as ValuationOutflow).value,
           reason_code: null,
           source_posting_id: null,
           source_event_id: eventId,
@@ -1148,6 +1208,8 @@ async function applyConfirmationRecorded(
       component_sku: line.component_sku,
       required_quantity: line.required_quantity,
       postings,
+      valuation: relieved,
+      wip_cost_unresolved: Number(relieved.unvalued_quantity) > 0,
     });
   }
 
@@ -1270,6 +1332,25 @@ async function applyMaterialReturned(
       quantity,
     },
     client,
+  );
+
+  // Owner ruling 2026-09-20: the return puts back what the issue relieved - the share frozen on
+  // the source posting (read off the persisted source event), never today's average. What has
+  // already left this posting is quantity - open_quantity, so the return that closes it restores
+  // exactly the rest of the share.
+  const returnedBefore = await client.query(
+    `SELECT ($1::numeric - $2::numeric)::text AS returned`,
+    [posting.quantity, posting.open_quantity],
+  );
+  p['valuation'] = await applyValuationReturn(
+    {
+      sku: posting.component_sku,
+      quantity,
+      issue: await issueValuationOfPosting(posting.source_event_id, posting.posting_id, client),
+      returned_before: String(returnedBefore.rows[0]!['returned']),
+    },
+    client,
+    eventId,
   );
 
   // Insert the return posting (open_quantity NULL, source_posting_id + reason_code set) and

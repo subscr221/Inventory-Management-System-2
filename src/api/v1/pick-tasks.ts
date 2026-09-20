@@ -28,6 +28,7 @@ import {
 } from '../../read/projections/pick_task.js';
 import { activeUserExistsById } from '../../read/projections/users.js';
 import { listPickLinesByTask } from '../../read/projections/pick_line.js';
+import { stampActedLocation } from './actor-stamp.js';
 import { generatePickTasks } from '../../warehouse/pick-task-generator.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
@@ -499,7 +500,12 @@ const confirmPickLineBase: RouteHandler = async (req, res, params) => {
   }
   assertSiteAccess(req, await resolveTaskSite(pickTaskId), 'write');
 
-  const actor = actorContext(req);
+  // Pilot G2: a line is confirmed at ONE bin, so that bin is the audit stamp. An unknown line id
+  // is left to the projection seam and stamps nothing new.
+  const pickLine = (await listPickLinesByTask(pickTaskId)).find(
+    (l) => l.pick_line_id === pickLineId,
+  );
+  const actor = stampActedLocation(req, actorContext(req), 'warehouse', pickLine?.location_id);
   const persisted = await persistEvent(
     {
       stream_type: 'warehouse',

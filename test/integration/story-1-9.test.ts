@@ -318,6 +318,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/putaway-tasks/:putawayTaskId/complete',
       'GET /api/v1/velocity-classification',
       'POST /api/v1/velocity-classification/reslot',
+      // Pilot G3: same-site bin-to-bin move
+      'POST /api/v1/stock/bin-moves',
       // Story 3.6: Pick Task Generation and Execution
       'POST /api/v1/pick-tasks/generate',
       'POST /api/v1/pick-tasks/wave',

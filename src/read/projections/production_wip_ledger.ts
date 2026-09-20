@@ -104,6 +104,11 @@ export interface InsertWipPostingInput {
   /** Issue/backflush rows pass their quantity; return rows pass null. */
   open_quantity: string | null;
   unit_cost: string;
+  /**
+   * Owner default D1 (2026-09-20): an issue/backflush posting passes the value that actually left
+   * inventory valuation, so WIP takes in exactly that; omitted, it is quantity x unit_cost.
+   */
+  posting_value?: string | null;
   reason_code: string | null;
   source_posting_id: string | null;
   source_event_id: string;
@@ -119,7 +124,8 @@ export async function insertWipPosting(
       posting_id, production_order_id, posting_type, bom_line_id, component_item_id,
       component_sku, lot_number, source_location_id, quantity, open_quantity, unit_cost,
       posting_value, reason_code, source_posting_id, source_event_id, occurred_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$9::numeric * $11::numeric,$12,$13,$14,$15)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+              COALESCE($16::numeric, $9::numeric * $11::numeric),$12,$13,$14,$15)
     RETURNING posting_value`,
     [
       input.posting_id,
@@ -139,6 +145,7 @@ export async function insertWipPosting(
       input.source_posting_id,
       input.source_event_id,
       input.occurred_at,
+      input.posting_value ?? null,
     ],
   );
   return String(result.rows[0]!['posting_value']);

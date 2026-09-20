@@ -21,6 +21,7 @@ import { getSalesOrderLineById } from '../read/projections/erp_sales_order.js';
 import { QC_GATE_BLOCKED_STATUSES } from '../read/projections/qc_inspection_task.js';
 import type { AuditEntryPayload } from '../read/projections/audit_log.js';
 import { logRejectionAudit } from '../read/projections/audit_log.js';
+import { applyValuationOutflow, type ValuationOutflow } from './inventory-valuation.js';
 import {
   dispatchIrnPresent,
   getDispatchIrn,
@@ -446,6 +447,35 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
   );
 }
 
+/**
+ * Why a dispatch decrement missed. Picking only ever allocates OWNED stock and both decrements are
+ * pinned to stock_class 'owned', so a picked balance that is consignment/vmi/job_work by dispatch
+ * time (reclassified after the pick) is a business refusal, not an inconsistency: shipping a
+ * supplier's or customer's goods on a sales order needs an ownership transfer first (a purchase,
+ * which is a valuation event), and that flow does not exist. It answers a clean 409 and touches
+ * neither stock nor valuation; anything else stays the 500 it was.
+ */
+async function stockDecrementFailure(
+  dispatchOrderId: string,
+  message: string,
+  client: PoolClient,
+): Promise<AppError> {
+  const notOwned = await client.query(
+    `SELECT DISTINCT sb.sku, sb.stock_class FROM stock_balance sb
+       JOIN packing_record pr ON pr.sku = sb.sku AND pr.dispatch_order_id = $1
+      WHERE sb.stock_class <> 'owned' AND sb.picked > 0
+      ORDER BY sb.sku, sb.stock_class`,
+    [dispatchOrderId],
+  );
+  if (notOwned.rows.length === 0) return new AppError(500, 'STOCK_DECREMENT_FAILED', message);
+  return new AppError(
+    409,
+    'DISPATCH_STOCK_NOT_OWNED',
+    'Cannot dispatch: the picked stock is not owned stock; only owned stock ships on a sales order',
+    { dispatch_order_id: dispatchOrderId, not_owned: notOwned.rows },
+  );
+}
+
 export async function applyDispatchDispatchedProjection(
   envelope: DispatchDispatchedEnvelope,
   client: PoolClient,
@@ -629,10 +659,10 @@ export async function applyDispatchDispatchedProjection(
       remaining -= take;
     }
     if (remaining !== 0n) {
-      throw new AppError(
-        500,
-        'STOCK_DECREMENT_FAILED',
+      throw await stockDecrementFailure(
+        p.dispatch_order_id,
         'Stock balance not found for one or more dispatched lot-less lines; inventory may be inconsistent',
+        client,
       );
     }
   }
@@ -659,12 +689,30 @@ export async function applyDispatchDispatchedProjection(
     [p.dispatch_order_id],
   );
   if ((decResult.rowCount ?? 0) < packingCount) {
-    throw new AppError(
-      500,
-      'STOCK_DECREMENT_FAILED',
+    throw await stockDecrementFailure(
+      p.dispatch_order_id,
       'Stock balance not found for one or more dispatched lots; inventory may be inconsistent',
+      client,
     );
   }
+
+  // Owner ruling 2026-09-20: a customer dispatch is an owned outflow (both decrements above are
+  // pinned to stock_class 'owned') and relieves inventory valuation, one block per SKU in SKU order
+  // (a stable lock order). The relieved figures are frozen onto the payload as NUMERIC strings as the
+  // audit record; finished goods that were never valued simply record an unvalued quantity. Every
+  // stock row is decremented above before the first valuation row is locked.
+  const dispatchedBySku = await client.query(
+    `SELECT sku, SUM(packed_qty::numeric)::text AS packed_qty FROM packing_record
+      WHERE dispatch_order_id = $1 GROUP BY sku ORDER BY sku`,
+    [p.dispatch_order_id],
+  );
+  const valuation: ValuationOutflow[] = [];
+  for (const row of dispatchedBySku.rows as Array<Record<string, string>>) {
+    valuation.push(
+      await applyValuationOutflow({ sku: row['sku']!, quantity: row['packed_qty']! }, client),
+    );
+  }
+  (p as unknown as Record<string, unknown>)['valuation'] = valuation;
 
   // Update dispatch_order_status
   await client.query(

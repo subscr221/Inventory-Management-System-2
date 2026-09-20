@@ -95,8 +95,8 @@ async function authFor(port: number, sub: string): Promise<Record<string, string
 /**
  * Pilot B4: a GRN is the valuated movement of the receiving flow (Story 2.4 AC1 "or from GRNs once
  * Epics 3 and 4 deliver receiving"), so an owned receipt must feed inventory_valuation at the PO
- * line's unit price. Production-stream issues are deliberately NOT covered here: Story 6.2 Binding
- * Decision 9 rules that they do not relieve valuation (deferred-work row 474).
+ * line's unit price. Outflows are covered in pilot-a-valuation-follows-outflows.test.ts: the owner
+ * ruling of 2026-09-20 superseded Story 6.2 Binding Decision 9 (deferred-work row 474).
  */
 describe('Pilot B4: inventory valuation follows goods receipts', () => {
   let server: Server;

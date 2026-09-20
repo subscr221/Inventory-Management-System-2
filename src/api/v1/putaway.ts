@@ -23,6 +23,8 @@ import {
 import { isTaskPriority, TASK_PRIORITIES } from '../../read/projections/pick_task.js';
 import { listVelocityClasses } from '../../read/projections/velocity_class.js';
 import { activeUserExistsById } from '../../read/projections/users.js';
+import { getLocationByCode, getLocationById } from '../../read/projections/location_register.js';
+import { stampActedLocation } from './actor-stamp.js';
 import { computeDirectedSuggestion } from '../../warehouse/putaway-suggestion.js';
 import { runReslottingJob } from '../../warehouse/reslotting-job.js';
 
@@ -299,7 +301,16 @@ const completePutawayBase: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  const actor = actorContext(req);
+  // Pilot G2: the completion acts at ONE bin, so that bin is the audit stamp. An unknown id or code
+  // is left to the projection seam (404 PUTAWAY_LOCATION_NOT_FOUND) and stamps nothing new.
+  const destination =
+    typeof body['actual_location_code'] === 'string'
+      ? await getLocationByCode(body['actual_location_code'])
+      : typeof body['actual_location_id'] === 'string' &&
+          UUID_REGEX.test(body['actual_location_id'])
+        ? await getLocationById(body['actual_location_id'])
+        : null;
+  const actor = stampActedLocation(req, actorContext(req), 'warehouse', destination?.location_id);
   let persisted: Awaited<ReturnType<typeof persistEvent>>;
   try {
     persisted = await persistEvent(

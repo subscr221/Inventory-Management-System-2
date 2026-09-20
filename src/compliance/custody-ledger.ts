@@ -26,6 +26,7 @@ import { isPositiveQtyString, JOB_WORK_STOCK_CLASS } from './jobwork-receipt.js'
 import { qtyAdd, qtyCompare, qtyFromScaled, qtyNegate, qtyToScaled } from './custody-statement.js';
 import { resolveApprover } from '../api/v1/indents.js';
 import { isChallanClass, reconcileReturnClocks } from './jobwork-return-clock.js';
+import { applyValuationOutflow } from './inventory-valuation.js';
 
 /**
  * Story 9.3: custody ledger consumption and own-material seam (FR-JW-05, FR-JW-06, FR-JW-07).
@@ -950,6 +951,13 @@ export async function applyCustodyOwnMaterialProjection(
       quantity: p.quantity,
       occurred_at: occurredAt,
     },
+    client,
+  );
+  // Owner ruling 2026-09-20: the processor's OWN material consumed on a job is an owned outflow and
+  // relieves inventory valuation (customer-owned job_work stock never does - it was never valued).
+  // The relieved figures are frozen onto the payload as NUMERIC strings (the audit record).
+  (envelope.payload as Record<string, unknown>)['valuation'] = await applyValuationOutflow(
+    { sku: p.sku, quantity: p.quantity },
     client,
   );
 

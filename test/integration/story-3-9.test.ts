@@ -561,6 +561,64 @@ describe('Story 3.9 Forward-Pick Replenishment', () => {
     assert.strictEqual(res.body['error_code'], 'REPLENISHMENT_DESTINATION_OUTSIDE_ZONE');
   });
 
+  it('Pilot R6: a lot-controlled replenishment keeps its lot numbers, and a held lot stays behind', async () => {
+    const localSku = `SKU-39-R6-${run}`;
+    const lots = { held: `L39-A-HELD-${run}`, first: `L39-B-${run}`, second: `L39-C-${run}` };
+    await makeRequest(
+      port,
+      'PUT',
+      '/api/v1/replenishment/config',
+      { sku: localSku, zone_id: fpZoneId, min_qty: 10, max_qty: 30 },
+      managerHeaders,
+    );
+    // The held lot sorts first, so a drain that ignores the hold would take it before the others.
+    for (const [lot, onHand, hold] of [
+      [lots.held, 50, 'held'],
+      [lots.first, 20, 'none'],
+      [lots.second, 20, 'none'],
+    ] as const) {
+      await getPool().query(
+        `INSERT INTO lot_master (lot_id, lot_number, sku, quality_hold_status) VALUES ($1, $2, $3, $4)`,
+        [randomUUID(), lot, localSku, hold],
+      );
+      await getPool().query(
+        `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand) VALUES ($1, $2, $3, 'owned', $4)`,
+        [localSku, reserveBinId, lot, onHand],
+      );
+    }
+
+    const checkRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/replenishment/check',
+      { site_id: siteAId, sku: localSku },
+      managerHeaders,
+    );
+    assert.strictEqual(checkRes.status, 200, checkRes.raw);
+    const created = checkRes.body['created'] as Array<Record<string, unknown>>;
+    assert.strictEqual(created.length, 1, checkRes.raw);
+    const confirmRes = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/replenishment-tasks/${created[0]!['replenishment_task_id'] as string}/confirm`,
+      { to_location_id: fpBinId },
+      frontlineHeaders,
+    );
+    assert.strictEqual(confirmRes.status, 200, confirmRes.raw);
+
+    const balances = await getPool().query(
+      `SELECT location_id, lot_id, on_hand::float AS on_hand FROM stock_balance
+        WHERE sku = $1 AND on_hand <> 0 ORDER BY location_id = $2 DESC, lot_id`,
+      [localSku, reserveBinId],
+    );
+    assert.deepStrictEqual(balances.rows, [
+      { location_id: reserveBinId, lot_id: lots.held, on_hand: 50 },
+      { location_id: reserveBinId, lot_id: lots.second, on_hand: 10 },
+      { location_id: fpBinId, lot_id: lots.first, on_hand: 20 },
+      { location_id: fpBinId, lot_id: lots.second, on_hand: 10 },
+    ]);
+  });
+
   // -------------------------------------------------------------------------
   // RBAC and site scoping
   // -------------------------------------------------------------------------

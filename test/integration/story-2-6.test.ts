@@ -471,6 +471,86 @@ describe('Story 2.6 Cycle Counting and Physical Inventory', () => {
     assert.strictEqual(audit.rows[0]!['c'], 1, 'the adjustment carries a statutory audit row');
   });
 
+  /** Counts `sku` at locA as `counted`, approves the variance, and returns the stored stock.adjusted payload. */
+  async function countAndApprove(sku: string, counted: number): Promise<Record<string, unknown>> {
+    const countId = await createCount([sku], counterHeaders);
+    const submit = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/cycle-counts/${countId}/submit`,
+      { lines: [{ sku, counted_quantity: counted }] },
+      counterHeaders,
+    );
+    const adjustmentId = (submit.body['lines'] as Array<Record<string, unknown>>)[0]![
+      'adjustment_id'
+    ] as string;
+    const approve = await makeRequest(
+      port,
+      'PATCH',
+      `/api/v1/cycle-counts/${countId}/adjustments/${adjustmentId}/approve`,
+      { reason_code: 'shrinkage' },
+      approverHeaders,
+    );
+    assert.strictEqual(approve.status, 200, JSON.stringify(approve.body));
+    const evt = await getPool().query(
+      `SELECT payload FROM domain_events WHERE event_type = 'stock.adjusted' AND payload->>'adjustment_id' = $1`,
+      [adjustmentId],
+    );
+    return evt.rows[0]!['payload'] as Record<string, unknown>;
+  }
+
+  async function valuationText(sku: string): Promise<Record<string, unknown> | undefined> {
+    const val = await getPool().query(
+      `SELECT quantity_on_hand::text AS quantity, carrying_value::text AS value
+         FROM inventory_valuation WHERE sku = $1`,
+      [sku],
+    );
+    return val.rows[0];
+  }
+
+  it('owner default D3: a count loss is an outflow - it relieves the carrying value, never fails on unvalued stock, and freezes the block', async () => {
+    await seedItem('CC-D3-LOSS');
+    await seedStock('CC-D3-LOSS', locAId, 100, null);
+    // Only 10 of the 100 units carry value, written down from 100 to 70.
+    await getPool().query(
+      `INSERT INTO inventory_valuation (sku, quantity_on_hand, running_average_cost, carrying_value, pre_writedown_cost, cumulative_write_down)
+       VALUES ('CC-D3-LOSS', 10, 10, 70, 100, 30)`,
+    );
+    const payload = await countAndApprove('CC-D3-LOSS', 40);
+    assert.deepStrictEqual(await valuationText('CC-D3-LOSS'), {
+      quantity: '0.000000',
+      value: '0.000000',
+    });
+    const block = payload['valuation'] as Record<string, unknown>;
+    assert.strictEqual(block['value'], '70.000000');
+    assert.strictEqual(Number(block['valued_quantity']), 10);
+    assert.strictEqual(Number(block['unvalued_quantity']), 50);
+  });
+
+  it('owner default D3: a count gain has no price - it comes in at the carrying cost per unit, or unvalued when there is none', async () => {
+    await seedItem('CC-D3-GAIN');
+    await seedStock('CC-D3-GAIN', locAId, 100, null);
+    await getPool().query(
+      `INSERT INTO inventory_valuation (sku, quantity_on_hand, running_average_cost, carrying_value, pre_writedown_cost, cumulative_write_down)
+       VALUES ('CC-D3-GAIN', 100, 10, 700, 1000, 300)`,
+    );
+    const payload = await countAndApprove('CC-D3-GAIN', 110);
+    assert.deepStrictEqual(await valuationText('CC-D3-GAIN'), {
+      quantity: '110.000000',
+      value: '770.000000',
+    });
+    assert.strictEqual((payload['valuation'] as Record<string, unknown>)['unit_cost'], '7.000000');
+
+    await seedItem('CC-D3-GAIN-NONE');
+    await seedStock('CC-D3-GAIN-NONE', locAId, 100, null);
+    const unvalued = await countAndApprove('CC-D3-GAIN-NONE', 110);
+    const block = unvalued['valuation'] as Record<string, unknown>;
+    assert.strictEqual(block['unit_cost'], null, 'no price is invented');
+    assert.strictEqual(Number(block['unvalued_quantity']), 10);
+    const row = await valuationText('CC-D3-GAIN-NONE');
+    assert.ok(row === undefined || row['value'] === '0.000000', JSON.stringify(row));
+  });
+
   it('SOD: the count submitter cannot approve its own adjustment (COUNT_ENTERER_CANNOT_APPROVE)', async () => {
     await seedItem('CC-SOD');
     await seedStock('CC-SOD', locAId, 20, null);
