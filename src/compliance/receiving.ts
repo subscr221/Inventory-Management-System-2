@@ -33,6 +33,7 @@ import { insertCrossDockTask } from '../read/projections/cross_dock_task.js';
 import { isCrossDockQuantityCapacity } from './cross-dock.js';
 import { applyLotSerialValidation } from './lot-serial-validation.js';
 import { applyStockBalanceProjection } from './stock-balance.js';
+import { applyInventoryValuationProjection } from './inventory-valuation.js';
 
 /**
  * Central receiving compliance seam (Story 3.4). Split like every other seam: assert* runs BEFORE any
@@ -50,6 +51,13 @@ import { applyStockBalanceProjection } from './stock-balance.js';
 const RECEIVING_STREAM_TYPES = new Set(['receiving']);
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const UNIT_COST_REGEX = /^\d+(\.\d+)?$/;
+/**
+ * The currency the inventory books are kept in. The platform has no configurable books currency:
+ * valuation carries no currency column and supplier invoices accept INR only
+ * (SUPPORTED_CURRENCIES in supplier-invoice.ts), so INR it is until multi-currency is designed.
+ */
+const BOOKS_CURRENCY = 'INR';
 const NUMERIC_REGEX = /^\d{1,15}(\.\d{1,3})?$/;
 
 const QC_HOLD_ZONE_CODE = 'ZONE-QC-HOLD';
@@ -216,6 +224,27 @@ export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
       'INVALID_PARAMS',
       'target_location_id or target_location_code is required',
     );
+  }
+
+  // Pilot B4: unit_cost is optional (the PO line price is the default cost basis), but a supplied
+  // value feeds Story 2.4 valuation, so it must be a non-negative number or plain decimal string.
+  // Validated WITHOUT rewriting the payload: a NUMERIC travels as a string, so the stored event
+  // keeps the exact decimal that was submitted. Only the stock.received view built in the applier
+  // converts it, because the valuation seam consumes a number.
+  if (p['unit_cost'] !== undefined && p['unit_cost'] !== null) {
+    const raw = p['unit_cost'];
+    const unitCost =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && UNIT_COST_REGEX.test(raw)
+          ? Number(raw)
+          : NaN;
+    if (!Number.isFinite(unitCost) || unitCost < 0)
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'unit_cost must be a non-negative number when supplied',
+      );
   }
 
   if (p['expiry_date'] !== undefined && p['expiry_date'] !== null) {
@@ -605,6 +634,33 @@ export async function applyGoodsReceivedProjection(
     }
   }
 
+  // Pilot B4: an owned receipt is valued at the PO line's unit price unless the line carries its
+  // own unit_cost. The resolved cost is written back onto the payload BEFORE the domain_events
+  // insert, so the persisted goods.received event is self-contained: a replay re-applies the same
+  // cost even if the ERP later re-syncs a different price onto the PO line projection. Non-owned
+  // classes (consignment, vmi, job_work, offcut) carry no Ind AS 2 cost basis and are left alone.
+  //
+  // The default applies ONLY when the PO price is a safe cost basis: the PO is in the books
+  // currency (a foreign price is not a rupee cost and nothing here converts it), the price is
+  // above zero (0 is an unpriced placeholder, not a cost), and the item is not valued by
+  // specific_identification (that method needs serials at the valuation seam, and such an item was
+  // receivable without them before B4). Otherwise the receipt moves stock exactly as before B4 and
+  // no cost is written onto the event. An explicit unit_cost from the caller is never second-guessed.
+  // The cost is read as the PO's NUMERIC text - money stays a string on the event, never a float.
+  if (
+    stockClass === 'owned' &&
+    (p['unit_cost'] === undefined || p['unit_cost'] === null) &&
+    po.currency === BOOKS_CURRENCY &&
+    item.valuation_method !== 'specific_identification'
+  ) {
+    const price = await client.query(
+      `SELECT unit_price::text AS unit_price FROM erp_purchase_order_line
+        WHERE po_number_ext = $1 AND line_no = $2 AND unit_price > 0`,
+      [po.po_number_ext, poLine.line_no],
+    );
+    if (price.rows.length > 0) p['unit_cost'] = price.rows[0]['unit_price'] as string;
+  }
+
   // 6. Post the stock movement through a synthetic stock.received view so all existing Story 2.2/2.3/
   //    2.8 enforcement (lot auto-create from expiry_date, serial receipt, owner-party gate, NUMERIC
   //    precision) applies uniformly. The raw goods.received envelope (stream 'receiving') is a no-op
@@ -641,6 +697,11 @@ export async function applyGoodsReceivedProjection(
   }
   await applyLotSerialValidation(stockView, client, eventId);
   await applyStockBalanceProjection(stockView, client);
+  // Pilot B4: the GRN is the valuated movement (Story 2.4 AC1 "or from GRNs"). The top-level
+  // valuation seam gates on stream 'inventory', so - exactly like the two helpers above - the raw
+  // goods.received envelope is a no-op for it and the view must be passed instead. The seam itself
+  // skips non-owned stock classes and an unpriced receipt, inside this same transaction.
+  await applyInventoryValuationProjection(stockView, client, eventId);
 
   // 7. Persist the GRN header, GRN line, and putaway task (posted/quarantined lines only). NEVER
   //    writes any erp_* projection (AC6). The lot_id may have been auto-resolved onto the view above.

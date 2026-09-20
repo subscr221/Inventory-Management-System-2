@@ -5,10 +5,15 @@ import { AppError, sendJson } from '../../middleware/error.js';
 import {
   getAuthContext,
   getAuthorizedAssignment,
+  getAuthorizedLocation,
   getParsedBody,
   getTraceId,
 } from '../../middleware/context.js';
-import { requireRole, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
+import {
+  requireRole,
+  auditLocationFor,
+  permittedLocationsForModuleScope,
+} from '../../middleware/rbac.js';
 import { validateEnvelope, persistEvent } from '../../events/store.js';
 import {
   validateEdgeEnvelope,
@@ -421,6 +426,10 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   // central-only; close is caught by a payload predicate because it shares an event type with the
   // transitions a plant device legitimately records offline. AC 6 requires the REFUSAL itself to
   // reach the edit log - it never reaches persistEvent, so it is written here before rethrowing.
+  // Review fix 3: a covering (site) assignment acting at a location beneath it stamps that
+  // location; an exact match and the wildcard stamp exactly what they did before. Resolved before
+  // the refusal below so a rejected and an accepted capture audit the same location (Pilot F3a).
+  const stampLocationId = auditLocationFor(assignment, getAuthorizedLocation(req));
   try {
     assertEdgeProductionEventAllowed(body);
   } catch (err: unknown) {
@@ -429,7 +438,7 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
         trace_id: getTraceId(req) ?? '',
         user_id: authContext.userId,
         role: assignment.role,
-        location_id: assignment.locationId,
+        location_id: stampLocationId,
         endpoint: req.url ?? '',
         method: req.method ?? 'POST',
         event_id: null,
@@ -464,7 +473,7 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   body.metadata.actor.user_id = authContext.userId;
   body.metadata.actor.role = assignment.role;
   let auditRole = assignment.role;
-  let auditLocationId = assignment.locationId;
+  let auditLocationId = stampLocationId;
   let authoritativeSiteId: string | null = null;
   if (body.stream_type === 'warehouse' && body.event_type === 'cross_dock_task.completed') {
     const taskId = body.payload['cross_dock_task_id'];
@@ -650,7 +659,7 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   if (authoritativeSiteId !== null) {
     body.metadata.actor.location_id = authoritativeSiteId;
   } else if (assignment.locationId !== '*') {
-    body.metadata.actor.location_id = assignment.locationId;
+    body.metadata.actor.location_id = stampLocationId;
   } else if (body.stream_type === 'inventory') {
     body.metadata.actor.location_id = NO_LOCATION_UUID;
   }

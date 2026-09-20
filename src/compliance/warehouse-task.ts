@@ -7,6 +7,7 @@ import type {
   WarehouseTaskType,
 } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
+import { assertActorAtSite } from './actor-site.js';
 import { assignPickTask } from '../read/projections/pick_task.js';
 import { assignPutawayTask } from '../read/projections/putaway_task.js';
 import { upsertSlaConfig } from '../read/projections/task_sla_config.js';
@@ -29,12 +30,6 @@ import { activeUserExistsById } from '../read/projections/users.js';
  */
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * The sentinel an actor carries when their assignment is site-wildcard rather than a single site.
- * Matches the value the API layer substitutes for a '*' location assignment.
- */
-const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 
 export const WAREHOUSE_TASK_TYPES: readonly WarehouseTaskType[] = [
   'receiving',
@@ -69,30 +64,6 @@ function isUuid(value: unknown): value is string {
 
 function reject(code: string, message: string, details: Record<string, unknown> = {}): never {
   throw new AppError(400, code, message, details);
-}
-
-/**
- * Fails closed unless the actor's assignment covers the site being written to. A wildcard actor
- * (NO_LOCATION_UUID) is permitted, matching the convention in src/compliance/pick.ts.
- */
-function assertActorSite(
-  actorLocationId: string,
-  siteId: string,
-  context: Record<string, unknown>,
-): void {
-  if (actorLocationId === NO_LOCATION_UUID) return;
-  if (actorLocationId !== siteId) {
-    throw new AppError(
-      403,
-      'LOCATION_ACCESS_DENIED',
-      `No assignment grants access to site "${siteId}"`,
-      {
-        ...context,
-        actor_location_id: actorLocationId,
-        site_id: siteId,
-      },
-    );
-  }
 }
 
 function assertSupervisor(role: string, eventType: string, action: string): void {
@@ -185,9 +156,12 @@ export async function applyTaskSlaConfigUpdatedProjection(
     envelope.event_type,
     'Changing a task SLA threshold',
   );
-  assertActorSite(envelope.metadata.actor.location_id, p.site_id, {
-    event_type: envelope.event_type,
-  });
+  await assertActorAtSite(
+    envelope.metadata.actor.location_id,
+    p.site_id,
+    { event_type: envelope.event_type },
+    client,
+  );
 
   const zoneId = p.zone_id ?? null;
   if (zoneId !== null) {
@@ -349,9 +323,12 @@ export async function applyPutawayTaskAssignedProjection(
     );
   }
   const current = task.rows[0]!;
-  assertActorSite(envelope.metadata.actor.location_id, current['site_id'] as string, {
-    putaway_task_id: p.putaway_task_id,
-  });
+  await assertActorAtSite(
+    envelope.metadata.actor.location_id,
+    current['site_id'] as string,
+    { putaway_task_id: p.putaway_task_id },
+    client,
+  );
 
   const assigned = await assignPutawayTask(
     {
@@ -427,7 +404,12 @@ export async function applyPickTaskAssignedProjection(
       { pick_task_id: p.pick_task_id },
     );
   }
-  assertActorSite(envelope.metadata.actor.location_id, siteId, { pick_task_id: p.pick_task_id });
+  await assertActorAtSite(
+    envelope.metadata.actor.location_id,
+    siteId,
+    { pick_task_id: p.pick_task_id },
+    client,
+  );
 
   const assigned = await assignPickTask(
     {

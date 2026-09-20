@@ -9,7 +9,7 @@ import {
   getTraceId,
 } from '../../middleware/context.js';
 import { requireRole, permittedLocationsForModuleScope } from '../../middleware/rbac.js';
-import { persistEvent } from '../../events/store.js';
+import { persistEvent, readStream } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import {
   getForwardPickConfig,
@@ -303,29 +303,63 @@ const confirmReplenishmentBase: RouteHandler = async (req, res, params) => {
   }
   assertSiteAccess(req, task.site_id, 'write');
 
+  // Pilot F4 (bug 13): confirming a completed task is a replay - 2xx returning the ORIGINAL event,
+  // never a second replenishment_task.completed. A concurrent double-submit that slips past this
+  // read is refused by the seam (409 REPLENISHMENT_TASK_ALREADY_COMPLETED) and answered below with
+  // the same replay shape, exactly as the putaway completion does.
+  const answerReplay = async (): Promise<void> => {
+    const original = (await readStream('warehouse', replenishmentTaskId)).find(
+      (e) => e.event_type === 'replenishment_task.completed',
+    );
+    if (!original) {
+      throw new AppError(
+        500,
+        'REPLENISHMENT_COMPLETION_EVENT_MISSING',
+        `Replenishment task ${replenishmentTaskId} is completed but its completion event was not found`,
+        { replenishment_task_id: replenishmentTaskId },
+      );
+    }
+    const current = await getReplenishmentTaskById(replenishmentTaskId);
+    sendJson(res, 200, { event_id: original.event_id, task: current, replayed: true });
+  };
+  if (task.status === 'completed') {
+    await answerReplay();
+    return;
+  }
+
   const actor = actorContextForSite(req, task.site_id);
-  const persisted = await persistEvent(
-    {
-      stream_type: 'warehouse',
-      stream_id: replenishmentTaskId,
-      event_type: 'replenishment_task.completed',
-      payload: {
-        replenishment_task_id: replenishmentTaskId,
-        to_location_id:
-          typeof body['to_location_id'] === 'string' ? body['to_location_id'] : undefined,
-        to_location_code:
-          typeof body['to_location_code'] === 'string' ? body['to_location_code'] : undefined,
-        completed_by: actor.userId,
+  let persisted: Awaited<ReturnType<typeof persistEvent>>;
+  try {
+    persisted = await persistEvent(
+      {
+        stream_type: 'warehouse',
+        stream_id: replenishmentTaskId,
+        event_type: 'replenishment_task.completed',
+        payload: {
+          replenishment_task_id: replenishmentTaskId,
+          to_location_id:
+            typeof body['to_location_id'] === 'string' ? body['to_location_id'] : undefined,
+          to_location_code:
+            typeof body['to_location_code'] === 'string' ? body['to_location_code'] : undefined,
+          completed_by: actor.userId,
+        },
+        metadata: {
+          correlation_id: task.correlation_id,
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: new Date().toISOString(),
+        },
+        idempotency_key:
+          typeof body['idempotency_key'] === 'string' ? body['idempotency_key'] : null,
       },
-      metadata: {
-        correlation_id: task.correlation_id,
-        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
-        occurred_at: new Date().toISOString(),
-      },
-      idempotency_key: typeof body['idempotency_key'] === 'string' ? body['idempotency_key'] : null,
-    },
-    auditCtxFor(req, actor, 200),
-  );
+      auditCtxFor(req, actor, 200),
+    );
+  } catch (err: unknown) {
+    if (err instanceof AppError && err.errorCode === 'REPLENISHMENT_TASK_ALREADY_COMPLETED') {
+      await answerReplay();
+      return;
+    }
+    throw err;
+  }
 
   const updated = await getReplenishmentTaskById(replenishmentTaskId);
   sendJson(res, 200, { event_id: persisted.event_id, task: updated });

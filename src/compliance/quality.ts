@@ -18,6 +18,7 @@ import {
 import { appendTraceEntry } from '../read/projections/lot_trace.js';
 import { getBomById, getBomRevisionById } from '../read/projections/bom.js';
 import { locationExistsById } from '../read/projections/location_register.js';
+import { resolveActorSiteId } from './actor-site.js';
 import { assertNotRdDraft } from './bom.js';
 import {
   findActiveDelegation,
@@ -5149,7 +5150,9 @@ async function applyHoldPlaced(
     );
   }
 
-  const siteId = task?.site_id ?? envelope.metadata.actor.location_id;
+  // Pilot R5: the stamp may be a bin; the fallback site is that location's site.
+  const siteId =
+    task?.site_id ?? (await resolveActorSiteId(envelope.metadata.actor.location_id, client));
   await insertQcQualityHold(
     {
       hold_id: holdId,
@@ -5414,7 +5417,11 @@ async function applyNcrRaised(
     config.qc.repeatDefectWindowDays,
     client,
   );
-  const siteId = task?.site_id ?? openHold?.site_id ?? envelope.metadata.actor.location_id;
+  // Pilot R5: the stamp may be a bin; the fallback site is that location's site.
+  const siteId =
+    task?.site_id ??
+    openHold?.site_id ??
+    (await resolveActorSiteId(envelope.metadata.actor.location_id, client));
   await insertHoldSourcedQcNcr(
     {
       ncr_id: ncrId,

@@ -172,7 +172,7 @@ async function resolveDispatchOrderLineSite(
 function parsePackingLines(body: Record<string, unknown>): Array<{
   sku: string;
   packed_qty: string;
-  lot_id: string;
+  lot_id: string | null;
   carton_count: number;
   actual_weight_kg: number | null;
   label_ref: string | null;
@@ -192,7 +192,8 @@ function parsePackingLines(body: Record<string, unknown>): Array<{
     const obj = line as Record<string, unknown>;
     const sku = obj['sku'];
     const packedQty = obj['packed_qty'] ?? obj['packedQty'];
-    const lotId = obj['lot_id'] ?? obj['lotId'];
+    // Not `??`: an explicit null lot_id is a value (the lot-less form), only an absent key falls back.
+    const lotId = obj['lot_id'] !== undefined ? obj['lot_id'] : obj['lotId'];
     const cartonCount = obj['carton_count'] ?? obj['cartonCount'];
     const actualWeightKg = obj['actual_weight_kg'] ?? obj['actualWeightKg'];
     const labelRef = obj['label_ref'] ?? obj['labelRef'];
@@ -211,11 +212,13 @@ function parsePackingLines(body: Record<string, unknown>): Array<{
         `packingLines[${idx}].packed_qty is required and must be a non-empty string`,
       );
     }
-    if (typeof lotId !== 'string' || !UUID_REGEX.test(lotId)) {
+    // Pilot B3: an explicit null is the lot-less form (stock that is not lot-controlled); the
+    // compliance seam decides whether the item and the confirmed pick allow it.
+    if (lotId !== null && (typeof lotId !== 'string' || !UUID_REGEX.test(lotId))) {
       throw new AppError(
         400,
         'INVALID_PARAMS',
-        `packingLines[${idx}].lot_id is required and must be a valid UUID`,
+        `packingLines[${idx}].lot_id is required and must be a valid UUID, or null for stock that is not lot-controlled`,
       );
     }
     if (typeof cartonCount !== 'number' || !Number.isInteger(cartonCount) || cartonCount < 0) {

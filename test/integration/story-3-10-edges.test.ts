@@ -650,4 +650,89 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
       isCode('CROSS_DOCK_ORDER_NOT_OPEN'),
     );
   });
+
+  it('Pilot F1: an actor stamped at a bin of the task site passes the site seam; another site is refused', async () => {
+    const f1Sku = `${sku}-F1`;
+    const poRef = `PO-F1-${run}`;
+    const correlationId = randomUUID();
+    const taskId = randomUUID();
+    const foreignBinId = randomUUID();
+    await getPool().query(
+      `INSERT INTO location_register
+         (location_id, location_code, level, parent_location_id, site_id, zone_type, temperature_class, size_class, hazmat_allowed, quarantine, access_restricted, status)
+       VALUES ($1, $2, 'bin', $3, $3, 'general', 'ambient', 'standard', false, false, false, 'active')`,
+      [foreignBinId, `OTHER-BIN-310E-${run}`, otherSiteId],
+    );
+    await seedItem(f1Sku);
+    await seedPo(poRef, f1Sku, '100');
+    await seedSalesOrder(f1Sku, randomUUID(), `SO-F1-${run}`, '2', '2026-08-01');
+    await seedWeighment(poRef, correlationId);
+    await receiveCrossDock({
+      poRef,
+      correlationId,
+      grnId: randomUUID(),
+      grnLineId: randomUUID(),
+      taskId,
+      lotNumber: `LOT-F1-${run}`,
+      qty: '2.000',
+      sku: f1Sku,
+      stagingSelector: { staging_zone_id: stagingZoneId },
+      occurredAt: '2026-07-31T09:40:00.000Z',
+    });
+    const assign = (locationId: typeof siteId, occurredAt: string): Promise<unknown> =>
+      persistEvent({
+        event_id: randomUUID(),
+        stream_type: 'warehouse',
+        stream_id: taskId,
+        event_type: 'cross_dock_task.assigned',
+        payload: { cross_dock_task_id: taskId, assigned_to: operator2Id },
+        metadata: {
+          correlation_id: correlationId,
+          actor: actor(managerId, 'warehouse_manager', locationId),
+          occurred_at: occurredAt,
+        },
+      });
+
+    await assert.rejects(
+      assign(foreignBinId, '2026-07-31T09:41:00.000Z'),
+      isCode('LOCATION_ACCESS_DENIED'),
+    );
+    await assert.rejects(
+      assign(otherSiteId, '2026-07-31T09:41:30.000Z'),
+      isCode('LOCATION_ACCESS_DENIED'),
+    );
+    // The B1 audit stamp: a site-scoped supervisor who acted at a staging bin of this site.
+    await assign(stagingBinId, '2026-07-31T09:42:00.000Z');
+    const assigned = await getPool().query(
+      `SELECT assigned_to FROM cross_dock_task WHERE cross_dock_task_id = $1`,
+      [taskId],
+    );
+    assert.strictEqual(assigned.rows[0]!['assigned_to'], operator2Id);
+
+    // Completion by the operator stamped at the same bin passes the seam as well.
+    await persistEvent({
+      event_id: randomUUID(),
+      stream_type: 'warehouse',
+      stream_id: taskId,
+      event_type: 'cross_dock_task.completed',
+      payload: {
+        cross_dock_task_id: taskId,
+        to_location_id: stagingBinId,
+        pick_task_id: randomUUID(),
+        pick_line_id: randomUUID(),
+      },
+      metadata: {
+        correlation_id: correlationId,
+        actor: actor(operator2Id, 'warehouse_operator', stagingBinId),
+        occurred_at: '2026-07-31T09:43:00.000Z',
+      },
+    });
+
+    // Pilot F2: the cross-dock move is a relocation, so it must not start the issue clock.
+    const clock = await getPool().query(
+      `SELECT location_id FROM stock_balance WHERE sku = $1 AND last_issue_at IS NOT NULL`,
+      [f1Sku],
+    );
+    assert.deepStrictEqual(clock.rows, []);
+  });
 });

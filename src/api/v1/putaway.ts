@@ -13,7 +13,7 @@ import {
   permittedLocationsForModule,
   permittedLocationsForModuleScope,
 } from '../../middleware/rbac.js';
-import { persistEvent } from '../../events/store.js';
+import { persistEvent, readStream } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import {
   listPutawayTasks,
@@ -66,6 +66,11 @@ function actorContext(req: IncomingMessage): ActorContext {
  * belongs to rather than whichever warehouse write assignment the RBAC layer happened to match
  * first. The audit fields still come from the authorized assignment, so the audit log records the
  * supervisor's true site even when their primary write site differs.
+ *
+ * Pilot F3(b): the exact site-or-wildcard match is deliberate, not a missed coverage spot. Putaway
+ * work is a site-level duty: every write handler here first passes assertSiteAccess on the TASK
+ * SITE, and hierarchy coverage only rolls down, so a zone- or bin-scoped assignment never holds the
+ * site id and is refused before this runs. The same holds for pick, replenishment and cross-dock.
  */
 function actorContextForSite(req: IncomingMessage, targetSiteId: string): ActorContext {
   const base = actorContext(req);
@@ -269,38 +274,75 @@ const completePutawayBase: RouteHandler = async (req, res, params) => {
   }
   assertSiteAccess(req, task.site_id, 'write');
 
+  // Pilot B2: completing a completed task is a replay - the REST replay contract is 2xx returning
+  // the ORIGINAL event, never a second putaway.completed. A concurrent double-submit that slips
+  // past this read is refused by the projection seam (409 PUTAWAY_TASK_ALREADY_COMPLETED) and is
+  // answered below with the same replay shape, so the sequential and the racing loser agree.
+  const answerReplay = async (): Promise<void> => {
+    const original = (await readStream('putaway', putawayTaskId)).find(
+      (e) => e.event_type === 'putaway.completed',
+    );
+    if (!original) {
+      // A completed task with no completion event is a broken projection, not a successful replay.
+      throw new AppError(
+        500,
+        'PUTAWAY_COMPLETION_EVENT_MISSING',
+        `Putaway task ${putawayTaskId} is completed but its putaway.completed event was not found`,
+        { putaway_task_id: putawayTaskId },
+      );
+    }
+    const current = await getPutawayTaskById(putawayTaskId);
+    sendJson(res, 200, { event_id: original.event_id, task: current, replayed: true });
+  };
+  if (task.status === 'completed') {
+    await answerReplay();
+    return;
+  }
+
   const actor = actorContext(req);
-  const persisted = await persistEvent(
-    {
-      stream_type: 'putaway',
-      stream_id: putawayTaskId,
-      event_type: 'putaway.completed',
-      payload: {
-        putaway_task_id: putawayTaskId,
-        actual_location_id:
-          typeof body['actual_location_id'] === 'string' ? body['actual_location_id'] : undefined,
-        actual_location_code:
-          typeof body['actual_location_code'] === 'string'
-            ? body['actual_location_code']
-            : undefined,
-        correlation_id: task.grn_line_id,
-        override_reason_code:
-          typeof body['override_reason_code'] === 'string'
-            ? body['override_reason_code']
-            : undefined,
-        override_confidence:
-          typeof body['override_confidence'] === 'string' ? body['override_confidence'] : undefined,
-        completed_by: actor.userId,
+  let persisted: Awaited<ReturnType<typeof persistEvent>>;
+  try {
+    persisted = await persistEvent(
+      {
+        stream_type: 'putaway',
+        stream_id: putawayTaskId,
+        event_type: 'putaway.completed',
+        payload: {
+          putaway_task_id: putawayTaskId,
+          actual_location_id:
+            typeof body['actual_location_id'] === 'string' ? body['actual_location_id'] : undefined,
+          actual_location_code:
+            typeof body['actual_location_code'] === 'string'
+              ? body['actual_location_code']
+              : undefined,
+          correlation_id: task.grn_line_id,
+          override_reason_code:
+            typeof body['override_reason_code'] === 'string'
+              ? body['override_reason_code']
+              : undefined,
+          override_confidence:
+            typeof body['override_confidence'] === 'string'
+              ? body['override_confidence']
+              : undefined,
+          completed_by: actor.userId,
+        },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: new Date().toISOString(),
+        },
+        idempotency_key:
+          typeof body['idempotency_key'] === 'string' ? body['idempotency_key'] : null,
       },
-      metadata: {
-        correlation_id: randomUUID(),
-        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
-        occurred_at: new Date().toISOString(),
-      },
-      idempotency_key: typeof body['idempotency_key'] === 'string' ? body['idempotency_key'] : null,
-    },
-    auditCtxFor(req, actor, 200),
-  );
+      auditCtxFor(req, actor, 200),
+    );
+  } catch (err: unknown) {
+    if (err instanceof AppError && err.errorCode === 'PUTAWAY_TASK_ALREADY_COMPLETED') {
+      await answerReplay();
+      return;
+    }
+    throw err;
+  }
   const updated = await getPutawayTaskById(putawayTaskId);
   sendJson(res, 200, { event_id: persisted.event_id, task: updated });
 };

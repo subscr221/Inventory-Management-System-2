@@ -118,8 +118,11 @@ try {
     );
     for (const l of po.lines) {
       await client.query(
-        `INSERT INTO erp_purchase_order_line (po_number_ext, line_no, sku, ordered_qty, open_qty, unit_price, over_receipt_tolerance_pct, under_receipt_tolerance_pct, source_system, last_synced_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ERP', now())`,
+        // legacy_received_qty is what the ERP had received before the platform first saw the line;
+        // the sync sets it once on insert (erp_purchase_order.ts). Left at 0 here, the over-receipt
+        // guard would measure against the full ordered quantity (seen on staging 2026-09-20).
+        `INSERT INTO erp_purchase_order_line (po_number_ext, line_no, sku, ordered_qty, open_qty, unit_price, over_receipt_tolerance_pct, under_receipt_tolerance_pct, source_system, last_synced_at, legacy_received_qty)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ERP', now(), $4::numeric - $5::numeric)`,
         [po.po_number_ext, l.line_no, l.sku, l.ordered_qty, l.open_qty, l.unit_price, l.over_receipt_tolerance_pct, l.under_receipt_tolerance_pct],
       );
     }

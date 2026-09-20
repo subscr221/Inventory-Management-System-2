@@ -5,6 +5,7 @@ import { config } from '../config/index.js';
 import { AppError } from './error.js';
 import { lookupActiveUserWithRoles } from '../read/projections/users.js';
 import type { AuthContext } from './context.js';
+import { attachLocationCoverage } from './rbac.js';
 
 let remoteJwks: JWTVerifyGetKey | null = null;
 function getRemoteJwks(): JWTVerifyGetKey {
@@ -114,6 +115,9 @@ export async function authenticateRequest(req: IncomingMessage): Promise<AuthCon
   if (!user) {
     throw new AppError(401, 'UNAUTHORIZED', 'No active account for this identity');
   }
+
+  // Roll each location-scoped assignment down the register hierarchy once per request (B1).
+  await attachLocationCoverage(user.roles);
 
   return {
     userId: user.userId,

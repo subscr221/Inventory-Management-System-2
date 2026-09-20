@@ -411,7 +411,17 @@ export async function applyReplenishmentTaskCompletedProjection(
       },
     );
   }
-  if (task.status === 'completed') return;
+  // Pilot F4 (bug 13): a completed task is refused rather than skipped. The old silent return let
+  // persistEvent append a second replenishment_task.completed for a no-op, on the REST path and on
+  // a direct event post alike. The REST handler turns this code into its 200 replay answer.
+  if (task.status === 'completed') {
+    throw new AppError(
+      409,
+      'REPLENISHMENT_TASK_ALREADY_COMPLETED',
+      `Replenishment task "${p.replenishment_task_id}" is already completed`,
+      { replenishment_task_id: p.replenishment_task_id },
+    );
+  }
   if (task.status !== 'ready') {
     throw new AppError(
       409,
@@ -475,7 +485,13 @@ export async function applyReplenishmentTaskCompletedProjection(
   const completedBy = envelope.metadata.actor.user_id;
 
   await applyStockIssue(
-    { sku: task.sku, location_id: task.from_location_id, quantity: Number(task.quantity) },
+    // Pilot F2: a replenishment move is a relocation, not a consumption - the issue clock stays.
+    {
+      sku: task.sku,
+      location_id: task.from_location_id,
+      quantity: Number(task.quantity),
+      relocation: true,
+    },
     client,
   );
   await applyStockReceipt(

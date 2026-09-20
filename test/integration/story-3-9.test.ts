@@ -424,6 +424,102 @@ describe('Story 3.9 Forward-Pick Replenishment', () => {
       '170.000000',
       'a replayed confirmation must not move stock a second time',
     );
+
+    // Pilot F4 (bug 13): the replay answers with the ORIGINAL event and appends nothing.
+    assert.strictEqual(secondConfirm.body['event_id'], confirmRes.body['event_id']);
+    assert.strictEqual(secondConfirm.body['replayed'], true);
+    const completions = await getPool().query(
+      `SELECT count(*)::int AS n FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'replenishment_task.completed'`,
+      [taskId],
+    );
+    assert.strictEqual(completions.rows[0]!['n'], 1, 'a re-completion must not append an event');
+
+    // Pilot F2: a replenishment move is a relocation and must not start the issue clock.
+    const clock = await getPool().query(
+      `SELECT location_id FROM stock_balance WHERE sku = $1 AND last_issue_at IS NOT NULL`,
+      [localSku],
+    );
+    assert.deepStrictEqual(clock.rows, []);
+  });
+
+  it('Pilot F4: concurrent confirmations write exactly one event and all answer 200 with its id', async () => {
+    const localSku = `SKU-39-F4-${run}`;
+    await makeRequest(
+      port,
+      'PUT',
+      '/api/v1/replenishment/config',
+      { sku: localSku, zone_id: fpZoneId, min_qty: 10, max_qty: 30 },
+      managerHeaders,
+    );
+    await getPool().query(
+      `INSERT INTO stock_balance (sku, location_id, stock_class, on_hand)
+       VALUES ($1, $2, 'owned', 0), ($1, $3, 'owned', 200)`,
+      [localSku, fpBinId, reserveBinId],
+    );
+    const checkRes = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/replenishment/check',
+      { site_id: siteAId, sku: localSku },
+      managerHeaders,
+    );
+    assert.strictEqual(checkRes.status, 200, checkRes.raw);
+    const taskId = (checkRes.body['created'] as Array<Record<string, unknown>>)[0]![
+      'replenishment_task_id'
+    ] as string;
+
+    const answers = await Promise.all(
+      [1, 2, 3, 4].map(() =>
+        makeRequest(
+          port,
+          'POST',
+          `/api/v1/replenishment-tasks/${taskId}/confirm`,
+          { to_location_id: fpBinId },
+          frontlineHeaders,
+        ),
+      ),
+    );
+    for (const answer of answers) assert.strictEqual(answer.status, 200, answer.raw);
+    assert.strictEqual(new Set(answers.map((a) => a.body['event_id'])).size, 1);
+    const completions = await getPool().query(
+      `SELECT count(*)::int AS n FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'replenishment_task.completed'`,
+      [taskId],
+    );
+    assert.strictEqual(completions.rows[0]!['n'], 1);
+    const reserve = await getPool().query(
+      `SELECT on_hand FROM stock_balance WHERE sku = $1 AND location_id = $2 AND stock_class = 'owned'`,
+      [localSku, reserveBinId],
+    );
+    assert.strictEqual(reserve.rows[0]!['on_hand'], '170.000000');
+
+    // A direct event post on the completed task is refused by the seam and appends nothing.
+    const direct = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/events',
+      {
+        stream_type: 'warehouse',
+        stream_id: taskId,
+        event_type: 'replenishment_task.completed',
+        payload: { replenishment_task_id: taskId, to_location_id: fpBinId },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: randomUUID(), role: 'store_assistant', location_id: siteAId },
+          occurred_at: new Date().toISOString(),
+        },
+      },
+      frontlineHeaders,
+    );
+    assert.strictEqual(direct.status, 409, direct.raw);
+    assert.strictEqual(direct.body['error_code'], 'REPLENISHMENT_TASK_ALREADY_COMPLETED');
+    const after = await getPool().query(
+      `SELECT count(*)::int AS n FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'replenishment_task.completed'`,
+      [taskId],
+    );
+    assert.strictEqual(after.rows[0]!['n'], 1);
   });
 
   it('AC3: confirming to a destination outside the task zone is rejected with REPLENISHMENT_DESTINATION_OUTSIDE_ZONE', async () => {

@@ -5,6 +5,7 @@ import type {
   CrossDockTaskCompletedEnvelope,
 } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
+import { assertActorAtSite } from './actor-site.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import {
   assignCrossDockTask,
@@ -100,20 +101,9 @@ export function assertCrossDockEventShape(envelope: EventEnvelope): void {
   }
 }
 
-const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const ASSIGN_ROLES = new Set(['warehouse_manager', 'inventory_controller']);
 const COMPLETE_ROLES = new Set(['store_assistant', 'warehouse_operator']);
 const ASSIGNEE_ROLES = new Set(['store_assistant', 'warehouse_operator']);
-
-function assertActorSite(actorLocationId: string, siteId: string): void {
-  if (actorLocationId !== NO_LOCATION_UUID && actorLocationId !== siteId) {
-    throw new AppError(
-      403,
-      'LOCATION_ACCESS_DENIED',
-      `No assignment grants access to site "${siteId}"`,
-    );
-  }
-}
 
 async function assertActiveSiteOperator(
   userId: string,
@@ -177,7 +167,7 @@ export async function applyCrossDockTaskAssignedProjection(
   const task = await getCrossDockTaskByIdForUpdate(envelope.payload.cross_dock_task_id, client);
   if (!task)
     throw new AppError(404, CROSS_DOCK_ERROR_CODES.TASK_NOT_FOUND, 'Cross-dock task not found');
-  assertActorSite(envelope.metadata.actor.location_id, task.site_id);
+  await assertActorAtSite(envelope.metadata.actor.location_id, task.site_id, {}, client);
   await assertTaskAuthorities(task, client);
   const assignee = await client.query(
     `SELECT 1 FROM users u JOIN user_role_assignments ura ON ura.user_id = u.user_id
@@ -232,7 +222,7 @@ export async function applyCrossDockTaskCompletedProjection(
       CROSS_DOCK_ERROR_CODES.TASK_NOT_READY,
       'Completion timestamp cannot precede task creation',
     );
-  assertActorSite(envelope.metadata.actor.location_id, task.site_id);
+  await assertActorAtSite(envelope.metadata.actor.location_id, task.site_id, {}, client);
   await assertTaskAuthorities(task, client);
   const destination = await client.query(
     `WITH RECURSIVE ancestors AS (
@@ -363,7 +353,8 @@ export async function applyCrossDockTaskCompletedProjection(
       location_id: task.from_location_id,
       lot_id: lotNumber,
       quantity: task.quantity,
-      occurred_at: envelope.metadata.occurred_at,
+      // Pilot F2: a cross-dock move is a relocation, not a consumption - the issue clock stays.
+      relocation: true,
     },
     client,
   );

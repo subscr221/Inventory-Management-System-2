@@ -148,6 +148,8 @@
   "errors.LOCATION_NOT_FOUND": "The target location was not found or is not active. Confirm the location and try again.",
   "errors.PUTAWAY_TASK_NOT_FOUND": "The putaway task was not found. Refresh and try again.",
   "errors.PUTAWAY_TASK_NOT_HELD": "This putaway task is no longer awaiting release.",
+  "errors.PUTAWAY_DESTINATION_INVALID": "That location cannot take this putaway. Scan an active bin in this site.",
+  "errors.PUTAWAY_QC_HOLD_QUARANTINE_REQUIRED": "This lot is under QC hold and must be put away into a quarantine bin.",
   "errors.PICK_TASK_NOT_FOUND": "The pick task was not found. Refresh and try again.",
   "errors.PICK_LINE_NOT_FOUND": "The pick line was not found. Refresh and try again.",
   "errors.PICK_TASK_INVALID_PAYLOAD": "The pick task data is incomplete. Contact your supervisor.",

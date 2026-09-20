@@ -508,7 +508,8 @@ export interface PickLineInput {
   pick_line_id: string;
   dispatch_order_line_id: string;
   sku: string;
-  directed_lot_id: string;
+  /** lot_master.lot_id UUID; null for stock that is not lot-controlled (Pilot B3). */
+  directed_lot_id: string | null;
   directed_quantity: number | string;
   location_id: string;
   pick_sequence: number;
@@ -522,7 +523,8 @@ export interface PickTaskCreatedPayload {
   dispatch_order_id: string;
   sku: string;
   quantity: number | string;
-  lot_id: string;
+  /** First line's directed lot; null when that line is lot-less (Pilot B3). */
+  lot_id: string | null;
   location_id: string;
   pick_sequence: number;
   strategy: 'single' | 'batch' | 'wave' | 'zone';
@@ -545,7 +547,8 @@ export interface PickTaskCreatedEnvelope extends Omit<EventEnvelope, 'payload'> 
 export interface PickLineConfirmedPayload {
   pick_task_id: string;
   pick_line_id: string;
-  confirmed_lot_id: string;
+  /** null confirms a lot-less line (Pilot B3); it must match a lot-less directed line. */
+  confirmed_lot_id: string | null;
   confirmed_quantity: number | string;
   override_reason?: string | null;
   capture_method: 'PWA' | 'PAPER';
@@ -584,7 +587,8 @@ export interface DispatchPackedPayload {
   dispatch_order_id: string;
   sku: string;
   packed_qty: number | string;
-  lot_id: string;
+  /** null for stock that is not lot-controlled (Pilot B3). */
+  lot_id: string | null;
   actual_weight_kg?: number | string | null;
   label_ref?: string | null;
   carton_count: number;

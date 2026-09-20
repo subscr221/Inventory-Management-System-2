@@ -80,6 +80,20 @@ export interface StockIssueInput {
   occurred_at?: string | null;
   /** Story 8.1 (Task 6): see StockAllocationInput.qc_gate_cleared. */
   qc_gate_cleared?: boolean;
+  /**
+   * Pilot B2 review: set ONLY by the putaway seam for a lot-scoped relocation of a QC-gated lot
+   * into a quarantine bin, after it has checked the gate and the destination itself. A relocation
+   * is not a consumption, so the drain-window QC predicate is dropped for this one issue. Ignored
+   * without a lot_id - a lot-less drain can never see gated stock.
+   */
+  qc_gate_relocation?: boolean;
+  /**
+   * Pilot F2: true when the issue is the outbound leg of an internal relocation (putaway,
+   * cross-dock, replenishment) whose quantity is received at another location in the same
+   * transaction. A relocation is not a consumption, so last_issue_at - the obsolescence clock - is
+   * left untouched and occurred_at is ignored.
+   */
+  relocation?: boolean;
 }
 
 export interface StockDeallocationInput {
@@ -109,6 +123,11 @@ export interface StockPickInput {
   sku: string;
   location_id: string;
   lot_id?: string | null;
+  /**
+   * Pilot B3: true scopes the move to the lot-less row (lot_id IS NULL) only. Without it a null
+   * lot_id keeps the any-lot contract below, which could move another lot's allocation.
+   */
+  lot_less?: boolean;
   stock_class?: string;
   /** NUMERIC string preferred to avoid JS float precision loss; a number is coerced via String(). */
   quantity: string | number;
@@ -378,7 +397,10 @@ export async function applyStockIssue(
   // stock only; an explicit consignment/vmi issue drains that class only.
   const stockClass = input.stock_class ?? 'owned';
   // Story 8.1 (Task 6): see applyStockAllocation - QC-gated lots are invisible to the drain.
-  const qcGate = qcGateExclusionSql('stock_balance', input.qc_gate_cleared === true);
+  const qcGate =
+    input.qc_gate_relocation === true && lotId !== null
+      ? 'TRUE'
+      : qcGateExclusionSql('stock_balance', input.qc_gate_cleared === true);
   await client.query(
     `SELECT balance_id FROM stock_balance
      WHERE sku = $1 AND location_id = $2 AND stock_class = $4 AND ($3::text IS NULL OR lot_id = $3)
@@ -439,14 +461,17 @@ export async function applyStockIssue(
   // last_issue_at/updated_at, never on_hand/allocated/available/in_transit (Story 2.2 invariants).
   // Story 2.8: scoped to the issued stock class - a consignment/vmi issue must not reset the OWNED
   // obsolescence clock (the scan reads owned rows only).
-  const occurredAt = input.occurred_at ?? new Date().toISOString();
-  await client.query(
-    `UPDATE stock_balance
-     SET last_issue_at = GREATEST(COALESCE(last_issue_at, $4::timestamptz), $4::timestamptz),
-         updated_at = now()
-     WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)`,
-    [input.sku, input.location_id, lotId, occurredAt, stockClass],
-  );
+  // Pilot F2: a relocation leg moves stock, it does not consume it, so the clock is not touched.
+  if (input.relocation !== true) {
+    const occurredAt = input.occurred_at ?? new Date().toISOString();
+    await client.query(
+      `UPDATE stock_balance
+       SET last_issue_at = GREATEST(COALESCE(last_issue_at, $4::timestamptz), $4::timestamptz),
+           updated_at = now()
+       WHERE sku = $1 AND location_id = $2 AND stock_class = $5 AND ($3::text IS NULL OR lot_id = $3)`,
+      [input.sku, input.location_id, lotId, occurredAt, stockClass],
+    );
+  }
 
   // Filtered to rows that actually drained: a fully-reserved row inside the window contributes a
   // zero delta and is not a posting grain.
@@ -653,9 +678,10 @@ export async function applyStockPick(input: StockPickInput, client: PoolClient):
         SET allocated = allocated - $1::numeric,
             picked = picked + $1::numeric,
             updated_at = now()
-      WHERE sku = $2 AND location_id = $3 AND stock_class = $5 AND ($4::text IS NULL OR lot_id = $4)
+      WHERE sku = $2 AND location_id = $3 AND stock_class = $5
+        AND CASE WHEN $6::boolean THEN lot_id IS NULL ELSE ($4::text IS NULL OR lot_id = $4) END
         AND allocated >= $1::numeric`,
-    [quantity, input.sku, input.location_id, lotId, stockClass],
+    [quantity, input.sku, input.location_id, lotId, stockClass, input.lot_less === true],
   );
   if ((result.rowCount ?? 0) === 0) {
     throw new AppError(

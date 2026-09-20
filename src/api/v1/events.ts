@@ -6,10 +6,12 @@ import {
   getAuthContext,
   getAuthorizedRole,
   getAuthorizedAssignment,
+  getAuthorizedLocation,
   getTraceId,
 } from '../../middleware/context.js';
 import {
   requireRole,
+  auditLocationFor,
   permittedLocationsForModule,
   permittedLocationsForModuleScope,
 } from '../../middleware/rbac.js';
@@ -426,7 +428,11 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
 
   const authContext = getAuthContext(req);
   const authorizedAssignment = getAuthorizedAssignment(req);
-  const auditLocationId = authorizedAssignment?.locationId ?? body.metadata.actor.location_id;
+  // Review fix 3: the location acted on, not the covering assignment's own, when they differ.
+  const stampLocationId = authorizedAssignment
+    ? auditLocationFor(authorizedAssignment, getAuthorizedLocation(req))
+    : undefined;
+  const auditLocationId = stampLocationId ?? body.metadata.actor.location_id;
   if (authContext) {
     assertPlanningPayloadWriteLocation(authContext, body);
     assertOffcutValuationFunctionAccess(authContext, body);
@@ -441,7 +447,7 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     }
     if (authorizedAssignment) {
       if (authorizedAssignment.locationId !== '*') {
-        body.metadata.actor.location_id = authorizedAssignment.locationId;
+        body.metadata.actor.location_id = stampLocationId!;
       } else if (referencesInventoryMasters(body)) {
         body.metadata.actor.location_id = NO_LOCATION_UUID;
       }

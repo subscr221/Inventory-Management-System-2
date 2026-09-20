@@ -13,6 +13,7 @@ interface RequestContext extends IncomingMessage {
   authContext?: AuthContext;
   authorizedRole?: string;
   authorizedAssignment?: RoleAssignment;
+  authorizedLocation?: string;
   traceId?: string;
 }
 
@@ -62,6 +63,20 @@ export function setAuthorizedAssignment(req: IncomingMessage, assignment: RoleAs
 /** Reads the exact role assignment RBAC authorized this request under, if any. */
 export function getAuthorizedAssignment(req: IncomingMessage): RoleAssignment | undefined {
   return (req as RequestContext).authorizedAssignment;
+}
+
+/**
+ * Records the location RBAC resolved and authorized for this request. With hierarchy coverage the
+ * authorizing assignment can sit ABOVE it (a site grant acting at a bin), so the audit stamp needs
+ * the acted-on location as well as the assignment.
+ */
+export function setAuthorizedLocation(req: IncomingMessage, locationId: string): void {
+  (req as RequestContext).authorizedLocation = locationId;
+}
+
+/** Reads the location RBAC authorized this request at, if the route resolved one. */
+export function getAuthorizedLocation(req: IncomingMessage): string | undefined {
+  return (req as RequestContext).authorizedLocation;
 }
 
 /** Attaches a per-request trace_id for audit log and error envelope correlation. */

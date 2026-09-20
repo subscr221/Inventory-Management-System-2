@@ -133,8 +133,13 @@ export function assertDispatchPackedShape(envelope: DispatchPackedEnvelope): voi
       'DISPATCH_PACKED_INVALID_PAYLOAD',
       'packed_qty is required and must be a positive finite numeric value',
     );
-  if (!isUuid(p.lot_id))
-    reject('DISPATCH_PACKED_INVALID_PAYLOAD', 'lot_id is required and must be a UUID');
+  // Pilot B3: an explicit null is the lot-less form (stock that is not lot-controlled); a missing
+  // or malformed value is still rejected. Whether null is ALLOWED is decided in the applier.
+  if (p.lot_id !== null && !isUuid(p.lot_id))
+    reject(
+      'DISPATCH_PACKED_INVALID_PAYLOAD',
+      'lot_id is required and must be a UUID, or null for stock that is not lot-controlled',
+    );
   if (!Number.isInteger(p.carton_count) || p.carton_count < 0)
     reject(
       'DISPATCH_PACKED_INVALID_PAYLOAD',
@@ -205,6 +210,38 @@ export async function applyDispatchPackedProjection(
       'DISPATCH_ORDER_ALREADY_DISPATCHED',
       'Dispatch order has already been dispatched',
     );
+  }
+
+  // Pilot B3: a lot-less packing record mirrors the pick rules. It is valid only for an item that is
+  // not lot-controlled, and only when the order actually holds a lot-less confirmed pick line for
+  // that SKU (the same null-grain match the pick seam uses) - otherwise the dispatch decrement would go
+  // looking for a lot-less balance row the pick never touched. A lot-controlled item still
+  // REQUIRES a lot. Records that name a lot keep the pre-B3 behaviour untouched.
+  if (p.lot_id === null) {
+    const lotControlled = await client.query(
+      `SELECT 1 FROM item_master WHERE sku = $1 AND lot_controlled = true`,
+      [p.sku],
+    );
+    if (lotControlled.rows.length > 0)
+      reject(
+        'DISPATCH_PACKED_INVALID_PAYLOAD',
+        `Item "${p.sku}" is lot-controlled; a packing record must name a lot`,
+        { sku: p.sku },
+      );
+    const lotLessPick = await client.query(
+      `SELECT 1 FROM pick_line pl
+        WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2
+          AND pl.confirmed_lot_id IS NULL
+          AND pl.status IN ('confirmed', 'substituted')
+        LIMIT 1`,
+      [p.dispatch_order_id, p.sku],
+    );
+    if (lotLessPick.rows.length === 0)
+      reject(
+        'DISPATCH_PACKED_INVALID_PAYLOAD',
+        'This order has no lot-less confirmed pick for the SKU; the packing record must name the picked lot',
+        { sku: p.sku, dispatch_order_id: p.dispatch_order_id },
+      );
   }
 
   // Verify cumulative packed quantity (across all packing lines/SKUs/lots already recorded for
@@ -304,7 +341,9 @@ export async function applyDispatchShippingDocumentsGeneratedProjection(
   // LOT_ON_HOLD check: both halves, through the shared gate (lock every candidate lot FIRST, then
   // the manual/recall hold, then the QC gate) - see dispatchGateBlockedLots (Task 4.9).
   const candidateResult = await client.query(
-    `SELECT pr.lot_id FROM packing_record pr WHERE pr.dispatch_order_id = $1`,
+    // Pilot B3: a lot-less record has no lot to hold or gate, so it is not a candidate.
+    `SELECT pr.lot_id FROM packing_record pr
+      WHERE pr.dispatch_order_id = $1 AND pr.lot_id IS NOT NULL`,
     [p.dispatch_order_id],
   );
   const candidateLotIds = candidateResult.rows.map(
@@ -542,10 +581,61 @@ export async function applyDispatchDispatchedProjection(
   // Count how many packing records this dispatch order has, so the decrement below can be
   // verified to have matched every one of them (not just at-least-one).
   const packingCountResult = await client.query(
-    `SELECT COUNT(*) AS cnt FROM packing_record WHERE dispatch_order_id = $1`,
+    `SELECT COUNT(*) AS cnt FROM packing_record
+      WHERE dispatch_order_id = $1 AND lot_id IS NOT NULL`,
     [p.dispatch_order_id],
   );
   const packingCount = Number(packingCountResult.rows[0].cnt);
+
+  // Pilot B3: lot-less records resolve no lot_master row, so the lot decrement below never
+  // sees them; they are decremented here against the `lot_id IS NULL` balance rows only. Plain
+  // stock has no lot to keep a pick inside one bin, so the packed quantity per SKU is walked across
+  // the bins the order's lot-less pick lines were confirmed at (bin order, a stable lock order),
+  // never past what each bin's lines picked. Anything left over, or a bin whose picked quantity no
+  // longer covers its share, is the same STOCK_DECREMENT_FAILED the lot path raises.
+  const lotLessPacked = await client.query(
+    `SELECT sku, SUM(packed_qty)::text AS packed_qty FROM packing_record
+      WHERE dispatch_order_id = $1 AND lot_id IS NULL
+      GROUP BY sku ORDER BY sku`,
+    [p.dispatch_order_id],
+  );
+  for (const packed of lotLessPacked.rows as Array<Record<string, unknown>>) {
+    const bins = await client.query(
+      `SELECT COALESCE(pl.confirmed_location_id, pl.location_id) AS bin_id,
+              SUM(pl.confirmed_quantity)::text AS picked_qty
+         FROM pick_line pl
+        WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2 AND pl.confirmed_lot_id IS NULL
+          AND pl.status IN ('confirmed', 'substituted')
+        GROUP BY 1 ORDER BY 1`,
+      [p.dispatch_order_id, packed['sku']],
+    );
+    let remaining = toScaled3(packed['packed_qty'] as string) ?? 0n;
+    for (const bin of bins.rows as Array<Record<string, unknown>>) {
+      if (remaining === 0n) break;
+      const binPicked = toScaled3(bin['picked_qty'] as string) ?? 0n;
+      const take = remaining < binPicked ? remaining : binPicked;
+      if (take === 0n) continue;
+      // Exact NUMERIC(14,3) text, never a float.
+      const takeText = `${take / 1000n}.${String(take % 1000n).padStart(3, '0')}`;
+      const lotLessDec = await client.query(
+        `UPDATE stock_balance
+            SET on_hand = on_hand - $3::numeric, picked = picked - $3::numeric, updated_at = now()
+          WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL AND stock_class = 'owned'
+            AND picked >= $3::numeric`,
+        [packed['sku'], bin['bin_id'], takeText],
+      );
+      // A missed bin leaves `remaining` short, which raises below.
+      if ((lotLessDec.rowCount ?? 0) !== 1) break;
+      remaining -= take;
+    }
+    if (remaining !== 0n) {
+      throw new AppError(
+        500,
+        'STOCK_DECREMENT_FAILED',
+        'Stock balance not found for one or more dispatched lot-less lines; inventory may be inconsistent',
+      );
+    }
+  }
 
   // Decrement stock: move packed quantity from picked to dispatched (reduce on_hand and picked)
   const decResult = await client.query(

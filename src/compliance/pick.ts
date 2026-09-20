@@ -6,6 +6,7 @@ import type {
   PickLineInput,
 } from '../events/schema.js';
 import { AppError } from '../middleware/error.js';
+import { assertActorAtSite } from './actor-site.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import {
   createPickTask,
@@ -90,7 +91,10 @@ export function assertPickTaskCreatedShape(envelope: PickTaskCreatedEnvelope): v
     reject(
       'quantity is required and must be a positive finite numeric value with at most 3 decimal places',
     );
-  if (!isUuid(p.lot_id)) reject('lot_id is required and must be a UUID');
+  // Pilot B3: an explicit null is the lot-less form (stock that is not lot-controlled); a missing
+  // or malformed value is still rejected.
+  if (p.lot_id !== null && !isUuid(p.lot_id))
+    reject('lot_id is required and must be a UUID, or null for stock that is not lot-controlled');
   if (!isUuid(p.location_id)) reject('location_id is required and must be a UUID');
   if (!Number.isInteger(p.pick_sequence))
     reject('pick_sequence is required and must be an integer');
@@ -110,8 +114,10 @@ export function assertPickTaskCreatedShape(envelope: PickTaskCreatedEnvelope): v
       reject('pick_lines[].dispatch_order_line_id is required and must be a UUID');
     if (typeof line.sku !== 'string' || line.sku.length === 0)
       reject('pick_lines[].sku is required');
-    if (!isUuid(line.directed_lot_id))
-      reject('pick_lines[].directed_lot_id is required and must be a UUID');
+    if (line.directed_lot_id !== null && !isUuid(line.directed_lot_id))
+      reject(
+        'pick_lines[].directed_lot_id is required and must be a UUID, or null for stock that is not lot-controlled',
+      );
     if (
       !isPositiveFiniteQuantity(line.directed_quantity) ||
       !hasMilliPrecision(line.directed_quantity)
@@ -131,7 +137,10 @@ export function assertPickLineConfirmedShape(envelope: PickLineConfirmedEnvelope
   const p = envelope.payload;
   if (!isUuid(p.pick_task_id)) reject('pick_task_id is required and must be a UUID');
   if (!isUuid(p.pick_line_id)) reject('pick_line_id is required and must be a UUID');
-  if (!isUuid(p.confirmed_lot_id)) reject('confirmed_lot_id is required and must be a UUID');
+  if (p.confirmed_lot_id !== null && !isUuid(p.confirmed_lot_id))
+    reject(
+      'confirmed_lot_id is required and must be a UUID, or null for stock that is not lot-controlled',
+    );
   if (!isPositiveFiniteQuantity(p.confirmed_quantity) || !hasMilliPrecision(p.confirmed_quantity))
     reject(
       'confirmed_quantity is required and must be a positive finite numeric value with at most 3 decimal places',
@@ -169,18 +178,21 @@ async function lotNumberForUuid(lotUuid: string, sku: string, client: PoolClient
  * Allocates `quantity` of owned stock for (sku, location, lot_number), guarded on availability in
  * the same UPDATE (defensive against races - the generator already checked availability).
  * `available` is a generated column (on_hand - allocated - picked), so only `allocated` is written.
+ * Pilot B3: a null lotNumber addresses the lot-less row (stock_balance.lot_id IS NULL) and only
+ * that row, the same `IS NOT DISTINCT FROM` grain match the cycle-count writes use.
  */
 async function allocateStock(
   sku: string,
   locationId: string,
-  lotNumber: string,
+  lotNumber: string | null,
   quantity: string,
   client: PoolClient,
 ): Promise<void> {
   const result = await client.query(
     `UPDATE stock_balance
         SET allocated = allocated + $1::numeric, updated_at = now()
-      WHERE sku = $2 AND location_id = $3 AND lot_id = $4 AND stock_class = 'owned'
+      WHERE sku = $2 AND location_id = $3 AND lot_id IS NOT DISTINCT FROM $4::text
+        AND stock_class = 'owned'
         AND available >= $1::numeric`,
     [quantity, sku, locationId, lotNumber],
   );
@@ -208,14 +220,15 @@ async function allocateStock(
 async function releaseStock(
   sku: string,
   locationId: string,
-  lotNumber: string,
+  lotNumber: string | null,
   quantity: string,
   client: PoolClient,
 ): Promise<void> {
   const result = await client.query(
     `UPDATE stock_balance
         SET allocated = allocated - $1::numeric, updated_at = now()
-      WHERE sku = $2 AND location_id = $3 AND lot_id = $4 AND stock_class = 'owned'
+      WHERE sku = $2 AND location_id = $3 AND lot_id IS NOT DISTINCT FROM $4::text
+        AND stock_class = 'owned'
         AND allocated >= $1::numeric`,
     [quantity, sku, locationId, lotNumber],
   );
@@ -242,26 +255,27 @@ async function releaseStock(
  *
  * The actor location is server-set on every path: the HTTP/edge layers overwrite it with the
  * authorizing assignment's location, and a wildcard ('*') assignment yields the all-zero sentinel,
- * which is treated as unrestricted exactly as the other modules do.
+ * which is treated as unrestricted exactly as the other modules do. The rule itself is the shared
+ * assertActorAtSite (src/compliance/actor-site.ts): at the site, or at a location of that site.
  */
-const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 
-function assertActorSite(
-  actorLocationId: string,
-  siteId: string,
-  context: Record<string, unknown>,
-): void {
-  if (actorLocationId === NO_LOCATION_UUID) return;
-  if (actorLocationId !== siteId) {
+/**
+ * Pilot B3: a lot-less pick line is only valid for an item that is not lot-controlled. The
+ * generator already excludes lot-less balances of lot-controlled items; this repeats the rule on
+ * the central write path so the edge and direct-event routes cannot direct a pick that bypasses
+ * the lot hold and QC gates.
+ */
+async function assertLotLessPickAllowed(sku: string, client: PoolClient): Promise<void> {
+  const result = await client.query(
+    `SELECT 1 FROM item_master WHERE sku = $1 AND lot_controlled = true`,
+    [sku],
+  );
+  if (result.rows.length > 0) {
     throw new AppError(
-      403,
-      'LOCATION_ACCESS_DENIED',
-      `No assignment grants access to site "${siteId}"`,
-      {
-        ...context,
-        actor_location_id: actorLocationId,
-        site_id: siteId,
-      },
+      400,
+      'PICK_TASK_INVALID_PAYLOAD',
+      `Item "${sku}" is lot-controlled; a pick line must direct a lot`,
+      { sku },
     );
   }
 }
@@ -311,12 +325,13 @@ export async function applyPickTaskCreatedProjection(
       },
     );
   }
-  assertActorSite(
+  await assertActorAtSite(
     envelope.metadata.actor.location_id,
     orderLine.rows[0]!['ship_from_site_id'] as string,
     {
       pick_task_id: p.pick_task_id,
     },
+    client,
   );
 
   await createPickTask(
@@ -348,15 +363,22 @@ export async function applyPickTaskCreatedProjection(
       },
       client,
     );
-    const lotNumber = await lotNumberForUuid(line.directed_lot_id, line.sku, client);
-    // Story 8.1 (Task 6): picking is a sales path - blocked for qc_hold AND conditionally released
-    // lots until the Story 8.4 batch release record exists. Lot lock, gate lock, then the stock row.
-    await assertQcGateAllows({
-      lot_id: line.directed_lot_id,
-      operation: 'pick',
-      business_date: gateBusinessDateOf(envelope),
-      client,
-    });
+    // Pilot B3: a lot-less line has no lot_master row, so there is no lot number to bridge and no
+    // lot for the QC gate to lock; it allocates the lot-less balance row directly.
+    let lotNumber: string | null = null;
+    if (line.directed_lot_id === null) {
+      await assertLotLessPickAllowed(line.sku, client);
+    } else {
+      lotNumber = await lotNumberForUuid(line.directed_lot_id, line.sku, client);
+      // Story 8.1 (Task 6): picking is a sales path - blocked for qc_hold AND conditionally released
+      // lots until the Story 8.4 batch release record exists. Lot lock, gate lock, then the stock row.
+      await assertQcGateAllows({
+        lot_id: line.directed_lot_id,
+        operation: 'pick',
+        business_date: gateBusinessDateOf(envelope),
+        client,
+      });
+    }
     await allocateStock(
       line.sku,
       line.location_id,
@@ -435,10 +457,12 @@ export async function applyPickLineConfirmedProjection(
       pick_task_id: p.pick_task_id,
     });
   }
-  assertActorSite(envelope.metadata.actor.location_id, taskSiteId, {
-    pick_line_id: p.pick_line_id,
-    pick_task_id: p.pick_task_id,
-  });
+  await assertActorAtSite(
+    envelope.metadata.actor.location_id,
+    taskSiteId,
+    { pick_line_id: p.pick_line_id, pick_task_id: p.pick_task_id },
+    client,
+  );
 
   // Review decision (2026-07-27): a confirmed quantity must equal the directed quantity. Accepting
   // a short pick previously completed the task and flagged the dispatch order fully picked with the
@@ -454,6 +478,23 @@ export async function applyPickLineConfirmedProjection(
         pick_line_id: p.pick_line_id,
         directed_quantity: line.directed_quantity,
         confirmed_quantity: String(p.confirmed_quantity),
+      },
+    );
+  }
+
+  // Pilot B3: a lot-less line is confirmed lot-less and a lot line against a lot. Crossing the two
+  // is not a substitution (there is no lot on one side to release or to gate), so it is refused.
+  if ((p.confirmed_lot_id === null) !== (line.directed_lot_id === null)) {
+    throw new AppError(
+      400,
+      'PICK_TASK_INVALID_PAYLOAD',
+      line.directed_lot_id === null
+        ? 'This pick line directs stock that is not lot-controlled; confirmed_lot_id must be null'
+        : 'This pick line directs a lot; confirmed_lot_id must be a lot UUID',
+      {
+        pick_line_id: p.pick_line_id,
+        directed_lot_id: line.directed_lot_id,
+        confirmed_lot_id: p.confirmed_lot_id,
       },
     );
   }
@@ -478,7 +519,7 @@ export async function applyPickLineConfirmedProjection(
   // re-deriving it with a different predicate, which could land on another task's allocation when
   // a lot is allocated across several bins (review pass 2).
   let confirmedLocationId = line.location_id;
-  if (isSubstitution) {
+  if (isSubstitution && line.directed_lot_id !== null && p.confirmed_lot_id !== null) {
     // Release the directed lot's allocation at the directed bin...
     const directedLotNumber = await lotNumberForUuid(line.directed_lot_id, line.sku, client);
     await releaseStock(
@@ -623,14 +664,24 @@ async function finalizePickTaskCompletion(
   );
   for (const row of confirmedLines.rows) {
     const sku = row['sku'] as string;
-    const confirmedLotNumber = await lotNumberForUuid(
-      row['confirmed_lot_id'] as string,
-      sku,
-      client,
-    );
+    const confirmedLotId = (row['confirmed_lot_id'] as string | null) ?? null;
+    if (confirmedLotId === null) {
+      // Pilot B3: a lot-less line moves the lot-less balance row only (no lot to bridge or gate).
+      await applyStockPick(
+        {
+          sku,
+          location_id: row['bin_id'] as string,
+          lot_less: true,
+          quantity: row['confirmed_quantity'] as string,
+        },
+        client,
+      );
+      continue;
+    }
+    const confirmedLotNumber = await lotNumberForUuid(confirmedLotId, sku, client);
     // Story 8.1 (Task 6): the allocated-to-picked move re-runs the QC gate under the lot lock.
     await assertQcGateAllows({
-      lot_id: row['confirmed_lot_id'] as string,
+      lot_id: confirmedLotId,
       operation: 'pick',
       business_date: businessDate,
       client,
@@ -736,9 +787,12 @@ export async function applyPickTaskCompletedProjection(
       pick_task_id: p.pick_task_id,
     });
   }
-  assertActorSite(envelope.metadata.actor.location_id, taskSiteId, {
-    pick_task_id: p.pick_task_id,
-  });
+  await assertActorAtSite(
+    envelope.metadata.actor.location_id,
+    taskSiteId,
+    { pick_task_id: p.pick_task_id },
+    client,
+  );
 
   // SOD (Task 6.2 and the Dev Notes SOD/RBAC rule): completion is a supervisor action. The HTTP
   // handler enforces this, but the edge upload and direct-event paths authorize only on
