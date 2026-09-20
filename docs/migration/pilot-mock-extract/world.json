@@ -1,0 +1,348 @@
+{
+  "site_code": "CMF-ALIGARH",
+  "document_ref_prefix": "MK-",
+  "bins": [
+    "BIN-A01",
+    "BIN-A02",
+    "BIN-B01",
+    "BIN-B02",
+    "BIN-C01",
+    "BIN-C02",
+    "BIN-J01",
+    "BIN-J02",
+    "BIN-R01",
+    "BIN-R02"
+  ],
+  "items": [
+    {
+      "sku": "RM-COIL-2MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "RM-COIL-3MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "RM-SHEET-1MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "RM-SHEET-2MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "RM-ROD-12MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "RM-ROD-16MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "RM-PIPE-25NB",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "RM-PLATE-6MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "MTR-3.7KW",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": true
+    },
+    {
+      "sku": "MTR-7.5KW",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": true
+    },
+    {
+      "sku": "GEARBOX-40",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": true
+    },
+    {
+      "sku": "VFD-5HP",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": true
+    },
+    {
+      "sku": "PKG-CARTON-S",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "PKG-CARTON-L",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "PKG-PALLET",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "CON-GLOVES",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "CON-GRIND-DISC",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "BRG-6204",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "BRG-6306",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "SEAL-35MM",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "FAST-M8-BOLT",
+      "uom": "EA",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "FAST-M10-NUT",
+      "uom": "EA",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "WELD-WIRE-1.2",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "CUST-SHEET-3MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "CUST-PLATE-8MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "CUST-ROD-20MM",
+      "uom": "KG",
+      "lot_controlled": true,
+      "serial_controlled": false
+    },
+    {
+      "sku": "PROTO-BRKT-V3",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "FG-PUMP-12",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "FG-FRAME-A",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    },
+    {
+      "sku": "FG-BRACKET-H",
+      "uom": "EA",
+      "lot_controlled": false,
+      "serial_controlled": false
+    }
+  ],
+  "suppliers": [
+    "SUP-ACME",
+    "SUP-BHARAT-STEEL",
+    "SUP-NORTHERN-FAST"
+  ],
+  "legacy_kits": [
+    {
+      "kit_ref": "MK-KIT-001",
+      "parent_sku": "FG-PUMP-12",
+      "revision_code": "R1",
+      "components": [
+        {
+          "component_sku": "RM-ROD-12MM",
+          "quantity_per": 1,
+          "line_uom": "KG"
+        },
+        {
+          "component_sku": "BRG-6204",
+          "quantity_per": 2,
+          "line_uom": "EA"
+        },
+        {
+          "component_sku": "SEAL-35MM",
+          "quantity_per": 3,
+          "line_uom": "EA"
+        }
+      ]
+    },
+    {
+      "kit_ref": "MK-KIT-002",
+      "parent_sku": "FG-FRAME-A",
+      "revision_code": "R1",
+      "components": [
+        {
+          "component_sku": "BRG-6204",
+          "quantity_per": 2,
+          "line_uom": "EA"
+        },
+        {
+          "component_sku": "SEAL-35MM",
+          "quantity_per": 3,
+          "line_uom": "EA"
+        },
+        {
+          "component_sku": "RM-PLATE-6MM",
+          "quantity_per": 4,
+          "line_uom": "KG"
+        }
+      ]
+    },
+    {
+      "kit_ref": "MK-KIT-003",
+      "parent_sku": "FG-BRACKET-H",
+      "revision_code": "R1",
+      "components": [
+        {
+          "component_sku": "SEAL-35MM",
+          "quantity_per": 3,
+          "line_uom": "EA"
+        },
+        {
+          "component_sku": "RM-PLATE-6MM",
+          "quantity_per": 4,
+          "line_uom": "KG"
+        },
+        {
+          "component_sku": "FAST-M8-BOLT",
+          "quantity_per": 5,
+          "line_uom": "EA"
+        }
+      ]
+    }
+  ],
+  "service_orders": [
+    {
+      "order_number_ext": "JW-MK-0001",
+      "customer_party_code": "ACME",
+      "customer_name": "Acme Fabrication Pvt Ltd",
+      "challans": [
+        {
+          "challan_number_ext": "DC-MK-001",
+          "challan_date": "2026-08-12",
+          "sku": "CUST-SHEET-3MM",
+          "challan_qty": 521,
+          "uom": "KG",
+          "challan_class": "input"
+        },
+        {
+          "challan_number_ext": "DC-MK-002",
+          "challan_date": "2026-08-12",
+          "sku": "CUST-SHEET-3MM",
+          "challan_qty": 507,
+          "uom": "KG",
+          "challan_class": "input"
+        }
+      ],
+      "consumed_qty": 175,
+      "custody_qty": 853
+    },
+    {
+      "order_number_ext": "JW-MK-0002",
+      "customer_party_code": "ORBIT",
+      "customer_name": "Orbit Engineering Works",
+      "challans": [
+        {
+          "challan_number_ext": "DC-MK-003",
+          "challan_date": "2026-08-12",
+          "sku": "CUST-PLATE-8MM",
+          "challan_qty": 638,
+          "uom": "KG",
+          "challan_class": "input"
+        },
+        {
+          "challan_number_ext": "DC-MK-004",
+          "challan_date": "2026-08-12",
+          "sku": "CUST-PLATE-8MM",
+          "challan_qty": 567,
+          "uom": "KG",
+          "challan_class": "input"
+        }
+      ],
+      "consumed_qty": 237,
+      "custody_qty": 968
+    },
+    {
+      "order_number_ext": "JW-MK-0003",
+      "customer_party_code": "ZENITH",
+      "customer_name": "Zenith Agro Implements",
+      "challans": [
+        {
+          "challan_number_ext": "DC-MK-005",
+          "challan_date": "2026-08-12",
+          "sku": "CUST-ROD-20MM",
+          "challan_qty": 1355,
+          "uom": "KG",
+          "challan_class": "input"
+        },
+        {
+          "challan_number_ext": "DC-MK-006",
+          "challan_date": "2026-08-12",
+          "sku": "CUST-ROD-20MM",
+          "challan_qty": 497,
+          "uom": "KG",
+          "challan_class": "input"
+        }
+      ],
+      "consumed_qty": 203,
+      "custody_qty": 1649
+    }
+  ]
+}

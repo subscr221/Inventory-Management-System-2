@@ -1,0 +1,113 @@
+{
+  "purchase_orders": [
+    {
+      "po_number_ext": "MK-PO-0001",
+      "supplier_ref_ext": "SUP-ACME",
+      "currency": "INR",
+      "lines": [
+        {
+          "line_no": 1,
+          "sku": "BRG-6204",
+          "ordered_qty": 218,
+          "open_qty": 52,
+          "unit_price": 113.25,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        },
+        {
+          "line_no": 2,
+          "sku": "RM-ROD-16MM",
+          "ordered_qty": 260,
+          "open_qty": 121,
+          "unit_price": 99.5,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        }
+      ]
+    },
+    {
+      "po_number_ext": "MK-PO-0002",
+      "supplier_ref_ext": "SUP-BHARAT-STEEL",
+      "currency": "INR",
+      "lines": [
+        {
+          "line_no": 1,
+          "sku": "RM-PLATE-6MM",
+          "ordered_qty": 364,
+          "open_qty": 320,
+          "unit_price": 114.5,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        },
+        {
+          "line_no": 2,
+          "sku": "PKG-PALLET",
+          "ordered_qty": 483,
+          "open_qty": 436,
+          "unit_price": 50.25,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        },
+        {
+          "line_no": 3,
+          "sku": "RM-PLATE-6MM",
+          "ordered_qty": 283,
+          "open_qty": 86,
+          "unit_price": 114.5,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        }
+      ]
+    },
+    {
+      "po_number_ext": "MK-PO-0003",
+      "supplier_ref_ext": "SUP-NORTHERN-FAST",
+      "currency": "INR",
+      "lines": [
+        {
+          "line_no": 1,
+          "sku": "PKG-CARTON-L",
+          "ordered_qty": 402,
+          "open_qty": 303,
+          "unit_price": 29.25,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        },
+        {
+          "line_no": 2,
+          "sku": "CON-GLOVES",
+          "ordered_qty": 247,
+          "open_qty": 23,
+          "unit_price": 71.25,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        }
+      ]
+    },
+    {
+      "po_number_ext": "MK-PO-0004",
+      "supplier_ref_ext": "SUP-ACME",
+      "currency": "INR",
+      "lines": [
+        {
+          "line_no": 1,
+          "sku": "CON-GRIND-DISC",
+          "ordered_qty": 107,
+          "open_qty": 7,
+          "unit_price": 92.25,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        },
+        {
+          "line_no": 2,
+          "sku": "RM-COIL-2MM",
+          "ordered_qty": 52,
+          "open_qty": 27,
+          "unit_price": 62,
+          "over_receipt_tolerance_pct": 5,
+          "under_receipt_tolerance_pct": 5
+        }
+      ]
+    }
+  ]
+}

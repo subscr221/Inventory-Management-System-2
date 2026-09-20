@@ -1,0 +1,222 @@
+{
+  "generated_with": {
+    "site_code": "CMF-ALIGARH",
+    "lines": 300,
+    "seed": 2026,
+    "counted_on": "2026-09-19"
+  },
+  "document_ref_prefix": "MK-",
+  "opening_stock": {
+    "file_rows": 303,
+    "source_grains": 300,
+    "planted": [
+      {
+        "defect": "quantity_mismatch",
+        "variance_kind": "quantity_mismatch",
+        "key": "BIN-R02|CUST-SHEET-3MM|LOT-0011|-",
+        "source": "1984.000000",
+        "file": "1959.000000",
+        "file_line_no": 23
+      },
+      {
+        "defect": "quantity_mismatch",
+        "variance_kind": "quantity_mismatch",
+        "key": "BIN-A02|CUST-ROD-20MM|LOT-0147|-",
+        "source": "464.700000",
+        "file": "463.700000",
+        "file_line_no": 234
+      },
+      {
+        "defect": "quantity_mismatch",
+        "variance_kind": "quantity_mismatch",
+        "key": "BIN-C02|RM-ROD-12MM|LOT-0113|-",
+        "source": "1108.400000",
+        "file": "1148.400000",
+        "file_line_no": 193
+      },
+      {
+        "defect": "quantity_mismatch",
+        "variance_kind": "quantity_mismatch",
+        "key": "BIN-C01|CUST-ROD-20MM|LOT-0012|-",
+        "source": "1164.000000",
+        "file": "1163.000000",
+        "file_line_no": 24
+      },
+      {
+        "defect": "quantity_mismatch",
+        "variance_kind": "quantity_mismatch",
+        "key": "BIN-B01|RM-SHEET-1MM|LOT-0019|-",
+        "source": "119.500000",
+        "file": "118.500000",
+        "file_line_no": 35
+      },
+      {
+        "defect": "quantity_mismatch",
+        "variance_kind": "quantity_mismatch",
+        "key": "BIN-J02|RM-PLATE-6MM|LOT-0146|-",
+        "source": "1707.500000",
+        "file": "1706.500000",
+        "file_line_no": 232
+      },
+      {
+        "defect": "missing_in_import",
+        "variance_kind": "missing_in_import",
+        "key": "BIN-J02|CUST-ROD-20MM|LOT-0065|-"
+      },
+      {
+        "defect": "missing_in_import",
+        "variance_kind": "missing_in_import",
+        "key": "BIN-R01|CUST-PLATE-8MM|LOT-0134|-"
+      },
+      {
+        "defect": "missing_in_import",
+        "variance_kind": "missing_in_import",
+        "key": "BIN-J01|RM-COIL-3MM|LOT-0135|-"
+      },
+      {
+        "defect": "serial_missing_in_import",
+        "variance_kind": "serial_missing_in_import",
+        "key": "BIN-C02|VFD-5HP|-|SN-88035"
+      },
+      {
+        "defect": "missing_in_source",
+        "variance_kind": "missing_in_source",
+        "key": "BIN-B01|PKG-PALLET|-|-",
+        "file_line_no": 298
+      },
+      {
+        "defect": "missing_in_source",
+        "variance_kind": "missing_in_source",
+        "key": "BIN-J02|PKG-PALLET|-|-",
+        "file_line_no": 299
+      },
+      {
+        "defect": "serial_missing_in_source",
+        "variance_kind": "serial_missing_in_source",
+        "key": "BIN-C02|MTR-7.5KW|-|SN-88046",
+        "file_line_no": 300
+      },
+      {
+        "defect": "unknown_sku",
+        "rejection_code": "UNKNOWN_REFERENCE",
+        "key": "BIN-J02|GHOST-001|-|-",
+        "file_line_no": 301
+      },
+      {
+        "defect": "unknown_sku",
+        "rejection_code": "UNKNOWN_REFERENCE",
+        "key": "BIN-B02|GHOST-002|-|-",
+        "file_line_no": 302
+      },
+      {
+        "defect": "wrong_uom",
+        "rejection_code": "UNKNOWN_REFERENCE",
+        "variance_kind": "missing_in_import",
+        "key": "BIN-B01|RM-ROD-12MM|LOT-0024|-",
+        "file_line_no": 44
+      },
+      {
+        "defect": "wrong_uom",
+        "rejection_code": "UNKNOWN_REFERENCE",
+        "variance_kind": "missing_in_import",
+        "key": "BIN-J02|WELD-WIRE-1.2|LOT-0130|-",
+        "file_line_no": 213
+      },
+      {
+        "defect": "owned_without_cost",
+        "rejection_code": "MALFORMED_ROW",
+        "variance_kind": "missing_in_import",
+        "key": "BIN-C01|RM-COIL-3MM|LOT-0067|-",
+        "file_line_no": 125
+      },
+      {
+        "defect": "lot_missing_on_lot_item",
+        "rejection_code": "MALFORMED_ROW",
+        "variance_kind": "missing_in_import",
+        "key": "BIN-R01|FAST-M10-NUT|LOT-0030|-",
+        "file_line_no": 52
+      },
+      {
+        "defect": "duplicate_lot_serial",
+        "rejection_code": "DUPLICATE_LOT_SERIAL",
+        "key": "BIN-J02|FAST-M8-BOLT|LOT-0049|-",
+        "file_line_no": 303
+      },
+      {
+        "defect": "duplicate_lot_serial",
+        "rejection_code": "DUPLICATE_LOT_SERIAL",
+        "key": "BIN-A02|MTR-3.7KW|-|SN-88005",
+        "file_line_no": 304
+      }
+    ]
+  },
+  "active_boms": {
+    "manifest_rows": 10,
+    "planted": [
+      {
+        "defect": "quantity_per_off",
+        "finding_kind": "field_mismatch",
+        "field": "quantity_per",
+        "document_ref_ext": "MK-KIT-001",
+        "line_ref": "BRG-6204",
+        "source_value": "9",
+        "platform_value": "2"
+      },
+      {
+        "defect": "component_missing_in_platform",
+        "finding_kind": "field_mismatch",
+        "field": "component_sku",
+        "document_ref_ext": "MK-KIT-001",
+        "line_ref": "CON-GRIND-DISC"
+      }
+    ]
+  },
+  "open_pos": {
+    "manifest_rows": 10,
+    "planted": [
+      {
+        "defect": "received_qty_off",
+        "finding_kind": "field_mismatch",
+        "field": "received_qty",
+        "document_ref_ext": "MK-PO-0001",
+        "line_ref": "1",
+        "source_value": "173",
+        "platform_value": "166"
+      },
+      {
+        "defect": "po_missing_in_platform",
+        "finding_kind": "missing_in_platform",
+        "document_ref_ext": "MK-PO-9001",
+        "line_ref": "1"
+      }
+    ]
+  },
+  "jobwork_challans": {
+    "manifest_rows": 6,
+    "planted": [
+      {
+        "defect": "challan_qty_off",
+        "finding_kind": "field_mismatch",
+        "field": "challan_qty",
+        "document_ref_ext": "DC-MK-003",
+        "line_ref": "JW-MK-0002|CUST-PLATE-8MM",
+        "source_value": "645",
+        "platform_value": "638"
+      }
+    ]
+  },
+  "custody_registers": {
+    "manifest_rows": 3,
+    "planted": [
+      {
+        "defect": "custody_qty_off",
+        "finding_kind": "field_mismatch",
+        "field": "custody_qty",
+        "document_ref_ext": "JW-MK-0002",
+        "line_ref": "CUST-PLATE-8MM",
+        "source_value": "975",
+        "platform_value": "968"
+      }
+    ]
+  }
+}
