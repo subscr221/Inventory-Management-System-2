@@ -7,6 +7,10 @@
 //
 //   node deploy/rehearsal/mock/generate.mjs --site-code CMF-ALIGARH --lines 300 --seed 42
 //
+// --tag RUN1 makes every globally unique identifier run-scoped (bins, lots, serials, kit parents,
+// kit/PO/challan/order references), so a second pack can be loaded into the same append-only
+// database under another site code. rehearse.ts always passes one.
+//
 // Formats: docs/migration/opening-stock-template-v1.md, docs/migration/document-manifest-templates-v1.md.
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -15,8 +19,6 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// Every mock BOM and PO reference starts with this; it is the verification run's document_ref_prefix.
-const REF_PREFIX = 'MK-';
 
 const OPENING_STOCK_HEADER =
   'site_code,location_code,sku,lot_number,serial_number,quantity,uom,stock_class,unit_cost,expiry_date,counted_on,pv_ref_ext,pv_line_ref_ext';
@@ -31,7 +33,7 @@ const MANIFEST_HEADERS = {
 
 function parseArgs(argv) {
   const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-  const args = { siteCode: 'MOCK-SITE', lines: 300, seed: 42, countedOn: yesterday, out: null };
+  const args = { siteCode: 'MOCK-SITE', lines: 300, seed: 42, countedOn: yesterday, out: null, tag: '' };
   for (let i = 2; i < argv.length; i += 2) {
     const value = argv[i + 1];
     if (value === undefined) throw new Error(`missing value for ${argv[i]}`);
@@ -40,6 +42,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--seed') args.seed = Number(value);
     else if (argv[i] === '--counted-on') args.countedOn = value;
     else if (argv[i] === '--out') args.out = value;
+    else if (argv[i] === '--tag') args.tag = value;
     else throw new Error(`unknown argument ${argv[i]}`);
   }
   if (!Number.isInteger(args.lines) || args.lines < 50 || args.lines > 10_000) {
@@ -63,6 +66,11 @@ function prng(seed) {
 }
 
 const args = parseArgs(process.argv);
+/** Run-scope suffix for identifiers that are unique across the whole database. */
+const T = args.tag ? `-${args.tag}` : '';
+// Every mock BOM and PO reference starts with this; it is the verification run's document_ref_prefix.
+const REF_PREFIX = args.tag ? `MK-${args.tag}-` : 'MK-';
+const FG = ['FG-PUMP-12', 'FG-FRAME-A', 'FG-BRACKET-H'].map((s) => s + T);
 const rand = prng(args.seed);
 const int = (min, max) => min + Math.floor(rand() * (max - min + 1));
 const pick = (list) => list[int(0, list.length - 1)];
@@ -73,7 +81,7 @@ const csv = (header, rows) => [header, ...rows.map((r) => r.map(csvCell).join(',
 
 // ---------------------------------------------------------------- master data
 
-const bins = Array.from({ length: 10 }, (_, i) => `BIN-${'AABBCCJJRR'[i]}${pad((i % 2) + 1, 2)}`);
+const bins = Array.from({ length: 10 }, (_, i) => `BIN-${'AABBCCJJRR'[i]}${pad((i % 2) + 1, 2)}${T}`);
 
 /** control: 'lot' | 'serial' | 'plain' */
 function item(sku, uom, control, stockClass, cost) {
@@ -93,7 +101,7 @@ const items = [
   item('WELD-WIRE-1.2', 'KG', 'lot', 'vmi', null),
   ...['CUST-SHEET-3MM', 'CUST-PLATE-8MM', 'CUST-ROD-20MM'].map((s, i) => item(s, 'KG', 'lot', 'job_work', 58 + i * 6)),
   item('PROTO-BRKT-V3', 'EA', 'plain', 'prototype', null),
-  ...['FG-PUMP-12', 'FG-FRAME-A', 'FG-BRACKET-H'].map((s, i) => item(s, 'EA', 'plain', 'owned', 4200 + i * 900)),
+  ...FG.map((s, i) => item(s, 'EA', 'plain', 'owned', 4200 + i * 900)),
 ];
 const bySku = new Map(items.map((it) => [it.sku, it]));
 const stockable = items.filter((it) => !it.sku.startsWith('FG-'));
@@ -110,8 +118,8 @@ while (grains.size < args.lines) {
   const g = {
     location_code: pick(bins),
     sku: it.sku,
-    lot_number: it.control === 'lot' ? `LOT-${pad(++lotSeq, 4)}` : '',
-    serial_number: it.control === 'serial' ? `SN-${++serialSeq}` : '',
+    lot_number: it.control === 'lot' ? `LOT-${pad(++lotSeq, 4)}${T}` : '',
+    serial_number: it.control === 'serial' ? `SN-${++serialSeq}${T}` : '',
     quantity: it.control === 'serial' ? 1 : it.uom === 'KG' ? int(20, 2500) + int(0, 9) / 10 : int(1, 800),
     expiry: it.control === 'lot' && rand() < 0.3 ? `${2027 + int(0, 1)}-${pad(int(1, 12), 2)}-28` : '',
   };
@@ -184,7 +192,7 @@ times(os.missing_in_source, (i) => {
   expected.opening_stock.push({ defect: 'missing_in_source', variance_kind: 'missing_in_source', key: grainKey(g) });
 });
 times(os.serial_missing_in_source, () => {
-  const g = { location_code: pick(bins), sku: 'MTR-7.5KW', lot_number: '', serial_number: `SN-${++serialSeq}`, quantity: 1, expiry: '' };
+  const g = { location_code: pick(bins), sku: 'MTR-7.5KW', lot_number: '', serial_number: `SN-${++serialSeq}${T}`, quantity: 1, expiry: '' };
   touched.add(grainKey(g));
   fileRows.push({ key: grainKey(g), row: stockRow(g) });
   expected.opening_stock.push({ defect: 'serial_missing_in_source', variance_kind: 'serial_missing_in_source', key: grainKey(g) });
@@ -232,7 +240,7 @@ for (const e of expected.opening_stock) {
 // ---------------------------------------------------------------- documents: platform side, then the claim
 
 const supplierRefs = ['SUP-ACME', 'SUP-BHARAT-STEEL', 'SUP-NORTHERN-FAST'];
-const kits = ['FG-PUMP-12', 'FG-FRAME-A', 'FG-BRACKET-H'].map((parent, i) => ({
+const kits = FG.map((parent, i) => ({
   kit_ref: `${REF_PREFIX}KIT-${pad(i + 1, 3)}`,
   parent_sku: parent,
   revision_code: 'R1',
@@ -252,10 +260,10 @@ const purchaseOrders = Array.from({ length: 4 }, (_, i) => ({
 }));
 const challanDate = `${args.countedOn.slice(0, 4)}-${pad(Math.max(1, Number(args.countedOn.slice(5, 7)) - 1), 2)}-12`;
 const serviceOrders = ['CUST-SHEET-3MM', 'CUST-PLATE-8MM', 'CUST-ROD-20MM'].map((sku, i) => {
-  const challans = [1, 2].map((n) => ({ challan_number_ext: `DC-MK-${pad(i * 2 + n, 3)}`, challan_date: challanDate, sku, challan_qty: int(300, 1500), uom: 'KG', challan_class: 'input' }));
+  const challans = [1, 2].map((n) => ({ challan_number_ext: `DC-MK-${pad(i * 2 + n, 3)}${T}`, challan_date: challanDate, sku, challan_qty: int(300, 1500), uom: 'KG', challan_class: 'input' }));
   const consumed = int(50, 250);
   return {
-    order_number_ext: `JW-MK-${pad(i + 1, 4)}`,
+    order_number_ext: `JW-MK-${pad(i + 1, 4)}${T}`,
     customer_party_code: ['ACME', 'ORBIT', 'ZENITH'][i],
     customer_name: ['Acme Fabrication Pvt Ltd', 'Orbit Engineering Works', 'Zenith Agro Implements'][i],
     challans,
@@ -274,28 +282,35 @@ const challanRows = serviceOrders.flatMap((so) =>
 );
 const custodyRows = serviceOrders.map((so) => [site, so.order_number_ext, so.customer_party_code, so.challans[0].sku, String(so.custody_qty), 'KG']);
 
-/** Bump one numeric cell of a manifest row and record the field_mismatch it must produce. */
+/**
+ * Bump one numeric cell of a manifest row and record the field_mismatch it must produce. refOf
+ * gives the finding's [document_ref_ext, line_ref] as src/migration/document-templates.ts builds
+ * them (the challan line_ref is order and sku joined by U+001F, written here as '|').
+ */
 function bumpCell(rows, domain, defect, column, field, refOf, start) {
   times(defects[domain]?.[defect], (i) => {
     const row = rows[(start + i) % rows.length];
     const platformValue = row[column];
     row[column] = String(Number(platformValue) + 7);
-    expected[domain].push({ defect, finding_kind: 'field_mismatch', field, document: refOf(row), source_value: row[column], platform_value: platformValue });
+    const [document_ref_ext, line_ref] = refOf(row);
+    expected[domain].push({ defect, finding_kind: 'field_mismatch', field, document_ref_ext, line_ref, source_value: row[column], platform_value: platformValue });
   });
 }
-bumpCell(bomRows, 'active_boms', 'quantity_per_off', 5, 'quantity_per', (r) => `${r[1]} / ${r[4]}`, 1);
-bumpCell(poRows, 'open_pos', 'received_qty_off', 6, 'received_qty', (r) => `${r[1]} line ${r[2]}`, 0);
-bumpCell(challanRows, 'jobwork_challans', 'challan_qty_off', 6, 'challan_qty', (r) => r[1], 2);
-bumpCell(custodyRows, 'custody_registers', 'custody_qty_off', 4, 'custody_qty', (r) => r[1], 1);
+bumpCell(bomRows, 'active_boms', 'quantity_per_off', 5, 'quantity_per', (r) => [r[1], r[4]], 1);
+bumpCell(poRows, 'open_pos', 'received_qty_off', 6, 'received_qty', (r) => [r[1], r[2]], 0);
+bumpCell(challanRows, 'jobwork_challans', 'challan_qty_off', 6, 'challan_qty', (r) => [r[1], `${r[3]}|${r[5]}`], 2);
+bumpCell(custodyRows, 'custody_registers', 'custody_qty_off', 4, 'custody_qty', (r) => [r[1], r[3]], 1);
 times(defects.active_boms?.component_missing_in_platform, (i) => {
   const k = kits[i % kits.length];
   bomRows.push([site, k.kit_ref, k.parent_sku, k.revision_code, 'CON-GRIND-DISC', '2', 'EA']);
-  expected.active_boms.push({ defect: 'component_missing_in_platform', finding_kind: 'missing_in_platform', document: `${k.kit_ref} / CON-GRIND-DISC` });
+  // The kit exists, so the platform reports the extra component as a field_mismatch on
+  // component_sku (missing_in_platform is reserved for a whole document or PO line it lacks).
+  expected.active_boms.push({ defect: 'component_missing_in_platform', finding_kind: 'field_mismatch', field: 'component_sku', document_ref_ext: k.kit_ref, line_ref: 'CON-GRIND-DISC' });
 });
 times(defects.open_pos?.po_missing_in_platform, (i) => {
   const ref = `${REF_PREFIX}PO-9${pad(i + 1, 3)}`;
   poRows.push([site, ref, '1', 'BRG-6204', 'SUP-ACME', '100', '0', '100', '', '']);
-  expected.open_pos.push({ defect: 'po_missing_in_platform', finding_kind: 'missing_in_platform', document: ref });
+  expected.open_pos.push({ defect: 'po_missing_in_platform', finding_kind: 'missing_in_platform', document_ref_ext: ref, line_ref: '1' });
 });
 
 // ---------------------------------------------------------------- write the pack
