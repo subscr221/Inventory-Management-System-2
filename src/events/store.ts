@@ -1425,13 +1425,24 @@ export async function persistEvent(
       // Postgres exposes the violated constraint name via err.constraint, not err.detail
       // (err.detail only contains the conflicting key/value, e.g. "Key (idempotency_key)=(...) already exists.").
       const constraint = (err as { constraint?: string }).constraint;
-      if (constraint === 'uq_idempotency' || constraint === 'domain_events_pkey') {
-        if (ownsTransaction) {
-          const existing = await client.query(
+      // Projections run BEFORE the domain_events insert, so the loser of an identical-replay race
+      // can collide on a projection key (e.g. maintenance_fault_report_pkey) instead of on
+      // uq_idempotency. When the winner's event is already committed under this idempotency key or
+      // event id, the loser is a duplicate whichever constraint fired, and gets the same outcome
+      // and detail shape as the sequential short-circuit above.
+      const existing = ownsTransaction
+        ? await client.query(
             `SELECT event_id, stream_type, stream_id, event_type, event_version, payload, metadata, schema_version, idempotency_key, created_at
               FROM domain_events WHERE idempotency_key = $1 OR event_id = $2 LIMIT 1`,
             [envelope.idempotency_key, eventId],
-          );
+          )
+        : null;
+      if (
+        constraint === 'uq_idempotency' ||
+        constraint === 'domain_events_pkey' ||
+        (existing !== null && existing.rows.length > 0)
+      ) {
+        if (existing !== null) {
           if (existing.rows.length > 0) {
             if (opts?.strictDuplicate === true) {
               const row = existing.rows[0]!;

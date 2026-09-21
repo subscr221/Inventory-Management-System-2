@@ -156,6 +156,12 @@ describe('Pilot G2 REST handlers stamp the bin acted on', () => {
 
   /** Posts a real GRN line at the dock and returns the ready putaway task it generated. */
   async function receive(sku: string, qty: number): Promise<string> {
+    const res = await postGrn(sku, qty, dockCode);
+    assert.strictEqual(res.status, 201, `GRN for ${sku} failed: ${JSON.stringify(res.body)}`);
+    return (res.body['putaway_task'] as Record<string, unknown>)['putaway_task_id'] as string;
+  }
+
+  async function postGrn(sku: string, qty: number, targetCode: string): Promise<HttpResult> {
     const poRef = `G2PO-${run}-${sku}`;
     await getPool().query(
       `INSERT INTO erp_purchase_order (po_number_ext, supplier_ref_ext, currency, expected_delivery_date, status, source_system, last_synced_at)
@@ -175,7 +181,7 @@ describe('Pilot G2 REST handlers stamp the bin acted on', () => {
        VALUES ($1, $2, $3, $4, $5, $6, 1, 1000, 1100, 100, 'accepted', 'WB-1', 'MANUAL', $7, '2026-07-23', $8)`,
       [randomUUID(), token, randomUUID(), siteId, siteCode, poRef, supervisorId, randomUUID()],
     );
-    const res = await makeRequest(
+    return makeRequest(
       port,
       'POST',
       '/api/v1/grn-lines',
@@ -187,13 +193,11 @@ describe('Pilot G2 REST handlers stamp the bin acted on', () => {
         line_no: 1,
         source_document: 'PO',
         sku,
-        target_location_code: dockCode,
+        target_location_code: targetCode,
         received_qty: qty,
       },
       storeHeaders,
     );
-    assert.strictEqual(res.status, 201, `GRN for ${sku} failed: ${JSON.stringify(res.body)}`);
-    return (res.body['putaway_task'] as Record<string, unknown>)['putaway_task_id'] as string;
   }
 
   before(async () => {
@@ -260,6 +264,23 @@ describe('Pilot G2 REST handlers stamp the bin acted on', () => {
     assert.deepStrictEqual(await stamps(res.body['event_id'] as string), {
       event: binId,
       audit: binId,
+    });
+  });
+
+  it('a goods receipt records the receiving bin on the event and the audit row', async () => {
+    const sku = `G2-GRN-${run}`;
+    await seedItem(sku);
+    const taskId = await receive(sku, 10);
+    const received = await getPool().query(
+      `SELECT e.event_id FROM domain_events e
+         JOIN putaway_task pt ON pt.grn_line_id::text = e.payload->>'grn_line_id'
+        WHERE pt.putaway_task_id = $1 AND e.event_type = 'goods.received'`,
+      [taskId],
+    );
+    assert.strictEqual(received.rows.length, 1);
+    assert.deepStrictEqual(await stamps(received.rows[0]!['event_id'] as string), {
+      event: dockId,
+      audit: dockId,
     });
   });
 

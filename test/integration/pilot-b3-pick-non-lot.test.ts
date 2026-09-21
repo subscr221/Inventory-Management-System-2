@@ -757,4 +757,369 @@ describe('Pilot B3: stock that is not lot-controlled can be picked', () => {
     assert.strictEqual(lotLess.status, 400, lotLess.raw);
     assert.strictEqual(lotLess.body['error_code'], 'DISPATCH_PACKED_INVALID_PAYLOAD');
   });
+
+  // Packing must match what was picked, at the (SKU, lot) grain, through BOTH doors.
+  async function seedLotItem(sku: string, lotNumbers: string[]): Promise<string[]> {
+    await getPool().query(
+      `INSERT INTO item_master (sku, uom, lot_controlled, valuation_method, business_stream)
+       VALUES ($1, 'EA', true, 'weighted_average', 'manufacturing')`,
+      [sku],
+    );
+    const lotIds: string[] = [];
+    for (const lotNumber of lotNumbers) {
+      const lot = await getPool().query(
+        `INSERT INTO lot_master (lot_number, sku, expiry_date, quality_hold_status)
+         VALUES ($1, $2, NULL, 'none') RETURNING lot_id`,
+        [lotNumber, sku],
+      );
+      lotIds.push(lot.rows[0]!['lot_id'] as string);
+    }
+    return lotIds;
+  }
+
+  function packViaEventsDoor(
+    orderId: string,
+    line: { sku: string; packed_qty: string; lot_id: string | null },
+  ): Promise<HttpResult> {
+    return post('/api/v1/events', {
+      stream_type: 'warehouse',
+      stream_id: orderId,
+      event_type: 'dispatch.packed',
+      payload: {
+        packing_record_id: randomUUID(),
+        dispatch_order_id: orderId,
+        ...line,
+        carton_count: 1,
+      },
+      metadata: {
+        correlation_id: randomUUID(),
+        actor: { user_id: randomUUID(), role: 'warehouse_manager', location_id: siteId },
+        occurred_at: new Date().toISOString(),
+      },
+    });
+  }
+
+  it('packing a lot, SKU or quantity that was not picked is refused 409 PACKED_LINE_NOT_PICKED at the REST door and the events door', async () => {
+    const sku = `LOT-MATCH-${run}`;
+    const otherSku = `LOT-MATCH-OTHER-${run}`;
+    const [pickedLot, unpickedLot] = await seedLotItem(sku, [
+      `LOT-MATCH-A-${run}`,
+      `LOT-MATCH-B-${run}`,
+    ]);
+    await seedStock(sku, binP1, `LOT-MATCH-A-${run}`, 25);
+    await seedStock(sku, binP2, `LOT-MATCH-B-${run}`, 25);
+    const orderId = await seedOrderLine(`SOB3-MATCH-${run}`, sku, 5);
+    await pickAll(orderId, pickedLot!);
+
+    for (const [label, line] of [
+      ['a lot that was not picked', { sku, packed_qty: '5', lot_id: unpickedLot! }],
+      ['a SKU that was not picked', { sku: otherSku, packed_qty: '5', lot_id: pickedLot! }],
+    ] as const) {
+      const rest = await post(`/api/v1/dispatch/${orderId}/pack`, {
+        dispatchOrderId: orderId,
+        packingLines: [{ ...line, carton_count: 1 }],
+      });
+      assert.strictEqual(rest.status, 409, `REST, ${label}: ${rest.raw}`);
+      assert.strictEqual(rest.body['error_code'], 'PACKED_LINE_NOT_PICKED');
+      const door = await packViaEventsDoor(orderId, line);
+      assert.strictEqual(door.status, 409, `events door, ${label}: ${door.raw}`);
+      assert.strictEqual(door.body['error_code'], 'PACKED_LINE_NOT_PICKED');
+    }
+
+    // Quantity at the grain: 3 of the picked lot packs, a further 3 exceeds the 5 picked of it even
+    // though the order-wide cumulative check has nothing else to compare against.
+    const first = await post(`/api/v1/dispatch/${orderId}/pack`, {
+      dispatchOrderId: orderId,
+      packingLines: [{ sku, packed_qty: '3', lot_id: pickedLot!, carton_count: 1 }],
+    });
+    assert.strictEqual(first.status, 200, first.raw);
+    const records = await getPool().query(
+      `SELECT packed_qty::float8 AS packed_qty, lot_id FROM packing_record WHERE dispatch_order_id = $1`,
+      [orderId],
+    );
+    assert.deepStrictEqual(records.rows, [{ packed_qty: 3, lot_id: pickedLot }]);
+  });
+
+  it('a quantity picked from one lot cannot be packed against another lot of the same order', async () => {
+    const sku = `LOT-SPLIT-${run}`;
+    const [lotA, lotB] = await seedLotItem(sku, [`LOT-SPLIT-A-${run}`, `LOT-SPLIT-B-${run}`]);
+    await seedStock(sku, binP1, `LOT-SPLIT-A-${run}`, 3);
+    await seedStock(sku, binP1, `LOT-SPLIT-B-${run}`, 25);
+    const orderId = await seedOrderLine(`SOB3-SPLIT-${run}`, sku, 5);
+    const gen = await generate(orderId);
+    assert.strictEqual(gen.status, 201, JSON.stringify(gen.body));
+    const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
+    const detail = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/pick-tasks/${taskId}`,
+      undefined,
+      managerHeaders,
+    );
+    const lines = detail.body['lines'] as Array<Record<string, unknown>>;
+    assert.deepStrictEqual(
+      lines.map((l) => [l['directed_lot_id'], Number(l['directed_quantity'])]).sort(),
+      [
+        [lotA, 3],
+        [lotB, 2],
+      ].sort(),
+    );
+    for (const line of lines) {
+      const confirm = await makeRequest(
+        port,
+        'POST',
+        `/api/v1/pick-tasks/${taskId}/lines/${line['pick_line_id']}/confirm`,
+        {
+          confirmedLotId: line['directed_lot_id'],
+          confirmedQuantity: line['directed_quantity'],
+          captureMethod: 'PWA',
+        },
+        operatorHeaders,
+      );
+      assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
+    }
+
+    // 5 is within the order-wide confirmed total, but only 3 of lot A were picked.
+    const line = { sku, packed_qty: '5', lot_id: lotA! };
+    const rest = await post(`/api/v1/dispatch/${orderId}/pack`, {
+      dispatchOrderId: orderId,
+      packingLines: [{ ...line, carton_count: 1 }],
+    });
+    assert.strictEqual(rest.status, 409, rest.raw);
+    assert.strictEqual(rest.body['error_code'], 'PACKED_LINE_NOT_PICKED');
+    const door = await packViaEventsDoor(orderId, line);
+    assert.strictEqual(door.status, 409, door.raw);
+    assert.strictEqual(door.body['error_code'], 'PACKED_LINE_NOT_PICKED');
+
+    const pack = await post(`/api/v1/dispatch/${orderId}/pack`, {
+      dispatchOrderId: orderId,
+      packingLines: [
+        { sku, packed_qty: '3', lot_id: lotA!, carton_count: 1 },
+        { sku, packed_qty: '2', lot_id: lotB!, carton_count: 1 },
+      ],
+    });
+    assert.strictEqual(pack.status, 200, pack.raw);
+  });
+
+  it('a multi-line pack request is all-or-nothing: a refused second line leaves nothing packed, and the corrected retry succeeds', async () => {
+    const sku = `LOT-ATOMIC-${run}`;
+    const [pickedLot, unpickedLot] = await seedLotItem(sku, [
+      `LOT-ATOMIC-A-${run}`,
+      `LOT-ATOMIC-B-${run}`,
+    ]);
+    await seedStock(sku, binP1, `LOT-ATOMIC-A-${run}`, 25);
+    const orderId = await seedOrderLine(`SOB3-ATOMIC-${run}`, sku, 5);
+    await pickAll(orderId, pickedLot!);
+
+    const refused = await post(`/api/v1/dispatch/${orderId}/pack`, {
+      dispatchOrderId: orderId,
+      packingLines: [
+        { sku, packed_qty: '3', lot_id: pickedLot!, carton_count: 1 },
+        { sku, packed_qty: '2', lot_id: unpickedLot!, carton_count: 1 },
+      ],
+    });
+    assert.strictEqual(refused.status, 409, refused.raw);
+    assert.strictEqual(refused.body['error_code'], 'PACKED_LINE_NOT_PICKED');
+    const left = await getPool().query(
+      `SELECT (SELECT count(*)::int FROM packing_record WHERE dispatch_order_id = $1) AS records,
+              (SELECT count(*)::int FROM domain_events
+                WHERE stream_id = $1 AND event_type = 'dispatch.packed') AS events`,
+      [orderId],
+    );
+    assert.deepStrictEqual(left.rows[0], { records: 0, events: 0 });
+
+    const retry = await post(`/api/v1/dispatch/${orderId}/pack`, {
+      dispatchOrderId: orderId,
+      packingLines: [
+        { sku, packed_qty: '3', lot_id: pickedLot!, carton_count: 1 },
+        { sku, packed_qty: '2', lot_id: pickedLot!, carton_count: 1 },
+      ],
+    });
+    assert.strictEqual(retry.status, 200, retry.raw);
+    assert.strictEqual((retry.body['eventIds'] as string[]).length, 2);
+  });
+
+  it('a lot picked from two bins and packed as ONE record dispatches, relieving both bins and valuation once', async () => {
+    const sku = `LOT-2BIN-${run}`;
+    const lotNumber = `LOT-2BIN-A-${run}`;
+    const [lotId] = await seedLotItem(sku, [lotNumber]);
+    await seedStock(sku, binP1, lotNumber, 3);
+    await seedStock(sku, binP2, lotNumber, 25);
+    await seedValuation(sku, 28, 280);
+    const orderId = await seedOrderLine(`SOB3-2BIN-${run}`, sku, 5);
+    await pickAll(orderId, lotId!);
+    assert.strictEqual((await balanceFor(sku, binP1, lotNumber)).picked, 3);
+    assert.strictEqual((await balanceFor(sku, binP2, lotNumber)).picked, 2);
+
+    const pack = await post(`/api/v1/dispatch/${orderId}/pack`, {
+      dispatchOrderId: orderId,
+      packingLines: [{ sku, packed_qty: '5', lot_id: lotId!, carton_count: 1 }],
+    });
+    assert.strictEqual(pack.status, 200, pack.raw);
+    await documentsThenDispatch(orderId, '2BIN');
+
+    assert.deepStrictEqual(await balanceFor(sku, binP1, lotNumber), {
+      on_hand: 0,
+      allocated: 0,
+      picked: 0,
+      available: 0,
+    });
+    assert.deepStrictEqual(await balanceFor(sku, binP2, lotNumber), {
+      on_hand: 23,
+      allocated: 0,
+      picked: 0,
+      available: 23,
+    });
+    assert.deepStrictEqual(await valuationOf(sku), { quantity: '23.000000', value: '230.000000' });
+    const stored = await getPool().query(
+      `SELECT payload->'valuation' AS valuation FROM domain_events
+        WHERE stream_id = $1 AND event_type = 'dispatch.dispatched'`,
+      [orderId],
+    );
+    assert.strictEqual(stored.rows.length, 1);
+    const blocks = stored.rows[0]!['valuation'] as Array<Record<string, unknown>>;
+    assert.deepStrictEqual(
+      blocks.map((b) => [b['sku'], b['value']]),
+      [[sku, '50.000000']],
+    );
+  });
+
+  it('a legacy packing record whose lot matches no confirmed pick line is refused 409 at dispatch, naming the record', async () => {
+    const sku = `LOT-LEGACY-${run}`;
+    const [pickedLot, strayLot] = await seedLotItem(sku, [
+      `LOT-LEGACY-A-${run}`,
+      `LOT-LEGACY-B-${run}`,
+    ]);
+    await seedStock(sku, binP1, `LOT-LEGACY-A-${run}`, 25);
+    const orderId = await seedOrderLine(`SOB3-LEGACY-${run}`, sku, 5);
+    await pickAll(orderId, pickedLot!);
+    const pack = await post(`/api/v1/dispatch/${orderId}/pack`, {
+      dispatchOrderId: orderId,
+      packingLines: [{ sku, packed_qty: '3', lot_id: pickedLot!, carton_count: 1 }],
+    });
+    assert.strictEqual(pack.status, 200, pack.raw);
+    // The shape the packing seam accepted before it matched records to pick lines.
+    const legacyRecordId = randomUUID();
+    await getPool().query(
+      `INSERT INTO packing_record (packing_record_id, dispatch_order_id, sku, packed_qty, lot_id,
+                                   carton_count, packed_by)
+       SELECT $2, dispatch_order_id, sku, 2, $3, 1, packed_by
+         FROM packing_record WHERE dispatch_order_id = $1 LIMIT 1`,
+      [orderId, legacyRecordId, strayLot],
+    );
+
+    const docs = await post(`/api/v1/dispatch/${orderId}/generate-documents`, {
+      dispatchOrderId: orderId,
+    });
+    assert.strictEqual(docs.status, 200, docs.raw);
+    const irn = await post(`/api/v1/dispatch/${orderId}/irn`, {
+      idempotency_key: randomUUID(),
+      invoice_number_ext: `INV-B3-LEGACY-${run}`,
+      irn_ext: createHash('sha256').update(`IRN-B3-LEGACY-${run}`).digest('hex'),
+    });
+    assert.strictEqual(irn.status, 200, irn.raw);
+    const dispatched = await post(`/api/v1/dispatch/${orderId}/dispatch`, {
+      dispatchOrderId: orderId,
+    });
+    assert.strictEqual(dispatched.status, 409, dispatched.raw);
+    assert.strictEqual(dispatched.body['error_code'], 'DISPATCH_PACKED_LINE_NOT_PICKED');
+    assert.deepStrictEqual(
+      (dispatched.body['details'] as Record<string, unknown>)['packing_record_ids'],
+      [legacyRecordId],
+    );
+    assert.ok(String(dispatched.body['message']).includes(legacyRecordId));
+    // Nothing moved: the refusal rolled the matched grain's decrement back too.
+    assert.strictEqual((await balanceFor(sku, binP1, `LOT-LEGACY-A-${run}`)).picked, 5);
+
+    // A pick line that exists but whose stock is really missing stays the 500 it was.
+    await getPool().query(`UPDATE packing_record SET lot_id = $2 WHERE packing_record_id = $1`, [
+      legacyRecordId,
+      pickedLot,
+    ]);
+    await getPool().query(
+      `UPDATE stock_balance SET picked = 0, allocated = 0 WHERE sku = $1 AND location_id = $2`,
+      [sku, binP1],
+    );
+    const missing = await post(`/api/v1/dispatch/${orderId}/dispatch`, {
+      dispatchOrderId: orderId,
+    });
+    assert.strictEqual(missing.status, 500, missing.raw);
+    assert.strictEqual(missing.body['error_code'], 'STOCK_DECREMENT_FAILED');
+  });
+
+  it('pick completion takes its balance rows in the dispatch lock order (lot, SKU, bin), not pick-line order', async () => {
+    // The first-picked bin sorts LAST by id, so line order and lock order disagree.
+    const [firstLocked, pickedFirst] = [randomUUID(), randomUUID()].sort() as [string, string];
+    await seedLocation(pickedFirst, `BIN-ORD1-B3-${run}`, 'bin', zoneId, 1);
+    await seedLocation(firstLocked, `BIN-ORD2-B3-${run}`, 'bin', zoneId, 2);
+    const sku = `PLAIN-ORDER-${run}`;
+    await seedStock(sku, pickedFirst, null, 6);
+    await seedStock(sku, firstLocked, null, 50);
+    const orderId = await seedOrderLine(`SOB3-ORDER-${run}`, sku, 10);
+    const gen = await generate(orderId);
+    assert.strictEqual(gen.status, 201, JSON.stringify(gen.body));
+    const taskId = (gen.body['pickTaskIds'] as string[])[0]!;
+    const detail = await makeRequest(
+      port,
+      'GET',
+      `/api/v1/pick-tasks/${taskId}`,
+      undefined,
+      managerHeaders,
+    );
+    const lines = detail.body['lines'] as Array<Record<string, unknown>>;
+    assert.deepStrictEqual(
+      lines.map((l) => l['location_id']),
+      [pickedFirst, firstLocked],
+    );
+    const confirm = (line: Record<string, unknown>): Promise<HttpResult> =>
+      makeRequest(
+        port,
+        'POST',
+        `/api/v1/pick-tasks/${taskId}/lines/${line['pick_line_id']}/confirm`,
+        {
+          confirmedLotId: null,
+          confirmedQuantity: line['directed_quantity'],
+          captureMethod: 'PWA',
+        },
+        operatorHeaders,
+      );
+    assert.strictEqual((await confirm(lines[0]!)).status, 200);
+
+    // Park the completion on the row that is FIRST in lock order, then probe the other row: a
+    // completion walking in pick-line order would already hold it.
+    const holder = await getPool().connect();
+    const probe = await getPool().connect();
+    let completing: Promise<HttpResult> | undefined;
+    try {
+      await holder.query('BEGIN');
+      await holder.query(
+        `SELECT 1 FROM stock_balance WHERE sku = $1 AND location_id = $2 FOR UPDATE`,
+        [sku, firstLocked],
+      );
+      completing = confirm(lines[1]!);
+      let waiting = 0;
+      for (let i = 0; i < 1200 && waiting < 1; i++) {
+        await new Promise((r) => setTimeout(r, 25));
+        const r = await getPool().query(
+          `SELECT count(*)::int AS n FROM pg_locks
+            WHERE NOT granted AND locktype IN ('transactionid', 'tuple')`,
+        );
+        waiting = r.rows[0]!['n'] as number;
+      }
+      assert.strictEqual(waiting, 1, `the completion must be parked, saw ${waiting} waiters`);
+      await probe.query('BEGIN');
+      await probe.query(
+        `SELECT 1 FROM stock_balance WHERE sku = $1 AND location_id = $2 FOR UPDATE NOWAIT`,
+        [sku, pickedFirst],
+      );
+    } finally {
+      await probe.query('ROLLBACK').catch(() => undefined);
+      probe.release();
+      await holder.query('ROLLBACK');
+      holder.release();
+    }
+    assert.strictEqual((await completing).status, 200);
+    assert.strictEqual((await balanceFor(sku, pickedFirst, null)).picked, 6);
+    assert.strictEqual((await balanceFor(sku, firstLocked, null)).picked, 4);
+  });
 });

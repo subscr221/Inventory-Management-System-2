@@ -408,6 +408,15 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     assert.strictEqual(putaway['status'], 'held');
     assert.strictEqual(putaway['from_location_id'], qcZoneId);
     assert.strictEqual(await notificationCount('qc_inspector'), beforeQc + 1);
+    // Pilot G2: the audit stamp is the dock the receiver stood at, not the QC-hold zone the seam
+    // routed the stock into - the stamp says where the actor acted, the GRN line says where it went.
+    const stamped = await getPool().query(
+      `SELECT e.metadata->'actor'->>'location_id' AS event_location, a.location_id AS audit_location
+         FROM domain_events e JOIN audit_log a ON a.event_id = e.event_id
+        WHERE e.event_type = 'goods.received' AND e.payload->>'grn_line_id' = $1`,
+      [line['grn_line_id']],
+    );
+    assert.deepStrictEqual(stamped.rows, [{ event_location: dockId, audit_location: dockId }]);
 
     const putawayId = putaway['putaway_task_id'] as string;
     // A store assistant cannot release a held task (endpoint is supervisor-only).
@@ -430,6 +439,34 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
     assert.strictEqual(released.status, 200, JSON.stringify(released.body));
     assert.strictEqual(released.body['status'], 'ready');
     assert.strictEqual(released.body['release_reason_code'], 'QC_PASSED');
+  });
+
+  it('Pilot G2: a QC-hold receipt naming an inactive dock stamps the site, never the unvalidated location', async () => {
+    // The QC-hold route ignores the supplied target, so the seam never validates it; the stamp
+    // must not take an inactive or foreign location on the caller's word.
+    const closedDockId = randomUUID();
+    await getPool().query(
+      `INSERT INTO location_register (location_id, location_code, level, parent_location_id, site_id, zone_type, temperature_class, quarantine, status)
+       VALUES ($1, 'RECV-DOCK-CLOSED', 'zone', $2, $2, 'staging', 'ambient', false, 'inactive')`,
+      [closedDockId, siteAId],
+    );
+    await seedPo('PO-BIS-CLOSED', 'SKU-RCV-BIS', 50);
+    const token = await seedToken('PO-BIS-CLOSED');
+    const body = grnBody(token, {
+      po_ref_ext: 'PO-BIS-CLOSED',
+      sku: 'SKU-RCV-BIS',
+      received_qty: 10,
+      target_location_code: 'RECV-DOCK-CLOSED',
+    });
+    const res = await makeRequest(port, 'POST', '/api/v1/grn-lines', body, storeHeaders);
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const stamped = await getPool().query(
+      `SELECT e.metadata->'actor'->>'location_id' AS event_location, a.location_id AS audit_location
+         FROM domain_events e JOIN audit_log a ON a.event_id = e.event_id
+        WHERE e.event_type = 'goods.received' AND e.payload->>'grn_line_id' = $1`,
+      [body['grn_line_id']],
+    );
+    assert.deepStrictEqual(stamped.rows, [{ event_location: siteAId, audit_location: siteAId }]);
   });
 
   it('AC4: an off-PO barcode rejects ITEM_PO_MISMATCH with no stock and no durable line', async () => {

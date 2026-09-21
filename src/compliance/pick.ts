@@ -659,9 +659,28 @@ async function finalizePickTaskCompletion(
             COALESCE(pl.confirmed_location_id, pl.location_id) AS bin_id,
             pl.confirmed_quantity::text AS confirmed_quantity
        FROM pick_line pl
-      WHERE pl.pick_task_id = $1 AND pl.status IN ('confirmed', 'substituted')`,
+      WHERE pl.pick_task_id = $1 AND pl.status IN ('confirmed', 'substituted')
+      ORDER BY pl.confirmed_lot_id NULLS FIRST, pl.sku, 3, pl.pick_line_id`,
     [pickTaskId],
   );
+  // Lock order: the rows above come in the SAME total order the dispatch decrement walks its
+  // balance rows in (lot, SKU, bin), and every lot is gated - which locks its lot_master row -
+  // before the first balance row is touched (lot, then gate, then stock, as dispatch does). A
+  // two-line completion can then never deadlock against a dispatch sharing its balance rows.
+  const lotNumbers = new Map<string, string>();
+  for (const row of confirmedLines.rows) {
+    const confirmedLotId = (row['confirmed_lot_id'] as string | null) ?? null;
+    const lotKey = `${confirmedLotId}|${row['sku'] as string}`;
+    if (confirmedLotId === null || lotNumbers.has(lotKey)) continue;
+    lotNumbers.set(lotKey, await lotNumberForUuid(confirmedLotId, row['sku'] as string, client));
+    // Story 8.1 (Task 6): the allocated-to-picked move re-runs the QC gate under the lot lock.
+    await assertQcGateAllows({
+      lot_id: confirmedLotId,
+      operation: 'pick',
+      business_date: businessDate,
+      client,
+    });
+  }
   for (const row of confirmedLines.rows) {
     const sku = row['sku'] as string;
     const confirmedLotId = (row['confirmed_lot_id'] as string | null) ?? null;
@@ -678,19 +697,11 @@ async function finalizePickTaskCompletion(
       );
       continue;
     }
-    const confirmedLotNumber = await lotNumberForUuid(confirmedLotId, sku, client);
-    // Story 8.1 (Task 6): the allocated-to-picked move re-runs the QC gate under the lot lock.
-    await assertQcGateAllows({
-      lot_id: confirmedLotId,
-      operation: 'pick',
-      business_date: businessDate,
-      client,
-    });
     await applyStockPick(
       {
         sku,
         location_id: row['bin_id'] as string,
-        lot_id: confirmedLotNumber,
+        lot_id: lotNumbers.get(`${confirmedLotId}|${sku}`)!,
         quantity: row['confirmed_quantity'] as string,
       },
       client,

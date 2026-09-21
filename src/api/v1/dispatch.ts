@@ -312,34 +312,48 @@ export const postPacked: RouteHandler = async (req, res) => {
 
   const auditCtx = auditCtxFor(req, actor, 200);
 
+  // A multi-line request is all-or-nothing: every line's event joins ONE transaction, so a line the
+  // seam refuses (PACKED_LINE_NOT_PICKED, a lot-less record for a lot-controlled item) rolls back
+  // the lines before it. There is no unpack path, so a half-packed order could never be retried.
   const eventIds: string[] = [];
-  for (const line of packingLines) {
-    const result = await persistEvent(
-      {
-        stream_type: 'warehouse',
-        stream_id: dispatchOrderId,
-        event_type: 'dispatch.packed',
-        payload: {
-          packing_record_id: randomUUID(),
-          dispatch_order_id: dispatchOrderId,
-          sku: line.sku,
-          packed_qty: line.packed_qty,
-          lot_id: line.lot_id,
-          actual_weight_kg:
-            line.actual_weight_kg != null ? String(line.actual_weight_kg) : undefined,
-          label_ref: line.label_ref ?? undefined,
-          carton_count: line.carton_count,
-          packed_by: actor.userId,
+  const client = await pool.connect();
+  let committed = false;
+  try {
+    await client.query('BEGIN');
+    for (const line of packingLines) {
+      const result = await persistEvent(
+        {
+          stream_type: 'warehouse',
+          stream_id: dispatchOrderId,
+          event_type: 'dispatch.packed',
+          payload: {
+            packing_record_id: randomUUID(),
+            dispatch_order_id: dispatchOrderId,
+            sku: line.sku,
+            packed_qty: line.packed_qty,
+            lot_id: line.lot_id,
+            actual_weight_kg:
+              line.actual_weight_kg != null ? String(line.actual_weight_kg) : undefined,
+            label_ref: line.label_ref ?? undefined,
+            carton_count: line.carton_count,
+            packed_by: actor.userId,
+          },
+          metadata: {
+            correlation_id: randomUUID(),
+            actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+            occurred_at: new Date().toISOString(),
+          },
         },
-        metadata: {
-          correlation_id: randomUUID(),
-          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
-          occurred_at: new Date().toISOString(),
-        },
-      },
-      auditCtx,
-    );
-    eventIds.push(result.event_id);
+        auditCtx,
+        client,
+      );
+      eventIds.push(result.event_id);
+    }
+    await client.query('COMMIT');
+    committed = true;
+  } finally {
+    if (!committed) await client.query('ROLLBACK').catch(() => undefined);
+    client.release();
   }
 
   sendJson(res, 200, {

@@ -448,6 +448,15 @@ describe('Pilot Ruling B job-work receipt without a purchase order', () => {
     assert.strictEqual(task['status'], 'ready');
     assert.strictEqual(task['from_location_id'], dockId);
     assert.strictEqual(task['grn_line_id'], body['grn_line_id']);
+
+    // Pilot G2: the challan door stamps the receiving bin like the purchase-order door does.
+    const stamped = await getPool().query(
+      `SELECT e.metadata->'actor'->>'location_id' AS event_location, a.location_id AS audit_location
+         FROM domain_events e JOIN audit_log a ON a.event_id = e.event_id
+        WHERE e.event_type = 'goods.received' AND e.payload->>'grn_line_id' = $1`,
+      [body['grn_line_id']],
+    );
+    assert.deepStrictEqual(stamped.rows, [{ event_location: dockId, audit_location: dockId }]);
     assert.strictEqual(
       await rowCount('lot_master', 'lot_number = $1 AND sku = $2', [`RB-LOT-${run}`, SKU]),
       1,

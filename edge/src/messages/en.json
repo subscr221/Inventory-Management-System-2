@@ -181,6 +181,8 @@
   "errors.DISPATCH_DOCUMENTS_INVALID_PAYLOAD": "The document generation request is incomplete. Check your inputs.",
   "errors.DISPATCH_DISPATCHED_INVALID_PAYLOAD": "The dispatch confirmation data is incomplete. Check your inputs.",
   "errors.PACKED_QTY_MISMATCH": "The packed quantity does not match the confirmed pick quantity.",
+  "errors.DISPATCH_PACKED_LINE_NOT_PICKED": "A packing record on this order does not match what was picked. Ask a supervisor to correct it before dispatch.",
+  "errors.PACKED_LINE_NOT_PICKED": "This item, lot or quantity was not picked for the order. Pack what was picked.",
   "errors.DISPATCH_DOCUMENTS_NOT_GENERATED": "Shipping documents must be generated before dispatch.",
   "errors.IRN_MISSING": "This dispatch is blocked until its invoice IRN is recorded. Record the IRN, then retry dispatch.",
   "errors.GST_DOCUMENTS_REQUIRED": "This inter-branch transfer cannot ship until its GST documents are recorded. Ask the GST officer to record the tax invoice (with IRN) and, where required, the e-way bill.",

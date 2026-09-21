@@ -276,6 +276,42 @@ export async function applyDispatchPackedProjection(
     );
   }
 
+  // The order-wide sum above cannot tell WHAT was picked. A packing record must also fit the
+  // confirmed pick lines at its own (SKU, lot) grain - the same null-safe lot match the pick seam
+  // uses - counting what is already packed at that grain. A SKU or lot the order never picked has a
+  // picked quantity of zero, so it is refused here too, and the dispatch decrement never goes
+  // looking for a balance the pick did not touch.
+  const grainResult = await client.query(
+    `SELECT
+       (SELECT COALESCE(SUM(pl.confirmed_quantity), 0) FROM pick_line pl
+         WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2
+           AND pl.confirmed_lot_id IS NOT DISTINCT FROM $3::uuid
+           AND pl.status IN ('confirmed', 'substituted'))::text AS picked_qty,
+       (SELECT COALESCE(SUM(pr.packed_qty), 0) FROM packing_record pr
+         WHERE pr.dispatch_order_id = $1 AND pr.sku = $2
+           AND pr.lot_id IS NOT DISTINCT FROM $3::uuid)::text AS already_packed_qty`,
+    [p.dispatch_order_id, p.sku, p.lot_id],
+  );
+  const grain = grainResult.rows[0] as Record<string, string>;
+  if (
+    (toScaled3(grain['already_packed_qty']!) ?? 0n) + (toScaled3(p.packed_qty) ?? 0n) >
+    (toScaled3(grain['picked_qty']!) ?? 0n)
+  ) {
+    throw new AppError(
+      409,
+      'PACKED_LINE_NOT_PICKED',
+      'The packing record does not match the confirmed pick lines for this SKU and lot',
+      {
+        dispatch_order_id: p.dispatch_order_id,
+        sku: p.sku,
+        lot_id: p.lot_id,
+        picked_qty: grain['picked_qty'],
+        already_packed_qty: grain['already_packed_qty'],
+        packed_qty: String(p.packed_qty),
+      },
+    );
+  }
+
   await createPackingRecord(
     {
       packing_record_id: p.packing_record_id,
@@ -608,92 +644,86 @@ export async function applyDispatchDispatchedProjection(
     throw refusal;
   }
 
-  // Count how many packing records this dispatch order has, so the decrement below can be
-  // verified to have matched every one of them (not just at-least-one).
-  const packingCountResult = await client.query(
-    `SELECT COUNT(*) AS cnt FROM packing_record
-      WHERE dispatch_order_id = $1 AND lot_id IS NOT NULL`,
+  // Decrement stock: move the packed quantity out of on_hand and picked, one (SKU, lot) grain at a
+  // time. Pilot B3: a lot-less record resolves no lot_master row and is decremented against the
+  // `lot_id IS NULL` balance rows only. Nothing keeps a pick inside one bin - plain stock has no lot,
+  // and one lot can sit in several bins - so the packed quantity per grain is walked across the bins
+  // the order's pick lines for that grain were confirmed at (bin order, a stable lock order), never
+  // past what each bin's lines picked. One packing record may therefore cover a lot picked from two
+  // bins. Anything left over, a lot that does not resolve, or a bin whose picked quantity no longer
+  // covers its share, is STOCK_DECREMENT_FAILED.
+  const packedGrains = await client.query(
+    `SELECT pr.sku, pr.lot_id, lm.lot_number, SUM(pr.packed_qty)::text AS packed_qty
+       FROM packing_record pr
+       LEFT JOIN lot_master lm ON lm.lot_id = pr.lot_id
+      WHERE pr.dispatch_order_id = $1
+      GROUP BY pr.sku, pr.lot_id, lm.lot_number
+      ORDER BY pr.lot_id NULLS FIRST, pr.sku`,
     [p.dispatch_order_id],
   );
-  const packingCount = Number(packingCountResult.rows[0].cnt);
-
-  // Pilot B3: lot-less records resolve no lot_master row, so the lot decrement below never
-  // sees them; they are decremented here against the `lot_id IS NULL` balance rows only. Plain
-  // stock has no lot to keep a pick inside one bin, so the packed quantity per SKU is walked across
-  // the bins the order's lot-less pick lines were confirmed at (bin order, a stable lock order),
-  // never past what each bin's lines picked. Anything left over, or a bin whose picked quantity no
-  // longer covers its share, is the same STOCK_DECREMENT_FAILED the lot path raises.
-  const lotLessPacked = await client.query(
-    `SELECT sku, SUM(packed_qty)::text AS packed_qty FROM packing_record
-      WHERE dispatch_order_id = $1 AND lot_id IS NULL
-      GROUP BY sku ORDER BY sku`,
-    [p.dispatch_order_id],
-  );
-  for (const packed of lotLessPacked.rows as Array<Record<string, unknown>>) {
+  for (const packed of packedGrains.rows as Array<Record<string, unknown>>) {
+    const lotLess = packed['lot_id'] === null;
     const bins = await client.query(
       `SELECT COALESCE(pl.confirmed_location_id, pl.location_id) AS bin_id,
               SUM(pl.confirmed_quantity)::text AS picked_qty
          FROM pick_line pl
-        WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2 AND pl.confirmed_lot_id IS NULL
+        WHERE pl.dispatch_order_line_id = $1 AND pl.sku = $2
+          AND pl.confirmed_lot_id IS NOT DISTINCT FROM $3::uuid
           AND pl.status IN ('confirmed', 'substituted')
         GROUP BY 1 ORDER BY 1`,
-      [p.dispatch_order_id, packed['sku']],
+      [p.dispatch_order_id, packed['sku'], packed['lot_id']],
     );
+    if (bins.rows.length === 0) {
+      // No confirmed pick line at this grain: a record packed before the packing seam matched
+      // records to pick lines (new ones are refused PACKED_LINE_NOT_PICKED). That is the state of
+      // the data, not missing stock, so it is a named 409 and never STOCK_DECREMENT_FAILED.
+      const records = await client.query(
+        `SELECT packing_record_id FROM packing_record
+          WHERE dispatch_order_id = $1 AND sku = $2 AND lot_id IS NOT DISTINCT FROM $3::uuid
+          ORDER BY packing_record_id`,
+        [p.dispatch_order_id, packed['sku'], packed['lot_id']],
+      );
+      const recordIds = records.rows.map((r: Record<string, unknown>) => r['packing_record_id']);
+      throw new AppError(
+        409,
+        'DISPATCH_PACKED_LINE_NOT_PICKED',
+        `Cannot dispatch: packing record ${recordIds.join(', ')} names a SKU and lot with no confirmed pick line on this order`,
+        {
+          dispatch_order_id: p.dispatch_order_id,
+          packing_record_ids: recordIds,
+          sku: packed['sku'],
+          lot_id: packed['lot_id'],
+        },
+      );
+    }
     let remaining = toScaled3(packed['packed_qty'] as string) ?? 0n;
     for (const bin of bins.rows as Array<Record<string, unknown>>) {
-      if (remaining === 0n) break;
+      if (remaining === 0n || (!lotLess && packed['lot_number'] === null)) break;
       const binPicked = toScaled3(bin['picked_qty'] as string) ?? 0n;
       const take = remaining < binPicked ? remaining : binPicked;
       if (take === 0n) continue;
       // Exact NUMERIC(14,3) text, never a float.
       const takeText = `${take / 1000n}.${String(take % 1000n).padStart(3, '0')}`;
-      const lotLessDec = await client.query(
+      const dec = await client.query(
         `UPDATE stock_balance
             SET on_hand = on_hand - $3::numeric, picked = picked - $3::numeric, updated_at = now()
-          WHERE sku = $1 AND location_id = $2 AND lot_id IS NULL AND stock_class = 'owned'
-            AND picked >= $3::numeric`,
-        [packed['sku'], bin['bin_id'], takeText],
+          WHERE sku = $1 AND location_id = $2 AND lot_id IS NOT DISTINCT FROM $4::text
+            AND stock_class = 'owned' AND picked >= $3::numeric`,
+        [packed['sku'], bin['bin_id'], takeText, packed['lot_number']],
       );
       // A missed bin leaves `remaining` short, which raises below.
-      if ((lotLessDec.rowCount ?? 0) !== 1) break;
+      if ((dec.rowCount ?? 0) !== 1) break;
       remaining -= take;
     }
     if (remaining !== 0n) {
       throw await stockDecrementFailure(
         p.dispatch_order_id,
-        'Stock balance not found for one or more dispatched lot-less lines; inventory may be inconsistent',
+        lotLess
+          ? 'Stock balance not found for one or more dispatched lot-less lines; inventory may be inconsistent'
+          : 'Stock balance not found for one or more dispatched lots; inventory may be inconsistent',
         client,
       );
     }
-  }
-
-  // Decrement stock: move packed quantity from picked to dispatched (reduce on_hand and picked)
-  const decResult = await client.query(
-    `UPDATE stock_balance sb
-     SET on_hand = sb.on_hand - pr.packed_qty::numeric,
-         picked = sb.picked - pr.packed_qty::numeric,
-         updated_at = now()
-     FROM packing_record pr
-     JOIN lot_master lm ON lm.lot_id = pr.lot_id
-     WHERE sb.sku = pr.sku
-       AND sb.lot_id = lm.lot_number
-       AND sb.location_id = COALESCE(
-         (SELECT pl.confirmed_location_id FROM pick_line pl
-           WHERE pl.dispatch_order_line_id = pr.dispatch_order_id AND pl.confirmed_lot_id = pr.lot_id
-             AND pl.status IN ('confirmed', 'substituted')
-           ORDER BY pl.confirmed_at DESC NULLS LAST, pl.pick_line_id LIMIT 1),
-         sb.location_id)
-       AND sb.stock_class = 'owned'
-       AND sb.picked >= pr.packed_qty::numeric
-       AND pr.dispatch_order_id = $1`,
-    [p.dispatch_order_id],
-  );
-  if ((decResult.rowCount ?? 0) < packingCount) {
-    throw await stockDecrementFailure(
-      p.dispatch_order_id,
-      'Stock balance not found for one or more dispatched lots; inventory may be inconsistent',
-      client,
-    );
   }
 
   // Owner ruling 2026-09-20: a customer dispatch is an owned outflow (both decrements above are

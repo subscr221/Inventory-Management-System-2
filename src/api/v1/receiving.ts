@@ -16,7 +16,7 @@ import {
 import { persistEvent, findEventByIdempotencyKey } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
-import { getLocationByCode } from '../../read/projections/location_register.js';
+import { getLocationByCode, getLocationById } from '../../read/projections/location_register.js';
 import { getGrnById, listGrns } from '../../read/projections/grn.js';
 import {
   getGrnLineById,
@@ -30,6 +30,7 @@ import {
 import { getCrossDockTaskByGrnLine } from '../../read/projections/cross_dock_task.js';
 import { getServiceOrderById } from '../../read/projections/service_order.js';
 import { JOBWORK_CHALLAN_SOURCE } from '../../compliance/receiving.js';
+import { stampActedLocation } from './actor-stamp.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -57,6 +58,32 @@ function actorContext(req: IncomingMessage): ActorContext {
   const auditLocationId = assignment?.locationId ?? '*';
   const eventLocationId = auditLocationId === '*' ? NO_LOCATION_UUID : auditLocationId;
   return { userId, role, auditLocationId, eventLocationId };
+}
+
+/**
+ * Pilot G2: a receipt acts at ONE location, the receiving bin, so that bin is the audit stamp. The
+ * stamp takes nothing on the caller's word: only an ACTIVE location of the receipt's own site is
+ * stamped (the seam's own target rule, which its QC-hold route never applies to the supplied
+ * target). Anything else keeps the site stamp and is left to the seam's refusal.
+ */
+async function receivingActor(
+  req: IncomingMessage,
+  body: Record<string, unknown>,
+  siteId: string | null | undefined,
+): Promise<ActorContext> {
+  const target =
+    typeof body['target_location_id'] === 'string' && UUID_REGEX.test(body['target_location_id'])
+      ? await getLocationById(body['target_location_id'])
+      : typeof body['target_location_code'] === 'string'
+        ? await getLocationByCode(body['target_location_code'])
+        : null;
+  const valid = target && target.status === 'active' && target.site_id === siteId;
+  return stampActedLocation(
+    req,
+    actorContext(req),
+    'receiving',
+    valid ? target.location_id : undefined,
+  );
 }
 
 function auditCtxFor(
@@ -252,7 +279,7 @@ async function createJobworkChallanGrnLine(
     if (ticketSiteId) assertSiteAccess(req, ticketSiteId, 'write');
   }
 
-  const actor = actorContext(req);
+  const actor = await receivingActor(req, body, order?.site_id);
   const grnId =
     typeof body['grn_id'] === 'string' && UUID_REGEX.test(body['grn_id'])
       ? body['grn_id']
@@ -362,7 +389,7 @@ const createGrnLineBase: RouteHandler = async (req, res) => {
   const siteId = await resolveSiteByToken(correlationId);
   if (siteId) assertSiteAccess(req, siteId, 'write');
 
-  const actor = actorContext(req);
+  const actor = await receivingActor(req, body, siteId);
   const grnId =
     typeof body['grn_id'] === 'string' && UUID_REGEX.test(body['grn_id'])
       ? body['grn_id']

@@ -619,6 +619,100 @@ describe('Story 3.9 Forward-Pick Replenishment', () => {
     ]);
   });
 
+  it('generation: held reserve stock is not counted as source stock, and an unheld bin is still chosen', async () => {
+    const secondReserveBinId = randomUUID();
+    await seedLocation(
+      secondReserveBinId,
+      `ZRESBIN39-${run}`,
+      'bin',
+      reserveZoneId,
+      siteAId,
+      'reserve',
+    );
+
+    // The first reserve bin holds 70, but only 20 of it is drainable: it cannot cover the 30.
+    async function generate(
+      localSku: string,
+      secondBinOnHand: number | null,
+      blockedBy: 'manual_hold' | 'qc_gate' = 'manual_hold',
+    ): Promise<unknown> {
+      await makeRequest(
+        port,
+        'PUT',
+        '/api/v1/replenishment/config',
+        { sku: localSku, zone_id: fpZoneId, min_qty: 10, max_qty: 30 },
+        managerHeaders,
+      );
+      for (const [lot, binId, onHand, hold] of [
+        [`${localSku}-A-HELD`, reserveBinId, 50, blockedBy === 'manual_hold' ? 'held' : 'none'],
+        [`${localSku}-B`, reserveBinId, 20, 'none'],
+        [`${localSku}-C`, secondReserveBinId, secondBinOnHand, 'none'],
+      ] as const) {
+        if (onHand === null) continue;
+        const lotId = randomUUID();
+        await getPool().query(
+          `INSERT INTO lot_master (lot_id, lot_number, sku, quality_hold_status) VALUES ($1, $2, $3, $4)`,
+          [lotId, lot, localSku, hold],
+        );
+        // The Story 8.1 gate row (keyed by lot number + sku) blocks the lot with no manual hold.
+        if (blockedBy === 'qc_gate' && lot.endsWith('-A-HELD'))
+          await getPool().query(
+            `INSERT INTO qc_inspection_task
+               (task_id, lot_id, lot_number, source_completion_type, source_completion_id, item_id, sku,
+                quantity, uom, site_id, bom_revision_id, plan_id, plan_version_id, plan_scope, completed_at,
+                business_date, gate_status, gate_changed_at, source_event_id)
+             VALUES ($1, $2, $3, 'job_work_order', $4, $5, $6, 1, 'KG', $7, $8, $9, $10, 'standard', now(),
+                '2026-07-23', 'qc_hold', now(), $11)`,
+            [
+              randomUUID(),
+              lotId,
+              lot,
+              randomUUID(),
+              randomUUID(),
+              localSku,
+              siteAId,
+              randomUUID(),
+              randomUUID(),
+              randomUUID(),
+              randomUUID(),
+            ],
+          );
+        await getPool().query(
+          `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand) VALUES ($1, $2, $3, 'owned', $4)`,
+          [localSku, binId, lot, onHand],
+        );
+      }
+      const checkRes = await makeRequest(
+        port,
+        'POST',
+        '/api/v1/replenishment/check',
+        { site_id: siteAId, sku: localSku },
+        managerHeaders,
+      );
+      assert.strictEqual(checkRes.status, 200, checkRes.raw);
+      const created = checkRes.body['created'] as Array<Record<string, unknown>>;
+      assert.strictEqual(created.length, 1, checkRes.raw);
+      const task = await getPool().query(
+        `SELECT from_location_id FROM replenishment_task WHERE replenishment_task_id = $1`,
+        [created[0]!['replenishment_task_id']],
+      );
+      return task.rows[0]!['from_location_id'];
+    }
+
+    assert.strictEqual(
+      await generate(`SKU-39-GENHOLD-${run}`, null),
+      null,
+      'a bin whose drainable stock cannot cover the task must not be named as its source',
+    );
+    assert.strictEqual(
+      await generate(`SKU-39-GENGATE-${run}`, null, 'qc_gate'),
+      null,
+      'a lot under a blocking QC gate counts no more than a manually held one',
+    );
+    // Unheld behaviour is unchanged: a bin whose free stock covers the quantity is still chosen.
+    assert.strictEqual(await generate(`SKU-39-GENFREE-${run}`, 40), secondReserveBinId);
+  });
+
   // -------------------------------------------------------------------------
   // RBAC and site scoping
   // -------------------------------------------------------------------------

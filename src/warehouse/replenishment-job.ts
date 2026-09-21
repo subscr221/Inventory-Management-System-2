@@ -9,6 +9,7 @@ import {
 } from '../read/projections/forward_pick_config.js';
 import { getForwardPickBalance } from '../read/projections/stock_balance.js';
 import { getOpenPickDemand } from '../read/projections/erp_sales_order.js';
+import { qcGateExclusionSql } from '../read/projections/qc_inspection_task.js';
 
 /**
  * Story 3.9 (AC1, AC2): the Phase-1 synthetic forward-pick replenishment trigger, modeled directly
@@ -162,6 +163,9 @@ async function checkOneZone(
     // Phase-1 source-bin selection (Dev Notes): the first active bin, by location_code, under any
     // active reserve zone at this config's site whose owned available stock covers the top-up
     // quantity. No FEFO/velocity ranking - none of the three ACs require it for the source side.
+    // Only stock the completion drain can actually take counts: the SAME qcGateExclusionSql
+    // predicate applyStockIssue splices in, so a QC-gated or manually held lot never makes a bin
+    // look able to cover a task that could then never complete.
     const sourceRes = await client.query(
       `WITH RECURSIVE reserve_zones AS (
          SELECT location_id FROM location_register
@@ -179,6 +183,7 @@ async function checkOneZone(
          JOIN descendants d ON d.location_id = lr.location_id
          JOIN stock_balance sb ON sb.location_id = lr.location_id AND sb.sku = $2 AND sb.stock_class = 'owned'
         WHERE lr.level = 'bin' AND lr.status = 'active'
+          AND ${qcGateExclusionSql('sb', false)}
         GROUP BY lr.location_id, lr.location_code
        HAVING SUM(sb.available) >= $3::numeric
         ORDER BY lr.location_code
