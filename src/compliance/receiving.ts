@@ -4,24 +4,30 @@ import type { EventEnvelope } from '../events/store.js';
 import { persistEvent } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
 import { getServiceOrderById } from '../read/projections/service_order.js';
+import { getBomById, getBomLines } from '../read/projections/bom.js';
 import {
   JOBWORK_MATERIAL_RECEIVED,
   JOB_WORK_STOCK_CLASS,
   RECEIVING_HANDOFF,
+  orderAcceptsReceipt,
 } from './jobwork-receipt.js';
+import { kitLineMatchesConsumption } from './custody-ledger.js';
+import { assertActorAtSite } from './actor-site.js';
 import { emitNotificationInTransaction } from '../notify/emit.js';
 import { getItemBySku } from '../read/projections/item_master.js';
 import { getLocationById, getLocationByCode } from '../read/projections/location_register.js';
 import type { LocationRegisterEntry } from '../read/projections/location_register.js';
 import { getPurchaseOrderByRef } from '../read/projections/erp_purchase_order.js';
 import { getWeighbridgeEventsByCorrelationId } from '../read/projections/weighbridge_event.js';
+import type { WeighbridgeEvent } from '../read/projections/weighbridge_event.js';
 import {
   findMatchingDoaEntry,
   findRoleHolder,
   findActiveDelegation,
   listActiveDoaEntries,
 } from '../read/projections/doa_registry.js';
-import { insertGrnHeader } from '../read/projections/grn.js';
+import { getGrnById, insertGrnHeader } from '../read/projections/grn.js';
+import type { Grn } from '../read/projections/grn.js';
 import { insertGrnLine } from '../read/projections/grn_line.js';
 import {
   insertPutawayTask,
@@ -59,6 +65,16 @@ const UNIT_COST_REGEX = /^\d+(\.\d+)?$/;
  */
 const BOOKS_CURRENCY = 'INR';
 const NUMERIC_REGEX = /^\d{1,15}(\.\d{1,3})?$/;
+
+/**
+ * Pilot Ruling B: the third source document. Customer-owned job-work material is received against
+ * the job-work (service) order plus the customer's challan - no purchase order, weighbridge
+ * optional. It is a KIND of goods.received, not a parallel pipeline: only the purchase-order steps
+ * are skipped, everything from the expiry check onward is the one Story 3.4 / 9.2 path.
+ */
+export const JOBWORK_CHALLAN_SOURCE = 'JOBWORK_CHALLAN';
+/** The GRN route is store-assistant only; with no gate chain behind it this kind holds that on every door. */
+const JOBWORK_CHALLAN_RECEIVER_ROLES = new Set(['store_assistant']);
 
 const QC_HOLD_ZONE_CODE = 'ZONE-QC-HOLD';
 const DISCREPANCY_TARGET_ROLE = 'unloading_supervisor';
@@ -185,8 +201,20 @@ async function assertReleaseApproval(actorRole: string, client: PoolClient): Pro
 export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
   if (receivingEventType(envelope) !== 'goods.received') return;
   const p = envelope.payload;
+  // Pilot Ruling B: a customer challan receipt names no purchase order and the weighbridge ticket
+  // is optional. Every other source document keeps the Story 3.4 shape below untouched.
+  const challanReceipt = p['source_document'] === JOBWORK_CHALLAN_SOURCE;
 
-  if (!isUuid(p['correlation_id']))
+  if (challanReceipt) {
+    if (p['correlation_id'] !== undefined && p['correlation_id'] !== null) {
+      if (!isUuid(p['correlation_id']))
+        throw new AppError(
+          400,
+          'INVALID_PARAMS',
+          'correlation_id (weighbridge ticket) must be a UUID when supplied',
+        );
+    }
+  } else if (!isUuid(p['correlation_id']))
     throw new AppError(
       400,
       'RECEIVING_BINDING_TOKEN_REQUIRED',
@@ -196,13 +224,46 @@ export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
     throw new AppError(400, 'INVALID_PARAMS', 'grn_id is required and must be a UUID');
   if (!isUuid(p['grn_line_id']))
     throw new AppError(400, 'INVALID_PARAMS', 'grn_line_id is required and must be a UUID');
-  if (!isNonEmptyString(p['po_ref_ext']))
-    throw new AppError(400, 'INVALID_PARAMS', 'po_ref_ext is required');
-  p['po_ref_ext'] = (p['po_ref_ext'] as string).trim();
+  if (challanReceipt) {
+    // No purchase order, and no cost basis either: customer-owned stock is never valued, so a
+    // unit_cost on it is refused rather than silently ignored.
+    for (const field of ['po_ref_ext', 'line_no', 'unit_cost']) {
+      if (p[field] !== undefined && p[field] !== null)
+        throw new AppError(
+          400,
+          'INVALID_PARAMS',
+          `${field} must not be supplied on a ${JOBWORK_CHALLAN_SOURCE} receipt`,
+          { field },
+        );
+    }
+    if (p['stock_class'] !== JOB_WORK_STOCK_CLASS)
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `a ${JOBWORK_CHALLAN_SOURCE} receipt must carry stock_class '${JOB_WORK_STOCK_CLASS}'`,
+        { stock_class: p['stock_class'] ?? null },
+      );
+    // Cross-dock matches OWNED stock to open sales demand; customer material has neither.
+    if (p['cross_dock'] === true)
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        `cross_dock is not available on a ${JOBWORK_CHALLAN_SOURCE} receipt`,
+        { field: 'cross_dock' },
+      );
+  } else {
+    if (!isNonEmptyString(p['po_ref_ext']))
+      throw new AppError(400, 'INVALID_PARAMS', 'po_ref_ext is required');
+    p['po_ref_ext'] = (p['po_ref_ext'] as string).trim();
 
-  const lineNo = p['line_no'];
-  if (typeof lineNo !== 'number' || !Number.isInteger(lineNo) || lineNo <= 0)
-    throw new AppError(400, 'INVALID_PARAMS', 'line_no is required and must be a positive integer');
+    const lineNo = p['line_no'];
+    if (typeof lineNo !== 'number' || !Number.isInteger(lineNo) || lineNo <= 0)
+      throw new AppError(
+        400,
+        'INVALID_PARAMS',
+        'line_no is required and must be a positive integer',
+      );
+  }
   if (!isNonEmptyString(p['sku'])) throw new AppError(400, 'INVALID_PARAMS', 'sku is required');
   p['sku'] = (p['sku'] as string).trim();
 
@@ -215,8 +276,12 @@ export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
     );
   p['received_qty'] = normalizedQty;
 
-  if (p['source_document'] !== 'PO' && p['source_document'] !== 'ASN')
-    throw new AppError(400, 'INVALID_PARAMS', "source_document must be 'PO' or 'ASN'");
+  if (!challanReceipt && p['source_document'] !== 'PO' && p['source_document'] !== 'ASN')
+    throw new AppError(
+      400,
+      'INVALID_PARAMS',
+      `source_document must be 'PO', 'ASN' or '${JOBWORK_CHALLAN_SOURCE}'`,
+    );
 
   if (!isNonEmptyString(p['target_location_id']) && !isNonEmptyString(p['target_location_code'])) {
     throw new AppError(
@@ -306,139 +371,241 @@ export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
   }
 }
 
-/** In-transaction projection (Story 3.4, Task 5.3). See the seam header for the AD-2 chain rationale. */
-export async function applyGoodsReceivedProjection(
+// ---------------------------------------------------------------------------
+// goods.received against a customer challan (Pilot Ruling B)
+// ---------------------------------------------------------------------------
+
+/**
+ * The gates a customer challan receipt passes IN PLACE OF the purchase order, inside the event
+ * transaction so the REST route, the events door and the edge all get the same answer. Returns the
+ * receiving site (the order's site - there may be no weighment to name one).
+ *
+ * The order's existence, status, site and customer binding are re-derived under the order lock by
+ * the Story 9.2 seam gates further down (assertJobworkReceiptOwnership, then the custody applier);
+ * the read here is what THIS seam needs before it can post anything: a site, the expected items
+ * and the duplicate-challan check.
+ */
+async function assertJobworkChallanReceipt(
   envelope: EventEnvelope,
+  sku: string,
+  accepted: WeighbridgeEvent | null,
   client: PoolClient,
-  eventId: string,
-): Promise<void> {
-  if (receivingEventType(envelope) !== 'goods.received') return;
-  if (await alreadyPersisted(envelope, client)) return;
+): Promise<{ site_id: string; site_code_ext: string }> {
   const p = envelope.payload;
-
-  const correlationId = isNonEmptyString(p['correlation_id'])
-    ? (p['correlation_id'] as string)
-    : envelope.metadata.correlation_id;
-  const poRef = p['po_ref_ext'] as string;
-  const sku = p['sku'] as string;
-  const receivedQty = normalizeQty(p['received_qty']);
-  if (receivedQty === null)
+  const actor = envelope.metadata.actor;
+  if (!JOBWORK_CHALLAN_RECEIVER_ROLES.has(actor.role)) {
     throw new AppError(
-      400,
-      'RECEIVING_QTY_REQUIRED',
-      'received_qty is required and must be a positive NUMERIC value',
-    );
-
-  // 1. Resolve the accepted weighment for the binding token (AC1, AD-2 chain). Only a Story 3.3
-  //    'accepted' weighment opens receiving; a token whose weighments are all 'tolerance_breach' is
-  //    blocked from silent receipt.
-  const weighments = await getWeighbridgeEventsByCorrelationId(correlationId, client);
-  if (weighments.length === 0) {
-    throw new AppError(
-      404,
-      'RECEIVING_BINDING_TOKEN_NOT_FOUND',
-      `No weighbridge event exists for binding token "${correlationId}"`,
-      { correlation_id: correlationId },
+      403,
+      'FUNCTION_ACCESS_DENIED',
+      `This operation is restricted to roles: ${[...JOBWORK_CHALLAN_RECEIVER_ROLES].join(', ')}`,
+      { actor_role: actor.role },
     );
   }
-  const accepted = weighments.find((w) => w.status === 'accepted');
-  if (!accepted) {
+  const refuse = (message: string, details: Record<string, unknown>): never => {
+    throw new AppError(409, 'SOURCE_DOCUMENT_REQUIRED', message, { sku, ...details });
+  };
+  if (!isUuid(p['service_order_id'])) {
+    refuse(
+      'Customer material can only be received against a confirmed service order (service_order_id is required)',
+      { service_order_id: p['service_order_id'] ?? null },
+    );
+  }
+  const serviceOrderId = p['service_order_id'] as string;
+  if (
+    !isNonEmptyString(p['challan_number_ext']) ||
+    typeof p['challan_date'] !== 'string' ||
+    !DATE_REGEX.test(p['challan_date'])
+  ) {
+    refuse(
+      'Customer material can only be received with the inbound challan (challan_number_ext and a YYYY-MM-DD challan_date are required)',
+      { service_order_id: serviceOrderId },
+    );
+  }
+  const order = await getServiceOrderById(serviceOrderId, client);
+  if (!order || !orderAcceptsReceipt(order.status)) {
+    return refuse(
+      order
+        ? `A job_work receipt requires a confirmed service order; this order is ${order.status}`
+        : 'A job_work receipt requires a confirmed service order; none exists for service_order_id',
+      { service_order_id: serviceOrderId, ...(order ? { status: order.status } : {}) },
+    );
+  }
+  await assertActorAtSite(
+    actor.location_id,
+    order.site_id,
+    { service_order_id: serviceOrderId },
+    client,
+  );
+  if (accepted && accepted.site_id !== order.site_id) {
+    refuse('The weighbridge ticket belongs to a different site than the service order', {
+      service_order_id: serviceOrderId,
+      order_site_id: order.site_id,
+      ticket_site_id: accepted.site_id,
+    });
+  }
+  // A ticket weighed against a purchase order vouches for THAT delivery, not for customer material.
+  // Every ticket the gate and weighbridge issue today is PO-bound (po_ref_ext is mandatory there),
+  // so until they support job-work a challan receipt is ticketless in practice.
+  if (accepted && isNonEmptyString(accepted.po_ref_ext)) {
     throw new AppError(
       409,
-      'RECEIVING_WEIGHT_NOT_ACCEPTED',
-      'The binding token has no accepted weighment; receipt is blocked pending tolerance review',
-      { correlation_id: correlationId },
+      'RECEIVING_TICKET_PO_BOUND',
+      'The weighbridge ticket was issued against a purchase order and cannot be attached to a customer challan receipt',
+      { correlation_id: accepted.correlation_id, ticket_po_ref_ext: accepted.po_ref_ext },
     );
   }
-  const siteId = accepted.site_id;
-  const siteCodeExt = accepted.site_code_ext;
-
-  // 2. Resolve the open PO from the Story 2.9 projection and match the scanned SKU to a PO line (AC4).
-  const po = await getPurchaseOrderByRef(poRef, client);
-  if (!po)
-    throw new AppError(
-      404,
-      'RECEIVING_PO_NOT_FOUND',
-      `No open PO projection row exists for "${poRef}"`,
-      { po_ref_ext: poRef },
-    );
-  const poLine = po.lines.find((l) => l.sku === sku);
-  if (!poLine)
+  const site = await getLocationById(order.site_id, client);
+  if (!site || site.status !== 'active') {
     throw new AppError(
       400,
-      'ITEM_PO_MISMATCH',
-      `Scanned SKU "${sku}" matches no line of PO "${poRef}"`,
-      { po_ref_ext: poRef, sku },
+      'LOCATION_NOT_FOUND',
+      'The service order site is not registered or not active',
+      { site_id: order.site_id },
     );
-  const matchedLineNo = poLine.line_no;
-
-  const item = await getItemBySku(sku, client);
-  if (!item || item.status !== 'active')
-    throw new AppError(
-      404,
-      'ITEM_NOT_FOUND',
-      `No active item master record exists for sku "${sku}"`,
-      { sku },
-    );
-  const uom = item.uom;
-
-  const occurredAt = envelope.metadata.occurred_at
-    ? new Date(envelope.metadata.occurred_at)
-    : new Date();
-  const businessDate = localYmd(occurredAt);
-  const receivedBy = isUuid(p['received_by'])
-    ? (p['received_by'] as string)
-    : envelope.metadata.actor.user_id;
-  const sourceDocument = (p['source_document'] as 'PO' | 'ASN') ?? 'PO';
-  const sourceRefExt = isNonEmptyString(p['source_ref_ext'])
-    ? (p['source_ref_ext'] as string)
-    : null;
-  const stockClass = isNonEmptyString(p['stock_class']) ? (p['stock_class'] as string) : 'owned';
-
-  // 2b. Story 9.2 (FR-JW-03): customer material rides THIS flow, never a parallel receipt route.
-  //     A job_work receipt REQUIRES the confirmed service order and the inbound challan
-  //     (number, date, quantity); absence is 409 SOURCE_DOCUMENT_REQUIRED. Existence, status,
-  //     site, and customer binding are re-derived under lock by the seam gates below
-  //     (assertJobworkReceiptOwnership on the stock hand-off, then the custody applier) - this
-  //     block only shapes the hand-off.
-  const jobWork = stockClass === JOB_WORK_STOCK_CLASS;
-  if (jobWork) {
-    if (!isUuid(p['service_order_id'])) {
-      throw new AppError(
-        409,
-        'SOURCE_DOCUMENT_REQUIRED',
-        'Customer material can only be received against a confirmed service order (service_order_id is required)',
-        { sku, stock_class: stockClass },
-      );
-    }
-    if (!isNonEmptyString(p['challan_number_ext']) || !isNonEmptyString(p['challan_date'])) {
-      throw new AppError(
-        409,
-        'SOURCE_DOCUMENT_REQUIRED',
-        'Customer material can only be received with the inbound challan (challan_number_ext and challan_date are required)',
-        { sku, service_order_id: p['service_order_id'] },
-      );
-    }
-    if (normalizeQty(p['challan_qty']) === null) {
-      throw new AppError(
-        409,
-        'SOURCE_DOCUMENT_REQUIRED',
-        'Customer material can only be received with the inbound challan quantity (challan_qty must be a positive NUMERIC value)',
-        { sku, service_order_id: p['service_order_id'] },
-      );
-    }
-    // The customer binding travels on the stock view as owner_party_code (the consignment idiom)
-    // so the stock-surface gate verifies it against the order under lock. Derived from the order
-    // when the clerk did not supply one; a supplied value must still match (AC7).
-    if (!isNonEmptyString(p['owner_party_code'])) {
-      const order = await getServiceOrderById(p['service_order_id'] as string, client);
-      if (order) p['owner_party_code'] = order.customer_party_code;
-    }
   }
 
-  // 3. Tolerance band (AC5/AC6) computed entirely in PostgreSQL NUMERIC against the Story 2.9 PO line.
-  //    Serialize concurrent receipts on the same PO line BEFORE reading the cumulative sum so two
-  //    lines cannot both pass the band and over-receive.
+  // Expected materials. A service order carries no material lines of its own; what the customer is
+  // expected to send is the customer-supplied (or still untagged) lines of the CURRENT revision of
+  // its kit BOM - the same predicate custody consumption later posts against. An order with NO kit
+  // BOM (one migrated in already confirmed; the Story 9.1 confirm gate makes it impossible
+  // otherwise) names no expected items, so there is nothing to hold the sku against.
+  const bom = order.kit_bom_id ? await getBomById(order.kit_bom_id, client) : null;
+  const lines = bom?.current_revision_id ? await getBomLines(bom.current_revision_id, client) : [];
+  if (order.kit_bom_id && !lines.some((line) => kitLineMatchesConsumption(line, sku))) {
+    throw new AppError(
+      409,
+      'KIT_LINE_MISMATCH',
+      'The sku is not a customer-supplied line on the current revision of the order kit BOM',
+      {
+        service_order_id: serviceOrderId,
+        kit_bom_id: order.kit_bom_id ?? null,
+        kit_bom_revision_id: bom?.current_revision_id ?? null,
+        sku,
+      },
+    );
+  }
+
+  // The duplicate-challan check needs the RESOLVED lot, which only exists once the stock view has
+  // been through lot validation - so the lock is taken here and the check runs further down.
+  await lockJobworkChallan(order.customer_party_code, p['challan_number_ext'] as string, client);
+  return { site_id: order.site_id, site_code_ext: site.location_code };
+}
+
+function challanLockKey(customerPartyCode: string, challanNumber: string): string {
+  return `jobwork-challan:${customerPartyCode}:${challanNumber.trim().toUpperCase()}`;
+}
+
+/** Serializes every receipt of one customer's challan, on either receiving path, until commit. */
+async function lockJobworkChallan(
+  customerPartyCode: string,
+  challanNumber: string,
+  client: PoolClient,
+): Promise<void> {
+  await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+    challanLockKey(customerPartyCode, challanNumber),
+  ]);
+}
+
+/**
+ * Duplicate challan: one receipt per customer, challan number (trimmed, case-insensitive), sku and
+ * LOT. A challan may list several items and several lots (heats) of one item, one GRN line each;
+ * the same lot twice - or a non-lot item twice - is the same paper keyed again. The lot compared is
+ * the RESOLVED lot number (payload lot_id, or the lot the Story 2.3 helpers auto-resolved), which
+ * is what jobwork_material_receipt.lot_id stores. Counted against custody receipts from EITHER
+ * receiving path and across all of the customer's orders; the caller holds lockJobworkChallan. A
+ * genuine replay never reaches here - persistEvent answers it from the stored event.
+ */
+async function assertChallanNotDuplicate(
+  challan: { customerPartyCode: string; challanNumber: string; sku: string; lotId: string | null },
+  serviceOrderId: string,
+  client: PoolClient,
+): Promise<void> {
+  const duplicate = await client.query(
+    `SELECT r.receipt_id, r.service_order_id
+       FROM jobwork_material_receipt r
+       JOIN service_order so ON so.service_order_id = r.service_order_id
+      WHERE so.customer_party_code = $1 AND upper(btrim(r.challan_number_ext)) = $2
+        AND r.sku = $3 AND r.lot_id IS NOT DISTINCT FROM $4::text
+      LIMIT 1`,
+    [
+      challan.customerPartyCode,
+      challan.challanNumber.trim().toUpperCase(),
+      challan.sku,
+      challan.lotId,
+    ],
+  );
+  if (duplicate.rows.length > 0) {
+    throw new AppError(
+      409,
+      'JOBWORK_CHALLAN_DUPLICATE',
+      'This customer challan has already been received for this item and lot',
+      {
+        service_order_id: serviceOrderId,
+        customer_party_code: challan.customerPartyCode,
+        challan_number_ext: challan.challanNumber.trim(),
+        sku: challan.sku,
+        lot_id: challan.lotId,
+        existing_receipt_id: duplicate.rows[0]!['receipt_id'] as string,
+        existing_service_order_id: duplicate.rows[0]!['service_order_id'] as string,
+      },
+    );
+  }
+}
+
+/**
+ * A GRN header is written by its FIRST line and never overwritten (insertGrnHeader), so a later
+ * line carrying a different source document, purchase order or site would silently ride a header
+ * that does not describe it - a challan line under a PO header, or the reverse. Refused here for
+ * every kind. For a customer challan GRN the header has no order column, so the order is read back
+ * from the custody receipts of the lines already on it. A second line that matches its header is
+ * untouched, exactly as before.
+ */
+async function assertGrnHeaderMatches(
+  p: Record<string, unknown>,
+  poRef: string | null,
+  siteId: string,
+  client: PoolClient,
+): Promise<void> {
+  const header = await getGrnById(p['grn_id'] as string, client);
+  if (!header) return;
+  const mismatch = (field: string, existing: unknown, supplied: unknown): never => {
+    throw new AppError(
+      409,
+      'GRN_HEADER_MISMATCH',
+      `This GRN already exists with a different ${field}; a line must match the header it joins`,
+      { grn_id: header.grn_id, field, existing, supplied },
+    );
+  };
+  if (header.source_document !== p['source_document'])
+    mismatch('source_document', header.source_document, p['source_document'] ?? null);
+  if (header.po_ref_ext !== poRef) mismatch('po_ref_ext', header.po_ref_ext, poRef);
+  if (header.site_id !== siteId) mismatch('site_id', header.site_id, siteId);
+  if (header.source_document === JOBWORK_CHALLAN_SOURCE) {
+    const orders = await client.query(
+      `SELECT DISTINCT r.service_order_id
+         FROM grn_line gl JOIN jobwork_material_receipt r ON r.grn_line_id = gl.grn_line_id
+        WHERE gl.grn_id = $1`,
+      [header.grn_id],
+    );
+    const other = orders.rows.find((row) => row['service_order_id'] !== p['service_order_id']);
+    if (other) mismatch('service_order_id', other['service_order_id'], p['service_order_id']);
+  }
+}
+
+/** The neutral band of a receipt with no purchase order line (Pilot Ruling B): never over, never short. */
+const NO_PO_BAND: Record<string, unknown> = { is_over: false, is_short: false, erp_overlap: '0' };
+
+/**
+ * The AC5/AC6 tolerance band for one PO line, computed entirely in PostgreSQL NUMERIC. Serializes
+ * concurrent receipts on the same PO line BEFORE reading the cumulative sum so two lines cannot
+ * both pass the band and over-receive.
+ */
+async function readPoReceiptBand(
+  poRef: string,
+  matchedLineNo: number,
+  receivedQty: string,
+  client: PoolClient,
+): Promise<Record<string, unknown>> {
   await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`${poRef}:${matchedLineNo}`]);
   const calc = await client.query(
     // Pilot triage 2026-09-13 (13.2 ledger): the band counts what the ERP had ALREADY received
@@ -479,7 +646,189 @@ export async function applyGoodsReceivedProjection(
       { po_ref_ext: poRef, line_no: matchedLineNo },
     );
   }
-  const band = calc.rows[0]!;
+  return calc.rows[0]! as Record<string, unknown>;
+}
+
+/** In-transaction projection (Story 3.4, Task 5.3). See the seam header for the AD-2 chain rationale. */
+export async function applyGoodsReceivedProjection(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  if (receivingEventType(envelope) !== 'goods.received') return;
+  if (await alreadyPersisted(envelope, client)) return;
+  const p = envelope.payload;
+
+  // Pilot Ruling B: a customer challan receipt has no purchase order, and its weighbridge ticket
+  // is optional. ticketId is the ticket to validate (always present on a PO/ASN receipt);
+  // correlationId (the envelope's own when there is no ticket) only threads notifications and the
+  // nested custody event. headerCorrelationId is what the GRN header STORES: the gate-dwell view
+  // joins gate events to grn.correlation_id, and on the events and edge doors the envelope's
+  // correlation id is caller-chosen, so a ticketless challan receipt stores NULL - never that.
+  const challanReceipt = p['source_document'] === JOBWORK_CHALLAN_SOURCE;
+  const correlationId = isNonEmptyString(p['correlation_id'])
+    ? (p['correlation_id'] as string)
+    : envelope.metadata.correlation_id;
+  const ticketId: string | null =
+    challanReceipt && !isNonEmptyString(p['correlation_id']) ? null : correlationId;
+  const headerCorrelationId: string | null = challanReceipt ? ticketId : correlationId;
+  const poRef = challanReceipt ? null : (p['po_ref_ext'] as string);
+  const sku = p['sku'] as string;
+  const receivedQty = normalizeQty(p['received_qty']);
+  if (receivedQty === null)
+    throw new AppError(
+      400,
+      'RECEIVING_QTY_REQUIRED',
+      'received_qty is required and must be a positive NUMERIC value',
+    );
+
+  // 1. Resolve the accepted weighment for the binding token (AC1, AD-2 chain). Only a Story 3.3
+  //    'accepted' weighment opens receiving; a token whose weighments are all 'tolerance_breach' is
+  //    blocked from silent receipt.
+  //    Pilot Ruling B: on a customer challan receipt the ticket is optional, but a SUPPLIED ticket
+  //    is held to exactly the same two checks.
+  let accepted: WeighbridgeEvent | null = null;
+  if (ticketId !== null) {
+    const weighments = await getWeighbridgeEventsByCorrelationId(ticketId, client);
+    if (weighments.length === 0) {
+      throw new AppError(
+        404,
+        'RECEIVING_BINDING_TOKEN_NOT_FOUND',
+        `No weighbridge event exists for binding token "${ticketId}"`,
+        { correlation_id: ticketId },
+      );
+    }
+    accepted = weighments.find((w) => w.status === 'accepted') ?? null;
+    if (!accepted) {
+      throw new AppError(
+        409,
+        'RECEIVING_WEIGHT_NOT_ACCEPTED',
+        'The binding token has no accepted weighment; receipt is blocked pending tolerance review',
+        { correlation_id: ticketId },
+      );
+    }
+  }
+
+  // 1b. The receiving site. A PO/ASN receipt is at the site of its accepted weighment. A customer
+  //     challan receipt (Pilot Ruling B) is at the site of its job-work order - the role, site,
+  //     expected-item and duplicate-challan gates all run here, before any PO-free step below.
+  const challanSite = challanReceipt
+    ? await assertJobworkChallanReceipt(envelope, sku, accepted, client)
+    : null;
+  const siteId = challanSite?.site_id ?? accepted!.site_id;
+  const siteCodeExt = challanSite?.site_code_ext ?? accepted!.site_code_ext;
+  await assertGrnHeaderMatches(p, poRef, siteId, client);
+
+  // 2. Resolve the open PO from the Story 2.9 projection and match the scanned SKU to a PO line (AC4).
+  //    Skipped entirely when there is no purchase order (Pilot Ruling B).
+  let po: Awaited<ReturnType<typeof getPurchaseOrderByRef>> = null;
+  let matchedLineNo: number | null = null;
+  if (poRef !== null) {
+    po = await getPurchaseOrderByRef(poRef, client);
+    if (!po)
+      throw new AppError(
+        404,
+        'RECEIVING_PO_NOT_FOUND',
+        `No open PO projection row exists for "${poRef}"`,
+        { po_ref_ext: poRef },
+      );
+    const poLine = po.lines.find((l) => l.sku === sku);
+    if (!poLine)
+      throw new AppError(
+        400,
+        'ITEM_PO_MISMATCH',
+        `Scanned SKU "${sku}" matches no line of PO "${poRef}"`,
+        { po_ref_ext: poRef, sku },
+      );
+    matchedLineNo = poLine.line_no;
+  }
+
+  const item = await getItemBySku(sku, client);
+  if (!item || item.status !== 'active')
+    throw new AppError(
+      404,
+      'ITEM_NOT_FOUND',
+      `No active item master record exists for sku "${sku}"`,
+      { sku },
+    );
+  const uom = item.uom;
+
+  const occurredAt = envelope.metadata.occurred_at
+    ? new Date(envelope.metadata.occurred_at)
+    : new Date();
+  const businessDate = localYmd(occurredAt);
+  // Pilot Ruling B: with no gate or weighbridge chain behind it, the receiver of record on a
+  // customer challan receipt is always the authenticated actor, whichever door it came through.
+  const receivedBy =
+    !challanReceipt && isUuid(p['received_by'])
+      ? (p['received_by'] as string)
+      : envelope.metadata.actor.user_id;
+  if (challanReceipt) p['received_by'] = receivedBy;
+  const sourceDocument = (p['source_document'] as Grn['source_document']) ?? 'PO';
+  const sourceRefExt = isNonEmptyString(p['source_ref_ext'])
+    ? (p['source_ref_ext'] as string)
+    : null;
+  const stockClass = isNonEmptyString(p['stock_class']) ? (p['stock_class'] as string) : 'owned';
+
+  // 2b. Story 9.2 (FR-JW-03): customer material rides THIS flow, never a parallel receipt route.
+  //     A job_work receipt REQUIRES the confirmed service order and the inbound challan
+  //     (number, date, quantity); absence is 409 SOURCE_DOCUMENT_REQUIRED. Existence, status,
+  //     site, and customer binding are re-derived under lock by the seam gates below
+  //     (assertJobworkReceiptOwnership on the stock hand-off, then the custody applier) - this
+  //     block only shapes the hand-off.
+  const jobWork = stockClass === JOB_WORK_STOCK_CLASS;
+  let jobWorkCustomer: string | null = null;
+  if (jobWork) {
+    if (!isUuid(p['service_order_id'])) {
+      throw new AppError(
+        409,
+        'SOURCE_DOCUMENT_REQUIRED',
+        'Customer material can only be received against a confirmed service order (service_order_id is required)',
+        { sku, stock_class: stockClass },
+      );
+    }
+    if (!isNonEmptyString(p['challan_number_ext']) || !isNonEmptyString(p['challan_date'])) {
+      throw new AppError(
+        409,
+        'SOURCE_DOCUMENT_REQUIRED',
+        'Customer material can only be received with the inbound challan (challan_number_ext and challan_date are required)',
+        { sku, service_order_id: p['service_order_id'] },
+      );
+    }
+    if (normalizeQty(p['challan_qty']) === null) {
+      throw new AppError(
+        409,
+        'SOURCE_DOCUMENT_REQUIRED',
+        'Customer material can only be received with the inbound challan quantity (challan_qty must be a positive NUMERIC value)',
+        { sku, service_order_id: p['service_order_id'] },
+      );
+    }
+    // The customer binding travels on the stock view as owner_party_code (the consignment idiom)
+    // so the stock-surface gate verifies it against the order under lock. Derived from the order
+    // when the clerk did not supply one; a supplied value must still match (AC7).
+    const order = await getServiceOrderById(p['service_order_id'] as string, client);
+    if (order && !isNonEmptyString(p['owner_party_code']))
+      p['owner_party_code'] = order.customer_party_code;
+    // Pilot Ruling B (R10): the purchase-order job_work path shares the challan lock and the
+    // duplicate check below with the customer challan kind (which locked in its own gate), so one
+    // paper challan cannot be received once through each path. An unknown order takes no lock -
+    // the seam gates below refuse it.
+    if (order) {
+      jobWorkCustomer = order.customer_party_code;
+      if (!challanReceipt)
+        await lockJobworkChallan(jobWorkCustomer, p['challan_number_ext'] as string, client);
+    }
+  }
+
+  // 3. Tolerance band (AC5/AC6) computed entirely in PostgreSQL NUMERIC against the Story 2.9 PO line.
+  //    Serialize concurrent receipts on the same PO line BEFORE reading the cumulative sum so two
+  //    lines cannot both pass the band and over-receive.
+  //    Pilot Ruling B: a customer challan receipt has no PO line, so there is no band to compute;
+  //    its quantity control is the Story 9.2 challan variance, recorded by the custody applier.
+  const band: Record<string, unknown> =
+    poRef === null
+      ? NO_PO_BAND
+      : await readPoReceiptBand(poRef, matchedLineNo!, receivedQty, client);
   const isOver = band['is_over'] === true;
   const isShort = band['is_short'] === true;
   const erpOverlap = band['erp_overlap'] as string;
@@ -498,7 +847,7 @@ export async function applyGoodsReceivedProjection(
     await insertGrnHeader(
       {
         grn_id: p['grn_id'] as string,
-        correlation_id: correlationId,
+        correlation_id: headerCorrelationId,
         po_ref_ext: poRef,
         source_document: sourceDocument,
         source_ref_ext: sourceRefExt,
@@ -525,7 +874,7 @@ export async function applyGoodsReceivedProjection(
         received_qty: receivedQty,
         uom,
         stock_class: stockClass,
-        weighbridge_correlation_id: correlationId,
+        weighbridge_correlation_id: ticketId,
         qc_hold: false,
         shortage_variance_qty: '0',
         target_location_id: null,
@@ -650,13 +999,14 @@ export async function applyGoodsReceivedProjection(
   if (
     stockClass === 'owned' &&
     (p['unit_cost'] === undefined || p['unit_cost'] === null) &&
+    po !== null &&
     po.currency === BOOKS_CURRENCY &&
     item.valuation_method !== 'specific_identification'
   ) {
     const price = await client.query(
       `SELECT unit_price::text AS unit_price FROM erp_purchase_order_line
         WHERE po_number_ext = $1 AND line_no = $2 AND unit_price > 0`,
-      [po.po_number_ext, poLine.line_no],
+      [po.po_number_ext, matchedLineNo],
     );
     if (price.rows.length > 0) p['unit_cost'] = price.rows[0]['unit_price'] as string;
   }
@@ -708,6 +1058,20 @@ export async function applyGoodsReceivedProjection(
   const resolvedLotId = isNonEmptyString(stockView.payload['lot_id'])
     ? (stockView.payload['lot_id'] as string)
     : null;
+  // Duplicate challan, now that the lot is resolved. Nothing above is committed: a refusal here
+  // rolls the stock movement back with the rest of the transaction.
+  if (jobWork && jobWorkCustomer !== null) {
+    await assertChallanNotDuplicate(
+      {
+        customerPartyCode: jobWorkCustomer,
+        challanNumber: p['challan_number_ext'] as string,
+        sku,
+        lotId: resolvedLotId,
+      },
+      p['service_order_id'] as string,
+      client,
+    );
+  }
   let nonqualificationReason: string | null = null;
   let matchedOrderLineId: string | null = null;
   let matchedLotUuid: string | null = null;
@@ -744,7 +1108,7 @@ export async function applyGoodsReceivedProjection(
   await insertGrnHeader(
     {
       grn_id: p['grn_id'] as string,
-      correlation_id: correlationId,
+      correlation_id: headerCorrelationId,
       po_ref_ext: poRef,
       source_document: sourceDocument,
       source_ref_ext: sourceRefExt,
@@ -771,7 +1135,7 @@ export async function applyGoodsReceivedProjection(
       received_qty: receivedQty,
       uom,
       stock_class: stockClass,
-      weighbridge_correlation_id: correlationId,
+      weighbridge_correlation_id: ticketId,
       qc_hold: qcHold,
       shortage_variance_qty: shortageVariance,
       target_location_id: target.location_id,

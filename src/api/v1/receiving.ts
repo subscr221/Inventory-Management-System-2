@@ -1,4 +1,4 @@
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { RouteHandler } from '../../middleware/error.js';
 import { AppError, sendJson, sendRequestError } from '../../middleware/error.js';
@@ -13,7 +13,7 @@ import {
   permittedLocationsForModule,
   permittedLocationsForModuleScope,
 } from '../../middleware/rbac.js';
-import { persistEvent } from '../../events/store.js';
+import { persistEvent, findEventByIdempotencyKey } from '../../events/store.js';
 import type { AuditEntryPayload } from '../../read/projections/audit_log.js';
 import { getPool } from '../../config/db.js';
 import { getLocationByCode } from '../../read/projections/location_register.js';
@@ -28,6 +28,8 @@ import {
   getPutawayTaskByGrnLine,
 } from '../../read/projections/putaway_task.js';
 import { getCrossDockTaskByGrnLine } from '../../read/projections/cross_dock_task.js';
+import { getServiceOrderById } from '../../read/projections/service_order.js';
+import { JOBWORK_CHALLAN_SOURCE } from '../../compliance/receiving.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -139,11 +141,208 @@ async function resolveSiteByToken(correlationId: string): Promise<string | null>
   return result.rows.length > 0 ? (result.rows[0]!['site_id'] as string) : null;
 }
 
+/** The business fields of a challan submission; ids, the key and server-set fields are not part of it. */
+const CHALLAN_SUBMISSION_FIELDS = [
+  'source_document',
+  'stock_class',
+  'service_order_id',
+  'challan_number_ext',
+  'challan_date',
+  'challan_qty',
+  'challan_class',
+  'sku',
+  'lot_id',
+  'expiry_date',
+  'received_qty',
+  'target_location_id',
+  'target_location_code',
+  'correlation_id',
+] as const;
+
+/**
+ * Same key, same submission? (the gate.ts bodyMatches contract.) Compared field by field on the
+ * trimmed string form, so 100 and '100' agree with the normalized quantity the stored event holds;
+ * an absent field and a null one are the same. A retry may mint fresh grn ids - those are excluded.
+ */
+function challanSubmissionMatches(
+  stored: Record<string, unknown>,
+  body: Record<string, unknown>,
+): boolean {
+  const norm = (value: unknown): string | null =>
+    value === undefined || value === null ? null : String(value).trim();
+  return CHALLAN_SUBMISSION_FIELDS.every((field) => norm(stored[field]) === norm(body[field]));
+}
+
+/**
+ * Pilot Ruling B: POST /grn-lines with source_document 'JOBWORK_CHALLAN'. Same role gate, same
+ * goods.received event and the same response shape as a purchase-order GRN line. Differences:
+ * - the site scope is checked against the job-work order's site (there may be no token to name
+ *   one); an unknown order falls through to the seam's stable SOURCE_DOCUMENT_REQUIRED refusal;
+ * - correlation_id is optional, and when absent it is left OFF the payload so the seam knows no
+ *   weighbridge ticket was presented;
+ * - an idempotency_key replays the original result as 200 with replayed: true (the Pilot B2
+ *   putaway-completion contract), resolved before anything can trip over the first attempt's state.
+ */
+async function createJobworkChallanGrnLine(
+  req: IncomingMessage,
+  res: ServerResponse,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const rawTicket = body['correlation_id'];
+  const ticketId = typeof rawTicket === 'string' ? rawTicket.trim() : '';
+  if (rawTicket !== undefined && rawTicket !== null && !UUID_REGEX.test(ticketId)) {
+    sendRequestError(
+      req,
+      res,
+      400,
+      'INVALID_PARAMS',
+      'correlation_id (weighbridge ticket) must be a UUID when supplied',
+    );
+    return;
+  }
+  const idempotencyKey =
+    typeof body['idempotency_key'] === 'string' && body['idempotency_key'].trim().length > 0
+      ? body['idempotency_key']
+      : null;
+
+  const answerReplay = async (originalLineId: string): Promise<boolean> => {
+    const line = await getGrnLineById(originalLineId);
+    const grn = line ? await getGrnById(line.grn_id) : null;
+    if (!line || !grn) return false;
+    assertSiteAccess(req, grn.site_id, 'write');
+    sendJson(res, 200, {
+      grn,
+      grn_line: line,
+      putaway_task: await getPutawayTaskByGrnLine(originalLineId),
+      cross_dock_task: await getCrossDockTaskByGrnLine(originalLineId),
+      cross_dock_nonqualification_reason: line.cross_dock_nonqualification_reason ?? null,
+      replayed: true,
+    });
+    return true;
+  };
+  const keyConflict = (): never => {
+    throw new AppError(
+      409,
+      'IDEMPOTENCY_KEY_CONFLICT',
+      'idempotency_key was already used for a different receipt submission',
+    );
+  };
+  if (idempotencyKey) {
+    const original = await findEventByIdempotencyKey(idempotencyKey);
+    if (original) {
+      if (
+        original.event_type !== 'goods.received' ||
+        typeof original.payload['grn_line_id'] !== 'string' ||
+        !challanSubmissionMatches(original.payload, body) ||
+        !(await answerReplay(original.payload['grn_line_id']))
+      )
+        keyConflict();
+      return;
+    }
+  }
+
+  const serviceOrderId =
+    typeof body['service_order_id'] === 'string' && UUID_REGEX.test(body['service_order_id'])
+      ? body['service_order_id']
+      : null;
+  const order = serviceOrderId ? await getServiceOrderById(serviceOrderId) : null;
+  if (order) assertSiteAccess(req, order.site_id, 'write');
+  if (ticketId) {
+    const ticketSiteId = await resolveSiteByToken(ticketId);
+    if (ticketSiteId) assertSiteAccess(req, ticketSiteId, 'write');
+  }
+
+  const actor = actorContext(req);
+  const grnId =
+    typeof body['grn_id'] === 'string' && UUID_REGEX.test(body['grn_id'])
+      ? body['grn_id']
+      : randomUUID();
+  const grnLineId =
+    typeof body['grn_line_id'] === 'string' && UUID_REGEX.test(body['grn_line_id'])
+      ? body['grn_line_id']
+      : randomUUID();
+  // Same rule as the purchase-order path: a client-supplied id must not target another site's GRN.
+  const existingGrn = await getGrnById(grnId);
+  if (existingGrn) assertSiteAccess(req, existingGrn.site_id, 'write');
+  const existingLine = await getGrnLineById(grnLineId);
+  if (existingLine) {
+    const parentGrn = await getGrnById(existingLine.grn_id);
+    if (parentGrn) assertSiteAccess(req, parentGrn.site_id, 'write');
+  }
+
+  // Our own event id, so a racing retry that loses inside persistEvent (and is handed the STORED
+  // event) is recognized by identity - even when it re-sent the same grn_line_id.
+  const eventId = randomUUID();
+  const payload: Record<string, unknown> = {
+    ...body,
+    grn_id: grnId,
+    grn_line_id: grnLineId,
+    received_by: actor.userId,
+  };
+  delete payload['idempotency_key'];
+  if (ticketId) payload['correlation_id'] = ticketId;
+  else delete payload['correlation_id'];
+
+  const client = await getPool().connect();
+  let committed = false;
+  try {
+    await client.query('BEGIN');
+    const persisted = await persistEvent(
+      {
+        stream_type: 'receiving',
+        stream_id: grnId,
+        event_type: 'goods.received',
+        event_id: eventId,
+        payload,
+        metadata: {
+          correlation_id: ticketId || randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: new Date().toISOString(),
+        },
+        idempotency_key: idempotencyKey,
+      },
+      auditCtxFor(req, actor, 201),
+      client,
+    );
+    // A racing retry loses to the first attempt inside persistEvent and is handed the STORED
+    // event: answer it as the replay it is, or as a key conflict when its payload differs.
+    const replayed = persisted.event_id !== eventId;
+    if (replayed && !challanSubmissionMatches(persisted.payload, body)) keyConflict();
+    const persistedLineId = persisted.payload['grn_line_id'] as string;
+    const line = await getGrnLineById(persistedLineId, client);
+    const grn = line ? await getGrnById(line.grn_id, client) : null;
+    const putaway = await getPutawayTaskByGrnLine(persistedLineId, client);
+    const crossDockTask = await getCrossDockTaskByGrnLine(persistedLineId, client);
+    await client.query('COMMIT');
+    committed = true;
+    sendJson(res, replayed ? 200 : 201, {
+      grn,
+      grn_line: line,
+      putaway_task: putaway,
+      cross_dock_task: crossDockTask,
+      cross_dock_nonqualification_reason: line?.cross_dock_nonqualification_reason ?? null,
+      ...(replayed ? { replayed: true } : {}),
+    });
+  } catch (err) {
+    if (!committed) await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 const createGrnLineBase: RouteHandler = async (req, res) => {
   assertRoleAllowed(req, GRN_CREATE_ROLES, 'write');
   const body = getParsedBody(req) as Record<string, unknown> | undefined;
   if (!body) {
     sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+  // Pilot Ruling B: customer material received against the job-work order and the customer's
+  // challan has no purchase order and an OPTIONAL weighbridge ticket. It is the same event through
+  // the same seam; only the token and site pre-checks differ, so it branches here and nowhere else.
+  if (body['source_document'] === JOBWORK_CHALLAN_SOURCE) {
+    await createJobworkChallanGrnLine(req, res, body);
     return;
   }
   const correlationId =

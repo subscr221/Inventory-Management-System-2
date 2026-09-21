@@ -193,6 +193,11 @@ export async function computeMatchVariance(
        FROM grn_line gl
        JOIN grn g ON g.grn_id = gl.grn_id
        WHERE g.po_id = $2 AND gl.status IN ('posted', 'quarantined')
+         -- Pilot Ruling B (defence in depth): customer-owned job-work material is never supplier-
+         -- invoiced, so it never counts as received against a purchase order - whether it came
+         -- in on a customer challan GRN (which the grn.po_linked seam refuses to bind) or as a
+         -- job_work line on a PO GRN.
+         AND g.source_document <> 'JOBWORK_CHALLAN' AND gl.stock_class <> 'job_work'
        GROUP BY gl.sku
      ),
      po_sku_lines AS (

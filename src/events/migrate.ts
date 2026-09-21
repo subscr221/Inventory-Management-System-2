@@ -318,6 +318,12 @@ const MIGRATIONS = [
   '../../read/projections/migration_golive_status.sql',
   // Story 1.13 (AD-18): the edge refused-captures queue. Appended at the tail; no FK.
   '../../read/projections/edge_refused_capture.sql',
+  // Pilot Ruling B: customer-owned job-work material received against the service order and the
+  // customer's challan, with no purchase order and an optional weighbridge ticket. Forward-only
+  // ALTERs on grn and grn_line (widened source_document CHECK, nullable PO reference and ticket,
+  // CHECKs that keep every PO/ASN receipt as strict as before). Appended at the tail; grn.sql and
+  // grn_line.sql are NOT edited and re-apply harmlessly above it.
+  '../../read/projections/grn_jobwork_challan.sql',
 ];
 
 async function migrate(): Promise<void> {

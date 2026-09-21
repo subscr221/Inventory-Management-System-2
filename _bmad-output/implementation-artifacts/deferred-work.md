@@ -1120,3 +1120,9 @@ Story 1.14 Binding Decision 9 items, plus what implementation found.
 ## Deferred from: code review of 1-14-refused-captures-supervisor-screen (2026-09-17)
 
 - No fetch timeout on uthorizedFetch: a hung request can leave the refused-captures screen stuck in "Loading refused captures..." with no escape except reload. Pre-existing platform-wide: every edge API call shares edge/src/session/api-fetch.ts (no timeout or abort anywhere), and the shell's bootstrap gating plus the online event cover the realistic recovery paths; a shared timeout or abort controller is a platform change, not a Story 1.14 patch.
+
+## Deferred from: Pilot Ruling B job-work challan receipt (2026-09-21)
+
+- An order with no kit BOM skips the expected-item check on a `JOBWORK_CHALLAN` receipt (`assertJobworkChallanReceipt` in `src/compliance/receiving.ts`): any active item can be received against it. Only an order migrated in already confirmed can lack a kit BOM, since the Story 9.1 confirm gate requires one. Known pilot limit; needs an owner ruling on whether to refuse such orders or require a kit BOM to be attached first.
+- Gate entry and the weighbridge cannot issue a ticket without a purchase-order reference (`weighbridge_event.po_ref_ext` is mandatory), so every supplied ticket on a challan receipt is refused `RECEIVING_TICKET_PO_BOUND` and challan receipts are ticketless. Job-work support at the gate and weighbridge is a separate story.
+- The rehearsal mock pack seeds job-work orders in SQL with no kit BOM, and its operations layer has no job-work actor or step; no smoke step exercises the challan receipt yet.

@@ -2549,6 +2549,35 @@ describe('Story 2.1 schema drift guard', () => {
     );
   });
 
+  // Pilot Ruling B: grn_jobwork_challan.sql is ALTER-only (no CREATE TABLE), so the table-shaped
+  // EXPECTED entries above cannot see it. A first-boot database built from init-db.sql alone must
+  // end up with the same nullable PO reference / ticket / correlation and the same named CHECKs,
+  // so the whole file is mirrored verbatim and pinned here by name.
+  it('Pilot Ruling B mirrors the job-work challan GRN migration into init-db.sql, after grn and grn_line', () => {
+    const challanSql = read('read/projections/grn_jobwork_challan.sql');
+    for (const constraint of [
+      'chk_grn_source_document',
+      'chk_grn_po_ref_by_source_document',
+      'chk_grn_correlation_by_source_document',
+      'chk_grn_line_po_ref_pair',
+      'chk_grn_line_no_po_job_work_only',
+      'chk_grn_line_no_ticket_job_work_only',
+    ]) {
+      assert.ok(challanSql.includes(constraint), `grn_jobwork_challan.sql missing ${constraint}`);
+    }
+    assert.ok(challanSql.includes("CHECK (source_document IN ('PO', 'ASN', 'JOBWORK_CHALLAN'))"));
+    const mirrorAt = normalizeSql(initDb).indexOf(normalizeSql(challanSql));
+    assert.ok(mirrorAt >= 0, 'init-db.sql does not mirror grn_jobwork_challan.sql verbatim');
+    assert.ok(
+      mirrorAt > normalizeSql(initDb).indexOf('create table if not exists grn_line'),
+      'the mirror must follow the grn and grn_line definitions it alters',
+    );
+    assert.ok(
+      migrateSource.indexOf("'../../read/projections/grn_jobwork_challan.sql'") >
+        migrateSource.indexOf("'../../read/projections/grn_line.sql'"),
+    );
+  });
+
   it('Story 3.10 applies dependency-safe additive cross-dock alterations in final vocabulary order', () => {
     const grnSql = read('read/projections/grn_line.sql');
     const pickTaskSql = read('read/projections/pick_task.sql');

@@ -14603,3 +14603,51 @@ BEGIN
     GRANT SELECT ON edge_refused_capture TO readonly_user;
   END IF;
 END $$;
+
+-- grn_jobwork_challan: MIRROR of read/projections/grn_jobwork_challan.sql (Pilot Ruling B; the
+-- canonical definition, applied by src/events/migrate.ts and the test harness). ALTER-only: it
+-- widens the grn / grn_line definitions above for the 'JOBWORK_CHALLAN' source document. This copy
+-- exists for first-boot container init only - change both files together.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_grn_correlation_by_source_document'
+      AND conrelid = 'grn'::regclass
+  ) THEN
+    ALTER TABLE grn ALTER COLUMN po_ref_ext DROP NOT NULL;
+    ALTER TABLE grn ALTER COLUMN correlation_id DROP NOT NULL;
+    ALTER TABLE grn_line ALTER COLUMN po_ref_ext DROP NOT NULL;
+    ALTER TABLE grn_line ALTER COLUMN line_no DROP NOT NULL;
+    ALTER TABLE grn_line ALTER COLUMN weighbridge_correlation_id DROP NOT NULL;
+
+    ALTER TABLE grn DROP CONSTRAINT IF EXISTS chk_grn_source_document;
+    ALTER TABLE grn
+      ADD CONSTRAINT chk_grn_source_document
+      CHECK (source_document IN ('PO', 'ASN', 'JOBWORK_CHALLAN'));
+
+    ALTER TABLE grn DROP CONSTRAINT IF EXISTS chk_grn_po_ref_by_source_document;
+    ALTER TABLE grn
+      ADD CONSTRAINT chk_grn_po_ref_by_source_document
+      CHECK ((source_document = 'JOBWORK_CHALLAN') = (po_ref_ext IS NULL));
+
+    ALTER TABLE grn_line DROP CONSTRAINT IF EXISTS chk_grn_line_po_ref_pair;
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_po_ref_pair
+      CHECK ((po_ref_ext IS NULL) = (line_no IS NULL));
+
+    ALTER TABLE grn_line DROP CONSTRAINT IF EXISTS chk_grn_line_no_po_job_work_only;
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_no_po_job_work_only
+      CHECK (po_ref_ext IS NOT NULL OR stock_class = 'job_work');
+
+    ALTER TABLE grn_line DROP CONSTRAINT IF EXISTS chk_grn_line_no_ticket_job_work_only;
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_no_ticket_job_work_only
+      CHECK (weighbridge_correlation_id IS NOT NULL OR (po_ref_ext IS NULL AND stock_class = 'job_work'));
+
+    ALTER TABLE grn
+      ADD CONSTRAINT chk_grn_correlation_by_source_document
+      CHECK (correlation_id IS NOT NULL OR source_document = 'JOBWORK_CHALLAN');
+  END IF;
+END $$;

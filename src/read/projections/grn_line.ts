@@ -21,15 +21,17 @@ const CROSS_DOCK_NONQUALIFICATION_REASONS = new Set([
 export interface GrnLine {
   grn_line_id: string;
   grn_id: string;
-  po_ref_ext: string;
-  line_no: number;
+  /** Null together with line_no, only on a job_work line received against a customer challan (Pilot Ruling B). */
+  po_ref_ext: string | null;
+  line_no: number | null;
   sku: string;
   lot_id: string | null;
   expiry_date: string | null;
   received_qty: string;
   uom: string;
   stock_class: string;
-  weighbridge_correlation_id: string;
+  /** Null when a customer challan receipt carried no weighbridge ticket (Pilot Ruling B). */
+  weighbridge_correlation_id: string | null;
   qc_hold: boolean;
   shortage_variance_qty: string;
   target_location_id: string | null;
@@ -46,15 +48,15 @@ export interface GrnLine {
 export interface InsertGrnLineInput {
   grn_line_id: string;
   grn_id: string;
-  po_ref_ext: string;
-  line_no: number;
+  po_ref_ext: string | null;
+  line_no: number | null;
   sku: string;
   lot_id?: string | null;
   expiry_date?: string | null;
   received_qty: string;
   uom: string;
   stock_class?: string;
-  weighbridge_correlation_id: string;
+  weighbridge_correlation_id: string | null;
   qc_hold?: boolean;
   shortage_variance_qty?: string;
   target_location_id?: string | null;
@@ -97,15 +99,16 @@ function mapRow(row: Record<string, unknown>): GrnLine {
   return {
     grn_line_id: row['grn_line_id'] as string,
     grn_id: row['grn_id'] as string,
-    po_ref_ext: row['po_ref_ext'] as string,
-    line_no: Number(row['line_no']),
+    po_ref_ext: (row['po_ref_ext'] as string | null) ?? null,
+    line_no:
+      row['line_no'] === null || row['line_no'] === undefined ? null : Number(row['line_no']),
     sku: row['sku'] as string,
     lot_id: (row['lot_id'] as string | null) ?? null,
     expiry_date: (row['expiry_date'] as string | null) ?? null,
     received_qty: String(row['received_qty']),
     uom: row['uom'] as string,
     stock_class: row['stock_class'] as string,
-    weighbridge_correlation_id: row['weighbridge_correlation_id'] as string,
+    weighbridge_correlation_id: (row['weighbridge_correlation_id'] as string | null) ?? null,
     qc_hold: row['qc_hold'] === true,
     shortage_variance_qty: String(row['shortage_variance_qty']),
     target_location_id: (row['target_location_id'] as string | null) ?? null,
@@ -215,10 +218,11 @@ export async function insertGrnLine(input: InsertGrnLineInput, client: PoolClien
   );
   const existing = await client.query(
     `SELECT 1 FROM grn_line
-      WHERE grn_line_id = $1 AND grn_id = $2 AND po_ref_ext = $3 AND line_no = $4 AND sku = $5
+      WHERE grn_line_id = $1 AND grn_id = $2 AND po_ref_ext IS NOT DISTINCT FROM $3
+        AND line_no IS NOT DISTINCT FROM $4::int AND sku = $5
         AND lot_id IS NOT DISTINCT FROM $6 AND expiry_date IS NOT DISTINCT FROM $7::date
         AND received_qty = $8::numeric AND uom = $9 AND stock_class = $10
-        AND weighbridge_correlation_id = $11 AND qc_hold = $12
+        AND weighbridge_correlation_id IS NOT DISTINCT FROM $11::uuid AND qc_hold = $12
         AND shortage_variance_qty = $13::numeric AND target_location_id IS NOT DISTINCT FROM $14::uuid
         AND status = $15 AND rejection_reason IS NOT DISTINCT FROM $16
         AND cross_dock = $17 AND matched_dispatch_order_line_id IS NOT DISTINCT FROM $18::uuid

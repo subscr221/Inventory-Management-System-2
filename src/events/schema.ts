@@ -412,10 +412,20 @@ export interface WeighbridgeRecordedEnvelope extends Omit<EventEnvelope, 'payloa
 export interface GoodsReceivedPayload {
   grn_id: string;
   grn_line_id: string;
-  correlation_id: string;
-  po_ref_ext: string;
-  line_no: number;
-  source_document: 'PO' | 'ASN';
+  /**
+   * The weighbridge binding token. Required on a PO/ASN receipt. Pilot Ruling B: OPTIONAL on a
+   * 'JOBWORK_CHALLAN' receipt, where a supplied ticket is validated exactly the same way.
+   */
+  correlation_id?: string;
+  /** Required on a PO/ASN receipt; must be absent (with line_no) on a 'JOBWORK_CHALLAN' receipt. */
+  po_ref_ext?: string;
+  line_no?: number;
+  /**
+   * Pilot Ruling B: 'JOBWORK_CHALLAN' receives customer-owned job-work material against the
+   * service order plus the customer's challan, with no purchase order. It requires stock_class
+   * 'job_work', service_order_id, challan_number_ext, challan_date and challan_qty.
+   */
+  source_document: 'PO' | 'ASN' | 'JOBWORK_CHALLAN';
   source_ref_ext?: string | null;
   sku: string;
   target_location_id?: string;

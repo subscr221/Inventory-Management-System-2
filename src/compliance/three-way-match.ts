@@ -200,6 +200,17 @@ async function applyGrnPoLinked(envelope: EventEnvelope, client: PoolClient): Pr
 
   const grn = await getGrnByIdForUpdate(grnId, client);
   if (!grn) reject('GRN_NOT_FOUND', 'GRN not found', { grn_id: grnId }, 404);
+  // Pilot Ruling B: a customer challan GRN is not a purchase-order receipt. Binding one to a PO
+  // would put customer-owned quantities into that PO's three-way match and scorecard. Enforced
+  // here in the seam so the REST route and the events door refuse alike.
+  if (grn.source_document === 'JOBWORK_CHALLAN' || grn.po_ref_ext === null) {
+    reject(
+      'GRN_NOT_PO_RECEIPT',
+      'This GRN was received against a customer challan, not a purchase order, and cannot be linked to one',
+      { grn_id: grnId, po_id: poId, source_document: grn.source_document },
+      409,
+    );
+  }
 
   // AC4 (procurement-side variant): a receipt can only be bound to a purchase order that exists
   // and is live. A draft, pending-approval, approved or rejected PO is not a source document.
