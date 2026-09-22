@@ -102,6 +102,7 @@ describe('Pilot G2 REST handlers stamp the bin acted on', () => {
   let port: number;
   let storeHeaders: Record<string, string>;
   let managerHeaders: Record<string, string>;
+  let qcHeaders: Record<string, string>;
   let supervisorId: string;
 
   const run = randomUUID().slice(0, 8);
@@ -109,6 +110,7 @@ describe('Pilot G2 REST handlers stamp the bin acted on', () => {
   const zoneId = randomUUID();
   const dockId = randomUUID();
   const binId = randomUUID();
+  const bin2Id = randomUUID();
   const siteCode = `G2SITE-${run}`;
   const dockCode = `G2DOCK-${run}`;
   const binCode = `G2BIN-${run}`;
@@ -215,6 +217,7 @@ describe('Pilot G2 REST handlers stamp the bin acted on', () => {
     await seedLocation(zoneId, `G2ZONE-${run}`, 'zone', siteId);
     await seedLocation(dockId, dockCode, 'bin', zoneId);
     await seedLocation(binId, binCode, 'bin', zoneId, 10);
+    await seedLocation(bin2Id, `G2BIN2-${run}`, 'bin', zoneId, 20);
 
     supervisorId = await provisionUser(port, `g2-supervisor-${run}@example.com`, [
       {
@@ -240,6 +243,10 @@ describe('Pilot G2 REST handlers stamp the bin acted on', () => {
       },
     ]);
     managerHeaders = await authFor(port, `g2-manager-${run}@example.com`);
+    await provisionUser(port, `g2-qc-${run}@example.com`, [
+      { role: 'quality_inspector', module: 'qc', functionScope: 'write', locationId: siteId },
+    ]);
+    qcHeaders = await authFor(port, `g2-qc-${run}@example.com`);
   });
 
   after(async () => {
@@ -531,5 +538,124 @@ describe('Pilot G2 REST handlers stamp the bin acted on', () => {
       assert.notStrictEqual(stamp.audit, binId);
       if (ownsReach) assert.deepStrictEqual(stamp, { event: siteId, audit: siteId });
     }
+  });
+
+  it('transfer ship records the source bin and transfer receive the destination bin (owner ruling 2026-09-22)', async () => {
+    const sku = `G2-TR-${run}`;
+    await seedItem(sku);
+    const lotId = randomUUID();
+    const lotNumber = `G2LOT-TR-${run}`;
+    await getPool().query(`INSERT INTO lot_master (lot_id, lot_number, sku) VALUES ($1, $2, $3)`, [
+      lotId,
+      lotNumber,
+      sku,
+    ]);
+    // stock_balance.lot_id carries the lot NUMBER (see src/compliance/transfer-request.ts).
+    await getPool().query(
+      `INSERT INTO stock_balance (sku, location_id, lot_id, stock_class, on_hand)
+       VALUES ($1, $2, $3, 'owned', 20)`,
+      [sku, binId, lotNumber],
+    );
+    // A small quantity stays under any DOA band an earlier run may have left behind.
+    const create = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/transfer-requests',
+      {
+        sku_id: sku,
+        from_location_id: binId,
+        to_location_id: bin2Id,
+        quantity: 5,
+        business_stream: 'production',
+        lot_id: lotId,
+      },
+      storeHeaders,
+    );
+    assert.strictEqual(create.status, 201, JSON.stringify(create.body));
+    assert.strictEqual(create.body['status'], 'pending_shipment', JSON.stringify(create.body));
+    const transferId = create.body['transfer_request_id'] as string;
+
+    const ship = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${transferId}/ship`,
+      { lot_id: lotId, shipped_quantity: 5 },
+      storeHeaders,
+    );
+    assert.strictEqual(ship.status, 201, JSON.stringify(ship.body));
+    const shipped = await getPool().query(
+      `SELECT event_id FROM domain_events WHERE stream_id = $1 AND event_type = 'transfer_ship.created'`,
+      [transferId],
+    );
+    assert.strictEqual(shipped.rows.length, 1);
+    assert.deepStrictEqual(await stamps(shipped.rows[0]!['event_id'] as string), {
+      event: binId,
+      audit: binId,
+    });
+
+    const receive = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/transfer-requests/${transferId}/receive`,
+      { lot_id: lotId, received_quantity: 5 },
+      storeHeaders,
+    );
+    assert.strictEqual(receive.status, 201, JSON.stringify(receive.body));
+    const received = await getPool().query(
+      `SELECT event_id FROM domain_events WHERE stream_id = $1 AND event_type = 'transfer_receive.created'`,
+      [transferId],
+    );
+    assert.strictEqual(received.rows.length, 1);
+    assert.deepStrictEqual(await stamps(received.rows[0]!['event_id'] as string), {
+      event: bin2Id,
+      audit: bin2Id,
+    });
+  });
+
+  it('QC retention sample log records the storage bin (owner ruling 2026-09-22)', async () => {
+    const sku = `G2-RET-${run}`;
+    await seedItem(sku);
+    const lotId = randomUUID();
+    const taskId = randomUUID();
+    await getPool().query(
+      `INSERT INTO lot_master (lot_id, lot_number, sku, quality_hold_status) VALUES ($1, $2, $3, 'none')`,
+      [lotId, `G2LOT-RET-${run}`, sku],
+    );
+    // The task row is seeded directly: the stamp is about WHERE the sample is kept, not how the
+    // lot came to be inspected.
+    await getPool().query(
+      `INSERT INTO qc_inspection_task
+         (task_id, lot_id, lot_number, source_completion_type, source_completion_id, item_id, sku,
+          quantity, uom, site_id, bom_revision_id, plan_id, plan_version_id, plan_scope,
+          completed_at, business_date, gate_changed_at, source_event_id)
+       VALUES ($1, $2, $3, 'synthetic_completion', $4, $5, $6, 10, 'KG', $7, $8, $9, $10, 'standard',
+               now(), '2026-07-23', now(), $11)`,
+      [
+        taskId,
+        lotId,
+        `G2LOT-RET-${run}`,
+        randomUUID(),
+        randomUUID(),
+        sku,
+        siteId,
+        randomUUID(),
+        randomUUID(),
+        randomUUID(),
+        randomUUID(),
+      ],
+    );
+
+    const res = await makeRequest(
+      port,
+      'POST',
+      `/api/v1/qc/tasks/${taskId}/retention-sample`,
+      { quantity: '1.000000', uom: 'KG', location_id: binId },
+      qcHeaders,
+    );
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    assert.deepStrictEqual(await stamps(res.body['event_id'] as string), {
+      event: binId,
+      audit: binId,
+    });
   });
 });

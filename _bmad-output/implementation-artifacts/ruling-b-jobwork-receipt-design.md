@@ -62,13 +62,17 @@ Table 2: Refusals for a JOBWORK_CHALLAN receipt
 | GRN id exists with another kind, PO, site or order | 409 `GRN_HEADER_MISMATCH` (new, all kinds) |
 | same idempotency key, different submission | 409 `IDEMPOTENCY_KEY_CONFLICT` (new on this route) |
 | linking a challan GRN to a purchase order | 409 `GRN_NOT_PO_RECEIPT` (new) |
+| order has no kit BOM and `JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM` is not `true` | 409 `JOBWORK_ORDER_KIT_BOM_REQUIRED` (new) |
 
 - Expected materials: a service order carries no material lines or quantities. It carries a kit
   BOM, mandatory at confirmation. The expected items are the non-placeholder kit lines whose
   `supply_source` is `customer` or untagged, the same `kitLineMatchesConsumption` rule custody
   consumption uses. An order with no kit BOM at all (only possible for an order migrated in
-  already confirmed, as the rehearsal mock pack seeds them) names no expected items, so the item
-  check is skipped for it and the item need only be an active item master record.
+  already confirmed, as the rehearsal mock pack seeds them) names no expected items. Owner ruling
+  2026-09-22: such a receipt is refused in production and allowed on the pilot. The config knob
+  `JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM` (default `false`, refuse) is read on the seam both doors
+  pass through; staging sets it `true`, and then the item check is skipped for such an order and
+  the item need only be an active item master record.
 - Over-receipt: the order has no expected quantity, so the purchase-order band cannot apply. The
   existing job-work rule stands: received versus challan quantity is recorded as a signed variance
   and flagged beyond `config.jobwork.receiptTolerancePercent`. It flags and does not refuse.
@@ -85,8 +89,10 @@ Table 2: Refusals for a JOBWORK_CHALLAN receipt
   result (REST answers 200 with `replayed: true`, also for a racing retry that re-sends the same
   ids); the same key with a different submission is a conflict. Resolved before the duplicate
   check can fire. The purchase-order path's replay behaviour is unchanged.
-- Known pilot limit, needs an owner ruling: an order with no kit BOM skips the expected-item
-  check entirely, so any active item can be received against it.
+- Resolved by owner ruling 2026-09-22: an order with no kit BOM is refused
+  `JOBWORK_ORDER_KIT_BOM_REQUIRED` unless `JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM=true`, which staging
+  sets for the pilot's migrated orders; with it, the expected-item check is skipped for such an
+  order and any active item can be received against it.
 
 ## Ownership and Valuation
 

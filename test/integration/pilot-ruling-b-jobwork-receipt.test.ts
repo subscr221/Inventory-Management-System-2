@@ -554,16 +554,43 @@ describe('Pilot Ruling B job-work receipt without a purchase order', () => {
     // An untagged kit line counts as customer-supplied (the custody consumption rule).
     const untagged = await receive(challanBody(orderId, { sku: SKU_2 }));
     assert.strictEqual(untagged.status, 201, JSON.stringify(untagged.body));
+  });
 
-    // A migrated order with no kit BOM names no expected items: nothing to hold the sku against.
+  it('refuses an order with no kit BOM unless JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM is true (owner ruling 2026-09-22)', async () => {
+    // A migrated order with no kit BOM names no expected items, so there is nothing to hold the
+    // sku against. Production refuses it (the default); the pilot sets the knob true and receives.
     const migratedId = randomUUID();
     await getAdminPool().query(
       `INSERT INTO service_order (service_order_id, order_number_ext, customer_party_code, customer_name, status, has_contractual_offcut, site_id, business_stream, created_by, source_event_id)
        VALUES ($1, $2, $3, 'Migrated Customer', 'in_process', false, $4, 'job_work', $5, $6)`,
       [migratedId, `RB-MIG-${run}`, CUSTOMER, siteId, coordinatorId, randomUUID()],
     );
-    const migrated = await receive(challanBody(migratedId, { sku: SKU_OFF_ORDER }));
-    assert.strictEqual(migrated.status, 201, JSON.stringify(migrated.body));
+    const saved = process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'];
+    try {
+      delete process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'];
+      const refused = await receive(challanBody(migratedId, { sku: SKU_OFF_ORDER }));
+      assert.strictEqual(refused.status, 409, JSON.stringify(refused.body));
+      assert.strictEqual(errorCode(refused), 'JOBWORK_ORDER_KIT_BOM_REQUIRED');
+      assert.strictEqual(
+        (refused.body['details'] as Record<string, unknown>)['service_order_id'],
+        migratedId,
+      );
+      const door = await postEvent(
+        challanBody(migratedId, { sku: SKU_OFF_ORDER }),
+        storeHeaders,
+        storeActor(),
+      );
+      assert.strictEqual(door.status, 409, JSON.stringify(door.body));
+      assert.strictEqual(errorCode(door), 'JOBWORK_ORDER_KIT_BOM_REQUIRED');
+      assert.strictEqual(await rowCount('stock_balance', 'sku = $1', [SKU_OFF_ORDER]), 0);
+
+      process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'] = 'true';
+      const allowed = await receive(challanBody(migratedId, { sku: SKU_OFF_ORDER }));
+      assert.strictEqual(allowed.status, 201, JSON.stringify(allowed.body));
+    } finally {
+      if (saved === undefined) delete process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'];
+      else process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'] = saved;
+    }
   });
 
   it('refuses a duplicate challan for the same customer and item', async () => {

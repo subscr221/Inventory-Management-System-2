@@ -59,7 +59,11 @@ refuses. Three people are fictitious because the duty had no holder: `qchead1` (
 Local mode needs no preparation. `operations-smoke.ts` without arguments runs `rehearse.ts` for a
 fresh run-scoped site, starts the app in-process, provisions the people of `roles.json` as
 throwaway users, runs the setup and then the day. `--site-code MOCK-XXXX` reuses a site that is
-already live, and `--seed` and `--lines` are passed on to the rehearsal.
+already live, and `--seed` and `--lines` are passed on to the rehearsal. A run prints 35 lines:
+8 setup steps, 1 lot check and 26 steps of the day, two of them expected refusals (a job-work
+challan received twice, a pack naming a lot that was not picked). The seeded job-work orders
+carry no kit BOM, so local mode sets `JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM=true` before the app boots
+unless the shell already set it; staging runs with the same setting.
 
 Remote mode drives a deployed stack as the real people and provisions nobody. The config has the
 shape of `remote.example.json`; see `ops-remote.example.json`. The `actors` map is optional here:
@@ -106,6 +110,10 @@ date, and the local smoke test checks that no lot balance is missing, held or ex
 7. An approver is the oldest active holder of the role in the whole database
    (`src/read/projections/doa_registry.ts:298`), with no site scope. Keep one holder per approving
    role until that changes.
-8. Job-work receipts still need a PO reference on the GRN path, so they stay in `seed.mjs`.
+8. The historic job-work receipts of the extract stay in `seed.mjs`: they predate the site and
+   carry no GRN of their own. A new receipt goes through the API as a `JOBWORK_CHALLAN` source on
+   `/api/v1/grn-lines` (no purchase order, no ticket), which the smoke test exercises against the
+   seeded order JW-MK-0001. The gate and the weighbridge still need a purchase-order reference, so
+   a challan receipt is ticketless.
 9. Calibration certificates and critical spare min-max are left out on purpose: the runbook
    forbids them in the pilot. The pack seeds no instrument and no spare.

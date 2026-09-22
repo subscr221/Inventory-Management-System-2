@@ -146,6 +146,32 @@ function parseStatutoryReleaseBlockMode(): StatutoryReleaseBlockMode {
 }
 
 /**
+ * Pilot Ruling B follow-up (owner ruling 2026-09-22): whether a JOBWORK_CHALLAN receipt may be
+ * posted against a service order that has NO kit BOM. Such an order names no expected items, so
+ * the expected-item check has nothing to hold the sku against. Production refuses it (default
+ * `false`, 409 JOBWORK_ORDER_KIT_BOM_REQUIRED); the pilot's migrated orders carry no kit BOM, so
+ * staging sets `true` and any active item is received against them.
+ *
+ * Only an ABSENT variable takes the default; a present-but-blank or unrecognised value refuses
+ * boot (the repo-wide fail-closed config invariant). The seam reads the knob per receipt through
+ * `config.jobwork.receiptAllowNoKitBom` (a getter, not a boot-time snapshot) so the REST route and
+ * the events door always answer alike and a test can hold both values in one process; the boot-time
+ * call below is what makes a typo stop the boot.
+ */
+function parseJobworkReceiptAllowNoKitBom(): boolean {
+  const raw = process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'];
+  if (raw === undefined) return false;
+  const value = raw.trim();
+  if (value !== 'true' && value !== 'false') {
+    throw new Error(
+      `Invalid JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM "${raw}": must be "true" or "false".`,
+    );
+  }
+  return value === 'true';
+}
+parseJobworkReceiptAllowNoKitBom();
+
+/**
  * Parses a positive-number statutory rate from the environment, falling back to `fallback`
  * for an unset, non-numeric, or non-positive value. Fractional values are valid: the MSMED
  * s.16 rate is three times the RBI bank rate, which is frequently fractional (3 x 6.5 = 19.5),
@@ -692,6 +718,11 @@ export const config = {
       }
       return value;
     })(),
+    // Owner ruling 2026-09-22: a JOBWORK_CHALLAN receipt against an order with no kit BOM. See
+    // parseJobworkReceiptAllowNoKitBom for why this is a getter rather than a boot-time value.
+    get receiptAllowNoKitBom(): boolean {
+      return parseJobworkReceiptAllowNoKitBom();
+    },
     // Story 9.4 (FR-JW-08): the process-loss norm, in percent of cumulative customer material
     // consumed on the order/sku to date. Declared loss STRICTLY exceeding this percent requires
     // supervisor DOA approval (the 9.2 receipt-tolerance "exactly-at-boundary does not flag"

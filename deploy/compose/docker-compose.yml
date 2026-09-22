@@ -32,6 +32,9 @@ services:
       # Which token claim names the directory record (staging Keycloak: the email, so the roles
       # file's email IS the identity; default sub).
       AUTH_SUBJECT_CLAIM: ${AUTH_SUBJECT_CLAIM:-sub}
+      # Job-work challan receipt against an order with no kit BOM (owner ruling 2026-09-22):
+      # refused unless true. Staging sets true (its migrated job-work orders carry no kit BOM).
+      JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM: ${JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM:-false}
       SCIM_BEARER_TOKEN: ${SCIM_BEARER_TOKEN:?set SCIM_BEARER_TOKEN to a long random secret}
       EDGE_SITE_NAME: ${EDGE_SITE_NAME:-Pilot Gate Site}
       POWERSYNC_URL: ${POWERSYNC_URL:-/powersync}

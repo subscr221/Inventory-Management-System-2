@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import type { EventEnvelope } from '../events/store.js';
 import { persistEvent } from '../events/store.js';
 import { AppError } from '../middleware/error.js';
+import { config } from '../config/index.js';
 import { getServiceOrderById } from '../read/projections/service_order.js';
 import { getBomById, getBomLines } from '../read/projections/bom.js';
 import {
@@ -468,7 +469,17 @@ async function assertJobworkChallanReceipt(
   // expected to send is the customer-supplied (or still untagged) lines of the CURRENT revision of
   // its kit BOM - the same predicate custody consumption later posts against. An order with NO kit
   // BOM (one migrated in already confirmed; the Story 9.1 confirm gate makes it impossible
-  // otherwise) names no expected items, so there is nothing to hold the sku against.
+  // otherwise) names no expected items, so there is nothing to hold the sku against: refused in
+  // production, received on the pilot (owner ruling 2026-09-22, JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM).
+  // Read here, on the one seam both doors pass through, so REST and the events door agree.
+  if (!order.kit_bom_id && !config.jobwork.receiptAllowNoKitBom) {
+    throw new AppError(
+      409,
+      'JOBWORK_ORDER_KIT_BOM_REQUIRED',
+      'The service order has no kit BOM, so it names no expected customer material; attach a kit BOM before receiving against it',
+      { service_order_id: serviceOrderId, sku },
+    );
+  }
   const bom = order.kit_bom_id ? await getBomById(order.kit_bom_id, client) : null;
   const lines = bom?.current_revision_id ? await getBomLines(bom.current_revision_id, client) : [];
   if (order.kit_bom_id && !lines.some((line) => kitLineMatchesConsumption(line, sku))) {

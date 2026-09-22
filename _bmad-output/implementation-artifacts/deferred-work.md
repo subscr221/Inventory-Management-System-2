@@ -1123,7 +1123,7 @@ Story 1.14 Binding Decision 9 items, plus what implementation found.
 
 ## Deferred from: Pilot Ruling B job-work challan receipt (2026-09-21)
 
-- An order with no kit BOM skips the expected-item check on a `JOBWORK_CHALLAN` receipt (`assertJobworkChallanReceipt` in `src/compliance/receiving.ts`): any active item can be received against it. Only an order migrated in already confirmed can lack a kit BOM, since the Story 9.1 confirm gate requires one. Known pilot limit; needs an owner ruling on whether to refuse such orders or require a kit BOM to be attached first.
+- CLOSED 2026-09-22 (owner ruling): an order with no kit BOM on a `JOBWORK_CHALLAN` receipt (`assertJobworkChallanReceipt` in `src/compliance/receiving.ts`) is now refused 409 `JOBWORK_ORDER_KIT_BOM_REQUIRED` unless the config knob `JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM` is `true` (default `false`; a present-but-invalid value refuses boot). Staging sets it `true` for the pilot's migrated orders, which carry no kit BOM; production keeps the refusal. Read on the seam, so REST and the events door agree.
 - Gate entry and the weighbridge cannot issue a ticket without a purchase-order reference (`weighbridge_event.po_ref_ext` is mandatory), so every supplied ticket on a challan receipt is refused `RECEIVING_TICKET_PO_BOUND` and challan receipts are ticketless. Job-work support at the gate and weighbridge is a separate story.
 - The rehearsal mock pack seeds job-work orders in SQL with no kit BOM, and its operations layer has no job-work actor or step; no smoke step exercises the challan receipt yet.
 

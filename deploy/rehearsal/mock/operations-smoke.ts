@@ -9,7 +9,8 @@
 //            runs the setup first)
 //
 // The day: gate entry, weighbridge, GRN of a plain, a lot and a consignment item, putaway into a storage bin,
-// cycle count with approval by another person, pick + pack + IRN + documents + dispatch of a
+// a job-work challan receipt (no PO, no ticket) and its duplicate refused,
+// cycle count with approval by another person, pick + pack (a wrong lot refused first) + IRN + documents + dispatch of a
 // seeded sales order, a production order for a seeded BOM (release, stage, issue,
 // complete against the inspection plan), an indent raised and approved, a maintenance fault
 // through work order to completion. Every record is permanent (append-only platform): a remote
@@ -72,6 +73,8 @@ async function inbound(ctx: Ctx): Promise<void> {
   const lot = `LOT-SMOKE-${ctx.run.toUpperCase()}`;
   let token = '';
   const tasks: string[] = [];
+  let jobworkOrderId = '';
+  let challan: Json | null = null;
   let countId = '';
   let adjustment: Json = {};
 
@@ -200,6 +203,86 @@ async function inbound(ctx: Ctx): Promise<void> {
         );
         if (!here) throw new Error(`BRG-6204 is not in ${bin} after putaway`);
         return `${tasks.length} tasks completed into ${bin}`;
+      },
+    ],
+    [
+      'job-work: receive customer material against the challan (no PO, no ticket)',
+      async () => {
+        // The seeded order JW-MK-0001 (a tagged pack suffixes the number). The pack's job-work
+        // orders are migrated in with no kit BOM, which the challan receipt refuses unless
+        // JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM is true (owner ruling 2026-09-22): staging sets it, and
+        // local mode sets it below before the app boots.
+        const orders = listOf(
+          must(
+            await ctx.request(
+              'GET',
+              `/api/v1/service-orders?site_id=${ctx.siteId}&status=in_process&limit=200`,
+              undefined,
+              await ctx.as('depthead'),
+            ),
+            200,
+            'list service orders',
+          ),
+          'service_orders',
+        );
+        const order = orders.find((o) => String(o['order_number_ext']).startsWith('JW-MK-0001'));
+        if (!order) throw new Error(`no in-process order JW-MK-0001 at ${ctx.siteCode}`);
+        jobworkOrderId = order['service_order_id'] as string;
+        challan = {
+          source_document: 'JOBWORK_CHALLAN',
+          stock_class: 'job_work',
+          service_order_id: jobworkOrderId,
+          challan_number_ext: `DC-SMOKE-${ctx.run.toUpperCase()}`,
+          challan_date: today(),
+          challan_qty: 120,
+          sku: 'CUST-SHEET-3MM',
+          lot_id: `HEAT-SMOKE-${ctx.run.toUpperCase()}`,
+          target_location_code: dock,
+          received_qty: 120,
+          idempotency_key: uuid(),
+        };
+        const res = must(
+          await ctx.request('POST', '/api/v1/grn-lines', challan, await ctx.as('store')),
+          201,
+          'challan receipt',
+        );
+        const grn = res['grn'] as Json;
+        if (grn['po_ref_ext'] !== null)
+          throw new Error(`the challan GRN carries a purchase order: ${String(grn['po_ref_ext'])}`);
+        const receipts = listOf(
+          must(
+            await ctx.request(
+              'GET',
+              `/api/v1/service-orders/${jobworkOrderId}/receipts`,
+              undefined,
+              await ctx.as('depthead'),
+            ),
+            200,
+            'list receipts',
+          ),
+          'receipts',
+        );
+        const number = String(challan['challan_number_ext']);
+        const mine = receipts.find((r) => r['challan_number_ext'] === number);
+        if (!mine) throw new Error(`no receipt row for challan ${number}`);
+        return `${String(challan['received_qty'])} ${String(challan['sku'])} of ${String(order['order_number_ext'])} at ${dock}, receipt ${String(mine['receipt_id'])}, no PO, no ticket`;
+      },
+    ],
+    [
+      'job-work: the same challan and lot again is refused',
+      async () => {
+        if (!challan) throw new Error('nothing was received');
+        const res = await ctx.request(
+          'POST',
+          '/api/v1/grn-lines',
+          { ...challan, idempotency_key: uuid() },
+          await ctx.as('store'),
+        );
+        if (res.status !== 409 || res.body['error_code'] !== 'JOBWORK_CHALLAN_DUPLICATE')
+          throw new Error(
+            `expected 409 JOBWORK_CHALLAN_DUPLICATE, got ${res.status} ${res.text.slice(0, 300)}`,
+          );
+        return `JOBWORK_CHALLAN_DUPLICATE for ${String(challan['challan_number_ext'])}`;
       },
     ],
     [
@@ -398,6 +481,51 @@ async function outbound(ctx: Ctx): Promise<void> {
             must(done, [200, 201], 'complete pick task');
         }
         return notes.join(', ');
+      },
+    ],
+    [
+      'outbound: pack refuses a lot that was not picked',
+      async () => {
+        const line = picked.find((p) => p.lotId) ?? picked[0];
+        if (!line) throw new Error('nothing was picked');
+        const res = await ctx.request(
+          'POST',
+          `/api/v1/dispatch/${line.orderId}/pack`,
+          {
+            dispatchOrderId: line.orderId,
+            packingLines: [
+              {
+                sku: line.sku,
+                packed_qty: line.qty,
+                lot_id: uuid(),
+                carton_count: 1,
+                actual_weight_kg: 12.5,
+                label_ref: null,
+              },
+            ],
+          },
+          await ctx.as('dispatch'),
+        );
+        if (res.status !== 409 || res.body['error_code'] !== 'PACKED_LINE_NOT_PICKED')
+          throw new Error(
+            `expected 409 PACKED_LINE_NOT_PICKED, got ${res.status} ${res.text.slice(0, 300)}`,
+          );
+        const records = listOf(
+          must(
+            await ctx.request(
+              'GET',
+              `/api/v1/dispatch/${line.orderId}/packing-records`,
+              undefined,
+              await ctx.as('dispatch'),
+            ),
+            200,
+            'packing records',
+          ),
+          'packingRecords',
+        );
+        if (records.length !== 0)
+          throw new Error(`${records.length} packing record(s) exist after the refusal`);
+        return `PACKED_LINE_NOT_PICKED for ${line.sku} with a lot that was not picked, no packing record`;
       },
     ],
     [
@@ -856,6 +984,11 @@ let ctx: Ctx | null = null;
 try {
   let siteCode = argOf('--site-code', '');
   const remote = hasFlag('--remote');
+  // The pack's job-work orders are migrated in with no kit BOM. Local mode boots the app itself,
+  // so it takes the pilot setting staging runs with (owner ruling 2026-09-22) unless the shell
+  // already chose one; remote mode drives whatever the stack was started with.
+  if (!remote && process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'] === undefined)
+    process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'] = 'true';
   if (!remote && !siteCode) {
     const out = execFileSync(
       process.execPath,
