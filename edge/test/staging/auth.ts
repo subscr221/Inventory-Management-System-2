@@ -14,7 +14,8 @@ const KEYCLOAK_HOST = 'auth.ancorlabs.org';
 // accounts carry their email as the user name, so the header may show either.
 export const PEOPLE = {
   'info@ancorlabs.org': 'Gagan Kumar',
-  'accounts@ancorlabs.org': 'Finance Controller',
+  // Keycloak name on staging; the role is finance_controller.
+  'accounts@ancorlabs.org': 'Accounts Department',
   'subscr@ancorlabs.org': 'Department Head',
   'anupam@ancorlabs.org': 'CFO',
   'cmf_supervisor@ancorlabs.org': 'Site Head',

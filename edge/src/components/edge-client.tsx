@@ -214,6 +214,9 @@ export function EdgeClient({
   const sessionAuthLost = useRef(false);
   // Story 1.12: no capture may start between the sign-out count and the identity being cleared.
   const signingOut = useRef(false);
+  // Bootstrap refused the site (no concrete site assignment): the API never named the user, and
+  // capture never opened, so this person owns no outbox rows but must still be able to sign out.
+  const siteRefused = useRef(false);
   const [state, setState] = useState(initialState);
 
   const insertOwnCapture = useCallback(async (db: PowerSyncDatabase, event: Parameters<typeof insertCaptureEvent>[1]) => {
@@ -395,6 +398,7 @@ export function EdgeClient({
             // Not a sync problem: tell the person their account has no usable site, name them from
             // the sign-in token, and show no cached identity from an earlier assignment.
             const signedInName = (await getActiveSession()?.getDisplayName()) ?? null;
+            siteRefused.current = true;
             if (!cancelled)
               setState((current) => ({
                 ...current,
@@ -507,13 +511,13 @@ export function EdgeClient({
     const db = database.current;
     const current = session.current;
     const userId = signedInUserId.current;
-    if (!db || !current || !userId || signingOut.current) return;
+    if (!db || !current || (!userId && !siteRefused.current) || signingOut.current) return;
     signingOut.current = true;
     setState((prev) => ({ ...prev, signingOut: true }));
     let result: Awaited<ReturnType<EdgeSession['signOut']>>;
     try {
       result = await current.signOut({
-        countUnsettled: () => countUnsettled(db, userId),
+        countUnsettled: () => (userId ? countUnsettled(db, userId) : Promise.resolve(0)),
         clearCachedUser: () => clearCachedUserContext(db),
       });
     } catch {
@@ -524,7 +528,7 @@ export function EdgeClient({
     if (result.blocked) {
       signingOut.current = false;
       setState((prev) => ({ ...prev, signingOut: false, signOutBlockedCount: result.count }));
-      if (navigator.onLine) {
+      if (navigator.onLine && userId) {
         await resetAuthRequired(db, userId);
         await refreshLocalState(db);
       }
@@ -534,6 +538,7 @@ export function EdgeClient({
     // redirect that could not reach the IdP, stays here, so the shell must stop showing this user.
     // Capture stays closed (signingOut) until the next start signs somebody in.
     signedInUserId.current = null;
+    siteRefused.current = false;
     sessionAuthLost.current = false;
     setActiveSession(null);
     setState((prev) => ({
