@@ -1,0 +1,12 @@
+
+Running 8 tests using 1 worker
+
+[1/8] test\staging\department-head.spec.ts:7:1 › subscr reviews refused captures and resolves one captured by someone else
+[2/8] test\staging\floor-staff.spec.ts:55:1 › indent1 raises a requisition for a pilot SKU and it syncs
+[3/8] test\staging\floor-staff.spec.ts:67:1 › indent1 repeats a requisition for the same SKU; it is held for confirmation, not refused
+[4/8] test\staging\floor-staff.spec.ts:89:1 › maint1 reports a fault on a pack asset and it syncs
+[5/8] test\staging\read-only-roles.spec.ts:15:3 › accounts@ancorlabs.org signs in, sees their name, signs out to Keycloak
+[6/8] test\staging\read-only-roles.spec.ts:15:3 › anupam@ancorlabs.org signs in, sees their name, signs out to Keycloak
+[7/8] test\staging\read-only-roles.spec.ts:15:3 › info@ancorlabs.org signs in, sees their name, signs out to Keycloak
+[8/8] test\staging\read-only-roles.spec.ts:15:3 › cmf_supervisor@ancorlabs.org signs in, sees their name, signs out to Keycloak
+  8 passed (2.5m)

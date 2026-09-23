@@ -12,6 +12,7 @@
     "test:sync-real": "node --env-file=../.env.test --import tsx --test --test-timeout=120000 test/sync-real/*.test.ts",
     "test:e2e": "playwright test test/e2e",
     "accessibility": "playwright test test/accessibility",
+    "test:staging": "playwright test -c playwright.staging.config.ts",
     "i18n:check": "node --import tsx test/unit/i18n-literals.test.ts",
     "start": "next start",
     "postbuild": "node scripts/copy-standalone-assets.js"

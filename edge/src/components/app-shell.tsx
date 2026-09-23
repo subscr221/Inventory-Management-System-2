@@ -58,6 +58,8 @@ export interface AppShellProps {
   role?: string;
   syncState: SyncUiState;
   firstSyncRequired?: boolean;
+  /** The account has no single concrete site: bootstrap refused, nothing will sync until fixed. */
+  siteRefusal?: 'no_site' | 'ambiguous_site' | null;
   failures?: SyncFailureItem[];
   navigation?: string[];
   pendingCount?: number;
@@ -111,6 +113,7 @@ export function AppShell({
   role = '',
   syncState,
   firstSyncRequired = false,
+  siteRefusal = null,
   failures = [],
   navigation = ['Dashboard', 'Frontline'],
   pendingCount = 0,
@@ -206,7 +209,14 @@ export function AppShell({
             {t('auth.offlineNoSession')}
           </div>
         ) : null}
-        {firstSyncRequired ? (
+        {siteRefusal ? (
+          <section className="edge-card" role="alert" aria-labelledby="site-refusal-heading">
+            <h2 id="site-refusal-heading">
+              {t(siteRefusal === 'no_site' ? 'bootstrap.noSiteTitle' : 'bootstrap.ambiguousSiteTitle')}
+            </h2>
+            <p>{t(siteRefusal === 'no_site' ? 'bootstrap.noSiteBody' : 'bootstrap.ambiguousSiteBody')}</p>
+          </section>
+        ) : firstSyncRequired ? (
           <section className="edge-card" aria-labelledby="first-sync-heading">
             <h2 id="first-sync-heading">{t('bootstrap.firstSyncTitle')}</h2>
             <p>{t('bootstrap.firstSyncBody')}</p>

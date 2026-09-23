@@ -51,8 +51,9 @@ import { EdgePowerSyncConnector } from '../sync/connector';
 import { deriveSyncUiState, type SyncUiState } from '../sync/sync-status';
 import { refreshWorklist } from '../sync/worklist-refresh';
 import { authorizedFetch } from '../session/api-fetch';
+import { classifyBootstrapRefusal } from '../session/bootstrap-refusal';
 import { AuthConfigUnavailableError, loadAuthConfig } from '../session/auth-config';
-import { createBrowserSession, setActiveSession, type EdgeSession } from '../session/session';
+import { createBrowserSession, getActiveSession, setActiveSession, type EdgeSession } from '../session/session';
 
 interface BootstrapResponse {
   user_id: string;
@@ -81,6 +82,8 @@ interface RuntimeState {
   failures: Array<{ eventId: string; eventType: string; errorCode: string; failedAt: string }>;
   authRequired: boolean;
   firstSyncRequired: boolean;
+  // The account has no single concrete site, so bootstrap is refused and nothing will sync.
+  siteRefusal: 'no_site' | 'ambiguous_site' | null;
   setupError: boolean;
   // Story 1.12: offline with no cached sign-in; unsettled captures that blocked a sign-out.
   offlineNoSession: boolean;
@@ -101,6 +104,9 @@ interface RuntimeState {
   selectedReservations: CachedReservationRow[];
 }
 
+/** Bootstrap refused for the account's site assignment: already shown, not a sync failure. */
+class SiteRefusedError extends Error {}
+
 const initialState: RuntimeState = {
   userId: '',
   userName: '',
@@ -113,6 +119,7 @@ const initialState: RuntimeState = {
   failures: [],
   authRequired: false,
   firstSyncRequired: false,
+  siteRefusal: null,
   setupError: false,
   offlineNoSession: false,
   signOutBlockedCount: 0,
@@ -382,7 +389,23 @@ export function EdgeClient({
 
         try {
           const response = await authorizedFetch('/api/v1/edge/bootstrap', { credentials: 'include' });
-          if (!response.ok) throw new Error('bootstrap unavailable');
+          if (!response.ok) {
+            const refusal = await classifyBootstrapRefusal(response);
+            if (refusal === 'unavailable') throw new Error('bootstrap unavailable');
+            // Not a sync problem: tell the person their account has no usable site, name them from
+            // the sign-in token, and show no cached identity from an earlier assignment.
+            const signedInName = (await getActiveSession()?.getDisplayName()) ?? null;
+            if (!cancelled)
+              setState((current) => ({
+                ...current,
+                siteRefusal: refusal,
+                firstSyncRequired: false,
+                userName: signedInName ?? '',
+                siteName: '',
+                signOutAvailable: sessionReady,
+              }));
+            throw new SiteRefusedError();
+          }
           const bootstrap = (await response.json()) as BootstrapResponse;
           await cacheContext(
             db,
@@ -415,6 +438,7 @@ export function EdgeClient({
             siteName: bootstrap.site_name,
             navigation: bootstrap.navigation,
             firstSyncRequired: false,
+            siteRefusal: null,
             authRequired: false,
             signOutAvailable: sessionReady,
           }));
@@ -422,8 +446,9 @@ export function EdgeClient({
             .connect(new EdgePowerSyncConnector('', () => signedInUserId.current))
             .catch(() => undefined);
           if (navigator.onLine) void refreshWorklistNow(db).catch(() => undefined);
-        } catch {
-          if (!cached) setState((current) => ({ ...current, firstSyncRequired: true }));
+        } catch (error) {
+          if (!(error instanceof SiteRefusedError) && !cached)
+            setState((current) => ({ ...current, firstSyncRequired: true }));
         }
 
         // Story 1.13: one watch over both the outbox and the local-only retention table.
@@ -708,6 +733,7 @@ export function EdgeClient({
       role={state.role}
       syncState={state.syncState}
       firstSyncRequired={state.firstSyncRequired}
+      siteRefusal={state.siteRefusal}
       failures={state.failures}
       navigation={state.navigation}
       pendingCount={state.pendingCount}

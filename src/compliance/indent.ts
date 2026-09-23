@@ -369,26 +369,9 @@ async function applyIndentRaised(
   await recomputeIndentEstimatedValue(indentId, client);
 
   if (duplicateOf) {
-    // Audit trail of the hold, committed atomically with the raise (same client/transaction).
-    await persistEvent(
-      {
-        stream_type: 'procurement',
-        stream_id: indentId,
-        event_type: 'indent.duplicate_flagged',
-        payload: {
-          indent_id: indentId,
-          duplicate_of_indent_id: duplicateOf,
-        },
-        metadata: {
-          correlation_id: envelope.metadata.correlation_id ?? randomUUID(),
-          causation_id: eventId,
-          actor: envelope.metadata.actor,
-          occurred_at: occurredAt,
-        },
-      },
-      undefined,
-      client,
-    );
+    // The indent.duplicate_flagged audit event is written by recordIndentDuplicateFlag AFTER this
+    // raise is inserted: written here it took version 1 of the new stream first, and a device
+    // capture (which always declares event_version 1) was refused STREAM_CONFLICT.
 
     // AC 3: informational duplicate-hold notice to the requester. Plain emitNotification - it
     // never throws, so the offline-synced capture can never be lost to a notification failure.
@@ -408,6 +391,44 @@ async function applyIndentRaised(
       occurred_at: occurredAt,
     });
   }
+}
+
+/**
+ * Writes the indent.duplicate_flagged audit event of a held raise, in the raise's transaction,
+ * AFTER the raise itself is inserted (persistEvent calls it once the envelope's row exists), so
+ * the raise keeps the version it declared and the flag follows it in the stream. Does nothing for
+ * any other event, for a raise that was not held, or for an idempotent replay (the indent row was
+ * created by an earlier event, not this one).
+ */
+export async function recordIndentDuplicateFlag(
+  envelope: EventEnvelope,
+  client: PoolClient,
+  eventId: string,
+): Promise<void> {
+  if (envelope.stream_type !== 'procurement' || envelope.event_type !== 'indent.raised') return;
+  const held = await client.query(
+    `SELECT indent_id, duplicate_of_indent_id FROM indent
+     WHERE source_event_id = $1 AND duplicate_of_indent_id IS NOT NULL`,
+    [eventId],
+  );
+  const row = held.rows[0] as { indent_id: string; duplicate_of_indent_id: string } | undefined;
+  if (!row) return;
+  await persistEvent(
+    {
+      stream_type: 'procurement',
+      stream_id: row.indent_id,
+      event_type: 'indent.duplicate_flagged',
+      payload: { indent_id: row.indent_id, duplicate_of_indent_id: row.duplicate_of_indent_id },
+      metadata: {
+        correlation_id: envelope.metadata.correlation_id ?? randomUUID(),
+        causation_id: eventId,
+        actor: envelope.metadata.actor,
+        occurred_at: envelope.metadata.occurred_at,
+      },
+    },
+    undefined,
+    client,
+  );
 }
 
 async function applyIndentDuplicateFlagged(

@@ -108,7 +108,11 @@ import {
   applyCrossDockTaskCompletedProjection,
 } from '../compliance/cross-dock.js';
 import { assertSupplierShape, applySupplierProjection } from '../compliance/supplier.js';
-import { assertIndentShape, applyIndentProjection } from '../compliance/indent.js';
+import {
+  assertIndentShape,
+  applyIndentProjection,
+  recordIndentDuplicateFlag,
+} from '../compliance/indent.js';
 import {
   assertPurchaseOrderShape,
   applyPurchaseOrderProjection,
@@ -1378,6 +1382,11 @@ export async function persistEvent(
     const persisted = mapRowToEvent(result.rows[0]!);
 
     await assertLocationInvariant(envelope, persisted, client);
+
+    // Story 4.3: a held indent raise gets its duplicate_flagged audit event only now, after the
+    // raise holds its own version (a device capture declares version 1; written earlier by the
+    // applier the flag took it and the capture was refused STREAM_CONFLICT, found 2026-09-23).
+    await recordIndentDuplicateFlag(envelope, client, eventId);
 
     if (auditCtx) {
       // http_status comes from the caller (201 for POST-created resources, 200 for PUT/PATCH

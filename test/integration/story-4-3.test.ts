@@ -524,6 +524,45 @@ describe('Story 4.3 Purchase Requisition and Indent Loop Integration Tests', () 
     assert.strictEqual((confirm.body['indent'] as Record<string, unknown>)['status'], 'raised');
   });
 
+  it('AC3: a device duplicate that declares event_version 1 is held, not refused STREAM_CONFLICT', async () => {
+    // The edge outbox always declares event_version 1 for a new stream
+    // (edge/src/capture/outbox-event.ts). Found by the simulated pilot on staging 2026-09-23: the
+    // duplicate-flag audit event took version 1 first and the capture was refused 409.
+    const sku = `SKU-43-OFFV1-${run}`;
+    const online = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/indents',
+      raiseBody(sku),
+      requesterHeaders,
+    );
+    assert.strictEqual(online.status, 201, JSON.stringify(online.body));
+
+    const heldId = randomUUID();
+    const synced = await makeRequest(
+      port,
+      'POST',
+      '/api/v1/edge/events',
+      { ...edgeRaiseEnvelope(sku, heldId, randomUUID()), event_version: 1 },
+      requesterHeaders,
+    );
+    assert.strictEqual(synced.status, 201, JSON.stringify(synced.body));
+
+    const stream = await getPool().query(
+      `SELECT event_type, event_version FROM domain_events WHERE stream_id = $1 ORDER BY event_version`,
+      [heldId],
+    );
+    assert.deepStrictEqual(
+      stream.rows.map((r) => [r['event_type'], r['event_version']]),
+      [
+        ['indent.raised', 1],
+        ['indent.duplicate_flagged', 2],
+      ],
+    );
+    const row = await getPool().query('SELECT status FROM indent WHERE indent_id = $1', [heldId]);
+    assert.strictEqual(row.rows[0]!['status'], 'pending-confirmation');
+  });
+
   it('AC3: a held indent can be withdrawn by the requester instead', async () => {
     const sku = `SKU-43-OFFWD-${run}`;
     const online = await makeRequest(

@@ -1,0 +1,20 @@
+IMS staging daily check  2026-09-23 10:16 IST
+
+OK    stack      6 containers running
+OK    events     726 total, 100 in last 24 h
+            notification.created 18
+            goods.received 8
+            putaway.completed 6
+            production_order.material_issued 6
+            pick_line.confirmed 4
+WARN  refused    2 open refused captures (department head to resolve)
+FAIL  backup     newest nightly is 55 h old: ims-basebackup-202609210230-nightly.tar.gz
+FAIL  backuplog  /bin/sh: 1: /opt/ims/deploy/backup/staging-basebackup.sh: Permission denied
+            17 labelled backups kept (never rotated; they also pin the WAL archive)
+OK    disk       79% used, 41G free, WAL archive 13G
+OK    sync       slot powersync_2_5d93 active, behind by 0.2 MB
+WARN  tasks      open tasks with nobody assigned (type, count, oldest in hours):
+            putaway 7 36
+            4 QC inspection tasks not yet inspected (QC tasks have no assignee field)
+
+RESULT: FAIL, act before users start

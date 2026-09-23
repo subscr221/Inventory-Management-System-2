@@ -1,0 +1,510 @@
+{
+  "config": {
+    "argv": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "D:\\WINCODE\\Inventory Management System_2\\node_modules\\@playwright\\test\\cli.js",
+      "test",
+      "-c",
+      "playwright.staging.config.ts"
+    ],
+    "configFile": "D:\\WINCODE\\Inventory Management System_2\\edge\\playwright.staging.config.ts",
+    "rootDir": "D:/WINCODE/Inventory Management System_2/edge/test/staging",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "D:/WINCODE/Inventory Management System_2/_bmad-output/pilot-sim/playwright/test-results",
+        "repeatEach": 1,
+        "retries": 1,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "",
+        "name": "",
+        "testDir": "D:/WINCODE/Inventory Management System_2/edge/test/staging",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 60000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "html",
+        {
+          "outputFolder": "D:\\WINCODE\\Inventory Management System_2\\_bmad-output\\pilot-sim\\playwright\\html",
+          "open": "never"
+        }
+      ],
+      [
+        "json",
+        {
+          "outputFile": "D:\\WINCODE\\Inventory Management System_2\\_bmad-output\\pilot-sim\\playwright\\results.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "department-head.spec.ts",
+      "file": "department-head.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "subscr reviews refused captures and resolves one captured by someone else",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [
+                {
+                  "type": "resolved",
+                  "description": "Refused on Sep 23, 2026, 1:01 PM Captured by 69fc05a8-d622-43af-9d7f-f5724a5607e6 (procurement_officer) Device 71ebeb74-85ad-477b-802b-622993cecf2d Capture type indent.raised (procurement) Refused because This event conflicts with the latest central state. (STREAM_CONFLICT)"
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 7907,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-23T05:01:57.277Z",
+                  "annotations": [
+                    {
+                      "type": "resolved",
+                      "description": "Refused on Sep 23, 2026, 1:01 PM Captured by 69fc05a8-d622-43af-9d7f-f5724a5607e6 (procurement_officer) Device 71ebeb74-85ad-477b-802b-622993cecf2d Capture type indent.raised (procurement) Refused because This event conflicts with the latest central state. (STREAM_CONFLICT)"
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "d56ecd2c40b4bce74155-9675320486984da0db4b",
+          "file": "department-head.spec.ts",
+          "line": 7,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "title": "floor-staff.spec.ts",
+      "file": "floor-staff.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "indent1 raises a requisition for a pilot SKU and it syncs",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [
+                {
+                  "type": "sku",
+                  "description": "SEAL-35MM"
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 9042,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-23T05:02:05.263Z",
+                  "annotations": [
+                    {
+                      "type": "sku",
+                      "description": "SEAL-35MM"
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "bcb3f9d010a88f2b84ac-bfe4e1f0522332c248b1",
+          "file": "floor-staff.spec.ts",
+          "line": 55,
+          "column": 1
+        },
+        {
+          "title": "indent1 repeats a requisition for the same SKU; it is held for confirmation, not refused",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [
+                {
+                  "type": "fail",
+                  "description": "DEFECT: repeat offline indent refused with STREAM_CONFLICT instead of duplicate hold",
+                  "location": {
+                    "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\floor-staff.spec.ts",
+                    "line": 74,
+                    "column": 8
+                  }
+                }
+              ],
+              "expectedStatus": "failed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 27920,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoHaveText\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nLocator:  locator('.sync-counts > div').filter({ has: locator('dt').filter({ hasText: 'Needs attention' }) }).locator('dd')\nExpected: \u001b[32m\"0\"\u001b[39m\nReceived: \u001b[31m\"1\"\u001b[39m\nTimeout:  20000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveText\" with timeout 20000ms\u001b[22m\n\u001b[2m  - waiting for locator('.sync-counts > div').filter({ has: locator('dt').filter({ hasText: 'Needs attention' }) }).locator('dd')\u001b[22m\n\u001b[2m    43 × locator resolved to <dd>1</dd>\u001b[22m\n\u001b[2m       - unexpected value \"1\"\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoHaveText\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nLocator:  locator('.sync-counts > div').filter({ has: locator('dt').filter({ hasText: 'Needs attention' }) }).locator('dd')\nExpected: \u001b[32m\"0\"\u001b[39m\nReceived: \u001b[31m\"1\"\u001b[39m\nTimeout:  20000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveText\" with timeout 20000ms\u001b[22m\n\u001b[2m  - waiting for locator('.sync-counts > div').filter({ has: locator('dt').filter({ hasText: 'Needs attention' }) }).locator('dd')\u001b[22m\n\u001b[2m    43 × locator resolved to <dd>1</dd>\u001b[22m\n\u001b[2m       - unexpected value \"1\"\u001b[22m\n\n    at expectOutboxDrained (D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\sync.ts:18:50)\n    at D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\floor-staff.spec.ts:86:3",
+                    "location": {
+                      "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\sync.ts",
+                      "column": 50,
+                      "line": 18
+                    },
+                    "snippet": "\u001b[90m   at \u001b[39msync.ts:18\n\n\u001b[0m \u001b[90m 16 |\u001b[39m   \u001b[36mif\u001b[39m (\u001b[36mnew\u001b[39m \u001b[33mURL\u001b[39m(page\u001b[33m.\u001b[39murl())\u001b[33m.\u001b[39mpathname \u001b[33m!==\u001b[39m \u001b[32m'/'\u001b[39m) \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mgoto(\u001b[32m'/'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 17 |\u001b[39m   \u001b[36mawait\u001b[39m expect(counter(page\u001b[33m,\u001b[39m \u001b[32m'Pending sync'\u001b[39m))\u001b[33m.\u001b[39mtoHaveText(\u001b[32m'0'\u001b[39m\u001b[33m,\u001b[39m { timeout })\u001b[33m;\u001b[39m\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 18 |\u001b[39m   \u001b[36mawait\u001b[39m expect(counter(page\u001b[33m,\u001b[39m \u001b[32m'Needs attention'\u001b[39m))\u001b[33m.\u001b[39mtoHaveText(\u001b[32m'0'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m    |\u001b[39m                                                  \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 19 |\u001b[39m   \u001b[36mawait\u001b[39m expect(page\u001b[33m.\u001b[39mgetByRole(\u001b[32m'heading'\u001b[39m\u001b[33m,\u001b[39m { name\u001b[33m:\u001b[39m \u001b[32m'Sync failed - needs attention'\u001b[39m }))\u001b[33m.\u001b[39mtoHaveCount(\u001b[35m0\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 20 |\u001b[39m   \u001b[36mawait\u001b[39m expect(syncBadge(page))\u001b[33m.\u001b[39mnot\u001b[33m.\u001b[39mtoContainText(\u001b[32m'Sync Error'\u001b[39m)\u001b[33m;\u001b[39m\n \u001b[90m 21 |\u001b[39m }\u001b[0m"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\sync.ts",
+                        "column": 50,
+                        "line": 18
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoHaveText\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nLocator:  locator('.sync-counts > div').filter({ has: locator('dt').filter({ hasText: 'Needs attention' }) }).locator('dd')\nExpected: \u001b[32m\"0\"\u001b[39m\nReceived: \u001b[31m\"1\"\u001b[39m\nTimeout:  20000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveText\" with timeout 20000ms\u001b[22m\n\u001b[2m  - waiting for locator('.sync-counts > div').filter({ has: locator('dt').filter({ hasText: 'Needs attention' }) }).locator('dd')\u001b[22m\n\u001b[2m    43 × locator resolved to <dd>1</dd>\u001b[22m\n\u001b[2m       - unexpected value \"1\"\u001b[22m\n\n\n   at sync.ts:18\n\n  16 |   if (new URL(page.url()).pathname !== '/') await page.goto('/');\n  17 |   await expect(counter(page, 'Pending sync')).toHaveText('0', { timeout });\n> 18 |   await expect(counter(page, 'Needs attention')).toHaveText('0');\n     |                                                  ^\n  19 |   await expect(page.getByRole('heading', { name: 'Sync failed - needs attention' })).toHaveCount(0);\n  20 |   await expect(syncBadge(page)).not.toContainText('Sync Error');\n  21 | }\n    at expectOutboxDrained (D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\sync.ts:18:50)\n    at D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\floor-staff.spec.ts:86:3"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-23T05:02:14.310Z",
+                  "annotations": [
+                    {
+                      "type": "fail",
+                      "description": "DEFECT: repeat offline indent refused with STREAM_CONFLICT instead of duplicate hold",
+                      "location": {
+                        "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\floor-staff.spec.ts",
+                        "line": 74,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "D:\\WINCODE\\Inventory Management System_2\\_bmad-output\\pilot-sim\\playwright\\test-results\\floor-staff-indent1-repeat-d4b23-or-confirmation-not-refused\\error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\sync.ts",
+                    "column": 50,
+                    "line": 18
+                  }
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "bcb3f9d010a88f2b84ac-ff1d6eb80a0281f71abf",
+          "file": "floor-staff.spec.ts",
+          "line": 67,
+          "column": 1
+        },
+        {
+          "title": "maint1 reports a fault on a pack asset and it syncs",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 9319,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-23T05:02:42.238Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "bcb3f9d010a88f2b84ac-0657a80fa228838f6742",
+          "file": "floor-staff.spec.ts",
+          "line": 89,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "title": "read-only-roles.spec.ts",
+      "file": "read-only-roles.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "accounts@ancorlabs.org signs in, sees their name, signs out to Keycloak",
+          "ok": true,
+          "tags": [
+            "ancorlabs.org"
+          ],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [
+                {
+                  "type": "fail",
+                  "description": "DEFECT: bootstrap 403 EDGE_NO_CONCRETE_SITE shows placeholder identity in header",
+                  "location": {
+                    "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\read-only-roles.spec.ts",
+                    "line": 19,
+                    "column": 10
+                  }
+                }
+              ],
+              "expectedStatus": "failed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 41364,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\\.org) ·/ })\nExpected: visible\nTimeout: 30000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 30000ms\u001b[22m\n\u001b[2m  - waiting for locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\\.org) ·/ })\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\\.org) ·/ })\nExpected: visible\nTimeout: 30000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 30000ms\u001b[22m\n\u001b[2m  - waiting for locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\\.org) ·/ })\u001b[22m\n\n    at signIn (D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\auth.ts:136:22)\n    at D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\read-only-roles.spec.ts:23:5",
+                    "location": {
+                      "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\auth.ts",
+                      "column": 22,
+                      "line": 136
+                    },
+                    "snippet": "\u001b[90m   at \u001b[39mauth.ts:136\n\n\u001b[0m \u001b[90m 134 |\u001b[39m     })\u001b[33m;\u001b[39m\n \u001b[90m 135 |\u001b[39m   }\n\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 136 |\u001b[39m   \u001b[36mawait\u001b[39m expect(name)\u001b[33m.\u001b[39mtoBeVisible({ timeout\u001b[33m:\u001b[39m \u001b[35m30\u001b[39m_000 })\u001b[33m;\u001b[39m\n \u001b[90m     |\u001b[39m                      \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n \u001b[90m 137 |\u001b[39m\n \u001b[90m 138 |\u001b[39m   fs\u001b[33m.\u001b[39mmkdirSync(\u001b[33mAUTH_DIR\u001b[39m\u001b[33m,\u001b[39m { recursive\u001b[33m:\u001b[39m \u001b[36mtrue\u001b[39m })\u001b[33m;\u001b[39m\n \u001b[90m 139 |\u001b[39m   \u001b[36mawait\u001b[39m page\u001b[33m.\u001b[39mcontext()\u001b[33m.\u001b[39mstorageState({ path\u001b[33m:\u001b[39m authFile(email) })\u001b[33m;\u001b[39m\u001b[0m"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\auth.ts",
+                        "column": 22,
+                        "line": 136
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\\.org) ·/ })\nExpected: visible\nTimeout: 30000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 30000ms\u001b[22m\n\u001b[2m  - waiting for locator('header .edge-brand p').filter({ hasText: /^(Finance Controller|accounts@ancorlabs\\.org) ·/ })\u001b[22m\n\n\n   at auth.ts:136\n\n  134 |     });\n  135 |   }\n> 136 |   await expect(name).toBeVisible({ timeout: 30_000 });\n      |                      ^\n  137 |\n  138 |   fs.mkdirSync(AUTH_DIR, { recursive: true });\n  139 |   await page.context().storageState({ path: authFile(email) });\n    at signIn (D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\auth.ts:136:22)\n    at D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\read-only-roles.spec.ts:23:5"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-23T05:02:51.576Z",
+                  "annotations": [
+                    {
+                      "type": "fail",
+                      "description": "DEFECT: bootstrap 403 EDGE_NO_CONCRETE_SITE shows placeholder identity in header",
+                      "location": {
+                        "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\read-only-roles.spec.ts",
+                        "line": 19,
+                        "column": 10
+                      }
+                    }
+                  ],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "D:\\WINCODE\\Inventory Management System_2\\_bmad-output\\pilot-sim\\playwright\\test-results\\read-only-roles-accounts-a-88d87--name-signs-out-to-Keycloak\\error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "D:\\WINCODE\\Inventory Management System_2\\edge\\test\\staging\\auth.ts",
+                    "column": 22,
+                    "line": 136
+                  }
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "7db608b31338a46871b6-9e26cc9ad8d517adb899",
+          "file": "read-only-roles.spec.ts",
+          "line": 15,
+          "column": 3
+        },
+        {
+          "title": "anupam@ancorlabs.org signs in, sees their name, signs out to Keycloak",
+          "ok": true,
+          "tags": [
+            "ancorlabs.org"
+          ],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 15686,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-23T05:03:32.949Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "7db608b31338a46871b6-cfa81ffa2378e111a9f5",
+          "file": "read-only-roles.spec.ts",
+          "line": 15,
+          "column": 3
+        },
+        {
+          "title": "info@ancorlabs.org signs in, sees their name, signs out to Keycloak",
+          "ok": true,
+          "tags": [
+            "ancorlabs.org"
+          ],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 17017,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-23T05:03:48.641Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "7db608b31338a46871b6-260fd5851f7bf1acff76",
+          "file": "read-only-roles.spec.ts",
+          "line": 15,
+          "column": 3
+        },
+        {
+          "title": "cmf_supervisor@ancorlabs.org signs in, sees their name, signs out to Keycloak",
+          "ok": true,
+          "tags": [
+            "ancorlabs.org"
+          ],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 16306,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-23T05:04:05.664Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "7db608b31338a46871b6-e5466537fc583a57d0e3",
+          "file": "read-only-roles.spec.ts",
+          "line": 15,
+          "column": 3
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-09-23T05:01:57.012Z",
+    "duration": 145026.49599999998,
+    "expected": 8,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

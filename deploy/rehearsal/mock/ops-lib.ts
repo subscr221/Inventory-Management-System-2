@@ -88,7 +88,7 @@ export interface Ctx {
 
 // ---------------------------------------------------------------- result table
 
-interface Line {
+export interface Line {
   name: string;
   result: 'PASS' | 'FAIL' | 'SKIP';
   seconds: number;
@@ -125,6 +125,9 @@ export async function flow(steps: [string, () => Promise<string | void>][]): Pro
     else if (!(await step(name, fn))) failed = name;
   }
 }
+
+/** A copy of every recorded line, for drivers that write a machine-readable report. */
+export const results = (): Line[] => lines.map((l) => ({ ...l }));
 
 export function printTable(title: string): boolean {
   const pad = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '~' : s.padEnd(n));

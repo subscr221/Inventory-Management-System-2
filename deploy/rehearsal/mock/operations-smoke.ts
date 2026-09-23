@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   HERE,
   ROOT,
@@ -43,7 +44,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const nextYear = () => `${new Date().getFullYear() + 1}-12-31`;
 
 /** Bins that hold available stock of a SKU at this site, richest first (GET /api/v1/stock/:sku). */
-async function stockOf(ctx: Ctx, sku: string, who: string): Promise<Json[]> {
+export async function stockOf(ctx: Ctx, sku: string, who: string): Promise<Json[]> {
   const res = must(
     await ctx.request(
       'GET',
@@ -66,7 +67,7 @@ async function stockOf(ctx: Ctx, sku: string, who: string): Promise<Json[]> {
     );
 }
 
-async function inbound(ctx: Ctx): Promise<void> {
+export async function inbound(ctx: Ctx): Promise<void> {
   const po = ctx.ops['operations_po'] as string;
   const dock = ctx.ops['receiving_dock'] as string;
   const bin = ctx.ops['putaway_bin'] as string;
@@ -135,7 +136,13 @@ async function inbound(ctx: Ctx): Promise<void> {
       'inbound: weighbridge (net within the PO line band)',
       async () => {
         // The band is the ordered quantity of the weighed PO line: line 2, the coil in KG.
-        const orders = packJson(ctx, 'erp-sync-purchase-orders.json')['purchase_orders'] as {
+        // A driver that fed today's PO itself (deploy/pilot/sim/pilot-day.ts) leaves it in
+        // ops.operations_po_snapshot; otherwise the pack's snapshot holds the PO.
+        const orders = (
+          ctx.ops['operations_po_snapshot']
+            ? [ctx.ops['operations_po_snapshot']]
+            : packJson(ctx, 'erp-sync-purchase-orders.json')['purchase_orders']
+        ) as {
           po_number_ext: string;
           lines: { line_no: number; ordered_qty: number }[];
         }[];
@@ -351,7 +358,7 @@ async function inbound(ctx: Ctx): Promise<void> {
   ]);
 }
 
-async function outbound(ctx: Ctx): Promise<void> {
+export async function outbound(ctx: Ctx): Promise<void> {
   let lines: Json[] = [];
   let taskIds: string[] = [];
   const picked: { orderId: string; sku: string; lotId: string | null; qty: string }[] = [];
@@ -375,18 +382,20 @@ async function outbound(ctx: Ctx): Promise<void> {
         );
         // The list does not carry the dispatch-order id pick generation needs
         // (src/api/v1/erp-projections.ts:210): locally it is read from the table, remotely from the
-        // file seed.mjs --sales-order-ids wrote.
+        // file seed.mjs --sales-order-ids wrote, or from ops.sales_order_ids a driver filled.
         if (open.some((l) => !l['id'])) {
-          const known = ctx.sql
-            ? await ctx.sql(
-                `SELECT id, so_number_ext, line_no FROM erp_sales_order WHERE ship_from_site_code_ext = $1`,
-                [ctx.siteCode],
-              )
-            : argOf('--sales-order-ids', '')
-              ? ((JSON.parse(readFileSync(argOf('--sales-order-ids', ''), 'utf8')) as Json)[
-                  'sales_orders'
-                ] as Json[])
-              : null;
+          const known = ctx.ops['sales_order_ids']
+            ? (ctx.ops['sales_order_ids'] as Json[])
+            : ctx.sql
+              ? await ctx.sql(
+                  `SELECT id, so_number_ext, line_no FROM erp_sales_order WHERE ship_from_site_code_ext = $1`,
+                  [ctx.siteCode],
+                )
+              : argOf('--sales-order-ids', '')
+                ? ((JSON.parse(readFileSync(argOf('--sales-order-ids', ''), 'utf8')) as Json)[
+                    'sales_orders'
+                  ] as Json[])
+                : null;
           if (!known)
             throw new Error(
               'GET /api/v1/erp/sales-orders returns no id; pass --sales-order-ids <file written by seed.mjs --sales-order-ids>',
@@ -618,7 +627,7 @@ async function outbound(ctx: Ctx): Promise<void> {
   ]);
 }
 
-async function production(ctx: Ctx): Promise<void> {
+export async function production(ctx: Ctx): Promise<void> {
   const plan = ctx.ops['production'] as { output_sku: string; order_quantity: string };
   let orderId = '';
   let bom: Awaited<ReturnType<typeof releasedBomOf>> | null = null;
@@ -796,7 +805,7 @@ async function production(ctx: Ctx): Promise<void> {
   ]);
 }
 
-async function indent(ctx: Ctx): Promise<void> {
+export async function indent(ctx: Ctx): Promise<void> {
   let indentId = '';
   let approverId: string | null = null;
   await flow([
@@ -865,7 +874,7 @@ async function indent(ctx: Ctx): Promise<void> {
   ]);
 }
 
-async function maintenance(ctx: Ctx): Promise<void> {
+export async function maintenance(ctx: Ctx): Promise<void> {
   const asset = (ctx.ops['assets'] as Json[])[0]!;
   let faultId = '';
   let workOrderId = '';
@@ -959,7 +968,7 @@ async function maintenance(ctx: Ctx): Promise<void> {
 }
 
 /** After go-live every lot-controlled stock row must have its lot in lot_master, or FEFO skips it. Local only. */
-async function lotMasterCheck(ctx: Ctx): Promise<void> {
+export async function lotMasterCheck(ctx: Ctx): Promise<void> {
   if (!ctx.sql) return;
   await step('check: every lot in stock exists in lot_master (FEFO)', async () => {
     const rows = await ctx.sql!(
@@ -978,55 +987,60 @@ async function lotMasterCheck(ctx: Ctx): Promise<void> {
   });
 }
 
-let ok = false;
-let crashed = false;
-let ctx: Ctx | null = null;
-try {
-  let siteCode = argOf('--site-code', '');
-  const remote = hasFlag('--remote');
-  // The pack's job-work orders are migrated in with no kit BOM. Local mode boots the app itself,
-  // so it takes the pilot setting staging runs with (owner ruling 2026-09-22) unless the shell
-  // already chose one; remote mode drives whatever the stack was started with.
-  if (!remote && process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'] === undefined)
-    process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'] = 'true';
-  if (!remote && !siteCode) {
-    const out = execFileSync(
-      process.execPath,
-      [
-        '--import',
-        'tsx',
-        join(HERE, 'rehearse.ts'),
-        '--seed',
-        argOf('--seed', '42'),
-        '--lines',
-        argOf('--lines', '300'),
-      ],
-      { cwd: ROOT, env: process.env, encoding: 'utf8' },
+async function main(): Promise<void> {
+  let ok = false;
+  let crashed = false;
+  let ctx: Ctx | null = null;
+  try {
+    let siteCode = argOf('--site-code', '');
+    const remote = hasFlag('--remote');
+    // The pack's job-work orders are migrated in with no kit BOM. Local mode boots the app itself,
+    // so it takes the pilot setting staging runs with (owner ruling 2026-09-22) unless the shell
+    // already chose one; remote mode drives whatever the stack was started with.
+    if (!remote && process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'] === undefined)
+      process.env['JOBWORK_RECEIPT_ALLOW_NO_KIT_BOM'] = 'true';
+    if (!remote && !siteCode) {
+      const out = execFileSync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          join(HERE, 'rehearse.ts'),
+          '--seed',
+          argOf('--seed', '42'),
+          '--lines',
+          argOf('--lines', '300'),
+        ],
+        { cwd: ROOT, env: process.env, encoding: 'utf8' },
+      );
+      siteCode = /Planted defects \((MOCK-[A-Z0-9]+)\)/.exec(out)?.[1] ?? '';
+      console.log(
+        out
+          .split('\n')
+          .filter((l) => /^(PASS|FAIL): /.test(l))
+          .join('\n') + `  (rehearse.ts, site ${siteCode})`,
+      );
+    }
+    ctx = await boot(
+      remote ? null : { siteCode, pack: argOf('--pack', join(HERE, 'out', siteCode)) },
     );
-    siteCode = /Planted defects \((MOCK-[A-Z0-9]+)\)/.exec(out)?.[1] ?? '';
-    console.log(
-      out
-        .split('\n')
-        .filter((l) => /^(PASS|FAIL): /.test(l))
-        .join('\n') + `  (rehearse.ts, site ${siteCode})`,
-    );
+    if (!remote || hasFlag('--with-setup')) await setupOperations(ctx);
+    await lotMasterCheck(ctx);
+    await inbound(ctx);
+    await outbound(ctx);
+    await production(ctx);
+    await indent(ctx);
+    await maintenance(ctx);
+  } catch (error) {
+    crashed = true;
+    console.error(`\nstopped: ${(error as Error).stack ?? (error as Error).message}`);
   }
-  ctx = await boot(
-    remote ? null : { siteCode, pack: argOf('--pack', join(HERE, 'out', siteCode)) },
+  ok = printTable(
+    `Operations smoke test (${ctx?.siteCode ?? '?'}, ${ctx?.remote ? 'remote' : 'local'})`,
   );
-  if (!remote || hasFlag('--with-setup')) await setupOperations(ctx);
-  await lotMasterCheck(ctx);
-  await inbound(ctx);
-  await outbound(ctx);
-  await production(ctx);
-  await indent(ctx);
-  await maintenance(ctx);
-} catch (error) {
-  crashed = true;
-  console.error(`\nstopped: ${(error as Error).stack ?? (error as Error).message}`);
+  await ctx?.close();
+  process.exit(ok && !crashed ? 0 : 1);
 }
-ok = printTable(
-  `Operations smoke test (${ctx?.siteCode ?? '?'}, ${ctx?.remote ? 'remote' : 'local'})`,
-);
-await ctx?.close();
-process.exit(ok && !crashed ? 0 : 1);
+
+// Runs only as a script; deploy/pilot/sim/pilot-day.ts imports the flows above.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) await main();

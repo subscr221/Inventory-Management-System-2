@@ -24,6 +24,9 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^Frontline$/,
   /^main-content$/,
   /^first-sync-heading$/,
+  // The site-assignment refusal card (simulated pilot 2026-09-23).
+  /^site-refusal-heading$/,
+  /^(no_site|ambiguous_site|unavailable)$/,
   /^ready-heading$/,
   /^dashboard$/,
   /^frontline$/,
