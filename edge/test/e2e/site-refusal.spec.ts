@@ -1,11 +1,11 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 // Found by the simulated pilot on staging 2026-09-23: an account with no concrete site got
 // bootstrap 403 EDGE_NO_CONCRETE_SITE and the header showed a made-up "Raman Gate Officer" at
 // "Pilot Gate Site" with "Waiting for first sync". The shell must say what is actually wrong.
 
 async function refuseBootstrap(
-  page: import('@playwright/test').Page,
+  page: Page,
   status: number,
   code: string,
 ) {
