@@ -1,9 +1,9 @@
 ---
 name: Inventory Management System_2
 description: Ergonomic, Zoho-familiar operations UI for a multi-site plant inventory platform, one token set across handheld, tablet, desktop and desktop touch.
-status: draft
+status: final
 created: 2026-09-23
-updated: 2026-09-25
+updated: 2026-09-26
 colors:
   accent: '#1E6BC6'
   accent-strong: '#1656A3'
@@ -105,6 +105,10 @@ components:
     backgroundColor: '{colors.surface}'
     borderColor: '{colors.border}'
     rounded: '{rounded.DEFAULT}'
+  match-card:
+    backgroundColor: '{colors.surface}'
+    borderColor: '{colors.border}'
+    rounded: '{rounded.DEFAULT}'
   stepper:
     activeColor: '{colors.accent}'
     doneColor: '{colors.ok}'
@@ -137,7 +141,7 @@ components:
 
 # Inventory Management System_2 Design Spine
 
-This file is the visual spine for the IMS UX run. Every value traces to the decision log (`.memlog.md`) or to the approved mockups under `.working/`. Where a mockup and this spine disagree, this spine wins.
+This file is the visual spine for the IMS UX run. Every value traces to the decision log (`.memlog.md`) or to the approved mockups under `mockups/`. Where a mockup and this spine disagree, this spine wins.
 
 ## Brand & Style
 
@@ -149,7 +153,7 @@ Role decides what a person sees; device decides how it is laid out and operated.
 
 ## Colors
 
-The colour system has three layers: a per-site accent family, a fixed neutral and sidebar shell, and fixed status colours. Mock reference: [colour direction board](.working/color-themes-1.html).
+The colour system has three layers: a per-site accent family, a fixed neutral and sidebar shell, and fixed status colours. Mock reference: [colour direction board](mockups/color-themes-1.html).
 
 ### Per-site accent family
 
@@ -163,7 +167,9 @@ Accent is configurable per site, Zoho style. Each accent is a five-token family:
 
 `accent-on-dark` exists because every base accent fails the 3:1 non-text contrast minimum on `{colors.side}`; Blue reaches only 3.01:1 and the other three fall below 3:1. A lighter tint passes for all four families.
 
-The site presets are listed in the Accent presets table below. The default for CMF-ALIGARH is Ledger Blue. All four pass 4.5:1 for white button text.
+The site presets are listed in Table 1 below. The default for CMF-ALIGARH is Ledger Blue. All four pass 4.5:1 for white button text.
+
+Table 1: Site accent presets
 
 | Preset | accent | accent-strong | accent-soft | accent-on-dark |
 |---|---|---|---|---|
@@ -180,7 +186,9 @@ The navigation sidebar is dark (`{colors.side}` #1B2230), like classic Zoho Book
 
 ### Status colours
 
-Status colours are fixed across sites and never reuse the accent. The Status pairs table below lists each foreground and background pair.
+Status colours are fixed across sites and never reuse the accent. Table 2 lists each foreground and background pair.
+
+Table 2: Status colour pairs
 
 | Meaning | Foreground | Background |
 |---|---|---|
@@ -209,7 +217,9 @@ The mocks also use in-between sizes (11.5px to 15px); they are not tokens and sh
 
 Spacing uses a 4px base: `{spacing.1}` to `{spacing.4}` (4, 8, 12, 16px).
 
-**Density follows device input, not role.** A coarse pointer or small viewport gets touch-roomy density; a fine pointer gets compact density. There are four device classes, shown in the Device classes table below.
+**Density follows device input, not role.** A coarse pointer or small viewport gets touch-roomy density; a fine pointer gets compact density. There are four device classes, shown in Table 3.
+
+Table 3: Device classes
 
 | Class | Navigation | Density | Primary target | Secondary target |
 |---|---|---|---|---|
@@ -218,7 +228,7 @@ Spacing uses a 4px base: `{spacing.1}` to `{spacing.4}` (4, 8, 12, 16px).
 | Desktop | Dark sidebar | Compact | `{spacing.control-compact}` 34px | 34px |
 | Desktop touch (touchscreen PC) | Dark sidebar, 232px, 52px items | Touch-roomy | 56px | 48px |
 
-Gate screens on a desktop use compact density like any desktop. Design small-first: the rugged scanner screen (mocked at 360x640) is the tightest canvas. On handheld, the fallback action next to a scan result (for example Type challan number) stays reachable without scrolling. Mock reference: [gate entry](.working/key-gate-entry.html).
+Gate screens on a desktop use compact density like any desktop. Design small-first: the rugged scanner screen (mocked at 360x640) is the tightest canvas. On handheld, the fallback action next to a scan result (for example Type challan number) stays reachable without scrolling. Mock reference: [gate entry](mockups/key-gate-entry.html).
 
 ## Elevation & Depth
 
@@ -247,15 +257,27 @@ Primary: `{colors.accent}` fill, `{colors.on-accent}` text, `{colors.accent-stro
 
 ### Status pills and chips
 
-Pill shape, `{typography.micro}`, foreground and background from the Status pairs table, always with a text label.
+Pill shape, `{typography.micro}`, foreground and background from Table 2, always with a text label.
 
 ### Scan bar
 
-Always-on-top field on stores and scan-driven screens: surface fill, border, scan icon, `{colors.accent-soft}` focus halo, 48px high in touch density. It accepts camera, hardware trigger and keyboard-wedge input. Mock reference: [stores](.working/key-stores.html).
+Always-on-top field on stores and scan-driven screens: surface fill, border, scan icon, `{colors.accent-soft}` focus halo, 48px high in touch density. It accepts camera, hardware trigger and keyboard-wedge input. Mock reference: [stores](mockups/key-stores.html).
 
 ### Inbox card
 
 Surface card with border and `{rounded.DEFAULT}`: title line in `{typography.label}`, metadata in `{typography.caption}`, a status pill on the right, and one primary action in touch density.
+
+### Match card
+
+Result card for a challan scan: `{colors.surface}` fill, `{colors.border}` border, `{rounded.DEFAULT}`. Matched challan, supplier and PO summary as title in `{typography.label}` with metadata in `{typography.caption}`; the match state uses the status pairs (matched `ok`, no match `warn`). Accept is a primary button and Reject a secondary button; "Scan again" and "Type challan number" sit side by side below and stay visible without scrolling on the 360x640 handheld canvas. Mock reference: [gate entry](mockups/key-gate-entry.html).
+
+### Weighbridge capture
+
+Composes from listed primitives: the "Trucks on site" list uses inbox cards, weigh-in and weigh-out are stepper steps, and the AUTO or MANUAL reading source shows as a status pill (`ok` for AUTO, `warn` for MANUAL) beside the kg value in `{typography.title}`. A tolerance breach shows a banner in the `err` pair; an overdue legal-metrology stamp disables the weigh action with the reason shown. Mock reference: [gate entry](mockups/key-gate-entry.html).
+
+### Counted-qty line and supplier picker
+
+Both compose from listed primitives and carry no bespoke visuals. The counted-qty line renders the tolerance band and the "Excess - returned with vehicle" message in the `warn` pair; the supplier picker is a standard fuzzy-search list with "Unlisted supplier" as a secondary action. Behaviour lives in EXPERIENCE.md Table 3.
 
 ### Stepper
 
@@ -263,7 +285,7 @@ Horizontal step labels: active step in accent, completed steps in `{colors.ok}` 
 
 ### Sync badge
 
-[ASSUMPTION] Pill in the top bar showing connection and sync state using the status pairs (online `ok`, syncing `info`, offline `off`, failed `err`), with a text label.
+Pill in the top bar showing connection and sync state using the status pairs (online `ok`, syncing `info`, offline `off`, failed `err`), with a text label.
 
 ### Bottom nav
 
@@ -275,15 +297,15 @@ Collapsed dark navigation: `{colors.side}` fill, icons in `{colors.side-text}`, 
 
 ### Sidebar
 
-Dark module sidebar: `{colors.side}`, labels `{colors.side-text}`, section captions `{colors.side-muted}`, hover `{colors.side-hover}`, active item with a 3px `{colors.accent-on-dark}` inset bar. In desktop touch it is 232px wide with 52px items and 16px labels. Mock reference: [manager overview](.working/key-desk.html).
+Dark module sidebar: `{colors.side}`, labels `{colors.side-text}`, section captions `{colors.side-muted}`, hover `{colors.side-hover}`, active item with a 3px `{colors.accent-on-dark}` inset bar. In desktop touch it is `{spacing.sidebar-width-touch}` wide with `{spacing.nav-item-touch}` items and `{typography.body-touch}` labels. Mock reference: [manager overview](mockups/key-desk.html).
 
-### Approval-class chips
+### Standing approval chips
 
-Pill chips on requisition lines and the issue screen. Colour pairings below are [ASSUMPTION], lifted from the mocks, not ruled. The **Standing approval** chip carries its reference (for example SA-2026-014) and uses the `ok` pair. The **Self-approval limit** chip shows the amount (Self-approval limit Rs <amount>) and uses the `info` pair. Lines needing department head approval use the `warn` pair. The issue banner and slip state the grant in words, not by colour. Mock references: [requisitions](.working/key-requisitions.html), [approvals](.working/key-approvals.html).
+Pill chips on requisition lines and the issue screen. Colour pairings below are lifted from the mocks and committed (accepted 2026-09-26). The **Standing approval** chip carries its reference (for example SA-2026-014) and uses the `ok` pair. The **Self-approval limit** chip shows the amount (Self-approval limit Rs <amount>) and uses the `info` pair. Lines needing department head approval use the `warn` pair. The issue banner and slip state the grant in words, not by colour. Mock references: [requisitions](mockups/key-requisitions.html), [approvals](mockups/key-approvals.html).
 
 ### Concurrence keys card
 
-Card for a damage case needing both QC and finance ([ASSUMPTION] pill colours not ruled): two key rows (QC, Finance), each with a status pill (pending `warn`, concurred `ok`, disagree `err`) and the decider's name and time. An escalation row to the CEO appears in the `err` pair when the keys disagree. Mock reference: [QC workbench](.working/key-qc.html).
+Card for a damage case needing both QC and finance: two key rows (QC, Finance), each with a status pill (pending `warn`, concurred `ok`, disagree `err`) and the decider's name and time. An escalation row to the CEO appears in the `err` pair when the keys disagree. Mock reference: [QC workbench](mockups/key-qc.html).
 
 ## Do's and Don'ts
 
