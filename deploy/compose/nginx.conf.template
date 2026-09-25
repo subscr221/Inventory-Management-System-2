@@ -84,6 +84,15 @@ server {
         proxy_send_timeout 60s;
     }
 
+    # Static UX design preview (clickable HTML mocks), not the live app. The directory is the
+    # UX_PREVIEW_DIR bind mount; left empty on hosts that do not publish a preview (404s).
+    location /ux-preview/ {
+        alias /usr/share/nginx/ux-preview/;
+        index index.html;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-cache" always;
+    }
+
     location / {
         proxy_pass http://edge;
         proxy_http_version 1.1;

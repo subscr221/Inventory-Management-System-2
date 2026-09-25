@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gate Entry Mock</title>
+<style>
+/*
+  KEY SCREEN: Gate entry (touch-roomy density only)
+  Governing spine sections:
+    EXPERIENCE.md
+      - Key Flows > Gate entry (step order: challan, photo, vehicle, supplier, submit)
+      - Component Patterns: scan sink (always armed), photo capture, supplier picker, sync badge
+      - State Patterns: captured-pending-sync, unlisted supplier
+    DESIGN.md
+      - Density modes (touch-roomy for gate/stores; compact is NOT shown here)
+      - Touch targets (56px frontline floor, primary full-width in bottom third) [ASSUMPTION]
+  Decision source: .memlog.md (2026-09-24). Colors: existing app tokens only, palette not decided.
+  Typeface: Lato is the chosen typeface. It is loaded locally (bundled) in production; this mock
+  does no network font loading and falls back to Segoe UI / Roboto / system-ui when Lato is absent.
+  Review fixes (2026-09-24): no scan toast (match card is the only visible feedback, aria-live
+  region kept); Next on challan step disabled until the challan is resolved; compact challan step
+  so "Type challan number" stays reachable without scrolling on the 360x640 scanner.
+*/
+:root{
+  --primary:#1f47d9; --primary-strong:#1a3ab3;
+  --neutral-50:#f8f9fa; --neutral-100:#f0f2f5; --neutral-500:#6b7280;
+  --neutral-900:#1f2937; --neutral-950:#000000;
+  --success:#10b981; --warning:#f59e0b; --error-strong:#991b1b;
+  --info-strong:#1e40af; --offline:#9ca3af;
+  --touch:56px; /* [ASSUMPTION] frontline floor */
+  --radius:10px;
+  font-family: Lato,"Segoe UI",Roboto,system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--neutral-100);color:var(--neutral-900);font-size:16px;line-height:1.4}
+h1{font-size:20px;margin:0 0 4px}
+.page{padding:16px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.intro{flex:0 0 100%}
+.intro p{margin:0;color:var(--neutral-500)}
+:focus-visible{outline:3px solid var(--primary);outline-offset:2px}
+.btn:focus-visible,.opt:focus-visible{outline:3px solid var(--neutral-950);outline-offset:2px;box-shadow:0 0 0 5px #fff}
+
+/* side panels */
+.side{width:300px;display:flex;flex-direction:column;gap:16px}
+.panel{background:#fff;border:1px solid #d1d5db;border-radius:var(--radius);padding:12px}
+.panel h2{font-size:15px;margin:0 0 8px}
+.panel .btn{margin-bottom:8px}
+.legend{margin:0;padding-left:18px;font-size:13px}
+.legend li{margin-bottom:6px}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;background:var(--warning);color:var(--neutral-950)}
+.tag.dec{background:var(--neutral-100);color:var(--neutral-900);border:1px solid #d1d5db}
+
+/* device frames */
+.device{display:flex;flex-direction:column;gap:6px}
+.device-label{font-size:13px;font-weight:600}
+.device-label span{font-weight:400;color:var(--neutral-500)}
+.bezel{background:var(--neutral-900);border-radius:22px;padding:10px;position:relative}
+.bezel.rugged{border-radius:14px;padding:14px 12px 40px;background:#2b2f36;border:4px solid #f59e0b}
+.trigger-note{position:absolute;left:-8px;top:120px;width:8px;height:60px;background:#f59e0b;border-radius:4px 0 0 4px}
+.trigger-cap{position:absolute;bottom:10px;left:0;right:0;text-align:center;color:#fff;font-size:12px}
+.screen{background:#fff;overflow:hidden;display:flex;flex-direction:column;position:relative}
+.s-scanner{width:360px;height:640px}
+.s-phone{width:412px;height:860px}
+.tablet-wrap{width:400px;height:640px;overflow:hidden;border-radius:22px}
+.tablet-wrap .bezel{transform:scale(.5);transform-origin:0 0;width:820px}
+.s-tablet{width:800px;height:1260px}
+
+/* app chrome */
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:6px;padding:6px 10px;background:var(--neutral-900);color:#fff;font-size:13px;min-height:36px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.12);white-space:nowrap}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.dot.ready{background:var(--success)}
+.dot.off{background:var(--offline)}
+.dot.on{background:var(--success)}
+.titlebar{padding:8px 12px 0;font-weight:700;font-size:17px}
+.stepper{display:flex;gap:4px;padding:8px 12px 10px;list-style:none;margin:0;border-bottom:1px solid #e5e7eb}
+.stepper li{flex:1;text-align:center;font-size:12px;color:var(--neutral-500)}
+.stepper .bar{height:6px;border-radius:3px;background:#e5e7eb;margin-bottom:4px}
+.stepper li.done .bar{background:var(--primary)}
+.stepper li.cur .bar{background:var(--primary)}
+.stepper li.cur{color:var(--neutral-950);font-weight:700}
+.stepper li.done{color:var(--neutral-900)}
+.body{flex:1;overflow:auto;padding:12px}
+.actions{padding:10px 12px 12px;border-top:1px solid #e5e7eb;background:#fff;display:flex;flex-direction:column;gap:8px}
+.q{font-size:20px;font-weight:700;margin:0 0 10px}
+.hint{font-size:14px;color:var(--neutral-500);margin:6px 0}
+
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:var(--touch);border-radius:var(--radius);border:2px solid transparent;font:inherit;font-size:18px;font-weight:700;cursor:pointer;padding:8px 12px;text-align:center}
+.btn.primary{background:var(--primary);color:#fff}
+.btn.primary:hover{background:var(--primary-strong)}
+.btn.primary[disabled]{background:#e5e7eb;color:var(--neutral-500);border-color:#d1d5db;cursor:not-allowed}
+.btn.primary[disabled]:hover{background:#e5e7eb}
+.btn.secondary{background:#fff;color:var(--primary);border-color:var(--primary)}
+.btn.ghost{background:transparent;color:var(--primary);border-color:transparent;text-decoration:underline;font-weight:600;font-size:16px}
+.btn.huge{min-height:96px;font-size:20px}
+.btn.small{min-height:44px;font-size:15px;width:auto}
+.icon{font-size:26px;line-height:1}
+
+.scan-note{display:flex;gap:8px;align-items:center;background:var(--neutral-50);border:1px dashed var(--neutral-500);border-radius:var(--radius);padding:8px;font-size:14px;margin:10px 0}
+.field{margin:10px 0}
+.field label{display:block;font-weight:600;margin-bottom:4px}
+.field input,.field textarea{width:100%;min-height:var(--touch);font:inherit;font-size:20px;padding:8px 12px;border:2px solid var(--neutral-500);border-radius:var(--radius);color:var(--neutral-950);background:#fff}
+.field input.plate{text-transform:uppercase;letter-spacing:2px;font-weight:700;font-size:24px}
+.field input.flag{border-color:var(--warning);background:#fffbeb}
+.field textarea{min-height:80px;font-size:16px}
+
+.chip{border-radius:var(--radius);padding:10px;margin:10px 0;border:2px solid;font-size:15px}
+.chip.match{border-color:var(--success);background:#ecfdf5}
+.chip.warn{border-color:var(--warning);background:#fffbeb}
+.chip.info{border-color:var(--info-strong);background:#eff6ff;color:var(--info-strong)}
+.chip.err{border-color:var(--error-strong);background:#fef2f2;color:var(--error-strong)}
+.chip strong{display:block;font-size:16px;color:var(--neutral-950)}
+.chip .row{display:flex;gap:8px;margin-top:8px}
+.chip .row .btn{flex:1;min-height:var(--touch);font-size:16px}
+/* compact secondary row shown once a match card is present (48px secondary floor) */
+.row2{display:flex;gap:8px;margin:10px 0}
+.row2 .btn{flex:1;min-height:48px;font-size:15px;padding:6px 8px}
+.row2 .icon{font-size:20px}
+
+.shutter{display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px;background:var(--neutral-50);border-radius:var(--radius);border:1px solid #e5e7eb}
+.shutter button{width:120px;height:120px;border-radius:50%;border:6px solid var(--primary);background:#fff;font:inherit;font-weight:700;color:var(--primary);cursor:pointer}
+.thumb{display:flex;gap:12px;align-items:center}
+.paper{width:110px;height:140px;background:#fdf6e3;border:1px solid #d6c9a8;border-radius:4px;padding:8px;font-size:9px;color:#5b4a2a;transform:rotate(-2deg);box-shadow:0 2px 6px rgba(0,0,0,.2);flex:none}
+.paper hr{border:0;border-top:1px solid #cdbf9c;margin:4px 0}
+
+.opts{display:flex;flex-direction:column;gap:6px;margin:8px 0;padding:0;list-style:none}
+.opt{display:block;width:100%;min-height:var(--touch);text-align:left;font:inherit;font-size:17px;padding:8px 12px;border:2px solid #d1d5db;border-radius:var(--radius);background:#fff;color:var(--neutral-950);cursor:pointer}
+.opt small{display:block;color:var(--neutral-500);font-size:13px}
+.opt[aria-pressed="true"]{border-color:var(--primary);background:#eef2ff}
+.opt.unl{border-style:dashed;color:var(--primary);font-weight:700}
+details{border:1px solid #d1d5db;border-radius:var(--radius);margin:12px 0}
+summary{min-height:var(--touch);display:flex;align-items:center;padding:0 12px;font-weight:700;cursor:pointer;color:var(--primary)}
+details .inner{padding:0 12px 8px}
+details .field input{font-size:17px}
+
+.done{text-align:center;padding-top:20px}
+.done .check{width:88px;height:88px;border-radius:50%;border:6px solid var(--success);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;font-size:48px;color:var(--neutral-950)}
+.done h2{font-size:24px;margin:0 0 6px}
+.summary{list-style:none;padding:0;margin:14px 0;text-align:left;font-size:15px;border:1px solid #e5e7eb;border-radius:var(--radius)}
+.summary li{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid #e5e7eb}
+.summary li:last-child{border-bottom:0}
+.summary span:first-child{color:var(--neutral-500)}
+.summary span:last-child{font-weight:600;text-align:right}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* tablet two-column */
+.two{display:flex;flex:1;min-height:0}
+.two .rail{width:260px;border-right:1px solid #e5e7eb;background:var(--neutral-50);padding:12px;overflow:auto}
+.two .rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.two .rail li button{width:100%;min-height:var(--touch);text-align:left;font:inherit;padding:8px 10px;border-radius:var(--radius);border:2px solid #d1d5db;background:#fff;color:var(--neutral-900);cursor:pointer}
+.two .rail li.cur button{border-color:var(--primary);font-weight:700}
+.two .rail li button small{display:block;color:var(--neutral-500);font-size:13px}
+.two .main{flex:1;display:flex;flex-direction:column;min-width:0}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="intro">
+    <h1>Gate entry - key screen mock</h1>
+    <p>One shared flow rendered in three device frames. Tap inside any frame or use Demo controls; all frames stay in step. Touch-roomy density only.</p>
+  </div>
+
+  <div class="device">
+    <div class="device-label">Android rugged scanner <span>360 x 640 - hardware trigger</span></div>
+    <div class="bezel rugged"><div class="trigger-note" aria-hidden="true"></div>
+      <div class="screen s-scanner" id="f-scanner" data-layout="single"></div>
+      <div class="trigger-cap">Hardware trigger (side) - keyboard-wedge</div>
+    </div>
+  </div>
+
+  <div class="device">
+    <div class="device-label">Android phone <span>412 x 860</span></div>
+    <div class="bezel"><div class="screen s-phone" id="f-phone" data-layout="single"></div></div>
+  </div>
+
+  <div class="device">
+    <div class="device-label">Rugged tablet <span>800 x 1280 shown at 50% - two-column</span></div>
+    <div class="tablet-wrap"><div class="bezel"><div class="screen s-tablet" id="f-tablet" data-layout="two"></div></div></div>
+  </div>
+
+  <div class="side">
+    <section class="panel" aria-labelledby="demo-h">
+      <h2 id="demo-h">Demo controls</h2>
+      <button class="btn secondary" data-demo="qr">Simulate QR challan</button>
+      <button class="btn secondary" data-demo="hand">Simulate handwritten challan</button>
+      <button class="btn secondary" data-demo="trigger">Press hardware trigger (any step)</button>
+      <button class="btn secondary" data-demo="offline" id="offline-btn">Toggle offline (now: offline)</button>
+      <button class="btn ghost" data-demo="reset">Reset flow</button>
+    </section>
+    <section class="panel" aria-labelledby="leg-h">
+      <h2 id="leg-h">Legend - decisions rendered</h2>
+      <ol class="legend">
+        <li><span class="tag dec">DECISION</span> Ergonomic over modern; small-first, scanner is the tightest canvas; tablet goes two-column.</li>
+        <li><span class="tag dec">DECISION</span> Step order: challan first, then photo, then vehicle, then supplier, then submit.</li>
+        <li><span class="tag dec">DECISION</span> Core fields only: challan reference, challan photo, vehicle number, supplier. Driver, weight, remarks sit under "More details (optional)".</li>
+        <li><span class="tag dec">DECISION</span> QR and handwritten challans are both first-class: Scan challan, or Type challan number.</li>
+        <li><span class="tag dec">DECISION</span> Scanner is always armed; hardware trigger works on any step ("Scanner ready").</li>
+        <li><span class="tag">ASSUMPTION</span> QR resolves offline against synced PO/ASN and pre-fills supplier via a Matched chip the officer accepts.</li>
+        <li><span class="tag">ASSUMPTION</span> "Read from photo" for the plate is best-effort; it pre-fills and must be confirmed. Never auto-submits.</li>
+        <li><span class="tag dec">DECISION</span> Unlisted supplier allowed; flagged "Stores will match this later". Truck never blocked.</li>
+        <li><span class="tag dec">DECISION</span> Submit shows "Captured - pending sync" and works with no network.</li>
+        <li><span class="tag">ASSUMPTION</span> Touch targets at least 56px; primary action full-width, pinned in the bottom third. Numbers not yet confirmed by user.</li>
+        <li><span class="tag dec">DECISION</span> Touch-roomy density only; compact (desk) mode not shown.</li>
+        <li><span class="tag dec">DECISION</span> No scan toast. The green "Matched: PO-..." card is the only visible scan feedback; screen readers still hear it via a hidden live region.</li>
+        <li><span class="tag dec">DECISION</span> "Next: photo" stays disabled until the challan is resolved: match Accepted, or "Not this" then a typed number, or a number typed manually.</li>
+        <li><span class="tag dec">DECISION</span> After a scan, the challan step is compact: "Scan again" and "Type challan number" share one secondary row, so typing stays reachable without scrolling on the 360 x 640 scanner.</li>
+        <li><span class="tag dec">DECISION</span> Typeface is Lato (loaded locally in production), falling back to Segoe UI, Roboto, system-ui.</li>
+        <li>Colors are the existing app tokens only; palette is not decided.</li>
+      </ol>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){
+  var VENDORS=[
+    {id:'V-1021',name:'Shree Balaji Steels',city:'Aligarh'},
+    {id:'V-1044',name:'Agarwal Packaging Industries',city:'Hathras'},
+    {id:'V-1107',name:'Jai Ambe Castings Pvt Ltd',city:'Aligarh'},
+    {id:'V-1139',name:'Kumar Brass Components',city:'Moradabad'},
+    {id:'V-1162',name:'Hindustan Fasteners Co.',city:'Ghaziabad'},
+    {id:'V-1188',name:'Balaji Rubber Works',city:'Agra'}
+  ];
+  var MATCH={po:'PO-CMF-2026-04817',asn:'ASN-2209',vendor:VENDORS[0],challan:'DC/2425/0913'};
+  var STEPS=['Challan','Photo','Vehicle','Supplier'];
+  var S;
+  function fresh(offline){return {step:0,challanMode:'idle',challan:'',match:null,matchAccepted:false,photo:false,
+    vehicle:'',vehicleFromPhoto:false,vehicleChecked:false,supplier:null,query:'',unlisted:false,unlistedName:'',
+    driver:'',phone:'',weight:'',remarks:'',offline:offline!==false,pending:S?S.pending:0,status:''};}
+  S=fresh(true);
+
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function fuzzy(q,t){q=q.toLowerCase().replace(/\s+/g,'');t=t.toLowerCase();var i=0;for(var j=0;j<t.length&&i<q.length;j++){if(t[j]===q[i])i++;}return i===q.length;}
+  function canNext(){
+    // challan resolved = match accepted, or a typed number with no pending (unaccepted) match
+    if(S.step===0)return S.matchAccepted||(S.challanMode==='manual'&&!S.match&&S.challan.trim().length>0);
+    if(S.step===1)return S.photo;
+    if(S.step===2)return S.vehicle.trim().length>=6&&(!S.vehicleFromPhoto||S.vehicleChecked);
+    if(S.step===3)return !!S.supplier||(S.unlisted&&S.unlistedName.trim().length>1);
+    return true;
+  }
+  function supplierLabel(){return S.supplier?S.supplier.name:(S.unlisted&&S.unlistedName?S.unlistedName+' (unlisted)':'-');}
+
+  function topbar(){
+    var sync=S.offline?'<span class="pill"><span class="dot off"></span>Offline'+(S.pending?' - '+S.pending+' waiting':'')+'</span>'
+                      :'<span class="pill"><span class="dot on"></span>Online'+(S.pending?' - syncing '+S.pending:' - synced')+'</span>';
+    return '<div class="topbar"><span class="pill" title="Scan sink is armed on every step"><span class="dot ready"></span>Scanner ready</span>'+sync+'</div>';
+  }
+  function stepper(){
+    var h='<ol class="stepper" aria-label="Gate entry progress">';
+    STEPS.forEach(function(n,i){var c=i<S.step?'done':(i===S.step?'cur':'');
+      h+='<li class="'+c+'"'+(i===S.step?' aria-current="step"':'')+'><div class="bar"></div>'+(i+1)+'. '+n+(i<S.step?'<span class="sr"> (done)</span>':'')+'</li>';});
+    return h+'</ol>';
+  }
+
+  function stepBody(fid){
+    var h='';
+    if(S.step===0){
+      h+='<p class="q">Challan</p>';
+      if(S.match){
+        h+= S.matchAccepted
+          ? '<div class="chip match" role="status"><strong>Matched: '+MATCH.po+' · '+esc(MATCH.vendor.name)+'</strong>Accepted. Supplier will be pre-filled.</div>'
+          : '<div class="chip match"><strong>Matched: '+MATCH.po+' · '+esc(MATCH.vendor.name)+'</strong>Challan '+esc(S.challan)+' found in synced POs ('+MATCH.asn+').<div class="row"><button class="btn primary" data-a="acceptMatch">Accept</button><button class="btn secondary" data-a="rejectMatch">Not this</button></div></div>';
+      }
+      if(S.challanMode!=='manual'&&S.match){
+        // compact: match card is present, so scan/type collapse into one secondary row
+        h+='<div class="row2"><button class="btn secondary" data-a="scan"><span class="icon" aria-hidden="true">&#9635;</span>Scan again</button>'+
+           '<button class="btn secondary" data-a="manual">Type challan number</button></div>';
+      } else if(S.challanMode!=='manual'){
+        h+='<button class="btn primary huge" data-a="scan"><span class="icon" aria-hidden="true">&#9635;</span>'+(S.challan?'Scan again':'Scan challan')+'</button>';
+        h+='<div class="scan-note"><span class="dot ready" aria-hidden="true"></span><span>Or press the hardware trigger - it works on any step.</span></div>';
+        h+='<button class="btn secondary" data-a="manual">Type challan number</button>';
+        h+='<p class="hint">Handwritten challan? Type the number written on it.</p>';
+      } else {
+        h+='<div class="field"><label for="'+fid+'-ch">Challan number</label><input id="'+fid+'-ch" data-f="challan" value="'+esc(S.challan)+'" placeholder="e.g. 4471" autocomplete="off" inputmode="text"></div>';
+        if(S.challan&&!S.match) h+='<div class="chip info">No PO match for this number. You will pick the supplier in step 4.</div>';
+        h+='<button class="btn secondary" data-a="scan"><span class="icon" aria-hidden="true">&#9635;</span>Scan instead</button>';
+      }
+    }
+    else if(S.step===1){
+      h+='<p class="q">Photo of the challan</p><p class="hint">Required as evidence. Fit the whole challan in the frame.</p>';
+      if(!S.photo){
+        h+='<div class="shutter"><button data-a="shoot" aria-label="Take challan photo">Take photo</button><span class="hint">Tap the big button</span></div>';
+      } else {
+        h+='<div class="thumb"><div class="paper" role="img" aria-label="Captured challan photo"><b>DELIVERY CHALLAN</b><hr>No. '+esc(S.challan)+'<br>'+(S.match?esc(MATCH.vendor.name):'Supplier copy')+'<hr>MS Round Bar 20mm<br>Qty 2.4 MT<hr>Sign ______</div>'+
+           '<div><div class="chip match" role="status" style="margin:0 0 8px"><strong>Photo saved</strong>Stored on device</div><button class="btn secondary small" data-a="retake">Retake</button></div></div>';
+      }
+    }
+    else if(S.step===2){
+      h+='<p class="q">Vehicle number</p>';
+      h+='<div class="field"><label for="'+fid+'-veh">Number plate</label><input id="'+fid+'-veh" class="plate'+(S.vehicleFromPhoto&&!S.vehicleChecked?' flag':'')+'" data-f="vehicle" value="'+esc(S.vehicle)+'" placeholder="UP81 AT 4521" autocomplete="off" autocapitalize="characters"></div>';
+      h+='<p class="hint">Format: UP81 AT 4521</p>';
+      if(S.vehicleFromPhoto&&!S.vehicleChecked){
+        h+='<div class="chip warn"><strong>Read from photo - please check</strong>Compare with the truck plate before continuing.<div class="row"><button class="btn primary" data-a="plateOk">Matches truck</button><button class="btn secondary" data-a="plateEdit">Edit</button></div></div>';
+      } else if(!S.vehicle){
+        h+='<button class="btn secondary" data-a="readPlate">Read from photo</button><p class="hint">Best effort. You always confirm it.</p>';
+      }
+    }
+    else if(S.step===3){
+      h+='<p class="q">Supplier</p>';
+      if(S.supplier){
+        h+='<div class="chip match"><strong>'+esc(S.supplier.name)+'</strong>'+esc(S.supplier.city)+(S.matchAccepted&&S.supplier===MATCH.vendor?' - from challan match '+MATCH.po:'')+'<div class="row"><button class="btn secondary" data-a="changeSup">Change</button></div></div>';
+      } else if(S.unlisted){
+        h+='<div class="field"><label for="'+fid+'-un">Supplier name as written on challan</label><input id="'+fid+'-un" data-f="unlistedName" value="'+esc(S.unlistedName)+'" placeholder="e.g. Verma Traders" autocomplete="off"></div>';
+        h+='<div class="chip warn"><strong>Unlisted supplier</strong>Stores will match this later. The truck can go in now.</div>';
+        h+='<button class="btn ghost" data-a="changeSup">Pick from list instead</button>';
+      } else {
+        h+='<div class="field"><label for="'+fid+'-sq">Search supplier</label><input id="'+fid+'-sq" data-f="query" value="'+esc(S.query)+'" placeholder="Type a few letters" autocomplete="off"></div>';
+        var list=VENDORS.filter(function(v){return !S.query||fuzzy(S.query,v.name+' '+v.city);});
+        h+='<ul class="opts" aria-label="Suppliers from synced list">';
+        list.slice(0,4).forEach(function(v){h+='<li><button class="opt" aria-pressed="false" data-a="pick" data-v="'+v.id+'">'+esc(v.name)+'<small>'+esc(v.city)+' · '+v.id+'</small></button></li>';});
+        if(!list.length)h+='<li class="hint">No match in synced suppliers.</li>';
+        h+='<li><button class="opt unl" data-a="unlisted">+ Unlisted supplier - type name</button></li></ul>';
+      }
+      h+='<details><summary>More details (optional)</summary><div class="inner">'+
+         '<div class="field"><label for="'+fid+'-dr">Driver name</label><input id="'+fid+'-dr" data-f="driver" value="'+esc(S.driver)+'" autocomplete="off"></div>'+
+         '<div class="field"><label for="'+fid+'-ph">Driver phone</label><input id="'+fid+'-ph" data-f="phone" value="'+esc(S.phone)+'" inputmode="tel" autocomplete="off"></div>'+
+         '<div class="field"><label for="'+fid+'-wt">Gross weight (kg)</label><input id="'+fid+'-wt" data-f="weight" value="'+esc(S.weight)+'" inputmode="numeric" autocomplete="off"></div>'+
+         '<div class="field"><label for="'+fid+'-rm">Remarks</label><textarea id="'+fid+'-rm" data-f="remarks">'+esc(S.remarks)+'</textarea></div></div></details>';
+    }
+    else {
+      h+='<div class="done"><div class="check" aria-hidden="true">&#10003;</div><h2>Captured - pending sync</h2>'+
+         '<p class="hint">'+(S.offline?'Saved on this device. It will sync when the network is back.':'Saved on this device. Sending now.')+'</p>'+
+         '<ul class="summary"><li><span>Challan</span><span>'+esc(S.challan)+'</span></li>'+
+         (S.matchAccepted?'<li><span>PO</span><span>'+MATCH.po+'</span></li>':'')+
+         '<li><span>Photo</span><span>1 saved</span></li><li><span>Vehicle</span><span>'+esc(S.vehicle.toUpperCase())+'</span></li>'+
+         '<li><span>Supplier</span><span>'+esc(supplierLabel())+'</span></li></ul>'+
+         (S.unlisted?'<div class="chip warn"><strong>Unlisted supplier</strong>Stores will match this later.</div>':'')+'</div>';
+    }
+    return h;
+  }
+  function actions(){
+    if(S.step===4) return '<div class="actions"><button class="btn primary" data-a="nextTruck">Next truck</button></div>';
+    var labels=['Next: photo','Next: vehicle','Next: supplier','Submit entry'];
+    var back=S.step>0?'<button class="btn ghost" data-a="back">Back</button>':'';
+    return '<div class="actions">'+back+'<button class="btn primary" data-a="next"'+(canNext()?' aria-disabled="false"':' disabled aria-disabled="true"')+'>'+labels[S.step]+'</button></div>';
+  }
+  function rail(){
+    var vals=[S.challan||'Not yet',S.photo?'1 photo':'Not yet',S.vehicle?S.vehicle.toUpperCase():'Not yet',supplierLabel()==='-'?'Not yet':supplierLabel()];
+    var h='<div class="rail"><ol aria-label="Steps">';
+    STEPS.forEach(function(n,i){h+='<li class="'+(i===S.step?'cur':'')+'"><button data-a="goto" data-i="'+i+'"'+(i>S.step?' disabled':'')+(i===S.step?' aria-current="step"':'')+'>'+(i+1)+'. '+n+'<small>'+esc(vals[i])+'</small></button></li>';});
+    return h+'</ol></div>';
+  }
+  function render(el){
+    var fid=el.id, two=el.dataset.layout==='two';
+    var live='<div class="sr" aria-live="polite">'+esc(S.status)+'</div>';
+    var core='<div class="body">'+stepBody(fid)+'</div>'+actions();
+    el.innerHTML=topbar()+'<div class="titlebar">Gate entry - CMF-ALIGARH</div>'+stepper()+live+
+      (two?'<div class="two">'+rail()+'<div class="main">'+core+'</div></div>':core);
+  }
+  var frames=['f-scanner','f-phone','f-tablet'].map(function(id){return document.getElementById(id);});
+  function renderAll(focusSel){
+    var active=document.activeElement, afid=null, af=null;
+    if(active&&active.dataset&&active.dataset.f){afid=active.closest('.screen').id;af=active.dataset.f;}
+    frames.forEach(render);
+    document.getElementById('offline-btn').textContent='Toggle offline (now: '+(S.offline?'offline':'online')+')';
+    if(afid){var i=document.querySelector('#'+afid+' [data-f="'+af+'"]');if(i){i.focus();var l=i.value.length;try{i.setSelectionRange(l,l);}catch(e){}}}
+  }
+  function doScan(){ // always-armed scan sink: a challan QR fills challan on any step
+    S.challan=MATCH.challan;S.match=MATCH;S.matchAccepted=false;S.challanMode='scanned';
+    // no visual toast: the Matched card is the feedback; announce via the hidden live region only
+    S.status='Challan scanned: '+MATCH.challan+' - matched '+MATCH.po+'. Accept or choose Not this';
+  }
+  function act(a,t){
+    switch(a){
+      case 'scan':doScan();break;
+      case 'manual':S.challanMode='manual';S.status='Type the challan number';break;
+      case 'acceptMatch':S.matchAccepted=true;S.supplier=MATCH.vendor;S.unlisted=false;S.status='Match accepted';break;
+      case 'rejectMatch':S.match=null;S.matchAccepted=false;S.challan='';S.challanMode='manual';if(S.supplier===MATCH.vendor)S.supplier=null;S.status='Match dismissed. Type the challan number';break;
+      case 'shoot':S.photo=true;S.status='Photo saved';break;
+      case 'retake':S.photo=false;S.status='Photo removed. Take it again';break;
+      case 'readPlate':S.vehicle='UP81 AT 4521';S.vehicleFromPhoto=true;S.vehicleChecked=false;S.status='Plate read from photo. Please check it';break;
+      case 'plateOk':S.vehicleChecked=true;S.status='Vehicle number confirmed';break;
+      case 'plateEdit':S.vehicleFromPhoto=false;S.status='Edit the vehicle number';break;
+      case 'pick':S.supplier=VENDORS.filter(function(v){return v.id===t.dataset.v;})[0];S.unlisted=false;S.status='Supplier selected: '+S.supplier.name;break;
+      case 'unlisted':S.unlisted=true;S.supplier=null;S.status='Unlisted supplier. Type the name';break;
+      case 'changeSup':S.supplier=null;S.unlisted=false;S.query='';break;
+      case 'back':S.step=Math.max(0,S.step-1);break;
+      case 'goto':S.step=+t.dataset.i;break;
+      case 'next':if(!canNext())return;S.step++;if(S.step===4){S.pending++;S.status='Captured - pending sync';}else S.status='Step '+(S.step+1)+' of 4: '+STEPS[S.step];break;
+      case 'nextTruck':S=fresh(S.offline);S.status='Ready for next truck';break;
+    }
+    renderAll();
+  }
+  document.addEventListener('click',function(e){
+    var t=e.target.closest('[data-a]');if(t&&!t.disabled){act(t.dataset.a,t);return;}
+    var d=e.target.closest('[data-demo]');if(!d)return;
+    switch(d.dataset.demo){
+      case 'qr':if(S.step===4)S=fresh(S.offline);S.step=0;doScan();break;
+      case 'hand':if(S.step===4)S=fresh(S.offline);S.step=0;S.challanMode='manual';S.challan='4471';S.match=null;S.matchAccepted=false;S.status='Handwritten challan 4471 typed. No PO match';break;
+      case 'trigger':doScan();break;
+      case 'offline':S.offline=!S.offline;if(!S.offline&&S.pending){var p=S.pending;setTimeout(function(){S.pending=0;S.status='All entries synced';renderAll();},1800);}S.status=S.offline?'Offline. Entries are saved on the device':'Back online. Syncing';break;
+      case 'reset':S=fresh(true);S.pending=0;break;
+    }
+    renderAll();
+  });
+  document.addEventListener('input',function(e){
+    var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
+    var v=e.target.value;if(f==='vehicle'){v=v.toUpperCase();S.vehicleFromPhoto=false;}
+    S[f]=v;
+    if(f==='challan'){S.match=null;S.matchAccepted=false;}
+    // live-update frames except typing target: re-render all keeps shared state; focus restored
+    if(f==='query'||f==='challan'||f==='vehicle'||f==='unlistedName')renderAll();
+  });
+  renderAll();
+})();
+</script>
+</body>
+</html>

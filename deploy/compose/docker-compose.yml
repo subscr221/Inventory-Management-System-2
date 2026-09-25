@@ -297,6 +297,8 @@ services:
       - ./certs:/etc/nginx/certs:ro
       # Let's Encrypt live files (symlinks resolve inside the mount). Staging VPS 2026-09-13.
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      # UX design preview mocks served at /ux-preview/ (staging 2026-09-25).
+      - ${UX_PREVIEW_DIR:-./ux-preview}:/usr/share/nginx/ux-preview:ro
     ports:
       # Staging VPS: 80 and 443 belong to the panel's nginx; Cloudflare's Origin Rule targets
       # NGINX_HTTPS_HOST_PORT. A host that owns 80 and 443 sets both to their natural values.

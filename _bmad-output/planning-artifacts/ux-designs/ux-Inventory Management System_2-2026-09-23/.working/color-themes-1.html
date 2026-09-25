@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IMS Accent Directions</title>
+<style>
+/* =====================================================================
+   IMS colour-direction board 1 (2026-09-24)
+   Fixed tokens (do NOT vary per site):
+     --side        #1B2230  dark navigation sidebar (near-black slate navy)
+     --side-hover  #252E3F  sidebar row hover
+     --side-text   #C9D1DD  sidebar label text (11.1:1 on --side)
+     --side-muted  #8C97A8  sidebar section captions (5.5:1 on --side)
+     --bg          #F4F6F9  page background
+     --surface     #FFFFFF  cards, lists, top bar
+     --border      #DDE2E9  hairlines
+     --text        #1C2430  body text (15.3:1 on white)
+     --text-muted  #566173  secondary text (6.3:1 on white)
+   Status (existing app semantics, fixed):
+     success #1E7A3C on #E6F4EA | warning #8A5300 on #FFF3DC
+     error   #B3261E on #FCE8E6 | info    #1F5FAD on #E7F0FB
+     offline / pending sync #4A5568 on #ECEFF3
+   Per-site accent tokens: --accent, --accent-strong (hover/pressed),
+     --accent-soft (tinted bg), --on-accent (text on accent),
+     plus derived --accent-on-dark (sidebar indicator/active text; the raw
+     accent is too dark on #1B2230 for 3 of 4 candidates, see chips).
+   ===================================================================== */
+:root{
+  --side:#1B2230; --side-hover:#252E3F; --side-text:#C9D1DD; --side-muted:#8C97A8;
+  --bg:#F4F6F9; --surface:#FFFFFF; --border:#DDE2E9; --text:#1C2430; --text-muted:#566173;
+  --ok:#1E7A3C; --ok-bg:#E6F4EA; --warn:#8A5300; --warn-bg:#FFF3DC;
+  --err:#B3261E; --err-bg:#FCE8E6; --info:#1F5FAD; --info-bg:#E7F0FB;
+  --off:#4A5568; --off-bg:#ECEFF3;
+  --font: Lato, "Segoe UI", Roboto, system-ui, sans-serif;
+}
+/* A. Ledger Blue - "steady, trustworthy, familiar ledger software".
+   accent #1E6BC6 | strong #1656A3 | soft #E8F1FC | on #FFFFFF | on-dark #5AA2F0
+   on-accent/accent 5.28 PASS; started at #2A7BDE (4.20 FAIL), darkened to pass. */
+[data-accent="blue"]{--accent:#1E6BC6;--accent-strong:#1656A3;--accent-soft:#E8F1FC;--on-accent:#FFFFFF;--accent-on-dark:#5AA2F0}
+/* B. Plant Teal - "calm, operational, things are running".
+   accent #0A7667 | strong #075C50 | soft #E3F4F1 | on #FFFFFF | on-dark #2BB5A0
+   on-accent/accent 5.53 PASS; started at #0F9480 (3.63 FAIL), darkened to pass. */
+[data-accent="teal"]{--accent:#0A7667;--accent-strong:#075C50;--accent-soft:#E3F4F1;--on-accent:#FFFFFF;--accent-on-dark:#2BB5A0}
+/* C. Board Indigo - "premium, deliberate, sign-off weight".
+   accent #4F46C8 | strong #3D35A6 | soft #EEEDFB | on #FFFFFF | on-dark #9A93F2
+   on-accent/accent 6.90 PASS as first chosen. */
+[data-accent="indigo"]{--accent:#4F46C8;--accent-strong:#3D35A6;--accent-soft:#EEEDFB;--on-accent:#FFFFFF;--accent-on-dark:#9A93F2}
+/* D. Kiln Terracotta - "warm, industrial, shop-floor grounded".
+   accent #B4461B | strong #8F3714 | soft #FBEDE6 | on #FFFFFF | on-dark #F08A5D
+   on-accent/accent 5.48 PASS; started at #D2582A (4.03 FAIL), darkened to pass.
+   A true saffron (#F2A30F) was rejected: it needs dark text and fails as link text on white (2.1). */
+[data-accent="terra"]{--accent:#B4461B;--accent-strong:#8F3714;--accent-soft:#FBEDE6;--on-accent:#FFFFFF;--accent-on-dark:#F08A5D}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.45}
+button{font-family:inherit;font-size:inherit;cursor:pointer}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.side :focus-visible,.nav-dark :focus-visible{outline-color:var(--accent-on-dark)}
+.page{max-width:1560px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:24px;margin:0 0 4px}
+h2{font-size:17px;margin:32px 0 12px}
+.lede{color:var(--text-muted);margin:0 0 20px;max-width:880px}
+
+/* switcher */
+.switcher{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.sw{display:flex;gap:12px;align-items:center;text-align:left;padding:14px;border:2px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);min-height:76px}
+.sw[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.sw .dot{flex:none;width:40px;height:40px;border-radius:8px;background:var(--accent)}
+.sw b{display:block;font-size:15px}
+.sw span{display:block;color:var(--text-muted);font-size:12.5px}
+
+/* comparison strip */
+.strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.cmp{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.cmp-top{display:flex;height:88px}
+.cmp-side{width:38%;background:var(--side);padding:10px 0;display:flex;flex-direction:column;gap:4px}
+.cmp-side i{display:block;height:8px;margin:0 10px;border-radius:3px;background:#3A4458}
+.cmp-side i.on{background:var(--accent-on-dark);height:10px}
+.cmp-main{flex:1;padding:10px;display:flex;flex-direction:column;gap:8px;justify-content:center}
+.cmp-body{padding:10px 12px 12px}
+.cmp-body b{font-size:14px}
+.cmp-body .hex{font-family:Consolas,monospace;font-size:12px;color:var(--text-muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{display:inline-flex;gap:6px;align-items:center;font-size:11.5px;padding:3px 8px;border-radius:999px;border:1px solid var(--border);background:#FAFBFC;white-space:nowrap}
+.chip .v{font-weight:700}
+.chip.pass .t{color:var(--ok);font-weight:700}
+.chip.fail .t{color:var(--err);font-weight:700}
+.chip.pass{border-color:#BFE0C8}
+.chip.fail{border-color:#F2C2BE}
+
+/* buttons */
+.btn{border:1px solid transparent;border-radius:6px;padding:0 14px;height:34px;font-weight:700;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn-primary{background:var(--accent);color:var(--on-accent)}
+.btn-primary:hover{background:var(--accent-strong)}
+.btn-ghost{background:var(--surface);color:var(--text);border-color:#B9C1CC}
+.btn-danger{background:var(--surface);color:var(--err);border-color:#E3A8A3}
+.link{color:var(--accent);font-weight:700;text-decoration:underline;text-underline-offset:2px}
+
+/* active contrast panel */
+.active-head{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline}
+.active-head .reg{color:var(--text-muted)}
+.stage{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;margin-top:12px}
+.desk-wrap{flex:1 1 640px;min-width:0}
+.desk-scaler{width:100%;overflow:hidden}
+.cap{font-size:12px;color:var(--text-muted);margin:0 0 6px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+
+/* ---------- DESK SHELL (compact) ---------- */
+.desk{width:1100px;height:640px;display:flex;background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow:hidden;transform-origin:0 0;font-size:13px}
+.side{width:208px;flex:none;background:var(--side);color:var(--side-text);display:flex;flex-direction:column}
+.brand{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#FFFFFF;font-weight:900;font-size:15px;border-bottom:1px solid #2A3345}
+.brand .mark{width:26px;height:26px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:12px}
+.side nav{padding:8px 0;flex:1}
+.side .sec{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--side-muted);padding:12px 16px 4px}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 16px 0 13px;border:0;border-left:3px solid transparent;background:transparent;color:var(--side-text);text-align:left}
+.nav-item:hover{background:var(--side-hover)}
+.nav-item svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.nav-item[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#FFFFFF;font-weight:700}
+.nav-item[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 7px;font-weight:700}
+.side-foot{padding:12px 16px;border-top:1px solid #2A3345;font-size:12px;color:var(--side-muted)}
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{height:52px;flex:none;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 16px}
+.search{flex:1;max-width:420px;display:flex;align-items:center;gap:8px;height:34px;border:1px solid var(--border);border-radius:6px;padding:0 10px;background:#FAFBFC}
+.search input{border:0;background:transparent;font:inherit;flex:1;color:var(--text);min-width:0}
+.search input:focus{outline:none}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.site{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-weight:700}
+.avatar{width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);display:grid;place-items:center;font-weight:900;font-size:12px}
+.spacer{flex:1}
+.content{flex:1;display:flex;min-height:0}
+.list{width:560px;flex:none;border-right:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column}
+.list-head{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.list-head h3{margin:0;font-size:16px}
+.tabs{display:flex;gap:4px;padding:8px 16px 0;border-bottom:1px solid var(--border)}
+.tab{border:0;background:none;padding:6px 10px 9px;color:var(--text-muted);border-bottom:2px solid transparent;font-weight:700}
+.tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);text-align:left;font-weight:700;padding:8px 12px;border-bottom:1px solid var(--border);background:#FAFBFC}
+td{padding:9px 12px;border-bottom:1px solid #EDF0F4;vertical-align:middle}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.sel td{background:var(--accent-soft)}
+tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.idn{font-weight:700;color:var(--accent)}
+.sub{display:block;font-size:11.5px;color:var(--text-muted)}
+.pill{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.p-pend{background:var(--warn-bg);color:var(--warn)}
+.p-ok{background:var(--ok-bg);color:var(--ok)}
+.p-rej{background:var(--err-bg);color:var(--err)}
+.p-sync{background:var(--off-bg);color:var(--off)}
+.p-sync::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;border:1.5px solid currentColor;margin-right:5px;vertical-align:0}
+.detail{flex:1;min-width:0;padding:16px 20px;overflow:hidden;display:flex;flex-direction:column;gap:12px}
+.detail h3{margin:0;font-size:18px}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:13px}
+.kv dt{color:var(--text-muted)}
+.kv dd{margin:0;font-weight:700}
+.lines{border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.lines td,.lines th{padding:7px 10px}
+.total{display:flex;justify-content:space-between;font-weight:900;font-size:15px;padding:4px 2px}
+.actions{margin-top:auto;display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--border)}
+
+/* ---------- SCANNER (touch-roomy) ---------- */
+.scanner-wrap{flex:none}
+.scanner{width:360px;height:640px;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--bg);display:flex;flex-direction:column;font-size:16px}
+.s-top{height:56px;flex:none;background:var(--side);color:#FFFFFF;display:flex;align-items:center;gap:10px;padding:0 14px}
+.s-top b{font-size:17px;flex:1}
+.ready{width:10px;height:10px;border-radius:50%;background:#3DD68C;box-shadow:0 0 0 3px rgba(61,214,140,.25)}
+.sync{font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;background:#2E3850;color:#E6EAF0;white-space:nowrap}
+.stepper{display:flex;padding:12px 10px 8px;background:var(--surface);border-bottom:1px solid var(--border);list-style:none;margin:0}
+.stepper li{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:12.5px;color:var(--text-muted);position:relative}
+.stepper li::after{content:"";position:absolute;top:15px;left:calc(50% + 17px);right:calc(-50% + 17px);height:2px;background:var(--border)}
+.stepper li:last-child::after{display:none}
+.stepper .n{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:900;border:2px solid #B9C1CC;background:var(--surface);color:var(--text-muted);font-size:14px}
+.stepper li.done .n{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.stepper li.done::after{background:var(--accent)}
+.stepper li.cur .n{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+.stepper li.cur,.stepper li.done{color:var(--text);font-weight:700}
+.s-body{flex:1;padding:14px;display:flex;flex-direction:column;gap:12px;min-height:0}
+.s-label{font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin:0}
+.match{background:var(--surface);border:2px solid var(--accent);border-radius:12px;padding:12px 14px}
+.match-h{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.match-h .tag{background:var(--accent-soft);color:var(--accent-strong);font-size:12.5px;font-weight:900;padding:3px 8px;border-radius:6px}
+.match-h b{font-size:18px}
+.match p{margin:2px 0;font-size:15px}
+.match .muted{color:var(--text-muted);font-size:14px}
+.match-actions{display:flex;gap:8px;margin-top:10px}
+.match-actions button{flex:1;height:56px;border-radius:10px;font-weight:700;font-size:16px}
+.accept{background:var(--accent-soft);color:var(--accent-strong);border:2px solid var(--accent)}
+.notit{background:var(--surface);color:var(--text);border:2px solid #B9C1CC}
+.typebtn{height:56px;border:2px dashed #B9C1CC;border-radius:10px;background:var(--surface);color:var(--accent);font-weight:700;font-size:16px}
+.primary-xl{margin-top:auto;height:60px;border:0;border-radius:10px;background:var(--accent);color:var(--on-accent);font-size:18px;font-weight:900;width:100%}
+.primary-xl:hover,.primary-xl:active{background:var(--accent-strong)}
+.bnav{height:64px;flex:none;display:flex;background:var(--surface);border-top:1px solid var(--border)}
+.bnav button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-muted);font-size:13px;font-weight:700;position:relative}
+.bnav svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9}
+.bnav button[aria-current="page"]{color:var(--accent)}
+.bnav button[aria-current="page"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+
+.notes{margin-top:28px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px}
+.notes li{margin:4px 0}
+code{font-family:Consolas,monospace;font-size:12.5px;background:#EEF1F5;padding:1px 5px;border-radius:4px}
+@media (max-width:900px){.switcher,.strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:520px){.switcher,.strip{grid-template-columns:1fr}.scanner-wrap{width:100%}.scanner{width:100%;max-width:360px}}
+</style>
+</head>
+<body data-accent="blue">
+<div class="page">
+  <h1>IMS accent directions - board 1</h1>
+  <p class="lede">Four per-site accent candidates on a fixed dark sidebar (#1B2230) and fixed neutrals. The accent is the only per-site variable. Pick one button to preview it on the desk shell and the gate scanner; the strip below compares all four without clicking. Typeface: Lato, falling back to Segoe UI, Roboto, system-ui.</p>
+
+  <div class="switcher" role="group" aria-label="Choose accent candidate">
+    <button class="sw" data-accent="blue" data-pick="blue" aria-pressed="true"><span class="dot" aria-hidden="true"></span><span><b>A. Ledger Blue</b><span>Steady, trustworthy, familiar ledger software</span></span></button>
+    <button class="sw" data-accent="teal" data-pick="teal" aria-pressed="false"><span class="dot" aria-hidden="true"></span><span><b>B. Plant Teal</b><span>Calm, operational, things are running</span></span></button>
+    <button class="sw" data-accent="indigo" data-pick="indigo" aria-pressed="false"><span class="dot" aria-hidden="true"></span><span><b>C. Board Indigo</b><span>Premium, deliberate, sign-off weight</span></span></button>
+    <button class="sw" data-accent="terra" data-pick="terra" aria-pressed="false"><span class="dot" aria-hidden="true"></span><span><b>D. Kiln Terracotta</b><span>Warm, industrial, shop-floor grounded</span></span></button>
+  </div>
+
+  <h2>Static comparison strip</h2>
+  <div class="strip" id="strip"></div>
+
+  <h2>Active candidate</h2>
+  <div class="active-head"><b id="activeName" style="font-size:18px">A. Ledger Blue</b><span class="reg" id="activeReg"></span></div>
+  <div class="chips" id="activeChips" aria-live="polite"></div>
+
+  <div class="stage">
+    <div class="desk-wrap">
+      <p class="cap">Desk shell - compact density (1100 x 640, scaled to fit)</p>
+      <div class="desk-scaler" id="deskScaler">
+      <div class="desk" id="desk">
+        <aside class="side" aria-label="Main navigation">
+          <div class="brand"><span class="mark" aria-hidden="true">IM</span>IMS</div>
+          <nav>
+            <div class="sec">Operations</div>
+            <button class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Dashboard</button>
+            <button class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 21V8l9-5 9 5v13"/><path d="M8 21v-8h8v8"/></svg>Gate</button>
+            <button class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/></svg>Receiving</button>
+            <button class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>Stores</button>
+            <button class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7"/></svg>Indents</button>
+            <button class="nav-item" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>Approvals<span class="count">7</span></button>
+            <div class="sec">Insight</div>
+            <button class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Reports</button>
+            <button class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>Settings</button>
+          </nav>
+          <div class="side-foot">Synced 2 min ago</div>
+        </aside>
+        <div class="main">
+          <header class="topbar">
+            <label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#566173" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span class="visually" style="position:absolute;left:-9999px">Search</span><input type="search" placeholder="Search indents, POs, suppliers"></label>
+            <span class="spacer"></span>
+            <button class="site" aria-label="Switch site, current CMF-ALIGARH">CMF-ALIGARH <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+            <button class="btn btn-primary">+ New</button>
+            <span class="avatar" aria-label="Signed in as Anupam">AK</span>
+          </header>
+          <div class="content">
+            <section class="list" aria-label="Approvals list">
+              <div class="list-head"><h3>Approvals</h3><span class="spacer"></span><a class="link" href="#" onclick="return false">Export</a></div>
+              <div class="tabs" role="tablist"><button class="tab" role="tab" aria-selected="true">Awaiting me (7)</button><button class="tab" role="tab" aria-selected="false">All</button><button class="tab" role="tab" aria-selected="false">Decided</button></div>
+              <table>
+                <thead><tr><th scope="col">Indent</th><th scope="col">Requester</th><th scope="col" class="num">Amount</th><th scope="col">Status</th></tr></thead>
+                <tbody>
+                  <tr class="sel"><td><span class="idn">IND-2026-0412</span><span class="sub">Bearings 6205 ZZ x 40</span></td><td>Anupam<span class="sub">Maintenance</span></td><td class="num">₹1,24,500</td><td><span class="pill p-pend">Pending</span></td></tr>
+                  <tr><td><span class="idn">IND-2026-0411</span><span class="sub">Hydraulic oil 68, 210 L</span></td><td>Gagan<span class="sub">Production</span></td><td class="num">₹48,300</td><td><span class="pill p-sync">Captured - pending sync</span></td></tr>
+                  <tr><td><span class="idn">IND-2026-0409</span><span class="sub">Welding rods E6013</span></td><td>Devender<span class="sub">Fabrication</span></td><td class="num">₹18,750</td><td><span class="pill p-pend">Pending</span></td></tr>
+                  <tr><td><span class="idn">IND-2026-0405</span><span class="sub">MS plate 10 mm, 2.4 t</span></td><td>Anupam<span class="sub">Maintenance</span></td><td class="num">₹2,16,000</td><td><span class="pill p-ok">Approved</span></td></tr>
+                  <tr><td><span class="idn">IND-2026-0401</span><span class="sub">Safety gloves, 300 pairs</span></td><td>Gagan<span class="sub">Stores</span></td><td class="num">₹36,900</td><td><span class="pill p-rej">Rejected</span></td></tr>
+                  <tr><td><span class="idn">IND-2026-0398</span><span class="sub">V-belt B-52 x 24</span></td><td>Devender<span class="sub">Utilities</span></td><td class="num">₹9,840</td><td><span class="pill p-ok">Approved</span></td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section class="detail" aria-label="Indent detail">
+              <div style="display:flex;align-items:center;gap:10px"><h3>IND-2026-0412</h3><span class="pill p-pend">Pending</span></div>
+              <dl class="kv">
+                <dt>Requester</dt><dd>Anupam, Maintenance</dd>
+                <dt>Needed by</dt><dd>30 Sep 2026</dd>
+                <dt>Cost centre</dt><dd>CC-MNT-02</dd>
+                <dt>Budget left</dt><dd>₹3,85,200 of ₹6,00,000</dd>
+              </dl>
+              <table class="lines">
+                <thead><tr><th scope="col">Item</th><th scope="col" class="num">Qty</th><th scope="col" class="num">Rate</th><th scope="col" class="num">Value</th></tr></thead>
+                <tbody>
+                  <tr><td>Bearing 6205 ZZ</td><td class="num">40</td><td class="num">₹1,850</td><td class="num">₹74,000</td></tr>
+                  <tr><td>Bearing 6308 2RS</td><td class="num">12</td><td class="num">₹4,208</td><td class="num">₹50,500</td></tr>
+                </tbody>
+              </table>
+              <div class="total"><span>Total</span><span>₹1,24,500</span></div>
+              <a class="link" href="#" onclick="return false">View approval history (2 steps)</a>
+              <div class="actions"><button class="btn btn-primary">Approve</button><button class="btn btn-danger">Reject</button><span class="spacer"></span><button class="btn btn-ghost">Ask a question</button></div>
+            </section>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+
+    <div class="scanner-wrap">
+      <p class="cap">Gate scanner - touch-roomy (360 x 640)</p>
+      <div class="scanner" role="region" aria-label="Gate scanner preview">
+        <div class="s-top"><span class="ready" aria-hidden="true"></span><b>Scanner ready</b><span class="sync">Captured - pending sync (2)</span></div>
+        <ol class="stepper" aria-label="Gate entry steps">
+          <li class="cur" aria-current="step"><span class="n">1</span>Challan</li>
+          <li><span class="n">2</span>Photo</li>
+          <li><span class="n">3</span>Vehicle</li>
+          <li><span class="n">4</span>Supplier</li>
+        </ol>
+        <div class="s-body">
+          <p class="s-label">Challan scanned - check the match</p>
+          <div class="match">
+            <div class="match-h"><span class="tag">PO match</span><b>PO-2026-1187</b></div>
+            <p><strong>Shree Balaji Steels</strong></p>
+            <p class="muted">Challan DC/784 - MS plate 10 mm, 2.4 t</p>
+            <p class="muted">Open qty 2.4 t of 6.0 t</p>
+            <div class="match-actions"><button class="accept">Accept match</button><button class="notit">Not this</button></div>
+          </div>
+          <button class="typebtn">Type challan number</button>
+          <button class="primary-xl">Next: Photo</button>
+        </div>
+        <nav class="bnav" aria-label="Gate app navigation">
+          <button aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 21V8l9-5 9 5v13"/><path d="M8 21v-8h8v8"/></svg>Gate</button>
+          <button><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/></svg>Receive</button>
+          <button><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>Stock</button>
+          <button><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>More</button>
+        </nav>
+      </div>
+    </div>
+  </div>
+
+  <section class="notes" aria-label="Notes">
+    <b>Reading the chips</b>
+    <ul>
+      <li>Every candidate's primary button (white on accent) passes 4.5:1. Blue, Teal and Terracotta were darkened from their first picks to get there; the hex notes are in the page source.</li>
+      <li>The raw accent is too dark on the #1B2230 sidebar for Teal, Indigo and Terracotta (under 3:1), and Blue only just reaches 3.01. So the sidebar active bar and icon use a derived lighter token, <code>--accent-on-dark</code>, which passes 4.5:1 for all four. This adds a fifth per-site token.</li>
+      <li>Fixed neutrals: sidebar #1B2230, page #F4F6F9, surface #FFFFFF, border #DDE2E9, text #1C2430, muted text #566173. Status colours are fixed and never take the accent.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+(function(){
+  var C = {
+    blue:  {name:'A. Ledger Blue',   reg:'Steady, trustworthy, familiar ledger software'},
+    teal:  {name:'B. Plant Teal',    reg:'Calm, operational, things are running'},
+    indigo:{name:'C. Board Indigo',  reg:'Premium, deliberate, sign-off weight'},
+    terra: {name:'D. Kiln Terracotta',reg:'Warm, industrial, shop-floor grounded'}
+  };
+  function lum(hex){
+    hex = hex.trim().replace('#','');
+    var c = [0,2,4].map(function(i){ var v = parseInt(hex.substr(i,2),16)/255; return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); });
+    return 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2];
+  }
+  function ratio(a,b){ var x=lum(a), y=lum(b); return (Math.max(x,y)+0.05)/(Math.min(x,y)+0.05); }
+  function tok(el,name){ return getComputedStyle(el).getPropertyValue(name).trim(); }
+  function chip(label, r, min){
+    var pass = r >= min;
+    return '<span class="chip '+(pass?'pass':'fail')+'">'+label+' <span class="v">'+r.toFixed(2)+':1</span> <span class="t">'+(pass?'PASS':'FAIL')+' '+(min>=4.5?'AA text':'AA UI 3:1')+'</span></span>';
+  }
+  function chipsFor(el){
+    var a=tok(el,'--accent'), s=tok(el,'--accent-strong'), on=tok(el,'--on-accent'), od=tok(el,'--accent-on-dark'), side=tok(el,'--side');
+    return chip('On-accent on accent', ratio(on,a), 4.5) +
+           chip('Accent on white', ratio(a,'#FFFFFF'), 4.5) +
+           chip('Accent on sidebar', ratio(a,side), 3) +
+           chip('Strong with on-accent', ratio(s,on), 4.5) +
+           chip('Accent-on-dark on sidebar', ratio(od,side), 4.5);
+  }
+  // static strip
+  var strip = document.getElementById('strip');
+  Object.keys(C).forEach(function(k){
+    var d = document.createElement('div');
+    d.className='cmp'; d.setAttribute('data-accent',k);
+    d.innerHTML = '<div class="cmp-top" aria-hidden="true"><div class="cmp-side"><i></i><i class="on"></i><i></i><i></i></div>'+
+      '<div class="cmp-main"><span class="btn btn-primary" style="align-self:flex-start">Approve</span><span class="link">IND-2026-0412</span></div></div>'+
+      '<div class="cmp-body"><b>'+C[k].name+'</b><div style="color:var(--text-muted);font-size:12.5px">'+C[k].reg+'</div><div class="hex"></div><div class="chips"></div></div>';
+    strip.appendChild(d);
+    d.querySelector('.hex').textContent = 'accent '+tok(d,'--accent')+' / strong '+tok(d,'--accent-strong')+' / soft '+tok(d,'--accent-soft')+' / on-dark '+tok(d,'--accent-on-dark');
+    d.querySelector('.chips').innerHTML = chipsFor(d);
+  });
+  function setAccent(k){
+    document.body.setAttribute('data-accent',k);
+    document.querySelectorAll('[data-pick]').forEach(function(b){ b.setAttribute('aria-pressed', String(b.getAttribute('data-pick')===k)); });
+    document.getElementById('activeName').textContent = C[k].name;
+    document.getElementById('activeReg').textContent = C[k].reg + ' - accent ' + tok(document.body,'--accent');
+    document.getElementById('activeChips').innerHTML = chipsFor(document.body);
+  }
+  document.querySelectorAll('[data-pick]').forEach(function(b){ b.addEventListener('click', function(){ setAccent(b.getAttribute('data-pick')); }); });
+  // scale desk to fit
+  var desk = document.getElementById('desk'), sc = document.getElementById('deskScaler');
+  function fit(){ var w = sc.clientWidth; var s = Math.min(1, w/1100); desk.style.transform = 'scale('+s+')'; sc.style.height = (640*s)+'px'; }
+  window.addEventListener('resize', fit);
+  setAccent('blue'); fit();
+})();
+</script>
+</body>
+</html>
