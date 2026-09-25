@@ -1,0 +1,960 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approvals Inbox Mock</title>
+<style>
+/*
+  KEY SCREEN: Approvals inbox (department_head, warehouse_manager / site head, qc_head,
+  maintenance_supervisor, finance_controller, cfo) incl. the damage case with QC + finance
+  concurrence and CEO escalation
+  Governing spine sections:
+    EXPERIENCE.md
+      - Key Flows > Approvals (role inbox, list to detail, approve / reject with reason / ask for info,
+        damage case concurrence, two-signature job-work offcut acquisition)
+      - Component Patterns: approval list row + card, SLA chip, status chip, DOA band note,
+        evidence (lines, photos, who/when), history timeline, concurrence card, pinned action footer
+      - State Patterns: empty inbox, decided (inline confirmation, no toast), offline block
+        (approvals are never queued), disagreement escalated to CEO
+    DESIGN.md
+      - Every role on every device: ONE frame + device switcher (Handheld / Tablet / Desktop /
+        Desktop touch). Role decides WHAT is shown, device class decides HOW.
+      - Density by input: Handheld, Tablet, Desktop touch = touch-roomy (primary >=56px, secondary
+        >=48px); Desktop (mouse) = compact (30-36px controls, dark Zoho-Books-like sidebar)
+      - Nav by class: Handheld bottom nav, Tablet icon rail, Desktop and Desktop touch dark sidebar
+      - Accent token family: theme A Ledger Blue (--accent, --accent-strong, --accent-soft,
+        --on-accent, --accent-on-dark) exactly as in color-themes-1.html; dark sidebar #1B2230
+  Decision source: .memlog.md (2026-09-25). Mock loads nothing from the network.
+*/
+:root{
+  --side:#1B2230; --side-hover:#252E3F; --side-text:#C9D1DD; --side-muted:#8C97A8;
+  --bg:#F4F6F9; --surface:#FFFFFF; --border:#DDE2E9; --text:#1C2430; --text-muted:#566173;
+  --ok:#1E7A3C; --ok-bg:#E6F4EA; --warn:#8A5300; --warn-bg:#FFF3DC;
+  --err:#B3261E; --err-bg:#FCE8E6; --info:#1F5FAD; --info-bg:#E7F0FB;
+  --off:#4A5568; --off-bg:#ECEFF3;
+  /* A. Ledger Blue (default for CMF-ALIGARH) */
+  --accent:#1E6BC6; --accent-strong:#1656A3; --accent-soft:#E8F1FC; --on-accent:#FFFFFF; --accent-on-dark:#5AA2F0;
+  --font: Lato, "Segoe UI", Roboto, system-ui, sans-serif;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.4}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+button[disabled]{cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.side :focus-visible,.s-top :focus-visible,.rail :focus-visible{outline-color:var(--accent-on-dark)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.page{padding:16px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.intro{flex:0 0 100%}
+.intro h1{font-size:22px;margin:0 0 4px}
+.intro p{margin:0;color:var(--text-muted);max-width:920px}
+
+/* ---------- device switcher + single frame ---------- */
+.devbar{flex:0 0 100%;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.devbar .lbl{font-weight:700;font-size:13px}
+.devsw{display:inline-flex;flex-wrap:wrap;border:1px solid #8792A3;border-radius:8px;overflow:hidden;background:var(--surface)}
+.devsw button{min-height:48px;padding:4px 14px;border:0;border-right:1px solid var(--border);background:none;font-weight:700;font-size:13.5px;color:var(--text);text-align:left}
+.devsw button:last-child{border-right:0}
+.devsw button small{display:block;font-weight:400;font-size:11.5px;color:var(--text-muted)}
+.devsw button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.devsw button[aria-pressed="true"] small{color:#E8F1FC}
+.devsw button:focus-visible{outline-offset:-4px;outline-color:var(--text)}
+.device{display:flex;flex-direction:column;gap:6px;min-width:0}
+.device-label{font-size:13px;font-weight:700}
+.device-label span{font-weight:400;color:var(--text-muted)}
+.fwrap{overflow:hidden;border-radius:10px;border:6px solid #1F2937;flex:none;background:#1F2937;box-sizing:content-box}
+.fwrap .screen{transform-origin:0 0}
+.fwrap.w-hand{width:390px;height:800px;border-radius:22px;border-width:10px}
+.fwrap.w-tab{width:451px;height:649px;border-radius:18px;border-width:10px}
+.fwrap.w-tab .screen{transform:scale(.55)}
+.fwrap.w-desk{width:896px;height:560px}
+.fwrap.w-desk .screen{transform:scale(.7)}
+.screen{background:var(--bg);overflow:hidden;display:flex;flex-direction:column;position:relative}
+.s-hand{width:390px;height:800px}
+.s-tab{width:820px;height:1180px;flex-direction:row}
+.s-desk{width:1280px;height:800px;flex-direction:row}
+
+/* ---------- tablet icon rail + two panes ---------- */
+.rail{width:88px;flex:none;background:var(--side);display:flex;flex-direction:column;padding:8px 0;gap:4px}
+.rail button{min-height:64px;border:0;border-left:3px solid transparent;background:none;color:var(--side-text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:12.5px;font-weight:700;position:relative}
+.rail svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.9}
+.rail button[aria-current="page"]{color:#fff;border-left-color:var(--accent-on-dark);background:var(--side-hover)}
+.rail button[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.rail .cnt{position:absolute;top:6px;right:14px;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+.rail .rbrand{height:52px;display:grid;place-items:center}
+.rail .rbrand span{width:34px;height:34px;border-radius:8px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-weight:900;font-size:13px}
+.tmain{flex:1;display:flex;flex-direction:column;min-width:0}
+.tpanes{flex:1;display:flex;min-height:0}
+.tlist{width:350px;flex:none;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;background:var(--bg)}
+
+/* ---------- buttons, density by input ---------- */
+.b{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:2px solid transparent;border-radius:var(--radius);font-weight:700;padding:0 12px;text-align:center;line-height:1.15}
+.b-pri{background:var(--accent);color:var(--on-accent)}
+.b-pri:hover{background:var(--accent-strong)}
+.b-pri[disabled],.b-sec[disabled],.b-plain[disabled],.b-danger[disabled]{background:#E3E7ED;color:var(--text-muted);border-color:#C9D0DA}
+.b-sec{background:var(--surface);color:var(--accent-strong);border-color:var(--accent)}
+.b-sec:hover{background:var(--accent-soft)}
+.b-plain{background:var(--surface);color:var(--text);border-color:#B9C1CC}
+.b-danger{background:var(--surface);color:var(--err);border-color:#E3A8A3}
+.b-danger:hover{background:var(--err-bg)}
+.b-ghost{background:transparent;color:var(--accent-strong);text-decoration:underline;text-underline-offset:2px}
+.b-full{width:100%}
+.touch{font-size:16px}
+.touch .b{min-height:56px;font-size:17px}
+.touch .b-sec,.touch .b-plain,.touch .b-ghost,.touch .b-danger{min-height:48px;font-size:16px}
+.compact{font-size:13px}
+.compact .b{height:34px;border-width:1px;border-radius:6px;font-size:13px;padding:0 12px}
+.icon{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;flex:none}
+.compact .icon{width:15px;height:15px}
+
+/* ---------- touch top bar and bottom nav ---------- */
+.s-top{height:52px;flex:none;background:var(--side);color:#fff;display:flex;align-items:center;gap:8px;padding:0 12px}
+.s-top b{font-size:16px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-top b small{display:block;font-size:12px;font-weight:400;color:var(--side-text)}
+.sync{font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;background:#2E3850;color:#E6EAF0;white-space:nowrap}
+.sync .d{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:#9AA5B6}
+.sync.on .d{background:#3DD68C}
+.bnav{height:64px;flex:none;display:flex;background:var(--surface);border-top:1px solid var(--border)}
+.bnav button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-muted);font-size:13px;font-weight:700;position:relative;min-height:56px}
+.bnav svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9}
+.bnav button[aria-current="page"]{color:var(--accent)}
+.bnav button[aria-current="page"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+.bnav .cnt{position:absolute;top:6px;left:calc(50% + 8px);background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+
+/* ---------- chips ---------- */
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.p-ok{background:var(--ok-bg);color:var(--ok)}
+.p-warn{background:var(--warn-bg);color:var(--warn)}
+.p-err{background:var(--err-bg);color:var(--err)}
+.p-info{background:var(--info-bg);color:var(--info)}
+.p-off{background:var(--off-bg);color:var(--off)}
+.p-acc{background:var(--accent-soft);color:var(--accent-strong)}
+.gl{font-weight:900}
+
+/* ---------- filters ---------- */
+.filters{flex:none;display:flex;gap:8px;padding:10px 12px;background:var(--surface);border-bottom:1px solid var(--border);align-items:center;flex-wrap:wrap}
+.fld{display:flex;align-items:center;gap:6px;border:1px solid #8792A3;border-radius:6px;padding:0 8px;background:#FAFBFC;min-width:0}
+.fld:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.fld input{border:0;background:transparent;flex:1;min-width:0;outline:none;height:32px}
+.sel{height:34px;border:1px solid #8792A3;border-radius:6px;background:#fff;padding:0 8px;max-width:100%}
+.touch .filters{padding:8px 10px}
+.touch .fld{border-width:2px;border-radius:var(--radius);flex:1 1 100%}
+.touch .fld input{height:44px;font-size:16px}
+.touch .sel{height:48px;border-width:2px;border-radius:var(--radius);font-size:15px;flex:1}
+.tabs{display:flex;gap:4px}
+.tab{border:1px solid var(--border);background:var(--surface);border-radius:999px;padding:0 12px;height:30px;font-weight:700;font-size:12.5px;color:var(--text-muted)}
+.tab[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-strong)}
+.touch .tab{height:48px;font-size:14px;padding:0 14px;border-width:2px}
+.band{flex:none;font-size:12.5px;color:var(--text-muted);padding:6px 12px;background:var(--bg);border-bottom:1px solid var(--border);display:flex;gap:6px;align-items:center}
+.band b{color:var(--text)}
+
+/* ---------- desktop list ---------- */
+.alist{width:610px;flex:none;border-right:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;min-height:0}
+.alist .lhd{padding:12px 12px 0;display:flex;align-items:center;gap:8px}
+.alist .lhd h2{margin:0;font-size:16px}
+.tscroll{flex:1;overflow:auto;min-height:0}
+.atbl{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12.5px}
+.atbl th{position:sticky;top:0;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);background:#FAFBFC;z-index:1}
+.atbl td{padding:6px 8px;border-bottom:1px solid #EDF0F4;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;height:48px}
+.atbl tr.r{cursor:pointer}
+.atbl tr.r:hover td{background:#F7F9FC}
+.atbl tr.r[aria-selected="true"] td{background:var(--accent-soft)}
+.atbl tr.r[aria-selected="true"] td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.atbl .num{text-align:right;font-variant-numeric:tabular-nums}
+.rbtn{border:0;background:none;padding:0;text-align:left;width:100%;display:block;color:var(--text)}
+.rbtn b{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--accent-strong)}
+.rbtn span{display:block;font-size:12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- empty ---------- */
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;color:var(--text-muted)}
+.empty .ring{width:64px;height:64px;border-radius:50%;border:4px solid var(--ok);display:grid;place-items:center;color:var(--ok);font-size:30px;font-weight:900}
+.empty h3{margin:0;color:var(--text);font-size:18px}
+
+/* ---------- phone cards ---------- */
+.cards{flex:1;overflow:auto;padding:8px 10px 12px;min-height:0;list-style:none;margin:0;display:flex;flex-direction:column;gap:8px}
+.acard{width:100%;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-height:56px}
+.acard:hover{border-color:var(--accent)}
+.acard[aria-current="true"]{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.acard .k{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+.acard .t1{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.acard .t1 b{font-size:16px;color:var(--accent-strong)}
+.acard .amt{font-weight:900;font-variant-numeric:tabular-nums;white-space:nowrap}
+.acard .sub{font-size:14px;color:var(--text)}
+.acard .m{font-size:13px;color:var(--text-muted)}
+.acard .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+
+/* ---------- detail ---------- */
+.adetail{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;background:var(--surface)}
+.dhead{flex:none;padding:12px 16px 10px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:flex-start}
+.dhead .tx{flex:1;min-width:0}
+.dhead .k{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted)}
+.dhead h2{margin:2px 0;font-size:18px}
+.dhead .sub{font-size:13.5px}
+.dhead .m{font-size:12.5px;color:var(--text-muted)}
+.dhead .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.backbtn{flex:none;width:48px;min-height:48px;border:1px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);display:grid;place-items:center;color:var(--text)}
+.dbody{flex:1;overflow:auto;overflow-x:hidden;padding:12px 16px;display:flex;flex-direction:column;gap:12px;min-height:0;background:var(--bg)}
+.dfoot{flex:none;border-top:1px solid var(--border);background:var(--surface);padding:10px 16px;display:flex;flex-direction:column;gap:8px}
+.touch .dhead{padding:10px}
+.touch .dhead h2{font-size:19px}
+.touch .dbody{padding:10px}
+.touch .dfoot{padding:8px 10px 10px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px}
+.compact .card{border-radius:6px}
+.card h3{margin:0 0 6px;font-size:14px;display:flex;align-items:center;gap:6px;justify-content:space-between}
+.card .m{font-size:12.5px;color:var(--text-muted)}
+.doa{display:flex;gap:8px;align-items:center;padding:8px 12px;border-radius:var(--radius);font-size:13px}
+.doa.in{background:var(--ok-bg);color:var(--ok);border:1px solid #9FCDAE}
+.doa.over{background:var(--warn-bg);color:var(--warn);border:1px solid #E8C27A}
+.doa.na{background:var(--off-bg);color:var(--off);border:1px solid #CBD2DC}
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);text-align:left;padding:5px 6px;border-bottom:1px solid var(--border)}
+.tbl td{padding:6px;border-bottom:1px solid #EDF0F4;vertical-align:top}
+.tbl .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tbl tfoot td{font-weight:900;border-bottom:0}
+.photos{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.ph{width:76px;height:58px;border-radius:6px;border:1px solid #5F6773;flex:none;position:relative}
+.ph.a{background:repeating-linear-gradient(170deg,#8A939F 0 6px,#A8B0BB 6px 11px,#6F7883 11px 13px)}
+.ph.b{background:linear-gradient(135deg,#A8B0BB 0 55%,#7A4E2A 55% 60%,#A8B0BB 60%)}
+.ph.c{background:radial-gradient(circle at 40% 45%,#6F4A2A 0 7px,#A8B0BB 8px),#A8B0BB}
+.ph span{position:absolute;left:3px;bottom:3px;background:rgba(0,0,0,.6);color:#fff;font-size:10px;padding:0 4px;border-radius:3px}
+.note{font-size:13px;margin:8px 0 0;padding:8px 10px;background:#FAFBFC;border-left:3px solid #B9C1CC;border-radius:4px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:13px;margin:0}
+.kv dt{color:var(--text-muted)}
+.kv dd{margin:0;font-weight:700}
+.tl{list-style:none;margin:0;padding:0 0 0 14px;border-left:2px solid var(--border);display:flex;flex-direction:column;gap:8px}
+.tl li{position:relative;font-size:13px}
+.tl li::before{content:"";position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:var(--surface);border:2px solid #8792A3}
+.tl li.ok::before{border-color:var(--ok);background:var(--ok)}
+.tl li.err::before{border-color:var(--err);background:var(--err)}
+.tl li.warn::before{border-color:var(--warn);background:var(--warn)}
+.tl .w{display:block;font-size:12px;color:var(--text-muted)}
+
+/* actions */
+.arow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.arow>.b{flex:1}
+.compact .arow>.b{flex:none}
+.compact .dfoot .arow{justify-content:flex-start}
+.reason label{display:block;font-weight:700;font-size:13px;margin-bottom:4px}
+.reason textarea{width:100%;min-height:64px;border:2px solid #8792A3;border-radius:var(--radius);padding:8px;background:#fff;resize:vertical;font-size:15px}
+.compact .reason textarea{min-height:48px;border-width:1px;border-radius:6px;font-size:13px}
+.reason textarea:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.reason .hint{font-size:12px;color:var(--text-muted);margin-top:2px}
+.block{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--radius);background:var(--off-bg);border:1px solid #9AA5B6;font-size:13.5px}
+.block b{display:block}
+.done{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--radius);font-size:13.5px}
+.done.ok{background:var(--ok-bg);border:1px solid #9FCDAE}
+.done.err{background:var(--err-bg);border:1px solid #F2C2BE}
+.done.info{background:var(--info-bg);border:1px solid #BCD3F0}
+.done .ck{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-weight:900;flex:none;color:#fff}
+.done.ok .ck{background:var(--ok)}
+.done.err .ck{background:var(--err)}
+.done.info .ck{background:var(--info)}
+.done b{display:block}
+
+/* ---------- damage case concurrence ---------- */
+.keys{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.touch .keys{grid-template-columns:1fr}
+.key{border:2px solid var(--border);border-radius:var(--radius);padding:8px 10px;display:flex;flex-direction:column;gap:4px}
+.key.pend{border-style:dashed;border-color:#B9C1CC}
+.key.conc{border-color:#9FCDAE;background:#F6FBF7}
+.key.dis{border-color:#F2C2BE;background:#FFF8F7}
+.key .who{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+.key .st{font-size:14px;font-weight:900}
+.key .out{font-size:13px}
+.lockst{margin-top:8px;padding:8px 10px;border-radius:8px;font-size:13px;display:flex;gap:8px;align-items:flex-start}
+.lockst.open{background:var(--off-bg);color:var(--off)}
+.lockst.locked{background:var(--ok-bg);color:var(--ok)}
+.lockst.esc{background:var(--err-bg);color:var(--err)}
+.ceo{margin-top:8px;border:2px dashed #E3A8A3;border-radius:var(--radius);padding:8px 10px;font-size:13px;background:#fff}
+.ceo b,.lockst b{display:block}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.tile{min-height:48px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-weight:700;font-size:14px;padding:4px 8px;text-align:center;line-height:1.2;color:var(--text)}
+.tile[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong);box-shadow:inset 0 0 0 1px var(--accent)}
+.compact .tile{min-height:34px;border-width:1px;border-radius:6px;font-size:12.5px}
+.qtyrow{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:14px;flex-wrap:wrap}
+.qtyrow input{width:72px;min-height:48px;border:2px solid #8792A3;border-radius:var(--radius);text-align:center;font-size:18px;font-weight:700}
+.compact .qtyrow input{min-height:32px;height:32px;border-width:1px;border-radius:6px;font-size:14px;width:60px}
+.qtyrow input:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.scope{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.opt{display:flex;gap:10px;align-items:flex-start;border:2px solid #B9C1CC;border-radius:var(--radius);padding:8px 10px;min-height:48px;font-size:13.5px}
+.opt input{width:20px;height:20px;accent-color:var(--accent);flex:none;margin-top:1px}
+.opt small{display:block;color:var(--text-muted);font-size:12px}
+.compact .opt{min-height:36px;border-width:1px;border-radius:6px;padding:6px 10px}
+.opt.ro{border-style:dashed}
+
+/* ---------- desktop compact shell ---------- */
+.side{width:208px;flex:none;background:var(--side);color:var(--side-text);display:flex;flex-direction:column}
+.brand{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;font-weight:900;font-size:15px;border-bottom:1px solid #2A3345}
+.brand .mark{width:26px;height:26px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:12px}
+.side nav{padding:8px 0;flex:1}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 16px 0 13px;border:0;border-left:3px solid transparent;background:transparent;color:var(--side-text);text-align:left;font-size:13px}
+.nav-item:hover{background:var(--side-hover)}
+.nav-item svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.nav-item[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff;font-weight:700}
+.nav-item[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 7px;font-weight:700}
+.side-foot{padding:12px 16px;border-top:1px solid #2A3345;font-size:12px;color:var(--side-muted)}
+.dmain{flex:1;display:flex;flex-direction:column;min-width:0}
+.dtop{height:52px;flex:none;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 16px}
+.search{flex:1;max-width:420px;display:flex;align-items:center;gap:8px;height:34px;border:1px solid var(--border);border-radius:6px;padding:0 10px;background:#FAFBFC}
+.search input{border:0;background:transparent;flex:1;min-width:0;outline:none}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.site{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-weight:700}
+.avatar{width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);display:grid;place-items:center;font-weight:900;font-size:12px}
+.spacer{flex:1}
+.dsync{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--off-bg);color:var(--off);white-space:nowrap}
+.dsync.on{background:var(--ok-bg);color:var(--ok)}
+.dcontent{flex:1;display:flex;min-height:0}
+.pick{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--text-muted);gap:6px;background:var(--bg)}
+/* desktop touch: same dark-sidebar shell, touch-roomy targets */
+.touch .side{width:224px}
+.touch .nav-item{height:52px;font-size:15px}
+.touch .nav-item svg{width:20px;height:20px}
+.touch .dtop{height:68px}
+.touch .search,.touch .site{height:48px;border-width:2px;border-radius:var(--radius)}
+.touch .dtop .b{min-height:48px}
+.touch .avatar{width:40px;height:40px}
+.touch .alist{width:600px}
+.touch .alist .lhd h2{font-size:18px}
+.touch .atbl{font-size:14px}
+.touch .atbl td{height:62px}
+.touch .rbtn b{font-size:15px}
+.touch .rbtn span{font-size:13px}
+/* requisition approval class */
+.cls{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:900;padding:2px 8px;border-radius:4px;border:1px solid #E8C27A;background:var(--warn-bg);color:var(--warn);letter-spacing:.04em}
+.rule{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:13px}
+.rule li{padding:6px 8px;border-radius:6px;background:#FAFBFC;border:1px solid #EDF0F4}
+.rule li.me{border-color:var(--accent);background:var(--accent-soft)}
+.astag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;background:var(--warn-bg);color:var(--warn);border:1px solid #E8C27A}
+
+/* ---------- side panels ---------- */
+.sidep{width:320px;display:flex;flex-direction:column;gap:16px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.panel h2{font-size:15px;margin:0 0 8px}
+.panel h3{font-size:13px;margin:10px 0 6px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em}
+.panel .b{width:100%;margin-bottom:8px;min-height:44px;font-size:14px}
+.rolechips{display:flex;flex-wrap:wrap;gap:6px}
+.rchip{min-height:44px;border:2px solid #B9C1CC;border-radius:999px;background:var(--surface);padding:0 12px;font-weight:700;font-size:13px}
+.rchip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent);color:var(--on-accent)}
+.legend{margin:0;padding-left:18px;font-size:13px}
+.legend li{margin-bottom:6px}
+.ltag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--border);background:#F4F6F9}
+.ltag.as{background:var(--warn-bg);color:var(--warn);border-color:#E8C27A}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="intro">
+    <h1>Approvals inbox - DOA approvals and damage case concurrence</h1>
+    <p>Every approver role works on every device class. Pick the device class above the frame and the approver role in Demo controls; the app state (role, open item, typed reason, concurrence) carries across switches. Each role sees only its own approval types. The damage case DMG-2026-0027 appears for both QC head and Finance controller; the requisition IND-2026-0461 appears for the Department head (the requester's Head of department, by value band). Standing approval and self-approval limit requests appear for the Finance controller (finance department head) for one-time approval.</p>
+  </div>
+
+  <div class="devbar">
+    <span class="lbl" id="dev-h">Device class</span>
+    <div class="devsw" role="group" aria-labelledby="dev-h" id="devsw">
+      <button data-dev="hand" aria-pressed="false">Handheld<small>scanner / phone, finger</small></button>
+      <button data-dev="tab" aria-pressed="false">Tablet<small>finger, icon rail</small></button>
+      <button data-dev="desk" aria-pressed="true">Desktop<small>mouse, compact</small></button>
+      <button data-dev="dtouch" aria-pressed="false">Desktop touch<small>touchscreen PC</small></button>
+    </div>
+  </div>
+
+  <div class="device">
+    <div class="device-label" id="frame-label"></div>
+    <div class="fwrap w-desk" id="fwrap"><div class="screen s-desk compact" id="f-main"></div></div>
+  </div>
+
+  <div class="sidep">
+    <section class="panel" aria-labelledby="demo-h">
+      <h2 id="demo-h">Demo controls</h2>
+      <h3 id="role-h">Viewing as</h3>
+      <div class="rolechips" role="group" aria-labelledby="role-h" id="rolechips"></div>
+      <h3>States</h3>
+      <button class="b b-sec" data-demo="offline" id="off-btn">Go offline (now: online)</button>
+      <button class="b b-sec" data-demo="empty" id="empty-btn">Show empty inbox</button>
+      <button class="b b-sec" data-demo="dmg">Open damage case DMG-2026-0027</button>
+      <button class="b b-sec" data-demo="other" id="other-btn">Other party concurs</button>
+      <button class="b b-sec" data-demo="disagree">Simulate disagreement (to CEO)</button>
+      <button class="b b-ghost" data-demo="reset">Reset</button>
+      <div class="sr" aria-live="polite" id="live"></div>
+    </section>
+    <section class="panel" aria-labelledby="leg-h">
+      <h2 id="leg-h">Legend - decisions rendered</h2>
+      <ol class="legend">
+        <li><span class="ltag">DECISION</span> Every role on every device: any approver can decide on a handheld, tablet, desktop or touchscreen PC. Role decides WHAT is shown; the device class decides HOW. No shared machine terminals.</li>
+        <li><span class="ltag">DECISION</span> Handheld (390 x 800, finger): touch-roomy, bottom nav, single column; the list opens a detail page with a back button and a pinned footer (Approve 56px full width, Reject and Ask for info 48px).</li>
+        <li><span class="ltag">DECISION</span> Tablet (820 x 1180 at 55%, finger): touch-roomy, icon rail on the left, list and detail as two panes.</li>
+        <li><span class="ltag">DECISION</span> Desktop (1280 x 800 at 70%, mouse): compact 30-36px controls, dark sidebar #1B2230, top bar with search, site switcher CMF-ALIGARH and + New, list and detail side by side.</li>
+        <li><span class="ltag">DECISION</span> Desktop touch: the desktop layout with dark sidebar, but touch-roomy targets.</li>
+        <li><span class="ltag">DECISION</span> Approvals need a live connection on every device and are never queued offline. Offline shows a block message; evidence stays readable from the last sync.</li>
+        <li><span class="ltag">DECISION</span> Approvals inbox is one surface for department head, site head (warehouse manager), QC head, maintenance supervisor, finance controller and CFO.</li>
+        <li><span class="ltag">DECISION</span> Accent A Ledger Blue #1E6BC6 with its five-token family; --accent-on-dark marks the active Approvals nav item.</li>
+        <li><span class="ltag">DECISION</span> Damage outcome needs concurrence of BOTH QC and finance, in either order; it locks only when both have concurred.</li>
+        <li><span class="ltag">DECISION</span> If QC and finance disagree, the case escalates to the CEO for the final decision.</li>
+        <li><span class="ltag">DECISION</span> Anyone can report damage, incl. machine operators from their own signed-in phone at the machine; reporting places stock on hold.</li>
+        <li><span class="ltag">DECISION</span> Hold scope: local damage holds only the reported units; a quality issue can hold all remaining stock of the lot everywhere.</li>
+        <li><span class="ltag">DECISION</span> Report damage + Request replacement is one flow in pilot scope (replacement indent shown in the case history).</li>
+        <li><span class="ltag">DECISION</span> Any employee can raise a requisition and check stock. Requisitions without a standing approval go to the requester's Head of department by value band (IND-2026-0461).</li>
+        <li><span class="ltag">DECISION</span> Standing approval (SA-YYYY-NNN) links a person to an item group, optionally with a monthly cap and end date; assigned by the site head or Head of department; needs a one-time approval by the finance department head (Finance controller) before it takes effect (SA-2026-021).</li>
+        <li><span class="ltag">DECISION</span> Self-approval limit is set per person with the same assign / finance-head approve / review cycle (Rs 25,000 example). Detail shows who asked, items or limit, cap, end date and the person's last 90 days usage; actions are Approve (one-time) or Reject with reason.</li>
+        <li><span class="ltag">DECISION</span> Grants are revoked the same day the person's sign-in is disabled; assigners and approvers get pruning lists (default every 30 days).</li>
+        <li><span class="ltag as">ASSUMPTION</span> The self-approval limit request shares the SA ref series (SA-2026-022); "Ask for info" is not offered on these requests; usage figures, unit values and the limit end date are mock values.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Approval types per role taken from the DOA registry (world.json doa_entries); approver volumes and per-role details not elicited.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Lot-wide hold: the reporter can only request it ("Suspect whole lot"); the QC head decides it.</li>
+        <li><span class="ltag as">ASSUMPTION</span> DOA band values other than department head (Rs 5,00,000) are mock values. Approving above band forwards to the next approver.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Each side may register disagreement only after the other side has concurred; a concurrence cannot be withdrawn once given.</li>
+        <li><span class="ltag as">ASSUMPTION</span> SLA per approval type (Due in / Overdue) is shown but SLA hours are mock values.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Decided items get an inline confirmation in the detail pane (no toast) and move to "Decided"; no undo.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Handheld top bar has no "Scanner ready" dot: no approval step needs a scan. Sync badge kept.</li>
+        <li><span class="ltag as">ASSUMPTION</span> CEO decision surface is a placeholder only; the machine operator and the welding technician are shown by role, not by name.</li>
+      </ol>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){
+  var ICON={
+    back:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
+    lock:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+    off:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 5-2.7M19 13a10 10 0 0 0-2.4-1.7M2 9.5a15 15 0 0 1 4.3-2.6M22 9.5A15 15 0 0 0 11 6"/><circle cx="12" cy="20" r="1"/></svg>',
+    band:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>',
+    warn:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>'
+  };
+  var ROLES=[
+    {k:'dh',n:'Department head',av:'DH',band:500000,up:'CFO'},
+    {k:'sh',n:'Site head',av:'SH',band:200000,up:'Department head'},
+    {k:'qch',n:'QC head',av:'QH',band:null,up:''},
+    {k:'ms',n:'Maintenance supervisor',av:'MS',band:100000,up:'Site head'},
+    {k:'fc',n:'Finance controller',av:'FC',band:1000000,up:'CFO'},
+    {k:'cfo',n:'CFO',av:'CF',band:5000000,up:'Board'}];
+  function R(k){for(var i=0;i<ROLES.length;i++)if(ROLES[i].k===k)return ROLES[i];}
+  /* who: requester; ln: evidence lines [desc, qty, value]; ph: photo count; hist: [when, text] */
+  var ITEMS=[
+    {id:'a1',r:['sh'],t:'Count adjustment',ref:'CC-2026-0144',sub:'Hex Bolt M16x60 at R-C1-12: system 358, counted 320',who:'Pooja Sharma',wr:'Inventory controller',amt:1254,age:5,due:3,
+      ln:[['Hex Bolt M16x60 · LOT-0975-2 · write-down','-38 nos',1254]],ph:1,note:'Recount by Rohit Mathur (internal auditor) matched 320.',hist:[['25 Sep 06:10','Cycle count CC-2026-0144 posted by Pooja Sharma'],['25 Sep 06:40','Recount witnessed by Rohit Mathur']]},
+    {id:'a2',r:['sh'],t:'Transfer request',ref:'TR-2026-0231',sub:'Main store to Line 2 store - 3 items',who:'Vikas Gupta',wr:'Planner',amt:48600,age:30,due:-24,
+      ln:[['MS Plate 10mm IS2062','12 nos',38400],['Hex Bolt M16x60','200 nos',6600],['Bearing 6205-2RS','12 nos',3600]],ph:0,note:'Needed for PRD-2026-0311 first shift.',hist:[['24 Sep 05:05','Requested by Vikas Gupta']]},
+    {id:'a3',r:['sh'],t:'Receiving quarantine',ref:'GRN-2026-0981 ln 30',sub:'Bearing 6205-2RS 20 nos to quarantine - damage suspected on opening',who:'Suresh Verma',wr:'Store assistant',amt:6200,age:2,due:6,
+      ln:[['Bearing 6205-2RS · LOT-0981-3','20 nos',6200]],ph:2,note:'Inspect on opening - damage suspected. Cartons crushed on one side.',hist:[['25 Sep 09:02','Accepted into inspection bay IB-01 by Suresh Verma'],['25 Sep 09:03','Quarantine requested']]},
+    {id:'a4',r:['sh'],t:'Putaway release',ref:'LOT-0968-3',sub:'Bearing 6205-2RS 24 nos to R-B3-04 after QC-2026-0311',who:'Suresh Verma',wr:'Store assistant',amt:7440,age:1,due:23,
+      ln:[['Bearing 6205-2RS · LOT-0968-3','24 nos',7440]],ph:0,note:'QC cleared 09:40 by Neha Saxena.',hist:[['25 Sep 09:40','QC-2026-0311 cleared by Neha Saxena'],['25 Sep 10:05','Release requested by Suresh Verma']]},
+    {id:'a5',r:['sh'],t:'Refused capture resolution',ref:'RCP-2026-0017',sub:'Challan 4471 Verma Traders - refused at gate, no PO match',who:'Ramesh Yadav',wr:'Gate officer',amt:null,age:10,due:-4,
+      ln:[['Challan 4471 · UP80 CT 1180','1 vehicle',null]],ph:2,note:'Unlisted supplier. Driver waited 40 min, vehicle sent back.',hist:[['25 Sep 01:05','Gate capture refused by Ramesh Yadav'],['25 Sep 01:06','Resolution requested']]},
+    {id:'b1',r:['dh'],t:'Indent approval',ref:'IND-2026-0412',sub:'Maintenance spares - 3 items, needed by 26 Sep',who:'Arif Ansari',wr:'Maintenance technician',amt:18350,age:3,due:5,
+      ln:[['V-belt B-52','4 nos',1840],['Bearing 6205-2RS','6 nos',1860],['Coolant pump CP-40','1 no',14650]],ph:0,note:'For CNC lathe L2-03 breakdown.',hist:[['25 Sep 08:05','Raised by Arif Ansari']]},
+    {id:'rq1',r:['dh'],t:'Requisition approval',ref:'IND-2026-0461',sub:'Welding gloves x 20 pairs - Welding bay',who:'Welding technician, Welding bay',wr:'Employee, no standing approval for this item',amt:3600,age:1,due:7,cls:'REQ',
+      ln:[['Welding gloves, leather, heat resistant (PPE-WG-14)','20 pairs',3600]],ph:0,note:'Old pairs burnt through on the MIG line; 4 welders on the new shift.',hist:[['25 Sep 10:05','Raised from own phone by welding technician, Welding bay'],['25 Sep 10:05','Stock check: 140 pairs available']]},
+    {id:'b2',r:['dh'],t:'Purchase order approval',ref:'PO-CMF-2026-04817',sub:'Shree Balaji Steels - MS plate, bolts, bearings',who:'Kavita Singh',wr:'Procurement',amt:386900,age:6,due:2,
+      ln:[['MS Plate 10mm IS2062','40 nos',128000],['Hex Bolt M16x60','500 nos',16500],['Bearing 6205-2RS','24 nos',7440],['Freight and GST 18%','-',234960]],ph:0,note:'Lowest of 3 quotes; delivery 7 days.',hist:[['25 Sep 05:05','Created by Kavita Singh from IND-2026-0398']]},
+    {id:'b3',r:['dh'],t:'Purchase order approval',ref:'PO-CMF-2026-04822',sub:'Rathi Castings - pump housings PH-40',who:'Kavita Singh',wr:'Procurement',amt:640000,age:1,due:23,
+      ln:[['Pump housing PH-40 casting','400 nos',542400],['GST 18%','-',97600]],ph:0,note:'New supplier, onboarding VEN-2026-0058 pending.',hist:[['25 Sep 10:05','Created by Kavita Singh']]},
+    {id:'b4',r:['dh'],t:'Supplier onboarding',ref:'VEN-2026-0058',sub:'Rathi Castings Pvt Ltd - GSTIN, bank, MSME documents',who:'Kavita Singh',wr:'Procurement',amt:null,age:56,due:-32,
+      ln:[['GSTIN 09AAKCR4471M1Z2','verified',null],['Bank letter (cancelled cheque)','uploaded',null],['MSME Udyam certificate','uploaded',null]],ph:3,note:'Site visit done 20 Sep.',hist:[['23 Sep 03:05','Submitted by Kavita Singh']]},
+    {id:'b5',r:['dh'],t:'Production order release override',ref:'PRD-2026-0311',sub:'Release Pump assembly PA-40 with Seal kit SK-22 short',who:'Vikas Gupta',wr:'Planner',amt:92500,age:2,due:2,
+      ln:[['Pump assembly PA-40','50 nos',92500],['Seal kit SK-22 short','-12 nos',null]],ph:0,note:'SK-22 arrives 26 Sep; first 38 can run.',hist:[['25 Sep 09:05','Override requested by Vikas Gupta']]},
+    {id:'b6',r:['dh'],t:'Production over-completion',ref:'PRD-2026-0298',sub:'Pump assembly PA-40: 106 of 100 completed',who:'Vikas Gupta',wr:'Planner',amt:41400,age:4,due:20,
+      ln:[['Pump assembly PA-40 over-completion','+6 nos',41400]],ph:1,note:'Extra housings from yield better than norm.',hist:[['25 Sep 07:05','Requested by Vikas Gupta']]},
+    {id:'b7',r:['dh'],t:'Production short close',ref:'PRD-2026-0290',sub:'Gear box GB-12: close at 188 of 200',who:'Vikas Gupta',wr:'Planner',amt:58800,age:20,due:4,
+      ln:[['Gear box GB-12 not produced','-12 nos',58800]],ph:0,note:'Customer reduced schedule.',hist:[['24 Sep 15:05','Requested by Vikas Gupta']]},
+    {id:'b8',r:['dh'],t:'BOM substitution',ref:'BOM-SUB-0042',sub:'Bearing 6205-2RS for 6205-ZZ on PA-40',who:'Vikas Gupta',wr:'Planner',amt:null,age:7,due:17,
+      ln:[['6205-ZZ replaced by 6205-2RS','per unit 2',null]],ph:0,note:'Same size, better sealing; QC agreed.',hist:[['25 Sep 04:05','Requested by Vikas Gupta']]},
+    {id:'b9',r:['dh'],t:'ECO approval',ref:'ECO-2026-0019',sub:'Impeller IMP-40 rev C - wall 4.0 to 4.5 mm',who:'Vikas Gupta',wr:'Planner',amt:null,age:26,due:22,
+      ln:[['Impeller IMP-40 rev B to rev C','drawing',null]],ph:1,note:'Field failures on rev B.',hist:[['24 Sep 09:05','Submitted by Vikas Gupta']]},
+    {id:'c1',r:['qch'],t:'Inspection plan approval',ref:'IP-2026-0033',sub:'MS Plate IS2062 - incoming plan rev 2',who:'Neha Saxena',wr:'QC inspector',amt:null,age:5,due:19,
+      ln:[['Thickness 3 points per plate','AQL 1.0',null],['Mill TC check','each lot',null]],ph:0,note:'Adds third thickness point.',hist:[['25 Sep 06:05','Drafted by Neha Saxena']]},
+    {id:'c2',r:['qch'],t:'Conditional release',ref:'QC-2026-0318',sub:'LOT-0975-2 Hex Bolt - release with 100% thread check at issue',who:'Neha Saxena',wr:'QC inspector',amt:10560,age:1,due:3,
+      ln:[['Hex Bolt M16x60 · LOT-0975-2','320 nos',10560]],ph:2,note:'4 of 50 sampled had burrs on thread.',hist:[['25 Sep 10:05','Requested by Neha Saxena']]},
+    {id:'c3',r:['qch'],t:'Witnessed inspection waiver',ref:'WIW-2026-0006',sub:'Rathi Castings first article - customer witness waived',who:'Neha Saxena',wr:'QC inspector',amt:null,age:28,due:-4,
+      ln:[['FAI PH-40 5 pieces','report',null]],ph:3,note:'Customer email of 23 Sep attached.',hist:[['24 Sep 07:05','Requested by Neha Saxena']]},
+    {id:'dmg',r:['qch','fc'],t:'Damage case',ref:'DMG-2026-0027',sub:'Bearing 6205-2RS lot L-2609-117 - damage found at Line 2',who:'Machine operator, Line 2',wr:'Reported from own phone',amt:7440,age:2,due:22,
+      ln:[['Bearing 6205-2RS · L-2609-117 at Line 2','24 nos',7440]],ph:3,note:'Outer race cracked on several pieces, rust spots on others. Found when opening the box at the machine.',
+      hist:[['25 Sep 08:52','Reported by the machine operator from their own phone at CNC lathe L2-03'],['25 Sep 08:52','Local hold placed on 24 nos at Line 2'],['25 Sep 08:53','Replacement indent IND-2026-0431 raised'],['25 Sep 08:53','Reporter asked: suspect whole lot']]},
+    {id:'d1',r:['ms'],t:'Return to service',ref:'RTS-2026-0051',sub:'CNC lathe L2-03 - spindle bearing replaced, trial run OK',who:'Arif Ansari',wr:'Maintenance technician',amt:null,age:1,due:1,
+      ln:[['Spindle bearing replaced','2 nos',null],['Trial run 30 min','no vibration',null]],ph:2,note:'Breakdown BD-2026-0144 closed pending your release.',hist:[['25 Sep 07:30','Breakdown logged'],['25 Sep 10:05','Repair done by Arif Ansari']]},
+    {id:'d2',r:['ms'],t:'Warranty override',ref:'WO-2026-0012',sub:'Spindle motor SM-7.5 - repair in-house during warranty',who:'Arif Ansari',wr:'Maintenance technician',amt:36500,age:30,due:-6,
+      ln:[['Rewinding in-house','1 job',36500]],ph:1,note:'OEM service lead time 3 weeks.',hist:[['24 Sep 05:05','Requested by Arif Ansari']]},
+    {id:'sa1',r:['fc'],t:'Standing approval request',ref:'SA-2026-021',sub:"Grant 'Safety consumables' (gloves, masks, ear plugs) to Arif Ansari, cap 10/month, no end date",who:'Deepak Chauhan',wr:'Maintenance supervisor',amt:null,age:3,due:21,
+      sa:{kind:'grant',to:'Arif Ansari (Maintenance technician)',grp:'Safety consumables',items:[['Nitrile gloves, pair (PPE-NG-02)','Rs 38'],['Dust mask FFP2 (PPE-DM-11)','Rs 64'],['Ear plugs, foam, pair (PPE-EP-05)','Rs 9']],cap:'10 per month (over the cap falls back to normal approval)',end:'No end date',use:[['Nitrile gloves','14 pairs'],['Dust mask FFP2','9 nos'],['Ear plugs','11 pairs']],usen:'Avg 11 per month across the group; 6 requisitions, all approved by Head of department'},
+      ln:[],ph:0,note:'Daily PPE for breakdown work; saves a Head of department approval for every small requisition.',hist:[['25 Sep 07:15','Requested by Deepak Chauhan (Maintenance supervisor)']]},
+    {id:'sl1',r:['fc'],t:'Self-approval limit request',ref:'SA-2026-022',sub:'Self-approval limit Rs 25,000 for Senior engineer - Production',who:'Head of department',wr:'Production',amt:null,age:5,due:19,
+      sa:{kind:'limit',to:'Senior engineer - Production',grp:'Self-approval limit Rs 25,000 per requisition',items:[['Any stocked item, requisitions up to','Rs 25,000']],cap:'None set',end:'31 Mar 2027',use:[['Requisitions raised','9'],['Largest requisition','Rs 21,400'],['Total value','Rs 96,300']],usen:'All 9 approved by Head of department, none rejected'},
+      ln:[],ph:0,note:'Frequent small requisitions for line trials; approvals delay first shift.',hist:[['25 Sep 05:05','Requested by Head of department (Production)']]},
+    {id:'e1',r:['fc'],t:'Job-work over-norm loss',ref:'JW-2026-0087',sub:'Galvanising at Om Coaters - 3.8% loss vs 2.0% norm',who:'Pooja Sharma',wr:'Inventory controller',amt:24300,age:8,due:16,
+      ln:[['Sent 4,200 kg, received 4,040 kg','-160 kg',24300],['Norm loss 2.0%','84 kg',null]],ph:0,note:'Om Coaters says zinc bath change.',hist:[['25 Sep 03:05','Raised by Pooja Sharma']]},
+    {id:'e2',r:['fc'],t:'Migration variance explanation',ref:'MIG-VAR-0012',sub:'Opening stock variance - 14 items, bins R-D2',who:'Migration lead',wr:'Migration',amt:112480,age:50,due:-26,
+      ln:[['14 items, opening vs physical','net -',112480]],ph:0,note:'Legacy system double-counted returns in March.',hist:[['23 Sep 09:05','Explanation submitted']]},
+    {id:'e3',r:['fc','cfo'],t:'Job-work offcut acquisition',ref:'JWO-2026-0009',sub:'MS plate offcuts 420 kg from Om Coaters',who:'Kavita Singh',wr:'Procurement',amt:58200,age:4,due:20,sig:true,
+      ln:[['MS plate offcuts','420 kg',58200]],ph:1,note:'Needs finance controller then CFO signature.',hist:[['25 Sep 07:05','Requested by Kavita Singh']]},
+    {id:'f1',r:['cfo'],t:'Job-work offcut acquisition',ref:'JWO-2026-0006',sub:'Bright bar offcuts 180 kg from Laxmi Engineering',who:'Kavita Singh',wr:'Procurement',amt:26100,age:19,due:5,sig:true,sig1:'24 Sep 16:10',
+      ln:[['Bright bar offcuts','180 kg',26100]],ph:1,note:'',hist:[['24 Sep 16:05','Requested by Kavita Singh'],['24 Sep 16:10','Signature 1 of 2: finance controller']]}
+  ];
+  function IT(id){for(var i=0;i<ITEMS.length;i++)if(ITEMS[i].id===id)return ITEMS[i];}
+  var QCO=[['usable','Usable'],['notusable','Not usable'],['partly','Partly usable']];
+  var FIO=[['debit','Debit note'],['rts','Return to supplier'],['wo','Write-off']];
+  function lab(list,k){for(var i=0;i<list.length;i++)if(list[i][0]===k)return list[i][1];return '';}
+
+  var S;
+  function fresh(){
+    return {dev:'desk',role:'sh',sel:null,pview:'list',tab:'wait',ftype:'',q:'',offline:false,empty:false,mode:'',text:'',clock:65,
+      st:{},hx:{},
+      d:{qc:{st:'pending',out:'',u:12,when:''},fin:{st:'pending',out:'',when:''},esc:false,escBy:'',scope:'local',pickQ:'',pickF:'',scopePick:'local'}};
+  }
+  S=fresh();
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function say(t){var l=document.getElementById('live');l.textContent='';setTimeout(function(){l.textContent=t;},30);}
+  function inr(n){
+    if(n==null)return '-';var s=String(Math.round(Math.abs(n))),last=s.slice(-3),rest=s.slice(0,-3);
+    if(rest)last=','+last;rest=rest.replace(/\B(?=(\d{2})+(?!\d))/g,',');return 'Rs '+rest+last;
+  }
+  function now(){var m=S.clock++;return '25 Sep '+(10+Math.floor(m/60))+':'+('0'+(m%60)).slice(-2);}
+  function hrs(h){h=Math.abs(h);return h<24?h+'h':Math.round(h/24)+'d';}
+
+  /* ---- status model ---- */
+  function key(it){return it.id+'|'+S.role;}
+  function st(it){ // per role
+    if(it.id==='dmg'){
+      var D=S.d;if(D.esc)return 'esc';
+      if(D.qc.st==='concurred'&&D.fin.st==='concurred')return 'locked';
+      var mine=S.role==='qch'?D.qc:D.fin;return mine.st==='concurred'?'mine':'wait';
+    }
+    var x=S.st[key(it)];if(x)return x.s;
+    if(it.id==='e3'&&S.role==='cfo'){var f=S.st['e3|fc'];if(!f)return 'blocked';if(f.s==='rejected')return 'fcrej';}
+    return 'wait';
+  }
+  function waiting(s){return s==='wait'||s==='blocked'||s==='info';}
+  function chipFor(it){
+    var s=st(it);
+    if(it.id==='dmg'){
+      var D=S.d;
+      if(s==='esc')return '<span class="pill p-err"><span class="gl" aria-hidden="true">!</span>Escalated to CEO</span>';
+      if(s==='locked')return '<span class="pill p-ok"><span class="gl" aria-hidden="true">&#10003;</span>Outcome locked</span>';
+      var n=(D.qc.st==='concurred'?1:0)+(D.fin.st==='concurred'?1:0);
+      return '<span class="pill '+(n?'p-info':'p-warn')+'">'+n+' of 2 concurred</span>';
+    }
+    return {wait:'<span class="pill p-warn">Waiting</span>',
+      blocked:'<span class="pill p-off">Needs 1st signature</span>',
+      fcrej:'<span class="pill p-err"><span class="gl" aria-hidden="true">&#10005;</span>Rejected by FC</span>',
+      approved:'<span class="pill p-ok"><span class="gl" aria-hidden="true">&#10003;</span>Approved</span>',
+      forwarded:'<span class="pill p-ok"><span class="gl" aria-hidden="true">&#10003;</span>Approved, forwarded</span>',
+      signed:'<span class="pill p-ok"><span class="gl" aria-hidden="true">&#10003;</span>Signed 1 of 2</span>',
+      rejected:'<span class="pill p-err"><span class="gl" aria-hidden="true">&#10005;</span>Rejected</span>',
+      info:'<span class="pill p-info"><span class="gl" aria-hidden="true">?</span>Info asked</span>'}[s];
+  }
+  function sla(it){
+    var s=st(it);if(!waiting(s)&&s!=='mine')return '<span class="pill p-off">Closed</span>';
+    if(it.due<0)return '<span class="pill p-err"><span class="gl" aria-hidden="true">!</span>Overdue '+hrs(it.due)+'</span>';
+    return '<span class="pill '+(it.due<=4?'p-warn':'p-off')+'">Due in '+hrs(it.due)+'</span>';
+  }
+  function roleItems(){return ITEMS.filter(function(it){return it.r.indexOf(S.role)>=0;});}
+  function inTab(it){
+    var s=st(it),w=waiting(s)||s==='mine';
+    if(S.tab==='wait')return w&&!S.empty;
+    if(S.tab==='done')return !w;
+    return !(S.empty&&w);
+  }
+  function list(){
+    var q=S.q.trim().toLowerCase();
+    return roleItems().filter(function(it){
+      if(!inTab(it))return false;
+      if(S.ftype&&it.t!==S.ftype)return false;
+      if(q&&(it.ref+' '+it.sub+' '+it.who+' '+it.t).toLowerCase().indexOf(q)<0)return false;
+      return true;});
+  }
+  function count(){if(S.empty)return 0;return roleItems().filter(function(it){var s=st(it);return s==='wait'||s==='info';}).length;}
+  function types(){var t=[];roleItems().forEach(function(it){if(t.indexOf(it.t)<0)t.push(it.t);});return t;}
+
+  /* ---- shared filters ---- */
+  function filters(fid){
+    var ts=types(),nd=roleItems().filter(function(it){var s=st(it);return !(waiting(s)||s==='mine');}).length;
+    var h='<div class="filters" role="search"><label class="fld" for="'+fid+'-q"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#566173" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span class="sr">Search approvals</span>'+
+      '<input id="'+fid+'-q" data-f="q" value="'+esc(S.q)+'" placeholder="Search reference, item, requester" autocomplete="off"></label>'+
+      '<label class="sr" for="'+fid+'-t">Filter by approval type</label><select class="sel" id="'+fid+'-t" data-f="ftype"><option value="">All types ('+ts.length+')</option>';
+    ts.forEach(function(t){h+='<option'+(S.ftype===t?' selected':'')+'>'+t+'</option>';});
+    h+='</select><div class="tabs" role="group" aria-label="Show">'+
+      '<button class="tab" data-a="tab" data-k="wait" aria-pressed="'+(S.tab==='wait')+'">Waiting '+count()+'</button>'+
+      '<button class="tab" data-a="tab" data-k="done" aria-pressed="'+(S.tab==='done')+'">Decided '+nd+'</button>'+
+      '<button class="tab" data-a="tab" data-k="all" aria-pressed="'+(S.tab==='all')+'">All</button></div></div>';
+    return h;
+  }
+  function bandLine(){
+    var r=R(S.role);
+    return '<div class="band">'+ICON.band+'<span>Your DOA band as '+r.n+': <b>'+(r.band?'up to '+inr(r.band):'quality decisions, no amount limit')+'</b></span></div>';
+  }
+  function emptyHTML(){
+    var r=R(S.role);
+    if(S.tab==='wait')return '<div class="empty" role="status"><div class="ring" aria-hidden="true">&#10003;</div><h3>Nothing waiting for you</h3><span>New approvals for '+r.n+' appear here. Last checked 11:05.</span><button class="b b-ghost" data-a="tab" data-k="done">See decided items</button></div>';
+    return '<div class="empty" role="status"><h3>No items match</h3><span>Clear the search or type filter.</span><button class="b b-ghost" data-a="clearf">Clear filters</button></div>';
+  }
+
+  /* ---- desktop list ---- */
+  function table(){
+    var L=list();
+    if(!L.length)return emptyHTML();
+    var h='<div class="tscroll"><table class="atbl"><caption class="sr">Approvals for '+R(S.role).n+'</caption>'+
+      (LAY.touch?'<colgroup><col style="width:176px"><col style="width:110px"><col style="width:104px">':'<colgroup><col style="width:190px"><col style="width:112px"><col style="width:84px">')+'<col style="width:44px"><col style="width:90px"><col></colgroup>'+
+      '<thead><tr><th scope="col">Type / reference</th><th scope="col">Requested by</th><th scope="col" class="num">Amount</th><th scope="col">Age</th><th scope="col">SLA</th><th scope="col">Status</th></tr></thead><tbody>';
+    L.forEach(function(it){
+      h+='<tr class="r" data-a="open" data-id="'+it.id+'" aria-selected="'+(S.sel===it.id)+'"><td><button class="rbtn" data-a="open" data-id="'+it.id+'" title="'+esc(it.sub)+'"><b>'+it.ref+'</b><span>'+it.t+'</span></button></td>'+
+        '<td>'+esc(it.who)+'</td><td class="num">'+inr(it.amt)+'</td><td>'+hrs(it.age)+'</td><td>'+sla(it)+'</td><td>'+chipFor(it)+'</td></tr>';
+    });
+    return h+'</tbody></table></div>';
+  }
+  /* ---- phone cards ---- */
+  function cards(){
+    var L=list();
+    if(!L.length)return emptyHTML();
+    var h='<ul class="cards" aria-label="Approvals for '+R(S.role).n+'">';
+    L.forEach(function(it){
+      h+='<li><button class="acard" data-a="open" data-id="'+it.id+'"'+(S.sel===it.id?' aria-current="true"':'')+'><span class="k">'+it.t+'</span>'+
+        '<span class="t1"><b>'+it.ref+'</b><span class="amt">'+inr(it.amt)+'</span></span><span class="sub">'+esc(it.sub)+'</span>'+
+        '<span class="m">'+esc(it.who)+' · '+hrs(it.age)+' ago</span><span class="row">'+sla(it)+chipFor(it)+'</span></button></li>';
+    });
+    return h+'</ul>';
+  }
+
+  /* ---- detail ---- */
+  function doa(it){
+    var r=R(S.role);
+    if(it.id==='dmg')return '<div class="doa na" role="note">'+ICON.band+'<span>Damage outcome needs QC and finance concurrence; no single-person band applies.</span></div>';
+    if(it.sa)return '<div class="doa na" role="note">'+ICON.band+'<span>One-time approval by the finance department head. The '+(it.sa.kind==='grant'?'standing approval':'self-approval limit')+' takes effect only after you approve.</span></div>';
+    if(it.cls)return '<div class="doa in" role="note">'+ICON.band+'<span>Routed to you as the requester\'s Head of department by value band (up to '+inr(r.band)+'). The requester holds no standing approval for this item.</span></div>';
+    if(it.amt==null||!r.band)return '<div class="doa na" role="note">'+ICON.band+'<span>No amount on this item - your role approves this type ('+it.t+').</span></div>';
+    if(it.amt<=r.band)return '<div class="doa in" role="note">'+ICON.band+'<span>Within your DOA band up to '+inr(r.band)+'</span></div>';
+    return '<div class="doa over" role="note">'+ICON.warn+'<span><b>Above your DOA band</b> (up to '+inr(r.band)+'). Approving records your approval and forwards it to the '+r.up+'.</span></div>';
+  }
+  function evidence(it){
+    var tot=0,any=false,h='<section class="card" aria-label="Evidence"><h3>Evidence</h3><table class="tbl"><caption class="sr">Lines for '+it.ref+'</caption><thead><tr><th>Line</th><th class="num">Qty</th><th class="num">Value</th></tr></thead><tbody>';
+    it.ln.forEach(function(l){if(l[2]!=null){tot+=l[2];any=true;}h+='<tr><td>'+esc(l[0])+'</td><td class="num">'+l[1]+'</td><td class="num">'+inr(l[2])+'</td></tr>';});
+    h+='</tbody>'+(any&&it.ln.length>1?'<tfoot><tr><td>Total</td><td></td><td class="num">'+inr(it.amt)+'</td></tr></tfoot>':'')+'</table>';
+    if(it.ph){h+='<div class="photos">';var cl=['a','b','c'];for(var i=0;i<it.ph;i++)h+='<span class="ph '+cl[i%3]+'" role="img" aria-label="Photo '+(i+1)+' of '+it.ph+' for '+it.ref+'"><span>'+(i+1)+'/'+it.ph+'</span></span>';h+='</div>';}
+    if(it.note)h+='<p class="note">'+esc(it.note)+'</p>';
+    h+='<dl class="kv" style="margin-top:8px"><dt>Requested by</dt><dd>'+esc(it.who)+' ('+esc(it.wr)+')</dd><dt>When</dt><dd>'+it.hist[0][0]+'</dd><dt>Site</dt><dd>CMF-ALIGARH</dd></dl></section>';
+    return h;
+  }
+  function classCard(it){
+    return '<section class="card" aria-label="Requisition check"><h3>Requisition check</h3>'+
+      '<dl class="kv"><dt>Approver</dt><dd>Head of department (value band)</dd><dt>Standing approval</dt><dd>None for Welding gloves</dd><dt>Stock</dt><dd>140 pairs available, main store R-A2-07</dd><dt>Last issue</dt><dd>20 pairs to Welding bay, 02 Sep</dd></dl></section>';
+  }
+  function saCard(it){
+    var A=it.sa,g=A.kind==='grant',h='<section class="card" aria-label="Request details"><h3>'+(g?'Standing approval':'Self-approval limit')+' <span class="pill p-acc">'+it.ref+'</span></h3>'+
+      '<dl class="kv"><dt>Asked by</dt><dd>'+esc(it.who)+' ('+esc(it.wr)+')</dd><dt>For</dt><dd>'+esc(A.to)+'</dd><dt>'+(g?'Item group':'Limit')+'</dt><dd>'+esc(A.grp)+'</dd><dt>Monthly cap</dt><dd>'+esc(A.cap)+'</dd><dt>End date</dt><dd>'+esc(A.end)+'</dd></dl>'+
+      '<table class="tbl" style="margin-top:8px"><caption class="sr">'+(g?'Items in the group':'Scope')+'</caption><thead><tr><th>'+(g?'Items in the group':'Scope')+'</th><th class="num">'+(g?'Unit value':'Up to')+'</th></tr></thead><tbody>';
+    A.items.forEach(function(x){h+='<tr><td>'+esc(x[0])+'</td><td class="num">'+esc(x[1])+'</td></tr>';});
+    h+='</tbody></table></section><section class="card" aria-label="Last 90 days usage"><h3>Last 90 days usage - '+esc(A.to.split(' (')[0])+'</h3><table class="tbl"><caption class="sr">Usage in the last 90 days</caption><thead><tr><th>What</th><th class="num">Last 90 days</th></tr></thead><tbody>';
+    A.use.forEach(function(x){h+='<tr><td>'+esc(x[0])+'</td><td class="num">'+esc(x[1])+'</td></tr>';});
+    return h+'</tbody></table><p class="note">'+esc(A.usen)+'</p><span class="m">After approval it appears in your pruning list (default every 30 days). Revoked automatically when the person\'s sign-in is disabled.</span></section>';
+  }
+  function history(it){
+    var H=it.hist.map(function(x){return [x[0],x[1],''];}).concat(S.hx[it.id]||[]);
+    var h='<section class="card" aria-label="History"><h3>History</h3><ol class="tl">';
+    H.forEach(function(x){h+='<li class="'+x[2]+'"><span class="w">'+x[0]+'</span>'+esc(x[1])+'</li>';});
+    return h+'</ol></section>';
+  }
+  function addH(id,text,cls){(S.hx[id]=S.hx[id]||[]).push([now(),text,cls||'']);}
+  function sigCard(it){
+    var fc=S.st['e3|fc'],s1=it.sig1?'Signed '+it.sig1:(fc?(fc.s==='rejected'?'Rejected '+fc.when:'Signed '+fc.when):'Pending');
+    var ok1=it.sig1||(fc&&fc.s==='signed');
+    var cf=S.st[it.id+'|cfo'],s2=cf?(cf.s==='rejected'?'Rejected '+cf.when:'Signed '+cf.when):'Pending';
+    return '<section class="card" aria-label="Signatures"><h3>Two signatures required</h3><div class="keys">'+
+      '<div class="key '+(ok1?'conc':'pend')+'"><span class="who">1 - Finance controller</span><span class="st">'+(ok1?'&#10003; ':'')+s1+'</span></div>'+
+      '<div class="key '+(cf&&cf.s!=='rejected'?'conc':'pend')+'"><span class="who">2 - CFO</span><span class="st">'+(cf&&cf.s!=='rejected'?'&#10003; ':'')+s2+'</span></div></div></section>';
+  }
+
+  /* ---- damage case ---- */
+  function dmgCard(fid){
+    var D=S.d,me=S.role==='qch'?'qc':'fin';
+    function keyBox(side){
+      var K=D[side],title=side==='qc'?'QC - QC head':'Finance - Finance controller',out='';
+      if(K.st==='concurred')out=side==='qc'?(K.out==='partly'?'Partly usable '+K.u+' of 24':lab(QCO,K.out)):lab(FIO,K.out);
+      var cls=K.st==='concurred'?(D.esc&&D.escBy===side?'dis':'conc'):'pend';
+      return '<div class="key '+cls+'"><span class="who">'+title+(side===me?' (you)':'')+'</span>'+
+        '<span class="st">'+(K.st==='concurred'?'&#10003; Concurred':'&#9675; Pending')+'</span>'+
+        '<span class="out">Outcome: '+(out?'<b>'+out+'</b>':(side==='qc'?'usable / not usable / partly usable':'debit note / return to supplier / write-off'))+'</span>'+
+        (K.when?'<span class="m">'+K.when+'</span>':'')+'</div>';
+    }
+    var h='<section class="card" aria-label="Concurrence"><h3>Concurrence - QC and finance <span class="pill p-off">either can go first</span></h3><div class="keys">'+keyBox('qc')+keyBox('fin')+'</div>';
+    if(D.esc){
+      h+='<div class="lockst esc" role="status"><span class="gl" aria-hidden="true">!</span><span><b>Disagreement - escalated to CEO</b>QC: '+(D.qc.out==='partly'?'Partly usable '+D.qc.u+' of 24':lab(QCO,D.qc.out))+' · Finance: '+lab(FIO,D.fin.out)+'. Stock stays on hold.</span></div>'+
+        '<div class="ceo"><b>CEO decision</b><span class="m">Placeholder - the CEO picks the final outcome here. Awaiting CEO.</span></div>';
+    } else if(D.qc.st==='concurred'&&D.fin.st==='concurred'){
+      h+='<div class="lockst locked" role="status">'+ICON.lock+'<span><b>Outcome locked</b>'+(D.qc.out==='partly'?'Partly usable '+D.qc.u+' of 24':lab(QCO,D.qc.out))+' · '+lab(FIO,D.fin.out)+'</span></div>';
+    } else {
+      h+='<div class="lockst open" role="status">'+ICON.lock+'<span>Outcome locks only when both have concurred.</span></div>';
+    }
+    return h+'</section>';
+  }
+  function scopeCard(fid){
+    var D=S.d,canEdit=S.role==='qch'&&D.qc.st==='pending'&&!D.esc&&!S.offline,cur=canEdit?D.scopePick:D.scope;
+    var o=[['local','Local - reported units only','24 nos at Line 2 on hold; nothing else held'],['lot','Whole lot L-2609-117 everywhere','Also holds 60 nos in store R-B3-04 and 16 nos in inspection bay IB-01']];
+    var h='<section class="card" aria-label="Hold scope"><h3>Hold scope <span class="pill p-warn">Reporter asked: suspect whole lot</span></h3>'+
+      '<span class="m">'+(S.role==='qch'?'You decide lot-wide hold as QC head.':'Decided by QC head.')+'</span><div class="scope" role="radiogroup" aria-label="Hold scope">';
+    o.forEach(function(x){
+      h+='<label class="opt'+(canEdit?'':' ro')+'"><input type="radio" name="'+fid+'-scope" data-f="scope" value="'+x[0]+'"'+(cur===x[0]?' checked':'')+(canEdit?'':' disabled')+'><span><b>'+x[1]+'</b><small>'+x[2]+'</small></span></label>';});
+    return h+'</div></section>';
+  }
+  function dmgReport(){
+    return '<section class="card" aria-label="Report"><h3>Report</h3><dl class="kv"><dt>Reported by</dt><dd>Machine operator, Line 2</dd><dt>Where</dt><dd>Line 2, CNC lathe L2-03</dd><dt>Device</dt><dd>Operator\'s own phone, signed in</dd><dt>When</dt><dd>25 Sep 08:52</dd>'+
+      '<dt>Item / lot</dt><dd>Bearing 6205-2RS · L-2609-117</dd><dt>From</dt><dd>GRN-2026-0962 · Shree Balaji Steels</dd><dt>Replacement</dt><dd>IND-2026-0431 raised</dd></dl></section>';
+  }
+
+  /* ---- actions ---- */
+  function offBlock(){
+    return '<div class="block" role="status">'+ICON.off+'<span><b>Offline - approvals need a connection</b>Decisions are checked live against the latest stock and your DOA band, so they are not queued. Reconnect to decide. Evidence shown is from the last sync at 10:42.</span></div>';
+  }
+  function reasonBox(fid,kind){
+    var lbl=kind==='reject'?'Reason for rejection (required, sent to the requester)':'What do you need from the requester?';
+    var ok=S.text.trim().length>0;
+    return '<div class="reason"><label for="'+fid+'-txt">'+lbl+'</label><textarea id="'+fid+'-txt" data-f="text">'+esc(S.text)+'</textarea>'+
+      (ok?'':'<div class="hint">Required before you can '+(kind==='reject'?'reject':'send')+'.</div>')+'</div>'+
+      '<div class="arow">'+(kind==='reject'?'<button class="b b-danger" data-a="doReject"'+(ok?'':' disabled')+'>Confirm reject</button>':'<button class="b b-pri" data-a="doInfo"'+(ok?'':' disabled')+'>Send question</button>')+
+      '<button class="b b-ghost" data-a="cancel">Cancel</button></div>';
+  }
+  function decided(it,s){
+    var x=S.st[key(it)],r=R(S.role);
+    if(s==='approved')return '<div class="done ok" role="status"><span class="ck" aria-hidden="true">&#10003;</span><span><b>Approved by you, '+x.when+'</b>'+esc(it.who)+' has been notified.'+(it.cls?' Stores gets an issue task for 20 pairs.':'')+(it.sa?' '+(it.sa.kind==='grant'?'Standing approval '+it.ref+' is now active for '+esc(it.sa.to.split(' (')[0])+'.':'Self-approval limit Rs 25,000 is now active.'):'')+'</span></div>';
+    if(s==='forwarded')return '<div class="done ok" role="status"><span class="ck" aria-hidden="true">&#10003;</span><span><b>Approved by you, '+x.when+' - forwarded to '+r.up+'</b>Amount is above your band; the '+r.up+' decides next.</span></div>';
+    if(s==='signed')return '<div class="done ok" role="status"><span class="ck" aria-hidden="true">&#10003;</span><span><b>Signed 1 of 2, '+x.when+'</b>Now waiting for the CFO signature.</span></div>';
+    if(s==='rejected')return '<div class="done err" role="status"><span class="ck" aria-hidden="true">&#10005;</span><span><b>Rejected by you, '+x.when+'</b>Reason sent to '+esc(it.who)+': "'+esc(x.reason)+'"</span></div>';
+    if(s==='fcrej')return '<div class="done err" role="status"><span class="ck" aria-hidden="true">&#10005;</span><span><b>Rejected by finance controller</b>Nothing for you to sign.</span></div>';
+    return '';
+  }
+  function actions(fid,it){
+    var s=st(it),phone=LAY.touch;
+    if(it.id==='dmg')return dmgActions(fid,phone);
+    var dec=decided(it,s);if(dec)return dec+(LAY.back?'<button class="b b-sec b-full" data-a="back">Back to inbox</button>':'');
+    if(S.offline)return offBlock()+'<div class="arow"><button class="b b-pri'+(phone?' b-full':'')+'" disabled>Approve</button></div>';
+    if(s==='blocked')return '<div class="block" role="status">'+ICON.lock+'<span><b>Finance controller signs first</b>You can sign once signature 1 of 2 is in.</span></div><div class="arow"><button class="b b-pri'+(phone?' b-full':'')+'" disabled>Sign 2 of 2</button></div>';
+    if(S.mode==='reject'||S.mode==='info')return reasonBox(fid,S.mode);
+    var info=s==='info'?'<div class="done info" role="status"><span class="ck" aria-hidden="true">?</span><span><b>Info asked, '+S.st[key(it)].when+'</b>"'+esc(S.st[key(it)].reason)+'" - you can still decide.</span></div>':'';
+    var apl=it.sig?(S.role==='fc'?'Sign 1 of 2':'Sign 2 of 2 and approve'):it.sa?'Approve (one-time)':it.cls?'Approve requisition':(R(S.role).band&&it.amt>R(S.role).band?'Approve and forward':'Approve');
+    if(phone)return info+'<button class="b b-pri b-full" data-a="approve">'+apl+'</button><div class="arow"><button class="b b-danger" data-a="reject">Reject</button>'+(it.sa?'':'<button class="b b-plain" data-a="info">Ask for info</button>')+'</div>';
+    return info+'<div class="arow"><button class="b b-pri" data-a="approve">'+apl+'</button><button class="b b-danger" data-a="reject">Reject</button>'+(it.sa?'':'<button class="b b-plain" data-a="info">Ask for info</button>')+'</div>';
+  }
+  function dmgPick(fid){
+    var D=S.d,h='';
+    if(S.role==='qch'){
+      h+='<div role="group" aria-label="QC outcome"><div class="tiles">';
+      QCO.forEach(function(o){h+='<button class="tile" data-a="pickQ" data-k="'+o[0]+'" aria-pressed="'+(D.pickQ===o[0])+'">'+o[1]+'</button>';});
+      h+='</div>';
+      if(D.pickQ==='partly')h+='<div class="qtyrow"><label for="'+fid+'-u">Usable</label><input id="'+fid+'-u" type="number" inputmode="numeric" min="1" max="23" data-f="u" value="'+D.qc.u+'"><span>of 24</span></div>';
+      h+='</div>';
+    } else {
+      h+='<div class="tiles" role="group" aria-label="Finance outcome">';
+      FIO.forEach(function(o){h+='<button class="tile" data-a="pickF" data-k="'+o[0]+'" aria-pressed="'+(D.pickF===o[0])+'">'+o[1]+'</button>';});
+      h+='</div>';
+    }
+    return h;
+  }
+  function dmgActions(fid,phone){
+    var D=S.d,me=S.role==='qch'?'qc':'fin',other=me==='qc'?'fin':'qc',K=D[me],pick=me==='qc'?D.pickQ:D.pickF,full=phone?' b-full':'';
+    var back=LAY.back?'<button class="b b-sec b-full" data-a="back">Back to inbox</button>':'';
+    if(D.esc)return '<div class="done err" role="status"><span class="ck" aria-hidden="true">!</span><span><b>With the CEO</b>Nothing more for you until the CEO decides.</span></div>'+back;
+    if(D.qc.st==='concurred'&&D.fin.st==='concurred')return '<div class="done ok" role="status"><span class="ck" aria-hidden="true">&#10003;</span><span><b>Both concurred - outcome locked</b>Stores and finance get their follow-up tasks.</span></div>'+back;
+    if(K.st==='concurred')return '<div class="done ok" role="status"><span class="ck" aria-hidden="true">&#10003;</span><span><b>You concurred, '+K.when+'</b>Waiting for '+(other==='qc'?'QC head':'finance controller')+'. The outcome locks when both concur.</span></div>'+back;
+    if(S.offline)return offBlock()+'<div class="arow"><button class="b b-pri'+full+'" disabled>Concur</button></div>';
+    if(S.mode==='dis')return '<div class="reason"><label for="'+fid+'-txt">Why do you disagree with the '+(other==='qc'?'QC':'finance')+' outcome? (required)</label><textarea id="'+fid+'-txt" data-f="text">'+esc(S.text)+'</textarea></div>'+
+      '<div class="arow"><button class="b b-danger" data-a="doDis"'+(S.text.trim()?'':' disabled')+'>Disagree - escalate to CEO</button><button class="b b-ghost" data-a="cancel">Cancel</button></div>';
+    var h='<span class="m" style="font-size:13px;font-weight:700">Your outcome as '+R(S.role).n+'</span>'+dmgPick(fid);
+    h+='<button class="b b-pri'+full+'" data-a="concur"'+(pick?'':' disabled')+'>'+(pick?'Concur: '+(me==='qc'?(pick==='partly'?'Partly usable '+D.qc.u+' of 24':lab(QCO,pick)):lab(FIO,pick)):'Choose an outcome to concur')+'</button>';
+    if(D[other].st==='concurred')h+='<button class="b b-danger'+full+'" data-a="dis">Disagree with '+(other==='qc'?'QC':'finance')+' outcome</button>';
+    return h;
+  }
+
+  function detailHead(it,phone){
+    return '<div class="dhead">'+(phone?'<button class="backbtn" data-a="back" aria-label="Back to approvals list">'+ICON.back+'</button>':'')+
+      '<div class="tx"><span class="k">'+it.t+'</span><h2>'+it.ref+'</h2><div class="sub">'+esc(it.sub)+'</div>'+
+      '<div class="m">'+esc(it.who)+' · '+esc(it.wr)+' · '+hrs(it.age)+' ago · '+inr(it.amt)+'</div>'+
+      '<div class="chips">'+sla(it)+chipFor(it)+'</div></div></div>';
+  }
+  function detailBody(fid,it){
+    var h=doa(it);
+    if(it.id==='dmg')h+=dmgCard(fid)+scopeCard(fid)+dmgReport();
+    if(it.sig)h+=sigCard(it);
+    if(it.cls)h+=classCard(it);
+    if(it.sa)return h+saCard(it)+'<section class="card" aria-label="Reason"><h3>Reason given</h3><p class="note" style="margin:0">'+esc(it.note)+'</p></section>'+history(it);
+    return h+evidence(it)+history(it);
+  }
+  function detail(fid,phone){
+    var it=S.sel&&IT(S.sel);
+    if(!it||it.r.indexOf(S.role)<0){
+      return '<div class="pick"><b>Pick an approval from the list</b><span>Evidence, history and actions open here.</span></div>';
+    }
+    return detailHead(it,phone)+'<div class="dbody">'+detailBody(fid,it)+'</div><div class="dfoot">'+actions(fid,it,phone)+'</div>';
+  }
+
+  /* ---- shells ---- */
+  function side(){
+    var n=count();
+    var I=[['Dashboard','<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>'],
+      ['Gate','<path d="M3 21V8l9-5 9 5v13"/><path d="M8 21v-8h8v8"/>'],
+      ['Receiving','<path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/>'],
+      ['Stores','<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>'],
+      ['Indents','<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7"/>'],
+      ['Approvals','<path d="M4 12l5 5L20 6"/>'],
+      ['Reports','<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
+      ['Settings','<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>']];
+    var h='<aside class="side"><div class="brand"><span class="mark" aria-hidden="true">IM</span>IMS</div><nav aria-label="Modules">';
+    I.forEach(function(x){var on=x[0]==='Approvals';h+='<button class="nav-item"'+(on?' aria-current="page" data-a="tab" data-k="wait"':' data-a="nr" data-what="'+x[0]+'"')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[1]+'</svg>'+x[0]+(on&&n?'<span class="count">'+n+'</span>':'')+'</button>';});
+    return h+'</nav><div class="side-foot">Signed in: '+R(S.role).n+'</div></aside>';
+  }
+  function dtop(){
+    var s=S.offline?'<span class="dsync" role="status">Offline - last synced 10:42</span>':'<span class="dsync on" role="status">Online</span>';
+    return '<header class="dtop"><label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#566173" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span class="sr">Search IMS</span><input name="gq" placeholder="Search PO, GRN, lot, supplier"></label>'+
+      '<span class="spacer"></span>'+s+'<button class="site" aria-label="Switch site, current CMF-ALIGARH">CMF-ALIGARH <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>'+
+      '<button class="b b-pri" data-a="nr" data-what="+ New">+ New</button><span class="avatar" aria-hidden="true">'+R(S.role).av+'</span></header>';
+  }
+  function ptop(){
+    var sy=S.offline?'<span class="sync" role="status"><span class="d"></span>Offline</span>':'<span class="sync on" role="status"><span class="d"></span>Online</span>';
+    return '<div class="s-top"><b>Approvals<small>'+R(S.role).n+' · CMF-ALIGARH</small></b>'+sy+'</div>';
+  }
+  function bnav(){
+    return '<nav class="bnav" aria-label="Approvals navigation">'+
+      '<button data-a="tab" data-k="wait"'+(S.tab!=='done'?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 2h6l1-2h5"/></svg>Inbox'+(count()?'<span class="cnt">'+count()+'</span>':'')+'</button>'+
+      '<button data-a="tab" data-k="done"'+(S.tab==='done'?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>Decided</button>'+
+      '<button data-a="nr" data-what="More"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>More</button></nav>';
+  }
+  function rail(){
+    var n=count(),I=[['Home','<path d="M3 11l9-7 9 7v10H3z"/>'],['Stores','<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>'],['Indents','<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7"/>'],['Approvals','<path d="M4 12l5 5L20 6"/>'],['More','<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>']];
+    var h='<nav class="rail" aria-label="Modules"><div class="rbrand"><span aria-hidden="true">IM</span></div>';
+    I.forEach(function(x){var on=x[0]==='Approvals';h+='<button'+(on?' aria-current="page" data-a="tab" data-k="wait"':' data-a="nr" data-what="'+x[0]+'"')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[1]+'</svg>'+x[0]+(on&&n?'<span class="cnt">'+n+'</span>':'')+'</button>';});
+    return h+'</nav>';
+  }
+  var DEV={hand:{w:'w-hand',s:'s-hand touch',l:'Handheld <span>scanner / phone 390 x 800 - finger, touch-roomy, bottom nav, list opens a detail page</span>'},
+    tab:{w:'w-tab',s:'s-tab touch',l:'Tablet <span>820 x 1180 shown at 55% - finger, touch-roomy, icon rail, list and detail panes</span>'},
+    desk:{w:'w-desk',s:'s-desk compact',l:'Desktop <span>1280 x 800 shown at 70% - mouse, compact, dark sidebar, list and detail side by side</span>'},
+    dtouch:{w:'w-desk',s:'s-desk touch',l:'Desktop touch <span>1280 x 800 shown at 70% - touchscreen PC, dark sidebar, touch-roomy</span>'}};
+  var LAY={touch:false,back:false};
+  function render(el){
+    var fid=el.id,h,dv=S.dev,cfg=DEV[dv];
+    LAY={touch:dv!=='desk',back:dv==='hand'};
+    el.className='screen '+cfg.s;
+    document.getElementById('fwrap').className='fwrap '+cfg.w;
+    document.getElementById('frame-label').innerHTML=cfg.l;
+    if(dv==='desk'||dv==='dtouch'){
+      h=side()+'<div class="dmain">'+dtop()+'<div class="dcontent"><section class="alist" aria-label="Approvals list"><div class="lhd"><h2>Approvals</h2></div>'+filters(fid)+bandLine()+table()+'</section>'+
+        '<section class="adetail" aria-label="Approval detail">'+detail(fid,false)+'</section></div></div>';
+    } else if(dv==='tab'){
+      h=rail()+'<div class="tmain">'+ptop()+'<div class="tpanes"><section class="tlist" aria-label="Approvals list">'+filters(fid)+bandLine()+cards()+'</section>'+
+        '<section class="adetail" aria-label="Approval detail">'+detail(fid,false)+'</section></div></div>';
+    } else {
+      h=ptop();
+      if(S.pview==='detail'&&S.sel&&IT(S.sel).r.indexOf(S.role)>=0)h+='<section class="adetail" aria-label="Approval detail">'+detail(fid,true)+'</section>'; // task mode: pinned footer replaces bottom nav
+      else h+=filters(fid)+bandLine()+cards()+bnav();
+    }
+    el.innerHTML=h;
+    document.querySelectorAll('#devsw [data-dev]').forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.dev===dv));});
+  }
+  var frames=[document.getElementById('f-main')];
+  function roleChips(){
+    document.getElementById('rolechips').innerHTML=ROLES.map(function(r){return '<button class="rchip" data-demo="role" data-k="'+r.k+'" aria-pressed="'+(S.role===r.k)+'">'+r.n+'</button>';}).join('');
+  }
+  function renderAll(){
+    var a=document.activeElement,fr=null,f=null,act=null,k=null,scr={};
+    if(a&&a.closest&&a.closest('.screen')){fr=a.closest('.screen').id;f=a.dataset.f;act=a.dataset.a;k=a.dataset.k||a.dataset.id;}
+    frames.forEach(function(el){el.querySelectorAll('.dbody,.cards,.tscroll').forEach(function(b,i){scr[el.id+i]=b.scrollTop;});});
+    frames.forEach(render);
+    frames.forEach(function(el){el.querySelectorAll('.dbody,.cards,.tscroll').forEach(function(b,i){if(scr[el.id+i])b.scrollTop=scr[el.id+i];});});
+    roleChips();
+    document.getElementById('off-btn').textContent=S.offline?'Go online (now: offline)':'Go offline (now: online)';
+    document.getElementById('empty-btn').textContent=S.empty?'Show items again (now: empty)':'Show empty inbox';
+    if(fr){var sel=f?'[data-f="'+f+'"]':(act?'[data-a="'+act+'"]'+(k?'[data-'+(a.dataset.k?'k':'id')+'="'+k+'"]':''):null);
+      var n=sel&&document.querySelector('#'+fr+' '+sel);
+      if(n&&n.type!=='radio'){n.focus();if(n.tagName==='INPUT'||n.tagName==='TEXTAREA'){var l=n.value.length;try{n.setSelectionRange(l,l);}catch(e){}}}}
+  }
+
+  function firstWaiting(){var L=roleItems().filter(function(it){return st(it)==='wait';});return L.length?L[0].id:null;}
+  function decide(s,reason){
+    var it=IT(S.sel);S.st[key(it)]={s:s,when:now().slice(7),reason:reason||''};
+    var r=R(S.role).n;
+    if(s==='rejected')addH(it.id,'Rejected by '+r+': '+reason,'err');
+    else if(s==='info')addH(it.id,r+' asked: '+reason,'warn');
+    else if(s==='signed')addH(it.id,'Signature 1 of 2: finance controller','ok');
+    else if(s==='forwarded')addH(it.id,'Approved by '+r+', forwarded to '+R(S.role).up,'ok');
+    else addH(it.id,(it.sig?'Signature 2 of 2: CFO - approved':'Approved by '+r),'ok');
+    S.mode='';S.text='';
+  }
+  function concur(side,out,u){
+    var D=S.d;D[side].st='concurred';D[side].out=out;D[side].when=now();if(side==='qc'){if(u)D.qc.u=u;D.scope=D.scopePick;}
+    addH('dmg',(side==='qc'?'QC head concurred: '+(out==='partly'?'Partly usable '+D.qc.u+' of 24':lab(QCO,out))+(side==='qc'?' · hold '+(D.scope==='lot'?'whole lot':'local'):''):'Finance controller concurred: '+lab(FIO,out)),'ok');
+    if(D.qc.st==='concurred'&&D.fin.st==='concurred')addH('dmg','Outcome locked','ok');
+  }
+  function act(a,t){
+    var it=S.sel&&IT(S.sel),D=S.d;
+    switch(a){
+      case 'open':S.sel=t.dataset.id;S.pview='detail';S.mode='';S.text='';S.d.pickQ='';S.d.pickF='';S.d.scopePick=S.d.scope;say('Opened '+IT(S.sel).ref);break;
+      case 'back':S.pview='list';S.mode='';S.text='';break;
+      case 'tab':S.tab=t.dataset.k;S.pview='list';say('Showing '+{wait:'waiting',done:'decided',all:'all'}[S.tab]+' approvals');break;
+      case 'clearf':S.q='';S.ftype='';break;
+      case 'nr':say((t.dataset.what||'This')+' is not rendered in this mock');return;
+      case 'approve':
+        if(S.offline)return;
+        var r=R(S.role),s=it.sig?(S.role==='fc'?'signed':'approved'):(r.band&&it.amt>r.band?'forwarded':'approved');
+        decide(s);say(it.ref+(s==='signed'?' signed 1 of 2':s==='forwarded'?' approved and forwarded to '+r.up:' approved'));break;
+      case 'reject':S.mode='reject';S.text='';say('Reject: a reason is required');break;
+      case 'info':S.mode='info';S.text='';say('Ask for info: type your question');break;
+      case 'cancel':S.mode='';S.text='';break;
+      case 'doReject':if(!S.text.trim())return;var rs=S.text.trim();decide('rejected',rs);say(it.ref+' rejected. Reason sent to '+it.who);break;
+      case 'doInfo':if(!S.text.trim())return;var q=S.text.trim();decide('info',q);say('Question sent to '+it.who);break;
+      case 'pickQ':D.pickQ=t.dataset.k;say('QC outcome: '+lab(QCO,D.pickQ));break;
+      case 'pickF':D.pickF=t.dataset.k;say('Finance outcome: '+lab(FIO,D.pickF));break;
+      case 'concur':if(S.offline)return;
+        if(S.role==='qch'){if(!D.pickQ)return;concur('qc',D.pickQ);}else{if(!D.pickF)return;concur('fin',D.pickF);}
+        say(D.qc.st==='concurred'&&D.fin.st==='concurred'?'Both concurred. Outcome locked':'Concurrence recorded. Waiting for the other side');break;
+      case 'dis':S.mode='dis';S.text='';say('Disagree: a reason is required');break;
+      case 'doDis':if(!S.text.trim())return;D.esc=true;D.escBy=S.role==='qch'?'qc':'fin';
+        if(S.role==='qch'&&D.pickQ){D.qc.st='concurred';D.qc.out=D.pickQ;D.qc.when=now();}
+        if(S.role==='fc'&&D.pickF){D.fin.st='concurred';D.fin.out=D.pickF;D.fin.when=now();}
+        addH('dmg',R(S.role).n+' disagreed: '+S.text.trim(),'err');addH('dmg','Escalated to CEO','err');S.mode='';S.text='';say('Disagreement recorded. Escalated to the CEO');break;
+    }
+    renderAll();
+  }
+
+  document.addEventListener('click',function(e){
+    var t=e.target.closest('[data-a]');if(t&&!t.disabled){e.preventDefault();act(t.dataset.a,t);return;}
+    var d=e.target.closest('[data-demo]');if(!d)return;var D=S.d;
+    switch(d.dataset.demo){
+      case 'role':S.role=d.dataset.k;S.ftype='';S.q='';S.mode='';S.text='';S.tab='wait';S.sel=firstWaiting();S.pview='list';say('Viewing as '+R(S.role).n+'. '+count()+' waiting');break;
+      case 'offline':S.offline=!S.offline;S.mode='';say(S.offline?'Offline. Approvals are blocked until you reconnect':'Back online. You can decide again');break;
+      case 'empty':S.empty=!S.empty;S.tab='wait';if(S.empty){S.sel=null;S.pview='list';}else S.sel=firstWaiting();say(S.empty?'Inbox empty: nothing waiting for you':'Items shown again');break;
+      case 'dmg':if(S.role!=='qch'&&S.role!=='fc')S.role='qch';S.empty=false;S.sel='dmg';S.pview='detail';S.mode='';S.ftype='';S.q='';S.tab='wait';say('Damage case DMG-2026-0027 opened as '+R(S.role).n);break;
+      case 'other':
+        if(D.esc){say('Already escalated to CEO');break;}
+        var side=S.role==='fc'?'qc':'fin';
+        if(D[side].st==='concurred'){say('Other side already concurred');break;}
+        if(side==='qc')concur('qc','partly',12);else concur('fin','debit');
+        say((side==='qc'?'QC head concurred: partly usable 12 of 24':'Finance controller concurred: debit note'));break;
+      case 'disagree':
+        D.qc={st:'concurred',out:'usable',u:12,when:D.qc.when||'25 Sep 10:20'};D.fin={st:'concurred',out:'wo',when:D.fin.when||'25 Sep 10:31'};
+        D.esc=true;D.escBy='fin';addH('dmg','Finance controller disagreed: write-off vs QC usable','err');addH('dmg','Escalated to CEO','err');
+        if(S.role!=='qch'&&S.role!=='fc')S.role='qch';S.sel='dmg';S.pview='detail';S.empty=false;S.mode='';say('Disagreement. Escalated to the CEO');break;
+      case 'reset':var dv=S.dev;S=fresh();S.dev=dv;S.sel=firstWaiting();say('Reset');break;
+    }
+    renderAll();
+  });
+  document.getElementById('devsw').addEventListener('click',function(e){
+    var b=e.target.closest('[data-dev]');if(!b)return;
+    S.dev=b.dataset.dev;renderAll();b.focus();
+    say('Device class: '+b.firstChild.textContent+'. Same approval state kept');
+  });
+  document.addEventListener('input',function(e){
+    var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
+    if(f==='q'){S.q=e.target.value;renderAll();}
+    else if(f==='text'){S.text=e.target.value;renderAll();}
+    else if(f==='u'){var v=parseInt(e.target.value,10);if(v>=1&&v<=23){S.d.qc.u=v;renderAll();}}
+  });
+  document.addEventListener('change',function(e){
+    var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
+    if(f==='ftype'){S.ftype=e.target.value;renderAll();}
+    if(f==='scope'){S.d.scopePick=e.target.value;say(e.target.value==='lot'?'Hold whole lot L-2609-117 everywhere':'Hold local units only');renderAll();}
+  });
+  S.sel=firstWaiting();
+  renderAll();
+})();
+</script>
+</body>
+</html>

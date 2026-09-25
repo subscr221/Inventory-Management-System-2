@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QC Workbench Mock</title>
+<style>
+/*
+  KEY SCREEN: QC workbench - task inbox, lot inspection (checklist, observations, split),
+  QC head disposition with hold scope, damage case concurrence hand-off
+  Governing spine sections:
+    EXPERIENCE.md
+      - Key Flows > QC inspection at the inspection bay (receiving hand-off, inspect-on-opening flags,
+        characteristic checklist, observations with photo, split, complete inspection) and
+        QC head disposition (accept / reject / conditional release, hold scope, released for putaway,
+        damage case to finance concurrence, CEO escalation)
+      - Component Patterns: task inbox, scan bar, pass/fail + measured value row, split stepper,
+        hold-scope chooser with lot location table, concurrence track, sync badge, read-only badge
+      - State Patterns: captured-pending-sync, lot on hold, sent for finance concurrence,
+        escalated to CEO (read-only), role-gated (inspector sees disposition read-only)
+    DESIGN.md
+      - Every role on every device (memlog override 2026-09-25): ONE frame + device switcher,
+        4 classes - Handheld 390x800 (bottom nav, single column, list opens detail),
+        Tablet 820x1180 at 55% (icon rail, two panes), Desktop 1280x800 at 70% (compact,
+        dark sidebar), Desktop touch (dark sidebar, touch-roomy)
+      - Density by input: touch classes = touch-roomy (primary >=56px, secondary >=48px),
+        desktop fine pointer = compact (34px controls, dark sidebar, "Quality" module active)
+      - Accent token family: theme A Ledger Blue (--accent, --accent-strong, --accent-soft,
+        --on-accent, --accent-on-dark) exactly as in color-themes-1.html; dark sidebar #1B2230
+  Decision source: .memlog.md (2026-09-25). Look and mechanics match key-stores.html.
+  This mock loads nothing from the network; Lato falls back to Segoe UI / Roboto / system-ui.
+*/
+:root{
+  --side:#1B2230; --side-hover:#252E3F; --side-text:#C9D1DD; --side-muted:#8C97A8;
+  --bg:#F4F6F9; --surface:#FFFFFF; --border:#DDE2E9; --text:#1C2430; --text-muted:#566173;
+  --ok:#1E7A3C; --ok-bg:#E6F4EA; --warn:#8A5300; --warn-bg:#FFF3DC;
+  --err:#B3261E; --err-bg:#FCE8E6; --info:#1F5FAD; --info-bg:#E7F0FB;
+  --off:#4A5568; --off-bg:#ECEFF3;
+  /* A. Ledger Blue (default for CMF-ALIGARH) */
+  --accent:#1E6BC6; --accent-strong:#1656A3; --accent-soft:#E8F1FC; --on-accent:#FFFFFF; --accent-on-dark:#5AA2F0;
+  --font: Lato, "Segoe UI", Roboto, system-ui, sans-serif;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.4}
+button,input,select{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+button[disabled]{cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.side :focus-visible,.s-top :focus-visible{outline-color:var(--accent-on-dark)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.page{padding:16px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.intro{flex:0 0 100%}
+.intro h1{font-size:22px;margin:0 0 4px}
+.intro p{margin:0;color:var(--text-muted);max-width:920px}
+
+/* ---------- device switcher + ONE frame (addendum 2026-09-25: every role on every device) ---------- */
+.devsw{flex:0 0 100%;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.devsw .lbl{font-weight:700;font-size:13px}
+.seg{display:inline-flex;border:1px solid #8792A3;border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{border:0;border-right:1px solid #C9D0DA;background:transparent;min-height:44px;padding:0 14px;font-weight:700;font-size:13.5px;color:var(--text);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;line-height:1.15;text-align:left}
+.seg button:last-child{border-right:0}
+.seg button small{font-weight:400;font-size:11.5px;color:var(--text-muted)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg button[aria-pressed="true"] small{color:#E3EEFB}
+.seg button:focus-visible{outline-offset:-3px;outline-color:var(--accent-strong);box-shadow:inset 0 0 0 5px #fff}
+.device{display:flex;flex-direction:column;gap:6px;flex:none}
+.device-label{font-size:13px;font-weight:700}
+.device-label span{font-weight:400;color:var(--text-muted)}
+.fwrap{overflow:hidden;flex:none}
+.bezel{background:#1F2937;border-radius:22px;padding:10px;position:relative;transform-origin:0 0;width:max-content}
+.screen{background:var(--bg);overflow:hidden;display:flex;flex-direction:column;position:relative}
+/* Handheld 390x800 at 100% */
+.fwrap[data-dev="hand"]{width:410px;height:820px;border-radius:22px}
+.fwrap[data-dev="hand"] .screen{width:390px;height:800px}
+/* Tablet 820x1180 at 55% */
+.fwrap[data-dev="tab"]{width:462px;height:660px;border-radius:13px}
+.fwrap[data-dev="tab"] .bezel{transform:scale(.55)}
+.fwrap[data-dev="tab"] .screen{width:820px;height:1180px}
+/* Desktop and desktop touch 1280x800 at 70% */
+.fwrap[data-dev="desk"],.fwrap[data-dev="dtouch"]{width:910px;height:574px;border-radius:6px}
+.fwrap[data-dev="desk"] .bezel,.fwrap[data-dev="dtouch"] .bezel{transform:scale(.7);border-radius:8px}
+.fwrap[data-dev="desk"] .screen,.fwrap[data-dev="dtouch"] .screen{width:1280px;height:800px;flex-direction:row}
+
+/* ---------- tablet icon rail ---------- */
+.rail{width:88px;flex:none;background:var(--side);display:flex;flex-direction:column;padding:6px 0;gap:2px}
+.rail button{border:0;background:transparent;color:var(--side-text);min-height:72px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:12.5px;font-weight:700;position:relative;border-left:4px solid transparent}
+.rail button svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.9}
+.rail button[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff}
+.rail button[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.rail .cnt{position:absolute;top:8px;right:14px;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+.rail :focus-visible{outline-color:var(--accent-on-dark);outline-offset:-3px}
+.tbody{flex:1;display:flex;min-height:0}
+
+/* ---------- buttons, density by input ---------- */
+.b{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:2px solid transparent;border-radius:var(--radius);font-weight:700;padding:0 12px;text-align:center;line-height:1.15}
+.b-pri{background:var(--accent);color:var(--on-accent)}
+.b-pri:hover{background:var(--accent-strong)}
+.b-pri[disabled]{background:#E3E7ED;color:var(--text-muted);border-color:#C9D0DA}
+.b-sec{background:var(--surface);color:var(--accent-strong);border-color:var(--accent)}
+.b-sec:hover{background:var(--accent-soft)}
+.b-plain{background:var(--surface);color:var(--text);border-color:#B9C1CC}
+.b-ghost{background:transparent;color:var(--accent-strong);text-decoration:underline;text-underline-offset:2px}
+.b-full{width:100%}
+.touch{font-size:16px}
+.touch .b{min-height:56px;font-size:17px}
+.touch .b-sec,.touch .b-plain,.touch .b-ghost{min-height:48px;font-size:16px}
+.compact{font-size:13px}
+.compact .b{height:34px;border-width:1px;border-radius:6px;font-size:13px;padding:0 12px}
+.icon{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;flex:none}
+.compact .icon{width:15px;height:15px}
+
+/* ---------- touch top bar and bottom nav ---------- */
+.s-top{height:48px;flex:none;background:var(--side);color:#fff;display:flex;align-items:center;gap:8px;padding:0 12px}
+.s-top b{font-size:16px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ready{width:10px;height:10px;border-radius:50%;background:#3DD68C;box-shadow:0 0 0 3px rgba(61,214,140,.25);flex:none}
+.sync{font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;background:#2E3850;color:#E6EAF0;white-space:nowrap}
+.sync .d{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:#9AA5B6}
+.sync.on .d{background:#3DD68C}
+.bnav{height:64px;flex:none;display:flex;background:var(--surface);border-top:1px solid var(--border)}
+.bnav button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-muted);font-size:13px;font-weight:700;position:relative;min-height:56px}
+.bnav svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9}
+.bnav button[aria-current="page"]{color:var(--accent)}
+.bnav button[aria-current="page"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+.bnav .cnt{position:absolute;top:6px;left:calc(50% + 8px);background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+
+/* ---------- scan bar ---------- */
+.scanbar{flex:none;background:var(--surface);border-bottom:1px solid var(--border);padding:8px 10px}
+.scanbar form{display:flex;gap:8px;align-items:stretch}
+.scanbar .fld{flex:1;display:flex;align-items:center;gap:8px;border:2px solid #8792A3;border-radius:var(--radius);padding:0 10px;background:#FAFBFC;min-width:0}
+.scanbar .fld:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.scanbar input{border:0;background:transparent;flex:1;min-width:0;outline:none;height:52px;font-size:16px}
+.scanbar .hint{font-size:12px;color:var(--text-muted);margin:4px 2px 0}
+.scanbar .how{font-size:12px;color:var(--text-muted);margin:4px 2px 0;display:flex;gap:6px;align-items:center}
+.scanbar .how .ready{width:8px;height:8px;box-shadow:0 0 0 2px rgba(61,214,140,.3)}
+.scanbar .camb{width:56px;flex:none;padding:0}
+.compact .scanbar .camb{width:auto}
+.compact .scanbar{padding:10px 12px}
+.compact .scanbar .fld{border-width:1px;border-radius:6px}
+.compact .scanbar input{height:32px;font-size:13px}
+.who{font-size:12.5px;color:var(--text-muted);padding:8px 12px 0;display:flex;gap:6px;align-items:center}
+.who b{color:var(--text)}
+
+/* ---------- task inbox ---------- */
+.inbox{flex:1;overflow:auto;padding:4px 10px 12px;min-height:0}
+.grp h3{display:flex;align-items:center;gap:8px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:12px 2px 6px}
+.grp h3 .cnt{background:var(--accent);color:var(--on-accent);border-radius:999px;padding:0 8px;font-size:12px;letter-spacing:0}
+.grp h3 .cnt.zero{background:var(--off-bg);color:var(--off)}
+.grp ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.task{width:100%;display:flex;gap:10px;align-items:center;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;min-height:64px}
+.task:hover{border-color:var(--accent)}
+.task[aria-current="true"]{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+.task .tx{flex:1;min-width:0}
+.task b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task .m{display:block;font-size:13px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task .pills{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px}
+.task .pills .pill,.task .pills .ro{white-space:normal}
+.task .go{color:var(--accent);font-weight:900;font-size:20px}
+.empty-g{font-size:13px;color:var(--text-muted);padding:6px 2px}
+.compact .inbox{padding:0 12px 12px}
+.compact .task{min-height:44px;padding:6px 10px;border-radius:6px}
+.compact .task b{font-size:13px}
+.compact .task .m{font-size:12px}
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.pill svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2.4;flex:none}
+.p-ok{background:var(--ok-bg);color:var(--ok)}
+.p-warn{background:var(--warn-bg);color:var(--warn)}
+.p-err{background:var(--err-bg);color:var(--err)}
+.p-info{background:var(--info-bg);color:var(--info)}
+.p-off{background:var(--off-bg);color:var(--off)}
+.p-hold{background:var(--err-bg);color:var(--err);border:1px solid #F2C2BE}
+.ro{display:inline-flex;align-items:center;gap:6px;border:2px solid var(--off);background:var(--off-bg);color:var(--off);border-radius:6px;padding:2px 8px;font-size:12px;font-weight:900;white-space:nowrap}
+.ro svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2.4}
+/* damage photo thumbnail (captured by storekeeper or reporter) */
+.dmg{width:54px;height:40px;border-radius:5px;flex:none;background:linear-gradient(135deg,#A8B0BB 0 55%,#7A4E2A 55% 60%,#A8B0BB 60%);border:1px solid #5F6773}
+.dmg.sm{width:40px;height:30px}
+.nophoto{width:40px;height:30px;border:1px dashed #B9C1CC;border-radius:3px;display:grid;place-items:center;font-size:9.5px;color:var(--text-muted);flex:none;text-align:center}
+
+/* ---------- panes ---------- */
+.two{flex:1;display:flex;min-height:0}
+.two .lp{width:330px;flex:none;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;background:var(--bg)}
+.two .rp{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--surface)}
+.tbody .two .lp{width:300px}
+.tbody .two,.dcontent,.dmain{min-width:0}
+
+/* ---------- detail (inspection / disposition) ---------- */
+.acc{flex:1;display:flex;flex-direction:column;min-height:0;background:var(--surface)}
+.acc-head{flex:none;display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);background:var(--surface)}
+.acc-head .tx{flex:1;min-width:0}
+.acc-head b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-head .m{display:block;font-size:12.5px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-body{flex:1;overflow:auto;overflow-x:hidden;padding:10px;display:flex;flex-direction:column;gap:10px;min-height:0;background:var(--bg)}
+.acc-foot{flex:none;padding:8px 10px 10px;border-top:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;gap:6px}
+.todo{font-size:13px;color:var(--text-muted);display:flex;justify-content:space-between;gap:8px}
+.todo b{color:var(--text)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px}
+.card.done{border-color:#9FCDAE;box-shadow:inset 3px 0 0 var(--ok)}
+.card.bad{border-color:#F2C2BE;box-shadow:inset 3px 0 0 var(--err)}
+.card h4{margin:0;font-size:15px}
+.card .m,.m{font-size:13px;color:var(--text-muted)}
+.kind{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);font-weight:700}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.gap{margin-top:8px}
+.lh{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.lh .ord{font-size:13px;color:var(--text-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.flagc{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:var(--radius);background:var(--warn-bg);border:1px solid #E8C27A;font-size:13.5px}
+.flagc b{color:var(--warn)}
+.hintbox{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:var(--radius);background:var(--info-bg);border:1px solid #BCD3F0;font-size:13.5px}
+.hintbox .icon{color:var(--info);margin-top:1px}
+.hintbox b{color:var(--info)}
+.dest{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:var(--radius);background:var(--ok-bg);border:1px solid #9FCDAE;font-size:14px;margin:0}
+.dest .icon{color:var(--ok);margin-top:1px}
+.dest b{color:var(--ok)}
+.dest .m{display:block;font-size:12.5px}
+.warnbox{padding:8px 10px;border-radius:8px;background:var(--warn-bg);border:1px solid #E8C27A;font-size:13.5px}
+.errbox{padding:8px 10px;border-radius:8px;background:var(--err-bg);border:1px solid #F2C2BE;color:var(--err);font-size:13.5px;font-weight:700}
+
+/* characteristic row: measured value + pass/fail */
+.chk-list{display:flex;flex-direction:column;gap:8px}
+.chrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.meas{display:flex;align-items:center;gap:6px}
+.meas label{font-weight:700;font-size:14px}
+.meas input{width:112px;min-height:48px;border:2px solid #8792A3;border-radius:var(--radius);text-align:center;font-size:18px;font-weight:700;background:#fff;font-variant-numeric:tabular-nums}
+.meas input:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.pf{display:flex;gap:6px;margin-left:auto}
+.tog{min-height:40px;padding:0 12px;border-radius:999px;border:2px solid #B9C1CC;background:var(--surface);font-weight:700;font-size:14px;color:var(--text);display:inline-flex;align-items:center;gap:5px}
+.tog svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2.6}
+.touch .tog{min-height:48px;min-width:92px;justify-content:center}
+.tog.t-pass[aria-pressed="true"]{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)}
+.tog.t-fail[aria-pressed="true"]{border-color:var(--err);background:var(--err-bg);color:var(--err)}
+
+/* observations */
+.obs{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.obs li{display:flex;gap:10px;align-items:center;border:1px solid var(--border);border-radius:8px;padding:6px 8px;font-size:13.5px}
+.obs li .tx{flex:1;min-width:0}
+.obsadd{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.txt{min-height:48px;border:2px solid #8792A3;border-radius:var(--radius);padding:0 10px;background:#fff;font-size:15px;width:100%}
+.txt:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.flbl{font-weight:700;font-size:13.5px}
+
+/* split */
+.split{display:flex;gap:10px;align-items:stretch;margin-top:8px;flex-wrap:wrap}
+.qty{display:flex;align-items:stretch;gap:6px}
+.qty label{display:flex;align-items:center;font-weight:700;font-size:14px;min-width:48px}
+.qty .stp{width:48px;min-height:48px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-size:22px;font-weight:900;color:var(--text)}
+.qty input{width:76px;min-height:48px;border:2px solid #8792A3;border-radius:var(--radius);text-align:center;font-size:20px;font-weight:700;background:#fff}
+.qty input:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.nu{flex:1;min-width:130px;display:flex;align-items:center;gap:8px;padding:0 12px;border-radius:var(--radius);background:var(--err-bg);border:1px solid #F2C2BE;color:var(--err);font-weight:700}
+.nu b{font-size:20px}
+
+/* decisions, hold scope */
+.tiles{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px}
+.tile{min-height:48px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-weight:700;font-size:14px;padding:4px 8px;text-align:center;line-height:1.2;color:var(--text)}
+.tile[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong);box-shadow:inset 0 0 0 1px var(--accent)}
+.tile[disabled]{opacity:.5;text-decoration:line-through}
+.dec+.dec{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)}
+.opt{display:flex;gap:10px;align-items:flex-start;border:2px solid #B9C1CC;border-radius:var(--radius);padding:10px 12px;min-height:48px;margin-top:6px;cursor:pointer}
+.opt input{width:22px;height:22px;accent-color:var(--accent);flex:none;margin:1px 0 0}
+.opt.sel{border-color:var(--accent);background:var(--accent-soft)}
+.opt b{display:block}
+.opt small{display:block;font-size:12.5px;color:var(--text-muted)}
+.req{font-size:12px;color:var(--warn);font-weight:700;margin-top:6px}
+.tbl{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:8px}
+.tbl th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);background:#FAFBFC}
+.tbl td{padding:7px 8px;border-bottom:1px solid #EDF0F4}
+.tbl .num{text-align:right;font-variant-numeric:tabular-nums}
+.track{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.track li{display:flex;gap:10px;align-items:flex-start;font-size:13.5px}
+.track .dot{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;flex:none;font-weight:900;font-size:13px;border:2px solid var(--off);color:var(--off);background:var(--surface)}
+.track .dot.ok{border-color:var(--ok);color:var(--ok);background:var(--ok-bg)}
+.track .dot.no{border-color:var(--err);color:var(--err);background:var(--err-bg)}
+.donehead{display:flex;gap:12px;align-items:center}
+.check{width:52px;height:52px;border-radius:50%;border:5px solid var(--ok);display:grid;place-items:center;font-size:28px;color:var(--ok);flex:none;font-weight:900}
+.donehead h2{margin:0;font-size:20px}
+.backbtn{flex:none;width:48px;min-height:48px;border:1px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);display:grid;place-items:center;color:var(--text)}
+.sheet{flex:1;overflow:auto;overflow-x:hidden;padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--surface);min-height:0}
+.sheet h2{margin:0;font-size:18px}
+.stat{display:flex;gap:8px}
+.stat div{flex:1;border:1px solid var(--border);border-radius:var(--radius);padding:8px;text-align:center}
+.stat b{display:block;font-size:22px}
+.stat span{font-size:12px;color:var(--text-muted)}
+
+/* compact overrides */
+.compact .acc-head{padding:10px 20px}
+.compact .acc-body{padding:12px 20px}
+.compact .acc-foot{flex-direction:row;align-items:center;justify-content:space-between;padding:10px 20px}
+.compact .acc-foot .b{width:auto}
+.compact .sheet{padding:16px 20px}
+.compact .card{border-radius:6px;padding:8px 12px}
+.compact .card h4{font-size:14px}
+.compact .chk-list{gap:0}
+.compact .chk-list .card{border-radius:0;border-bottom-width:0;display:grid;grid-template-columns:1fr auto;align-items:center;gap:0 12px;padding:6px 12px}
+.compact .chk-list .card:first-child{border-radius:6px 6px 0 0}
+.compact .chk-list .card:last-child{border-radius:0 0 6px 6px;border-bottom-width:1px}
+.compact .chk-list .chrow{margin-top:0;flex-wrap:nowrap}
+.compact .chk-list .oot{grid-column:1/-1}
+.compact .meas input,.compact .qty .stp,.compact .qty input,.compact .txt,.compact .backbtn{min-height:32px;height:32px;border-width:1px;border-radius:6px;font-size:13px}
+.compact .meas input{width:90px}
+.compact .meas label,.compact .qty label{font-size:13px}
+.compact .qty .stp{width:32px;font-size:16px}
+.compact .qty input{width:60px}
+.compact .nu{border-radius:6px;min-height:32px}
+.compact .nu b{font-size:15px}
+.compact .tog{min-height:28px;font-size:12px;border-width:1px;padding:0 10px}
+.compact .tile{min-height:30px;border-width:1px;border-radius:6px;font-size:12.5px;padding:3px 8px}
+.compact .opt{min-height:32px;border-width:1px;border-radius:6px;padding:6px 10px}
+.compact .opt input{width:16px;height:16px}
+.compact .backbtn{width:32px}
+.compact .flagc,.compact .hintbox,.compact .dest,.compact .warnbox{font-size:13px;border-radius:6px}
+.dual{display:flex;flex-direction:column;gap:10px}
+.compact .dual{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start}
+
+/* ---------- desktop compact shell ---------- */
+.side{width:208px;flex:none;background:var(--side);color:var(--side-text);display:flex;flex-direction:column}
+.brand{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;font-weight:900;font-size:15px;border-bottom:1px solid #2A3345}
+.brand .mark{width:26px;height:26px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:12px}
+.side nav{padding:8px 0;flex:1}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 16px 0 13px;border:0;border-left:3px solid transparent;background:transparent;color:var(--side-text);text-align:left;font-size:13px}
+.nav-item:hover{background:var(--side-hover)}
+.nav-item svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.nav-item[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff;font-weight:700}
+.nav-item[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 7px;font-weight:700}
+.side-foot{padding:12px 16px;border-top:1px solid #2A3345;font-size:12px;color:var(--side-muted)}
+.dmain{flex:1;display:flex;flex-direction:column;min-width:0}
+.dtop{height:52px;flex:none;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 16px}
+.search{flex:1;max-width:420px;display:flex;align-items:center;gap:8px;height:34px;border:1px solid var(--border);border-radius:6px;padding:0 10px;background:#FAFBFC}
+.search input{border:0;background:transparent;flex:1;min-width:0;outline:none}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.site{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-weight:700}
+.avatar{width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);display:grid;place-items:center;font-weight:900;font-size:12px}
+.spacer{flex:1}
+.dsync{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--off-bg);color:var(--off);white-space:nowrap}
+.dsync.on{background:var(--ok-bg);color:var(--ok)}
+.dcontent{flex:1;display:flex;min-height:0}
+.dlist{width:360px;flex:none;border-right:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;min-height:0}
+.dlist .lhd{padding:12px 12px 0;display:flex;align-items:center;gap:8px}
+.dlist .lhd h2{margin:0;font-size:16px}
+.ddetail{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;background:var(--surface)}
+/* desktop touch: same dark-sidebar layout, touch-roomy density */
+.touch .side{width:220px}
+.touch .nav-item{height:52px;font-size:15px}
+.touch .nav-item svg{width:20px;height:20px}
+.touch .dtop{height:64px}
+.touch .search{height:48px;border-width:2px}
+.touch .site{height:48px;border-width:2px}
+.touch .dtop .b{min-height:48px;font-size:16px}
+.touch .avatar{width:40px;height:40px}
+.touch .dsync{font-size:13px;padding:6px 12px}
+.touch .dlist{width:380px}
+.touch .dlist .lhd h2{font-size:18px}
+
+/* ---------- side panels ---------- */
+.sidep{width:320px;display:flex;flex-direction:column;gap:16px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.panel h2{font-size:15px;margin:0 0 8px}
+.panel .b{width:100%;margin-bottom:8px;min-height:44px;font-size:14px}
+.legend{margin:0;padding-left:18px;font-size:13px}
+.legend li{margin-bottom:6px}
+.ltag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--border);background:#F4F6F9}
+.ltag.as{background:var(--warn-bg);color:var(--warn);border-color:#E8C27A}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="intro">
+    <h1>QC workbench - inspect, split, dispose, hold scope</h1>
+    <p>One shared state in one frame. Pick a device class below; switching mid-flow keeps the current step. Every role works on every class: the role decides what is shown, the device decides how. Switch role between QC inspector Neha Saxena and QC head Sunita Rawat. Path rendered in full: lot L-2609-117 from inspection bay IB-01, checklist and observations, split Good 12 / Not usable 12, complete inspection, then the QC head disposition with hold scope, released for putaway, and the damage case sent for finance concurrence (concur, or disagree and escalate to the CEO).</p>
+  </div>
+
+  <div class="devsw" role="group" aria-labelledby="devsw-l">
+    <span class="lbl" id="devsw-l">Device class</span>
+    <div class="seg">
+      <button type="button" data-dev="hand" aria-pressed="false">Handheld<small>scanner or phone - finger</small></button>
+      <button type="button" data-dev="tab" aria-pressed="true">Tablet<small>finger - icon rail</small></button>
+      <button type="button" data-dev="desk" aria-pressed="false">Desktop<small>mouse - compact</small></button>
+      <button type="button" data-dev="dtouch" aria-pressed="false">Desktop touch<small>touchscreen PC - roomy</small></button>
+    </div>
+  </div>
+
+  <div class="device">
+    <div class="device-label" id="dev-label" aria-live="polite">Tablet <span>820 x 1180 shown at 55%</span></div>
+    <div class="fwrap" id="fwrap" data-dev="tab"><div class="bezel"><div class="screen touch" id="f-main"></div></div></div>
+  </div>
+
+  <div class="sidep">
+    <section class="panel" aria-labelledby="demo-h">
+      <h2 id="demo-h">Demo controls</h2>
+      <button class="b b-sec" data-demo="role" id="role-btn">Acting as: Neha Saxena (QC inspector)</button>
+      <button class="b b-sec" data-demo="scan">Scan lot QR L-2609-117</button>
+      <button class="b b-sec" data-demo="fill">Quick-fill inspection (2 fails, split 12 / 12)</button>
+      <button class="b b-sec" data-demo="disp">Open disposition as QC head</button>
+      <button class="b b-sec" data-demo="concur">Finance concurs</button>
+      <button class="b b-sec" data-demo="disagree">Finance disagrees (escalate to CEO)</button>
+      <button class="b b-sec" data-demo="offline" id="off-btn">Toggle offline (now: offline)</button>
+      <button class="b b-ghost" data-demo="reset">Reset</button>
+      <div class="sr" aria-live="polite" id="live"></div>
+    </section>
+    <section class="panel" aria-labelledby="leg-h">
+      <h2 id="leg-h">Legend - decisions rendered</h2>
+      <ol class="legend">
+        <li><span class="ltag">DECISION</span> Every role on every device: QC inspector and QC head both work on Handheld, Tablet, Desktop and Desktop touch. Role decides what is shown; device class decides how. One shared state across switches.</li>
+        <li><span class="ltag">DECISION</span> Handheld: touch-roomy, bottom nav, single column; the inbox opens a detail page with a back button; primary action pinned at the bottom. Hardware "Scanner ready" shows only here.</li>
+        <li><span class="ltag">DECISION</span> Tablet: touch-roomy, icon rail on the left, inbox and detail in two panes.</li>
+        <li><span class="ltag">DECISION</span> Desktop: compact (30-36px controls), dark sidebar #1B2230, top bar with search, site switcher CMF-ALIGARH and "+ New", list and detail side by side. Desktop touch: same layout, touch-roomy density.</li>
+        <li><span class="ltag">DECISION</span> Every scan also offers the camera (Handheld, Tablet) and always "Type it"; desktop says "USB scanner or type".</li>
+        <li><span class="ltag">DECISION</span> Accent A Ledger Blue with --accent-on-dark for the active nav marker on the dark sidebar and rail.</li>
+        <li><span class="ltag">DECISION</span> All received items land in inspection bay IB-01 first; the QC inbox group "In inspection bay IB-01 - to inspect" is fed by stores acceptance.</li>
+        <li><span class="ltag">DECISION</span> Storekeeper flags "Inspect on opening - damage suspected / observed" with photo reach the inspector as chips: a note, not a verdict.</li>
+        <li><span class="ltag">DECISION</span> Anyone can report damage from their own signed-in device (there are no shared machine terminals), including a machine operator from their phone; reports arrive under "Damage reported" with the stock already on local hold.</li>
+        <li><span class="ltag">DECISION</span> Approvals need a live connection on every device: finance concurrence and conditional-release sign-off happen in the Approvals inbox, online only.</li>
+        <li><span class="ltag">DECISION</span> Uses the existing QC module concepts: observations, results, inspection completion, split, disposition accept / reject / conditional release (DOA governed), lot quality hold.</li>
+        <li><span class="ltag">DECISION</span> Hold scope: local damage holds only the reported units; a quality issue can hold all remaining stock of the lot everywhere (store, inspection bay, shop floor).</li>
+        <li><span class="ltag">DECISION</span> Damage outcome needs QC and finance concurrence; either may go first; final only when both concur. Disagreement escalates to the CEO.</li>
+        <li><span class="ltag">DECISION</span> Accepted stock is "Released for putaway" and appears in the storekeeper's "Cleared by QC - put away" group with a suggested rack.</li>
+        <li><span class="ltag">DECISION</span> Offline-first: captures show "Captured - pending sync".</li>
+        <li><span class="ltag as">ASSUMPTION</span> Reporter can only REQUEST a lot-wide hold ("Suspect whole lot"); the QC head decides it. Room recommendation, not yet ruled.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Only the QC head records a disposition; the inspector sees it read-only. Role split taken from qc_inspector / qc_head, not elicited.</li>
+        <li><span class="ltag as">ASSUMPTION</span> A lot-wide hold blocks "Accept" on the good part of the same lot until cleared; conditional release stays possible.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Sampling plan text (sample 5 of 24, accept on 0, flagged carton 100%) and the bearing characteristics are illustrative; real plans come from item QC specs.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Measured value auto-suggests Pass or Fail against the tolerance; the inspector can override.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Not-usable units need at least one observation before inspection can complete.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Conditional release routes to the Approvals inbox (DOA) before any stock moves; thresholds not shown.</li>
+        <li><span class="ltag as">ASSUMPTION</span> A fourth inbox group "Sent on - finance or CEO" holds cases waiting on others; ad-hoc QC task creation from a damage report is unverified in the backend.</li>
+        <li><span class="ltag as">ASSUMPTION</span> The machine operator name Rakesh Kumar is fictitious; the pilot roster has no machine operator.</li>
+        <li><span class="ltag as">ASSUMPTION</span> The QC head's disposition is a QC capture, not an approval, so it can be captured offline ("Captured - pending sync"); the finance and CEO steps are online only.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Tablet rail and handheld bottom nav carry the same four QC destinations (Inbox, Scan, On hold, More); the desktop sidebar shows all modules.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Lot L-2609-117 also covers an earlier part delivery (R-B3-04 30) and 4 issued to Line 2 WIP, so the lot's stock sits in three places.</li>
+      </ol>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){
+  var ICON={
+    scan:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>',
+    cam:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    back:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
+    info:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>',
+    flag:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>',
+    ok:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>'
+  };
+  var LOCK='<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+  var TICK='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>';
+  var CROSS='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  var EYE='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+
+  var LOT={item:'Bearing 6205-2RS',lot:'L-2609-117',grn:'GRN-2026-0981',sup:'Shree Balaji Steels',po:'PO-CMF-2026-04817 ln 30',qty:24,bay:'IB-01',qc:'QC-2026-0327',rate:385};
+  var CHARS=[
+    {n:'Bore diameter',spec:'25.00 mm ± 0.01',nom:25,tol:0.01,unit:'mm'},
+    {n:'Outside diameter',spec:'52.00 mm ± 0.013',nom:52,tol:0.013,unit:'mm'},
+    {n:'Width',spec:'15.00 mm ± 0.12',nom:15,tol:0.12,unit:'mm'},
+    {n:'Shields - no dents, cuts or rust',spec:'Visual'},
+    {n:'Rotation - smooth, no noise or seizing',spec:'Hand spin'}
+  ];
+  var ROLES={insp:{name:'Neha Saxena',title:'QC inspector',ini:'NS'},head:{name:'Sunita Rawat',title:'QC head',ini:'SR'}};
+  var GROUPS=['In inspection bay IB-01 - to inspect','Damage reported','Awaiting disposition','Sent on - finance or CEO'];
+  var OTHER={
+    k2:{g:0,title:'MS Plate 10mm IS2062 · L-2609-115',m:'GRN-2026-0981 · 42 nos · Shree Balaji Steels'},
+    k3:{g:0,title:'Hex Bolt M16x60 · L-2609-116',m:'GRN-2026-0981 · 500 nos · flagged by Suresh Verma',flag:'observed'},
+    d2:{g:1,title:'Proximity sensor M18 PNP · L-2609-090',m:'1 no dead on arrival · reported by Arif Ansari · 10:05',hold:'On hold - 1 unit'},
+    a2:{g:3,title:'Welding wire ER70S-6 · L-2609-102',m:'Rejected 6 spools · QC and finance disagree',ceo:true},
+    a3:{g:3,title:'V-belt B-52 · L-2609-094',m:'Rejected 10 nos · Rs 6,480 · debit note proposed',fin:true}
+  };
+  var S,syncT=null;
+  function fresh(){
+    return {role:'insp',view:'home',task:null,offline:true,pending:0,msg:'',scanq:'',
+      chars:CHARS.map(function(){return {res:'',val:''};}),
+      obs:[],obsText:'',obsPhoto:false,good:'',inspDone:false,
+      disp:{good:'accept',bad:'reject',reason:'',scope:'local',done:false},fin:'pending'};
+  }
+  S=fresh();
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function say(t){var l=document.getElementById('live');l.textContent='';setTimeout(function(){l.textContent=t;},30);}
+  function inr(n){var s=String(Math.round(n)),l=s.slice(-3),r=s.slice(0,-3);if(r)l=r.replace(/\B(?=(\d{2})+(?!\d))/g,',')+','+l;return 'Rs '+l;}
+  function head(){return S.role==='head';}
+  function goodN(){return S.good===''?0:+S.good;}
+  function badN(){return S.good===''?0:LOT.qty-goodN();}
+  function hold(t){return '<span class="pill p-hold">'+LOCK+esc(t)+'</span>';}
+
+  /* ---- inspection logic ---- */
+  function oot(i){var C=CHARS[i],v=S.chars[i].val;if(C.tol==null||v===''||isNaN(+v))return null;var d=+v-C.nom;return Math.abs(d)>C.tol+1e-9?d:null;}
+  function todo(){
+    var t=[],r=S.chars.filter(function(c){return !c.res;}).length;
+    if(r)t.push(r+' result'+(r>1?'s':''));
+    if(S.good==='')t.push('split');
+    if(badN()>0&&!S.obs.length)t.push('observation for not-usable units');
+    return t;
+  }
+  function fails(){return CHARS.filter(function(_,i){return S.chars[i].res==='fail';}).map(function(c){return c.n.split(' - ')[0];});}
+
+  /* ---- disposition logic ---- */
+  function dispBlock(){
+    var D=S.disp;
+    if(D.scope==='whole'&&D.good==='accept')return 'A lot-wide hold blocks accepting the good 12. Choose Conditional release, or hold only reported units.';
+    return '';
+  }
+  function dispTodo(){var D=S.disp,t=[];if(!D.reason.trim())t.push('reason');if(dispBlock())t.push('resolve hold conflict');return t;}
+  function damageQty(){var D=S.disp,q=0;if(D.bad==='reject')q+=badN();if(D.good==='reject')q+=goodN();return q;}
+  function locs(){
+    var whole=S.disp.scope==='whole',done=S.disp.done;
+    return [
+      ['Inspection bay IB-01','12 not usable (this delivery)',12,true],
+      ['Rack R-B3-04','Earlier part delivery GRN-2026-0968',30,whole],
+      ['Line 2 WIP','Issued on IND-2026-0415 - reported',4,true]
+    ];
+  }
+
+  /* ---- chrome ---- */
+  function syncBadge(){
+    if(S.offline)return '<span class="sync"><span class="d"></span>'+(S.pending?'Captured - pending sync ('+S.pending+')':'Offline')+'</span>';
+    return '<span class="sync on"><span class="d"></span>'+(S.pending?'Syncing '+S.pending:'Synced')+'</span>';
+  }
+  function stop(){var hw=DEV==='hand';return '<div class="s-top">'+(hw?'<span class="ready" aria-hidden="true"></span>':'')+'<b>QC workbench</b>'+(hw?'<span class="sr">Scanner ready</span>':'')+syncBadge()+'</div>';}
+  var RAILI=[['home','Inbox','<path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 2h6l1-2h5"/>'],
+    ['focusScan','Scan','<path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M7 12h10"/>'],
+    ['nr','On hold','<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'],
+    ['nr','More','<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>']];
+  function rail(){
+    var h='<nav class="rail" aria-label="QC navigation">';
+    RAILI.forEach(function(x,k){h+='<button data-a="'+x[0]+'"'+(k===0?' aria-current="page"':'')+(x[0]==='nr'?' data-what="'+x[1]+'"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[2]+'</svg>'+x[1]+(k===0?'<span class="cnt">'+total()+'</span>':'')+'</button>';});
+    return h+'</nav>';
+  }
+  function counts(){
+    var d=S.disp.done;
+    return [(S.inspDone?0:1)+2, 2, (S.inspDone&&!d)?1:0, 2+((d&&damageQty()&&S.fin!=='concur')?1:0)];
+  }
+  function total(){var c=counts();return c[0]+c[1]+c[2];}
+  function bnav(){
+    return '<nav class="bnav" aria-label="QC navigation">'+
+      '<button data-a="home" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 2h6l1-2h5"/></svg>Inbox<span class="cnt">'+total()+'</span></button>'+
+      '<button data-a="focusScan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M7 12h10"/></svg>Scan</button>'+
+      '<button data-a="nr" data-what="Lots on hold"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>On hold</button>'+
+      '<button data-a="nr" data-what="More"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>More</button></nav>';
+  }
+  function scanbar(fid){
+    var desk=DEV==='desk'||DEV==='dtouch',cam=!desk;
+    var how=DEV==='hand'?'<span class="ready" aria-hidden="true"></span>Scanner ready - or use the camera, or type it':
+      DEV==='tab'?'Camera or type it':'USB scanner or type';
+    return '<div class="scanbar"><form data-scan="1" role="search"><label class="fld" for="'+fid+'-scan">'+ICON.scan+
+      '<span class="sr">Type it: lot, GRN or QC task</span><input id="'+fid+'-scan" data-f="scanq" value="'+esc(S.scanq)+'" placeholder="'+(desk?'USB scanner or type lot, GRN, QC task':'Type it: lot, GRN or QC task')+'" autocomplete="off"></label>'+
+      (cam?'<button class="b b-sec camb" type="button" data-a="cam" aria-label="Scan with camera">'+ICON.cam+'</button>':'')+
+      '<button class="b b-pri" type="submit">Go</button></form>'+
+      '<p class="how">'+how+'</p>'+
+      (S.msg?'<p class="hint" role="note">'+esc(S.msg)+'</p>':'')+'</div>';
+  }
+  function who(){var R=ROLES[S.role];return '<div class="who">Signed in: <b>'+R.name+'</b> - '+R.title+'</div>';}
+
+  /* ---- inbox ---- */
+  function taskBtn(id,title,meta,thumb,pills){
+    var cur=S.task===id&&S.view!=='home';
+    return '<li><button class="task" data-a="open" data-t="'+id+'"'+(cur?' aria-current="true"':'')+'>'+(thumb||'')+'<span class="tx"><b>'+esc(title)+'</b><span class="m">'+esc(meta)+'</span>'+(pills?'<span class="pills">'+pills+'</span>':'')+'</span><span class="go" aria-hidden="true">&rsaquo;</span></button></li>';
+  }
+  function flagPill(k){return '<span class="pill p-warn">'+TICK.replace('M4 12l5 5L20 6','M5 21V4h11l-2 4 2 4H5')+'Inspect on opening - damage '+k+'</span>';}
+  function inbox(){
+    var c=counts(),h='<div class="inbox">',D=S.disp;
+    GROUPS.forEach(function(g,gi){
+      h+='<section class="grp" aria-label="'+g+', '+c[gi]+'"><h3>'+g+' <span class="cnt'+(c[gi]?'':' zero')+'">'+c[gi]+'</span></h3><ul>';
+      if(gi===0&&!S.inspDone)h+=taskBtn('k1',LOT.item+' · '+LOT.lot,LOT.grn+' · '+LOT.qty+' nos · '+LOT.sup,'<span class="dmg sm" role="img" aria-label="Storekeeper photo: crushed carton corner"></span>',flagPill('suspected'));
+      if(gi===0)['k2','k3'].forEach(function(k){var o=OTHER[k];h+=taskBtn(k,o.title,o.m,o.flag?'<span class="dmg sm" role="img" aria-label="Storekeeper photo: bent bolts"></span>':'<span class="nophoto" aria-hidden="true">no flag</span>',o.flag?flagPill(o.flag):'');});
+      if(gi===1){
+        h+=taskBtn('d1',LOT.item+' · '+LOT.lot,'4 nos at Line 2 · reported by Rakesh Kumar from their phone · 11:20','<span class="dmg sm" role="img" aria-label="Operator photo: seized bearing"></span>',
+          hold(S.disp.done&&D.scope==='whole'?'Lot on hold':'On hold - 4 units')+'<span class="pill p-info">Suspect whole lot - requested</span>');
+        var o=OTHER.d2;h+=taskBtn('d2',o.title,o.m,'<span class="dmg sm" role="img" aria-label="Photo: sensor"></span>',hold(o.hold));
+      }
+      if(gi===2&&S.inspDone&&!D.done)h+=taskBtn('k1',LOT.item+' · '+LOT.lot,LOT.qc+' · Good '+goodN()+' / Not usable '+badN(),'',hold('Lot on hold - 12 units')+(S.pending?'<span class="pill p-off">Captured - pending sync</span>':''));
+      if(gi===3){
+        if(D.done&&damageQty()&&S.fin!=='concur')h+=taskBtn('k1','DC-2026-0042 · '+LOT.lot,LOT.item+' · Rejected '+damageQty()+' · '+inr(damageQty()*LOT.rate),'',S.fin==='disagree'?'<span class="ro">'+EYE+'Escalated to CEO - read-only</span>':'<span class="pill p-info">Sent for finance concurrence</span>');
+        ['a2','a3'].forEach(function(k){var o=OTHER[k];h+=taskBtn(k,o.title,o.m,'',o.ceo?'<span class="ro">'+EYE+'Escalated to CEO - read-only</span>':'<span class="pill p-info">Sent for finance concurrence</span>');});
+      }
+      if(!c[gi])h+='<li class="empty-g">Nothing waiting</li>';
+      h+='</ul></section>';
+    });
+    if(D.done){
+      h+='<section class="grp" aria-label="Done today"><h3>Done today</h3><ul>';
+      h+=taskBtn('k1',LOT.lot+' · '+(D.good==='accept'?'Released for putaway 12':D.good==='cond'?'Conditional release - DOA':'Rejected'),LOT.item+' · '+LOT.qc,'',D.good==='accept'?'<span class="pill p-ok">'+TICK+'Released for putaway</span>':'');
+      if(damageQty()&&S.fin==='concur')h+=taskBtn('k1','DC-2026-0042 · outcome final',LOT.item+' · QC and finance concurred','','<span class="pill p-ok">'+TICK+'Final</span>');
+      h+='</ul></section>';
+    }
+    return h+'</div>';
+  }
+
+  /* ---- inspection ---- */
+  function charHTML(fid,i){
+    var C=CHARS[i],R=S.chars[i],id=fid+'-c'+i,o=oot(i),h='<article class="card'+(R.res==='pass'?' done':R.res==='fail'?' bad':'')+'" aria-label="'+C.n+'">';
+    h+='<div class="lh"><h4>'+C.n+'</h4><span class="ord">'+C.spec+'</span></div><div class="chrow">';
+    if(C.tol!=null)h+='<div class="meas"><label for="'+id+'-v">Measured</label><input id="'+id+'-v" type="text" inputmode="decimal" data-f="val" data-i="'+i+'" value="'+esc(R.val)+'" placeholder="'+C.nom.toFixed(C.tol<0.1?3:2)+'"><span>'+C.unit+'</span></div>';
+    h+='<div class="pf" role="group" aria-label="Result for '+C.n+'">'+
+      '<button class="tog t-pass" data-a="res" data-i="'+i+'" data-k="pass" aria-pressed="'+(R.res==='pass')+'">'+TICK+'Pass</button>'+
+      '<button class="tog t-fail" data-a="res" data-i="'+i+'" data-k="fail" aria-pressed="'+(R.res==='fail')+'">'+CROSS+'Fail</button></div></div>';
+    if(o!=null)h+='<div class="oot gap"><span class="pill p-err">'+CROSS+'Out of tolerance by '+(o>0?'+':'')+o.toFixed(3)+' '+C.unit+'</span></div>';
+    return h+'</article>';
+  }
+  function inspection(fid,withBack){
+    var t=todo(),ready=!t.length,nres=S.chars.filter(function(c){return c.res;}).length;
+    var h='<div class="acc"><div class="acc-head">'+(withBack?'<button class="backbtn" data-a="home" aria-label="Back to inbox">'+ICON.back+'</button>':'')+
+      '<div class="tx"><b>'+LOT.item+' · '+LOT.lot+'</b><span class="m">'+LOT.grn+' · '+LOT.sup+' · '+LOT.po+'</span><span class="m">'+LOT.qty+' nos in inspection bay '+LOT.bay+' · '+LOT.qc+'</span></div>'+hold('Not issuable')+'</div>';
+    h+='<div class="acc-body">';
+    h+='<div class="flagc" role="note"><span class="dmg" role="img" aria-label="Storekeeper photo: carton 2 of 4, crushed corner"></span><span><b>Inspect on opening - damage suspected</b><br>Suresh Verma at acceptance, 08:55: "Carton 2 of 4 crushed on one corner." A note, not a verdict.</span></div>';
+    h+='<div class="hintbox" role="note">'+ICON.info+'<span><b>Sampling plan</b> - 24 nos: inspect 5 at random, accept on 0 defects. Flagged carton 2: inspect every unit.</span></div>';
+    h+='<section aria-label="Characteristic checklist"><div class="lh" style="margin:2px 2px 6px"><span class="kind">Checklist</span><span class="ord">'+nres+' of '+CHARS.length+' recorded</span></div><div class="chk-list">';
+    for(var i=0;i<CHARS.length;i++)h+=charHTML(fid,i);
+    h+='</div></section>';
+    h+='<div class="dual"><section class="card" aria-label="Observations"><h4>Observations</h4>';
+    if(S.obs.length){h+='<ul class="obs">';S.obs.forEach(function(o){h+='<li>'+(o.photo?'<span class="dmg sm" role="img" aria-label="Observation photo"></span>':'<span class="nophoto" aria-hidden="true">no photo</span>')+'<span class="tx">'+esc(o.text)+'<br><span class="m">'+ROLES.insp.name+' · '+o.at+'</span></span>'+(S.pending?'<span class="pill p-off">Captured - pending sync</span>':'')+'</li>';});h+='</ul>';}
+    h+='<div class="obsadd"><label class="flbl" for="'+fid+'-obs">New observation</label><input class="txt" id="'+fid+'-obs" type="text" data-f="obsText" value="'+esc(S.obsText)+'" placeholder="What did you see, how many units">'+
+      '<div class="row"><button class="b b-plain" data-a="obsPhoto" aria-pressed="'+S.obsPhoto+'">'+ICON.cam+(S.obsPhoto?'Photo taken - retake':'Take photo')+'</button>'+
+      '<button class="b b-sec" data-a="obsAdd"'+(S.obsText.trim()?'':' disabled aria-disabled="true"')+'>Add observation</button></div></div></section>';
+    h+='<section class="card'+(S.good!==''?' done':'')+'" aria-label="Split"><h4>Split - received '+LOT.qty+'</h4><div class="split">'+
+      '<div class="qty"><label for="'+fid+'-good">Good</label><button class="stp" data-a="gdec" aria-label="Decrease good quantity">-</button>'+
+      '<input id="'+fid+'-good" type="text" inputmode="numeric" data-f="good" value="'+esc(S.good)+'" placeholder="0"><button class="stp" data-a="ginc" aria-label="Increase good quantity">+</button></div>'+
+      '<div class="nu" role="status">'+CROSS.replace('<svg','<svg class="icon"')+'Not usable <b>'+(S.good===''?'-':badN())+'</b></div></div>'+
+      '<p class="m" style="margin:6px 0 0">Good + Not usable = '+LOT.qty+'. Not-usable units stay on hold in '+LOT.bay+'.</p></section></div>';
+    h+='</div><div class="acc-foot"><div class="todo"><span>'+(S.good!==''?'Good '+goodN()+' / Not usable '+badN():'Split not set')+'</span><span>'+(ready?'<b>Ready to complete</b>':'Left: <b>'+esc(t[0])+'</b>'+(t.length>1?' +'+(t.length-1)+' more':''))+'</span></div>'+
+      '<button class="b b-pri b-full" data-a="complete"'+(ready?'':' disabled aria-disabled="true"')+'>Complete inspection</button></div></div>';
+    return h;
+  }
+
+  /* ---- disposition (QC head decides; inspector read-only) ---- */
+  function decRow(key,label,qty,opts){
+    var D=S.disp,h='<div class="dec" role="group" aria-label="Decision for '+label+'"><div class="lh"><b>'+label+' '+qty+'</b><span class="ord">'+inr(qty*LOT.rate)+'</span></div><div class="tiles">';
+    opts.forEach(function(o){
+      var dis=(!head())||(key==='good'&&o[0]==='accept'&&D.scope==='whole');
+      h+='<button class="tile" data-a="dec" data-k="'+key+'" data-v="'+o[0]+'" aria-pressed="'+(D[key]===o[0])+'"'+(dis?' disabled':'')+'>'+o[1]+'</button>';
+    });
+    return h+'</div></div>';
+  }
+  function scopeHTML(fid){
+    var D=S.disp,ed=head(),h='<section class="card" aria-label="Hold scope"><h4>Hold scope - lot '+LOT.lot+'</h4>'+
+      '<div class="warnbox gap" role="note"><b>Rakesh Kumar (machine operator, Line 2) requested: Suspect whole lot.</b> A reporter can only request; the QC head decides.</div>';
+    [['local','Hold only reported units','12 not usable in IB-01 and 4 reported at Line 2 WIP. R-B3-04 stays issuable.'],
+     ['whole','Hold all remaining stock of lot '+LOT.lot+' everywhere (store, inspection bay, shop floor)','Adds R-B3-04 30. Issue is blocked everywhere until QC clears the lot.']].forEach(function(o){
+      h+='<label class="opt'+(D.scope===o[0]?' sel':'')+'"><input type="radio" name="'+fid+'-scope" value="'+o[0]+'" data-f="scope"'+(D.scope===o[0]?' checked':'')+(ed?'':' disabled')+'><span><b>'+o[1]+'</b><small>'+o[2]+'</small></span></label>';
+    });
+    h+='<table class="tbl"><caption class="sr">Where lot '+LOT.lot+' stock sits</caption><thead><tr><th>Location</th><th>Source</th><th class="num">Qty</th><th>Status</th></tr></thead><tbody>';
+    locs().forEach(function(l){h+='<tr><td>'+l[0]+'</td><td>'+l[1]+'</td><td class="num">'+l[2]+'</td><td>'+(l[3]?hold('On hold'):'<span class="pill p-ok">'+TICK+'Issuable</span>')+'</td></tr>';});
+    return h+'</tbody></table><p class="m" style="margin:6px 0 0">Good 12 in IB-01 follow the decision above.</p></section>';
+  }
+  function disposition(fid,withBack){
+    var D=S.disp,ed=head(),t=dispTodo(),ready=!t.length,bl=dispBlock(),f=fails();
+    var h='<div class="acc"><div class="acc-head">'+(withBack?'<button class="backbtn" data-a="home" aria-label="Back to inbox">'+ICON.back+'</button>':'')+
+      '<div class="tx"><b>Disposition · '+LOT.item+' · '+LOT.lot+'</b><span class="m">'+LOT.qc+' · '+LOT.grn+' · '+LOT.sup+'</span></div>'+hold(D.scope==='whole'?'Lot on hold':'On hold - reported units')+'</div><div class="acc-body">';
+    if(!ed)h+='<div class="hintbox" role="status">'+ICON.info+'<span><b>Inspection complete - '+(S.pending?'Captured - pending sync':'synced')+'.</b> Waiting for QC head '+ROLES.head.name+' to record the disposition. You can view it read-only.</span></div>';
+    h+='<div class="dual"><section class="card" aria-label="Inspection result"><span class="kind">Inspection by '+ROLES.insp.name+'</span><h4 class="gap">Good '+goodN()+' / Not usable '+badN()+'</h4>'+
+      '<div class="row gap"><span class="pill p-ok">'+TICK+(CHARS.length-f.length)+' pass</span>'+(f.length?'<span class="pill p-err">'+CROSS+f.length+' fail: '+esc(f.join(', '))+'</span>':'')+'</div>'+
+      '<p class="m" style="margin:6px 0 0">'+(S.obs.length?esc(S.obs[0].text)+(S.obs.length>1?' (+'+(S.obs.length-1)+' more)':''):'No observations')+'</p></section>';
+    h+='<section class="card" aria-label="Linked damage report"><span class="kind">Linked damage report</span><div class="row gap"><span class="dmg" role="img" aria-label="Operator photo: seized bearing"></span><span class="m" style="flex:1">Reported by Rakesh Kumar (machine operator, Line 2) from their phone, 11:20: "2 seized on fitting, 2 shields dented." 4 nos on local hold. Replacement IND-2026-0419 raised.</span></div></section></div>';
+    h+='<section class="card" aria-label="Decision"><h4>Decision'+(ed?'':' <span class="ro">'+EYE+'QC head only - read-only</span>')+'</h4>';
+    h+=decRow('good','Good',goodN(),[['accept','Accept'],['cond','Conditional release'],['reject','Reject']]);
+    h+=decRow('bad','Not usable',badN(),[['reject','Reject'],['cond','Conditional release']]);
+    if(D.good==='cond'||D.bad==='cond')h+='<div class="warnbox gap" role="note">Conditional release is DOA governed: it goes to the Approvals inbox and stock moves only after sign-off.</div>';
+    if(D.good==='reject'||D.bad==='reject')h+='<p class="m" style="margin:8px 0 0">Reject is a damage outcome: it opens damage case DC-2026-0042 needing QC and finance concurrence.</p>';
+    h+='<div class="gap"><label class="flbl" for="'+fid+'-reason">Reason (required - DOA record)</label><input class="txt" id="'+fid+'-reason" type="text" data-f="reason" value="'+esc(D.reason)+'" placeholder="Why - what the inspection showed"'+(ed?'':' disabled')+'></div></section>';
+    h+=scopeHTML(fid);
+    if(bl&&ed)h+='<div class="errbox" role="alert">'+esc(bl)+'</div>';
+    h+='</div><div class="acc-foot">';
+    if(ed)h+='<div class="todo"><span>Recorded as '+ROLES.head.name+', QC head</span><span>'+(ready?'<b>Ready to record</b>':'Left: <b>'+esc(t[0])+'</b>')+'</span></div><button class="b b-pri b-full" data-a="record"'+(ready?'':' disabled aria-disabled="true"')+'>Record disposition</button>';
+    else h+='<button class="b b-pri b-full" data-a="home">Back to inbox</button>';
+    return h+'</div></div>';
+  }
+
+  /* ---- outcome after disposition ---- */
+  function outcome(fid,withBack){
+    var D=S.disp,dq=damageQty(),h='<div class="acc"><div class="acc-head">'+(withBack?'<button class="backbtn" data-a="home" aria-label="Back to inbox">'+ICON.back+'</button>':'')+
+      '<div class="tx"><b>Disposition recorded · '+LOT.lot+'</b><span class="m">'+LOT.qc+' · by '+ROLES.head.name+'</span></div>'+(D.scope==='whole'?hold('Lot on hold'):'')+'</div><div class="acc-body">';
+    h+='<div class="donehead"><div class="check" aria-hidden="true">&#10003;</div><div><h2 role="status">'+(S.pending?'Captured - pending sync':'Captured - synced')+'</h2><span class="m">'+(S.offline?'Saved on this device. It syncs when the network is back.':'Sent to the server.')+'</span></div></div>';
+    if(D.good==='accept')h+='<div class="dest" role="note">'+ICON.ok+'<span><b>Released for putaway - Good 12</b><span class="m">Now in the storekeeper\'s inbox under "Cleared by QC - put away", suggested rack R-B3-04. The hold on these 12 is cleared.</span></span></div>';
+    if(D.good==='cond'||D.bad==='cond')h+='<div class="warnbox" role="note"><b>Conditional release - awaiting DOA approval.</b> '+(D.good==='cond'?'Good 12':'Not usable 12')+' stay on hold until the Approvals inbox signs off.</div>';
+    if(dq){
+      var st=S.fin==='concur'?'<span class="pill p-ok">'+TICK+'Outcome final - QC and finance concurred</span>':S.fin==='disagree'?'<span class="ro">'+EYE+'Escalated to CEO - read-only</span>':'<span class="pill p-info">Sent for finance concurrence</span>';
+      h+='<section class="card" aria-label="Damage case DC-2026-0042"><div class="lh"><h4>Damage case DC-2026-0042</h4><span class="ord">Rejected '+dq+' · '+inr(dq*LOT.rate)+'</span></div><div class="row gap" role="status">'+st+'</div><ol class="track" aria-label="Concurrence">'+
+        '<li><span class="dot ok" aria-hidden="true">&#10003;</span><span><b>QC head - '+ROLES.head.name+'</b>: concurred - Reject, return to supplier, debit note<br><span class="m">'+esc(D.reason)+'</span></span></li>'+
+        '<li><span class="dot '+(S.fin==='concur'?'ok':S.fin==='disagree'?'no':'')+'" aria-hidden="true">'+(S.fin==='concur'?'&#10003;':S.fin==='disagree'?'&#10005;':'2')+'</span><span><b>Finance controller</b>: '+(S.fin==='concur'?'concurred - debit note to '+LOT.sup:S.fin==='disagree'?'disagrees - proposes accept at 20% price deduction':'pending in the Approvals inbox')+'</span></li>'+
+        (S.fin==='disagree'?'<li><span class="dot" aria-hidden="true">3</span><span><b>CEO</b>: decides. QC and finance can no longer edit this case.</span></li>':'')+
+        '</ol></section>';
+    }
+    h+='<section class="card" aria-label="Hold result"><h4>Hold scope</h4><p class="m" style="margin:4px 0 0">'+(D.scope==='whole'?'Lot '+LOT.lot+' on hold everywhere: IB-01 12, R-B3-04 30, Line 2 WIP 4. Stores and Line 2 cannot issue from this lot.':'Only reported units on hold: IB-01 12 and Line 2 WIP 4. R-B3-04 30 stays issuable. Rakesh Kumar\'s request for a whole-lot hold was declined by the QC head.')+'</p></section>';
+    h+='</div><div class="acc-foot"><button class="b b-pri b-full" data-a="home">Back to inbox</button></div></div>';
+    return h;
+  }
+
+  /* ---- sheets ---- */
+  function reportSheet(){
+    return '<div class="sheet"><span class="kind">Damage reported</span><h2>'+LOT.item+' · '+LOT.lot+'</h2>'+
+      '<div class="row">'+hold(S.disp.done&&S.disp.scope==='whole'?'Lot on hold everywhere':'On hold - 4 reported units')+'<span class="pill p-info">Suspect whole lot - requested</span></div>'+
+      '<div class="row"><span class="dmg" role="img" aria-label="Operator photo: seized bearing"></span><span class="m" style="flex:1">"2 seized on fitting, 2 shields dented."</span></div>'+
+      '<table class="tbl"><caption class="sr">Damage report details</caption><tbody><tr><td>Reported by</td><td>Rakesh Kumar, machine operator Line 2 - from their phone (signed in)</td></tr>'+
+      '<tr><td>When</td><td>Today 11:20</td></tr><tr><td>Units</td><td>4 nos in Line 2 WIP, issued on IND-2026-0415</td></tr><tr><td>Replacement</td><td>IND-2026-0419 raised (same flow)</td></tr></tbody></table>'+
+      '<p class="m" style="margin:0">The reporter\'s own hold is local. Holding the whole lot is the QC head\'s decision, taken in the lot disposition.</p>'+
+      '<button class="b b-pri b-full" data-a="open" data-t="k1">'+(S.disp.done?'Open lot outcome':S.inspDone?(head()?'Decide disposition and hold scope':'Open lot disposition (read-only)'):'Inspect lot '+LOT.lot+' in IB-01')+'</button>'+
+      '<button class="b b-ghost" data-a="home">Close</button></div>';
+  }
+  function otherSheet(){
+    var o=OTHER[S.task];
+    var h='<div class="sheet"><span class="kind">'+GROUPS[o.g]+'</span><h2>'+esc(o.title)+'</h2><p class="m" style="margin:0">'+esc(o.m)+'</p>';
+    if(o.ceo)h+='<div class="row"><span class="ro">'+EYE+'Escalated to CEO - read-only</span></div><ol class="track" aria-label="Concurrence"><li><span class="dot ok" aria-hidden="true">&#10003;</span><span><b>QC head</b>: Reject - porosity in weld test, return to supplier</span></li><li><span class="dot no" aria-hidden="true">&#10005;</span><span><b>Finance controller</b>: accept with 15% price deduction</span></li><li><span class="dot" aria-hidden="true">3</span><span><b>CEO</b>: decision pending. Case locked for QC and finance.</span></li></ol>';
+    else if(o.fin)h+='<div class="row"><span class="pill p-info">Sent for finance concurrence</span></div><ol class="track" aria-label="Concurrence"><li><span class="dot ok" aria-hidden="true">&#10003;</span><span><b>QC head</b>: concurred - Reject, debit note</span></li><li><span class="dot" aria-hidden="true">2</span><span><b>Finance controller</b>: pending</span></li></ol>';
+    else h+='<p class="pill p-off" style="align-self:flex-start">Not rendered in this mock - same inspection screen as '+LOT.lot+'</p>';
+    return h+'<button class="b b-ghost" data-a="home">Close</button></div>';
+  }
+  function nextUp(){
+    var c=counts(),h='<div class="sheet"><span class="kind">Today at CMF-ALIGARH quality</span><div class="stat"><div><b>'+c[0]+'</b><span>To inspect</span></div><div><b>'+c[1]+'</b><span>Damage</span></div><div><b>'+c[2]+'</b><span>Disposition</span></div><div><b>'+c[3]+'</b><span>With others</span></div></div>';
+    if(!S.inspDone)h+='<div class="card"><span class="kind">Next up - flagged at acceptance</span><div class="row gap"><span class="dmg" role="img" aria-label="Storekeeper photo"></span><div style="flex:1"><h4>'+LOT.item+' · '+LOT.lot+'</h4><span class="m">'+LOT.qty+' nos in '+LOT.bay+' · '+LOT.grn+'</span></div></div><div class="gap">'+flagPill('suspected')+'</div><button class="b b-pri b-full gap" data-a="open" data-t="k1">Start inspection</button></div>';
+    else if(!S.disp.done)h+='<div class="card"><h4>'+LOT.lot+' awaiting disposition</h4><span class="m">Good '+goodN()+' / Not usable '+badN()+'</span><button class="b b-pri b-full gap" data-a="open" data-t="k1">'+(head()?'Decide disposition':'View read-only')+'</button></div>';
+    else h+='<div class="card"><h4>'+LOT.lot+' disposition recorded</h4><button class="b b-sec b-full gap" data-a="open" data-t="k1">Open outcome</button></div>';
+    return h+'<p class="m">Pick a task from the inbox, or scan a lot QR.</p></div>';
+  }
+  function detail(fid,back){
+    switch(S.view){
+      case 'insp':return inspection(fid,back);
+      case 'disp':return disposition(fid,back);
+      case 'out':return outcome(fid,back);
+      case 'report':return reportSheet();
+      case 'other':return otherSheet();
+      default:return nextUp();
+    }
+  }
+
+  /* ---- desktop shell ---- */
+  function side(){
+    var n=total(),R=ROLES[S.role];
+    var I=[['Dashboard','<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>'],
+      ['Gate','<path d="M3 21V8l9-5 9 5v13"/><path d="M8 21v-8h8v8"/>'],
+      ['Receiving','<path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/>'],
+      ['Stores','<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>'],
+      ['Quality','<path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/>'],
+      ['Indents','<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7"/>'],
+      ['Approvals','<path d="M4 12l5 5L20 6"/>'],
+      ['Reports','<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
+      ['Settings','<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>']];
+    var h='<aside class="side"><div class="brand"><span class="mark" aria-hidden="true">IM</span>IMS</div><nav aria-label="Modules">';
+    I.forEach(function(x){var on=x[0]==='Quality';h+='<button class="nav-item"'+(on?' aria-current="page" data-a="home"':' data-a="nr" data-what="'+x[0]+'"')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[1]+'</svg>'+x[0]+(on?'<span class="count">'+n+'</span>':'')+'</button>';});
+    return h+'</nav><div class="side-foot">Signed in: '+R.name+' - '+R.title+'</div></aside>';
+  }
+  function dtop(){
+    var s=S.offline?'<span class="dsync">'+(S.pending?'Captured - pending sync ('+S.pending+')':'Offline')+'</span>':'<span class="dsync on">'+(S.pending?'Syncing '+S.pending:'Synced')+'</span>';
+    return '<header class="dtop"><label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#566173" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span class="sr">Search IMS</span><input name="q" placeholder="Search lot, GRN, QC task, supplier"></label>'+
+      '<span class="spacer"></span>'+s+'<button class="site" aria-label="Switch site, current CMF-ALIGARH">CMF-ALIGARH <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>'+
+      '<button class="b b-pri" data-a="nr" data-what="+ New">+ New</button><span class="avatar" aria-hidden="true">'+ROLES[S.role].ini+'</span></header>';
+  }
+
+  /* ---- frame render ---- */
+  var DEV='tab';
+  var DEVS={hand:['Handheld','390 x 800 at 100% - scanner or phone, finger, bottom nav, single column'],
+    tab:['Tablet','820 x 1180 shown at 55% - finger, icon rail, inbox and detail side by side'],
+    desk:['Desktop','1280 x 800 shown at 70% - mouse, compact, dark sidebar, Quality module'],
+    dtouch:['Desktop touch','1280 x 800 shown at 70% - touchscreen PC, dark sidebar, touch-roomy']};
+  function render(el){
+    var fid=el.id,h='';
+    el.className='screen '+(DEV==='desk'?'compact':'touch');
+    if(DEV==='desk'||DEV==='dtouch'){
+      h=side()+'<div class="dmain">'+dtop()+'<div class="dcontent"><section class="dlist" aria-label="QC inbox"><div class="lhd"><h2>QC inbox</h2></div>'+scanbar(fid)+inbox()+'</section>'+
+        '<section class="ddetail" aria-label="Task detail">'+detail(fid,false)+'</section></div></div>';
+    } else if(DEV==='tab'){
+      h=stop()+'<div class="tbody">'+rail()+'<div class="two"><section class="lp" aria-label="QC inbox">'+who()+scanbar(fid)+inbox()+'</section><section class="rp" aria-label="Task detail">'+detail(fid,false)+'</section></div></div>';
+    } else {
+      h=stop()+'<div class="two">'+(S.view==='home'?'<section class="rp" aria-label="QC inbox" style="background:var(--bg)">'+who()+scanbar(fid)+inbox()+'</section>':'<section class="rp" aria-label="Task detail">'+detail(fid,true)+'</section>')+'</div>'+bnav();
+    }
+    el.innerHTML=h;
+  }
+  function setDev(d){
+    DEV=d;var w=document.getElementById('fwrap');w.dataset.dev=d;
+    [].forEach.call(document.querySelectorAll('.seg [data-dev]'),function(b){b.setAttribute('aria-pressed',String(b.dataset.dev===d));});
+    document.getElementById('dev-label').innerHTML=DEVS[d][0]+' <span>'+DEVS[d][1]+'</span>';
+  }
+  var frames=[document.getElementById('f-main')];
+  function renderAll(){
+    var a=document.activeElement,fr=null,f=null,i=null,act=null,scr={};
+    if(a&&a.closest&&a.closest('.screen')){fr=a.closest('.screen').id;f=a.dataset.f;i=a.dataset.i;act=a.dataset.a;}
+    frames.forEach(function(el){scr[el.id]=[].map.call(el.querySelectorAll('.acc-body,.inbox,.sheet'),function(b){return b.scrollTop;});});
+    frames.forEach(render);
+    frames.forEach(function(el){var s=scr[el.id];[].forEach.call(el.querySelectorAll('.acc-body,.inbox,.sheet'),function(b,k){if(s&&s[k])b.scrollTop=s[k];});});
+    document.getElementById('off-btn').textContent='Toggle offline (now: '+(S.offline?'offline':'online')+')';
+    document.getElementById('role-btn').textContent='Acting as: '+ROLES[S.role].name+' ('+ROLES[S.role].title+')';
+    if(fr&&f!=='scope'){var sel=f?'[data-f="'+f+'"]':(act?'[data-a="'+act+'"]':null);if(sel&&i!=null)sel+='[data-i="'+i+'"]';
+      var n=sel&&document.querySelector('#'+fr+' '+sel);if(n&&!n.disabled){n.focus();if(n.tagName==='INPUT'&&n.type==='text'){var l=n.value.length;try{n.setSelectionRange(l,l);}catch(e){}}}}
+  }
+  function scheduleSync(){
+    clearTimeout(syncT);if(S.offline||!S.pending)return;
+    syncT=setTimeout(function(){S.pending=0;say('All captures synced');renderAll();},1800);
+  }
+  function openK1(){
+    S.task='k1';S.msg='';
+    if(S.disp.done){S.view='out';say('Disposition outcome for '+LOT.lot);}
+    else if(S.inspDone){S.view='disp';say(head()?'Disposition for '+LOT.lot+'. Choose decisions, reason and hold scope':'Disposition for '+LOT.lot+', read-only. Waiting for QC head');}
+    else {S.view='insp';say('Inspection opened for '+LOT.lot+'. Flagged: damage suspected');}
+  }
+  function resolve(code){
+    var c=code.trim().toUpperCase();S.msg='';
+    if(!c){S.msg='Nothing scanned. Scan or type a lot, GRN or QC task.';return;}
+    if(/2609-117|QC-2026-0327/.test(c)){openK1();return;}
+    if(/0981/.test(c)){S.view='home';S.task=null;S.msg=LOT.grn+': 3 lots in inspection bay IB-01. Pick one from the inbox.';say(S.msg);return;}
+    S.msg='Not recognised: '+code+'. Try lot L-2609-117.';say(S.msg);
+  }
+
+  function act(a,t){
+    var i=t.dataset.i!=null?+t.dataset.i:null,D=S.disp;
+    switch(a){
+      case 'home':S.view='home';S.task=null;S.msg='';break;
+      case 'cam':resolve(LOT.lot);if(S.view!=='home')say('Camera read lot QR '+LOT.lot+'. '+(S.view==='insp'?'Inspection opened':'Lot opened'));break;
+      case 'focusScan':S.msg='';if(DEV==='hand'){S.view='home';S.task=null;}renderAll();var inp=t.closest('.screen').querySelector('[data-f="scanq"]');if(inp)inp.focus();return;
+      case 'open':var k=t.dataset.t;
+        if(k==='k1')openK1();
+        else if(k==='d1'){S.task=k;S.view='report';S.msg='';say('Damage report from Line 2. Suspect whole lot requested');}
+        else{S.task=k;S.view='other';S.msg='';say(OTHER[k].title);}break;
+      case 'nr':say((t.dataset.what||'This')+' is not rendered in this mock');return;
+      case 'res':S.chars[i].res=t.dataset.k;say(CHARS[i].n+': '+t.dataset.k);break;
+      case 'obsPhoto':S.obsPhoto=true;say('Observation photo taken');break;
+      case 'obsAdd':if(!S.obsText.trim())return;S.obs.push({text:S.obsText.trim(),photo:S.obsPhoto,at:'10:4'+S.obs.length});S.obsText='';S.obsPhoto=false;S.pending++;scheduleSync();say('Observation added. Captured - pending sync');break;
+      case 'gdec':S.good=String(Math.max(0,(+S.good||0)-1));say('Good '+S.good+', not usable '+badN());break;
+      case 'ginc':S.good=String(Math.min(LOT.qty,(+S.good||0)+1));say('Good '+S.good+', not usable '+badN());break;
+      case 'complete':if(todo().length)return;S.inspDone=true;S.pending++;scheduleSync();S.view='disp';
+        say('Inspection complete. Captured - pending sync. Good '+goodN()+', not usable '+badN()+' on hold. Sent to QC head for disposition');break;
+      case 'dec':if(!head())return;D[t.dataset.k]=t.dataset.v;say((t.dataset.k==='good'?'Good':'Not usable')+': '+t.textContent);break;
+      case 'record':if(!head()||dispTodo().length)return;D.done=true;S.pending++;scheduleSync();S.view='out';
+        say('Disposition recorded. '+(D.good==='accept'?'Good 12 released for putaway. ':'')+(damageQty()?'Damage case sent for finance concurrence':''));break;
+    }
+    renderAll();
+  }
+
+  document.addEventListener('click',function(e){
+    var t=e.target.closest('[data-a]');if(t&&!t.disabled){e.preventDefault();act(t.dataset.a,t);return;}
+    var dv=e.target.closest('.seg [data-dev]');if(dv){setDev(dv.dataset.dev);say('Device class: '+DEVS[DEV][0]+'. Same step kept');renderAll();return;}
+    var d=e.target.closest('[data-demo]');if(!d)return;
+    switch(d.dataset.demo){
+      case 'role':S.role=head()?'insp':'head';say('Acting as '+ROLES[S.role].name+', '+ROLES[S.role].title);break;
+      case 'scan':resolve(LOT.lot);break;
+      case 'fill':
+        if(S.inspDone){say('Inspection already complete. Reset to try again');break;}
+        S.task='k1';S.view='insp';
+        S.chars[0]={val:'24.998',res:'pass'};S.chars[1]={val:'52.004',res:'pass'};S.chars[2]={val:'15.02',res:'pass'};
+        S.chars[3]={val:'',res:'fail'};S.chars[4]={val:'',res:'fail'};
+        S.obs=[{text:'Carton 2: 12 units with dented shields, 3 seized on hand spin',photo:true,at:'10:40'}];S.good='12';
+        say('Inspection filled. Shields and rotation fail. Split good 12, not usable 12');break;
+      case 'disp':
+        S.role='head';
+        if(!S.inspDone){say('Complete the inspection first, or use Quick-fill then Complete inspection');S.task='k1';S.view='insp';break;}
+        openK1();break;
+      case 'concur':if(!S.disp.done||!damageQty()){say('Record a disposition with a reject first');break;}S.fin='concur';S.view='out';S.task='k1';say('Finance concurred. Damage outcome final');break;
+      case 'disagree':if(!S.disp.done||!damageQty()){say('Record a disposition with a reject first');break;}S.fin='disagree';S.view='out';S.task='k1';say('Finance disagrees. Case escalated to the CEO, read-only');break;
+      case 'offline':S.offline=!S.offline;say(S.offline?'Offline. Captures stay on the device':'Back online. Syncing');scheduleSync();break;
+      case 'reset':clearTimeout(syncT);S=fresh();say('Reset');break;
+    }
+    renderAll();
+  });
+  document.addEventListener('submit',function(e){
+    if(!e.target.dataset.scan)return;e.preventDefault();
+    var v=e.target.querySelector('input').value;S.scanq='';resolve(v);renderAll();
+  });
+  document.addEventListener('input',function(e){
+    var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
+    if(f==='scanq'){S.scanq=e.target.value;}
+    else if(f==='val'){var i=+e.target.dataset.i,v=e.target.value.replace(/[^0-9.]/g,'');S.chars[i].val=v;
+      if(v!==''&&!isNaN(+v)&&/\d\.\d/.test(v))S.chars[i].res=oot(i)==null?'pass':'fail';}
+    else if(f==='obsText'){S.obsText=e.target.value;}
+    else if(f==='good'){var g=e.target.value.replace(/[^0-9]/g,'');if(g!==''&&+g>LOT.qty)g=String(LOT.qty);S.good=g;}
+    else if(f==='reason'){S.disp.reason=e.target.value;}
+    else return;
+    renderAll();
+  });
+  document.addEventListener('change',function(e){
+    if(e.target.dataset&&e.target.dataset.f==='scope'&&head()){S.disp.scope=e.target.value;
+      say(S.disp.scope==='whole'?'Hold all remaining stock of lot '+LOT.lot+' everywhere':'Hold only reported units');renderAll();}
+  });
+  setDev(DEV);
+  renderAll();
+})();
+</script>
+</body>
+</html>

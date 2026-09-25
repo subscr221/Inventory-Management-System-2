@@ -1,0 +1,1011 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Requisitions Mock</title>
+<style>
+/*
+  KEY SCREEN: My requisitions - the base 'employee' hat every signed-in person has
+  (home + My requests, Check stock, New requisition with approval-route chips, Report damage + Request replacement,
+   My standing approvals in the person's profile)
+  Approval model (memlog 78-86): default = requester's head of department by value band; exceptions are per person:
+  STANDING APPROVAL grants (SA-YYYY-NNN, person x item or item group, optional monthly cap + end date) and a
+  per-person 'Self-approval limit Rs <amount>'.
+  Governing spine sections:
+    EXPERIENCE.md
+      - Key Flows > Indent / requisition capture (any employee), Check stock availability,
+        Report damage (universal action, own device) + Request replacement (one flow, pilot scope)
+      - Component Patterns: scan-or-type field (hardware trigger, camera, Type it), approval-class chip
+        with plain-words rule sheet, status pills (icon + text), reason tiles, request-only checkboxes,
+        list-to-detail, pinned task footer, sync badge
+      - State Patterns: captured-pending-sync, ready to collect, pending approval, approved, rejected
+        with reason, issued, stock on hold
+    DESIGN.md
+      - Density by device class (memlog override 39, addendum 2026-09-25): Handheld / Tablet / Desktop touch
+        = touch-roomy (primary >=56px pinned bottom, secondary >=48px); Desktop (mouse) = compact 30-36px
+      - Accent token family: theme A Ledger Blue exactly as color-themes-1.html; dark sidebar #1B2230
+  Decision source: .memlog.md entries 57-86 (2026-09-25); entries 78-86 override the earlier approval-class assumption. Nothing loads from the network.
+*/
+:root{
+  --side:#1B2230; --side-hover:#252E3F; --side-text:#C9D1DD; --side-muted:#8C97A8;
+  --bg:#F4F6F9; --surface:#FFFFFF; --border:#DDE2E9; --text:#1C2430; --text-muted:#566173;
+  --ok:#1E7A3C; --ok-bg:#E6F4EA; --warn:#8A5300; --warn-bg:#FFF3DC;
+  --err:#B3261E; --err-bg:#FCE8E6; --info:#1F5FAD; --info-bg:#E7F0FB;
+  --off:#4A5568; --off-bg:#ECEFF3;
+  /* A. Ledger Blue (default for CMF-ALIGARH) */
+  --accent:#1E6BC6; --accent-strong:#1656A3; --accent-soft:#E8F1FC; --on-accent:#FFFFFF; --accent-on-dark:#5AA2F0;
+  --font: Lato, "Segoe UI", Roboto, system-ui, sans-serif;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.4}
+button,input,select{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+button[disabled]{cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.s-top :focus-visible,.side :focus-visible,.rail :focus-visible{outline-color:var(--accent-on-dark)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.page{padding:16px;display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start}
+.intro{flex:0 0 100%}
+.intro h1{font-size:22px;margin:0 0 4px}
+.intro p{margin:0;color:var(--text-muted);max-width:980px}
+
+/* ---------- switchers (outside the frame) ---------- */
+.ctlbar{flex:0 0 100%;display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center}
+.ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ctl>span{font-weight:700;font-size:13px}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid #B9C1CC;border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{min-height:40px;padding:0 14px;border:0;border-right:1px solid #B9C1CC;background:var(--surface);font-weight:700;font-size:13px}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg button:focus-visible{outline-offset:-3px}
+
+/* ---------- device frames ---------- */
+.device{display:flex;flex-direction:column;gap:6px;flex:none}
+.device-label{font-size:13px;font-weight:700}
+.device-label span{font-weight:400;color:var(--text-muted)}
+.bezel{background:#1F2937;border-radius:22px;padding:10px}
+.fwrap{overflow:hidden;position:relative}
+.fwrap.hand{width:390px;height:800px;border-radius:6px}
+.fwrap.tab{width:451px;height:649px;border-radius:6px}
+.fwrap.desk,.fwrap.dtouch{width:896px;height:560px;border-radius:8px;border:1px solid var(--border)}
+.screen{background:var(--bg);overflow:hidden;display:flex;position:relative;transform-origin:0 0}
+.d-hand{width:390px;height:800px;flex-direction:column}
+.d-tab{width:820px;height:1180px;flex-direction:column;transform:scale(.55)}
+.d-desk,.d-dtouch{width:1280px;height:800px;flex-direction:row;transform:scale(.7)}
+
+/* ---------- buttons, density ---------- */
+.b{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:2px solid transparent;border-radius:var(--radius);font-weight:700;padding:0 14px;text-align:center;line-height:1.15}
+.b-pri{background:var(--accent);color:var(--on-accent)}
+.b-pri:hover{background:var(--accent-strong)}
+.b-pri[disabled]{background:#E3E7ED;color:var(--text-muted);border-color:#C9D0DA}
+.b-sec{background:var(--surface);color:var(--accent-strong);border-color:var(--accent)}
+.b-sec:hover{background:var(--accent-soft)}
+.b-plain{background:var(--surface);color:var(--text);border-color:#B9C1CC}
+.b-ghost{background:transparent;color:var(--accent-strong);text-decoration:underline;text-underline-offset:2px}
+.b-full{width:100%}
+.touch{font-size:16px}
+.touch .b{min-height:56px;font-size:17px}
+.touch .b-sec,.touch .b-plain,.touch .b-ghost{min-height:48px;font-size:16px}
+.icon{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;flex:none}
+
+/* ---------- handheld / tablet top bar, bottom nav ---------- */
+.s-top{height:52px;flex:none;background:var(--side);color:#fff;display:flex;align-items:center;gap:10px;padding:0 14px}
+.s-top b{font-size:16px;white-space:nowrap}
+.s-top .sub{color:var(--side-text);font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.s-top .grow{flex:1}
+.ready{width:10px;height:10px;border-radius:50%;background:#3DD68C;box-shadow:0 0 0 3px rgba(61,214,140,.25);flex:none}
+.rdy{font-size:13px;font-weight:700;color:#E6EAF0;white-space:nowrap}
+.sync{font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;background:#2E3850;color:#E6EAF0;white-space:nowrap}
+.sync .d{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:#9AA5B6}
+.sync.on .d{background:#3DD68C}
+.av{width:32px;height:32px;border-radius:50%;background:#2E3850;color:#fff;display:grid;place-items:center;font-weight:900;font-size:12px;flex:none}
+.bnav{height:64px;flex:none;display:flex;background:var(--surface);border-top:1px solid var(--border)}
+.bnav button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-muted);font-size:13px;font-weight:700;position:relative;min-height:56px}
+.bnav svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9}
+.bnav button[aria-current="page"]{color:var(--accent)}
+.bnav button[aria-current="page"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+.phead{flex:none;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--surface);border-bottom:1px solid var(--border);min-height:60px}
+.phead .tx{flex:1;min-width:0}
+.phead h2{margin:0;font-size:18px}
+.phead .m{display:block}
+.backbtn{flex:none;width:48px;min-height:48px;border:1px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);display:grid;place-items:center;color:var(--text)}
+.pbody{flex:1;overflow:auto;overflow-x:hidden;padding:10px 12px 12px;display:flex;flex-direction:column;gap:10px;min-height:0}
+.pbody>*,.pb>*{flex:none}
+.pfoot{flex:none;padding:8px 12px 10px;border-top:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;gap:6px}
+.todo{font-size:13.5px;color:var(--text-muted)}
+.todo b{color:var(--text)}
+
+/* ---------- tablet rail ---------- */
+.trow{flex:1;min-height:0;display:flex}
+.rail{width:96px;flex:none;background:var(--side);display:flex;flex-direction:column;gap:4px;padding:8px 6px}
+.rail button{min-height:72px;border:0;border-radius:10px;background:transparent;color:var(--side-text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:13px;font-weight:700;border-left:4px solid transparent}
+.rail svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.9}
+.rail button[aria-current="page"]{background:var(--side-hover);color:#fff;border-left-color:var(--accent-on-dark)}
+.rail button[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+
+/* ---------- desktop sidebar + top bar ---------- */
+.side{width:216px;flex:none;background:var(--side);color:var(--side-text);display:flex;flex-direction:column}
+.brand{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;font-weight:900;font-size:15px;border-bottom:1px solid #2A3345}
+.brand .mark{width:26px;height:26px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:12px}
+.side nav{padding:8px 0;flex:1}
+.side .navh{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--side-muted);padding:10px 16px 4px}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 16px 0 13px;border:0;border-left:3px solid transparent;background:transparent;color:var(--side-text);text-align:left;font-size:13px}
+.touch .nav-item{height:56px;font-size:16px}
+.nav-item:hover{background:var(--side-hover)}
+.nav-item svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.touch .nav-item svg{width:22px;height:22px}
+.nav-item[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff;font-weight:700}
+.nav-item[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.side-foot{padding:12px 16px;border-top:1px solid #2A3345;font-size:12px;color:var(--side-muted)}
+.dmain{flex:1;display:flex;flex-direction:column;min-width:0}
+.dtop{height:52px;flex:none;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 16px}
+.touch .dtop{height:64px}
+.search{flex:1;max-width:420px;display:flex;align-items:center;gap:8px;height:34px;border:1px solid var(--border);border-radius:6px;padding:0 10px;background:#FAFBFC}
+.touch .search{height:48px}
+.search input{border:0;background:transparent;flex:1;min-width:0;outline:none}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.site{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-weight:700}
+.touch .site{height:48px}
+.avatar{width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);display:grid;place-items:center;font-weight:900;font-size:12px;flex:none}
+.spacer{flex:1}
+.dsync{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--off-bg);color:var(--off);white-space:nowrap}
+.dsync.on{background:var(--ok-bg);color:var(--ok)}
+
+/* ---------- panes (tablet + desktop) ---------- */
+.panes{flex:1;min-height:0;min-width:0;display:flex}
+.pane{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--surface)}
+.pl{width:44%;flex:none;border-right:1px solid var(--border);background:var(--bg)}
+.d-desk .pl,.d-dtouch .pl{width:420px}
+.pr{flex:1}
+.pane.full{flex:1;width:auto;border-right:0}
+.phd{flex:none;padding:12px 16px 8px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);background:var(--surface)}
+.phd h2{margin:0;font-size:18px;flex:1}
+.pb{flex:1;min-height:0;overflow:auto;overflow-x:hidden;padding:12px 16px;display:flex;flex-direction:column;gap:10px}
+.pr .pb{background:var(--surface)}
+.pf{flex:none;padding:10px 16px;border-top:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;gap:6px}
+
+/* ---------- shared bits ---------- */
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap}
+.pill svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2.4;flex:none}
+.p-ok{background:var(--ok-bg);color:var(--ok)}
+.p-warn{background:var(--warn-bg);color:var(--warn)}
+.p-err{background:var(--err-bg);color:var(--err)}
+.p-info{background:var(--info-bg);color:var(--info)}
+.p-off{background:var(--off-bg);color:var(--off)}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid transparent;white-space:normal;text-align:left;line-height:1.2}
+.chip svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.2;flex:none}
+button.chip{min-height:32px}
+.touch button.chip{min-height:44px;font-size:13.5px}
+button.chip::after{content:"?";display:inline-grid;place-items:center;width:16px;height:16px;border-radius:50%;border:1.5px solid currentColor;font-size:10px;margin-left:2px}
+.c-sa{background:var(--ok-bg);color:var(--ok);border-color:#9FCDAE}
+.c-hod,.c-over{background:var(--warn-bg);color:var(--warn);border-color:#E8C27A}
+.grant{border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;background:var(--surface);display:flex;flex-direction:column;gap:6px}
+.grant .ref{font-size:13.5px;font-weight:700;color:var(--ok)}
+.bar{height:8px;border-radius:4px;background:var(--off-bg);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ok)}
+.c-self{background:var(--info-bg);color:var(--info);border-color:#BCD3F0}
+.cnote{font-size:12.5px;color:var(--text-muted)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.card.done{border-color:#9FCDAE;box-shadow:inset 3px 0 0 var(--ok)}
+.card h3{margin:0 0 8px;font-size:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.m{font-size:13.5px;color:var(--text-muted)}
+.req{font-size:11px;font-weight:900;color:var(--err);text-transform:uppercase;letter-spacing:.04em}
+.opt{font-size:11px;font-weight:900;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row>.b{flex:1}
+.fld{display:flex;align-items:center;gap:8px;border:2px solid #8792A3;border-radius:var(--radius);padding:0 10px;background:#FAFBFC;min-width:0}
+.fld:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.fld input{border:0;background:transparent;flex:1;min-width:0;outline:none;height:52px;font-size:16px}
+.scanf{display:flex;gap:8px;flex-wrap:wrap}
+.scanf .fld{flex:1 1 200px}
+.scanf .b{flex:none}
+.hint{font-size:13px;color:var(--text-muted);margin:6px 2px 0}
+.hint.bad{color:var(--err);font-weight:700}
+.txt{min-height:52px;border:2px solid #8792A3;border-radius:var(--radius);padding:0 10px;background:#fff;font-size:16px;width:100%}
+.txt:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+select.txt{appearance:auto}
+.lbl{display:block;font-weight:700;font-size:14px;margin:0 0 6px}
+.list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.it{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:8px 10px}
+.it .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.it b{font-size:15px}
+.it small{font-size:12.5px;color:var(--text-muted)}
+.it .b{flex:none;min-width:84px}
+.it .tx .pill,.it .tx .chip,.pk .pill{align-self:flex-start;white-space:normal;max-width:100%}
+.pk{width:100%;min-height:56px;display:flex;align-items:center;gap:10px;text-align:left;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);padding:6px 12px}
+.pk .tx{flex:1;min-width:0}
+.pk b{display:block;font-size:15.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pk small{display:block;font-size:13px;color:var(--text-muted)}
+.pk[aria-pressed="true"],.pk[aria-current="true"]{border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent)}
+.pk .tick{width:26px;height:26px;border-radius:50%;border:2px solid #B9C1CC;flex:none;display:grid;place-items:center;font-weight:900;color:transparent}
+.pk[aria-pressed="true"] .tick{background:var(--accent);border-color:var(--accent);color:#fff}
+.qty{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap}
+.qty .stp{width:56px;min-height:56px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-size:24px;font-weight:900;color:var(--text)}
+.qty input{width:84px;min-height:56px;border:2px solid #8792A3;border-radius:var(--radius);text-align:center;font-size:20px;font-weight:700;background:#fff}
+.qty input:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.qty .of{display:flex;align-items:center;font-size:14px;color:var(--text-muted)}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{min-height:56px;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-weight:700;font-size:15px;padding:6px 12px;text-align:left;line-height:1.2;color:var(--text)}
+.tile small{display:block;font-weight:400;font-size:12.5px;color:var(--text-muted)}
+.tile[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong);box-shadow:inset 0 0 0 1px var(--accent)}
+.chk{display:flex;align-items:flex-start;gap:12px;min-height:56px;border:2px solid #B9C1CC;border-radius:var(--radius);padding:10px 12px;cursor:pointer;background:var(--surface)}
+.chk input{width:24px;height:24px;accent-color:var(--accent);flex:none;margin:1px 0 0}
+.chk b{display:block;font-size:15.5px}
+.chk small{display:block;font-size:13px;color:var(--text-muted)}
+.chk:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.chk:focus-within{outline:3px solid var(--accent);outline-offset:2px}
+.prev{margin-top:6px;padding:8px 10px;border-radius:8px;background:var(--info-bg);border:1px solid #BCD3F0;font-size:13.5px;display:block}
+.decide{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--radius);background:var(--warn-bg);border:1px solid #E8C27A;font-size:14px}
+.decide b{display:block}
+.note{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--radius);background:var(--info-bg);border:1px solid #BCD3F0;font-size:14px}
+.note b{display:block}
+.bad-box{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--radius);background:var(--err-bg);border:1px solid #F0B8B3;font-size:14px}
+.bad-box b{display:block;color:var(--err)}
+.ok-box{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--radius);background:var(--ok-bg);border:1px solid #9FCDAE;font-size:14px}
+.ok-box b{display:block;color:var(--ok)}
+.dmgph{width:64px;height:48px;border-radius:6px;flex:none;background:linear-gradient(135deg,#2F6B3A 0 50%,#1D4424 50% 54%,#2F6B3A 54%);border:1px solid #1D4424;position:relative}
+.gap{margin-top:10px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.tog{min-height:48px;padding:0 14px;border-radius:999px;border:2px solid #B9C1CC;background:var(--surface);font-weight:700;font-size:15px;color:var(--text)}
+.tog[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong)}
+.derived{font-size:13px;color:var(--text-muted);margin-top:6px}
+.greet{margin:2px 2px 0}
+.greet b{font-size:17px;display:block}
+.acts{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.act{border:2px solid #B9C1CC;border-radius:14px;background:var(--surface);display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:12px;text-align:left;color:var(--text);min-height:104px}
+.act:hover{border-color:var(--accent)}
+.act .ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center}
+.act .ic svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:2}
+.act b{font-size:17px;line-height:1.15}
+.act span.s{font-size:13px;color:var(--text-muted)}
+.act.st .ic{background:var(--accent-soft);color:var(--accent-strong)}
+.act.dm .ic{background:var(--err-bg);color:var(--err)}
+.grp h3{display:flex;align-items:center;gap:8px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:6px 2px 6px}
+.grp ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.rq{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;display:flex;flex-direction:column;gap:4px;text-align:left;color:var(--text);min-height:56px}
+.rq[aria-current="true"]{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+.rq.new{border-color:var(--accent)}
+.rq .top{display:flex;justify-content:space-between;gap:8px;align-items:center;width:100%}
+.ref{font-family:Consolas,monospace;font-size:13px;color:var(--text-muted)}
+.rq b{font-size:15px}
+.rq .m{font-size:13px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:14px;margin:0}
+.kv dt{color:var(--text-muted)}
+.kv dd{margin:0;font-weight:700}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0}
+.steps li{display:flex;gap:10px;align-items:flex-start;padding:6px 0;position:relative;font-size:14px}
+.steps .dot{width:22px;height:22px;border-radius:50%;border:2px solid #B9C1CC;background:#fff;flex:none;display:grid;place-items:center;font-size:12px;font-weight:900;color:#fff}
+.steps li.dn .dot{background:var(--ok);border-color:var(--ok)}
+.steps li.cur .dot{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.steps li.x .dot{background:var(--err);border-color:var(--err)}
+.steps small{display:block;color:var(--text-muted);font-size:12.5px}
+.avail{display:flex;align-items:center;gap:10px;padding:12px;border-radius:var(--radius);font-size:18px;font-weight:900}
+.avail svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:2.2;flex:none}
+.av-in{background:var(--ok-bg);color:var(--ok)}
+.av-low{background:var(--warn-bg);color:var(--warn)}
+.av-out{background:var(--err-bg);color:var(--err)}
+.line{border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;display:flex;flex-direction:column;gap:8px;background:var(--surface)}
+.line .lh{display:flex;gap:8px;align-items:flex-start}
+.line .lh .tx{flex:1;min-width:0}
+.line .lh b{font-size:15.5px;display:block}
+.line .lh small{font-size:12.5px;color:var(--text-muted)}
+.xbtn{flex:none;min-width:48px;min-height:48px;border:1px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);font-weight:700;color:var(--err)}
+.route{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:14px}
+.route li{display:flex;gap:8px;align-items:flex-start}
+.empty{padding:16px;border:2px dashed #C9D0DA;border-radius:var(--radius);color:var(--text-muted);text-align:center;font-size:14px}
+.donehead{display:flex;gap:14px;align-items:center}
+.check{width:56px;height:56px;border-radius:50%;border:5px solid var(--ok);display:grid;place-items:center;font-size:28px;color:var(--ok);flex:none;font-weight:900}
+.check.pend{border-color:var(--off);color:var(--off)}
+.donehead h2{margin:0;font-size:22px}
+.outs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.outs li{display:flex;flex-direction:column;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;font-size:15px}
+.outs .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.qr{width:72px;height:72px;flex:none;border:3px solid var(--text);background:repeating-linear-gradient(90deg,var(--text) 0 6px,#fff 6px 12px),repeating-linear-gradient(0deg,var(--text) 0 6px,#fff 6px 12px);background-blend-mode:difference}
+
+/* ---------- rule sheet (dialog inside frame) ---------- */
+.scrim{position:absolute;inset:0;background:rgba(15,20,30,.45);display:flex;align-items:flex-end;justify-content:center;z-index:5}
+.d-desk .scrim,.d-dtouch .scrim,.d-tab .scrim{align-items:center}
+.sheet{background:var(--surface);width:100%;max-width:520px;border-radius:16px 16px 0 0;padding:16px;display:flex;flex-direction:column;gap:10px;max-height:90%;overflow:auto}
+.d-desk .sheet,.d-dtouch .sheet,.d-tab .sheet{border-radius:12px}
+.sheet h2{margin:0;font-size:18px;display:flex;gap:8px;align-items:center}
+.sheet p{margin:0;font-size:15px}
+.sheet ul{margin:0;padding-left:20px;font-size:14.5px}
+
+/* ---------- compact (desktop mouse) overrides ---------- */
+.compact{font-size:13px}
+.compact .b{min-height:34px;height:34px;border-width:1px;border-radius:6px;font-size:13px;padding:0 12px}
+.compact .icon{width:15px;height:15px}
+.compact .fld{border-width:1px;border-radius:6px}
+.compact .fld input{height:32px;font-size:13px}
+.compact .txt{min-height:32px;height:32px;border-width:1px;border-radius:6px;font-size:13px}
+.compact .pk{min-height:40px;border-width:1px;border-radius:6px;padding:4px 10px}
+.compact .pk b{font-size:13px}
+.compact .pk small{font-size:12px}
+.compact .qty .stp,.compact .qty input{min-height:32px;height:32px;border-width:1px;border-radius:6px}
+.compact .qty .stp{width:32px;font-size:16px}
+.compact .qty input{width:64px;font-size:14px}
+.compact .tile{min-height:36px;border-width:1px;border-radius:6px;font-size:13px;padding:4px 10px}
+.compact .tile small{font-size:11.5px}
+.compact .chk{min-height:36px;border-width:1px;border-radius:6px;padding:6px 10px}
+.compact .chk b{font-size:13px}
+.compact .chk small{font-size:12px}
+.compact .chk input{width:16px;height:16px}
+.compact .tog{min-height:30px;font-size:12.5px;border-width:1px;padding:0 10px}
+.compact .card{border-radius:6px;padding:10px 12px}
+.compact .card h3{font-size:14px}
+.compact .act{min-height:64px;padding:8px 10px;border-width:1px;border-radius:8px;flex-direction:row;align-items:center}
+.compact .act .ic{width:32px;height:32px;border-radius:8px}
+.compact .act .ic svg{width:18px;height:18px}
+.compact .act b{font-size:14px}
+.compact .act span.s{font-size:12px}
+.compact .rq{min-height:44px;padding:6px 10px;border-radius:6px}
+.compact .rq b{font-size:13px}
+.compact .it{padding:6px 8px;border-radius:6px}
+.compact .it b{font-size:13px}
+.compact .xbtn{min-width:32px;min-height:32px;border-radius:6px}
+.compact .line{border-radius:6px;padding:8px 10px}
+.compact .line .lh b{font-size:13.5px}
+.compact .avail{font-size:15px;padding:8px 10px}
+.compact .phd h2{font-size:16px}
+.compact .sheet p{font-size:13.5px}
+.compact .sheet ul{font-size:13px}
+.compact .pill,.compact .chip{font-size:12px}
+.compact .decide,.compact .note,.compact .bad-box,.compact .ok-box{font-size:13px;padding:8px 10px}
+.compact .outs li{font-size:13.5px}
+.compact .check{width:44px;height:44px;font-size:22px;border-width:4px}
+
+/* ---------- side panels ---------- */
+.sidep{width:340px;display:flex;flex-direction:column;gap:16px;flex:none}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.panel h2{font-size:15px;margin:0 0 8px}
+.panel .b{width:100%;margin-bottom:8px;min-height:44px;font-size:14px}
+.legend{margin:0;padding-left:18px;font-size:13px}
+.legend li{margin-bottom:6px}
+.ltag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--border);background:#F4F6F9}
+.ltag.as{background:var(--warn-bg);color:var(--warn);border-color:#E8C27A}
+@media (max-width:700px){.sidep{width:100%}}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="intro">
+    <h1>My requisitions - every employee, own signed-in device</h1>
+    <p>The base 'employee' hat that every signed-in person has: raise a requisition, check stock, report damage, follow their own requests and see their own standing approvals. Every requisition goes to the head of department unless the person holds a standing approval or a self-approval limit. There are no shared terminals and no badge or PIN step: each person uses their own device. Switch the device class and the person below; the app state is kept across device switches.</p>
+  </div>
+
+  <div class="ctlbar">
+    <div class="ctl" role="group" aria-labelledby="dev-l"><span id="dev-l">Device class</span><div class="seg" id="devseg"></div></div>
+    <div class="ctl" role="group" aria-labelledby="role-l"><span id="role-l">Signed in as (demo)</span><div class="seg" id="roleseg"></div></div>
+  </div>
+
+  <div class="device">
+    <div class="device-label" id="devlabel"></div>
+    <div id="fbox"></div>
+  </div>
+
+  <div class="sidep">
+    <section class="panel" aria-labelledby="demo-h">
+      <h2 id="demo-h">Demo controls</h2>
+      <button class="b b-sec" data-demo="fill">Quick-fill this person's requisition</button>
+      <button class="b b-sec" data-demo="dscan">Report damage: scan lot label</button>
+      <button class="b b-sec" data-demo="dfill">Quick-fill damage report + replacement</button>
+      <button class="b b-sec" data-demo="approve">Approver decides: approve oldest pending</button>
+      <button class="b b-sec" data-demo="offline" id="off-btn">Toggle offline (now: online)</button>
+      <button class="b b-ghost" data-demo="reset">Reset</button>
+      <div class="sr" aria-live="polite" id="live"></div>
+    </section>
+    <section class="panel" aria-labelledby="leg-h">
+      <h2 id="leg-h">Legend - decisions and assumptions</h2>
+      <ol class="legend">
+        <li><span class="ltag">DECISION</span> Every role on every device: the role decides WHAT is shown, the device class decides HOW. Handheld = bottom nav, single column, list opens a detail page with Back. Tablet = icon rail, list and detail side by side. Desktop = dark sidebar, top bar with search, site switcher and + New, compact 30-36px controls. Desktop touch = desktop layout at touch-roomy size.</li>
+        <li><span class="ltag">DECISION</span> Touch classes: primary action 56px, full width, pinned at the bottom; secondary 48px. "Scanner ready" shows only on Handheld; every scan also offers camera (Handheld, Tablet) and always "Type it"; Desktop says "USB scanner or type".</li>
+        <li><span class="ltag">DECISION</span> No shared machine terminals: everyone, including machine operators, uses their own signed-in device. No badge or PIN step.</li>
+        <li><span class="ltag">DECISION</span> Any employee can raise a requisition and check stock availability at any time. By default every requisition is approved by the requester's head of department, by value band. There is no grade or seniority list.</li>
+        <li><span class="ltag">DECISION</span> Exception 1 - STANDING APPROVAL (ref SA-YYYY-NNN): a grant linking one person to an item or item group, e.g. SA-2026-014 Cleaning gear for Ramu. Optional monthly quantity cap and end date; quantity over the cap falls back to normal approval.</li>
+        <li><span class="ltag">DECISION</span> Exception 2 - per-person "Self-approval limit Rs 25,000" (senior engineer): self-approves requisitions within the limit. Overrides backend SOD-01 for this case; needs a backend change.</li>
+        <li><span class="ltag">DECISION</span> Grants and limits are assigned by the site head or head of department, need a one-time finance head approval, are revoked the same day the sign-in account is disabled, and can be revoked by the assigner any time. Assigners get pruning lists (default every 30 days); grants unused 90 days are flagged.</li>
+        <li><span class="ltag">DECISION</span> The stores screen and issue slip state the grant, e.g. "Standing approval SA-2026-014 for Ramu (Cleaning gear). Storekeeper please issue."</li>
+        <li><span class="ltag">DECISION</span> Each person sees their own grants, caps used and end dates under "My standing approvals" (Profile).</li>
+        <li><span class="ltag">DECISION</span> Report damage is universal. The reporter only reports: the reported units go on hold (not issuable) and QC is informed. QC and finance decide together; if they disagree, the CEO decides.</li>
+        <li><span class="ltag">DECISION</span> Hold scope: a report holds only the reported units; a lot-wide hold is an option for a quality issue.</li>
+        <li><span class="ltag">DECISION</span> Report damage + Request replacement is one flow, in pilot scope; the replacement is a linked requisition.</li>
+        <li><span class="ltag">DECISION</span> Approvals need a live connection (approver side). Requests and damage reports can be captured offline and show "Captured - pending sync".</li>
+        <li><span class="ltag">DECISION</span> Accent A Ledger Blue #1E6BC6 token family; dark sidebar #1B2230; Zoho-style structure without Zoho name, logo or icons.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Demo grants: Ramu - SA-2026-014 Cleaning gear (floor mop, phenyl 5 L, nitrile gloves, garbage bags), phenyl capped at 6 cans per month (4 used), ends 31 Mar 2027. Line 2 technician - SA-2026-023 Welding gloves, cap 8 pairs per month, ends 31 Dec 2026. Senior engineer - no grants, Self-approval limit Rs 25,000 per request.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Value bands: up to Rs 1,00,000 the head of department approves; above that the finance controller. Pilot backend has one unbounded band.</li>
+        <li><span class="ltag as">ASSUMPTION</span> A requisition mixing routes is split into one request per route, so standing-approval lines are not held up by an approval.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Standing-approval items are counter stock, so they are "Ready to collect" as soon as the request syncs. Stores counter hours 08:00 to 20:00.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Estimated value is shown only to people with a self-approval limit, because the limit depends on it.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Cost centre and purpose are prefilled from the person's department and can be changed.</li>
+        <li><span class="ltag as">ASSUMPTION</span> "Suspect whole lot" is a request only; the QC head decides the lot-wide hold. Damage reasons: Dead on arrival - electronic, Damaged component, Wrong item or spec, Other (photo + one line required).</li>
+        <li><span class="ltag as">ASSUMPTION</span> The replacement requisition follows the same approval rules as any requisition (Ramu's phenyl replacement is covered by their standing approval; a technician's PCB board needs the head of department).</li>
+        <li><span class="ltag as">ASSUMPTION</span> "Material issued to me" lists open issues to the person from the last 7 days; qty affected is capped at the qty issued.</li>
+      </ol>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){
+  var ICON={
+    scan:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>',
+    cam:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    kb:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h1M11 10h1M15 10h1M7 14h10"/></svg>',
+    back:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
+    info:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>',
+    ok:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>',
+    x:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    plus:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>'
+  };
+  var NAVI={
+    home:'<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7"/>',
+    req:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>',
+    stock:'<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>',
+    dmg:'<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M12 3l-2 6 4 3-3 5"/>'
+  };
+  NAVI.me='<circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/>';
+  var NAVS=[['home','Requests','My requests'],['req','New','New requisition'],['stock','Stock','Check stock'],['dmg','Damage','Report damage'],['me','Profile','My standing approvals']];
+  var PI={
+    clock:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    chk:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>',
+    bag:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1 12H6z"/><path d="M9 8a3 3 0 0 1 6 0"/></svg>',
+    box:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>',
+    x:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    cloud:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h10a4 4 0 0 0 0-8 6 6 0 0 0-11.5 1.5A3.5 3.5 0 0 0 7 18z"/></svg>',
+    hold:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+    user:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></svg>',
+    shield:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>',
+    rupee:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10M7 9h10M13 4c3 0 3 5 0 5H7l8 11"/></svg>',
+    warn:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>'
+  };
+  var STP={
+    'Issued':['p-off','chk'],'Ready to collect':['p-ok','bag'],'Pending approval':['p-warn','clock'],
+    'Approved':['p-info','chk'],'Rejected':['p-err','x'],'Captured - pending sync':['p-off','cloud'],
+    'On hold - with QC':['p-warn','hold']
+  };
+  function pill(st){var p=STP[st]||['p-off','chk'];return '<span class="pill '+p[0]+'">'+PI[p[1]]+st+'</span>';}
+
+  var ROLES={
+    jan:{seg:'Ramu - Janitor, Housekeeping',who:'Ramu',title:'Janitor - Housekeeping',ini:'RA',
+         dept:'Housekeeping - Admin',cc:'CC-ADM-HK',purpose:'Daily cleaning - admin block and canteen',usual:['HK-MOP-0001','HK-PHN-0005','SF-GLV-NIT','HK-GBG-L30','HK-WFS-0002'],
+         grants:[{ref:'SA-2026-014',group:'Cleaning gear',skus:['HK-MOP-0001','HK-PHN-0005','SF-GLV-NIT','HK-GBG-L30'],caps:{'HK-PHN-0005':6},end:'31 Mar 2027',by:'Head of department - Housekeeping',fin:'12 Apr 2026'}]},
+    jt:{seg:'Technician - Line 2',who:'Line 2 technician',title:'Technician - Production, Line 2',ini:'LT',
+        dept:'Production - Line 2',cc:'CC-PRD-L2',purpose:'Line 2 production - fabrication cell',usual:['SF-GLV-WLD','TL-INS-0408','EL-PRX-0012','SF-GLV-NIT','EL-PCB-0142'],
+        grants:[{ref:'SA-2026-023',group:'Welding gloves',skus:['SF-GLV-WLD'],caps:{'SF-GLV-WLD':8},end:'31 Dec 2026',by:'Site head',fin:'02 Jun 2026'}]},
+    se:{seg:'Senior engineer - Production',who:'Senior engineer',title:'Senior engineer - Production',ini:'SE',selfLimit:25000,limitFin:'18 May 2026',
+        dept:'Production - Engineering',cc:'CC-PRD-ENG',purpose:'Line 2 fabrication cell - welding jobs',usual:['SF-GLV-WLD','EL-PCB-0142','TL-INS-0408','EL-PRX-0012','SF-GLV-NIT'],grants:[]}
+  };
+  var HOD='Head of department (value band)';
+  var CCS=[['CC-ADM-HK','Housekeeping - Admin block'],['CC-PRD-L2','Production - Line 2 general'],['CC-PRD-ENG','Production - Engineering'],['CC-PRD-L2-CNC02','CNC-02 - Line 2']];
+  var ITEMS=[
+    {sku:'HK-MOP-0001',name:'Floor mop with handle',uom:'nos',avail:40,st:'in',price:260},
+    {sku:'HK-PHN-0005',name:'Phenyl 5 L can',uom:'can',avail:8,st:'low',price:340},
+    {sku:'SF-GLV-NIT',name:'Nitrile gloves, box of 100',uom:'box',avail:25,st:'in',price:450},
+    {sku:'HK-GBG-L30',name:'Garbage bags large, pack of 30',uom:'pack',avail:60,st:'in',price:120},
+    {sku:'HK-WFS-0002',name:'Wet-floor caution board',uom:'nos',avail:6,st:'in',price:850},
+    {sku:'HK-ACD-0005',name:'Acid descaler 5 L',uom:'can',avail:14,st:'in',price:560},
+    {sku:'SF-GLV-WLD',name:'Welding gloves, leather (pair)',uom:'pair',avail:64,st:'in',price:180},
+    {sku:'TL-INS-0408',name:'Carbide insert CNMG 120408',uom:'nos',avail:120,st:'in',price:640},
+    {sku:'EL-PRX-0012',name:'Proximity sensor M12 PNP',uom:'nos',avail:0,st:'out',eta:'30 Sep',price:1450},
+    {sku:'EL-PCB-0142',name:'PCB controller board',uom:'nos',avail:3,st:'low',price:18500}
+  ];
+  var ISSUED={
+    jan:[{lot:'L-2609-133',sku:'HK-PHN-0005',n:2,when:'issued 23 Sep, IND-2026-0446'},{lot:'L-2609-090',sku:'HK-GBG-L30',n:2,when:'issued 22 Sep, IND-2026-0439'}],
+    jt:[{lot:'L-2609-201',sku:'EL-PCB-0142',n:2,when:'issued 24 Sep, IND-2026-0431'},{lot:'L-2609-176',sku:'EL-PRX-0012',n:6,when:'issued 22 Sep, IND-2026-0419'},{lot:'L-2609-150',sku:'SF-GLV-WLD',n:4,when:'issued 21 Sep, IND-2026-0414'}],
+    se:[{lot:'L-2609-201',sku:'EL-PCB-0142',n:8,when:'issued 24 Sep, IND-2026-0431'},{lot:'L-2609-160',sku:'TL-INS-0408',n:30,when:'issued 23 Sep, IND-2026-0445'}]
+  };
+  var SCEN={jan:[['HK-MOP-0001',1],['HK-PHN-0005',2],['HK-GBG-L30',2]],jt:[['SF-GLV-WLD',20]],se:[['SF-GLV-WLD',20]]};
+  var DSCEN={jan:{lot:'L-2609-133',qty:1,reason:'comp'},jt:{lot:'L-2609-201',qty:1,reason:'doa'},se:{lot:'L-2609-201',qty:2,reason:'doa'}};
+  var REASONS=[['doa','Dead on arrival - electronic','Never worked when fitted'],['comp','Damaged component','Broken, bent, cracked, leaking'],['spec','Wrong item or spec','Not what was asked for'],['other','Other','Photo + one line required']];
+  var TODAY='2026-09-25',TOMORROW='2026-09-26',COUNTER='Stores counter - Main store, 08:00 to 20:00';
+  function seed(){
+    return {
+      jan:[
+        {id:'IND-2026-0446',lines:[['HK-PHN-0005',2]],st:'Ready to collect',route:'sa',grant:'SA-2026-014',raised:'23 Sep',need:'25 Sep',cc:'CC-ADM-HK',purpose:'Daily cleaning - admin block and canteen'},
+        {id:'IND-2026-0443',lines:[['HK-WFS-0002',2]],st:'Pending approval',route:'hod',appr:HOD,raised:'24 Sep',need:'26 Sep',cc:'CC-ADM-HK',purpose:'Canteen floor - wet mopping'},
+        {id:'IND-2026-0440',lines:[['HK-ACD-0005',1]],st:'Approved',route:'hod',appr:HOD,raised:'22 Sep',need:'25 Sep',cc:'CC-ADM-HK',purpose:'Toilet block descaling'},
+        {id:'IND-2026-0439',lines:[['HK-MOP-0001',1],['HK-GBG-L30',2]],st:'Issued',route:'sa',grant:'SA-2026-014',raised:'22 Sep',need:'22 Sep',cc:'CC-ADM-HK',purpose:'Daily cleaning - admin block and canteen'},
+        {id:'IND-2026-0436',lines:[['HK-ACD-0005',4]],st:'Rejected',route:'hod',appr:HOD,reason:'Four cans is too many - one can lasts a month. Raise again for 1.',raised:'20 Sep',need:'21 Sep',cc:'CC-ADM-HK',purpose:'Toilet block descaling'}],
+      jt:[
+        {id:'IND-2026-0449',lines:[['TL-INS-0408',20]],st:'Pending approval',route:'hod',appr:HOD,raised:'24 Sep',need:'26 Sep',cc:'CC-PRD-L2',purpose:'Line 2 production - fabrication cell'},
+        {id:'IND-2026-0448',lines:[['SF-GLV-WLD',2]],st:'Ready to collect',route:'sa',grant:'SA-2026-023',raised:'24 Sep',need:'25 Sep',cc:'CC-PRD-L2',purpose:'Line 2 production - fabrication cell'},
+        {id:'IND-2026-0444',lines:[['TL-INS-0408',10]],st:'Approved',route:'hod',appr:HOD,raised:'23 Sep',need:'25 Sep',cc:'CC-PRD-L2',purpose:'Line 2 production - fabrication cell'},
+        {id:'IND-2026-0438',lines:[['EL-PRX-0012',2]],st:'Rejected',route:'hod',appr:HOD,reason:'Take from the Line 2 spares kit first; raise again if the kit is empty.',raised:'22 Sep',need:'23 Sep',cc:'CC-PRD-L2',purpose:'CNC-02 sensor swap'},
+        {id:'IND-2026-0419',lines:[['EL-PRX-0012',6]],st:'Issued',route:'hod',appr:HOD,raised:'20 Sep',need:'22 Sep',cc:'CC-PRD-L2',purpose:'CNC-02 sensor swap'}],
+      se:[
+        {id:'IND-2026-0450',lines:[['EL-PCB-0142',2]],st:'Pending approval',route:'hod',appr:HOD,raised:'24 Sep',need:'27 Sep',cc:'CC-PRD-ENG',purpose:'CNC-04 controller spare'},
+        {id:'IND-2026-0445',lines:[['TL-INS-0408',30]],st:'Approved',route:'self',appr:'Self-approved within your limit',raised:'23 Sep',need:'25 Sep',cc:'CC-PRD-ENG',purpose:'Line 2 fabrication cell - welding jobs'},
+        {id:'IND-2026-0431',lines:[['EL-PCB-0142',10]],st:'Issued',route:'hod',appr:HOD,raised:'19 Sep',need:'24 Sep',cc:'CC-PRD-ENG',purpose:'CNC retrofit - Line 2'},
+        {id:'IND-2026-0425',lines:[['EL-PRX-0012',10]],st:'Rejected',route:'self',appr:'Stores',reason:'Out of stock. Pooja Sharma (inventory controller) has it on order, due 30 Sep - raise again after it arrives.',raised:'18 Sep',need:'19 Sep',cc:'CC-PRD-ENG',purpose:'Sensor spares'}]
+    };
+  }
+  function freshFlow(role){return {lines:[],iq:'',need:'',needOther:false,purpose:ROLES[role].purpose,cc:ROLES[role].cc,msg:''};}
+  function freshDmg(){return {lot:null,qty:'',reason:'',note:'',photo:false,whole:false,replace:false,q:'',msg:''};}
+  function fresh(k){
+    var role=k?k.role:'jan';
+    return {dev:k?k.dev:'hand',role:role,offline:false,pending:0,view:'home',hd:false,sel:null,stSel:null,sq:'',
+      r:freshFlow(role),d:freshDmg(),done:null,sheet:null,seq:452,dseq:71,mine:seed(),dmgs:{jan:[],jt:[],se:[]},used:{jan:{'HK-PHN-0005':4},jt:{'SF-GLV-WLD':2},se:{}}};
+  }
+  var S=fresh(),syncT=null;
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function say(t){var l=document.getElementById('live');l.textContent='';setTimeout(function(){l.textContent=t;},30);}
+  function inr(n){return '₹'+Number(n).toLocaleString('en-IN');}
+  function R(){return ROLES[S.role];}
+  function item(sku){for(var i=0;i<ITEMS.length;i++)if(ITEMS[i].sku===sku)return ITEMS[i];return null;}
+  function issuedOf(lot){var L=ISSUED[S.role];for(var i=0;i<L.length;i++)if(L[i].lot===lot)return L[i];return null;}
+  function ccName(c){for(var i=0;i<CCS.length;i++)if(CCS[i][0]===c)return CCS[i][1];return c;}
+  function dLabel(d){if(d===TODAY)return 'Today, 25 Sep';if(d===TOMORROW)return 'Tomorrow, 26 Sep';if(!d)return '';var p=d.split('-');if(p.length<3)return d;return +p[2]+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+p[1]-1];}
+  function isTouch(){return S.dev!=='desk';}
+  function twoPane(){return S.dev!=='hand';}
+  function mine(){return S.mine[S.role];}
+  function reqOf(id){var L=mine();for(var i=0;i<L.length;i++)if(L[i].id===id)return L[i];return null;}
+
+  /* ---------- approval class (the rule, per person) ---------- */
+  function grantFor(sku,role){var G=ROLES[role||S.role].grants;for(var i=0;i<G.length;i++)if(G[i].skus.indexOf(sku)>=0)return G[i];return null;}
+  function usedOf(sku,role){return (S.used[role||S.role]||{})[sku]||0;}
+  function klass(it,qty,role){
+    role=role||S.role;var Ro=ROLES[role],q=+qty||0,g=grantFor(it.sku,role);
+    if(g){var cap=g.caps[it.sku];
+      if(cap){var u=usedOf(it.sku,role);
+        if(u+q>cap)return {k:'over',label:'Over standing approval cap - needs Head of department',route:'hod',appr:HOD,g:g,note:u+' of '+cap+' used this month'};
+        return {k:'sa',label:'Standing approval '+g.ref+' - issue directly',route:'sa',grant:g.ref,g:g,note:u+' of '+cap+' used this month'+(q?' - this makes '+(u+q):'')};}
+      return {k:'sa',label:'Standing approval '+g.ref+' - issue directly',route:'sa',grant:g.ref,g:g};
+    }
+    if(Ro.selfLimit&&it.price*Math.max(q,1)<=Ro.selfLimit)return {k:'self',label:'Within your self-approval limit',route:'self',appr:'Self-approved within your limit'};
+    return {k:'hod',label:'Needs approval - Head of department',route:'hod',appr:HOD};
+  }
+  var CICON={sa:'chk',over:'warn',self:'shield',hod:'clock'};
+  function chip(it,qty,btn){
+    var c=klass(it,qty),h=PI[CICON[c.k]]+c.label;
+    if(btn)return '<button class="chip c-'+c.k+'" data-a="why" data-k="'+it.sku+'" data-q="'+(+qty||0)+'" aria-haspopup="dialog" title="Why? '+esc(ruleShort(c))+'">'+h+'<span class="sr">, explain this rule</span></button>';
+    return '<span class="chip c-'+c.k+'">'+h+'</span>';
+  }
+  function ruleShort(c){
+    return {sa:'Your standing approval covers this item; stores issues it directly.',over:'Over the monthly cap of your standing approval, so your head of department approves it.',self:'Inside your self-approval limit; you approve it yourself.',hod:'Your head of department approves it by value band.'}[c.k];
+  }
+  function stockPill(it){
+    if(it.st==='out')return '<span class="pill p-err">'+PI.x+'Out of stock - expected '+it.eta+'</span>';
+    if(it.st==='low')return '<span class="pill p-warn">'+PI.warn+'Low - '+it.avail+' available</span>';
+    return '<span class="pill p-ok">'+PI.chk+'In stock - '+it.avail+' available</span>';
+  }
+  function syncBadge(){
+    if(S.offline)return '<span class="sync"><span class="d"></span>'+(S.pending?'Captured - pending sync ('+S.pending+')':'Offline')+'</span>';
+    return '<span class="sync on"><span class="d"></span>'+(S.pending?'Syncing '+S.pending:'Synced')+'</span>';
+  }
+  function scheduleSync(){
+    clearTimeout(syncT);if(S.offline||!S.pending)return;
+    syncT=setTimeout(function(){
+      ['jan','jt','se'].forEach(function(r){S.mine[r].forEach(function(q){if(q.st==='Captured - pending sync')q.st=q.target;});S.dmgs[r].forEach(function(x){if(x.st==='Captured - pending sync')x.st='On hold - with QC';});});
+      S.pending=0;say('All captures synced');render();
+    },1800);
+  }
+
+  /* ---------- scan field (device-aware) ---------- */
+  function scanField(id,f,val,ph,cam){
+    var hand=S.dev==='hand',desk=S.dev==='desk'||S.dev==='dtouch',p=desk?'USB scanner or type - '+ph:(hand?'Scan with trigger or type - '+ph:'Scan with camera or type - '+ph);
+    var h='<form class="scanf" data-scan="'+f+'" role="search"><label class="fld" for="'+id+'">'+ICON.scan+'<span class="sr">'+esc(ph)+'</span><input id="'+id+'" data-f="'+f+'" value="'+esc(val)+'" placeholder="'+esc(p)+'" autocomplete="off"></label>';
+    if(!desk)h+='<button class="b b-sec" type="button" data-a="cam" data-k="'+f+'">'+ICON.cam+'Camera</button>';
+    h+='<button class="b b-plain" type="button" data-a="typeit" data-k="'+id+'">'+ICON.kb+'Type it</button></form>';
+    return h;
+  }
+
+  /* =================== HOME / MY REQUESTS =================== */
+  function reqSummary(q){return q.lines.map(function(l){var it=item(l[0]);return it.name+' x '+l[1];}).join(', ');}
+  function reqSub(q){
+    if(q.st==='Ready to collect')return 'Collect at Stores counter'+(q.grant?' - standing approval '+q.grant:'');
+    if(q.st==='Pending approval')return 'Waiting for '+q.appr;
+    if(q.st==='Approved')return (q.route==='self'?'Self-approved within your limit - ':'Approved - ')+'stores is picking it';
+    if(q.st==='Rejected')return 'Rejected: '+q.reason;
+    if(q.st==='Captured - pending sync')return 'Saved on this device - sends when online';
+    return 'Issued '+q.need;
+  }
+  function homeList(){
+    var fid=S.dev,Ro=R(),L=mine(),sel=selId(),h='';
+    h+='<div class="greet"><b>Namaste, '+esc(Ro.who)+'</b><span class="m">'+esc(Ro.title)+'</span></div>';
+    h+='<div class="acts">'+
+      '<button class="act st" data-a="go" data-k="stock"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true">'+NAVI.stock+'</svg></span><span><b>Check stock</b><br><span class="s">Is it in stores? Where to collect</span></span></button>'+
+      '<button class="act dm" data-a="go" data-k="dmg"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true">'+NAVI.dmg+'</svg></span><span><b>Report damage</b><br><span class="s">Damaged or dead part - QC is informed</span></span></button></div>';
+    h+='<section class="grp" aria-labelledby="'+fid+'-mr"><h3 id="'+fid+'-mr">My requests</h3><ul>';
+    L.forEach(function(q){
+      h+='<li><button class="rq'+(q.isNew?' new':'')+'" data-a="openReq" data-k="'+q.id+'"'+(twoPane()&&sel===q.id?' aria-current="true"':'')+'><span class="top"><span class="ref">'+q.id+'</span>'+pill(q.st)+'</span><b>'+esc(reqSummary(q))+'</b><span class="m">'+esc(reqSub(q))+'</span></button></li>';
+    });
+    h+='</ul></section>';
+    var D=S.dmgs[S.role];
+    if(D.length){h+='<section class="grp" aria-labelledby="'+fid+'-md"><h3 id="'+fid+'-md">My damage reports</h3><ul>';
+      D.forEach(function(x){h+='<li class="rq"><span class="top"><span class="ref">'+x.id+'</span>'+pill(x.st)+'</span><b>'+esc(x.name)+' x '+x.qty+'</b><span class="m">Lot '+x.lot+' - QC and finance will decide'+(x.repId?' - replacement '+x.repId:'')+'</span></li>';});
+      h+='</ul></section>';}
+    return h;
+  }
+  function selId(){var L=mine();if(S.sel&&reqOf(S.sel))return S.sel;return L.length?L[0].id:null;}
+  function reqDetail(){
+    var q=reqOf(selId());if(!q)return '<div class="empty">No requests yet.</div>';
+    var Ro=R(),h='<div class="row" style="justify-content:space-between"><span class="ref" style="font-size:15px">'+q.id+'</span>'+pill(q.st)+'</div>';
+    if(q.st==='Ready to collect')h+='<div class="ok-box"><span class="qr" role="img" aria-label="Collection code for '+q.id+'"></span><span><b>Ready to collect</b>'+COUNTER+'. Show this screen or say '+q.id+'.</span></div>';
+    if(q.grant&&(q.st==='Ready to collect'||q.st==='Issued'||q.st==='Captured - pending sync'))h+='<div class="note" role="note">'+PI.shield.replace('<svg','<svg class="icon"')+'<span><b>Issue slip</b>'+esc(slipText(q))+'</span></div>';
+    if(q.st==='Pending approval')h+='<div class="decide" role="note">'+ICON.info+'<span><b>Waiting for '+esc(q.appr)+'</b>You get a message when it is decided. Nothing to do now.</span></div>';
+    if(q.st==='Approved')h+='<div class="note">'+ICON.info+'<span><b>'+(q.route==='self'?'Self-approved within your limit':'Approved by '+esc(q.appr))+'</b>Stores is picking it. It moves to Ready to collect when it is at the counter.</span></div>';
+    if(q.st==='Rejected')h+='<div class="bad-box">'+ICON.x+'<span><b>Rejected by '+esc(q.appr)+'</b>'+esc(q.reason)+'</span></div>';
+    if(q.st==='Captured - pending sync')h+='<div class="note">'+ICON.info+'<span><b>Captured - pending sync</b>Saved on this device. It goes to '+(q.route==='sa'?'the Stores counter':esc(q.appr||'stores'))+' as soon as you are back online.</span></div>';
+    if(q.st==='Issued')h+='<div class="ok-box">'+ICON.ok+'<span><b>Issued on '+q.need+'</b>Found a problem with it? Use Report damage.</span></div>';
+    h+='<section class="card" aria-label="Items"><h3>Items</h3><ul class="list" style="margin:0">';
+    q.lines.forEach(function(l){var it=item(l[0]);h+='<li class="it"><span class="tx"><b>'+it.name+' - '+l[1]+' '+it.uom+'</b><small>'+it.sku+(Ro.selfLimit?' - est. '+inr(it.price*l[1]):'')+'</small>'+chip(it,l[1],true)+'</span></li>';});
+    h+='</ul></section>';
+    h+='<dl class="kv"><dt>Raised</dt><dd>'+q.raised+'</dd><dt>Needed by</dt><dd>'+q.need+'</dd><dt>Charged to</dt><dd>'+ccName(q.cc)+'</dd><dt>Purpose</dt><dd>'+esc(q.purpose)+'</dd>'+(q.link?'<dt>Linked to</dt><dd>'+q.link+'</dd>':'')+'</dl>';
+    var apprStep=q.route==='sa'?['Standing approval '+q.grant,'dn']:[q.route==='self'?'Self-approved within your limit':'Approval - '+q.appr,q.st==='Pending approval'?'cur':(q.st==='Rejected'?'x':(q.st==='Captured - pending sync'?'':'dn'))];
+    var sts=[['Raised',q.st==='Captured - pending sync'?'cur':'dn'],apprStep,['Ready at Stores counter',q.st==='Ready to collect'?'cur':(q.st==='Issued'?'dn':'')],['Issued to you',q.st==='Issued'?'dn':'']];
+    h+='<section class="card" aria-label="Progress"><h3>Progress</h3><ol class="steps">';
+    sts.forEach(function(s){h+='<li class="'+s[1]+'"><span class="dot" aria-hidden="true">'+(s[1]==='dn'?'&#10003;':(s[1]==='x'?'&#10005;':''))+'</span><span>'+esc(s[0])+'<span class="sr"> - '+({dn:'done',cur:'current step',x:'rejected'}[s[1]]||'not yet')+'</span></span></li>';});
+    h+='</ol></section>';
+    if(q.st==='Rejected')h+='<button class="b b-sec b-full" data-a="again" data-k="'+q.id+'">Raise again with changes</button>';
+    return h;
+  }
+
+  function grantByRef(ref){var G=R().grants;for(var i=0;i<G.length;i++)if(G[i].ref===ref)return G[i];return null;}
+  function slipText(q){var g=grantByRef(q.grant);return 'Standing approval '+q.grant+' for '+R().who+(g?' ('+g.group+')':'')+'. Storekeeper please issue.';}
+
+  /* =================== PROFILE - MY STANDING APPROVALS =================== */
+  function meList(){
+    var Ro=R(),fid=S.dev,h='<div class="greet"><b>'+esc(Ro.who)+'</b><span class="m">'+esc(Ro.title)+' - CMF-ALIGARH</span></div>';
+    h+='<section class="grp" aria-labelledby="'+fid+'-sa"><h3 id="'+fid+'-sa">My standing approvals</h3>';
+    if(!Ro.grants.length)h+='<div class="empty">You have no standing approvals. Your requisitions go to your head of department'+(Ro.selfLimit?', unless they are within your self-approval limit':'')+'.</div>';
+    else{h+='<ul>';Ro.grants.forEach(function(g){
+      h+='<li class="grant"><span class="row" style="justify-content:space-between"><span class="ref">'+g.ref+'</span><span class="pill p-ok">'+PI.chk+'Active</span></span><b>'+esc(g.group)+'</b>'+
+        '<span class="m">Items: '+g.skus.map(function(s){return item(s).name;}).join(', ')+'</span>';
+      g.skus.forEach(function(s){var cap=g.caps[s];if(!cap)return;var u=usedOf(s);
+        h+='<span class="m"><b style="color:var(--text)">'+esc(item(s).name)+'</b>: '+u+' of '+cap+' used in September</span><span class="bar" role="img" aria-label="'+u+' of '+cap+' used"><i style="width:'+Math.min(100,Math.round(u/cap*100))+'%"></i></span>';});
+      if(g.skus.some(function(s){return !g.caps[s];}))h+='<span class="m">Other items in this group: no monthly cap</span>';
+      h+='<span class="m">Ends '+g.end+' - over the cap goes to your head of department</span></li>';});
+      h+='</ul>';}
+    h+='</section>';
+    h+='<section class="grp" aria-labelledby="'+fid+'-sl"><h3 id="'+fid+'-sl">Self-approval limit</h3>'+(Ro.selfLimit?'<div class="grant"><b>Self-approval limit '+inr(Ro.selfLimit)+'</b><span class="m">You approve your own requisitions up to '+inr(Ro.selfLimit)+' per request. Above that they go to your head of department.</span></div>':'<div class="empty">No self-approval limit.</div>')+'</section>';
+    return h;
+  }
+  function meDetail(){
+    var Ro=R();
+    return '<div class="note">'+ICON.info+'<span><b>How approval works for you</b>Every requisition goes to your head of department by value band, except items covered by a standing approval'+(Ro.selfLimit?' and requests within your self-approval limit':'')+'.</span></div>'+
+      '<dl class="kv"><dt>Assigned by</dt><dd>'+(Ro.grants.length?esc(Ro.grants[0].by):'Head of department')+'</dd><dt>Finance head approved</dt><dd>'+(Ro.grants.length?Ro.grants[0].fin:(Ro.limitFin||'-'))+'</dd><dt>Reviewed</dt><dd>Every 30 days by the assigner</dd></dl>'+
+      '<p class="m">Grants end on their end date, when your sign-in account is disabled, or when the assigner revokes them. Ask your head of department to change them.</p>';
+  }
+
+  /* =================== CHECK STOCK =================== */
+  function stockList(){
+    var fid=S.dev,q=S.sq.trim().toLowerCase(),Ro=R();
+    var list=q?ITEMS.filter(function(x){return x.name.toLowerCase().indexOf(q)>=0||x.sku.toLowerCase().indexOf(q)>=0;}):Ro.usual.map(item);
+    var h=scanField(fid+'-sq','sq',S.sq,'item name, code or barcode');
+    h+='<p class="hint" aria-live="polite">'+(q?list.length+' match'+(list.length===1?'':'es'):'Items you usually ask for')+' - stock as of '+(S.offline?'last sync 14:05, may have changed':'14:32')+'</p><ul class="list">';
+    list.forEach(function(x){h+='<li><button class="pk" data-a="stSel" data-k="'+x.sku+'"'+(twoPane()&&S.stSel===x.sku?' aria-current="true"':'')+'><span class="tx"><b>'+x.name+'</b><small>'+x.sku+'</small><span style="display:block;margin-top:4px">'+stockPill(x)+'</span></span></button></li>';});
+    if(!list.length)h+='<li class="hint bad">No item matches. Check the spelling or scan the bin label.</li>';
+    return h+'</ul>';
+  }
+  function stockDetail(){
+    var it=item(S.stSel);if(!it)return '<div class="empty">Pick an item to see where and how much is available.</div>';
+    var Ro=R(),c=klass(it,1),h='<div><b style="font-size:18px">'+it.name+'</b><div class="m">'+it.sku+' - unit '+it.uom+'</div></div>';
+    var cls=it.st==='out'?'av-out':(it.st==='low'?'av-low':'av-in');
+    var txt=it.st==='out'?'Out of stock - expected '+it.eta:(it.st==='low'?'Low - '+it.avail+' available':'In stock - '+it.avail+' available');
+    h+='<div class="avail '+cls+'" role="status">'+(it.st==='in'?PI.chk:(it.st==='low'?PI.warn:PI.x))+txt+'</div>';
+    h+='<dl class="kv"><dt>Collect at</dt><dd>'+COUNTER+'</dd><dt>For you</dt><dd>'+chip(it,1,true)+'</dd>'+(c.note?'<dt>Your cap</dt><dd>'+c.note+'</dd>':'')+(Ro.selfLimit?'<dt>Unit value</dt><dd>'+inr(it.price)+' (last issue price)</dd>':'')+'</dl>';
+    if(it.st==='out')h+='<div class="note">'+ICON.info+'<span><b>You can still request it</b>Stores issues it when it arrives. You get a message.</span></div>';
+    if(it.st==='low')h+='<div class="note">'+ICON.info+'<span><b>Running low</b>Stores has been told to reorder. Ask only for what you need this week.</span></div>';
+    return h;
+  }
+  function stockFoot(){return S.stSel?'<button class="b b-pri b-full" data-a="reqThis" data-k="'+S.stSel+'">'+ICON.plus+'Request this item</button>':'';}
+
+  /* =================== NEW REQUISITION =================== */
+  function reqAdd(){
+    var fid=S.dev,r=S.r,q=r.iq.trim().toLowerCase(),Ro=R();
+    var list=q?ITEMS.filter(function(x){return x.name.toLowerCase().indexOf(q)>=0||x.sku.toLowerCase().indexOf(q)>=0;}):Ro.usual.map(item);
+    var h='<section class="card" aria-labelledby="'+fid+'-add"><h3 id="'+fid+'-add">Add items</h3>'+scanField(fid+'-iq','iq',r.iq,'item name, code or barcode');
+    if(r.msg)h+='<p class="hint bad" role="alert">'+esc(r.msg)+'</p>';
+    h+='<p class="hint">'+(q?list.length+' match'+(list.length===1?'':'es'):'Your usual items')+'</p><ul class="list">';
+    list.forEach(function(x){var inl=r.lines.some(function(l){return l[0]===x.sku;});
+      h+='<li class="it"><span class="tx"><b>'+x.name+'</b><small>'+x.sku+'</small>'+stockPill(x)+chip(x,1,false)+'</span>'+
+         '<button class="b '+(inl?'b-plain':'b-sec')+'" data-a="add" data-k="'+x.sku+'"'+(inl?' aria-label="Added - add one more '+esc(x.name)+'"':' aria-label="Add '+esc(x.name)+'"')+'>'+(inl?'+1':'Add')+'</button></li>';});
+    if(!list.length)h+='<li class="hint bad">No item matches. Check the spelling or scan the bin label.</li>';
+    return h+'</ul></section>';
+  }
+  function reqLines(){
+    var fid=S.dev,r=S.r,Ro=R(),h='<section class="card'+(r.lines.length?' done':'')+'" aria-labelledby="'+fid+'-ln"><h3 id="'+fid+'-ln">Items in this requisition <span class="req">Required</span></h3>';
+    if(!r.lines.length)return h+'<div class="empty">No items yet. Search or scan an item and tap Add.</div></section>';
+    h+='<div style="display:flex;flex-direction:column;gap:8px">';
+    r.lines.forEach(function(l,i){var it=item(l[0]),c=klass(it,l[1]),short=it.st!=='out'&&+l[1]>it.avail;
+      h+='<div class="line"><div class="lh"><span class="tx"><b>'+it.name+'</b><small>'+it.sku+' - '+(it.st==='out'?'out of stock, expected '+it.eta:it.avail+' available')+(Ro.selfLimit?' - est. '+inr(it.price*(+l[1]||0)):'')+'</small></span>'+
+         '<button class="xbtn" data-a="rm" data-k="'+i+'" aria-label="Remove '+esc(it.name)+'">'+ICON.x+'</button></div>'+
+         '<div class="qty"><button class="stp" data-a="lDec" data-k="'+i+'" aria-label="Decrease quantity of '+esc(it.name)+'">-</button><label class="sr" for="'+fid+'-lq'+i+'">Quantity of '+esc(it.name)+'</label>'+
+         '<input id="'+fid+'-lq'+i+'" type="number" inputmode="numeric" min="1" data-f="lqty" data-k="'+i+'" value="'+esc(l[1])+'"><button class="stp" data-a="lInc" data-k="'+i+'" aria-label="Increase quantity of '+esc(it.name)+'">+</button><span class="of">'+it.uom+'</span></div>'+
+         '<div class="row">'+chip(it,l[1],true)+(c.note?'<span class="cnote">'+c.note+'</span>':'')+'</div>'+
+         (short?'<p class="hint" style="margin:0">Only '+it.avail+' in stock now - the rest follows when stock arrives.</p>':'')+'</div>';});
+    return h+'</div></section>';
+  }
+  function reqDetails(){
+    var fid=S.dev,r=S.r,Ro=R();
+    var h='<section class="card'+(r.need?' done':'')+'" aria-labelledby="'+fid+'-nb"><h3 id="'+fid+'-nb">Needed by <span class="req">Required</span></h3><div class="chips" role="group" aria-labelledby="'+fid+'-nb">'+
+      '<button class="tog" data-a="need" data-k="'+TODAY+'" aria-pressed="'+(r.need===TODAY&&!r.needOther)+'">Today</button>'+
+      '<button class="tog" data-a="need" data-k="'+TOMORROW+'" aria-pressed="'+(r.need===TOMORROW&&!r.needOther)+'">Tomorrow</button>'+
+      '<button class="tog" data-a="needO" aria-pressed="'+r.needOther+'">Pick date</button></div>'+
+      (r.needOther?'<div class="gap"><label class="sr" for="'+fid+'-nd">Needed by date</label><input class="txt" type="date" id="'+fid+'-nd" data-f="ndate" min="'+TODAY+'" value="'+esc(r.need)+'"></div>':'')+'</section>';
+    h+='<section class="card done" aria-labelledby="'+fid+'-pp"><h3 id="'+fid+'-pp">Purpose and cost centre</h3>'+
+      '<label class="lbl" for="'+fid+'-pu">Purpose</label><input class="txt" id="'+fid+'-pu" data-f="purpose" value="'+esc(r.purpose)+'">'+
+      '<label class="lbl gap" for="'+fid+'-cc">Charged to</label><select class="txt" id="'+fid+'-cc" data-f="cc">';
+    CCS.forEach(function(c){h+='<option value="'+c[0]+'"'+(r.cc===c[0]?' selected':'')+'>'+c[1]+' ('+c[0]+')</option>';});
+    h+='</select><p class="derived">Filled from your department: '+esc(Ro.dept)+'. Change it if the work is for another cost centre.</p></section>';
+    if(r.lines.length){
+      var g=groups();h+='<section class="card" aria-labelledby="'+fid+'-wn"><h3 id="'+fid+'-wn">What happens when you send</h3><ul class="route">';
+      g.forEach(function(x){var n=x.lines.length+' item'+(x.lines.length>1?'s':'');
+        var t=x.route==='sa'?n+': standing approval '+x.grant+' - <b>ready to collect at Stores counter</b>':(x.route==='self'?n+': <b>self-approved</b> within your self-approval limit - stores picks it':n+': waits for <b>'+esc(x.appr)+'</b>');
+        h+='<li>'+PI[x.route==='sa'?'chk':(x.route==='self'?'shield':'clock')].replace('<svg','<svg class="icon" style="width:18px;height:18px"')+'<span>'+t+'</span></li>';});
+      if(g.length>1)h+='<li class="m">Sent as '+g.length+' separate requests so the standing-approval items are not held up.</li>';
+      h+='</ul></section>';
+    }
+    return h;
+  }
+  function groups(){
+    var m={},out=[];S.r.lines.forEach(function(l){var c=klass(item(l[0]),l[1]),key=c.route+'|'+(c.appr||c.grant||'');if(!m[key]){m[key]={route:c.route,appr:c.appr,grant:c.grant,lines:[]};out.push(m[key]);}m[key].lines.push([l[0],+l[1]]);});
+    var ord={sa:0,self:1,hod:2};out.sort(function(a,b){return ord[a.route]-ord[b.route];});return out;
+  }
+  function rTodo(){var r=S.r,t=[];if(!r.lines.length)t.push('at least one item');if(r.lines.some(function(l){return !(+l[1]>0);}))t.push('quantity');if(!r.need)t.push('needed by');return t;}
+  function reqFoot(){var t=rTodo(),n=S.r.lines.length;
+    return '<span class="todo">'+(t.length?'Still needed: <b>'+t.join(', ')+'</b>':'<b>Ready to send</b> - '+n+' item'+(n>1?'s':''))+'</span>'+
+      '<button class="b b-pri b-full" data-a="rSend"'+(t.length?' disabled aria-disabled="true"':'')+'>Send requisition'+(n?' ('+n+')':'')+'</button>';}
+
+  /* =================== REPORT DAMAGE =================== */
+  function dTodo(){var d=S.d,t=[];if(!d.lot)t.push('which material');if(!(+d.qty>0))t.push('how many');if(!d.reason)t.push('what is wrong');else if(d.reason==='other'){if(!d.photo)t.push('photo');if(!d.note.trim())t.push('one line');}return t;}
+  function dWhich(){
+    var fid=S.dev,d=S.d,L=d.lot?issuedOf(d.lot):null,h='<section class="card'+(L?' done':'')+'" aria-labelledby="'+fid+'-w"><h3 id="'+fid+'-w">1. Which material? <span class="req">Required</span></h3>'+scanField(fid+'-dq','dq',d.q,'lot or item label');
+    if(d.msg)h+='<p class="hint bad" role="alert">'+esc(d.msg)+'</p>';
+    h+='<p class="hint">or pick from <b>material issued to me</b> (last 7 days)</p><ul class="list">';
+    ISSUED[S.role].forEach(function(x){var it=item(x.sku);h+='<li><button class="pk" data-a="pickLot" data-k="'+x.lot+'" aria-pressed="'+(d.lot===x.lot)+'"><span class="tx"><b>'+it.name+'</b><small>lot '+x.lot+' - '+x.n+' '+it.uom+' - '+x.when+'</small></span><span class="tick" aria-hidden="true">&#10003;</span></button></li>';});
+    return h+'</ul></section>';
+  }
+  function dQty(){
+    var fid=S.dev,d=S.d,L=d.lot?issuedOf(d.lot):null,it=L?item(L.sku):null;
+    return '<section class="card'+(+d.qty>0?' done':'')+'" aria-labelledby="'+fid+'-q"><h3 id="'+fid+'-q">2. How many are affected? <span class="req">Required</span></h3>'+
+      '<div class="qty"><button class="stp" data-a="dDec" aria-label="Decrease quantity affected">-</button><label class="sr" for="'+fid+'-qi">Quantity affected</label>'+
+      '<input id="'+fid+'-qi" type="number" inputmode="numeric" min="1" data-f="dqty" value="'+esc(d.qty)+'" placeholder="0"><button class="stp" data-a="dInc" aria-label="Increase quantity affected">+</button>'+
+      '<span class="of">'+(L?'of '+L.n+' '+it.uom+' issued':'pick the material first')+'</span></div></section>'+
+      '<div class="decide" role="note">'+ICON.info+'<span><b>You report. You do not decide.</b>Only the units you report go on hold; QC inspects them. QC and finance will decide the outcome.</span></div>';
+  }
+  function dReason(){
+    var fid=S.dev,d=S.d,L=d.lot?issuedOf(d.lot):null,it=L?item(L.sku):null,t=dTodo();
+    var h='<section class="card'+(d.reason&&t.indexOf('photo')<0&&t.indexOf('one line')<0?' done':'')+'" aria-labelledby="'+fid+'-r"><h3 id="'+fid+'-r">3. What is wrong? <span class="req">Required</span></h3><div class="tiles" role="group" aria-labelledby="'+fid+'-r">';
+    REASONS.forEach(function(r){h+='<button class="tile" data-a="reason" data-k="'+r[0]+'" aria-pressed="'+(d.reason===r[0])+'">'+r[1]+'<small>'+r[2]+'</small></button>';});
+    h+='</div>';
+    if(d.reason==='other')h+='<div class="gap"><label class="lbl" for="'+fid+'-note">One line - what is wrong</label><input class="txt" id="'+fid+'-note" data-f="dnote" value="'+esc(d.note)+'" placeholder="e.g. can seal broken, leaking"></div>';
+    h+='<div class="gap">'+(d.photo?'<div class="row"><span class="dmgph" role="img" aria-label="Photo of the damaged item saved"></span><span class="pill p-ok">'+PI.chk+'Photo saved</span><button class="b b-ghost" data-a="dPhoto">Retake</button></div>'
+      :'<button class="b b-sec b-full" data-a="dPhoto">'+ICON.cam+'Take photo '+(d.reason==='other'?'(required)':'(optional)')+'</button>')+'</div></section>';
+    h+='<label class="chk"><input type="checkbox" data-f="whole"'+(d.whole?' checked':'')+'><span><b>Suspect whole lot</b><small>A request only. The QC head decides whether to hold all of lot'+(L?' '+L.lot:'')+' everywhere.</small></span></label>';
+    h+='<label class="chk"><input type="checkbox" data-f="replace"'+(d.replace?' checked':'')+'><span><b>Request replacement</b><small>Creates a linked requisition for the same item and quantity, needed today.</small>'+
+      (d.replace&&it?'<span class="prev">'+it.name+' x '+(+d.qty>0?d.qty:'same qty')+' - '+klass(it,d.qty).label+'</span>':'')+'</span></label>';
+    return h;
+  }
+  function dFoot(){var t=dTodo();return '<span class="todo">'+(t.length?'Still needed: <b>'+t.join(', ')+'</b>':'<b>Ready to send</b> - signed as '+esc(R().who))+'</span><button class="b b-pri b-full" data-a="dSend"'+(t.length?' disabled aria-disabled="true"':'')+'>Send damage report</button>';}
+
+  /* =================== CONFIRMATION =================== */
+  function nextText(q){
+    if(q.st==='Captured - pending sync')return 'Saved on this device. It goes to '+(q.route==='sa'?'the Stores counter':esc(q.appr))+' when you are back online.';
+    if(q.target==='Ready to collect')return slipText(q)+' Collect at '+COUNTER+'.';
+    if(q.target==='Approved')return 'Self-approved within your self-approval limit. Stores picks it; you get a message when it is ready to collect.';
+    return 'Waits for '+esc(q.appr)+'. You get a message when it is decided.';
+  }
+  function doneView(){
+    var d=S.done,h='';
+    if(d.kind==='req'){
+      var qs=d.ids.map(reqOf),allFree=qs.every(function(q){return q.route==='sa';});
+      var head=S.offline?'Captured - pending sync':(allFree?'Ready to collect at Stores counter':'Requisition sent');
+      h+='<div class="donehead"><span class="check'+(S.offline?' pend':'')+'" aria-hidden="true">'+(S.offline?'&#8987;':'&#10003;')+'</span><div><h2 role="status">'+head+'</h2><span class="m">'+(qs.length>1?qs.length+' requests, split by who approves':'1 request')+'</span></div></div><ul class="outs">';
+      qs.forEach(function(q){h+='<li><span class="top"><span class="ref">'+q.id+'</span>'+pill(q.st)+'</span><b>'+esc(reqSummary(q))+'</b><span class="m">'+nextText(q)+'</span></li>';});
+      h+='</ul>';
+    } else {
+      var x=null;S.dmgs[S.role].forEach(function(y){if(y.id===d.id)x=y;});
+      h+='<div class="donehead"><span class="check'+(S.offline?' pend':'')+'" aria-hidden="true">'+(S.offline?'&#8987;':'&#10003;')+'</span><div><h2 role="status">'+(S.offline?'Captured - pending sync':'Reported - stock on hold, QC informed')+'</h2><span class="m">'+x.id+' - '+esc(x.name)+' x '+x.qty+', lot '+x.lot+'</span></div></div><ul class="outs">';
+      h+='<li><span class="top">'+pill(S.offline?'Captured - pending sync':'On hold - with QC')+'</span><span>'+x.qty+' '+x.uom+' of lot '+x.lot+(S.offline?' will go on hold as soon as this syncs.':' on hold - not issuable until QC clears it.')+'</span></li>';
+      h+='<li><b>QC and finance will decide</b><span class="m">They decide together what happens next (return, debit note or write-off). You do not need to do anything more.</span></li>';
+      if(x.whole)h+='<li><b>Whole-lot hold requested</b><span class="m">The QC head decides whether to hold all of lot '+x.lot+'.</span></li>';
+      if(x.repId){var q=reqOf(x.repId);h+='<li><span class="top"><span class="ref">'+q.id+'</span>'+pill(q.st)+'</span><b>Replacement: '+esc(reqSummary(q))+'</b>'+chip(item(q.lines[0][0]),q.lines[0][1],false)+'<span class="m">'+nextText(q)+'</span></li>';}
+      h+='</ul>';
+    }
+    return h;
+  }
+  function doneFoot(){return '<button class="b b-pri b-full" data-a="go" data-k="home">Back to my requests</button><button class="b b-plain b-full" data-a="go" data-k="'+(S.done.kind==='req'?'req':'dmg')+'">'+(S.done.kind==='req'?'New requisition':'Report another')+'</button>';}
+
+  /* =================== RULE SHEET =================== */
+  function sheet(){
+    var it=item(S.sheet.sku),c=klass(it,S.sheet.q),Ro=R(),p='';
+    var cap=c.g?c.g.caps[it.sku]:0,u=usedOf(it.sku);
+    if(c.k==='sa')p='<p>You hold standing approval <b>'+c.g.ref+'</b> ('+esc(c.g.group)+'), so stores issues this item to you directly.</p><ul>'+(cap?'<li>Monthly cap: '+cap+' '+it.uom+'. You have used '+u+' in September.</li><li>Above the cap, the request goes to your head of department.</li>':'')+'<li>Ends '+c.g.end+'. See Profile - My standing approvals.</li></ul>';
+    if(c.k==='over')p='<p>This is over the monthly cap of your standing approval '+c.g.ref+' ('+cap+' '+it.uom+', '+u+' used). The line goes to your head of department for normal approval. Lower the quantity to '+Math.max(cap-u,0)+' or less to use your standing approval.</p>';
+    if(c.k==='self')p='<p>You have a self-approval limit of '+inr(Ro.selfLimit)+' per request, so you approve this yourself.</p><ul><li>This line is about '+inr(it.price*Math.max(+S.sheet.q||1,1))+', inside your limit.</li><li>It goes straight to stores for picking.</li></ul>';
+    if(c.k==='hod')p='<p>Every requisition is approved by your head of department, by value band.</p><ul><li>Up to ₹1,00,000: head of department.</li><li>Above ₹1,00,000: finance controller.</li>'+(Ro.selfLimit?'<li>This line is about '+inr(it.price*Math.max(+S.sheet.q||1,1))+', above your self-approval limit of '+inr(Ro.selfLimit)+'.</li>':'')+'</ul>';
+    return '<div class="scrim" data-a="closeSheet"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-h"><h2 id="sh-h">'+chip(it,S.sheet.q,false)+'</h2><p class="m" style="font-size:13.5px">'+it.name+'</p>'+p+
+      '<p class="m" style="font-size:13px">Rules are set by the site. Ask your supervisor if something looks wrong.</p><button class="b b-pri b-full" data-a="closeSheet" id="sh-close">Got it</button></div></div>';
+  }
+
+  /* =================== SHELLS =================== */
+  var TITLES={home:'My requests',stock:'Check stock',req:'New requisition',dmg:'Report damage',me:'Profile',done:'Done'};
+  function navKey(){return S.view==='done'?(S.done.kind==='req'?'req':'dmg'):S.view;}
+  function viewParts(){
+    var v=S.view;
+    if(v==='home')return {a:homeList(),b:reqDetail(),bTitle:'Request detail',foot:'<button class="b b-pri b-full" data-a="go" data-k="req">'+ICON.plus+'New requisition</button>',footSide:'a'};
+    if(v==='me')return {a:meList(),b:meDetail(),bTitle:'About your approvals',foot:'',footSide:'a',hand:meList()+meDetail()};
+    if(v==='stock')return {a:stockList(),b:stockDetail(),bTitle:'Availability',foot:stockFoot(),footSide:'b'};
+    if(v==='req')return {a:reqAdd(),b:reqLines()+reqDetails(),bTitle:'Your requisition',foot:reqFoot(),footSide:'b',hand:reqLines()+reqAdd()+reqDetails()};
+    if(v==='dmg')return {a:dWhich()+dQty(),b:dReason(),bTitle:'What is wrong',foot:dFoot(),footSide:'b',hand:dWhich()+dQty()+dReason()};
+    return {full:doneView(),foot:doneFoot()};
+  }
+  function handShell(){
+    var Ro=R(),P=viewParts(),v=S.view,detail=(v==='home'||v==='stock')&&S.hd,h='';
+    h+='<div class="s-top"><span class="ready" aria-hidden="true"></span><span class="rdy">Scanner ready</span><span class="grow"></span>'+syncBadge()+'<span class="av" aria-label="Signed in: '+esc(Ro.who)+'">'+Ro.ini+'</span></div>';
+    var title=detail?(v==='home'?'Request '+selId():'Availability'):TITLES[v];
+    h+='<div class="phead">'+(detail?'<button class="backbtn" data-a="back" aria-label="Back to '+TITLES[v]+'">'+ICON.back+'</button>':'')+'<div class="tx"><h2>'+esc(title)+'</h2>'+(v==='home'&&!detail?'<span class="m">'+esc(Ro.dept)+' - CMF-ALIGARH</span>':'')+'</div></div>';
+    var body,foot='';
+    if(P.full!==undefined){body=P.full;foot=P.foot;}
+    else if(detail){body=P.b;foot=v==='stock'?P.foot:'';}
+    else {body=P.hand||P.a;foot=(v==='stock')?'':P.foot;}
+    h+='<div class="pbody">'+body+'</div>'+(foot?'<div class="pfoot">'+foot+'</div>':'');
+    h+='<nav class="bnav" aria-label="Main">';
+    NAVS.forEach(function(n){h+='<button data-a="go" data-k="'+n[0]+'"'+(navKey()===n[0]?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+NAVI[n[0]]+'</svg>'+n[1]+'</button>';});
+    return h+'</nav>';
+  }
+  function panes(){
+    var P=viewParts(),v=S.view;
+    if(P.full!==undefined)return '<div class="panes"><section class="pane full" aria-label="Confirmation"><div class="pb" style="max-width:760px">'+P.full+'</div><div class="pf" style="flex-direction:row;max-width:760px">'+P.foot.replace(/b-full/g,'')+'</div></section></div>';
+    var ft=P.foot?'<div class="pf">'+P.foot+'</div>':'';
+    return '<div class="panes"><section class="pane pl" aria-labelledby="pa-h"><div class="phd"><h2 id="pa-h">'+TITLES[v]+'</h2></div><div class="pb">'+P.a+'</div>'+(P.footSide==='a'?ft:'')+'</section>'+
+      '<section class="pane pr" aria-labelledby="pb-h"><div class="phd"><h2 id="pb-h">'+P.bTitle+'</h2></div><div class="pb">'+P.b+'</div>'+(P.footSide==='b'?ft:'')+'</section></div>';
+  }
+  function tabShell(){
+    var Ro=R(),h='<div class="s-top"><b>IMS</b><span class="sub">My requisitions - '+esc(Ro.dept)+'</span><span class="grow"></span>'+syncBadge()+'<span class="av" aria-label="Signed in: '+esc(Ro.who)+'">'+Ro.ini+'</span></div>';
+    h+='<div class="trow"><nav class="rail" aria-label="Main">';
+    NAVS.forEach(function(n){h+='<button data-a="go" data-k="'+n[0]+'"'+(navKey()===n[0]?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+NAVI[n[0]]+'</svg>'+n[1]+'</button>';});
+    return h+'</nav>'+panes()+'</div>';
+  }
+  function deskShell(){
+    var Ro=R(),h='<aside class="side"><div class="brand"><span class="mark" aria-hidden="true">IM</span>IMS</div><nav aria-label="Modules"><div class="navh">My work</div>';
+    NAVS.forEach(function(n){h+='<button class="nav-item" data-a="go" data-k="'+n[0]+'"'+(navKey()===n[0]?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+NAVI[n[0]]+'</svg>'+n[2]+'</button>';});
+    h+='</nav><div class="side-foot">Signed in: '+esc(Ro.who)+'<br>'+esc(Ro.title)+'</div></aside>';
+    var s=S.offline?'<span class="dsync">'+(S.pending?'Captured - pending sync ('+S.pending+')':'Offline')+'</span>':'<span class="dsync on">'+(S.pending?'Syncing '+S.pending:'Synced')+'</span>';
+    h+='<div class="dmain"><header class="dtop"><label class="search">'+'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#566173" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span class="sr">Search IMS</span><input placeholder="Search item, request number"></label>'+
+      '<span class="spacer"></span>'+s+'<button class="site" aria-label="Switch site, current CMF-ALIGARH">CMF-ALIGARH <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>'+
+      '<button class="b b-pri" data-a="go" data-k="req">+ New</button><span class="avatar" aria-hidden="true">'+Ro.ini+'</span></header>'+panes()+'</div>';
+    return h;
+  }
+
+  var DEVS=[['hand','Handheld','scanner or phone - 390 x 800 - finger, touch-roomy, bottom nav'],['tab','Tablet','820 x 1180 shown at 55% - finger, touch-roomy, icon rail, two panes'],['desk','Desktop','1280 x 800 shown at 70% - mouse, compact, dark sidebar'],['dtouch','Desktop touch','1280 x 800 shown at 70% - touchscreen PC, dark sidebar, touch-roomy']];
+  function renderCtl(){
+    var h='';DEVS.forEach(function(d){h+='<button data-dev="'+d[0]+'" aria-pressed="'+(S.dev===d[0])+'">'+d[1]+'</button>';});document.getElementById('devseg').innerHTML=h;
+    h='';['jan','jt','se'].forEach(function(k){h+='<button data-role="'+k+'" aria-pressed="'+(S.role===k)+'">'+ROLES[k].seg+'</button>';});document.getElementById('roleseg').innerHTML=h;
+    var D=DEVS.filter(function(d){return d[0]===S.dev;})[0];document.getElementById('devlabel').innerHTML=D[1]+' <span>'+D[2]+'</span>';
+    document.getElementById('off-btn').textContent='Toggle offline (now: '+(S.offline?'offline':'online')+')';
+  }
+  function render(){
+    var box=document.getElementById('fbox'),ae=document.activeElement,fid=ae&&ae.id,pos=null;
+    try{pos=ae&&ae.selectionStart;}catch(e){}
+    var h=S.dev==='hand'?handShell():(S.dev==='tab'?tabShell():deskShell());
+    if(S.sheet)h+=sheet();
+    var cls='screen d-'+S.dev+' '+(isTouch()?'touch':'compact');
+    var inner='<div class="'+cls+'" id="app">'+h+'</div>';
+    box.className=S.dev==='hand'?'bezel':'';
+    box.innerHTML='<div class="fwrap '+S.dev+'">'+inner+'</div>';
+    renderCtl();
+    if(S.sheet){var c=document.getElementById('sh-close');if(c)c.focus();}
+    else if(fid){var el=document.getElementById(fid);if(el){el.focus();try{if(pos!=null&&el.setSelectionRange)el.setSelectionRange(pos,pos);}catch(e){}}}
+  }
+
+  /* =================== ACTIONS =================== */
+  function addLine(sku,n){var r=S.r,f=false;r.lines.forEach(function(l){if(l[0]===sku){l[1]=(+l[1]||0)+(n||1);f=true;}});if(!f)r.lines.push([sku,n||1]);}
+  function makeReq(g,need,purpose,cc,link){
+    var st=g.route==='sa'?'Ready to collect':(g.route==='self'?'Approved':'Pending approval');
+    var q={id:'IND-2026-0'+(S.seq++),lines:g.lines,route:g.route,appr:g.appr,grant:g.grant,target:st,st:S.offline?'Captured - pending sync':st,raised:'25 Sep',need:dLabel(need).replace(/^(Today|Tomorrow), /,''),cc:cc,purpose:purpose,isNew:true,link:link};
+    if(g.route==='sa')g.lines.forEach(function(l){var u=S.used[S.role];u[l[0]]=(u[l[0]]||0)+l[1];});
+    mine().forEach(function(x){x.isNew=false;});
+    mine().unshift(q);if(S.offline)S.pending++;return q;
+  }
+  function rSend(){
+    if(rTodo().length)return;var r=S.r,ids=[];
+    groups().forEach(function(g){ids.push(makeReq(g,r.need,r.purpose,r.cc).id);});
+    S.done={kind:'req',ids:ids};S.r=freshFlow(S.role);S.view='done';S.sel=ids[0];
+    say(S.offline?'Captured - pending sync':'Requisition sent');scheduleSync();
+  }
+  function dSend(){
+    var d=S.d;if(dTodo().length)return;var L=issuedOf(d.lot),it=item(L.sku);
+    var x={id:'DMG-2026-00'+(S.dseq++),lot:d.lot,name:it.name,qty:+d.qty,uom:it.uom,whole:d.whole,st:S.offline?'Captured - pending sync':'On hold - with QC'};
+    if(S.offline)S.pending++;
+    if(d.replace){var c=klass(it,d.qty);var q=makeReq({route:c.route,appr:c.appr,grant:c.grant,lines:[[it.sku,+d.qty]]},TODAY,'Replacement for '+x.id+' - '+it.name,R().cc,x.id);x.repId=q.id;}
+    S.dmgs[S.role].unshift(x);S.done={kind:'dmg',id:x.id};S.d=freshDmg();S.view='done';
+    say(S.offline?'Captured - pending sync':'Reported - stock on hold, QC informed');scheduleSync();
+  }
+  function findSku(v){v=v.trim().toLowerCase();if(!v)return null;var ex=ITEMS.filter(function(x){return x.sku.toLowerCase()===v;});if(ex.length)return ex[0];var m=ITEMS.filter(function(x){return x.name.toLowerCase().indexOf(v)>=0;});return m.length===1?m[0]:null;}
+  function scanLot(v){v=v.trim().toUpperCase();var L=issuedOf(v);if(L){S.d.lot=v;S.d.msg='';S.d.q='';if(+S.d.qty>L.n)S.d.qty=String(L.n);say('Lot '+v+' found: '+item(L.sku).name);}else{S.d.msg='Lot '+(v||'?')+' is not in material issued to you. Check the label or pick from the list.';}}
+  function go(k){S.view=k;S.hd=false;S.sheet=null;if(k==='stock'&&!S.stSel&&twoPane())S.stSel=R().usual[0];}
+
+  function act(a,k,el){
+    var r=S.r,d=S.d;
+    if(a==='go'){go(k);if(k==='dmg')S.d.msg='';}
+    else if(a==='back'){S.hd=false;}
+    else if(a==='openReq'){S.sel=k;if(!twoPane())S.hd=true;}
+    else if(a==='stSel'){S.stSel=k;if(!twoPane())S.hd=true;}
+    else if(a==='reqThis'){addLine(k,1);go('req');say(item(k).name+' added to a new requisition');}
+    else if(a==='again'){var q=reqOf(k);S.r=freshFlow(S.role);q.lines.forEach(function(l){S.r.lines.push([l[0],l[1]]);});S.r.purpose=q.purpose;go('req');}
+    else if(a==='add'){addLine(k,1);r.msg='';say(item(k).name+' added');}
+    else if(a==='rm'){r.lines.splice(+k,1);}
+    else if(a==='lDec'){var l=r.lines[+k];l[1]=Math.max(1,(+l[1]||1)-1);}
+    else if(a==='lInc'){var l2=r.lines[+k];l2[1]=(+l2[1]||0)+1;}
+    else if(a==='need'){r.need=k;r.needOther=false;}
+    else if(a==='needO'){r.needOther=true;if(r.need===TODAY||r.need===TOMORROW)r.need='';}
+    else if(a==='rSend')rSend();
+    else if(a==='why'){S.sheet={sku:k,q:+el.getAttribute('data-q')||1,ret:el.id||null};}
+    else if(a==='closeSheet'){S.sheet=null;}
+    else if(a==='pickLot'){S.d.lot=k;S.d.msg='';var L=issuedOf(k);if(+d.qty>L.n)d.qty=String(L.n);}
+    else if(a==='dDec'){d.qty=String(Math.max(1,(+d.qty||1)-1));}
+    else if(a==='dInc'){var L2=d.lot?issuedOf(d.lot):null;d.qty=String(Math.min(L2?L2.n:999,(+d.qty||0)+1));}
+    else if(a==='reason'){d.reason=k;}
+    else if(a==='dPhoto'){d.photo=true;say('Photo saved');}
+    else if(a==='dSend')dSend();
+    else if(a==='cam'){
+      if(k==='dq'){scanLot(DSCEN[S.role].lot);}
+      else{var sku=SCEN[S.role][0][0];if(k==='iq'){addLine(sku,1);say('Camera scan: '+item(sku).name+' added');}else{S.stSel=sku;if(!twoPane())S.hd=true;say('Camera scan: '+item(sku).name);}}
+    }
+    else if(a==='typeit'){render();var e=document.getElementById(k);if(e){e.setAttribute('inputmode','text');e.focus();}return;}
+    render();
+  }
+
+  document.addEventListener('click',function(e){
+    var dv=e.target.closest('[data-dev]');if(dv){S.dev=dv.getAttribute('data-dev');S.hd=S.hd&&false;render();say('Device class: '+dv.textContent);return;}
+    var rl=e.target.closest('[data-role]');if(rl){var k=rl.getAttribute('data-role');S.role=k;S.r=freshFlow(k);S.d=freshDmg();S.sel=null;S.hd=false;S.sheet=null;if(S.view==='done')S.view='home';S.stSel=twoPane()?ROLES[k].usual[0]:null;render();say('Signed in as '+ROLES[k].seg);return;}
+    var dm=e.target.closest('[data-demo]');if(dm){demo(dm.getAttribute('data-demo'));return;}
+    var t=e.target.closest('[data-a]');if(!t||!document.getElementById('app').contains(t))return;
+    if(t.classList.contains('scrim')&&e.target!==t)return;
+    if(t.tagName==='BUTTON'&&t.disabled)return;
+    e.preventDefault();act(t.getAttribute('data-a'),t.getAttribute('data-k'),t);
+  });
+  document.addEventListener('submit',function(e){
+    var f=e.target.closest('[data-scan]');if(!f)return;e.preventDefault();var w=f.getAttribute('data-scan');
+    if(w==='dq'){scanLot(S.d.q);}
+    else if(w==='iq'){var it=findSku(S.r.iq);if(it){addLine(it.sku,1);S.r.iq='';S.r.msg='';say(it.name+' added');}else S.r.msg=S.r.iq.trim()?'Pick the item from the list, or scan its barcode.':'';}
+    else if(w==='sq'){var it2=findSku(S.sq);if(it2){S.stSel=it2.sku;if(!twoPane())S.hd=true;}}
+    render();
+  });
+  document.addEventListener('input',function(e){
+    var t=e.target,f=t.getAttribute&&t.getAttribute('data-f');if(!f)return;
+    if(f==='iq'){S.r.iq=t.value;S.r.msg='';}
+    else if(f==='sq'){S.sq=t.value;}
+    else if(f==='dq'){S.d.q=t.value;S.d.msg='';return;}
+    else if(f==='lqty'){S.r.lines[+t.getAttribute('data-k')][1]=t.value;}
+    else if(f==='ndate'){S.r.need=t.value;}
+    else if(f==='purpose'){S.r.purpose=t.value;return;}
+    else if(f==='dqty'){var L=S.d.lot?issuedOf(S.d.lot):null;S.d.qty=L&&+t.value>L.n?String(L.n):t.value;}
+    else if(f==='dnote'){S.d.note=t.value;}
+    else return;
+    render();
+  });
+  document.addEventListener('change',function(e){
+    var t=e.target,f=t.getAttribute&&t.getAttribute('data-f');if(!f)return;
+    if(f==='cc'){S.r.cc=t.value;}
+    else if(f==='whole'){S.d.whole=t.checked;}
+    else if(f==='replace'){S.d.replace=t.checked;}
+    else return;
+    render();
+  });
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&S.sheet){S.sheet=null;render();}});
+
+  function demo(k){
+    if(k==='fill'){S.r=freshFlow(S.role);SCEN[S.role].forEach(function(l){addLine(l[0],l[1]);});S.r.need=TODAY;go('req');say('Requisition filled');}
+    else if(k==='dscan'){go('dmg');scanLot(DSCEN[S.role].lot);}
+    else if(k==='dfill'){var D=DSCEN[S.role];go('dmg');S.d=freshDmg();scanLot(D.lot);S.d.qty=String(D.qty);S.d.reason=D.reason;S.d.photo=true;S.d.replace=true;say('Damage report filled');}
+    else if(k==='approve'){
+      if(S.offline){say('Approvals need a live connection - go online first');alertBox('Approvals need a live connection. Toggle online first.');return;}
+      var P=mine().filter(function(q){return q.st==='Pending approval';});
+      if(!P.length){say('Nothing pending for this person');}else{var q=P[P.length-1];q.st='Approved';S.sel=q.id;say(q.id+' approved by '+q.appr);}
+    }
+    else if(k==='offline'){S.offline=!S.offline;say(S.offline?'Offline - captures are saved on the device':'Back online - syncing');scheduleSync();}
+    else if(k==='reset'){clearTimeout(syncT);S=fresh(S);say('Reset');}
+    render();
+  }
+  function alertBox(t){say(t);}
+  render();
+})();
+</script>
+</body>
+</html>

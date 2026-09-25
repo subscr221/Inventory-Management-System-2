@@ -16,8 +16,10 @@
         label print queue, sync badge, report damage (stub)
       - State Patterns: short / excess, captured-pending-sync, printer-not-ready
     DESIGN.md
-      - Density by input: scanner + tablet = touch-roomy (primary >=56px, secondary >=48px),
-        desktop fine pointer = compact (34px controls, Zoho-Books-like dark sidebar)
+      - Density by input (memlog override): ONE frame + device-class switcher. Handheld 390x800
+        (touch-roomy, bottom nav, single column), Tablet 820x1180 (touch-roomy, icon rail, two panes),
+        Desktop 1280x800 (compact 30-36px controls, dark sidebar), Desktop touch (dark sidebar,
+        touch-roomy). Primary >=56px, secondary >=48px on touch classes. Every role on every device.
       - Accent token family: theme A Ledger Blue (--accent, --accent-strong, --accent-soft,
         --on-accent, --accent-on-dark) exactly as in color-themes-1.html; dark sidebar #1B2230
   Decision source: .memlog.md (2026-09-24). Typeface Lato (bundled locally in production);
@@ -41,7 +43,7 @@ button,input,select{font-family:inherit;font-size:inherit;color:inherit}
 button{cursor:pointer}
 button[disabled]{cursor:not-allowed}
 :focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-.side :focus-visible,.s-top :focus-visible{outline-color:var(--accent-on-dark)}
+.side :focus-visible,.s-top :focus-visible,.rail :focus-visible{outline-color:var(--accent-on-dark)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .page{padding:16px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
 .intro{flex:0 0 100%}
@@ -57,13 +59,59 @@ button[disabled]{cursor:not-allowed}
 .trigger-note{position:absolute;left:-8px;top:120px;width:8px;height:60px;background:#f59e0b;border-radius:4px 0 0 4px}
 .trigger-cap{position:absolute;bottom:10px;left:0;right:0;text-align:center;color:#fff;font-size:12px}
 .screen{background:var(--bg);overflow:hidden;display:flex;flex-direction:column;position:relative}
-.s-scanner{width:360px;height:640px}
-.tablet-wrap{width:410px;height:640px;overflow:hidden;border-radius:22px}
-.tablet-wrap .bezel{transform:scale(.5);transform-origin:0 0;width:820px}
-.s-tablet{width:800px;height:1260px}
-.desk-wrap{width:960px;height:600px;overflow:hidden;border-radius:8px;border:1px solid var(--border);flex:none}
-.desk-wrap .screen{transform:scale(.75);transform-origin:0 0}
+.s-hand{width:390px;height:800px}
+.tablet-wrap{width:462px;height:660px;overflow:hidden;border-radius:14px;flex:none}
+.tablet-wrap .bezel{transform:scale(.55);transform-origin:0 0;width:840px}
+.s-tablet{width:820px;height:1180px}
+.desk-wrap{width:896px;height:560px;overflow:hidden;border-radius:8px;border:1px solid var(--border);flex:none}
+.desk-wrap .screen{transform:scale(.7);transform-origin:0 0}
 .s-desk{width:1280px;height:800px;flex-direction:row}
+
+#dev-host{display:flex;align-items:flex-start}
+/* ---------- device-class switcher (outside the frame) ---------- */
+.devsw{flex:0 0 100%;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.devsw .lbl{font-weight:700;font-size:13px}
+.seg{display:inline-flex;border:1px solid #8792A3;border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{min-height:44px;padding:0 16px;border:0;border-right:1px solid #C9D0DA;background:var(--surface);font-weight:700;font-size:14px;color:var(--text)}
+.seg button:last-child{border-right:0}
+.seg button small{display:block;font-weight:400;font-size:11.5px;color:var(--text-muted)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg button[aria-pressed="true"] small{color:var(--on-accent)}
+.seg button:focus-visible{outline-offset:-4px;outline-color:var(--accent-strong);box-shadow:inset 0 0 0 5px #fff}
+
+/* ---------- tablet icon rail ---------- */
+.rail{width:92px;flex:none;background:var(--side);display:flex;flex-direction:column;padding:8px 0;gap:4px}
+.rail button{position:relative;min-height:76px;border:0;border-left:4px solid transparent;background:transparent;color:var(--side-text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:13px;font-weight:700}
+.rail svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.9}
+.rail button[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff}
+.rail button[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.rail .cnt{position:absolute;top:8px;left:calc(50% + 6px);background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 6px}
+.rail :focus-visible{outline-color:var(--accent-on-dark);outline-offset:-4px}
+.s-tablet .two .lp{width:320px}
+
+/* ---------- scan options: camera (handheld/tablet), always Type it; desktop = USB scanner or type ---------- */
+.scanopts{display:flex;gap:8px;align-items:center;margin-top:6px}
+.scanopts .b{flex:1}
+.scanopts .how{font-size:12px;color:var(--text-muted);flex:1}
+.compact .scanopts{margin-top:4px}
+.compact .scanopts .b{flex:none;height:26px;font-size:12px}
+.touch .scanopts .how{font-size:13px}
+
+/* ---------- desktop touch: dark sidebar shell, touch-roomy density ---------- */
+.touch .side{width:232px}
+.touch .brand{height:64px;font-size:17px}
+.touch .nav-item{height:52px;font-size:16px;gap:12px}
+.touch .nav-item svg{width:20px;height:20px}
+.touch .dtop{height:68px;gap:14px}
+.touch .search{height:48px;border-width:2px;border-radius:var(--radius);font-size:16px}
+.touch .site{height:48px;padding:0 14px;border-radius:var(--radius);font-size:15px}
+.touch .dtop .b{min-height:48px}
+.touch .avatar{width:40px;height:40px;font-size:14px}
+.touch .dsync{font-size:13.5px;padding:6px 12px}
+.touch .dlist{width:400px}
+.touch .dlist .lhd h2{font-size:18px}
+.s-desk.touch .acc-foot{flex-direction:row;align-items:center;justify-content:space-between;padding:10px 20px}
+.s-desk.touch .acc-foot .b{width:auto;min-width:280px}
 
 /* ---------- buttons, density by input ---------- */
 .b{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:2px solid transparent;border-radius:var(--radius);font-weight:700;padding:0 12px;text-align:center;line-height:1.15}
@@ -263,6 +311,29 @@ button[disabled]{cursor:not-allowed}
 .stat b{display:block;font-size:22px}
 .stat span{font-size:12px;color:var(--text-muted)}
 
+/* ---------- pinned primary on Handheld (putaway, scan results, issue) ---------- */
+.pinbar{display:flex;flex-direction:column;gap:6px}
+.s-hand .pinbar{margin-top:auto;position:sticky;bottom:-12px;background:var(--surface);border-top:1px solid var(--border);padding:8px 0 12px;margin-bottom:-12px}
+.compact .pinbar{flex-direction:row;flex-wrap:wrap}
+.compact .pinbar .b{width:auto}
+
+/* ---------- issue against requisition ---------- */
+.appr{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--radius);border:2px solid;font-size:14px}
+.appr .icon{margin-top:1px}
+.appr b{display:block}
+.appr .m{display:block;font-size:13px;color:var(--text-muted);margin-top:2px}
+.appr.sa{background:var(--ok-bg);border-color:var(--ok);color:var(--text)}
+.appr.sa .icon{color:var(--ok)}
+.appr.sa b{font-size:15.5px}
+.appr.hod,.appr.self{background:var(--info-bg);border-color:#BCD3F0;border-width:1px}
+.appr.hod .icon,.appr.self .icon{color:var(--info)}
+.blk{padding:8px 10px;border-radius:8px;background:var(--err-bg);border:1px solid #F2C2BE;color:var(--err);font-size:14px;font-weight:700}
+.slip{border:1px dashed #8792A3;border-radius:6px;padding:10px 12px;background:#FFFEF8;font-family:Consolas,monospace;font-size:12.5px;line-height:1.45}
+.slip .sh{font-weight:900;font-size:13.5px;border-bottom:1px solid #D6CDB0;padding-bottom:4px;margin-bottom:4px}
+.slip .ap{margin-top:6px;padding-top:6px;border-top:1px dashed #D6CDB0;font-weight:700}
+.compact .appr{padding:8px 10px;font-size:13px;border-radius:6px}
+.compact .appr.sa b{font-size:14px}
+
 /* ---------- desktop compact shell (from color-themes-1 desk shell) ---------- */
 .side{width:208px;flex:none;background:var(--side);color:var(--side-text);display:flex;flex-direction:column}
 .brand{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;font-weight:900;font-size:15px;border-bottom:1px solid #2A3345}
@@ -312,20 +383,22 @@ button[disabled]{cursor:not-allowed}
 <div class="page">
   <div class="intro">
     <h1>Stores - scan anything, task inbox, acceptance and putaway</h1>
-    <p>One shared state rendered in three device frames. Tap inside any frame or use Demo controls; all frames stay in step. Scanner and tablet are touch-roomy; desktop is compact. Paths rendered in full: challan in inbox or scanned, then acceptance into inspection bay IB-01, then complete with label queue; and a lot cleared by QC, then putaway to the suggested rack confirmed by rack scan.</p>
+    <p>One frame, one shared state. Pick a device class below; switching mid-flow keeps the current step. The role (storekeeper) decides what is shown; the device class decides how. Paths rendered in full: challan in inbox or scanned, then acceptance into inspection bay IB-01, then complete with label queue; and a lot cleared by QC, then putaway to the suggested rack confirmed by rack scan; and issues against pending requisitions (standing approval, head of department, self-approval limit), scan lot, quantity, confirm, issue slip.</p>
   </div>
 
-  <div class="device">
-    <div class="device-label">Android rugged scanner <span>360 x 640 - touch-roomy</span></div>
-    <div class="bezel rugged"><div class="trigger-note" aria-hidden="true"></div>
-      <div class="screen s-scanner touch" id="f-scan" data-layout="single"></div>
-      <div class="trigger-cap">Hardware trigger (side) - keyboard-wedge</div>
+  <div class="devsw" role="group" aria-labelledby="devsw-l">
+    <span class="lbl" id="devsw-l">Device class</span>
+    <div class="seg">
+      <button type="button" data-dev="hand" aria-pressed="true">Handheld<small>scanner / phone - touch</small></button>
+      <button type="button" data-dev="tab" aria-pressed="false">Tablet<small>touch - icon rail</small></button>
+      <button type="button" data-dev="desk" aria-pressed="false">Desktop<small>mouse - compact</small></button>
+      <button type="button" data-dev="dtouch" aria-pressed="false">Desktop touch<small>touchscreen PC</small></button>
     </div>
   </div>
 
   <div class="device">
-    <div class="device-label">Rugged tablet <span>800 x 1280 shown at 50% - inbox left, detail right</span></div>
-    <div class="tablet-wrap"><div class="bezel"><div class="screen s-tablet touch" id="f-tab" data-layout="two"></div></div></div>
+    <div class="device-label" id="dev-label"></div>
+    <div id="dev-host"></div>
   </div>
 
   <div class="sidep">
@@ -336,27 +409,24 @@ button[disabled]{cursor:not-allowed}
       <button class="b b-sec" data-demo="item">Scan item/lot QR LOT-0975-2</button>
       <button class="b b-sec" data-demo="fill">Quick-fill acceptance (excess, short, flag)</button>
       <button class="b b-sec" data-demo="put">Open QC-cleared putaway</button>
+      <button class="b b-sec" data-demo="iss">Open Ramu's issue (standing approval)</button>
+      <button class="b b-sec" data-demo="held">Scan lot on QC hold LOT-0990-4</button>
       <button class="b b-sec" data-demo="jam" id="jam-btn">Printer jammed (now: ready)</button>
       <button class="b b-sec" data-demo="offline" id="off-btn">Toggle offline (now: offline)</button>
       <button class="b b-ghost" data-demo="reset">Reset</button>
       <div class="sr" aria-live="polite" id="live"></div>
     </section>
-  </div>
-
-  <div class="device">
-    <div class="device-label">Desktop <span>1280 x 800 shown at 75% - compact, dark sidebar</span></div>
-    <div class="desk-wrap"><div class="screen s-desk compact" id="f-desk" data-layout="desk"></div></div>
-  </div>
-
-  <div class="sidep">
     <section class="panel" aria-labelledby="leg-h">
       <h2 id="leg-h">Legend - decisions rendered</h2>
       <ol class="legend">
+        <li><span class="ltag">DECISION</span> Every role on every device: role decides WHAT is shown, the device class decides HOW. No shared machine terminals. One shared state across device switches.</li>
+        <li><span class="ltag">DECISION</span> Handheld (scanner or phone, 390 x 800): touch-roomy (primary 56px pinned in the bottom third, secondary 48px), bottom nav (Inbox, Scan, Stock, More), single column, list opens a detail page with Back.</li>
+        <li><span class="ltag">DECISION</span> Tablet (820 x 1180): touch-roomy, icon rail on the left, inbox list and detail side by side.</li>
+        <li><span class="ltag">DECISION</span> Desktop (1280 x 800): compact, dark Zoho-style sidebar #1B2230, top bar with search, site switcher CMF-ALIGARH and "+ New", list and detail side by side.</li>
+        <li><span class="ltag">DECISION</span> Desktop touch (touchscreen PC): desktop layout with dark sidebar, touch-roomy density.</li>
+        <li><span class="ltag">DECISION</span> Scanning: "Scanner ready" (hardware trigger) shows only on Handheld; Handheld and Tablet also offer Camera; every class always offers "Type it"; desktop reads "USB scanner or type".</li>
+        <li><span class="ltag">DECISION</span> Accent A Ledger Blue #1E6BC6 with its five-token family; --accent-on-dark marks the active nav item on the sidebar and icon rail.</li>
         <li><span class="ltag">DECISION</span> Storekeeper job: accept material, photograph, assign rack, keep traceability, issue, shelve returns.</li>
-        <li><span class="ltag">DECISION</span> Devices: rugged scanner, tablet and desktop; all three frames share one state.</li>
-        <li><span class="ltag">DECISION</span> Density follows input: scanner and tablet touch-roomy (primary 56px, secondary 48px), desktop compact.</li>
-        <li><span class="ltag">DECISION</span> Dark sidebar #1B2230 on desk; touch mode collapses nav to a bottom bar (Inbox, Scan, Stock, More).</li>
-        <li><span class="ltag">DECISION</span> Accent A Ledger Blue #1E6BC6 with its five-token family; --accent-on-dark marks the active nav item.</li>
         <li><span class="ltag">DECISION</span> Stores home = task inbox (Arrived - awaiting acceptance; Cleared by QC - put away; Issues pending; Returns to shelve) with an always-on-top Scan anything bar.</li>
         <li><span class="ltag">DECISION</span> All received items land first in the inspection bay. Acceptance assigns no rack; it shows "Destination: Inspection bay IB-01".</li>
         <li><span class="ltag">DECISION</span> Directed putaway happens after QC clearance, from the "Cleared by QC - put away" inbox group: the system suggests the rack, "Use suggested" or "Choose another rack".</li>
@@ -372,6 +442,17 @@ button[disabled]{cursor:not-allowed}
         <li><span class="ltag">DECISION</span> Label printing is non-blocking: GRN completes, labels queue with Reprint per item; each QR resolves to GRN, PO line and current location.</li>
         <li><span class="ltag">DECISION</span> Unlisted supplier from gate appears in the inbox flagged for stores to match.</li>
         <li><span class="ltag">DECISION</span> Offline-first: completion shows "Captured - pending sync" and "Sent to inspection bay IB-01".</li>
+        <li><span class="ltag as">ASSUMPTION</span> Desktop control height stays at 30-36px (earlier 44px desk floor was never confirmed).</li>
+        <li><span class="ltag as">ASSUMPTION</span> Icon rail labels mirror the handheld bottom nav; "Type it" focuses the scan field; the camera viewfinder is not drawn (camera confirms a putaway rack, otherwise use Demo controls).</li>
+        <li><span class="ltag">DECISION</span> On Handheld the primary action is pinned in the bottom third on every task screen: acceptance, putaway, scan results, report damage and issue.</li>
+        <li><span class="ltag">DECISION</span> "Issues pending" opens the issue screen: pending requisitions with how each was approved. Issue = scan item/lot (camera or hardware trigger on Handheld, camera on Tablet, USB scanner on desktop, always Type it), quantity, confirm.</li>
+        <li><span class="ltag">DECISION</span> Standing approval (ref SA-YYYY-NNN) is stated explicitly on the stores screen and repeated on the issue slip: "Standing approval SA-2026-014 for Ramu (Cleaning gear). Storekeeper please issue." Grants may carry a monthly cap; over the cap falls back to normal approval.</li>
+        <li><span class="ltag">DECISION</span> Requisitions without a grant are approved by the head of department (shown as "Approved by Head of department"). Senior staff may self-approve within a per-person limit ("Within self-approval limit").</li>
+        <li><span class="ltag">DECISION</span> A lot on QC hold cannot be issued: the scan is blocked with the reason and the lot to pick instead.</li>
+        <li><span class="ltag">DECISION</span> Offline-first issue: completion reads "Issued - Captured - pending sync".</li>
+        <li><span class="ltag as">ASSUMPTION</span> Standing-approval cap counts quantity issued ("4 of 6 cans used this month"). "Senior engineer" is a display label for the self-approval holder, not a grade.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Issue slip number ISS-2026-NNNN, one lot per line, issued qty may be reduced below requested but not raised; slip layout is illustrative.</li>
+        <li><span class="ltag as">ASSUMPTION</span> Ramu is a housekeeping employee name used only for the standing-approval example given by the user.</li>
       </ol>
     </section>
   </div>
@@ -401,15 +482,42 @@ button[disabled]{cursor:not-allowed}
     alts:[['R-B3-05','next bay, 60% free'],['R-D2-03','bearings zone, 40% free']]};
   var OTHER={
     t2:{g:0,title:'Challan 4471 - Verma Traders (unlisted)',m:'No PO match · UP80 CT 1180 · arrived 07:40',flag:'Match supplier'},
-    t3:{g:2,title:'IND-2026-0412 - Gagan',m:'Maintenance · 3 items · needed by 10:00'},
-    t4:{g:2,title:'IND-2026-0415 - Rekha',m:'Production line 2 · 1 item · needed by 14:00'},
     t5:{g:3,title:'RET-2026-0107 - Hex Bolt M16x60',m:'40 nos from Line 2 · lot LOT-0975-2'}
   };
-  var S, timer=null, syncT=null;
+  /* pending issues against requisitions; appr = how the requisition was approved */
+  var ISS={
+    i1:{ind:'IND-2026-0446',who:'Ramu',dept:'Housekeeping',item:'Phenyl 5 L',qty:2,unit:'cans',lot:'L-2609-117',rack:'R-A1-02',need:'needed by 11:00',appr:'sa'},
+    i2:{ind:'IND-2026-0412',who:'Arif Ansari',dept:'Maintenance',item:'V-belt B-52',qty:4,unit:'nos',lot:'L-2609-121',rack:'R-D1-06',need:'needed by 10:00',appr:'hod'},
+    i3:{ind:'IND-2026-0421',who:'Deepak Chauhan',dept:'Maintenance',item:'Bearing 6205-2RS',qty:2,unit:'nos',lot:'LOT-0951-1',rack:'R-B3-04',need:'needed by 14:00',appr:'self'}
+  };
+  var HELD='LOT-0990-4', SA_LINE='Standing approval SA-2026-014 for Ramu (Cleaning gear). Storekeeper please issue.';
+  var ISSNO={i1:'ISS-2026-0233',i2:'ISS-2026-0234',i3:'ISS-2026-0235'};
+  var S, timer=null, syncT=null, DEV='hand';
+  /* device classes: how the one frame is laid out and operated */
+  var DEVS={
+    hand:{label:'Handheld',sub:'rugged scanner or phone, 390 x 800 - touch-roomy, bottom nav, single column',
+      html:'<div class="bezel rugged"><div class="trigger-note" aria-hidden="true"></div><div class="screen s-hand touch" id="f-main" data-layout="single"></div><div class="trigger-cap">Hardware trigger (side) - keyboard-wedge; phones use the camera</div></div>'},
+    tab:{label:'Tablet',sub:'820 x 1180 shown at 55% - touch-roomy, icon rail, list and detail',
+      html:'<div class="tablet-wrap"><div class="bezel"><div class="screen s-tablet touch" id="f-main" data-layout="two"></div></div></div>'},
+    desk:{label:'Desktop',sub:'1280 x 800 shown at 70% - mouse, compact, dark sidebar',
+      html:'<div class="desk-wrap"><div class="screen s-desk compact" id="f-main" data-layout="desk"></div></div>'},
+    dtouch:{label:'Desktop touch',sub:'touchscreen PC, 1280 x 800 shown at 70% - dark sidebar, touch-roomy',
+      html:'<div class="desk-wrap"><div class="screen s-desk touch" id="f-main" data-layout="desk"></div></div>'}
+  };
+  function isDesk(){return DEV==='desk'||DEV==='dtouch';}
+  var frames=[];
+  function setDevice(d){
+    DEV=d;
+    document.getElementById('dev-label').innerHTML=DEVS[d].label+' <span>'+DEVS[d].sub+'</span>';
+    document.getElementById('dev-host').innerHTML=DEVS[d].html;
+    frames=[document.getElementById('f-main')];
+    [].forEach.call(document.querySelectorAll('[data-dev]'),function(b){b.setAttribute('aria-pressed',String(b.dataset.dev===d));});
+  }
   function fresh(){
     return {view:'inbox',task:null,accepted:false,matPhoto:false,offline:true,pending:0,printer:'ok',labels:[],scanq:'',msg:'',
       put:{target:null,how:'',choosing:false,done:false},
       dmg:{replace:false,sent:false},
+      iss:{i1:{step:'scan',qty:2,err:''},i2:{step:'scan',qty:4,err:''},i3:{step:'scan',qty:2,err:''}},
       lines:LINES.map(function(){return {count:'',reason:'',photo:false,note:'',flagOn:false,flag:'',fphoto:false};})};
   }
   S=fresh();
@@ -460,12 +568,16 @@ button[disabled]{cursor:not-allowed}
     if(S.offline)return '<span class="sync"><span class="d"></span>'+(S.pending?'Captured - pending sync ('+S.pending+')':'Offline')+'</span>';
     return '<span class="sync on"><span class="d"></span>'+(S.pending?'Syncing '+S.pending:'Synced')+'</span>';
   }
-  function stop(){return '<div class="s-top"><span class="ready" aria-hidden="true"></span><b>Stores</b><span class="sr">Scanner ready</span>'+syncBadge()+'</div>';}
-  function counts(){return [S.accepted?1:2,S.put.done?0:1,2,1];}
+  function stop(){
+    /* hardware "Scanner ready" indicator only on Handheld */
+    var rd=DEV==='hand'?'<span class="ready" aria-hidden="true" title="Scanner ready"></span>':'';
+    return '<div class="s-top">'+rd+'<b>Stores</b>'+(DEV==='hand'?'<span class="sr">Scanner ready</span>':'')+syncBadge()+'</div>';}
+  function issLeft(){return Object.keys(ISS).filter(function(k){return S.iss[k].step!=='done';}).length;}
+  function counts(){return [S.accepted?1:2,S.put.done?0:1,issLeft(),1];}
   function total(){return counts().reduce(function(a,b){return a+b;},0);}
-  function bnav(){
+  function bnav(kind){
     var cur=(S.view==='rack'||S.view==='item'||S.view==='dmg')?1:0;
-    return '<nav class="bnav" aria-label="Stores navigation">'+
+    return '<nav class="'+(kind||'bnav')+'" aria-label="Stores navigation">'+
       '<button data-a="home"'+(cur===0?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 2h6l1-2h5"/></svg>Inbox<span class="cnt">'+total()+'</span></button>'+
       '<button data-a="focusScan"'+(cur===1?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M7 12h10"/></svg>Scan</button>'+
       '<button data-a="nr" data-what="Stock"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>Stock</button>'+
@@ -473,8 +585,11 @@ button[disabled]{cursor:not-allowed}
   }
   function scanbar(fid){
     return '<div class="scanbar"><form data-scan="1" role="search"><label class="fld" for="'+fid+'-scan">'+ICON.scan+
-      '<span class="sr">Scan anything</span><input id="'+fid+'-scan" data-f="scanq" value="'+esc(S.scanq)+'" placeholder="Scan or type rack, item or challan" autocomplete="off"></label>'+
+      '<span class="sr">Scan anything</span><input id="'+fid+'-scan" data-f="scanq" value="'+esc(S.scanq)+'" placeholder="'+(isDesk()?'USB scanner or type: rack, item, challan':'Scan or type rack, item or challan')+'" autocomplete="off"></label>'+
       '<button class="b b-pri" type="submit">Go</button></form>'+
+      '<div class="scanopts">'+(isDesk()?'<span class="how">USB scanner or type</span>'
+        :'<button type="button" class="b b-plain" data-a="cam">'+ICON.cam+'Camera</button>')+
+      '<button type="button" class="b b-plain" data-a="focusScan">Type it</button></div>'+
       (S.msg?'<p class="hint" role="note">'+esc(S.msg)+'</p>':'')+'</div>';
   }
 
@@ -489,13 +604,17 @@ button[disabled]{cursor:not-allowed}
       h+='<section class="grp" aria-label="'+g+', '+c[gi]+'"><h3>'+g+' <span class="cnt'+(c[gi]?'':' zero')+'">'+c[gi]+'</span></h3><ul>';
       if(gi===0&&!S.accepted)h+=taskBtn('t1','Challan '+CH.challan+' · '+CH.supplier,CH.po+' · '+CH.veh+' · arrived '+CH.at,paper(false),'<span class="m">From gate - photo attached</span>');
       if(gi===1&&!S.put.done)h+=taskBtn('q1',PUT.item+' · '+PUT.lot,PUT.qty+' nos in bay '+BAY+' · '+PUT.qc+' cleared '+PUT.at,'','<span class="pill p-ok">Suggested '+PUT.sug+'</span>');
+      if(gi===2)Object.keys(ISS).forEach(function(k){var R=ISS[k];if(S.iss[k].step==='done')return;
+        h+=taskBtn(k,R.ind+' - '+R.who,R.item+' x '+R.qty+' · '+R.dept+' · '+R.need,'',apprPill(R.appr));});
       Object.keys(OTHER).forEach(function(k){var o=OTHER[k];if(o.g!==gi)return;
         h+=taskBtn(k,o.title,o.m,gi===0?'<span class="nophoto" aria-hidden="true">photo</span>':'',o.flag?'<span class="pill p-warn">'+o.flag+'</span>':'');});
       if(!c[gi])h+='<li class="empty-g">Nothing waiting</li>';
       h+='</ul></section>';
     });
-    if(S.accepted||S.put.done){
+    var issD=Object.keys(ISS).filter(function(k){return S.iss[k].step==='done';});
+    if(S.accepted||S.put.done||issD.length){
       h+='<section class="grp" aria-label="Done today"><h3>Done today</h3><ul>';
+      issD.forEach(function(k){var R=ISS[k];h+=taskBtn(k,ISSNO[k]+' · issued to '+R.who,R.item+' x '+S.iss[k].qty+' · '+(S.pending?'Captured - pending sync':'Synced'),'');});
       if(S.accepted)h+=taskBtn('t1',GRN+' · '+CH.supplier,'In bay '+BAY+' · '+(S.pending?'Captured - pending sync':'Synced'),'');
       if(S.put.done)h+=taskBtn('q1',PUT.lot+' put away · '+S.put.target,PUT.item+' · '+PUT.qty+' nos','');
       h+='</ul></section>';
@@ -596,26 +715,33 @@ button[disabled]{cursor:not-allowed}
     if(P.done){
       h+='<div class="rackset"><span class="pill p-ok">Put away</span><b>'+P.target+'</b><span class="m">'+esc(P.how)+'</span></div>'+
         '<p class="m" style="margin:0">'+(S.pending?'Captured - pending sync.':'Synced.')+' The lot is now issuable from '+P.target+'.</p>'+
-        '<button class="b b-pri b-full" data-a="home">Back to inbox</button>';
+        '<div class="pinbar"><button class="b b-pri b-full" data-a="home">Back to inbox</button></div>';
       return h+'</div>';
     }
     if(P.target){
       h+='<div class="card"><div class="sug">Take it to <b>'+P.target+'</b>'+(P.target===PUT.sug?' - '+PUT.why:'')+'</div>'+
-        '<p class="m" style="margin:0 0 8px">Confirm by scanning the rack label (hardware trigger at the rack).</p><div class="stack">'+
-        '<button class="b b-pri b-full" data-a="putScan">'+ICON.scan+'Scan rack label '+P.target+'</button>'+
-        '<button class="b b-ghost" data-a="putChange">Change rack</button></div></div>';
+        '<p class="m" style="margin:0 0 8px">Confirm by scanning the rack label ('+scanHow()+').</p><div class="stack">'+
+        '<button class="b b-ghost" data-a="putChange">Change rack</button><button class="b b-ghost" data-a="home">Close</button></div></div>'+
+        '<div class="pinbar"><button class="b b-pri b-full" data-a="putScan">'+(DEV==='tab'?ICON.cam+'Scan rack label '+P.target+' with camera':ICON.scan+'Scan rack label '+P.target)+'</button>'+
+        (DEV==='hand'?'<div class="row"><button class="b b-sec" data-a="putScan">'+ICON.cam+'Camera</button><button class="b b-sec" data-a="focusScan">Type it</button></div>'
+          :'<button class="b b-sec b-full" data-a="focusScan">Type it - rack code</button>')+'</div>';
     } else {
       h+='<div class="card"><div class="sug">Suggested: <b>'+PUT.sug+'</b> - '+PUT.why+'</div><div class="stack">'+
-        '<button class="b b-pri b-full" data-a="putUse">Use suggested</button>'+
         '<button class="b b-sec b-full" data-a="putChoose" aria-expanded="'+P.choosing+'">Choose another rack</button></div>';
       if(P.choosing){
         h+='<ul class="alts" aria-label="Other racks for '+PUT.item+'">';
         PUT.alts.forEach(function(a){h+='<li><button class="alt" data-a="putPick" data-r="'+a[0]+'"><b>'+a[0]+'</b><small>'+a[1]+'</small></button></li>';});
-        h+='<li><button class="alt" data-a="putScanAny">'+ICON.scan+' <b>Scan a rack label</b><small>Or press the hardware trigger at the rack</small></button></li></ul>';
+        h+='<li><button class="alt" data-a="putScanAny">'+ICON.scan+' <b>Scan a rack label</b><small>'+scanHow()+'</small></button></li></ul>';
       }
-      h+='</div>';
+      h+='</div><button class="b b-ghost" data-a="home">Close</button>'+
+        '<div class="pinbar"><button class="b b-pri b-full" data-a="putUse">Use suggested '+PUT.sug+'</button></div>';
     }
-    return h+'<button class="b b-ghost" data-a="home">Close</button></div>';
+    return h+'</div>';
+  }
+  function scanHow(){
+    if(DEV==='hand')return 'hardware trigger at the rack, camera, or Type it';
+    if(DEV==='tab')return 'camera at the rack, or Type it';
+    return 'USB scanner or type the rack code';
   }
   function confirmPut(code){
     var P=S.put;P.how=(code===PUT.sug?'suggested rack':'another rack')+', confirmed by rack scan';
@@ -629,17 +755,19 @@ button[disabled]{cursor:not-allowed}
       '<tr><td>MS Plate 10mm IS2062</td><td>LOT-0962-1</td><td class="num">62 nos</td></tr>'+
       '<tr><td>Bearing 6205-2RS</td><td>LOT-0951-1</td><td class="num">16 nos</td></tr>'+
       (S.put.done&&S.put.target==='R-B3-04'?'<tr><td>'+PUT.item+'</td><td>'+PUT.lot+'</td><td class="num">'+PUT.qty+' nos</td></tr>':'')+
-      '</tbody></table><div class="acts"><button class="b b-pri wide" data-a="nr" data-what="Put away here">Put away here</button>'+
+      '</tbody></table><div class="acts">'+
       '<button class="b b-sec" data-a="nr" data-what="Count rack">Count rack</button><button class="b b-sec" data-a="nr" data-what="Move stock out">Move stock out</button>'+
-      '<button class="b b-ghost wide" data-a="home">Close</button></div></div>';
+      '<button class="b b-ghost wide" data-a="home">Close</button></div>'+
+      '<div class="pinbar"><button class="b b-pri b-full" data-a="nr" data-what="Put away here">Put away here</button></div></div>';
   }
   function itemSheet(){
     return '<div class="sheet"><span class="kind">Item / lot QR scanned</span><h2>Hex Bolt M16x60 · LOT-0975-2</h2>'+
       '<table class="tbl"><caption class="sr">Lot details</caption><tbody><tr><td>On hand</td><td class="num">320 nos</td></tr><tr><td>Rack</td><td class="num">R-C1-12</td></tr><tr><td>Received on</td><td class="num">GRN-2026-0962</td></tr></tbody></table>'+
-      '<div class="acts"><button class="b b-pri wide" data-a="nr" data-what="Issue">Issue</button>'+
+      '<div class="acts">'+
       '<button class="b b-sec" data-a="nr" data-what="Return">Return</button><button class="b b-sec" data-a="nr" data-what="Move">Move</button>'+
       '<button class="b b-sec wide" data-a="dmgOpen">Report damage</button>'+
-      '<button class="b b-ghost wide" data-a="home">Close</button></div></div>';
+      '<button class="b b-ghost wide" data-a="home">Close</button></div>'+
+      '<div class="pinbar"><button class="b b-pri b-full" data-a="nr" data-what="Issue without a requisition">Issue</button></div></div>';
   }
   function dmgSheet(){
     var D=S.dmg;
@@ -647,13 +775,71 @@ button[disabled]{cursor:not-allowed}
       '<div class="xs" role="note"><span>Places this stock on hold and sends it to QC. QC and finance decide together.</span></div>';
     if(D.sent){
       h+='<span class="pill p-warn" style="align-self:flex-start;white-space:normal">Reported - on hold, sent to QC'+(D.replace?' · replacement requested':'')+'</span>'+
-        '<button class="b b-pri b-full" data-a="home">Back to inbox</button>';
+        '<div class="pinbar"><button class="b b-pri b-full" data-a="home">Back to inbox</button></div>';
     } else {
       h+='<label class="chk"><input type="checkbox" name="replace" data-f="replace"'+(D.replace?' checked':'')+'><span>Request replacement</span><span class="pill p-info">Pilot</span></label>'+
         '<p class="pill p-off" style="align-self:flex-start;white-space:normal;margin:0">Stub - qty, photo and hold scope come in a later key screen</p>'+
-        '<button class="b b-pri b-full" data-a="dmgSend">Report damage</button><button class="b b-ghost" data-a="item">Cancel</button>';
+        '<button class="b b-ghost" data-a="item">Cancel</button><div class="pinbar"><button class="b b-pri b-full" data-a="dmgSend">Report damage</button></div>';
     }
     return h+'</div>';
+  }
+  /* ---- issue against a pending requisition ---- */
+  var CHK='<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>';
+  function apprPill(a){
+    if(a==='sa')return '<span class="pill p-ok">Standing approval SA-2026-014</span>';
+    if(a==='hod')return '<span class="pill p-info">Approved by Head of department</span>';
+    return '<span class="pill p-info">Within self-approval limit</span>';
+  }
+  function apprBanner(a){
+    if(a==='sa')return '<div class="appr sa" role="note">'+CHK+'<span><b>'+SA_LINE+'</b><span class="m">4 of 6 cans used this month</span></span></div>';
+    if(a==='hod')return '<div class="appr hod" role="note">'+CHK+'<span><b>Approved by Head of department</b><span class="m">Maintenance value band - approved 08:52</span></span></div>';
+    return '<div class="appr self" role="note">'+CHK+'<span><b>Within self-approval limit - Senior engineer</b><span class="m">Self-approval limit Rs 25,000 · this requisition Rs 1,840</span></span></div>';
+  }
+  function slip(k){
+    var R=ISS[k],I=S.iss[k];
+    return '<div class="slip" role="img" aria-label="Issue slip preview '+ISSNO[k]+'"><div class="sh">ISSUE SLIP '+ISSNO[k]+' · CMF-ALIGARH stores</div>'+
+      'Requisition: '+R.ind+'<br>Issued to: '+R.who+' ('+R.dept+')<br>Item: '+R.item+'<br>Lot: '+R.lot+' · from rack '+R.rack+'<br>Qty issued: '+I.qty+' '+R.unit+' (requested '+R.qty+')<br>Issued by: Storekeeper · 25-09-2026 10:18'+
+      '<div class="ap">'+(R.appr==='sa'?SA_LINE:(R.appr==='hod'?'Approved by Head of department':'Within self-approval limit - Senior engineer'))+'</div></div>';
+  }
+  function issSheet(){
+    var k=S.task,R=ISS[k],I=S.iss[k];
+    var h='<div class="sheet"><span class="kind">'+GROUPS[2]+'</span><h2>'+R.ind+' · '+R.who+'</h2><span class="m">'+R.dept+' · '+R.need+'</span>'+apprBanner(R.appr);
+    h+='<table class="tbl"><caption class="sr">Requisition line</caption><tbody><tr><td>Item</td><td class="num">'+R.item+'</td></tr>'+
+      '<tr><td>Requested</td><td class="num">'+R.qty+' '+R.unit+'</td></tr><tr><td>Pick from</td><td class="num">Lot '+R.lot+' · rack '+R.rack+'</td></tr></tbody></table>';
+    if(I.step==='done'){
+      h+='<div class="donehead"><div class="check" aria-hidden="true">&#10003;</div><div><h2 role="status">'+(S.pending?'Issued - Captured - pending sync':'Issued - synced')+'</h2><span class="m">'+ISSNO[k]+' · '+I.qty+' '+R.unit+' to '+R.who+'</span></div></div>'+
+        slip(k)+'<div class="pinbar"><button class="b b-pri b-full" data-a="home">Back to inbox</button><button class="b b-sec b-full" data-a="nr" data-what="Print issue slip">'+ICON.print+'Print slip</button></div>';
+      return h+'</div>';
+    }
+    if(I.err)h+='<div class="blk" role="alert">'+esc(I.err)+'</div>';
+    if(I.step==='scan'){
+      h+='<div class="card"><h4>1. Scan item or lot</h4><span class="m">'+scanHowItem()+'</span></div>'+
+        '<button class="b b-ghost" data-a="home">Close</button>'+
+        '<div class="pinbar"><button class="b b-pri b-full" data-a="issScan">'+(DEV==='tab'?ICON.cam+'Scan lot '+R.lot+' with camera':ICON.scan+'Scan lot '+R.lot)+'</button>'+
+        '<div class="row">'+(isDesk()||DEV==='tab'?'':'<button class="b b-sec" data-a="issScan">'+ICON.cam+'Camera</button>')+'<button class="b b-sec" data-a="focusScan">Type it</button></div></div>';
+    } else {
+      var id='iss-'+k+'-q';
+      h+='<div class="card done"><h4>1. Lot <span class="pill p-ok">'+R.lot+' - scanned, released</span></h4></div>'+
+        '<div class="card"><h4>2. Quantity</h4><div class="qty"><label for="'+id+'">Issue</label>'+
+        '<button class="stp" data-a="issDec" aria-label="Decrease issue quantity">-</button>'+
+        '<input id="'+id+'" type="number" inputmode="numeric" min="1" max="'+R.qty+'" data-f="issq" value="'+I.qty+'">'+
+        '<button class="stp" data-a="issInc" aria-label="Increase issue quantity"'+(I.qty>=R.qty?' disabled':'')+'>+</button>'+
+        '<span class="eq m" style="display:flex;align-items:center">'+R.unit+' of '+R.qty+'</span></div></div>'+
+        '<button class="b b-ghost" data-a="issBack">Scan a different lot</button>'+
+        '<div class="pinbar"><button class="b b-pri b-full" data-a="issConfirm"'+(I.qty>0?'':' disabled')+'>Confirm issue - '+I.qty+' '+R.unit+'</button></div>';
+    }
+    return h+'</div>';
+  }
+  function scanHowItem(){
+    if(DEV==='hand')return 'Hardware trigger, camera, or Type it. Lots on QC hold are blocked.';
+    if(DEV==='tab')return 'Camera, or Type it. Lots on QC hold are blocked.';
+    return 'USB scanner or type the lot code. Lots on QC hold are blocked.';
+  }
+  function issCode(c){
+    var I=S.iss[S.task],R=ISS[S.task];
+    if(c===HELD){I.err='Blocked - lot '+HELD+' is on QC hold (QC-2026-0318). Pick from lot '+R.lot+' at rack '+R.rack+'.';say(I.err);return;}
+    if(c===R.lot.toUpperCase()){I.err='';I.step='qty';say('Lot '+R.lot+' scanned. Enter quantity');return;}
+    I.err='Scanned '+c+' - not this item. Pick lot '+R.lot+' at rack '+R.rack+'.';say(I.err);
   }
   function otherSheet(){
     var o=OTHER[S.task];
@@ -678,6 +864,7 @@ button[disabled]{cursor:not-allowed}
       case 'item':return itemSheet();
       case 'dmg':return dmgSheet();
       case 'other':return otherSheet();
+      case 'iss':return issSheet();
       default:return nextUp();
     }
   }
@@ -711,7 +898,7 @@ button[disabled]{cursor:not-allowed}
       h=side()+'<div class="dmain">'+dtop()+'<div class="dcontent"><section class="dlist" aria-label="Stores inbox"><div class="lhd"><h2>Stores inbox</h2></div>'+scanbar(fid)+inbox()+'</section>'+
         '<section class="ddetail" aria-label="Task detail">'+detail(fid,false)+'</section></div></div>';
     } else if(lay==='two'){
-      h=stop()+'<div class="two"><section class="lp" aria-label="Stores inbox">'+scanbar(fid)+inbox()+'</section><section class="rp" aria-label="Task detail">'+detail(fid,false)+'</section></div>'+bnav();
+      h=stop()+'<div class="two">'+bnav('rail')+'<section class="lp" aria-label="Stores inbox">'+scanbar(fid)+inbox()+'</section><section class="rp" aria-label="Task detail">'+detail(fid,false)+'</section></div>';
     } else {
       h=stop()+scanbar(fid);
       if(S.view==='inbox')h+=inbox()+bnav();
@@ -720,7 +907,6 @@ button[disabled]{cursor:not-allowed}
     }
     el.innerHTML=h;
   }
-  var frames=['f-scan','f-tab','f-desk'].map(function(id){return document.getElementById(id);});
   function renderAll(){
     var a=document.activeElement,fr=null,f=null,i=null,act=null,scr={};
     if(a&&a.closest&&a.closest('.screen')){fr=a.closest('.screen').id;f=a.dataset.f;i=a.dataset.i;act=a.dataset.a;}
@@ -751,6 +937,7 @@ button[disabled]{cursor:not-allowed}
   function resolve(code){
     var c=code.trim().toUpperCase();S.msg='';
     if(!c){S.msg='Nothing scanned. Scan or type rack, item or challan.';return;}
+    if(S.view==='iss'&&S.iss[S.task].step==='scan'&&/^(LOT-|L-)/.test(c)){issCode(c);return;}
     if(/^R-/.test(c)){
       if(S.view==='accept'){S.msg='Racks are assigned after QC clears the lot. This delivery goes to inspection bay '+BAY+'.';say(S.msg);return;}
       if(S.view==='put'&&!S.put.done){ // rack scan during putaway = confirm
@@ -775,7 +962,16 @@ button[disabled]{cursor:not-allowed}
       case 'open':S.task=t.dataset.t;S.msg='';
         if(S.task==='t1'){S.view=S.accepted?'done':'accept';say(S.accepted?'Label queue opened':'Acceptance opened for challan '+CH.challan);}
         else if(S.task==='q1'){S.view='put';say(P.done?PUT.lot+' already put away':'Put away '+PUT.lot+'. Suggested '+PUT.sug);}
+        else if(ISS[S.task]){S.view='iss';say('Issue '+ISS[S.task].ind+' for '+ISS[S.task].who);}
         else{S.view='other';say(OTHER[S.task].title);}break;
+      case 'issScan':issCode(ISS[S.task].lot.toUpperCase());break;
+      case 'issBack':S.iss[S.task].step='scan';say('Scan a lot');break;
+      case 'issDec':var q=S.iss[S.task];q.qty=Math.max(1,q.qty-1);say('Issue '+q.qty);break;
+      case 'issInc':var q2=S.iss[S.task];q2.qty=Math.min(ISS[S.task].qty,q2.qty+1);say('Issue '+q2.qty);break;
+      case 'issConfirm':S.iss[S.task].step='done';S.pending++;scheduleSync();say('Issued - Captured - pending sync. '+ISSNO[S.task]);break;
+      case 'cam':
+        if(S.view==='put'&&P.target&&!P.done){confirmPut(P.target);break;}
+        S.msg='Camera opened. Viewfinder not drawn in this mock - use Demo controls to simulate a scan, or Type it.';say(S.msg);break;
       case 'showDone':S.view='done';S.task='t1';break;
       case 'item':S.view='item';break;
       case 'nr':say((t.dataset.what||'This')+' is not rendered in this mock');return;
@@ -809,12 +1005,18 @@ button[disabled]{cursor:not-allowed}
   }
 
   document.addEventListener('click',function(e){
+    var dv=e.target.closest('[data-dev]');if(dv){setDevice(dv.dataset.dev);renderAll();say(DEVS[DEV].label+' layout. Same task, same step');return;}
     var t=e.target.closest('[data-a]');if(t&&!t.disabled){e.preventDefault();act(t.dataset.a,t);return;}
     var d=e.target.closest('[data-demo]');if(!d)return;
     switch(d.dataset.demo){
       case 'challan':resolve(CH.challan);break;
       case 'rack':resolve('R-B3-04');break;
       case 'item':resolve('LOT-0975-2');break;
+      case 'iss':S.view='iss';S.task='i1';S.msg='';say('Issue IND-2026-0446 for Ramu. '+SA_LINE);break;
+      case 'held':
+        if(S.view!=='iss'){S.view='iss';S.task='i1';}
+        if(S.iss[S.task].step==='done'){say('Already issued. Reset to try again');break;}
+        S.iss[S.task].step='scan';issCode(HELD);break;
       case 'put':S.view='put';S.task='q1';S.msg='';say('Put away '+PUT.lot+'. Suggested '+PUT.sug);break;
       case 'fill':
         if(S.accepted){say('Already accepted. Reset to try again');break;}
@@ -840,11 +1042,13 @@ button[disabled]{cursor:not-allowed}
     var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
     if(f==='scanq'){S.scanq=e.target.value;renderAll();return;}
     if(f==='count'){var v=e.target.value.replace(/[^0-9]/g,'');S.lines[+e.target.dataset.i].count=v;renderAll();}
+    if(f==='issq'){var R=ISS[S.task],v2=+e.target.value.replace(/[^0-9]/g,'')||0;S.iss[S.task].qty=Math.min(R.qty,v2);renderAll();}
     if(f==='note'){S.lines[+e.target.dataset.i].note=e.target.value;renderAll();}
   });
   document.addEventListener('change',function(e){
     if(e.target.dataset&&e.target.dataset.f==='replace'){S.dmg.replace=e.target.checked;say(S.dmg.replace?'Replacement requested':'Replacement not requested');renderAll();}
   });
+  setDevice('hand');
   renderAll();
 })();
 </script>

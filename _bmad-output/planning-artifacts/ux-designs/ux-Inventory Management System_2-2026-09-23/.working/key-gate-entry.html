@@ -6,214 +6,408 @@
 <title>Gate Entry Mock</title>
 <style>
 /*
-  KEY SCREEN: Gate entry (touch-roomy density only)
+  KEY SCREEN: Gate entry, one frame + device switcher (Handheld / Tablet / Desktop / Desktop touch)
   Governing spine sections:
     EXPERIENCE.md
       - Key Flows > Gate entry (step order: challan, photo, vehicle, supplier, submit)
-      - Component Patterns: scan sink (always armed), photo capture, supplier picker, sync badge
-      - State Patterns: captured-pending-sync, unlisted supplier
+      - Component Patterns: scan sink (always armed), camera scan, "Type it" manual entry,
+        photo capture, supplier picker, sync badge, device-class navigation (bottom nav,
+        icon rail, dark sidebar)
+      - State Patterns: captured-pending-sync, unlisted supplier, offline
     DESIGN.md
-      - Density modes (touch-roomy for gate/stores; compact is NOT shown here)
-      - Touch targets (56px frontline floor, primary full-width in bottom third) [ASSUMPTION]
-  Decision source: .memlog.md (2026-09-24). Colors: existing app tokens only, palette not decided.
-  Typeface: Lato is the chosen typeface. It is loaded locally (bundled) in production; this mock
-  does no network font loading and falls back to Segoe UI / Roboto / system-ui when Lato is absent.
-  Review fixes (2026-09-24): no scan toast (match card is the only visible feedback, aria-live
-  region kept); Next on challan step disabled until the challan is resolved; compact challan step
-  so "Type challan number" stays reachable without scrolling on the 360x640 scanner.
+      - Tokens: theme A Ledger Blue (default for CMF-ALIGARH), dark sidebar #1B2230,
+        fixed neutrals and status colours (from .working/color-themes-1.html)
+      - Density by input: finger = touch-roomy (primary >=56px pinned bottom third,
+        secondary >=48px); mouse = compact (34px controls). Gate on desktop is compact.
+  Decision source: .memlog.md (2026-09-25 overrides: every role on every device; gate on
+  desktop compact). Typeface: Lato (bundled locally in production), no network font loading.
+  Kept review fixes (2026-09-24): no scan toast (match card + hidden live region), Next gated
+  on challan resolution, "Type challan number" reachable without scroll after a scan.
 */
 :root{
-  --primary:#1f47d9; --primary-strong:#1a3ab3;
-  --neutral-50:#f8f9fa; --neutral-100:#f0f2f5; --neutral-500:#6b7280;
-  --neutral-900:#1f2937; --neutral-950:#000000;
-  --success:#10b981; --warning:#f59e0b; --error-strong:#991b1b;
-  --info-strong:#1e40af; --offline:#9ca3af;
-  --touch:56px; /* [ASSUMPTION] frontline floor */
+  --side:#1B2230; --side-hover:#252E3F; --side-text:#C9D1DD; --side-muted:#8C97A8;
+  --bg:#F4F6F9; --surface:#FFFFFF; --border:#DDE2E9; --text:#1C2430; --text-muted:#566173;
+  --ok:#1E7A3C; --ok-bg:#E6F4EA; --warn:#8A5300; --warn-bg:#FFF3DC;
+  --err:#B3261E; --err-bg:#FCE8E6; --info:#1F5FAD; --info-bg:#E7F0FB;
+  --off:#4A5568; --off-bg:#ECEFF3;
+  /* A. Ledger Blue (default for CMF-ALIGARH) */
+  --accent:#1E6BC6; --accent-strong:#1656A3; --accent-soft:#E8F1FC; --on-accent:#FFFFFF; --accent-on-dark:#5AA2F0;
+  --font: Lato, "Segoe UI", Roboto, system-ui, sans-serif;
   --radius:10px;
-  font-family: Lato,"Segoe UI",Roboto,system-ui,sans-serif;
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--neutral-100);color:var(--neutral-900);font-size:16px;line-height:1.4}
-h1{font-size:20px;margin:0 0 4px}
-.page{padding:16px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
-.intro{flex:0 0 100%}
-.intro p{margin:0;color:var(--neutral-500)}
-:focus-visible{outline:3px solid var(--primary);outline-offset:2px}
-.btn:focus-visible,.opt:focus-visible{outline:3px solid var(--neutral-950);outline-offset:2px;box-shadow:0 0 0 5px #fff}
+html,body{margin:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.4}
+button,input,textarea{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+button[disabled]{cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.side :focus-visible,.s-top :focus-visible,.rail :focus-visible{outline-color:var(--accent-on-dark)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.page{padding:16px;max-width:100%}
+.intro h1{font-size:22px;margin:0 0 4px}
+.intro p{margin:0 0 12px;color:var(--text-muted);max-width:920px}
 
-/* side panels */
-.side{width:300px;display:flex;flex-direction:column;gap:16px}
-.panel{background:#fff;border:1px solid #d1d5db;border-radius:var(--radius);padding:12px}
-.panel h2{font-size:15px;margin:0 0 8px}
-.panel .btn{margin-bottom:8px}
-.legend{margin:0;padding-left:18px;font-size:13px}
-.legend li{margin-bottom:6px}
-.tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;background:var(--warning);color:var(--neutral-950)}
-.tag.dec{background:var(--neutral-100);color:var(--neutral-900);border:1px solid #d1d5db}
+/* ---------- device switcher (outside the frame) ---------- */
+.devsw{display:inline-flex;flex-wrap:wrap;border:1px solid #B9C1CC;border-radius:10px;overflow:hidden;background:var(--surface)}
+.devsw button{min-height:52px;padding:6px 16px;border:0;border-right:1px solid var(--border);background:var(--surface);text-align:left;color:var(--text)}
+.devsw button:last-child{border-right:0}
+.devsw button b{display:block;font-size:14px}
+.devsw button small{display:block;font-size:12px;color:var(--text-muted)}
+.devsw button:hover{background:var(--accent-soft)}
+.devsw button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.devsw button[aria-pressed="true"] small{color:#E8F1FC}
+.devsw button:focus-visible{outline-offset:-4px;outline-color:var(--text)}
+.devcap{margin:8px 0 14px;font-size:13px;color:var(--text-muted)}
+.devcap b{color:var(--text)}
+.stage{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.vpwrap{max-width:100%;overflow-x:auto;padding:8px}
 
-/* device frames */
-.device{display:flex;flex-direction:column;gap:6px}
-.device-label{font-size:13px;font-weight:600}
-.device-label span{font-weight:400;color:var(--neutral-500)}
-.bezel{background:var(--neutral-900);border-radius:22px;padding:10px;position:relative}
-.bezel.rugged{border-radius:14px;padding:14px 12px 40px;background:#2b2f36;border:4px solid #f59e0b}
-.trigger-note{position:absolute;left:-8px;top:120px;width:8px;height:60px;background:#f59e0b;border-radius:4px 0 0 4px}
-.trigger-cap{position:absolute;bottom:10px;left:0;right:0;text-align:center;color:#fff;font-size:12px}
-.screen{background:#fff;overflow:hidden;display:flex;flex-direction:column;position:relative}
-.s-scanner{width:360px;height:640px}
-.s-phone{width:412px;height:860px}
-.tablet-wrap{width:400px;height:640px;overflow:hidden;border-radius:22px}
-.tablet-wrap .bezel{transform:scale(.5);transform-origin:0 0;width:820px}
-.s-tablet{width:800px;height:1260px}
+/* ---------- the one frame ---------- */
+.vp{position:relative;overflow:hidden;flex:none;background:var(--bg)}
+.vp[data-dev="handheld"]{width:390px;height:800px;border-radius:18px;box-shadow:0 0 0 8px #1F2937}
+.vp[data-dev="tablet"]{width:451px;height:649px;border-radius:14px;box-shadow:0 0 0 8px #1F2937}
+.vp[data-dev="desktop"],.vp[data-dev="dtouch"]{width:896px;height:560px;border-radius:6px;box-shadow:0 0 0 1px #B9C1CC,0 6px 18px rgba(28,36,48,.12)}
+.screen{display:flex;flex-direction:column;overflow:hidden;background:var(--bg);transform-origin:0 0}
+.screen[data-dev="handheld"]{width:390px;height:800px}
+.screen[data-dev="tablet"]{width:820px;height:1180px;transform:scale(.55)}
+.screen[data-dev="desktop"],.screen[data-dev="dtouch"]{width:1280px;height:800px;transform:scale(.7);flex-direction:row}
 
-/* app chrome */
-.topbar{display:flex;justify-content:space-between;align-items:center;gap:6px;padding:6px 10px;background:var(--neutral-900);color:#fff;font-size:13px;min-height:36px}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.12);white-space:nowrap}
-.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
-.dot.ready{background:var(--success)}
-.dot.off{background:var(--offline)}
-.dot.on{background:var(--success)}
-.titlebar{padding:8px 12px 0;font-weight:700;font-size:17px}
-.stepper{display:flex;gap:4px;padding:8px 12px 10px;list-style:none;margin:0;border-bottom:1px solid #e5e7eb}
-.stepper li{flex:1;text-align:center;font-size:12px;color:var(--neutral-500)}
-.stepper .bar{height:6px;border-radius:3px;background:#e5e7eb;margin-bottom:4px}
-.stepper li.done .bar{background:var(--primary)}
-.stepper li.cur .bar{background:var(--primary)}
-.stepper li.cur{color:var(--neutral-950);font-weight:700}
-.stepper li.done{color:var(--neutral-900)}
-.body{flex:1;overflow:auto;padding:12px}
-.actions{padding:10px 12px 12px;border-top:1px solid #e5e7eb;background:#fff;display:flex;flex-direction:column;gap:8px}
-.q{font-size:20px;font-weight:700;margin:0 0 10px}
-.hint{font-size:14px;color:var(--neutral-500);margin:6px 0}
+/* ---------- buttons, density by input ---------- */
+.b{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:2px solid transparent;border-radius:var(--radius);font-weight:700;padding:0 14px;text-align:center;line-height:1.15;background:none}
+.b-pri{background:var(--accent);color:var(--on-accent)}
+.b-pri:hover{background:var(--accent-strong)}
+.b-pri[disabled],.b-pri[disabled]:hover{background:#E3E7ED;color:var(--text-muted);border-color:#C9D0DA}
+.b-sec{background:var(--surface);color:var(--accent-strong);border-color:var(--accent)}
+.b-sec:hover{background:var(--accent-soft)}
+.b-plain{background:var(--surface);color:var(--text);border-color:#B9C1CC}
+.b-ghost{background:transparent;color:var(--accent-strong);text-decoration:underline;text-underline-offset:2px}
+.b-full{width:100%}
+.touch{font-size:16px}
+.touch .b{min-height:56px;font-size:17px}
+.touch .b-sec,.touch .b-plain,.touch .b-ghost{min-height:48px;font-size:16px}
+.touch .b-huge{min-height:84px;font-size:19px}
+.compact{font-size:13px}
+.compact .b{height:34px;border-width:1px;border-radius:6px;font-size:13px;padding:0 12px}
+.icon{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;flex:none}
+.b-huge .icon{width:28px;height:28px}
+.compact .icon{width:15px;height:15px}
 
-.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:var(--touch);border-radius:var(--radius);border:2px solid transparent;font:inherit;font-size:18px;font-weight:700;cursor:pointer;padding:8px 12px;text-align:center}
-.btn.primary{background:var(--primary);color:#fff}
-.btn.primary:hover{background:var(--primary-strong)}
-.btn.primary[disabled]{background:#e5e7eb;color:var(--neutral-500);border-color:#d1d5db;cursor:not-allowed}
-.btn.primary[disabled]:hover{background:#e5e7eb}
-.btn.secondary{background:#fff;color:var(--primary);border-color:var(--primary)}
-.btn.ghost{background:transparent;color:var(--primary);border-color:transparent;text-decoration:underline;font-weight:600;font-size:16px}
-.btn.huge{min-height:96px;font-size:20px}
-.btn.small{min-height:44px;font-size:15px;width:auto}
-.icon{font-size:26px;line-height:1}
+/* ---------- handheld / tablet top bar, bottom nav, icon rail ---------- */
+.s-top{height:48px;flex:none;background:var(--side);color:#fff;display:flex;align-items:center;gap:10px;padding:0 12px}
+.s-top b{font-size:16px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rdy{display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:13.5px;white-space:nowrap}
+.ready{width:10px;height:10px;border-radius:50%;background:#3DD68C;box-shadow:0 0 0 3px rgba(61,214,140,.25);flex:none;display:inline-block}
+.spacer{flex:1}
+.sync{font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;background:#2E3850;color:#E6EAF0;white-space:nowrap}
+.sync .d{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:#9AA5B6}
+.sync.on .d{background:#3DD68C}
+.titlebar{flex:none;padding:10px 12px 0;font-weight:900;font-size:17px;background:var(--surface)}
+.titlebar span{font-weight:400;color:var(--text-muted);font-size:13px}
+.bnav{height:64px;flex:none;display:flex;background:var(--surface);border-top:1px solid var(--border)}
+.bnav button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-muted);font-size:13px;font-weight:700;position:relative;min-height:56px}
+.bnav svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9}
+.bnav button[aria-current="page"]{color:var(--accent)}
+.bnav button[aria-current="page"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+.trow{flex:1;display:flex;min-height:0}
+.rail{width:104px;flex:none;background:var(--side);display:flex;flex-direction:column;padding:8px 0;gap:4px}
+.rail button{min-height:76px;border:0;border-left:4px solid transparent;background:transparent;color:var(--side-text);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font-weight:700;font-size:13.5px}
+.rail button:hover{background:var(--side-hover)}
+.rail button[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff}
+.rail svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.9}
+.rail button[aria-current="page"] svg{stroke:var(--accent-on-dark)}
 
-.scan-note{display:flex;gap:8px;align-items:center;background:var(--neutral-50);border:1px dashed var(--neutral-500);border-radius:var(--radius);padding:8px;font-size:14px;margin:10px 0}
+/* ---------- horizontal stepper (handheld) ---------- */
+.stepper{flex:none;display:flex;gap:4px;padding:8px 12px 10px;list-style:none;margin:0;border-bottom:1px solid var(--border);background:var(--surface)}
+.stepper li{flex:1;text-align:center;font-size:12.5px;color:var(--text-muted)}
+.stepper .bar{height:6px;border-radius:3px;background:#DDE2E9;margin-bottom:4px}
+.stepper li.done .bar,.stepper li.cur .bar{background:var(--accent)}
+.stepper li.cur{color:var(--text);font-weight:900}
+.stepper li.done{color:var(--text)}
+
+/* ---------- vertical step list (tablet and desktop) ---------- */
+.steps{width:270px;flex:none;border-right:1px solid var(--border);background:var(--bg);padding:12px;overflow:auto}
+.steps ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.steps button{width:100%;min-height:64px;text-align:left;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);padding:8px 10px;display:flex;gap:10px;align-items:center;color:var(--text);font-weight:700}
+.steps button[disabled]{background:#FAFBFC;color:var(--text-muted);border-color:var(--border)}
+.steps .n{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:900;border:2px solid #B9C1CC;flex:none;font-size:14px;background:var(--surface)}
+.steps li.done .n{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.steps li.cur button{border-color:var(--accent);background:var(--accent-soft)}
+.steps li.cur .n{border-color:var(--accent);color:var(--accent-strong)}
+.steps .tx{flex:1;min-width:0}
+.steps small{display:block;font-weight:400;color:var(--text-muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.steps h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:2px 2px 8px}
+.compact .steps{width:240px;padding:14px 12px}
+.compact .steps ol{gap:6px}
+.compact .steps button{min-height:44px;border-width:1px;border-radius:6px;padding:5px 10px;font-size:13px}
+.compact .steps .n{width:24px;height:24px;font-size:12px;border-width:1px}
+.compact .steps small{font-size:12px}
+
+/* ---------- form body + actions ---------- */
+.main{flex:1;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--surface)}
+.body{flex:1;overflow:auto;overflow-x:hidden;padding:12px;min-height:0;background:var(--surface)}
+.compact .body{padding:16px 24px}
+.actions{flex:none;padding:10px 12px 12px;border-top:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;gap:8px}
+.touch .actions .b{width:100%}
+.dsk.touch .actions{flex-direction:row;justify-content:flex-end;align-items:center;padding:12px 24px}
+.dsk.touch .actions .b{width:auto;min-width:200px}
+.compact .actions{flex-direction:row;justify-content:flex-end;align-items:center;padding:10px 24px}
+.todo{margin-right:auto;color:var(--text-muted);font-size:13px}
+.q{font-size:20px;font-weight:900;margin:0 0 10px}
+.compact .q{font-size:16px;margin-bottom:8px}
+.hint{font-size:14px;color:var(--text-muted);margin:6px 0;display:flex;gap:6px;align-items:center}
+.compact .hint{font-size:12.5px}
+.scan-note{display:flex;gap:8px;align-items:center;background:var(--bg);border:1px dashed #8792A3;border-radius:var(--radius);padding:8px 10px;font-size:14px;margin:10px 0}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap}
+.p-info{background:var(--info-bg);color:var(--info)}
+.stack{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+.touch .stack .b{width:100%}
+.compact .stack,.dsk .stack{flex-direction:row;flex-wrap:wrap}
+.dsk .stack .b{width:auto;min-width:200px}
+
 .field{margin:10px 0}
-.field label{display:block;font-weight:600;margin-bottom:4px}
-.field input,.field textarea{width:100%;min-height:var(--touch);font:inherit;font-size:20px;padding:8px 12px;border:2px solid var(--neutral-500);border-radius:var(--radius);color:var(--neutral-950);background:#fff}
-.field input.plate{text-transform:uppercase;letter-spacing:2px;font-weight:700;font-size:24px}
-.field input.flag{border-color:var(--warning);background:#fffbeb}
-.field textarea{min-height:80px;font-size:16px}
+.field label{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-weight:700;margin-bottom:4px}
+.field input,.field textarea{width:100%;border:2px solid #8792A3;border-radius:var(--radius);background:#fff;color:var(--text);padding:0 12px}
+.touch .field input{min-height:56px;font-size:20px}
+.touch .field textarea{min-height:80px;font-size:16px;padding:8px 12px}
+.compact .field input{height:34px;font-size:14px;border-width:1px;border-radius:6px;max-width:420px}
+.compact .field textarea{max-width:420px;min-height:60px;font-size:13px;border-width:1px;border-radius:6px;padding:6px 10px}
+.dsk .field input,.dsk .field textarea{max-width:460px}
+.field input:focus,.field textarea:focus{border-color:var(--accent);outline:3px solid var(--accent);outline-offset:1px}
+.field input.plate{text-transform:uppercase;letter-spacing:2px;font-weight:900}
+.touch .field input.plate{font-size:24px}
+.field input.flag{border-color:var(--warn);background:var(--warn-bg)}
 
-.chip{border-radius:var(--radius);padding:10px;margin:10px 0;border:2px solid;font-size:15px}
-.chip.match{border-color:var(--success);background:#ecfdf5}
-.chip.warn{border-color:var(--warning);background:#fffbeb}
-.chip.info{border-color:var(--info-strong);background:#eff6ff;color:var(--info-strong)}
-.chip.err{border-color:var(--error-strong);background:#fef2f2;color:var(--error-strong)}
-.chip strong{display:block;font-size:16px;color:var(--neutral-950)}
+.chip{border-radius:var(--radius);padding:10px 12px;margin:10px 0;border:1px solid;font-size:14.5px;color:var(--text)}
+.chip strong{display:flex;gap:6px;align-items:center;font-size:15.5px}
+.chip .gl{font-weight:900}
+.chip.match{border-color:#9FCDAE;background:var(--ok-bg);box-shadow:inset 4px 0 0 var(--ok)}
+.chip.match .gl{color:var(--ok)}
+.chip.warn{border-color:#E8C27A;background:var(--warn-bg);box-shadow:inset 4px 0 0 var(--warn)}
+.chip.warn .gl{color:var(--warn)}
+.chip.info{border-color:#BCD3F0;background:var(--info-bg);box-shadow:inset 4px 0 0 var(--info)}
+.chip.info .gl{color:var(--info)}
 .chip .row{display:flex;gap:8px;margin-top:8px}
-.chip .row .btn{flex:1;min-height:var(--touch);font-size:16px}
-/* compact secondary row shown once a match card is present (48px secondary floor) */
+.touch .chip .row .b{flex:1}
+.compact .chip{border-radius:6px;font-size:13px;max-width:560px;padding:8px 12px}
+.compact .chip strong{font-size:14px}
+.dsk .chip{max-width:600px}
+/* compact secondary row once a match card is present (48px secondary floor on touch) */
 .row2{display:flex;gap:8px;margin:10px 0}
-.row2 .btn{flex:1;min-height:48px;font-size:15px;padding:6px 8px}
-.row2 .icon{font-size:20px}
+.touch .row2 .b{flex:1;padding:4px 8px}
+.dsk .row2 .b{flex:none}
 
-.shutter{display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px;background:var(--neutral-50);border-radius:var(--radius);border:1px solid #e5e7eb}
-.shutter button{width:120px;height:120px;border-radius:50%;border:6px solid var(--primary);background:#fff;font:inherit;font-weight:700;color:var(--primary);cursor:pointer}
-.thumb{display:flex;gap:12px;align-items:center}
-.paper{width:110px;height:140px;background:#fdf6e3;border:1px solid #d6c9a8;border-radius:4px;padding:8px;font-size:9px;color:#5b4a2a;transform:rotate(-2deg);box-shadow:0 2px 6px rgba(0,0,0,.2);flex:none}
+.shutter{display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px;background:var(--bg);border-radius:var(--radius);border:1px solid var(--border)}
+.shutter button{width:120px;height:120px;border-radius:50%;border:6px solid var(--accent);background:#fff;font-weight:900;color:var(--accent-strong);font-size:16px}
+.shutter button:hover{background:var(--accent-soft)}
+.thumb{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.paper{width:110px;height:140px;background:#fdf6e3;border:1px solid #d6c9a8;border-radius:4px;padding:8px;font-size:9px;color:#5b4a2a;transform:rotate(-2deg);box-shadow:0 2px 6px rgba(0,0,0,.2);flex:none;overflow:hidden}
 .paper hr{border:0;border-top:1px solid #cdbf9c;margin:4px 0}
 
 .opts{display:flex;flex-direction:column;gap:6px;margin:8px 0;padding:0;list-style:none}
-.opt{display:block;width:100%;min-height:var(--touch);text-align:left;font:inherit;font-size:17px;padding:8px 12px;border:2px solid #d1d5db;border-radius:var(--radius);background:#fff;color:var(--neutral-950);cursor:pointer}
-.opt small{display:block;color:var(--neutral-500);font-size:13px}
-.opt[aria-pressed="true"]{border-color:var(--primary);background:#eef2ff}
-.opt.unl{border-style:dashed;color:var(--primary);font-weight:700}
-details{border:1px solid #d1d5db;border-radius:var(--radius);margin:12px 0}
-summary{min-height:var(--touch);display:flex;align-items:center;padding:0 12px;font-weight:700;cursor:pointer;color:var(--primary)}
+.opt{display:block;width:100%;text-align:left;border:2px solid #B9C1CC;border-radius:var(--radius);background:#fff;color:var(--text);padding:6px 12px}
+.touch .opt{min-height:56px;font-size:17px}
+.compact .opt{min-height:36px;font-size:13px;border-width:1px;border-radius:6px;padding:4px 10px;max-width:460px}
+.dsk .opt{max-width:460px}
+.opt:hover{border-color:var(--accent)}
+.opt small{display:block;color:var(--text-muted);font-size:13px}
+.compact .opt small{font-size:11.5px}
+.opt.unl{border-style:dashed;color:var(--accent-strong);font-weight:700}
+details{border:1px solid var(--border);border-radius:var(--radius);margin:12px 0}
+.dsk details{max-width:560px}
+summary{display:flex;align-items:center;padding:0 12px;font-weight:700;cursor:pointer;color:var(--accent-strong)}
+.touch summary{min-height:56px}
+.compact summary{min-height:34px}
 details .inner{padding:0 12px 8px}
-details .field input{font-size:17px}
 
-.done{text-align:center;padding-top:20px}
-.done .check{width:88px;height:88px;border-radius:50%;border:6px solid var(--success);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;font-size:48px;color:var(--neutral-950)}
-.done h2{font-size:24px;margin:0 0 6px}
-.summary{list-style:none;padding:0;margin:14px 0;text-align:left;font-size:15px;border:1px solid #e5e7eb;border-radius:var(--radius)}
-.summary li{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid #e5e7eb}
+.done{text-align:center;padding-top:16px}
+.dsk .done{text-align:left;max-width:560px}
+.done .check{width:84px;height:84px;border-radius:50%;border:6px solid var(--ok);margin:0 auto 12px;display:grid;place-items:center;font-size:44px;color:var(--ok);font-weight:900}
+.dsk .done .check{margin:0 0 10px;width:56px;height:56px;font-size:28px;border-width:4px}
+.done h2{font-size:22px;margin:0 0 6px}
+.compact .done h2{font-size:18px}
+.summary{list-style:none;padding:0;margin:14px 0;text-align:left;font-size:15px;border:1px solid var(--border);border-radius:var(--radius)}
+.compact .summary{font-size:13px}
+.summary li{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border)}
 .summary li:last-child{border-bottom:0}
-.summary span:first-child{color:var(--neutral-500)}
-.summary span:last-child{font-weight:600;text-align:right}
-.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.summary span:first-child{color:var(--text-muted)}
+.summary span:last-child{font-weight:700;text-align:right}
 
-/* tablet two-column */
-.two{display:flex;flex:1;min-height:0}
-.two .rail{width:260px;border-right:1px solid #e5e7eb;background:var(--neutral-50);padding:12px;overflow:auto}
-.two .rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.two .rail li button{width:100%;min-height:var(--touch);text-align:left;font:inherit;padding:8px 10px;border-radius:var(--radius);border:2px solid #d1d5db;background:#fff;color:var(--neutral-900);cursor:pointer}
-.two .rail li.cur button{border-color:var(--primary);font-weight:700}
-.two .rail li button small{display:block;color:var(--neutral-500);font-size:13px}
-.two .main{flex:1;display:flex;flex-direction:column;min-width:0}
+/* ---------- desktop shell (from color-themes-1 desk shell, via key-stores) ---------- */
+.side{width:208px;flex:none;background:var(--side);color:var(--side-text);display:flex;flex-direction:column}
+.brand{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;color:#fff;font-weight:900;font-size:15px;border-bottom:1px solid #2A3345}
+.brand .mark{width:26px;height:26px;border-radius:6px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:12px}
+.side nav{padding:8px 0;flex:1}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 16px 0 13px;border:0;border-left:3px solid transparent;background:transparent;color:var(--side-text);text-align:left;font-size:13px}
+.touch .nav-item{height:52px;font-size:15px}
+.nav-item:hover{background:var(--side-hover)}
+.nav-item svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.8}
+.touch .nav-item svg{width:20px;height:20px}
+.nav-item[aria-current="page"]{border-left-color:var(--accent-on-dark);background:var(--side-hover);color:#fff;font-weight:700}
+.nav-item[aria-current="page"] svg{stroke:var(--accent-on-dark)}
+.nav-item .count{margin-left:auto;background:var(--accent);color:var(--on-accent);border-radius:999px;font-size:11px;padding:0 7px;font-weight:700}
+.side-foot{padding:12px 16px;border-top:1px solid #2A3345;font-size:12px;color:var(--side-muted)}
+.dmain{flex:1;display:flex;flex-direction:column;min-width:0}
+.dtop{height:52px;flex:none;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;padding:0 16px}
+.touch .dtop{height:64px}
+.search{flex:1;max-width:420px;display:flex;align-items:center;gap:8px;height:34px;border:1px solid var(--border);border-radius:6px;padding:0 10px;background:#FAFBFC}
+.touch .search,.touch .site{height:48px}
+.search input{border:0;background:transparent;flex:1;min-width:0;outline:none}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.site{display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-weight:700}
+.avatar{width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);display:grid;place-items:center;font-weight:900;font-size:12px}
+.dsync{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--off-bg);color:var(--off);white-space:nowrap}
+.dsync.on{background:var(--ok-bg);color:var(--ok)}
+.dhead{flex:none;padding:12px 24px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.dhead h1{margin:0;font-size:18px}
+.dhead .m{color:var(--text-muted);font-size:13px}
+.dcontent{flex:1;display:flex;min-height:0}
+
+/* ---------- side panels ---------- */
+.sidep{width:340px;max-width:100%;display:flex;flex-direction:column;gap:16px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.panel h2{font-size:15px;margin:0 0 8px}
+.panel .b{width:100%;margin-bottom:8px;min-height:44px;font-size:14px}
+.legend{margin:0;padding-left:18px;font-size:13px}
+.legend li{margin-bottom:6px}
+.ltag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--border);background:#F4F6F9}
+.ltag.as{background:var(--warn-bg);color:var(--warn);border-color:#E8C27A}
+
+/* ---------- weighbridge: trucks on site + weigh in / weigh out ---------- */
+.p-ok{background:var(--ok-bg);color:var(--ok)} .p-warn{background:var(--warn-bg);color:var(--warn)}
+.p-err{background:var(--err-bg);color:var(--err)} .p-off{background:var(--off-bg);color:var(--off)}
+.tpane{width:320px;flex:none;border-right:1px solid var(--border);background:var(--bg);overflow:auto;padding:10px}
+.compact .tpane{width:300px;padding:10px}
+.tpane h2,.tl-h{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:2px 2px 8px}
+.tlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.trk{width:100%;text-align:left;border:2px solid #B9C1CC;border-radius:var(--radius);background:var(--surface);padding:8px 10px;color:var(--text);display:block}
+.touch .trk{min-height:72px}
+.compact .trk{border-width:1px;border-radius:6px;padding:6px 10px;font-size:13px}
+.trk:hover{border-color:var(--accent)}
+.trk[aria-current="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.trk .pl{font-weight:900;letter-spacing:1px}
+.trk small{display:block;color:var(--text-muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trk .pill{margin-top:4px}
+.tcard{border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;background:var(--bg);font-size:14px}
+.compact .tcard{font-size:13px;max-width:600px;border-radius:6px}
+.tcard .pl{font-size:20px;font-weight:900;letter-spacing:2px}
+.compact .tcard .pl{font-size:16px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:8px 0 0;font-size:13.5px}
+.kv dt{color:var(--text-muted)} .kv dd{margin:0;font-weight:700}
+.compact .kv{font-size:12.5px}
+.wfield input{font-weight:900;text-align:right;letter-spacing:1px}
+.touch .wfield input{min-height:72px;font-size:34px}
+.compact .wfield input{height:40px;font-size:20px;max-width:260px}
+.wrow{display:flex;align-items:center;gap:8px}
+.wrow .u{font-weight:900;font-size:18px}
+.chip.err{border-color:#EBA59F;background:var(--err-bg);box-shadow:inset 4px 0 0 var(--err)}
+.chip.err .gl{color:var(--err)}
+.netbox{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+.netbox div{flex:1;min-width:90px;border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px;background:var(--surface)}
+.netbox small{display:block;color:var(--text-muted);font-size:12px}
+.netbox b{font-size:18px}
+.compact .netbox{max-width:600px} .compact .netbox b{font-size:15px}
+.hback{border:0;background:none;color:var(--accent-strong);font-weight:700;min-height:48px;padding:0 10px 0 0;white-space:nowrap;font-size:16px}
+.titlebar:has(.hback){padding-top:0}
 </style>
 </head>
 <body>
 <div class="page">
   <div class="intro">
     <h1>Gate entry - key screen mock</h1>
-    <p>One shared flow rendered in three device frames. Tap inside any frame or use Demo controls; all frames stay in step. Touch-roomy density only.</p>
+    <p>One gate-entry flow in one frame. Pick a device class; the current step and everything typed so far stay put when you switch. Tap inside the frame or use Demo controls. "Trucks" / "Trucks on site" opens the weighbridge: weigh in (gross), unloading, weigh out (tare), net against the PO tolerance.</p>
   </div>
 
-  <div class="device">
-    <div class="device-label">Android rugged scanner <span>360 x 640 - hardware trigger</span></div>
-    <div class="bezel rugged"><div class="trigger-note" aria-hidden="true"></div>
-      <div class="screen s-scanner" id="f-scanner" data-layout="single"></div>
-      <div class="trigger-cap">Hardware trigger (side) - keyboard-wedge</div>
+  <div class="devsw" role="group" aria-label="Device class">
+    <button data-dev="handheld" aria-pressed="true"><b>Handheld</b><small>Scanner or phone - finger</small></button>
+    <button data-dev="tablet" aria-pressed="false"><b>Tablet</b><small>Finger - icon rail</small></button>
+    <button data-dev="desktop" aria-pressed="false"><b>Desktop</b><small>Mouse - compact</small></button>
+    <button data-dev="dtouch" aria-pressed="false"><b>Desktop touch</b><small>Touchscreen PC</small></button>
+  </div>
+  <p class="devcap" id="devcap"></p>
+
+  <div class="stage">
+    <div class="vpwrap">
+      <div class="vp" id="vp" data-dev="handheld">
+        <div class="screen" id="app" data-dev="handheld" role="region" aria-label="Gate entry app"></div>
+      </div>
+    </div>
+
+    <div class="sidep">
+      <section class="panel" aria-labelledby="demo-h">
+        <h2 id="demo-h">Demo controls</h2>
+        <button class="b b-sec" data-demo="qr">Simulate QR challan</button>
+        <button class="b b-sec" data-demo="hand">Simulate handwritten challan</button>
+        <button class="b b-sec" data-demo="trigger">Scan fires on any step (trigger or USB)</button>
+        <button class="b b-sec" data-demo="offline" id="offline-btn">Toggle offline (now: offline)</button>
+        <button class="b b-sec" data-demo="trucks">Open Trucks on site (weighbridge)</button>
+        <button class="b b-sec" data-demo="short" id="short-btn">Short load on weigh out (now: off)</button>
+        <button class="b b-sec" data-demo="stamp" id="stamp-btn">Weighbridge stamp overdue (now: no)</button>
+        <button class="b b-ghost" data-demo="reset">Reset flow</button>
+      </section>
+      <section class="panel" aria-labelledby="leg-h">
+        <h2 id="leg-h">Legend - decisions rendered</h2>
+        <ol class="legend">
+          <li><span class="ltag">DECISION</span> Every role on every device. Role decides what is shown; the device class decides how. No shared machine terminals.</li>
+          <li><span class="ltag">DECISION</span> Handheld (scanner or phone): touch-roomy, single column, bottom nav; primary action full width pinned in the bottom third.</li>
+          <li><span class="ltag">DECISION</span> Tablet: touch-roomy, icon rail on the left, step list beside the form.</li>
+          <li><span class="ltag">DECISION</span> Desktop: gate is compact like any desktop (34px controls), dark sidebar with Gate active, top bar with search, CMF-ALIGARH site switcher and + New, step list left of the form.</li>
+          <li><span class="ltag">DECISION</span> Desktop touch: desktop layout and dark sidebar, touch-roomy density.</li>
+          <li><span class="ltag">DECISION</span> Step order: challan first, then photo, then vehicle, then supplier, then submit.</li>
+          <li><span class="ltag">DECISION</span> Core fields only: challan reference, challan photo, vehicle number, supplier. Driver, challan weight, remarks sit under "More details (optional)". Weighbridge weights are taken in Trucks on site, not in the entry form.</li>
+          <li><span class="ltag">DECISION</span> QR and handwritten challans are both first-class: scan the challan, or type the challan number. Typing is always offered on every device.</li>
+          <li><span class="ltag">DECISION</span> Scanner is always armed on every step. "Scanner ready" shows on Handheld only; Handheld and Tablet also scan with the camera; Desktop shows "USB scanner or type".</li>
+          <li><span class="ltag as">ASSUMPTION</span> QR resolves offline against synced PO/ASN and pre-fills supplier via a Matched card the officer accepts.</li>
+          <li><span class="ltag as">ASSUMPTION</span> "Read from photo" for the plate is best-effort; it pre-fills and must be confirmed. Never auto-submits.</li>
+          <li><span class="ltag">DECISION</span> Unlisted supplier allowed; flagged "Stores will match this later". Truck never blocked.</li>
+          <li><span class="ltag">DECISION</span> Submit shows "Captured - pending sync" and works with no network.</li>
+          <li><span class="ltag">DECISION</span> No scan toast. The green Matched card is the only visible scan feedback; screen readers hear it via a live region.</li>
+          <li><span class="ltag">DECISION</span> "Next: photo" stays disabled until the challan is resolved: match accepted, or "Not this" then a typed number, or a number typed manually.</li>
+          <li><span class="ltag">DECISION</span> After a scan the challan step is compact: "Scan again" and "Type challan number" share one row, so typing stays reachable without scrolling on Handheld.</li>
+          <li><span class="ltag">DECISION</span> Colours: theme A Ledger Blue (#1E6BC6) for CMF-ALIGARH, dark sidebar #1B2230, lighter accent-on-dark for the active nav marker.</li>
+          <li><span class="ltag">DECISION</span> Typeface is Lato (loaded locally in production), falling back to Segoe UI, Roboto, system-ui.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Touch sizes: primary at least 56px, secondary at least 48px. Numbers not yet confirmed by the user.</li>
+          <li><span class="ltag as">ASSUMPTION</span> On Desktop the challan photo comes from "Upload photo" or "Use webcam".</li>
+          <li><span class="ltag">DECISION</span> Weighbridge capture belongs in the gate surface (memlog Q9). Ramesh Yadav holds both roles, gate_officer and weighbridge_operator (the only role allowed to write weighments in src/api/v1/weighbridge.ts).</li>
+          <li><span class="ltag">DECISION</span> Every weighment is bound to an open gate entry (binding token = the gate event's correlation_id) and to one PO line (po_ref_ext + line_no). A reversed gate entry cannot be weighed (code: WEIGHBRIDGE_BINDING_TOKEN_NOT_FOUND).</li>
+          <li><span class="ltag">DECISION</span> Weights in kg, up to 3 decimals. Net = gross - tare; a negative net is refused (code: WEIGHBRIDGE_NET_NEGATIVE).</li>
+          <li><span class="ltag">DECISION</span> Tolerance is checked on the NET weight against the PO line ordered quantity with its under/over receipt tolerance %, not against the challan weight (code: applyWeighbridgeProjection). Challan weight is shown for information only.</li>
+          <li><span class="ltag">DECISION</span> Out of tolerance = Exception: receipt is blocked and a task goes to the receiving supervisor role (Mahesh Tyagi, same exceptions list as the floor mock).</li>
+          <li><span class="ltag">DECISION</span> Capture method is recorded as AUTO (read from indicator) or MANUAL (typed). Code has no reason rule for manual, so no reason is asked.</li>
+          <li><span class="ltag">DECISION</span> An overdue legal-metrology stamp on the weighbridge blocks weighing until re-stamped (code: 423 WEIGHBRIDGE_OUT_OF_STAMP).</li>
+          <li><span class="ltag as">ASSUMPTION</span> Gross at weigh in (loaded), tare at weigh out (empty) for inbound trucks. Code needs both in one weighbridge.recorded event; the mock holds the gross reading as "Captured - pending sync" until tare is taken.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Offline, the tolerance result is provisional (checked against the synced PO line); the server check on sync is final.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Indicator photo is optional evidence; not a field in code. Unloading and Unloading done are set by the unloading supervisor; the mock lets you tap them.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Truck statuses (Entered - weigh in pending, Weighed in, Unloading, Weigh out pending, Weighed out - net recorded, Exception), gate entry numbers GE-0925-nnn, bridge WB-01 and PO tolerance -2% / +5% are illustrative.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Nav items other than Gate and Trucks on site (More, other sidebar modules) are placeholders, not rendered here.</li>
+          <li><span class="ltag as">ASSUMPTION</span> Once submitted, an entry is locked; the step list is no longer clickable.</li>
+        </ol>
+      </section>
     </div>
   </div>
-
-  <div class="device">
-    <div class="device-label">Android phone <span>412 x 860</span></div>
-    <div class="bezel"><div class="screen s-phone" id="f-phone" data-layout="single"></div></div>
-  </div>
-
-  <div class="device">
-    <div class="device-label">Rugged tablet <span>800 x 1280 shown at 50% - two-column</span></div>
-    <div class="tablet-wrap"><div class="bezel"><div class="screen s-tablet" id="f-tablet" data-layout="two"></div></div></div>
-  </div>
-
-  <div class="side">
-    <section class="panel" aria-labelledby="demo-h">
-      <h2 id="demo-h">Demo controls</h2>
-      <button class="btn secondary" data-demo="qr">Simulate QR challan</button>
-      <button class="btn secondary" data-demo="hand">Simulate handwritten challan</button>
-      <button class="btn secondary" data-demo="trigger">Press hardware trigger (any step)</button>
-      <button class="btn secondary" data-demo="offline" id="offline-btn">Toggle offline (now: offline)</button>
-      <button class="btn ghost" data-demo="reset">Reset flow</button>
-    </section>
-    <section class="panel" aria-labelledby="leg-h">
-      <h2 id="leg-h">Legend - decisions rendered</h2>
-      <ol class="legend">
-        <li><span class="tag dec">DECISION</span> Ergonomic over modern; small-first, scanner is the tightest canvas; tablet goes two-column.</li>
-        <li><span class="tag dec">DECISION</span> Step order: challan first, then photo, then vehicle, then supplier, then submit.</li>
-        <li><span class="tag dec">DECISION</span> Core fields only: challan reference, challan photo, vehicle number, supplier. Driver, weight, remarks sit under "More details (optional)".</li>
-        <li><span class="tag dec">DECISION</span> QR and handwritten challans are both first-class: Scan challan, or Type challan number.</li>
-        <li><span class="tag dec">DECISION</span> Scanner is always armed; hardware trigger works on any step ("Scanner ready").</li>
-        <li><span class="tag">ASSUMPTION</span> QR resolves offline against synced PO/ASN and pre-fills supplier via a Matched chip the officer accepts.</li>
-        <li><span class="tag">ASSUMPTION</span> "Read from photo" for the plate is best-effort; it pre-fills and must be confirmed. Never auto-submits.</li>
-        <li><span class="tag dec">DECISION</span> Unlisted supplier allowed; flagged "Stores will match this later". Truck never blocked.</li>
-        <li><span class="tag dec">DECISION</span> Submit shows "Captured - pending sync" and works with no network.</li>
-        <li><span class="tag">ASSUMPTION</span> Touch targets at least 56px; primary action full-width, pinned in the bottom third. Numbers not yet confirmed by user.</li>
-        <li><span class="tag dec">DECISION</span> Touch-roomy density only; compact (desk) mode not shown.</li>
-        <li><span class="tag dec">DECISION</span> No scan toast. The green "Matched: PO-..." card is the only visible scan feedback; screen readers still hear it via a hidden live region.</li>
-        <li><span class="tag dec">DECISION</span> "Next: photo" stays disabled until the challan is resolved: match Accepted, or "Not this" then a typed number, or a number typed manually.</li>
-        <li><span class="tag dec">DECISION</span> After a scan, the challan step is compact: "Scan again" and "Type challan number" share one secondary row, so typing stays reachable without scrolling on the 360 x 640 scanner.</li>
-        <li><span class="tag dec">DECISION</span> Typeface is Lato (loaded locally in production), falling back to Segoe UI, Roboto, system-ui.</li>
-        <li>Colors are the existing app tokens only; palette is not decided.</li>
-      </ol>
-    </section>
-  </div>
+  <div id="live" class="sr" aria-live="polite"></div>
 </div>
 
 <script>
 (function(){
+  var ICON={
+    scan:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>',
+    cam:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    kbd:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h1M10 10h1M14 10h1M18 10h1M7 14h10"/></svg>',
+    up:'<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>'
+  };
+  var NAV={
+    gate:'<path d="M3 21V8l9-5 9 5v13"/><path d="M8 21v-8h8v8"/>',
+    truck:'<path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/>',
+    scan:'<path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M7 12h10"/>',
+    more:'<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>'
+  };
+  var DEVS={
+    handheld:'<b>Handheld</b> - scanner or phone, frame 390 x 800, finger: touch-roomy, bottom nav, single column.',
+    tablet:'<b>Tablet</b> - frame 820 x 1180 shown at 55%, finger: touch-roomy, icon rail, step list beside the form.',
+    desktop:'<b>Desktop</b> - frame 1280 x 800 shown at 70%, mouse: compact 34px controls, dark sidebar, step list beside the form.',
+    dtouch:'<b>Desktop touch</b> - touchscreen PC, frame 1280 x 800 shown at 70%: desktop layout and dark sidebar, touch-roomy density.'
+  };
   var VENDORS=[
     {id:'V-1021',name:'Shree Balaji Steels',city:'Aligarh'},
     {id:'V-1044',name:'Agarwal Packaging Industries',city:'Hathras'},
@@ -224,12 +418,100 @@ details .field input{font-size:17px}
   ];
   var MATCH={po:'PO-CMF-2026-04817',asn:'ASN-2209',vendor:VENDORS[0],challan:'DC/2425/0913'};
   var STEPS=['Challan','Photo','Vehicle','Supplier'];
+  var DEV='handheld';
   var S;
   function fresh(offline){return {step:0,challanMode:'idle',challan:'',match:null,matchAccepted:false,photo:false,
     vehicle:'',vehicleFromPhoto:false,vehicleChecked:false,supplier:null,query:'',unlisted:false,unlistedName:'',
     driver:'',phone:'',weight:'',remarks:'',offline:offline!==false,pending:S?S.pending:0,status:''};}
   S=fresh(true);
 
+  /* ---- weighbridge (mirrors src/compliance/weighbridge.ts) ---- */
+  var V='entry', SEL='T1';   // view: entry | trucks | wb (handheld detail page)
+  function freshW(){return {stage:'in',inp:'',method:'',photo:false,gross:null,gm:'',tare:null,tm:'',short:false,stamp:false};}
+  var W=freshW();
+  var PO={ref:'PO-CMF-2026-04817',line:1,item:'MS Round Bar 20mm',ordered:24000,under:2,over:5};
+  var LOW=PO.ordered*(1-PO.under/100), HIGH=PO.ordered*(1+PO.over/100);
+  var STAT={in:['Entered - weigh in pending','p-info','&#9675;'],wi:['Weighed in','p-ok','&#10003;'],unl:['Unloading','p-off','&#8635;'],
+    out:['Weigh out pending','p-warn','&#9675;'],done:['Weighed out - net recorded','p-ok','&#10003;'],exc:['Exception','p-err','!']};
+  var TRUCKS=[
+    {id:'T1',plate:'UP81 AT 4521',sup:'Shree Balaji Steels',ch:'DC/2425/0913',ge:'GE-0925-014',at:'10:42'},
+    {id:'T2',plate:'UP80 BK 7702',sup:'Jai Ambe Castings Pvt Ltd',ch:'JAC/1187',ge:'GE-0925-013',at:'10:18',st:'wi',po:'PO-CMF-2026-04809 line 2',g:'18,420'},
+    {id:'T3',plate:'HR55 AB 3310',sup:'Agarwal Packaging Industries',ch:'API/5521',ge:'GE-0925-011',at:'09:47',st:'unl',po:'PO-CMF-2026-04795 line 1',g:'9,860'},
+    {id:'T4',plate:'UP81 CT 1189',sup:'Kumar Brass Components',ch:'4471',ge:'GE-0925-009',at:'09:05',st:'out',po:'PO-CMF-2026-04788 line 3',g:'12,240'},
+    {id:'T5',plate:'UP16 DL 0442',sup:'Hindustan Fasteners Co.',ch:'HFC/0398',ge:'GE-0925-006',at:'08:31',st:'done',po:'PO-CMF-2026-04771 line 1',g:'16,905',t:'7,410',n:'9,495'},
+    {id:'T6',plate:'UP81 AX 9051',sup:'Balaji Rubber Works',ch:'BRW/221',ge:'GE-0925-004',at:'08:02',st:'exc',po:'PO-CMF-2026-04760 line 1',g:'11,380',t:'6,950',n:'4,430',why:'Net 4,430 kg is outside the band 4,704 - 5,040 kg for PO-CMF-2026-04760 line 1'}
+  ];
+  function tStage(t){return t.id==='T1'?W.stage:t.st;}
+  function fmt(n){return Number(n).toLocaleString('en-IN',{maximumFractionDigits:3});}
+  function parseW(s){s=String(s).replace(/,/g,'').trim();return /^\d+(\.\d{1,3})?$/.test(s)?Number(s):null;} // WEIGHT_REGEX, kg up to 3 dp
+  function pillS(st){var x=STAT[st];return '<span class="pill '+x[1]+'"><span aria-hidden="true">'+x[2]+'</span>'+x[0]+'</span>';}
+  function within(net){return net>=LOW&&net<=HIGH;}
+  function tlist(){
+    var h='<h2 class="tl-h">Trucks on site - '+TRUCKS.length+'</h2><ul class="tlist" aria-label="Trucks on site">';
+    TRUCKS.forEach(function(t){h+='<li><button class="trk" data-a="selTruck" data-t="'+t.id+'"'+(V!=='entry'&&SEL===t.id&&(V==='wb'||DEV!=='handheld')?' aria-current="true"':'')+'><span class="pl">'+t.plate+'</span><small>'+esc(t.sup)+' - in at '+t.at+'</small>'+pillS(tStage(t))+'</button></li>';});
+    return h+'</ul>';
+  }
+  function tcard(t,po){
+    return '<div class="tcard"><div class="pl">'+t.plate+'</div>'+esc(t.sup)+
+      '<dl class="kv"><dt>Gate entry</dt><dd>'+t.ge+' at '+t.at+' (binding token)</dd><dt>Challan</dt><dd>'+esc(t.ch)+'</dd><dt>PO line</dt><dd>'+po+'</dd>'+
+      (t.id==='T1'?'<dt>Ordered</dt><dd>'+fmt(PO.ordered)+' kg, tolerance -'+PO.under+'% / +'+PO.over+'% ('+fmt(LOW)+' - '+fmt(HIGH)+' kg)</dd><dt>Challan weight</dt><dd>24,150 kg (information only)</dd>':'')+'</dl></div>';
+  }
+  function stampLine(){
+    return W.stamp?'<div class="chip err" role="alert"><strong><span class="gl" aria-hidden="true">!</span>Weighbridge WB-01 stamp overdue</strong>Weighing is blocked until the bridge is re-stamped. Tell the maintenance supervisor.</div>'
+      :'<p class="hint"><span class="pill p-ok"><span aria-hidden="true">&#10003;</span>WB-01 stamp valid</span> Legal metrology stamp due 14 Mar 2027</p>';
+  }
+  function resultBox(g,t,n,ok,prov){
+    return '<div class="netbox"><div><small>Gross (in)</small><b>'+g+' kg</b></div><div><small>Tare (out)</small><b>'+t+' kg</b></div><div><small>Net</small><b>'+n+' kg</b></div></div>'+
+      (ok?'<div class="chip match" role="status"><strong><span class="gl" aria-hidden="true">&#10003;</span>Within tolerance</strong>Net is inside '+fmt(LOW)+' - '+fmt(HIGH)+' kg. Ready for receipt.'+(prov?' Provisional until synced.':'')+'</div>'
+        :'<div class="chip err" role="status"><strong><span class="gl" aria-hidden="true">!</span>Out of tolerance - exception raised</strong>Receipt is blocked. Sent to receiving supervisor Mahesh Tyagi for review.'+(prov?' Provisional until synced.':'')+'</div>');
+  }
+  function wbBody(){
+    var t=TRUCKS.filter(function(x){return x.id===SEL;})[0], h='', st=tStage(t);
+    if(t.id!=='T1'){
+      h+=tcard(t,t.po)+'<p class="hint">'+pillS(st)+'</p>';
+      if(st==='done'||st==='exc'){h+='<div class="netbox"><div><small>Gross (in)</small><b>'+t.g+' kg</b></div><div><small>Tare (out)</small><b>'+t.t+' kg</b></div><div><small>Net</small><b>'+t.n+' kg</b></div></div>';
+        h+=st==='exc'?'<div class="chip err"><strong><span class="gl" aria-hidden="true">!</span>Tolerance breach - with receiving supervisor</strong>'+t.why+'. Mahesh Tyagi is reviewing; receipt blocked.</div>':'<div class="chip match"><strong><span class="gl" aria-hidden="true">&#10003;</span>Net recorded, within tolerance</strong>Handed to stores for acceptance.</div>';}
+      else h+='<p class="hint">Gross '+t.g+' kg recorded at weigh in.</p><p class="hint">Demo: open UP81 AT 4521 to weigh a truck.</p>';
+      return h;
+    }
+    h+=tcard(t,PO.ref+' line '+PO.line+' - '+PO.item)+stampLine();
+    if(st==='in'||st==='out'){
+      var isIn=st==='in', v=parseW(W.inp);
+      h+='<p class="q" style="margin-top:12px">'+(isIn?'Weigh in - gross (loaded truck)':'Weigh out - tare (empty truck)')+'</p>';
+      if(!isIn)h+='<p class="hint">Gross '+fmt(W.gross)+' kg ('+W.gm+') - Captured - pending sync</p>';
+      h+='<button class="b b-sec b-full" data-a="readInd"'+(W.stamp?' disabled':'')+'>'+ICON.scan+'Read from weighbridge indicator</button>';
+      h+='<div class="field wfield"><label for="app-wbw">'+(isIn?'Gross weight':'Tare weight')+' (kg) '+(W.method?'<span class="pill '+(W.method==='AUTO'?'p-ok':'p-warn')+'">'+(W.method==='AUTO'?'From indicator - AUTO':'Typed - MANUAL')+'</span>':'')+'</label>'+
+         '<div class="wrow"><input id="app-wbw" data-f="wbinp" value="'+esc(W.inp)+'" inputmode="decimal" placeholder="0" autocomplete="off"'+(W.stamp?' disabled':'')+'><span class="u" aria-hidden="true">kg</span></div></div>';
+      if(W.inp&&v===null)h+='<div class="chip err"><strong><span class="gl" aria-hidden="true">!</span>Not a weight</strong>Use kg with up to 3 decimals, e.g. 38460 or 38460.5</div>';
+      if(!isIn&&v!==null){var net=W.gross-v;
+        if(net<0)h+='<div class="chip err"><strong><span class="gl" aria-hidden="true">!</span>Tare is more than gross</strong>Net cannot be negative. Check the reading.</div>';
+        else h+=resultBox(fmt(W.gross),fmt(v),fmt(net),within(net),true).replace('Ready for receipt.','Ready for receipt once recorded.').replace('Receipt is blocked. Sent to','If recorded, receipt is blocked and this goes to');
+      }
+      h+='<button class="b b-plain" data-a="indPhoto">'+ICON.cam+(W.photo?'Indicator photo added - retake':'Add indicator photo (optional)')+'</button>';
+    } else if(st==='wi'){
+      h+='<div class="chip match" role="status"><strong><span class="gl" aria-hidden="true">&#10003;</span>Weighed in: gross '+fmt(W.gross)+' kg</strong>'+W.gm+'. Captured - pending sync. Truck goes to unloading bay 2.</div>';
+    } else if(st==='unl'){
+      h+='<div class="chip info"><strong><span class="gl" aria-hidden="true">&#8635;</span>Unloading at bay 2</strong>Supervised by Mahesh Tyagi. Weigh out opens when unloading is done.</div>';
+    } else {
+      h+=resultBox(fmt(W.gross),fmt(W.tare),fmt(W.gross-W.tare),st==='done',S.offline);
+      h+='<p class="hint">'+(S.offline?'Captured - pending sync. Server confirms the tolerance check on sync.':'Synced. Weighment recorded.')+'</p>';
+    }
+    return h;
+  }
+  function wbActions(){
+    var t=SEL, st=W.stage;
+    var todo=DEV==='handheld'?'':'<span class="todo">'+(t==='T1'?STAT[st][0]:'Read only')+'</span>';
+    if(t!=='T1')return DEV==='handheld'?'<div class="actions"><button class="b b-sec" data-a="view" data-v="trucks">Back to trucks on site</button></div>':'';
+    var v=parseW(W.inp);
+    if(st==='in')return '<div class="actions">'+todo+'<button class="b b-pri" data-a="recGross"'+(v!==null&&v>0&&!W.stamp?'':' disabled')+'>Record gross weight</button></div>';
+    if(st==='out')return '<div class="actions">'+todo+'<button class="b b-pri" data-a="recTare"'+(v!==null&&W.gross-v>=0&&!W.stamp?'':' disabled')+'>Record tare - calculate net</button></div>';
+    if(st==='wi')return '<div class="actions">'+todo+'<button class="b b-pri" data-a="unlStart">Unloading started</button></div>';
+    if(st==='unl')return '<div class="actions">'+todo+'<button class="b b-pri" data-a="unlDone">Unloading done - weigh out</button></div>';
+    return '<div class="actions">'+todo+'<button class="b b-pri" data-a="view" data-v="trucks">Back to trucks on site</button></div>';
+  }
+
+  var app=document.getElementById('app'), vp=document.getElementById('vp');
+  function isDesk(){return DEV==='desktop'||DEV==='dtouch';}
   function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function fuzzy(q,t){q=q.toLowerCase().replace(/\s+/g,'');t=t.toLowerCase();var i=0;for(var j=0;j<t.length&&i<q.length;j++){if(t[j]===q[i])i++;}return i===q.length;}
   function canNext(){
@@ -242,49 +524,114 @@ details .field input{font-size:17px}
   }
   function supplierLabel(){return S.supplier?S.supplier.name:(S.unlisted&&S.unlistedName?S.unlistedName+' (unlisted)':'-');}
 
-  function topbar(){
-    var sync=S.offline?'<span class="pill"><span class="dot off"></span>Offline'+(S.pending?' - '+S.pending+' waiting':'')+'</span>'
-                      :'<span class="pill"><span class="dot on"></span>Online'+(S.pending?' - syncing '+S.pending:' - synced')+'</span>';
-    return '<div class="topbar"><span class="pill" title="Scan sink is armed on every step"><span class="dot ready"></span>Scanner ready</span>'+sync+'</div>';
+  /* ---- chrome per device class ---- */
+  function syncBadge(){
+    if(S.offline)return '<span class="sync"><span class="d"></span>'+(S.pending?'Captured - pending sync ('+S.pending+')':'Offline')+'</span>';
+    return '<span class="sync on"><span class="d"></span>'+(S.pending?'Syncing '+S.pending:'Synced')+'</span>';
   }
-  function stepper(){
+  function stop(){
+    if(DEV==='handheld')return '<div class="s-top"><span class="rdy" title="Scan sink is armed on every step"><span class="ready" aria-hidden="true"></span>Scanner ready</span><span class="spacer"></span>'+syncBadge()+'</div>';
+    return '<div class="s-top"><b>Gate entry - CMF-ALIGARH</b>'+syncBadge()+'</div>';
+  }
+  function navBtns(){
+    return [['Gate',NAV.gate,'entry'],['Trucks',NAV.truck,'trucks'],['Scan',NAV.scan,'scan'],['More',NAV.more,'nr']];
+  }
+  function navBtn(x){
+    var cur=(x[2]==='entry'&&V==='entry')||(x[2]==='trucks'&&V!=='entry');
+    var a=(x[2]==='entry'||x[2]==='trucks')?' data-a="view" data-v="'+x[2]+'"':' data-a="'+x[2]+'" data-what="'+x[0]+'"';
+    return '<button'+a+(cur?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[1]+'</svg>'+x[0]+'</button>';
+  }
+  function bnav(){
+    var h='<nav class="bnav" aria-label="Gate navigation">';
+    navBtns().forEach(function(x){h+=navBtn(x);});
+    return h+'</nav>';
+  }
+  function rail(){
+    var h='<nav class="rail" aria-label="Gate navigation">';
+    navBtns().forEach(function(x){h+=navBtn(x);});
+    return h+'</nav>';
+  }
+  function side(){
+    var I=[['Dashboard','<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>'],
+      ['Gate',NAV.gate],
+      ['Trucks on site','<path d="M3 20h18M5 20v-6h14v6"/><path d="M9 14V9h6v5"/>'],
+      ['Receiving',NAV.truck],
+      ['Stores','<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/>'],
+      ['Indents','<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h7M9 16h7"/>'],
+      ['Approvals','<path d="M4 12l5 5L20 6"/>'],
+      ['Reports','<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'],
+      ['Settings','<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>']];
+    var h='<aside class="side"><div class="brand"><span class="mark" aria-hidden="true">IM</span>IMS</div><nav aria-label="Modules">';
+    I.forEach(function(x){
+      var v=x[0]==='Gate'?'entry':(x[0]==='Trucks on site'?'trucks':null);
+      var on=(v==='entry'&&V==='entry')||(v==='trucks'&&V!=='entry');
+      var cnt=v==='entry'&&S.pending?S.pending:(v==='trucks'?TRUCKS.length:0);
+      h+='<button class="nav-item"'+(v?' data-a="view" data-v="'+v+'"':' data-a="nr" data-what="'+x[0]+'"')+(on?' aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+x[1]+'</svg>'+x[0]+(cnt?'<span class="count">'+cnt+'</span>':'')+'</button>';});
+    return h+'</nav><div class="side-foot">Signed in: Ramesh Yadav<br>Gate officer + Weighbridge operator</div></aside>';
+  }
+  function dtop(){
+    var s=S.offline?'<span class="dsync">'+(S.pending?'Captured - pending sync ('+S.pending+')':'Offline')+'</span>':'<span class="dsync on">'+(S.pending?'Syncing '+S.pending:'Synced')+'</span>';
+    return '<header class="dtop"><label class="search"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#566173" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span class="sr">Search IMS</span><input name="q" placeholder="Search challan, vehicle, PO, supplier"></label>'+
+      '<span class="spacer"></span>'+s+'<button class="site" aria-label="Switch site, current CMF-ALIGARH">CMF-ALIGARH <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>'+
+      '<button class="b b-pri" data-a="nr" data-what="+ New">+ New</button><span class="avatar" aria-hidden="true">RY</span></header>';
+  }
+  function stepperH(){
     var h='<ol class="stepper" aria-label="Gate entry progress">';
     STEPS.forEach(function(n,i){var c=i<S.step?'done':(i===S.step?'cur':'');
       h+='<li class="'+c+'"'+(i===S.step?' aria-current="step"':'')+'><div class="bar"></div>'+(i+1)+'. '+n+(i<S.step?'<span class="sr"> (done)</span>':'')+'</li>';});
     return h+'</ol>';
   }
+  function stepsV(){
+    var vals=[S.challan||'Not yet',S.photo?'1 photo':'Not yet',S.vehicle?S.vehicle.toUpperCase():'Not yet',supplierLabel()==='-'?'Not yet':supplierLabel()];
+    var h='<nav class="steps" aria-label="Gate entry steps"><h2>'+(S.step===4?'Submitted':'Step '+(S.step+1)+' of 4')+'</h2><ol>';
+    STEPS.forEach(function(n,i){var c=i<S.step?'done':(i===S.step?'cur':'');
+      h+='<li class="'+c+'"><button data-a="goto" data-i="'+i+'"'+((i>S.step||S.step===4)?' disabled':'')+(i===S.step?' aria-current="step"':'')+'><span class="n" aria-hidden="true">'+(i<S.step?'&#10003;':(i+1))+'</span><span class="tx">'+n+(i<S.step?'<span class="sr"> (done)</span>':'')+'<small>'+esc(vals[i])+'</small></span></button></li>';});
+    return h+'</ol></nav>';
+  }
 
-  function stepBody(fid){
-    var h='';
+  /* ---- step content (shared by every class; scan affordance differs) ---- */
+  function matchCard(){
+    return S.matchAccepted
+      ? '<div class="chip match" role="status"><strong><span class="gl" aria-hidden="true">&#10003;</span>Matched: '+MATCH.po+' - '+esc(MATCH.vendor.name)+'</strong>Accepted. Supplier will be pre-filled.</div>'
+      : '<div class="chip match"><strong><span class="gl" aria-hidden="true">&#10003;</span>Matched: '+MATCH.po+' - '+esc(MATCH.vendor.name)+'</strong>Challan '+esc(S.challan)+' found in synced POs ('+MATCH.asn+').<div class="row"><button class="b b-pri" data-a="acceptMatch">Accept</button><button class="b b-sec" data-a="rejectMatch">Not this</button></div></div>';
+  }
+  function stepBody(){
+    var h='', fid='app';
     if(S.step===0){
       h+='<p class="q">Challan</p>';
-      if(S.match){
-        h+= S.matchAccepted
-          ? '<div class="chip match" role="status"><strong>Matched: '+MATCH.po+' · '+esc(MATCH.vendor.name)+'</strong>Accepted. Supplier will be pre-filled.</div>'
-          : '<div class="chip match"><strong>Matched: '+MATCH.po+' · '+esc(MATCH.vendor.name)+'</strong>Challan '+esc(S.challan)+' found in synced POs ('+MATCH.asn+').<div class="row"><button class="btn primary" data-a="acceptMatch">Accept</button><button class="btn secondary" data-a="rejectMatch">Not this</button></div></div>';
+      if(isDesk()){
+        // desktop: the scan sink is a USB scanner; the field is always there for typing
+        if(S.match)h+=matchCard();
+        h+='<div class="field"><label for="'+fid+'-ch">Challan number <span class="pill p-info">'+ICON.scan+'USB scanner or type</span></label><input id="'+fid+'-ch" data-f="challan" value="'+esc(S.challan)+'" placeholder="Scan the QR or type the number, e.g. 4471" autocomplete="off"></div>';
+        h+='<p class="hint">Handwritten challan? Type the number written on it.</p>';
+        if(S.challan&&!S.match&&S.challanMode==='manual')h+='<div class="chip info"><strong><span class="gl" aria-hidden="true">i</span>No PO match for this number</strong>You will pick the supplier in step 4.</div>';
+        return h;
       }
+      if(S.match)h+=matchCard();
       if(S.challanMode!=='manual'&&S.match){
         // compact: match card is present, so scan/type collapse into one secondary row
-        h+='<div class="row2"><button class="btn secondary" data-a="scan"><span class="icon" aria-hidden="true">&#9635;</span>Scan again</button>'+
-           '<button class="btn secondary" data-a="manual">Type challan number</button></div>';
+        h+='<div class="row2"><button class="b b-sec" data-a="scan">'+ICON.cam+'Scan again</button>'+
+           '<button class="b b-sec" data-a="manual">'+ICON.kbd+'Type challan number</button></div>';
       } else if(S.challanMode!=='manual'){
-        h+='<button class="btn primary huge" data-a="scan"><span class="icon" aria-hidden="true">&#9635;</span>'+(S.challan?'Scan again':'Scan challan')+'</button>';
-        h+='<div class="scan-note"><span class="dot ready" aria-hidden="true"></span><span>Or press the hardware trigger - it works on any step.</span></div>';
-        h+='<button class="btn secondary" data-a="manual">Type challan number</button>';
+        h+='<button class="b b-pri b-huge b-full" data-a="scan">'+ICON.cam+'Scan challan with camera</button>';
+        if(DEV==='handheld')h+='<div class="scan-note"><span class="ready" aria-hidden="true"></span><span>On a scanner, press the hardware trigger - it works on any step.</span></div>';
+        else h+='<p class="hint">A paired scanner also works on any step.</p>';
+        h+='<button class="b b-sec b-full" data-a="manual">'+ICON.kbd+'Type challan number</button>';
         h+='<p class="hint">Handwritten challan? Type the number written on it.</p>';
       } else {
         h+='<div class="field"><label for="'+fid+'-ch">Challan number</label><input id="'+fid+'-ch" data-f="challan" value="'+esc(S.challan)+'" placeholder="e.g. 4471" autocomplete="off" inputmode="text"></div>';
-        if(S.challan&&!S.match) h+='<div class="chip info">No PO match for this number. You will pick the supplier in step 4.</div>';
-        h+='<button class="btn secondary" data-a="scan"><span class="icon" aria-hidden="true">&#9635;</span>Scan instead</button>';
+        if(S.challan&&!S.match)h+='<div class="chip info"><strong><span class="gl" aria-hidden="true">i</span>No PO match for this number</strong>You will pick the supplier in step 4.</div>';
+        h+='<button class="b b-sec b-full" data-a="scan">'+ICON.cam+'Scan instead</button>';
       }
     }
     else if(S.step===1){
       h+='<p class="q">Photo of the challan</p><p class="hint">Required as evidence. Fit the whole challan in the frame.</p>';
       if(!S.photo){
-        h+='<div class="shutter"><button data-a="shoot" aria-label="Take challan photo">Take photo</button><span class="hint">Tap the big button</span></div>';
+        if(isDesk())h+='<div class="stack"><button class="b b-sec" data-a="shoot">'+ICON.up+'Upload photo</button><button class="b b-plain" data-a="shoot">'+ICON.cam+'Use webcam</button></div>';
+        else h+='<div class="shutter"><button data-a="shoot" aria-label="Take challan photo">Take photo</button><span class="hint">Tap the big button</span></div>';
       } else {
         h+='<div class="thumb"><div class="paper" role="img" aria-label="Captured challan photo"><b>DELIVERY CHALLAN</b><hr>No. '+esc(S.challan)+'<br>'+(S.match?esc(MATCH.vendor.name):'Supplier copy')+'<hr>MS Round Bar 20mm<br>Qty 2.4 MT<hr>Sign ______</div>'+
-           '<div><div class="chip match" role="status" style="margin:0 0 8px"><strong>Photo saved</strong>Stored on device</div><button class="btn secondary small" data-a="retake">Retake</button></div></div>';
+           '<div><div class="chip match" role="status" style="margin:0 0 8px"><strong><span class="gl" aria-hidden="true">&#10003;</span>Photo saved</strong>Stored on this device</div><button class="b b-sec" data-a="retake">Retake</button></div></div>';
       }
     }
     else if(S.step===2){
@@ -292,70 +639,92 @@ details .field input{font-size:17px}
       h+='<div class="field"><label for="'+fid+'-veh">Number plate</label><input id="'+fid+'-veh" class="plate'+(S.vehicleFromPhoto&&!S.vehicleChecked?' flag':'')+'" data-f="vehicle" value="'+esc(S.vehicle)+'" placeholder="UP81 AT 4521" autocomplete="off" autocapitalize="characters"></div>';
       h+='<p class="hint">Format: UP81 AT 4521</p>';
       if(S.vehicleFromPhoto&&!S.vehicleChecked){
-        h+='<div class="chip warn"><strong>Read from photo - please check</strong>Compare with the truck plate before continuing.<div class="row"><button class="btn primary" data-a="plateOk">Matches truck</button><button class="btn secondary" data-a="plateEdit">Edit</button></div></div>';
+        h+='<div class="chip warn"><strong><span class="gl" aria-hidden="true">!</span>Read from photo - please check</strong>Compare with the truck plate before continuing.<div class="row"><button class="b b-pri" data-a="plateOk">Matches truck</button><button class="b b-sec" data-a="plateEdit">Edit</button></div></div>';
       } else if(!S.vehicle){
-        h+='<button class="btn secondary" data-a="readPlate">Read from photo</button><p class="hint">Best effort. You always confirm it.</p>';
+        h+='<div class="stack"><button class="b b-sec" data-a="readPlate">'+ICON.cam+'Read from photo</button></div><p class="hint">Best effort. You always confirm it.</p>';
       }
     }
     else if(S.step===3){
       h+='<p class="q">Supplier</p>';
       if(S.supplier){
-        h+='<div class="chip match"><strong>'+esc(S.supplier.name)+'</strong>'+esc(S.supplier.city)+(S.matchAccepted&&S.supplier===MATCH.vendor?' - from challan match '+MATCH.po:'')+'<div class="row"><button class="btn secondary" data-a="changeSup">Change</button></div></div>';
+        h+='<div class="chip match"><strong><span class="gl" aria-hidden="true">&#10003;</span>'+esc(S.supplier.name)+'</strong>'+esc(S.supplier.city)+(S.matchAccepted&&S.supplier===MATCH.vendor?' - from challan match '+MATCH.po:'')+'<div class="row"><button class="b b-sec" data-a="changeSup">Change</button></div></div>';
       } else if(S.unlisted){
         h+='<div class="field"><label for="'+fid+'-un">Supplier name as written on challan</label><input id="'+fid+'-un" data-f="unlistedName" value="'+esc(S.unlistedName)+'" placeholder="e.g. Verma Traders" autocomplete="off"></div>';
-        h+='<div class="chip warn"><strong>Unlisted supplier</strong>Stores will match this later. The truck can go in now.</div>';
-        h+='<button class="btn ghost" data-a="changeSup">Pick from list instead</button>';
+        h+='<div class="chip warn"><strong><span class="gl" aria-hidden="true">!</span>Unlisted supplier</strong>Stores will match this later. The truck can go in now.</div>';
+        h+='<button class="b b-ghost" data-a="changeSup">Pick from list instead</button>';
       } else {
         h+='<div class="field"><label for="'+fid+'-sq">Search supplier</label><input id="'+fid+'-sq" data-f="query" value="'+esc(S.query)+'" placeholder="Type a few letters" autocomplete="off"></div>';
         var list=VENDORS.filter(function(v){return !S.query||fuzzy(S.query,v.name+' '+v.city);});
         h+='<ul class="opts" aria-label="Suppliers from synced list">';
-        list.slice(0,4).forEach(function(v){h+='<li><button class="opt" aria-pressed="false" data-a="pick" data-v="'+v.id+'">'+esc(v.name)+'<small>'+esc(v.city)+' · '+v.id+'</small></button></li>';});
+        list.slice(0,4).forEach(function(v){h+='<li><button class="opt" data-a="pick" data-v="'+v.id+'">'+esc(v.name)+'<small>'+esc(v.city)+' - '+v.id+'</small></button></li>';});
         if(!list.length)h+='<li class="hint">No match in synced suppliers.</li>';
         h+='<li><button class="opt unl" data-a="unlisted">+ Unlisted supplier - type name</button></li></ul>';
       }
       h+='<details><summary>More details (optional)</summary><div class="inner">'+
          '<div class="field"><label for="'+fid+'-dr">Driver name</label><input id="'+fid+'-dr" data-f="driver" value="'+esc(S.driver)+'" autocomplete="off"></div>'+
          '<div class="field"><label for="'+fid+'-ph">Driver phone</label><input id="'+fid+'-ph" data-f="phone" value="'+esc(S.phone)+'" inputmode="tel" autocomplete="off"></div>'+
-         '<div class="field"><label for="'+fid+'-wt">Gross weight (kg)</label><input id="'+fid+'-wt" data-f="weight" value="'+esc(S.weight)+'" inputmode="numeric" autocomplete="off"></div>'+
+         '<div class="field"><label for="'+fid+'-wt">Challan weight (kg)</label><input id="'+fid+'-wt" data-f="weight" value="'+esc(S.weight)+'" inputmode="numeric" autocomplete="off"></div>'+
          '<div class="field"><label for="'+fid+'-rm">Remarks</label><textarea id="'+fid+'-rm" data-f="remarks">'+esc(S.remarks)+'</textarea></div></div></details>';
     }
     else {
       h+='<div class="done"><div class="check" aria-hidden="true">&#10003;</div><h2>Captured - pending sync</h2>'+
-         '<p class="hint">'+(S.offline?'Saved on this device. It will sync when the network is back.':'Saved on this device. Sending now.')+'</p>'+
+         '<p class="hint" style="display:block">'+(S.offline?'Saved on this device. It will sync when the network is back.':'Saved on this device. Sending now.')+'</p>'+
          '<ul class="summary"><li><span>Challan</span><span>'+esc(S.challan)+'</span></li>'+
          (S.matchAccepted?'<li><span>PO</span><span>'+MATCH.po+'</span></li>':'')+
          '<li><span>Photo</span><span>1 saved</span></li><li><span>Vehicle</span><span>'+esc(S.vehicle.toUpperCase())+'</span></li>'+
          '<li><span>Supplier</span><span>'+esc(supplierLabel())+'</span></li></ul>'+
-         (S.unlisted?'<div class="chip warn"><strong>Unlisted supplier</strong>Stores will match this later.</div>':'')+'</div>';
+         (S.unlisted?'<div class="chip warn"><strong><span class="gl" aria-hidden="true">!</span>Unlisted supplier</strong>Stores will match this later.</div>':'')+'</div>';
     }
     return h;
   }
   function actions(){
-    if(S.step===4) return '<div class="actions"><button class="btn primary" data-a="nextTruck">Next truck</button></div>';
+    var todo=DEV==='handheld'?'':'<span class="todo">'+(S.step===4?'Entry submitted':'Step '+(S.step+1)+' of 4 - '+STEPS[S.step])+'</span>';
+    if(S.step===4) return '<div class="actions">'+todo+'<button class="b b-sec" data-a="view" data-v="trucks">Trucks on site - weigh in</button><button class="b b-pri" data-a="nextTruck">Next truck</button></div>';
     var labels=['Next: photo','Next: vehicle','Next: supplier','Submit entry'];
-    var back=S.step>0?'<button class="btn ghost" data-a="back">Back</button>':'';
-    return '<div class="actions">'+back+'<button class="btn primary" data-a="next"'+(canNext()?' aria-disabled="false"':' disabled aria-disabled="true"')+'>'+labels[S.step]+'</button></div>';
+    var back=S.step>0?'<button class="b b-ghost" data-a="back">Back</button>':'';
+    return '<div class="actions">'+todo+back+'<button class="b b-pri" data-a="next"'+(canNext()?'':' disabled')+'>'+labels[S.step]+'</button></div>';
   }
-  function rail(){
-    var vals=[S.challan||'Not yet',S.photo?'1 photo':'Not yet',S.vehicle?S.vehicle.toUpperCase():'Not yet',supplierLabel()==='-'?'Not yet':supplierLabel()];
-    var h='<div class="rail"><ol aria-label="Steps">';
-    STEPS.forEach(function(n,i){h+='<li class="'+(i===S.step?'cur':'')+'"><button data-a="goto" data-i="'+i+'"'+(i>S.step?' disabled':'')+(i===S.step?' aria-current="step"':'')+'>'+(i+1)+'. '+n+'<small>'+esc(vals[i])+'</small></button></li>';});
-    return h+'</ol></div>';
+
+  /* ---- one frame, layout by device class ---- */
+  function render(){
+    var h, core='<div class="body">'+stepBody()+'</div>'+actions();
+    app.dataset.dev=DEV; vp.dataset.dev=DEV;
+    app.className='screen '+(DEV==='desktop'?'compact':'touch')+(isDesk()?' dsk':'');
+    if(V!=='entry'){
+      var det='<section class="main" aria-label="Truck weighment"><div class="body">'+wbBody()+'</div>'+wbActions()+'</section>';
+      if(DEV==='handheld'){
+        if(V==='trucks')h=stop()+'<div class="titlebar">Trucks on site <span>CMF-ALIGARH</span></div><div class="main"><div class="body">'+tlist()+'</div></div>'+bnav();
+        else h=stop()+'<div class="titlebar"><button class="hback" data-a="view" data-v="trucks" aria-label="Back to trucks on site">&lsaquo; Trucks</button> Weighbridge <span>'+TRUCKS.filter(function(x){return x.id===SEL;})[0].plate+'</span></div>'+det+bnav();
+      } else if(DEV==='tablet'){
+        h=stop().replace('Gate entry - CMF-ALIGARH','Trucks on site - CMF-ALIGARH')+'<div class="trow">'+rail()+'<div class="tpane">'+tlist()+'</div>'+det+'</div>';
+      } else {
+        h=side()+'<div class="dmain">'+dtop()+'<div class="dhead"><h1>Trucks on site</h1><span class="m">Weighbridge WB-01 - Ramesh Yadav, Gate officer + Weighbridge operator</span></div>'+
+          '<div class="dcontent"><div class="tpane">'+tlist()+'</div>'+det+'</div></div>';
+      }
+      app.innerHTML=h;return;
+    }
+    if(DEV==='handheld'){
+      h=stop()+'<div class="titlebar">Gate entry <span>CMF-ALIGARH</span></div>'+stepperH()+'<div class="main">'+core+'</div>'+bnav();
+    } else if(DEV==='tablet'){
+      h=stop()+'<div class="trow">'+rail()+stepsV()+'<div class="main">'+core+'</div></div>';
+    } else {
+      h=side()+'<div class="dmain">'+dtop()+'<div class="dhead"><h1>New gate entry</h1><span class="m">Gate 1 - Ramesh Yadav</span></div>'+
+        '<div class="dcontent">'+stepsV()+'<section class="main" aria-label="Current step">'+core+'</section></div></div>';
+    }
+    app.innerHTML=h;
   }
-  function render(el){
-    var fid=el.id, two=el.dataset.layout==='two';
-    var live='<div class="sr" aria-live="polite">'+esc(S.status)+'</div>';
-    var core='<div class="body">'+stepBody(fid)+'</div>'+actions();
-    el.innerHTML=topbar()+'<div class="titlebar">Gate entry - CMF-ALIGARH</div>'+stepper()+live+
-      (two?'<div class="two">'+rail()+'<div class="main">'+core+'</div></div>':core);
-  }
-  var frames=['f-scanner','f-phone','f-tablet'].map(function(id){return document.getElementById(id);});
-  function renderAll(focusSel){
-    var active=document.activeElement, afid=null, af=null;
-    if(active&&active.dataset&&active.dataset.f){afid=active.closest('.screen').id;af=active.dataset.f;}
-    frames.forEach(render);
+  var lastStatus='';
+  function renderAll(){
+    var active=document.activeElement, af=null;
+    if(active&&active.dataset&&active.dataset.f&&app.contains(active))af=active.dataset.f;
+    render();
     document.getElementById('offline-btn').textContent='Toggle offline (now: '+(S.offline?'offline':'online')+')';
-    if(afid){var i=document.querySelector('#'+afid+' [data-f="'+af+'"]');if(i){i.focus();var l=i.value.length;try{i.setSelectionRange(l,l);}catch(e){}}}
+    document.getElementById('short-btn').textContent='Short load on weigh out (now: '+(W.short?'on':'off')+')';
+    document.getElementById('stamp-btn').textContent='Weighbridge stamp overdue (now: '+(W.stamp?'yes':'no')+')';
+    document.getElementById('devcap').innerHTML=DEVS[DEV];
+    [].forEach.call(document.querySelectorAll('.devsw button'),function(b){b.setAttribute('aria-pressed',b.dataset.dev===DEV?'true':'false');});
+    if(S.status!==lastStatus){document.getElementById('live').textContent=S.status;lastStatus=S.status;}
+    if(af){var i=app.querySelector('[data-f="'+af+'"]');if(i){i.focus();var l=i.value.length;try{i.setSelectionRange(l,l);}catch(e){}}}
   }
   function doScan(){ // always-armed scan sink: a challan QR fills challan on any step
     S.challan=MATCH.challan;S.match=MATCH;S.matchAccepted=false;S.challanMode='scanned';
@@ -380,27 +749,52 @@ details .field input{font-size:17px}
       case 'goto':S.step=+t.dataset.i;break;
       case 'next':if(!canNext())return;S.step++;if(S.step===4){S.pending++;S.status='Captured - pending sync';}else S.status='Step '+(S.step+1)+' of 4: '+STEPS[S.step];break;
       case 'nextTruck':S=fresh(S.offline);S.status='Ready for next truck';break;
+      case 'here':S.status='You are on Gate entry';break;
+      case 'view':V=t.dataset.v;S.status=V==='entry'?'Gate entry':'Trucks on site';break;
+      case 'selTruck':SEL=t.dataset.t;V='wb';S.status='Truck '+TRUCKS.filter(function(x){return x.id===SEL;})[0].plate+' opened';break;
+      case 'readInd':W.inp=String(W.stage==='in'?38460:(W.short?15120:14280));W.method='AUTO';S.status='Read '+fmt(W.inp)+' kg from the weighbridge indicator';break;
+      case 'indPhoto':W.photo=true;S.status='Indicator photo added';break;
+      case 'recGross':W.gross=parseW(W.inp);W.gm=W.method||'MANUAL';W.stage='wi';W.inp='';W.method='';W.photo=false;S.pending++;S.status='Gross '+fmt(W.gross)+' kg recorded. Captured - pending sync';break;
+      case 'unlStart':W.stage='unl';S.status='Unloading started';break;
+      case 'unlDone':W.stage='out';S.status='Weigh out pending';break;
+      case 'recTare':W.tare=parseW(W.inp);W.tm=W.method||'MANUAL';W.stage=within(W.gross-W.tare)?'done':'exc';W.inp='';W.method='';S.pending++;
+        S.status='Net '+fmt(W.gross-W.tare)+' kg recorded. '+(W.stage==='done'?'Within tolerance':'Out of tolerance - exception sent to receiving supervisor')+'. Captured - pending sync';break;
+      case 'nr':S.status=(t.dataset.what||'That item')+' is not part of this mock';break;
+      default:return;
     }
     renderAll();
   }
   document.addEventListener('click',function(e){
+    var dv=e.target.closest('[data-dev]');
+    if(dv&&dv.tagName==='BUTTON'){DEV=dv.dataset.dev;S.status='Device class: '+dv.querySelector('b').textContent+'. Same entry, same step';renderAll();return;}
     var t=e.target.closest('[data-a]');if(t&&!t.disabled){act(t.dataset.a,t);return;}
     var d=e.target.closest('[data-demo]');if(!d)return;
     switch(d.dataset.demo){
       case 'qr':if(S.step===4)S=fresh(S.offline);S.step=0;doScan();break;
       case 'hand':if(S.step===4)S=fresh(S.offline);S.step=0;S.challanMode='manual';S.challan='4471';S.match=null;S.matchAccepted=false;S.status='Handwritten challan 4471 typed. No PO match';break;
       case 'trigger':doScan();break;
-      case 'offline':S.offline=!S.offline;if(!S.offline&&S.pending){var p=S.pending;setTimeout(function(){S.pending=0;S.status='All entries synced';renderAll();},1800);}S.status=S.offline?'Offline. Entries are saved on the device':'Back online. Syncing';break;
-      case 'reset':S=fresh(true);S.pending=0;break;
+      case 'offline':S.offline=!S.offline;if(!S.offline&&S.pending){setTimeout(function(){if(!S.offline){S.pending=0;S.status='All entries synced';renderAll();}},1800);}S.status=S.offline?'Offline. Entries are saved on the device':'Back online. Syncing';break;
+      case 'reset':S=fresh(true);S.pending=0;W=freshW();V='entry';SEL='T1';break;
+      case 'trucks':V=DEV==='handheld'?'trucks':'trucks';SEL='T1';S.status='Trucks on site';break;
+      case 'short':W.short=!W.short;S.status='Short load '+(W.short?'on':'off');break;
+      case 'stamp':W.stamp=!W.stamp;S.status=W.stamp?'Weighbridge stamp overdue. Weighing blocked':'Weighbridge stamp valid';break;
     }
     renderAll();
   });
+  // device switcher: arrow keys move between classes (buttons stay in the tab order)
+  document.querySelector('.devsw').addEventListener('keydown',function(e){
+    if(e.key!=='ArrowRight'&&e.key!=='ArrowLeft')return;
+    var bs=[].slice.call(this.querySelectorAll('button')),i=bs.indexOf(document.activeElement);if(i<0)return;
+    var n=bs[(i+(e.key==='ArrowRight'?1:bs.length-1))%bs.length];n.focus();e.preventDefault();
+  });
+  app.addEventListener('submit',function(e){e.preventDefault();});
   document.addEventListener('input',function(e){
     var f=e.target.dataset&&e.target.dataset.f;if(!f)return;
-    var v=e.target.value;if(f==='vehicle'){v=v.toUpperCase();S.vehicleFromPhoto=false;}
+    var v=e.target.value;
+    if(f==='wbinp'){W.inp=v;W.method=v?'MANUAL':'';renderAll();return;}
+    if(f==='vehicle'){v=v.toUpperCase();S.vehicleFromPhoto=false;}
     S[f]=v;
-    if(f==='challan'){S.match=null;S.matchAccepted=false;}
-    // live-update frames except typing target: re-render all keeps shared state; focus restored
+    if(f==='challan'){S.match=null;S.matchAccepted=false;S.challanMode='manual';}
     if(f==='query'||f==='challan'||f==='vehicle'||f==='unlistedName')renderAll();
   });
   renderAll();
