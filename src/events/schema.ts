@@ -2492,6 +2492,30 @@ export interface SpareCataloguedEnvelope extends Omit<EventEnvelope, 'payload'> 
 }
 
 /**
+ * Story 7.9 (FR-M-09): amends the min-max levels of an already catalogued spare in place, without
+ * re-cataloguing it. The row is identified by the (sku, location_id) grain the storekeeper already
+ * knows; stream_id is the existing catalogue_id. The caller sends only sku, location_id and the NEW
+ * levels. The seam locks the row and writes catalogue_id, previous_min_level and
+ * previous_max_level onto this payload before the event is persisted, so the append-only event log
+ * IS the row's level history - no separate history table exists. is_critical is NOT amendable here.
+ */
+export interface SpareCatalogueAmendedPayload {
+  sku: string;
+  location_id: string;
+  min_level: string | null;
+  max_level: string | null;
+  /** Seam-written from the locked row; a caller-supplied value is ignored and overwritten. */
+  catalogue_id?: string;
+  previous_min_level?: string | null;
+  previous_max_level?: string | null;
+}
+
+export interface SpareCatalogueAmendedEnvelope extends Omit<EventEnvelope, 'payload'> {
+  event_type: 'maintenance.spare_catalogue_amended';
+  payload: SpareCatalogueAmendedPayload;
+}
+
+/**
  * Story 7.4 (FR-M-07): one line of the maintenance-owned asset parts list, the equipment BOM.
  * stream_id is part_line_id. This is NOT an Epic 5 bom.* event and must never be treated as one
  * (AD-4): there is no revision, no release gate and no ERP outbound. quantity_per is a NUMERIC
@@ -6079,6 +6103,11 @@ export const SUPPORTED_EVENT_TYPES = {
   // belongs to the stock.* events of Epic 2 - so requiresBusinessStream stays false, matching the
   // rest of the maintenance block.
   'maintenance.spare_catalogued': {
+    streamType: 'maintenance',
+    requiresBusinessStream: false,
+  },
+  // Story 7.9: amends the levels of an existing catalogue row; same stream, no stock movement.
+  'maintenance.spare_catalogue_amended': {
     streamType: 'maintenance',
     requiresBusinessStream: false,
   },

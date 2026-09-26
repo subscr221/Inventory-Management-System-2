@@ -64,6 +64,7 @@ import {
 } from '../../maintenance/spares-jobs.js';
 import { canonicalSku, deriveReturnDueDate } from '../../compliance/maintenance-spares.js';
 import {
+  getSpareCatalogueByGrain,
   getSpareCatalogueById,
   listSpareCatalogue,
 } from '../../read/projections/maintenance_spare_catalogue.js';
@@ -2073,6 +2074,97 @@ const createSpareBase: RouteHandler = async (req, res, _params) => {
   }
 };
 
+/**
+ * Story 7.9: amends the min-max levels of the catalogue row at (sku, location_id). Same body shape
+ * as the create route minus is_critical (criticality is not amendable). Responds 200, not 201: an
+ * existing resource is updated, none is created.
+ */
+const amendSpareBase: RouteHandler = async (req, res, _params) => {
+  const body = getParsedBody(req) as Record<string, unknown> | undefined;
+  if (!body) {
+    sendRequestError(req, res, 400, 'INVALID_PARAMS', 'Request body is required');
+    return;
+  }
+
+  const actor = actorContext(req);
+  const now = new Date().toISOString();
+
+  try {
+    const sku = requireSku(body);
+    const locationId = requireUuidField(body, 'location_id');
+
+    // Same numeric-format checks as createSpareBase. The max >= min and critical-needs-min rules
+    // stay in the seam (the latter needs the locked row's is_critical), not duplicated here.
+    const minLevelRaw = body['min_level'];
+    const maxLevelRaw = body['max_level'];
+    const minLevel =
+      minLevelRaw === undefined || minLevelRaw === null ? null : numericStringOrNull(minLevelRaw);
+    const maxLevel =
+      maxLevelRaw === undefined || maxLevelRaw === null ? null : numericStringOrNull(maxLevelRaw);
+    if (minLevelRaw !== undefined && minLevelRaw !== null && minLevel === null) {
+      throw new AppError(
+        400,
+        'INVALID_MIN_MAX',
+        'min_level must be a number with at most 6 decimals',
+      );
+    }
+    if (maxLevelRaw !== undefined && maxLevelRaw !== null && maxLevel === null) {
+      throw new AppError(
+        400,
+        'INVALID_MIN_MAX',
+        'max_level must be a number with at most 6 decimals',
+      );
+    }
+
+    // UX fast-fail before minting an event. The seam's own locked lookup is the authoritative check
+    // and is what protects the direct POST /api/v1/events path.
+    const existing = await getSpareCatalogueByGrain(sku, locationId);
+    if (!existing) {
+      throw new AppError(
+        422,
+        'SPARE_NOT_CATALOGUED',
+        'This spare is not catalogued at this location',
+        {
+          sku,
+          location_id: locationId,
+        },
+      );
+    }
+
+    const persisted = await persistEvent(
+      {
+        stream_type: 'maintenance',
+        // The row's own id: a mutate-in-place event, like issue/return/cancel on a reservation.
+        stream_id: existing.catalogue_id,
+        event_type: 'maintenance.spare_catalogue_amended',
+        // No catalogue_id in the outbound payload: the seam derives and writes it back, so there
+        // is nothing for a caller to get wrong.
+        payload: { sku, location_id: locationId, min_level: minLevel, max_level: maxLevel },
+        metadata: {
+          correlation_id: randomUUID(),
+          actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+          occurred_at: now,
+        },
+        idempotency_key: idempotencyKeyFrom(body),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      auditCtxFor(req, actor, 200),
+    );
+
+    const persistedCatalogueId = replayIdOrReject(
+      persisted,
+      'maintenance.spare_catalogue_amended',
+      'catalogue_id',
+    );
+    // Read back BY ID from the persisted payload: on a replay the stored event carries the
+    // ORIGINAL catalogue_id, never the request's grain.
+    const spare = await getSpareCatalogueById(persistedCatalogueId);
+    sendJson(res, 200, { event_id: persisted.event_id, spare: spare ?? null });
+  } catch (err: unknown) {
+    sendAppError(req, res, err);
+  }
+};
+
 const listSparesBase: RouteHandler = async (req, res, _params) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const paging = parseListPaging(req, res, url);
@@ -2586,6 +2678,11 @@ export const createSpareHandler = requireRole({
   module: 'maintenance',
   functionScope: 'write',
 })(createSpareBase);
+
+export const amendSpareHandler = requireRole({
+  module: 'maintenance',
+  functionScope: 'write',
+})(amendSpareBase);
 
 export const listSparesHandler = requireRole({
   module: 'maintenance',

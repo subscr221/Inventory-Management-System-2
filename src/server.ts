@@ -253,6 +253,7 @@ import {
   rejectFaultReportHandler,
   sweepGraceWindowsHandler,
   addAssetPartHandler,
+  amendSpareHandler,
   cancelSpareReservationHandler,
   createSpareHandler,
   issueSpareHandler,
@@ -907,6 +908,7 @@ export function createAppRouter(): Router {
   router.post('/api/v1/maintenance/spares', createSpareHandler);
   router.get('/api/v1/maintenance/spares', listSparesHandler);
   router.post('/api/v1/maintenance/spares/scan', scanSparesHandler);
+  router.post('/api/v1/maintenance/spares/amend', amendSpareHandler);
   router.get('/api/v1/maintenance/spares/alerts', listSpareAlertsHandler);
   router.get('/api/v1/maintenance/spares/:sku/where-used', whereUsedHandler);
   router.post('/api/v1/maintenance/assets/:assetId/parts', addAssetPartHandler);

@@ -466,6 +466,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/maintenance/spares',
       'GET /api/v1/maintenance/spares',
       'POST /api/v1/maintenance/spares/scan',
+      'POST /api/v1/maintenance/spares/amend',
       'GET /api/v1/maintenance/spares/alerts',
       'GET /api/v1/maintenance/spares/:sku/where-used',
       'POST /api/v1/maintenance/assets/:assetId/parts',

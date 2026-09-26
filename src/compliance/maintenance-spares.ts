@@ -11,6 +11,7 @@ import { getWorkOrderById } from '../read/projections/maintenance_work_order.js'
 import {
   getSpareCatalogueByGrain,
   insertSpareCatalogue,
+  updateSpareCatalogueLevels,
 } from '../read/projections/maintenance_spare_catalogue.js';
 import { getAssetPartByGrain, insertAssetPart } from '../read/projections/asset_parts_list.js';
 import {
@@ -63,6 +64,7 @@ import {
 const MAINTENANCE_STREAM_TYPES = new Set(['maintenance']);
 const MAINTENANCE_SPARE_EVENT_TYPES = new Set([
   'maintenance.spare_catalogued',
+  'maintenance.spare_catalogue_amended',
   'maintenance.asset_part_listed',
   'maintenance.spare_reserved',
   'maintenance.spare_issued',
@@ -162,6 +164,9 @@ export function assertMaintenanceSpareShape(envelope: EventEnvelope): void {
     case 'maintenance.spare_catalogued':
       assertSpareCataloguedShape(p);
       break;
+    case 'maintenance.spare_catalogue_amended':
+      assertSpareCatalogueAmendedShape(p);
+      break;
     case 'maintenance.asset_part_listed':
       assertAssetPartListedShape(p);
       break;
@@ -217,6 +222,36 @@ function assertSpareCataloguedShape(p: Record<string, unknown>): void {
   // acceptance criterion exists to prevent.
   if (p['is_critical'] === true && typeof minLevel !== 'string') {
     reject('INVALID_MIN_MAX', 'a critical spare requires a min_level', { is_critical: true });
+  }
+}
+
+/**
+ * Story 7.9. Mirrors the level rules of assertSpareCataloguedShape, minus the critical-needs-min
+ * check: is_critical is not in this payload (it is not amendable) and only exists on the row, so
+ * that one rule can only be evaluated under the row lock in applySpareCatalogueAmended. Threading
+ * is_critical into the payload just to keep this pure would let a caller lie about the row.
+ */
+function assertSpareCatalogueAmendedShape(p: Record<string, unknown>): void {
+  if (!isNonEmptyString(p['sku'])) reject('INVALID_PAYLOAD', 'sku is required');
+  if (!isUuid(p['location_id'])) reject('INVALID_PAYLOAD', 'location_id must be a UUID');
+
+  const minLevel = p['min_level'];
+  const maxLevel = p['max_level'];
+  if (minLevel !== null && !isNonNegativeNumericString(minLevel)) {
+    reject('INVALID_MIN_MAX', 'min_level must be a non-negative NUMERIC string or null');
+  }
+  if (maxLevel !== null && !isNonNegativeNumericString(maxLevel)) {
+    reject('INVALID_MIN_MAX', 'max_level must be a non-negative NUMERIC string or null');
+  }
+  if (
+    typeof minLevel === 'string' &&
+    typeof maxLevel === 'string' &&
+    Number(maxLevel) < Number(minLevel)
+  ) {
+    reject('INVALID_MIN_MAX', 'max_level must be greater than or equal to min_level', {
+      min_level: minLevel,
+      max_level: maxLevel,
+    });
   }
 }
 
@@ -377,6 +412,9 @@ export async function applyMaintenanceSpareProjection(
     case 'maintenance.spare_catalogued':
       await applySpareCatalogued(envelope, client);
       break;
+    case 'maintenance.spare_catalogue_amended':
+      await applySpareCatalogueAmended(envelope, client);
+      break;
     case 'maintenance.asset_part_listed':
       await applyAssetPartListed(envelope, client);
       break;
@@ -449,6 +487,65 @@ async function applySpareCatalogued(envelope: EventEnvelope, client: PoolClient)
     },
     client,
   );
+}
+
+/**
+ * Story 7.9: amends min-max in place on the existing catalogue row. Lock order is trivial (one row,
+ * no cross-entity reference, no ledger touch - a threshold change is not a stock movement). The
+ * locked row's catalogue_id and prior levels are written back onto the payload BEFORE the
+ * domain_events INSERT persists the same object (the applySpareIssued return_due_date idiom), so
+ * the append-only event log carries the row's level history and a caller can never declare them.
+ */
+async function applySpareCatalogueAmended(
+  envelope: EventEnvelope,
+  client: PoolClient,
+): Promise<void> {
+  if (await alreadyPersisted(envelope, client)) return;
+
+  const p = envelope.payload as Record<string, unknown>;
+  const sku = canonicalSku(p['sku'] as string);
+  const locationId = p['location_id'] as string;
+  const minLevel = (p['min_level'] as string | null) ?? null;
+  const maxLevel = (p['max_level'] as string | null) ?? null;
+
+  const catalogue = await getSpareCatalogueByGrain(sku, locationId, client, true);
+  if (!catalogue) {
+    reject(
+      'SPARE_NOT_CATALOGUED',
+      'This spare is not catalogued at this location',
+      { sku, location_id: locationId },
+      422,
+    );
+  }
+
+  // The one level rule the pure shape assert cannot evaluate: criticality lives on the row only.
+  if (catalogue.is_critical && minLevel === null) {
+    reject('INVALID_MIN_MAX', 'a critical spare requires a min_level', {
+      is_critical: true,
+      catalogue_id: catalogue.catalogue_id,
+    });
+  }
+
+  p['catalogue_id'] = catalogue.catalogue_id;
+  p['previous_min_level'] = catalogue.min_level;
+  p['previous_max_level'] = catalogue.max_level;
+
+  const updated = await updateSpareCatalogueLevels(
+    catalogue.catalogue_id,
+    minLevel,
+    maxLevel,
+    client,
+  );
+  if (updated === 0) {
+    // Unreachable while the FOR UPDATE lock above is held; kept so a future refactor that drops
+    // the lock cannot turn this into a silent no-op.
+    reject(
+      'SPARE_NOT_CATALOGUED',
+      'This spare is not catalogued at this location',
+      { sku, location_id: locationId },
+      422,
+    );
+  }
 }
 
 async function applyAssetPartListed(envelope: EventEnvelope, client: PoolClient): Promise<void> {

@@ -1,0 +1,18 @@
+Simulated pilot day  2026-09-26-0830
+
+== password-grant client
+  ims-cli client created
+== API day (pilot-day.ts)
+  SKIP  replenishment: operator confirms one task                    0.00 s  no open replenishment task: the site has no forward-pick min/max configured (PUT /api/v1/replenishment/config is a planning decision, not a daily action)
+  SKIP  refused captures: resolve one captured by somebody else      0.00 s  no open refused capture of another person at the site
+  SKIP  offcut: CFO signs a job-work offcut acquisition              0.00 s  no retained offcut holding: capturing one needs consumption, output, QC release, dispatch and an ERP-acknowledged billing feed on the job-work order, none of which the pilot day does
+  FAIL: 42/45 steps passed, 0 failed, 3 skipped
+== Browser day (Playwright, real sign-in)
+    8 passed (2.1m)
+== Daily check
+  WARN  disk       86% used, 27G free, WAL archive 26G
+  WARN  tasks      open tasks with nobody assigned (type, count, oldest in hours):
+  RESULT: WARN, read the guide
+
+DAY RESULT: PASS
+== password-grant client removal

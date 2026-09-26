@@ -100,6 +100,27 @@ export async function insertSpareCatalogue(
   );
 }
 
+/**
+ * Story 7.9: replaces the min-max levels of a LOCKED catalogue row in place. There is no lifecycle
+ * status to guard, so the only predicate is the id; the caller asserts rowCount and rejects on 0
+ * (SPARE_NOT_CATALOGUED) rather than silently no-opping. The two CHECK constraints on the table
+ * remain the last line of defence behind the seam's own validation.
+ */
+export async function updateSpareCatalogueLevels(
+  catalogueId: string,
+  minLevel: string | null,
+  maxLevel: string | null,
+  client: PoolClient,
+): Promise<number> {
+  const result = await client.query(
+    `UPDATE maintenance_spare_catalogue
+        SET min_level = $2::numeric, max_level = $3::numeric, updated_at = now()
+      WHERE catalogue_id = $1`,
+    [catalogueId, minLevel, maxLevel],
+  );
+  return result.rowCount ?? 0;
+}
+
 export interface ListSpareCatalogueParams {
   sku?: string | undefined;
   location_id?: string | undefined;
