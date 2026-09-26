@@ -41,6 +41,14 @@ import { isCrossDockQuantityCapacity } from './cross-dock.js';
 import { applyLotSerialValidation } from './lot-serial-validation.js';
 import { applyStockBalanceProjection } from './stock-balance.js';
 import { applyInventoryValuationProjection } from './inventory-valuation.js';
+import {
+  ALLOWED_CONDITION_REASON,
+  LINE_CONDITIONS,
+  MAX_REASON_NOTE_LENGTH,
+  MAX_REASON_PHOTO_REF_LENGTH,
+  RECEIPT_REASON_CODES,
+  RECEIPT_REASON_DETAILS,
+} from './receiving-reasons.js';
 
 /**
  * Central receiving compliance seam (Story 3.4). Split like every other seam: assert* runs BEFORE any
@@ -370,6 +378,120 @@ export function assertGoodsReceivedShape(envelope: EventEnvelope): void {
       );
     }
   }
+
+  assertReceiptReasonShape(p, challanReceipt);
+}
+
+/**
+ * Story 3.11 pure reason rules (story Tables 1-3). The two rules that need the PO band (a GOOD line
+ * that leaves the PO line short needs SHORT or OTHER; SHORT on a line that is not short) live in
+ * the applier. Normalizes an absent line_condition to 'GOOD' so the stored event says what the row
+ * says.
+ */
+function assertReceiptReasonShape(p: Record<string, unknown>, challanReceipt: boolean): void {
+  const reasonFields = ['reason_code', 'reason_detail', 'reason_note', 'reason_photo_ref'];
+  const present = (field: string): boolean => p[field] !== undefined && p[field] !== null;
+
+  if (!present('line_condition')) p['line_condition'] = 'GOOD';
+  const condition = p['line_condition'];
+  if (typeof condition !== 'string' || !LINE_CONDITIONS.has(condition))
+    throw new AppError(
+      400,
+      'RECEIVING_REASON_INVALID',
+      "line_condition must be 'GOOD', 'DAMAGED' or 'REJECTED'",
+      { line_condition: condition },
+    );
+
+  if (challanReceipt || p['stock_class'] === JOB_WORK_STOCK_CLASS) {
+    // Job-work condition capture is out of scope (deferred): customer material - on a challan or a
+    // PO line - stays GOOD and unreasoned. Its quantity control is the Story 9.2 challan variance.
+    const supplied = reasonFields.filter(present);
+    if (condition !== 'GOOD' || supplied.length > 0)
+      throw new AppError(
+        400,
+        'RECEIVING_REASON_INVALID',
+        'line condition and reason codes are not available on a job-work receipt',
+        { line_condition: condition, fields: supplied },
+      );
+    return;
+  }
+
+  if (!present('reason_code')) {
+    if (condition !== 'GOOD')
+      throw new AppError(
+        400,
+        'RECEIVING_REASON_REQUIRED',
+        `a ${condition} line requires a reason_code`,
+        { line_condition: condition },
+      );
+    const stray = reasonFields.filter(present);
+    if (stray.length > 0)
+      throw new AppError(400, 'RECEIVING_REASON_INVALID', 'reason fields require a reason_code', {
+        fields: stray,
+      });
+    return;
+  }
+
+  const code = p['reason_code'];
+  if (typeof code !== 'string' || !RECEIPT_REASON_CODES.has(code))
+    throw new AppError(
+      400,
+      'RECEIVING_REASON_INVALID',
+      "reason_code must be 'SHORT', 'DAMAGED', 'REJECTED' or 'OTHER'",
+      { reason_code: code },
+    );
+  if (!ALLOWED_CONDITION_REASON.get(condition)!.has(code))
+    throw new AppError(
+      400,
+      'RECEIVING_REASON_INVALID',
+      `reason_code ${code} is not allowed on a ${condition} line`,
+      { line_condition: condition, reason_code: code },
+    );
+
+  const details = RECEIPT_REASON_DETAILS.get(code);
+  if (details) {
+    const detail = p['reason_detail'];
+    if (typeof detail !== 'string' || !details.has(detail))
+      throw new AppError(
+        400,
+        'RECEIVING_REASON_INVALID',
+        `reason_detail must be one of ${[...details].join(', ')} for reason_code ${code}`,
+        { reason_code: code, reason_detail: detail ?? null },
+      );
+    // Table 1: reason_photo_ref/reason_note are OTHER-only evidence, not general-purpose fields.
+    const strayEvidence = ['reason_photo_ref', 'reason_note'].filter(present);
+    if (strayEvidence.length > 0)
+      throw new AppError(
+        400,
+        'RECEIVING_REASON_INVALID',
+        'reason_photo_ref and reason_note may only be supplied with reason_code OTHER',
+        { reason_code: code, fields: strayEvidence },
+      );
+    return;
+  }
+
+  // OTHER: no sub-reason; a photo plus a one-line description instead.
+  if (present('reason_detail'))
+    throw new AppError(
+      400,
+      'RECEIVING_REASON_INVALID',
+      'reason_detail must not be supplied with reason_code OTHER',
+      { reason_code: code },
+    );
+  const photo = p['reason_photo_ref'];
+  const note = p['reason_note'];
+  const photoOk = isNonEmptyString(photo) && photo.trim().length <= MAX_REASON_PHOTO_REF_LENGTH;
+  const noteOk =
+    isNonEmptyString(note) && note.trim().length <= MAX_REASON_NOTE_LENGTH && !/[\r\n]/.test(note);
+  if (!photoOk || !noteOk)
+    throw new AppError(
+      400,
+      'RECEIVING_OTHER_EVIDENCE_REQUIRED',
+      `reason_code OTHER requires a photo reference and a one-line description of at most ${MAX_REASON_NOTE_LENGTH} characters`,
+      { photo_ok: photoOk, note_ok: noteOk },
+    );
+  p['reason_photo_ref'] = (photo as string).trim();
+  p['reason_note'] = (note as string).trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +755,8 @@ async function readPoReceiptBand(
       ),
       cum AS (
         SELECT (SELECT COALESCE(SUM(received_qty), 0)
-                  FROM grn_line WHERE po_ref_ext = $1 AND line_no = $2 AND status <> 'rejected')
+                  FROM grn_line WHERE po_ref_ext = $1 AND line_no = $2 AND status <> 'rejected'
+                   AND line_condition <> 'REJECTED')
                + $3::numeric + pol.legacy_received_qty AS cumulative
           FROM pol
       )
@@ -692,6 +815,25 @@ export async function applyGoodsReceivedProjection(
       'RECEIVING_QTY_REQUIRED',
       'received_qty is required and must be a positive NUMERIC value',
     );
+  // Story 3.11: the shape assert normalized an absent condition to GOOD. A REJECTED (wrong item or
+  // spec) quantity never counts against the PO line: it neither widens the cumulative band nor
+  // trips the over-tolerance outcome, and it carries no shortage of its own. A DAMAGED line DOES
+  // widen the band (it counts against the PO line) but must never trip the old committed-rejection
+  // outcome either - AC3's quarantine routing is unconditional for any non-GOOD condition, so
+  // over-tolerance rejection is reserved for GOOD lines only (code review 2026-09-27).
+  const lineCondition = isNonEmptyString(p['line_condition'])
+    ? (p['line_condition'] as string)
+    : 'GOOD';
+  const rejectedCondition = lineCondition === 'REJECTED';
+  const optionalText = (field: string): string | null =>
+    isNonEmptyString(p[field]) ? (p[field] as string) : null;
+  const reasonColumns = {
+    line_condition: lineCondition as 'GOOD' | 'DAMAGED' | 'REJECTED',
+    reason_code: optionalText('reason_code'),
+    reason_detail: optionalText('reason_detail'),
+    reason_note: optionalText('reason_note'),
+    reason_photo_ref: optionalText('reason_photo_ref'),
+  };
 
   // 1. Resolve the accepted weighment for the binding token (AC1, AD-2 chain). Only a Story 3.3
   //    'accepted' weighment opens receiving; a token whose weighments are all 'tolerance_breach' is
@@ -839,9 +981,14 @@ export async function applyGoodsReceivedProjection(
   const band: Record<string, unknown> =
     poRef === null
       ? NO_PO_BAND
-      : await readPoReceiptBand(poRef, matchedLineNo!, receivedQty, client);
-  const isOver = band['is_over'] === true;
-  const isShort = band['is_short'] === true;
+      : await readPoReceiptBand(
+          poRef,
+          matchedLineNo!,
+          rejectedCondition ? '0' : receivedQty,
+          client,
+        );
+  const isOver = lineCondition === 'GOOD' && band['is_over'] === true;
+  const isShort = lineCondition === 'GOOD' && band['is_short'] === true;
   const erpOverlap = band['erp_overlap'] as string;
   if (Number(erpOverlap) > 0) {
     // The stored event carries what THIS process derived; the route echoes it on the response.
@@ -891,6 +1038,7 @@ export async function applyGoodsReceivedProjection(
         target_location_id: null,
         status: 'rejected',
         rejection_reason: rejectionReason,
+        ...reasonColumns,
         source_event_id: eventId,
       },
       client,
@@ -914,6 +1062,28 @@ export async function applyGoodsReceivedProjection(
 
   const shortageVariance = isShort ? (band['shortage'] as string) : '0';
 
+  // Story 3.11 (AC5): reason reporting is required. A GOOD line that leaves the PO line short must
+  // say why (SHORT or OTHER); SHORT on a line that is not short is refused. Band-dependent, so it
+  // lives here, not in the pure shape assert. The throw rolls the whole receipt back.
+  const reasonCode = reasonColumns.reason_code;
+  // Job-work lines are exempt (shape assert): the challan variance is their quantity control.
+  if (lineCondition === 'GOOD' && !jobWork) {
+    if (isShort && reasonCode === null)
+      throw new AppError(
+        400,
+        'RECEIVING_REASON_REQUIRED',
+        `This line leaves PO ${poRef as string} line ${matchedLineNo as number} short by ${shortageVariance}; a SHORT or OTHER reason_code is required`,
+        { po_ref_ext: poRef, line_no: matchedLineNo, shortage_variance_qty: shortageVariance },
+      );
+    if (!isShort && reasonCode === 'SHORT')
+      throw new AppError(
+        400,
+        'RECEIVING_REASON_INVALID',
+        'reason_code SHORT requires a line that leaves the PO line short',
+        { po_ref_ext: poRef, line_no: matchedLineNo },
+      );
+  }
+
   // 4. Expiry check (AC7). A back-dated expiry is a hard reject unless a DOA-approved quarantine.
   const expiryDate = isNonEmptyString(p['expiry_date']) ? (p['expiry_date'] as string) : null;
   let quarantined = false;
@@ -932,8 +1102,15 @@ export async function applyGoodsReceivedProjection(
 
   // 5. QC-hold routing (AC3). A BIS-licensed or quarantine-required item (or the AC7 quarantine path)
   //    posts into the site ZONE-QC-HOLD with a held putaway task and a qc_inspector notification.
+  //    Story 3.11 (AC3): so does a line reported DAMAGED or REJECTED at the dock. Only this line's
+  //    units are held (location quarantine); no lot-wide Story 8.5 hold is placed - that stays a QC
+  //    head decision, so good units of the same lot on another line are not frozen.
+  const reportedNonClean = lineCondition !== 'GOOD';
   const needsQcHold =
-    item.bis_licence_required === true || item.quarantine_required === true || quarantined;
+    item.bis_licence_required === true ||
+    item.quarantine_required === true ||
+    quarantined ||
+    reportedNonClean;
   let target: LocationRegisterEntry | null;
   if (needsQcHold) {
     target = await getLocationByCode(QC_HOLD_ZONE_CODE, client);
@@ -971,7 +1148,8 @@ export async function applyGoodsReceivedProjection(
     }
   }
   const qcHold = needsQcHold;
-  const lineStatus: 'posted' | 'quarantined' = quarantined ? 'quarantined' : 'posted';
+  const lineStatus: 'posted' | 'quarantined' =
+    quarantined || reportedNonClean ? 'quarantined' : 'posted';
   const putawayStatus: 'ready' | 'held' = needsQcHold ? 'held' : 'ready';
   const crossDockRequested = p['cross_dock'] === true;
   let stagingZone: LocationRegisterEntry | null = null;
@@ -1152,6 +1330,7 @@ export async function applyGoodsReceivedProjection(
       target_location_id: target.location_id,
       status: lineStatus,
       rejection_reason: null,
+      ...reasonColumns,
       cross_dock: qualifiedCrossDock,
       matched_dispatch_order_line_id: matchedOrderLineId,
       cross_dock_nonqualification_reason: nonqualificationReason,
@@ -1253,13 +1432,26 @@ export async function applyGoodsReceivedProjection(
         object_type: 'grn_line',
         object_id: p['grn_line_id'] as string,
         actor_label: 'Receiving',
-        next_step: `Inspect ${sku}${resolvedLotId ? ` lot ${resolvedLotId}` : ''} held in ${QC_HOLD_ZONE_CODE}`,
+        next_step: `Inspect ${sku}${resolvedLotId ? ` lot ${resolvedLotId}` : ''} held in ${QC_HOLD_ZONE_CODE}${reportedNonClean ? ` - reported ${describeReceiptReason(reasonColumns)} at the dock` : ''}`,
         actor: envelope.metadata.actor,
         correlation_id: correlationId,
       },
       client,
     );
   }
+}
+
+/** Story 3.11: the dock report as the inspector reads it in the qc_hold_placed notification. */
+function describeReceiptReason(r: {
+  line_condition: string;
+  reason_code: string | null;
+  reason_detail: string | null;
+  reason_note: string | null;
+}): string {
+  const parts = [r.line_condition, r.reason_code, r.reason_detail].filter(
+    (v): v is string => v !== null,
+  );
+  return `${parts.join(' / ')}${r.reason_note ? `: ${r.reason_note}` : ''}`;
 }
 
 // ---------------------------------------------------------------------------

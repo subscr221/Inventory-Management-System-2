@@ -90,6 +90,10 @@ const PERMANENT_ERROR_CODES = new Set([
   'RECEIVING_PO_NOT_FOUND',
   'RECEIVING_QTY_REQUIRED',
   'RECEIVING_QC_HOLD_ZONE_NOT_FOUND',
+  // Story 3.11: GRN line condition and reason codes.
+  'RECEIVING_REASON_REQUIRED',
+  'RECEIVING_REASON_INVALID',
+  'RECEIVING_OTHER_EVIDENCE_REQUIRED',
   'LOCATION_NOT_FOUND',
   'PUTAWAY_TASK_NOT_FOUND',
   'PUTAWAY_TASK_NOT_HELD',
@@ -462,8 +466,15 @@ export class EdgePowerSyncConnector implements PowerSyncBackendConnector {
               localStatus === 'auth_required'
                 ? undefined
                 : {
-                    classification: { action: 'complete', localStatus: 'auth_required', retryable: false },
-                    details: { error_code: 'OWNER_NOT_SIGNED_IN', details: { owner_user_id: owner } },
+                    classification: {
+                      action: 'complete',
+                      localStatus: 'auth_required',
+                      retryable: false,
+                    },
+                    details: {
+                      error_code: 'OWNER_NOT_SIGNED_IN',
+                      details: { owner_user_id: owner },
+                    },
                   },
             );
           }

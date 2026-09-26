@@ -92,6 +92,10 @@ export async function inbound(ctx: Ctx): Promise<void> {
           received_qty: qty,
           source_document: 'PO',
           target_location_code: dock,
+          // Story 3.11: every smoke receipt is a part delivery of its PO line, and a GOOD line that
+          // leaves the PO line short must say why.
+          reason_code: 'SHORT',
+          reason_detail: 'PART_DELIVERY_BALANCE_TO_FOLLOW',
           ...extra,
         },
         await ctx.as('store'),

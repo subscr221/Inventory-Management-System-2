@@ -115,6 +115,8 @@ async function receiveCrossDock(opts: {
   sku: string;
   stagingSelector: Record<string, unknown>;
   occurredAt: string;
+  /** Story 3.11: false when the receipt completes its PO line (a clean line carries no reason). */
+  shortReason?: boolean;
 }): Promise<void> {
   await persistEvent({
     event_id: randomUUID(),
@@ -131,6 +133,10 @@ async function receiveCrossDock(opts: {
       sku: opts.sku,
       target_location_id: receivingLocationId,
       received_qty: opts.qty,
+      // Story 3.11: a part delivery of the PO line must say why it is short.
+      ...(opts.shortReason === false
+        ? {}
+        : { reason_code: 'SHORT', reason_detail: 'PART_DELIVERY_BALANCE_TO_FOLLOW' }),
       lot_id: opts.lotNumber,
       cross_dock: true,
       ...opts.stagingSelector,
@@ -302,6 +308,7 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         sku: raceSku,
         stagingSelector: { staging_zone_id: stagingZoneId },
         occurredAt: '2026-07-31T09:07:00.000Z',
+        shortReason: false,
       }),
       receiveCrossDock({
         poRef: poB,
@@ -314,6 +321,7 @@ describe('Story 3.10 Tasks 3-5 edge coverage', () => {
         sku: raceSku,
         stagingSelector: { staging_zone_id: stagingZoneId },
         occurredAt: '2026-07-31T09:07:00.000Z',
+        shortReason: false,
       }),
     ]);
 

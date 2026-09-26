@@ -257,6 +257,8 @@ Domain status views ship inside module epics — default: every role reads its o
 | SOD-10 | `system_administrator` holds no business-transaction hats | Assignment time | NFR-SEC-05 |
 | SOD-11 | No single identity holds both `weighbridge_operator` and `store_assistant` at the same site, unless a documented compensating control is on file and countersigned by the site's Warehouse Head | Assignment time (pair-set check) | Finalized 2026-07-12, source §6 item 2; site census (§7) found no site requiring an exception |
 
+**Amended 2026-09-26 (SOD-01):** no self-approval, except a requisition line within the requester's per-person self-approval limit; the limit itself is assigned by the site head or head of department and takes effect only after one-time approval by the finance department head; all self-approved requisitions remain in the audit trail. The original blanket constraint in the SOD-01 row above stands for every other DOA-resolved approval. Rationale: user ruling 2026-09-25 (senior self-approval within a limit), recorded in the UX memlog; applied by `sprint-change-proposal-2026-09-26.md` Section 4.4, delivered by Story 4.8.
+
 **Blocked-for-everyone rows (design invariants, not SoD):** calibration lockout override (FR-M-13/AD-8) · edit-log disable or hard delete (FR-AC-13/C-07) · untagged transaction (FR-AC-01) · IRN-less dispatch of e-invoiceable supply (FR-AC-14) · direct edit of a Released BOM (FR-B-03) · last-writer-wins location update (INT-LOC-01).
 
 ## 6. Open Items for the Super Admin (Resolution Record)

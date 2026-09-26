@@ -324,6 +324,9 @@ const MIGRATIONS = [
   // CHECKs that keep every PO/ASN receipt as strict as before). Appended at the tail; grn.sql and
   // grn_line.sql are NOT edited and re-apply harmlessly above it.
   '../../read/projections/grn_jobwork_challan.sql',
+  // Story 3.11: GRN line condition and reason codes. Forward-only ADD COLUMN IF NOT EXISTS plus
+  // named CHECKs on grn_line; appended at the tail, grn_line.sql is NOT edited.
+  '../../read/projections/grn_line_condition.sql',
 ];
 
 async function migrate(): Promise<void> {

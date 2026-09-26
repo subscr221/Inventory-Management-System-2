@@ -343,6 +343,11 @@ describe('Pilot Ruling B job-work receipt without a purchase order', () => {
       sku,
       target_location_code: dockCode,
       received_qty: qty,
+      // Story 3.11: a part delivery of the PO line must say why it is short. Customer material
+      // (job_work) carries no reason at all - its quantity control is the challan variance.
+      ...(overrides['stock_class'] === 'job_work'
+        ? {}
+        : { reason_code: 'SHORT', reason_detail: 'PART_DELIVERY_BALANCE_TO_FOLLOW' }),
       ...overrides,
     };
   }
@@ -776,7 +781,14 @@ describe('Pilot Ruling B job-work receipt without a purchase order', () => {
       challanBody(orderId, { grn_id: challan['grn_id'], sku: SKU_2 }),
     );
     assert.strictEqual(secondChallan.status, 201, JSON.stringify(secondChallan.body));
-    const secondPo = await receive(poBody(po, SKU_OWNED_2, 30, { grn_id: poLine['grn_id'] }));
+    // 20 + 30 completes the 50-unit line: a clean line carries no reason (Story 3.11).
+    const secondPo = await receive(
+      poBody(po, SKU_OWNED_2, 30, {
+        grn_id: poLine['grn_id'],
+        reason_code: undefined,
+        reason_detail: undefined,
+      }),
+    );
     assert.strictEqual(secondPo.status, 201, JSON.stringify(secondPo.body));
     assert.strictEqual(await rowCount('grn_line', 'grn_id = $1', [challan['grn_id']]), 2);
     assert.strictEqual(await rowCount('grn_line', 'grn_id = $1', [poLine['grn_id']]), 2);

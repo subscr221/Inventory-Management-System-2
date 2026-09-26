@@ -2578,6 +2578,37 @@ describe('Story 2.1 schema drift guard', () => {
     );
   });
 
+  // Story 3.11: grn_line_condition.sql is ALTER-only, so it is pinned by name and mirrored verbatim
+  // like the challan migration above.
+  it('Story 3.11 mirrors the GRN line condition migration into init-db.sql, after grn_line', () => {
+    const conditionSql = read('read/projections/grn_line_condition.sql');
+    for (const fragment of [
+      'ADD COLUMN IF NOT EXISTS line_condition TEXT NOT NULL DEFAULT',
+      'ADD COLUMN IF NOT EXISTS reason_code TEXT',
+      'ADD COLUMN IF NOT EXISTS reason_detail TEXT',
+      'ADD COLUMN IF NOT EXISTS reason_note TEXT',
+      'ADD COLUMN IF NOT EXISTS reason_photo_ref TEXT',
+      'chk_grn_line_condition',
+      'chk_grn_line_reason_code',
+      'chk_grn_line_condition_needs_reason',
+      'chk_grn_line_other_evidence',
+    ]) {
+      assert.ok(conditionSql.includes(fragment), `grn_line_condition.sql missing ${fragment}`);
+    }
+    const body = conditionSql.slice(conditionSql.indexOf('ALTER TABLE grn_line ADD COLUMN'));
+    const mirrorAt = normalizeSql(initDb).indexOf(normalizeSql(body));
+    assert.ok(mirrorAt >= 0, 'init-db.sql does not mirror grn_line_condition.sql verbatim');
+    const grnLineAt = normalizeSql(initDb)
+      .toLowerCase()
+      .indexOf('create table if not exists grn_line(');
+    assert.ok(grnLineAt >= 0, 'init-db.sql defines grn_line');
+    assert.ok(mirrorAt > grnLineAt, 'the mirror must follow the grn_line definition it alters');
+    assert.ok(
+      migrateSource.indexOf("'../../read/projections/grn_line_condition.sql'") >
+        migrateSource.indexOf("'../../read/projections/grn_jobwork_challan.sql'"),
+    );
+  });
+
   it('Story 3.10 applies dependency-safe additive cross-dock alterations in final vocabulary order', () => {
     const grnSql = read('read/projections/grn_line.sql');
     const pickTaskSql = read('read/projections/pick_task.sql');
@@ -3370,7 +3401,10 @@ describe('Story 9.9 event-type registry', () => {
 // Story 1.13 (AD-18): the refused-captures queue events live on the central-only 'sync' stream.
 describe('Story 1.13 event-type registry', () => {
   it('registers the refused-capture record and resolution on the sync stream', () => {
-    for (const type of ['sync.refused_capture_recorded', 'sync.refused_capture_resolved'] as const) {
+    for (const type of [
+      'sync.refused_capture_recorded',
+      'sync.refused_capture_resolved',
+    ] as const) {
       assert.deepStrictEqual(SUPPORTED_EVENT_TYPES[type], {
         streamType: 'sync',
         requiresBusinessStream: false,

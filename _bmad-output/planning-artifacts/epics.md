@@ -441,6 +441,38 @@ So that I can see who captured what, why it was refused, and close each one with
 
 ---
 
+#### Story 1.15: Employee Base Role
+
+As a signed-in employee holding no specialist role,
+I want to raise a requisition, check stock availability, report damage, and see my own requests from the base employee capability,
+So that everyday needs do not require a procurement or inventory role grant that hands me write access I should not have.
+
+**Acceptance Criteria:**
+
+**Given** a signed-in user whose only capability is the employee base role (extends Story 1.2 RBAC)
+**When** they raise a purchase requisition
+**Then** the requisition is accepted without any procurement write role - the current code path requires procurement write (`src/api/v1/indents.ts:557`), and this story removes that requirement for the raise action only
+
+**Given** the same base-role user
+**When** they look up stock availability for an item
+**Then** they see availability (in stock or not, and where it can be requested from) without holding inventory read (`src/api/v1/stock.ts:195` currently requires it); quantities, valuations, and other inventory detail remain gated by inventory read
+
+**Given** the same base-role user
+**When** they report damage (Story 8.9 capture flow)
+**Then** the report is accepted from the base role on any device
+
+**Given** the same base-role user
+**When** they open "My requests"
+**Then** they see the live status of their own requisitions and damage reports only - no other user's requests and no procurement or inventory work queues
+
+**Given** any signed-in user
+**When** their menu renders
+**Then** the visible entries derive from the access matrix capabilities they hold, with the employee base entries present for everyone
+
+**Note:** PILOT. Ratified in the UX run 2026-09-23 to 2026-09-26 (`ux-designs/ux-Inventory Management System_2-2026-09-23/`, EXPERIENCE.md IA base "employee" hat and run memlog). Created 2026-09-26 by `sprint-change-proposal-2026-09-26.md`.
+
+---
+
 ## Epic 2: Core Inventory and Multi-Location Stock Visibility
 
 **Goal:** Stock controllers and managers can answer "what do we hold, where is it, and what is it worth" in real time across all locations. Lot and serial traceability enables FEFO/FIFO picking, expiry management, and recall readiness. Consignment and VMI stock is segregated from owned inventory. Valuation is Ind AS 2 compliant (FIFO, weighted average, specific identification; LIFO blocked).
@@ -1579,6 +1611,66 @@ So that cross-dockable receipts clear the dock faster and dock-to-dispatch time 
 
 ---
 
+### Story 3.11: GRN Line Condition and Reason Codes
+
+As a receiving store assistant,
+I want every GRN line to carry a condition and a fixed, grouped reason code when the receipt is not clean,
+So that shortages, damage, and wrong deliveries are captured at the dock with evidence and routed correctly instead of posting silently as good stock.
+
+**PRE-PILOT BLOCKING:** reason reporting is required at pilot; the pilot site cannot go live on receiving without it. Ratified in the UX run 2026-09-23 to 2026-09-26 (`ux-designs/ux-Inventory Management System_2-2026-09-23/`, EXPERIENCE.md Receiving and Damage Governance plus the run memlog reason-code ruling). Extends Story 3.4, which creates QC inspection tasks but records no line condition or reason code. Created 2026-09-26 by `sprint-change-proposal-2026-09-26.md`.
+
+**Acceptance Criteria:**
+
+**Given** a GRN line being confirmed (Story 3.4 flow)
+**When** the store assistant records the line
+**Then** the line carries a condition, and any non-clean condition carries exactly one reason code from the fixed grouped set: `SHORT`, `DAMAGED`, `REJECTED` (wrong item or wrong spec), or `OTHER`; the condition and reason code are stamped on both the GRN line and the `goods.received` event
+
+**Given** a line captured with reason code `OTHER`
+**When** the line is submitted
+**Then** it is accepted only with a photo plus a one-line description; without both it is rejected at capture
+
+**Given** a line captured as `DAMAGED` or `REJECTED`
+**When** the GRN line is confirmed
+**Then** the affected quantity routes to quarantine under a quality hold (Story 8.5 hold machinery) instead of ordinary putaway
+
+**Given** a line captured as `REJECTED` for wrong item or wrong spec
+**When** the GRN posts
+**Then** the rejected quantity never posts against the PO line - the PO line's open balance is unchanged and the rejection is visible in the receiving discrepancy view
+
+**Given** the pilot configuration
+**When** a non-clean line is submitted without a reason code
+**Then** it is rejected at capture - reason reporting is required at pilot, not optional
+
+---
+
+### Story 3.12: Weighbridge Breach Task Routing for Pilot Roles
+
+As a warehouse manager at the pilot site,
+I want weighbridge tolerance-breach tasks routed to a role that a real pilot account actually holds,
+So that every breach reaches a person who can act on it instead of dying in a queue no one sees.
+
+**PRE-PILOT BLOCKING (defect):** Story 3.3 emits breach notifications targeting `receiving_supervisor` (`src/compliance/weighbridge.ts:11`, `src/api/v1/weighbridge.ts:34`), but the pilot roles file provisions no holder of that role - the access matrix defines `unloading_supervisor` instead - so breaches currently reach nobody. Found checking the UX mocks against code (`ux-designs/ux-Inventory Management System_2-2026-09-23/`, EXPERIENCE.md Backend Dependencies plus the run memlog). Created 2026-09-26 by `sprint-change-proposal-2026-09-26.md`.
+
+**Acceptance Criteria:**
+
+**Given** a weighbridge event flagged `status: "tolerance_breach"` (Story 3.3)
+**When** the breach task is routed
+**Then** it targets a role present at pilot - either the routing changes to `unloading_supervisor` or `receiving_supervisor` is provisioned in the pilot roles file - and the decision is recorded in the story file
+
+**Given** the corrected routing
+**When** the routing role is resolved
+**Then** both code sites resolve the same role from one place (`src/compliance/weighbridge.ts:11` and `src/api/v1/weighbridge.ts:34` do not disagree)
+
+**Given** the pilot role provisioning
+**When** a tolerance breach fires in a staging rehearsal
+**Then** the task lands with an account that actually holds the target role, and the holder sees the breach reason
+
+**Given** the regression suite
+**When** it runs
+**Then** a test asserts that a tolerance breach reaches at least one real holder of the target role, and fails if the role has no holder in the pilot roles fixture
+
+---
+
 ## Epic 4: Procurement and Supplier Management
 
 Procurement officers manage the full source-to-pay cycle from supplier registry through requisition, purchase order, goods receipt, and three-way invoice matching. Floor supervisors raise indents from a phone in under 90 seconds and always see live status (UJ-IND-01), with push notifications on every decision. Every purchase order carries DOA-gated approval by amount and category (FR-P-05) and MSME payment discipline is enforced at source (FR-P-09). Tender management (FR-T) is deferred to Phase 2 / Epic 14; this epic delivers the requisition-to-confirmation loop and the compliance controls that protect statutory payment deadlines.
@@ -1806,6 +1898,70 @@ So that the three-way match (Story 4.5), supplier scorecards (Story 4.2), and MS
 **Given** the supplier is MSME-flagged (Story 4.6)
 **When** the invoice is captured
 **Then** the statutory payment due date is stamped on the invoice at capture — the earlier of the agreed date and 45 days, or 15 days where no agreement exists — feeding the Story 4.6 ageing
+
+---
+
+### Story 4.8: Standing Approvals and Self-Approval Limits
+
+As a site head or head of department,
+I want to grant a named person a standing approval for an item or item group, and a per-person self-approval limit, each effective after a one-time finance sign-off,
+So that routine repeat issues stop queuing behind approvers while every grant stays visible, capped, revocable, and audited.
+
+**Extends Story 4.3's approval rules (FR-P-04). SOD-01 is amended as recorded in the access matrix and the PRD addendum (sprint-change-proposal-2026-09-26 Section 4.4). Ratified in the UX run 2026-09-23 to 2026-09-26 (`ux-designs/ux-Inventory Management System_2-2026-09-23/`, EXPERIENCE.md Requisitions and Standing Approvals, memlog standing-approval rulings 2026-09-25, Q6 and Q7 rulings). Created 2026-09-26 by `sprint-change-proposal-2026-09-26.md`.**
+
+**Acceptance Criteria:**
+
+**Given** a site head or head of department
+**When** they assign a standing approval
+**Then** a grant with id `SA-YYYY-NNN` links one user to one item or item group, with an optional monthly quantity cap (counted against quantity issued) and an optional end date; the grant is inactive until the finance department head approves it once
+
+**Given** an active standing approval
+**When** a requisition or issue falls under it and within its cap
+**Then** it proceeds without a per-transaction approver, and the issue screen and the printed slip both state the grant id it rode on
+
+**Given** an issue that would take the month's issued quantity over the grant's cap, or a requisition outside the grant's scope
+**When** it is submitted
+**Then** it falls back to the normal DOA approval path - never rejected for exceeding the grant, never silently self-approved
+
+**Given** a per-person self-approval limit assigned by the site head or head of department and approved once by the finance department head
+**When** the person approves their own requisition line within that limit
+**Then** the self-approval is permitted (SOD-01 as amended) and the requisition is flagged as self-approved in the audit trail
+
+**Given** an active grant
+**When** the assigner revokes it
+**Then** revocation is effective instantly and needs no second approver; and when the grantee's account is disabled, every grant they hold auto-revokes the same day
+
+**Given** the pruning cycle (default every 30 days)
+**When** it runs
+**Then** each assigner receives an in-app plus email list of their live grants, with any grant unused for 90 days flagged for review
+
+---
+
+### Story 4.9: Indent Approver Resolution Fallback
+
+As a floor supervisor whose indent matches no DOA band,
+I want the system to route it to a defined fallback approver and show me that state,
+So that no indent is ever stored unapprovable and stuck with no path forward.
+
+**Defect:** an indent with no DOA band match is stored without an approver, and the approval step then refuses with `NOT_RESOLVED_APPROVER`, leaving it permanently stuck (`src/compliance/indent.ts:599-603`). Found in the UX run backend check (`ux-designs/ux-Inventory Management System_2-2026-09-23/`, run memlog indent backend check). Fallback per UX ruling Q6: route to the head of department band. Sits inside done Story 4.3's flow. Created 2026-09-26 by `sprint-change-proposal-2026-09-26.md`.
+
+**Acceptance Criteria:**
+
+**Given** an indent whose amount and category match no DOA band (`src/compliance/indent.ts:599-603`)
+**When** the approver is resolved
+**Then** the indent routes to the requester's head of department band (UX ruling Q6) instead of being stored without an approver
+
+**Given** an indent routed by the fallback
+**When** the requester views its status
+**Then** the status surfaces the fallback state (who it is waiting on and why) instead of a dead end; approval by the fallback authority proceeds normally
+
+**Given** the fallback itself cannot resolve (no head of department on record)
+**When** the indent is submitted
+**Then** the submission is rejected at capture with an actionable error naming the missing configuration - it is never stored unapprovable
+
+**Given** indents stored stuck before this fix
+**When** the fix deploys
+**Then** existing `NOT_RESOLVED_APPROVER` indents are re-resolved through the fallback or surfaced in an exception list for manual routing, and a regression test locks in that an unmatched indent never again persists without an approver path
 
 ---
 
@@ -2696,6 +2852,38 @@ So that contractual inspection obligations are met with evidence and no prototyp
 **Dev Notes:**
 
 - Sequencing (FR-Q-12): prototype build records and design-evidence capture originate in Story 10.3 (Epic 10, sequenced after this epic and outside the pilot slice). This story delivers the stock-class bar so the control is active before any prototype exists; verification-as-design-evidence is captured against Story 10.3's build records when Epic 10 lands.
+
+---
+
+### Story 8.9: Report Damage - Universal Capture, QC Task, and Commercial Outcome
+
+As any employee who finds damaged material,
+I want to report it from any device by scanning the lot or item, and have the units held, QC decide, and finance settle a commercial outcome,
+So that damage found anywhere becomes governed evidence with a concurred resolution instead of an informal write-off (realizes the "A dead PCB on the line" key flow).
+
+**PILOT. Ratified in the UX run 2026-09-23 to 2026-09-26 (`ux-designs/ux-Inventory Management System_2-2026-09-23/`, EXPERIENCE.md damage governance and concurrence rules, Q5 ruling on the four outcomes, Key Flow "A dead PCB on the line"). Hooks FR-P-07 (debit notes). Reuses the Story 8.5 hold machinery and feeds Story 1.15's base-role capture. Created 2026-09-26 by `sprint-change-proposal-2026-09-26.md`.**
+
+**Acceptance Criteria:**
+
+**Given** any signed-in role on any device, including the Story 1.15 employee base role
+**When** they report damage by scanning the lot or item and capturing a reason and a photo
+**Then** the report is accepted (offline-capable, Story 1.8 pattern), the reported units go on quality hold, and an ad-hoc QC inspection task opens for them
+
+**Given** a reporter who suspects the damage extends beyond the scanned units
+**When** they mark "Suspect whole lot"
+**Then** that is recorded as a request, not a hold - the QC head decides whether the hold widens to the lot
+
+**Given** a completed ad-hoc QC inspection confirming damage
+**When** the resolution is decided
+**Then** it requires QC and finance concurrence keys, with disagreement escalating to the CEO band via the DOA registry
+
+**Given** finance concurrence
+**When** the commercial outcome is recorded
+**Then** it is exactly one of: debit note (FR-P-07), return for replacement, write-off, or accept as-is with price reduction - recorded in IMS and executed in ERP, with the IMS record carrying the ERP reference
+
+**Given** a reporter who also needs the material replaced
+**When** they choose report-and-request-replacement
+**Then** it is one flow - the replacement becomes a requisition under normal approval rules (Story 4.3, standing approvals per Story 4.8 where they apply), linked to the damage report
 
 ---
 

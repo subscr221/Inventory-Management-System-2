@@ -446,6 +446,24 @@ export interface GoodsReceivedPayload {
   cross_dock_task_id?: string;
   /** Server-set from auth on both HTTP and edge paths; never trusted from the client. */
   received_by?: string;
+  /**
+   * Story 3.11: the physical condition of THIS line's quantity, as reported at the dock (a report,
+   * not a verdict - QC decides). Absent means 'GOOD' (additive extension; pre-3.11 events are
+   * GOOD). DAMAGED and REJECTED post into the site ZONE-QC-HOLD with a held putaway; REJECTED
+   * never counts against the PO line.
+   */
+  line_condition?: 'GOOD' | 'DAMAGED' | 'REJECTED';
+  /**
+   * Story 3.11: exactly one fixed group code on a non-clean line (src/compliance/receiving-reasons.ts
+   * holds the catalogue and the allowed condition/reason pairs).
+   */
+  reason_code?: 'SHORT' | 'DAMAGED' | 'REJECTED' | 'OTHER';
+  /** Story 3.11: the fixed sub-reason within SHORT, DAMAGED or REJECTED; forbidden for OTHER. */
+  reason_detail?: string;
+  /** Story 3.11: the one-line description, required with reason_code 'OTHER'. */
+  reason_note?: string;
+  /** Story 3.11: opaque photo attachment key (the challan_photo_ref precedent), required with 'OTHER'. */
+  reason_photo_ref?: string;
 }
 
 export interface GoodsReceivedEnvelope extends Omit<EventEnvelope, 'payload'> {

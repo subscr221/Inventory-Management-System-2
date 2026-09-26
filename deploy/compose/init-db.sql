@@ -14651,3 +14651,44 @@ BEGIN
       CHECK (correlation_id IS NOT NULL OR source_document = 'JOBWORK_CHALLAN');
   END IF;
 END $$;
+
+-- grn_line_condition: MIRROR of read/projections/grn_line_condition.sql (Story 3.11; the canonical
+-- definition, applied by src/events/migrate.ts and the test harness). ALTER-only: it adds the line
+-- condition and reason columns and CHECKs to grn_line above. This copy exists for first-boot
+-- container init only - change both files together.
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS line_condition TEXT NOT NULL DEFAULT 'GOOD';
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS reason_code TEXT;
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS reason_detail TEXT;
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS reason_note TEXT;
+ALTER TABLE grn_line ADD COLUMN IF NOT EXISTS reason_photo_ref TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_grn_line_other_evidence'
+      AND conrelid = 'grn_line'::regclass
+  ) THEN
+    ALTER TABLE grn_line DROP CONSTRAINT IF EXISTS chk_grn_line_condition;
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_condition
+      CHECK (line_condition IN ('GOOD', 'DAMAGED', 'REJECTED'));
+
+    ALTER TABLE grn_line DROP CONSTRAINT IF EXISTS chk_grn_line_reason_code;
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_reason_code
+      CHECK (reason_code IS NULL OR reason_code IN ('SHORT', 'DAMAGED', 'REJECTED', 'OTHER'));
+
+    ALTER TABLE grn_line DROP CONSTRAINT IF EXISTS chk_grn_line_condition_needs_reason;
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_condition_needs_reason
+      CHECK (line_condition = 'GOOD' OR reason_code IS NOT NULL);
+
+    ALTER TABLE grn_line
+      ADD CONSTRAINT chk_grn_line_other_evidence
+      CHECK (
+        reason_code IS DISTINCT FROM 'OTHER'
+        OR (COALESCE(btrim(reason_photo_ref), '') <> '' AND COALESCE(btrim(reason_note), '') <> '')
+      );
+  END IF;
+END $$;

@@ -1149,3 +1149,17 @@ No earlier row is closed by this batch. Row 192 (no lock on reserve source-bin s
 - The seam compares `max_level >= min_level` with JS `Number`, not NUMERIC, mirroring the Story 7.4 create assert; values differing past float precision fall through to the DB CHECK as a 500.
 - Story 7.9 scope: partial amendment (sending only `min_level` or only `max_level`) is not supported; the amend route replaces both levels together and an omitted level becomes null, matching the create route's paired shape.
 - Story 7.9 scope: toggling `is_critical` on an existing catalogue row is not amendable; it is a re-cataloguing decision with no acceptance criterion yet.
+
+## Deferred from: dev of 3-11-grn-line-condition-and-reason-codes (2026-09-26)
+
+- Job-work condition capture is out of scope: any `job_work` line (a `JOBWORK_CHALLAN` receipt or customer material on a PO line) refuses `line_condition` other than GOOD and every reason field with `RECEIVING_REASON_INVALID`, and is exempt from the short-line reason rule. Its quantity control is the Story 9.2 challan variance. Damaged customer material at receipt has no capture path yet.
+- The SHORT rule depends on capture order on a split receipt: the PO band is cumulative, so a GOOD line posted before the DAMAGED line of the same delivery looks short and needs a SHORT or OTHER reason. The client must post non-clean lines first; the server enforces the rule on whatever order arrives. A per-delivery reconciliation would remove the dependence.
+- A held DAMAGED or REJECTED putaway task can still be released to a shelf through `goods.putaway_released` (DOA `receiving.putaway_release`) with no QC disposition record. Story 8.9 owns the disposition and should gate that release.
+- EXPERIENCE.md L146 (every receipt lands in the inspection bay first, putaway only after inspection clearance) and L83 (capped excess recorded as "Excess - returned with vehicle", not posted) are not built; receiving still posts GOOD lines straight to the target and over-tolerance quantity as a rejected line.
+- The "Inspect on opening" flag (EXPERIENCE.md L84, observation plus photo travelling to the inspector) is not built; the stores mock uses it instead of a DAMAGED tile.
+- `reason_photo_ref` is an opaque key with no upload endpoint or blob store behind it (the Story 3.2 `challan_photo_ref` precedent); nothing verifies that the referenced photo exists.
+- Site-configurable reason labels are parked post-pilot (UX Q14); the catalogue is fixed in `src/compliance/receiving-reasons.ts`.
+
+## Deferred from: code review of 3-11-grn-line-condition-and-reason-codes (2026-09-27)
+
+- `schema-drift.test.ts` grn_line position check is vacuous: it lowercases the normalized init-db before searching, then reuses an older lowercase `indexOf` comparison that always returns -1, so the assertion always passes regardless of the actual column position. Pre-existing (predates Story 3.11), admitted in this story's Dev Agent Record but not fixed there.

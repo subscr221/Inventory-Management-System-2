@@ -943,6 +943,9 @@ describe('Story 3.8 Warehouse Task Management and Productivity Tracking', () => 
         sku: `SKU-38-${run}`,
         target_location_code: dockDCode,
         received_qty: 10,
+        // Story 3.11: a part delivery of the PO line must say why it is short.
+        reason_code: 'SHORT',
+        reason_detail: 'PART_DELIVERY_BALANCE_TO_FOLLOW',
       },
       storeHeaders,
     );

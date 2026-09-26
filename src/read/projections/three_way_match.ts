@@ -193,6 +193,9 @@ export async function computeMatchVariance(
        FROM grn_line gl
        JOIN grn g ON g.grn_id = gl.grn_id
        WHERE g.po_id = $2 AND gl.status IN ('posted', 'quarantined')
+         -- Story 3.11: a wrong item or wrong spec (REJECTED at the dock) never posts against the
+         -- PO line, so it is never matched to the supplier's invoice either.
+         AND gl.line_condition <> 'REJECTED'
          -- Pilot Ruling B (defence in depth): customer-owned job-work material is never supplier-
          -- invoiced, so it never counts as received against a purchase order - whether it came
          -- in on a customer challan GRN (which the grn.po_linked seam refuses to bind) or as a
@@ -321,6 +324,7 @@ export async function computeMatchVariance(
     `SELECT DISTINCT g.grn_id
      FROM grn g
      JOIN grn_line gl ON gl.grn_id = g.grn_id AND gl.status IN ('posted', 'quarantined')
+      AND gl.line_condition <> 'REJECTED'
      WHERE g.po_id = $1
      ORDER BY g.grn_id ASC`,
     [poId],

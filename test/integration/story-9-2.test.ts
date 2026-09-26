@@ -1310,6 +1310,9 @@ describe('Story 9.2 Customer Material Receipt and Segregated Stock', () => {
         target_location_code: DOCK_CODE,
         received_qty: '10',
         lot_id: `LOT-OWNED-${run}`,
+        // Story 3.11: a part delivery of the PO line must say why it is short.
+        reason_code: 'SHORT',
+        reason_detail: 'PART_DELIVERY_BALANCE_TO_FOLLOW',
       },
       storeHeaders,
     );

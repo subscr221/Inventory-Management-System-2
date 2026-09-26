@@ -159,6 +159,10 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
       sku: 'SKU-RCV-1',
       target_location_code: 'RECV-DOCK',
       received_qty: 10,
+      // Story 3.11: these fixtures receive part of a 100-unit PO line, and a GOOD line that leaves
+      // the PO line short must carry a reason.
+      reason_code: 'SHORT',
+      reason_detail: 'PART_DELIVERY_BALANCE_TO_FOLLOW',
       ...overrides,
     };
   }
@@ -762,7 +766,13 @@ describe('Story 3.4 Goods Receiving Against ASN or PO', () => {
       port,
       'POST',
       '/api/v1/grn-lines',
-      grnBody(await seedToken('PO-LEG'), { po_ref_ext: 'PO-LEG', received_qty: 40 }),
+      grnBody(await seedToken('PO-LEG'), {
+        po_ref_ext: 'PO-LEG',
+        received_qty: 40,
+        // Completes the line (60 legacy + 40): a clean line carries no reason (Story 3.11).
+        reason_code: undefined,
+        reason_detail: undefined,
+      }),
       storeHeaders,
     );
     assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
