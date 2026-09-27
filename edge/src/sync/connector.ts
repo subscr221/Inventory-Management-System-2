@@ -275,6 +275,18 @@ const PERMANENT_ERROR_CODES = new Set([
   'CREDIT_NOTE_MISSING',
   'CREDIT_NOTE_UNCITABLE',
   'CREDIT_NOTE_SUPERSEDED',
+  // Story 8.9: damage capture (and the linked replacement indent, and any stock leaving
+  // quarantine) refusals an offline retry can never clear.
+  'DAMAGE_REASON_INVALID',
+  'DAMAGE_OTHER_NOTE_REQUIRED',
+  'DAMAGE_PHOTO_REQUIRED',
+  'DAMAGE_QUANTITY_INVALID',
+  'DAMAGE_LOT_REQUIRED',
+  'DAMAGE_LOT_NOT_FOUND',
+  'DAMAGE_LOCATION_NOT_FOUND',
+  'DAMAGE_REPLACEMENT_LINK_INVALID',
+  'DAMAGE_UNITS_HELD',
+  'DAMAGE_CASE_BLOCKS_RELEASE',
 ]);
 
 const TRANSIENT_STATUS_CODES = new Set([408, 425, 429]);

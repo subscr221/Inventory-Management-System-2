@@ -3,7 +3,8 @@
 # three sign-off transaction types have no active band (Story 1.13 adds a fourth: refusal resolution), because "no band" means postings of any
 # value proceed unsigned. The finance controller (who holds `compliance` write, see the roles file)
 # registers one unbounded band per type: every posting of that type needs the named role's
-# signature. A band that already exists answers 409 and is kept. Runs as root on the box.
+# signature. A band that already exists answers 409 and is kept. Story 8.9 adds the three damage
+# bands (qc_head, finance_controller, ceo) the damage case resolves its keys and escalation from. Runs as root on the box.
 # Usage: staging-doa-bands.sh <finance-controller-email>
 set -euo pipefail
 FIN="$(printf '%s' "${1:?finance controller email}" | tr 'A-Z' 'a-z')"
@@ -46,6 +47,11 @@ band cfo                jobwork.offcut_acquisition      offcut-acquisition
 # Story 1.13: the applier resolves this type under the row lock; with no band every resolve is
 # 409 APPROVAL_UNRESOLVED. The department head holds write on every edge module at the site.
 band department_head    edge.refused_capture_resolution refused-capture-resolution
+# Story 8.9: the two concurrence keys of a damage case and the CEO escalation when they disagree.
+# The resolvers fail closed: with no band every key turn is 409 APPROVAL_UNRESOLVED.
+band qc_head            damage.qc_concurrence           damage-qc-concurrence
+band finance_controller damage.finance_concurrence      damage-finance-concurrence
+band ceo                damage.escalation               damage-escalation
 unset TOKEN
 echo "=== verify:roles"
 docker compose exec -T app node dist/src/cli/verify-segregated-roles.js 2>&1 | tail -8

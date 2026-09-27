@@ -2192,6 +2192,36 @@ const EXPECTED = [
     ],
     appUserGrant: 'INSERT, SELECT, UPDATE',
   },
+  // Story 8.9: the damage case (inline two-way pairing CHECKs, no guarded DO blocks: a new table),
+  // its append-only action history, and the photo store (append-only; bytes never rewritten).
+  {
+    canonical: 'read/projections/damage_report.sql',
+    table: 'damage_report',
+    constraints: [] as string[],
+    indexes: [
+      'uq_damage_report_number',
+      'uq_damage_report_source_grn_line',
+      'idx_damage_report_site_status',
+      'idx_damage_report_reporter',
+      'idx_damage_report_held_sku',
+      'idx_damage_report_replacement_indent',
+    ],
+    appUserGrant: 'INSERT, SELECT, UPDATE',
+  },
+  {
+    canonical: 'read/projections/damage_report.sql',
+    table: 'damage_report_action',
+    constraints: [] as string[],
+    indexes: ['uq_damage_report_action_source_event', 'idx_damage_report_action_report'],
+    appUserGrant: 'INSERT, SELECT',
+  },
+  {
+    canonical: 'read/projections/attachment.sql',
+    table: 'attachment',
+    constraints: [] as string[],
+    indexes: ['idx_attachment_uploaded_by'],
+    appUserGrant: 'INSERT, SELECT',
+  },
 ];
 
 describe('Story 2.1 schema drift guard', () => {
@@ -3395,6 +3425,50 @@ describe('Story 9.9 event-type registry', () => {
       streamType: 'jobwork',
       requiresBusinessStream: false,
     });
+  });
+});
+
+// Story 8.9: the eleven damage-case events on their own 'damage' stream (never 'qc', D2) and the
+// metadata-only photo upload record on 'attachment'.
+describe('Story 8.9 event-type registry', () => {
+  it('registers every damage event on the damage stream and the upload on attachment', () => {
+    for (const type of [
+      'damage.reported',
+      'damage.units_arrived',
+      'damage.sent_for_external_check',
+      'damage.returned_from_external_check',
+      'damage.inspected',
+      'damage.whole_lot_decided',
+      'damage.key_turned',
+      'damage.key_withdrawn',
+      'damage.disagreed',
+      'damage.escalation_decided',
+      'damage.outcome_recorded',
+    ] as const) {
+      assert.deepStrictEqual(SUPPORTED_EVENT_TYPES[type], {
+        streamType: 'damage',
+        requiresBusinessStream: false,
+      });
+    }
+    assert.deepStrictEqual(SUPPORTED_EVENT_TYPES['attachment.uploaded'], {
+      streamType: 'attachment',
+      requiresBusinessStream: false,
+    });
+    const damageTypes = Object.keys(SUPPORTED_EVENT_TYPES).filter((t) => t.startsWith('damage.'));
+    assert.strictEqual(damageTypes.length, 11);
+  });
+
+  it('mirrors the indent replacement link into init-db.sql', () => {
+    const initDb = read('deploy/compose/init-db.sql');
+    const canonical = read('read/projections/indent_damage_link.sql');
+    for (const statement of [
+      'ALTER TABLE indent ADD COLUMN IF NOT EXISTS damage_report_id UUID;',
+      'CREATE INDEX IF NOT EXISTS idx_indent_damage_report ON indent (damage_report_id) WHERE damage_report_id IS NOT NULL;',
+    ]) {
+      assert.ok(canonical.includes(statement), `canonical missing: ${statement}`);
+      assert.ok(initDb.includes(statement), `init-db.sql missing: ${statement}`);
+    }
+    assert.ok(read('src/events/migrate.ts').includes('indent_damage_link.sql'));
   });
 });
 

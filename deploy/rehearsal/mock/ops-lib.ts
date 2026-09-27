@@ -168,7 +168,9 @@ export function listOf(body: Json, ...keys: string[]): Json[] {
 function localRequest(port: number) {
   return (method: string, path: string, body?: unknown, headers?: Headers): Promise<HttpResult> =>
     new Promise((resolvePromise, reject) => {
-      const data = body === undefined ? undefined : JSON.stringify(body);
+      // Story 8.9: a Buffer body is sent as raw bytes (a photo upload); anything else as JSON.
+      const data =
+        body === undefined ? undefined : Buffer.isBuffer(body) ? body : JSON.stringify(body);
       const req = httpRequest(
         {
           hostname: 'localhost',
@@ -391,7 +393,10 @@ function bootRemote(path: string): Ctx {
       const res = await fetch(cfg.api_base.replace(/\/$/, '') + urlPath, {
         method,
         headers: { 'Content-Type': 'application/json', ...headers },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        // Story 8.9: a Buffer body is sent as raw bytes (a photo upload); anything else as JSON.
+        ...(body === undefined
+          ? {}
+          : { body: Buffer.isBuffer(body) ? new Uint8Array(body) : JSON.stringify(body) }),
         signal: AbortSignal.timeout(600000),
       });
       return parse(res.status, await res.text());

@@ -26,6 +26,8 @@ import { ReportsView } from './enterprise/reports-view';
 import { SampleDataNotice } from './enterprise/sample-data-notice';
 import { CheckStock } from './check-stock';
 import { MyRequests } from './my-requests';
+import { ReportDamage, type ReportDamageProps } from './report-damage';
+import { DamageCases } from './damage-cases';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import type { SyncUiState } from '../sync/sync-status';
@@ -73,11 +75,16 @@ export interface AppShellProps {
   onLoadCrossDockTask?: (taskId: string) => Promise<CrossDockTaskContext | null>;
   onConfirmCrossDock?: (task: CrossDockTaskContext, stagingBinCode: string) => Promise<string>;
   onSubmitIndent?: (input: IndentSubmitInput) => Promise<string>;
+  /** Story 8.9: the report-damage capture and its outbox settlement, injected by the edge client. */
+  reportDamage?: ReportDamageProps;
+  /** Story 8.9: the signed-in user, for the damage cases workbench grouping. */
+  userId?: string;
   /**
    * Story 7.8: 'frontline' (default, the Story 1.8 shell) or 'maintenance' (the technician page).
    * Story 1.14: 'refused-captures' (the site supervisor's screen).
    * Enterprise: 'workflows', 'access-control', and 'reports' (Phase 3/4 management views).
    * Story 1.15: 'new-requisition', 'check-stock' and 'my-requests' (the employee base screens).
+   * Story 8.9: 'report-damage' and 'damage-cases'.
    */
   view?:
     | 'frontline'
@@ -114,13 +121,16 @@ export interface AppShellProps {
   waitingForOthers?: Array<{ userName: string; count: number }>;
 }
 
-type BaseView = 'new-requisition' | 'check-stock' | 'my-requests';
+type BaseView = 'new-requisition' | 'check-stock' | 'my-requests' | 'report-damage' | 'damage-cases';
 
 /** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
 const BASE_VIEW_ENTRY: Record<BaseView, string> = {
   'new-requisition': 'New requisition',
   'check-stock': 'Check stock',
   'my-requests': 'My requests',
+  // Story 8.9 (Task 11.1): a deep link without the entry gets the same no-access card.
+  'report-damage': 'Report damage',
+  'damage-cases': 'Damage cases',
 };
 
 function isBaseView(view: string): view is BaseView {
@@ -149,6 +159,8 @@ export function AppShell({
   onLoadCrossDockTask,
   onConfirmCrossDock,
   onSubmitIndent,
+  reportDamage,
+  userId = '',
   view = 'frontline',
   online = true,
   navigationConfirmed = false,
@@ -271,6 +283,10 @@ export function AppShell({
           <CheckStock online={online} />
         ) : view === 'my-requests' ? (
           <MyRequests online={online} />
+        ) : view === 'report-damage' ? (
+          <ReportDamage {...(reportDamage ?? {})} />
+        ) : view === 'damage-cases' ? (
+          <DamageCases online={online} userId={userId} />
         ) : view === 'refused-captures' ? (
           refusedCaptures ? (
             <RefusedCapturesScreen {...refusedCaptures} />

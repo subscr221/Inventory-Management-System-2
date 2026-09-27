@@ -26,6 +26,21 @@ describe('Story 1.15 nav model', () => {
     }
   });
 
+  it('Story 8.9 (Task 11.1): registers Report damage and Damage cases with real paths', () => {
+    for (const [name, href, label] of [
+      ['Report damage', '/damage/new', 'nav.reportDamage'],
+      ['Damage cases', '/damage/cases', 'nav.damageCases'],
+    ] as const) {
+      const entry = NAV_ENTRIES.find((e) => e.name === name);
+      assert.deepEqual(entry, { name, href, label });
+      assert.equal(typeof message(label), 'string', `${label} missing from en.json`);
+    }
+    // After My requests, in the order the server advertises them.
+    const names = NAV_ENTRIES.map((e) => e.name);
+    assert.equal(names.indexOf('Report damage'), names.indexOf('My requests') + 1);
+    assert.equal(names.indexOf('Damage cases'), names.indexOf('Report damage') + 1);
+  });
+
   it('renders only what the server advertised, in server order', () => {
     const names = entriesFor([
       'Dashboard',
@@ -34,6 +49,7 @@ describe('Story 1.15 nav model', () => {
       'Check stock',
       'My requests',
       'Report damage',
+      'Not an entry',
     ]).map((e) => e.name);
     assert.deepEqual(names, [
       'Dashboard',
@@ -41,6 +57,7 @@ describe('Story 1.15 nav model', () => {
       'New requisition',
       'Check stock',
       'My requests',
+      'Report damage',
     ]);
   });
 });

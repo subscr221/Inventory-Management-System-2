@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
 import { getPool } from '../../config/db.js';
 import { qcGateExclusionSql } from './qc_inspection_task.js';
 import { AppError } from '../../middleware/error.js';
+import { isQuarantineLocation } from '../../compliance/stock-relocation.js';
+import { assertDamageHeldQuantity } from './damage_report.js';
 
 /**
  * Stock balance read model (Story 2.2). Derived state only: every row is rebuildable by
@@ -95,6 +97,13 @@ export interface StockIssueInput {
    * left untouched and occurred_at is ignored.
    */
   relocation?: boolean;
+  /**
+   * Story 8.9 (D5): the destination of a relocation leg, when the caller knows it. The damage hold
+   * guard lets held units move between quarantine locations; any other issue out of quarantine
+   * (a consumption, or a relocation that does not say where it lands) is checked against the
+   * quantity open damage cases hold.
+   */
+  relocation_target_location_id?: string | null;
 }
 
 export interface StockDeallocationInput {
@@ -499,6 +508,20 @@ export async function applyStockIssue(
     [input.sku, input.location_id, lotId, input.quantity, stockClass],
   );
 
+  // Story 8.9 (D5): after the drain, units held by an open damage case must still be in the site's
+  // quarantine pool. One check here covers every issue, pick, putaway, bin move and replenishment
+  // that leaves quarantine; it is a no-op unless an open quarantined case holds this SKU.
+  await assertDamageHeldQuantity(
+    {
+      sku: input.sku,
+      sourceLocationId: input.location_id,
+      targetLocationId: input.relocation_target_location_id ?? null,
+      stockClass,
+    },
+    client,
+    isQuarantineLocation,
+  );
+
   // Story 2.7: stamp last_issue_at for every balance row at this (sku, location_id) so the
   // obsolescence scan reads MAX(last_issue_at) across lots. GREATEST keeps the value monotonic - a
   // late or out-of-order issue never moves the obsolescence clock backwards. Touches only
@@ -649,6 +672,21 @@ export async function applyStockIssueUnderSite(
                 LEAST(ranked.available_qty, GREATEST(0, $4 - (ranked.cumulative - ranked.available_qty)))::text AS drained_quantity`,
     [siteLocationId, input.sku, lotId, input.quantity, stockClass],
   );
+
+  // Story 8.9 (D5): the plant-wide backflush drains every bin under the site, quarantine included,
+  // without going through applyStockIssue - so it takes the same damage-hold guard for every
+  // location it actually drained. A no-op unless an open quarantined case holds this SKU.
+  for (const locationId of new Set(
+    drained.rows
+      .filter((row) => row['drained_quantity'] !== null && row['drained_quantity'] !== '0')
+      .map((row) => row['location_id'] as string),
+  )) {
+    await assertDamageHeldQuantity(
+      { sku: input.sku, sourceLocationId: locationId, targetLocationId: null, stockClass },
+      client,
+      isQuarantineLocation,
+    );
+  }
 
   // Same last_issue_at stamping contract as applyStockIssue (Story 2.7): monotonic GREATEST, scoped
   // to the issued stock class, touching only last_issue_at/updated_at.

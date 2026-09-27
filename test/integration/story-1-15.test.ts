@@ -521,6 +521,8 @@ describe('Story 1.15 Employee Base Role', () => {
       'New requisition',
       'Check stock',
       'My requests',
+      // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
+      'Report damage',
     ]);
     assert.strictEqual(res.body['role'], 'employee');
   });
@@ -535,6 +537,8 @@ describe('Story 1.15 Employee Base Role', () => {
       'New requisition',
       'Check stock',
       'My requests',
+      // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
+      'Report damage',
     ]);
   });
 
@@ -549,6 +553,8 @@ describe('Story 1.15 Employee Base Role', () => {
       'New requisition',
       'Check stock',
       'My requests',
+      // Story 8.9: every base-hat holder reports damage; none of these callers works cases.
+      'Report damage',
     ]);
   });
 

@@ -212,7 +212,17 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
   const estimatedValue = parseFloat(estimatedValueStr);
   const approval = await resolveApprover(INDENT_DOA_TYPE, estimatedValue);
 
-  const indentId = randomUUID();
+  // Story 8.9 (AC 5, D15): a damage replacement names its case, and its indent id was minted with
+  // the report (the report names it back), so the client's id is kept for that raise only. Every
+  // other raise keeps a server-minted id exactly as before.
+  const damageReportId =
+    typeof body.damage_report_id === 'string' ? body.damage_report_id : undefined;
+  const indentId =
+    damageReportId !== undefined &&
+    typeof body.indent_id === 'string' &&
+    UUID_REGEX.test(body.indent_id)
+      ? body.indent_id
+      : randomUUID();
   const now = new Date().toISOString();
   const eventId = randomUUID();
 
@@ -235,6 +245,7 @@ export const raiseIndentBase: RouteHandler = async (req, res, _params) => {
         approver_actor_id: approval.approverActorId ?? undefined,
         doa_entry_id: approval.doaEntryId ?? undefined,
         duplicate_confirmed: body.confirm_duplicate === true,
+        ...(damageReportId !== undefined ? { damage_report_id: damageReportId } : {}),
       },
       metadata: {
         correlation_id: randomUUID(),

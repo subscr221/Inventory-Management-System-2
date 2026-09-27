@@ -49,6 +49,7 @@ import {
   RECEIPT_REASON_CODES,
   RECEIPT_REASON_DETAILS,
 } from './receiving-reasons.js';
+import { openReceiptDamageCase, assertDamageCaseAllowsRelease } from './damage.js';
 
 /**
  * Central receiving compliance seam (Story 3.4). Split like every other seam: assert* runs BEFORE any
@@ -85,7 +86,8 @@ export const JOBWORK_CHALLAN_SOURCE = 'JOBWORK_CHALLAN';
 /** The GRN route is store-assistant only; with no gate chain behind it this kind holds that on every door. */
 const JOBWORK_CHALLAN_RECEIVER_ROLES = new Set(['store_assistant']);
 
-const QC_HOLD_ZONE_CODE = 'ZONE-QC-HOLD';
+/** Story 8.9: exported so the damage report books into the same QC hold area, never a retyped code. */
+export const QC_HOLD_ZONE_CODE = 'ZONE-QC-HOLD';
 const DISCREPANCY_TARGET_ROLE = 'unloading_supervisor';
 const QC_INSPECTION_TARGET_ROLE = 'qc_inspector';
 
@@ -1339,6 +1341,34 @@ export async function applyGoodsReceivedProjection(
     client,
   );
 
+  // 7a. Story 8.9 (AC 9): a DAMAGED or REJECTED line opens a damage case in this same transaction,
+  //     on every door that persists goods.received. Its units are already in the QC hold area (step
+  //     5), so the case starts in_qc_hold; one case per GRN line, so a replay opens nothing. No
+  //     extra notification: the qc_hold_placed notice below already reaches the inspector.
+  if (reportedNonClean) {
+    await openReceiptDamageCase(
+      {
+        envelope,
+        eventId,
+        grnLineId: p['grn_line_id'] as string,
+        siteId,
+        receivedBy,
+        sku,
+        lotNumber: resolvedLotId,
+        quantity: receivedQty,
+        uom,
+        lineCondition,
+        sourceReasonCode: reasonColumns.reason_detail ?? reasonColumns.reason_code,
+        sourcePhotoRef: reasonColumns.reason_photo_ref,
+        quarantineLocation: {
+          location_id: target.location_id,
+          location_code: target.location_code,
+        },
+      },
+      client,
+    );
+  }
+
   // 7b. Story 9.2 (FR-JW-03, FR-JW-05): the order-linked custody record, persisted as its own
   //     jobwork.material_received domain event INSIDE this transaction (the bis-licence-expiry
   //     nested-persistEvent precedent). The custody applier re-derives the order under lock,
@@ -1496,6 +1526,9 @@ export async function applyGoodsPutawayReleasedProjection(
       { putaway_task_id: putawayTaskId, status: task.status },
     );
   }
+
+  // Story 8.9 (AC 9): the held putaway of a damaged or rejected line waits for its damage case.
+  await assertDamageCaseAllowsRelease(task.grn_line_id, client);
 
   // AC3: the release is DOA-gated - a governing band must exist AND the actor must be an authorized
   //      receiving supervisor. The reason_code rides the event payload into the standard audit path.

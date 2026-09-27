@@ -24,6 +24,11 @@ const ALLOWED_LITERAL_PATTERNS = [
   /^check-stock-/,
   /^myRequests\./,
   /^my-requests-/,
+  // Story 8.9: report damage and the damage cases workbench.
+  /^damage\./,
+  /^damage-/,
+  /^damageCases\./,
+  /^damage-cases-/,
   /^Promise$/,
   /^Dashboard$/,
   /^Frontline$/,

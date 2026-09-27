@@ -37,17 +37,21 @@ describe('Story 1.15 employee base role in the pilot pack', () => {
     assert.strictEqual(EMPLOYEE_MODULE, 'employee');
   });
 
-  it('the edge event allow-list names only indent.raised on the procurement stream', () => {
+  it('the edge event allow-list names indent.raised and (Story 8.9) damage.reported', () => {
     assert.deepStrictEqual(EMPLOYEE_EDGE_EVENTS, [
       { stream_type: 'procurement', event_type: 'indent.raised' },
+      { stream_type: 'damage', event_type: 'damage.reported' },
     ]);
   });
 
   it('every human person holds exactly one employee write grant at the site', () => {
     const humans = Object.keys(fixture.people).filter((email) => !serviceHolders.has(email));
-    assert.strictEqual(humans.length, 20);
+    // Story 8.9 (D16): ceo1@ joins the pack as the 21st human.
+    assert.strictEqual(humans.length, 21);
     for (const email of humans) {
-      const rows = fixture.roles.filter((r) => r.holder === email && r.module === EMPLOYEE_MODULE);
+      const rows = fixture.roles.filter(
+        (r) => r.holder === email && r.module === EMPLOYEE_MODULE && r.role === 'employee',
+      );
       assert.deepStrictEqual(
         rows,
         [
@@ -74,10 +78,19 @@ describe('Story 1.15 employee base role in the pilot pack', () => {
     }
   });
 
-  it('no role other than employee sits on the employee module', () => {
+  it('no role other than employee sits on the employee module, except the Story 8.9 CEO', () => {
+    // D16: the CEO acts only through the DOA registry, so its one grant sits on the employee module.
     assert.deepStrictEqual(
       fixture.roles.filter((r) => r.module === EMPLOYEE_MODULE && r.role !== 'employee'),
-      [],
+      [
+        {
+          role: 'ceo',
+          module: 'employee',
+          function_scope: 'write',
+          location_id: 'site',
+          holder: 'ceo1@ancorlabs.org',
+        },
+      ],
     );
   });
 

@@ -458,7 +458,11 @@ const postEventBase: RouteHandler = async (req, res, _params) => {
     body.stream_type === 'maintenance' ||
     body.stream_type === 'migration' ||
     // Story 1.13: the refused-captures queue is written only by the server.
-    body.stream_type === 'sync'
+    body.stream_type === 'sync' ||
+    // Story 8.9: damage cases and photo uploads have their own routes, which gate the hat and
+    // shape the body; the appliers hold every decision guard, but no one posts them raw.
+    body.stream_type === 'damage' ||
+    body.stream_type === 'attachment'
   ) {
     sendRequestError(
       req,

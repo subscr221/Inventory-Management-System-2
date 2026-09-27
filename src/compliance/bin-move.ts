@@ -336,6 +336,7 @@ export async function applyStockBinMovedProjection(
       quantity,
       relocation: true,
       ...(heldLot ? { qc_gate_relocation: true } : {}),
+      relocation_target_location_id: to.location_id,
     },
     client,
   );

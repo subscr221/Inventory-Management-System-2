@@ -284,6 +284,18 @@ const PERMANENT_ERROR_CODES = new Set([
   'REASON_CODE_REQUIRED',
   'WIP_COST_UNRESOLVED',
   'QC_HOLD_REQUIRED',
+  // Story 8.9: damage capture (and the linked replacement indent, and any stock leaving
+  // quarantine) refusals an offline retry can never clear.
+  'DAMAGE_REASON_INVALID',
+  'DAMAGE_OTHER_NOTE_REQUIRED',
+  'DAMAGE_PHOTO_REQUIRED',
+  'DAMAGE_QUANTITY_INVALID',
+  'DAMAGE_LOT_REQUIRED',
+  'DAMAGE_LOT_NOT_FOUND',
+  'DAMAGE_LOCATION_NOT_FOUND',
+  'DAMAGE_REPLACEMENT_LINK_INVALID',
+  'DAMAGE_UNITS_HELD',
+  'DAMAGE_CASE_BLOCKS_RELEASE',
 ]);
 
 /** Story 7.8: the server-side twin of the edge connector's permanent set, exported for the edge upload handler's safety-fault queueing decision. */
@@ -330,6 +342,25 @@ export function assertEdgeQcEventAllowed(envelope: EventEnvelope): void {
     'CENTRAL_ONLY_OPERATION',
     'This quality operation must be performed centrally, not from an edge device',
     { event_type: envelope.event_type },
+  );
+}
+
+/**
+ * Story 8.9 (D2, D3): of the damage case, only the report itself travels the edge door - it is the
+ * base-hat capture that must work offline. Custody marks, inspection, the whole-lot decision, the
+ * keys, escalation and the ERP outcome are online decisions and reject 403 CENTRAL_ONLY_OPERATION
+ * here, before any identity or version work.
+ */
+export const EDGE_DAMAGE_EVENT_TYPES: ReadonlySet<string> = new Set(['damage.reported']);
+
+export function assertEdgeDamageEventAllowed(envelope: EventEnvelope): void {
+  if (envelope.stream_type !== 'damage' && !envelope.event_type.startsWith('damage.')) return;
+  if (envelope.stream_type === 'damage' && EDGE_DAMAGE_EVENT_TYPES.has(envelope.event_type)) return;
+  throw new AppError(
+    403,
+    'CENTRAL_ONLY_OPERATION',
+    'This damage-case decision must be recorded online, not from an edge device',
+    { stream_type: envelope.stream_type, event_type: envelope.event_type },
   );
 }
 

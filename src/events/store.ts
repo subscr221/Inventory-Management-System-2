@@ -114,6 +114,11 @@ import {
   recordIndentDuplicateFlag,
 } from '../compliance/indent.js';
 import {
+  assertDamageShape,
+  assertAttachmentShape,
+  applyDamageProjection,
+} from '../compliance/damage.js';
+import {
   assertPurchaseOrderShape,
   applyPurchaseOrderProjection,
 } from '../compliance/purchase-order.js';
@@ -907,6 +912,10 @@ export async function persistEvent(
   // or an edge upload cannot fabricate ERP reference rows. Narrowly gated - every existing stream
   // passes through byte-for-byte and the Story 1.9 spine gate stays green.
   assertErpReadOnly(envelope);
+  // Story 8.9: damage-case and photo-upload shape validation is non-DB and runs with the other
+  // pre-transaction asserts, so a malformed damage event never consumes an idempotency key.
+  assertDamageShape(envelope);
+  assertAttachmentShape(envelope);
 
   const pool = getPool();
   const eventId = envelope.event_id ?? randomUUID();
@@ -1349,6 +1358,11 @@ export async function persistEvent(
     // reordered. The promotion gate and the approval identity checks live in the applier and
     // self-audit their refusals through auditCtx.
     await applyMigrationProjection(envelope, client, eventId, auditCtx);
+    // Story 8.9: the damage case (report with its report-time relocation into the QC hold area,
+    // custody marks, inspection, the whole-lot decision with its nested governed hold, the two DOA
+    // keys, escalation and the recorded ERP outcome) runs inside this same transaction, tail-appended
+    // so nothing above is reordered. Every guard lives in the applier (AD-12).
+    await applyDamageProjection(envelope, client, eventId);
 
     let nextVersion: number;
 
@@ -2333,6 +2347,16 @@ export async function persistEvent(
                 : null,
           },
         );
+      } else if (
+        // Story 8.9: a damage case is keyed by its client-minted report_id and, for a receipt case,
+        // by its GRN line. Both collide only on a racing replay of the same capture or receipt.
+        constraint === 'damage_report_pkey' ||
+        constraint === 'uq_damage_report_source_grn_line'
+      ) {
+        throw new AppError(409, 'DUPLICATE_EVENT', 'This damage report has already been recorded', {
+          report_id:
+            typeof envelope.payload['report_id'] === 'string' ? envelope.payload['report_id'] : null,
+        });
       } else if (constraint === 'asset_pkey') {
         // Server-minted UUIDs make this practically unreachable; mapped for completeness.
         throw new AppError(409, 'DUPLICATE_EVENT', 'An asset with this asset_id already exists', {

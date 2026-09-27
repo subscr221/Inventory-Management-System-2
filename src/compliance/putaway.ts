@@ -288,6 +288,7 @@ export async function applyPutawayCompletedProjection(
         quantity: task.quantity,
         relocation: true,
         ...(heldLot ? { qc_gate_relocation: true } : {}),
+        relocation_target_location_id: resolvedLocationId,
       },
       client,
     );

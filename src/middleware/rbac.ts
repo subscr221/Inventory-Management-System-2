@@ -135,13 +135,17 @@ export function permittedLocationsForModule(
  * name this module next to the specialist one (`[EMPLOYEE_MODULE, 'procurement']`), never a role.
  */
 export const EMPLOYEE_MODULE = 'employee';
+/** Story 1.15 (D1): the base hat's own role name, the one every signed-in person holds. */
+export const EMPLOYEE_ROLE = 'employee';
 
 /**
  * Story 1.15: the (stream, event) pairs the edge door accepts from an `employee` write assignment.
- * Every other event keeps its stream-module write rule. Story 8.9 appends damage capture here.
+ * Every other event keeps its stream-module write rule. Story 8.9 appends damage capture: any
+ * signed-in person reports damage from any device (D3).
  */
 export const EMPLOYEE_EDGE_EVENTS: ReadonlyArray<{ stream_type: string; event_type: string }> = [
   { stream_type: 'procurement', event_type: 'indent.raised' },
+  { stream_type: 'damage', event_type: 'damage.reported' },
 ];
 
 export interface RbacOptions {
@@ -226,7 +230,13 @@ export function requireRole(options: RbacOptions): (handler: RouteHandler) => Ro
       // preference for the bootstrap header role; this closes the same gap here.
       if (moduleMatches.some((r) => r.module === EMPLOYEE_MODULE)) {
         const specialist = moduleMatches.filter((r) => r.module !== EMPLOYEE_MODULE);
-        const employeeOnly = moduleMatches.filter((r) => r.module === EMPLOYEE_MODULE);
+        // Story 8.9 (D9, amending 1.15 D9): a specialist role provisioned ON the employee module
+        // (the CEO acts only through DOA, so its grant lives there) outranks the base-hat row on
+        // the same module, so the audit reads 'ceo', never 'employee'.
+        const employeeOnly = [
+          ...moduleMatches.filter((r) => r.module === EMPLOYEE_MODULE && r.role !== EMPLOYEE_ROLE),
+          ...moduleMatches.filter((r) => r.module === EMPLOYEE_MODULE && r.role === EMPLOYEE_ROLE),
+        ];
         moduleMatches = [...specialist, ...employeeOnly];
       }
       if (moduleMatches.length === 0) {

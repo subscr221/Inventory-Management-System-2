@@ -477,3 +477,204 @@ input:focus-visible {
   border-color: var(--success);
   background: var(--neutral-50);
 }
+
+/* Story 8.9: report damage and the damage cases workbench. The 56px keyboard-wedge scan input
+   (EXPERIENCE.md scan-input-screen); state words in pills whose colour only reinforces the text
+   (DESIGN.md concurrence-keys-card: pending warn, concurred ok, disagree err). */
+.scan-input {
+  min-height: 56px;
+  font-size: 1.125rem;
+}
+
+.state-pill-warn {
+  border-color: var(--warning);
+  background: var(--neutral-50);
+}
+
+.state-pill-err {
+  border-color: var(--error-strong);
+  background: var(--neutral-50);
+}
+
+.damage-form {
+  display: grid;
+  gap: 24px;
+}
+
+.damage-step {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+}
+
+.damage-step legend {
+  padding: 0 4px;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.damage-form input:not([type='radio']):not([type='checkbox']),
+.damage-action-form input:not([type='radio']):not([type='checkbox']),
+.damage-action-form select,
+.damage-action-form textarea {
+  width: 100%;
+  max-width: 480px;
+  min-height: 48px;
+  border: 2px solid var(--neutral-500);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  background: white;
+}
+
+.damage-form input.scan-input:not([type='radio']):not([type='checkbox']) {
+  min-height: 56px;
+}
+
+.damage-action-form textarea {
+  min-height: 72px;
+}
+
+.damage-form input:focus-visible,
+.damage-action-form select:focus-visible,
+.damage-action-form textarea:focus-visible,
+.damage-case-link:focus-visible,
+.damage-case h3:focus-visible,
+.damage-cases-detail h3:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.damage-choice {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.damage-choice legend {
+  padding: 0;
+  font-weight: 700;
+}
+
+.damage-choice label,
+.damage-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+}
+
+.damage-choice label > span,
+.damage-toggle > span {
+  display: grid;
+  gap: 2px;
+}
+
+.damage-choice-rule {
+  font-weight: 400;
+}
+
+.damage-replacement {
+  display: grid;
+  gap: 8px;
+  padding-left: 16px;
+  border-left: 4px solid var(--neutral-100);
+}
+
+.damage-photo-label {
+  font-weight: 700;
+}
+
+.damage-footer {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.damage-cases {
+  display: grid;
+  gap: 16px;
+}
+
+.damage-cases-layout {
+  display: grid;
+  gap: 24px;
+}
+
+/* List and case side by side on a wide pointer, stacked on touch (Task 10.1). */
+@media (min-width: 1024px) and (pointer: fine) {
+  .damage-cases-layout {
+    grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
+    align-items: start;
+  }
+}
+
+.damage-cases-list,
+.damage-cases-detail,
+.damage-case {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.damage-case-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--primary-strong);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.damage-case-link[aria-current='true'] {
+  text-decoration-thickness: 3px;
+}
+
+.damage-card-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.damage-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.damage-panel p {
+  margin: 0;
+}
+
+.damage-action-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.damage-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--neutral-500);
+  border-radius: 8px;
+}
+
+.damage-field-error {
+  margin: 0;
+  color: var(--error-strong);
+  font-weight: 700;
+}
+
+.damage-photo {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+  border: 1px solid var(--neutral-500);
+}

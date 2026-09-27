@@ -63,6 +63,9 @@
     },
     "notify1@ancorlabs.org": {
       "display_name": "Anita Joshi"
+    },
+    "ceo1@ancorlabs.org": {
+      "display_name": "Rajiv Malhotra"
     }
   },
   "roles": [
@@ -583,6 +586,20 @@
       "function_scope": "write",
       "location_id": "site",
       "holder": "notify1@ancorlabs.org"
+    },
+    {
+      "role": "ceo",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "ceo1@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "ceo1@ancorlabs.org"
     }
   ]
 }

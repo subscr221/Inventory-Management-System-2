@@ -6,6 +6,10 @@ import { createTestCaptureEvent } from '../capture/test-capture';
 import { createCrossDockCompletionEvent } from '../capture/cross-dock';
 import { assertLotNotHeld } from '../capture/held-lot';
 import { createIndentRaisedEvent } from '../capture/indent';
+import { createDamageCaptureEvents } from '../capture/damage';
+import type { CaptureSettlement, DamageSubmitInput, DamageSubmitResult } from './report-damage';
+import { pendingPhotoStore } from '../local-db/pending-photos';
+import { reencodeAsJpeg, uploadPendingPhotos } from '../sync/attachment-uploader';
 import {
   createFaultReportedEvent,
   createMeterReadingRecordedEvent,
@@ -31,6 +35,7 @@ import {
   hasAuthRequired,
   insertCaptureEvent,
   readCachedContext,
+  readCaptureSettlement,
   readFailures,
   readOutboxCounts,
   readWaitingForOtherOwners,
@@ -208,7 +213,9 @@ export function EdgeClient({
     | 'reports'
     | 'new-requisition'
     | 'check-stock'
-    | 'my-requests';
+    | 'my-requests'
+    | 'report-damage'
+    | 'damage-cases';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
@@ -224,6 +231,26 @@ export function EdgeClient({
   // capture never opened, so this person owns no outbox rows but must still be able to sign out.
   const siteRefused = useRef(false);
   const [state, setState] = useState(initialState);
+  // Story 8.9 (Task 9.2): one photo upload pass at a time.
+  const uploadingPhotos = useRef(false);
+
+  // Story 8.9 (Task 9.2): PUT pending damage photos when online, on bootstrap and after each
+  // refreshLocalState. Only the signed-in person's photos go out under their session.
+  const uploadPhotos = useCallback(() => {
+    const owner = signedInUserId.current;
+    if (!owner || uploadingPhotos.current || !navigator.onLine) return;
+    uploadingPhotos.current = true;
+    void uploadPendingPhotos({
+      store: pendingPhotoStore,
+      ownerUserId: owner,
+      fetch: authorizedFetch,
+      reencode: reencodeAsJpeg,
+    })
+      .catch(() => undefined)
+      .finally(() => {
+        uploadingPhotos.current = false;
+      });
+  }, []);
 
   const insertOwnCapture = useCallback(async (db: PowerSyncDatabase, event: Parameters<typeof insertCaptureEvent>[1]) => {
     if (signingOut.current) throw new Error('Signing out: capture is closed');
@@ -264,7 +291,8 @@ export function EdgeClient({
         ? 'error'
         : deriveSyncUiState({ online, syncing, ...counts }),
     }));
-  }, []);
+    uploadPhotos();
+  }, [uploadPhotos]);
 
   // Story 7.8: read the cached worklist (survives restarts; the snapshot meta lives in localStorage).
   const loadWorklistFromCache = useCallback(async (db: PowerSyncDatabase) => {
@@ -457,6 +485,7 @@ export function EdgeClient({
             .connect(new EdgePowerSyncConnector('', () => signedInUserId.current))
             .catch(() => undefined);
           if (navigator.onLine) void refreshWorklistNow(db).catch(() => undefined);
+          uploadPhotos();
         } catch (error) {
           if (!(error instanceof SiteRefusedError) && !cached)
             setState((current) => ({ ...current, firstSyncRequired: true }));
@@ -508,7 +537,7 @@ export function EdgeClient({
       session.current = null;
       setActiveSession(null);
     };
-  }, [loadWorklistFromCache, refreshLocalState, refreshWorklistNow]);
+  }, [loadWorklistFromCache, refreshLocalState, refreshWorklistNow, uploadPhotos]);
 
   // Story 1.12 (AC4): shared-tablet sign-out. Refused while captures would still upload (the
   // server attributes uploads to the bearer, not to the device-stamped actor); when online the
@@ -631,6 +660,66 @@ export function EdgeClient({
     await refreshLocalState(db);
     return event.event_id;
   }, [refreshLocalState, state.role, state.siteId, state.userId]);
+
+  // --- Story 8.9: report damage (the submitIndent pattern) ---------------------------------------
+
+  const submitDamage = useCallback(async (input: DamageSubmitInput): Promise<DamageSubmitResult> => {
+    const db = database.current;
+    if (!db || !state.userId || !state.siteId) {
+      throw new Error('Database or authentication state not available. Ensure the device is synced and logged in.');
+    }
+    if (signingOut.current) throw new Error('Signing out: capture is closed');
+    const occurredAt = new Date().toISOString();
+    const reportId = crypto.randomUUID();
+    const photoAttachmentId = crypto.randomUUID();
+    // The photo first: a report whose photo was never stored would wait forever for it.
+    await pendingPhotoStore.put({
+      attachmentId: photoAttachmentId,
+      blob: input.photo,
+      contentType: input.photo.type,
+      ownerUserId: state.userId,
+      createdAt: occurredAt,
+    });
+    const events = createDamageCaptureEvents({
+      sku: input.sku,
+      lotNumber: input.lotNumber,
+      quantity: input.quantity,
+      foundAt: input.foundAt,
+      binCode: input.binCode,
+      reasonCode: input.reasonCode,
+      reasonNote: input.reasonNote,
+      photoAttachmentId,
+      wholeLotRequested: input.wholeLotRequested,
+      replacement: input.replacement
+        ? { ...input.replacement, reason: t('damage.replacementReason') }
+        : null,
+      userId: state.userId,
+      role: state.role,
+      siteId: state.siteId,
+      deviceId: deviceId(),
+      reportId,
+      occurredAt,
+    });
+    // One local transaction, damage event first: the outbox uploads it before the linked indent.
+    const insertAll = async (tx: Parameters<typeof insertCaptureEvent>[0]) => {
+      for (const event of events) await insertCaptureEvent(tx, event);
+    };
+    if (db.writeTransaction) await db.writeTransaction(insertAll);
+    else await insertAll(db);
+    await refreshLocalState(db);
+    const damage = events[0]!;
+    return {
+      eventId: damage.event_id,
+      reportId,
+      replacementIndentId: (damage.payload['replacement_indent_id'] as string | null) ?? null,
+    };
+  }, [refreshLocalState, state.role, state.siteId, state.userId]);
+
+  const damageSettlement = useCallback(async (eventId: string): Promise<CaptureSettlement> => {
+    const db = database.current;
+    if (!db) return 'pending';
+    return readCaptureSettlement(db, eventId);
+  }, []);
 
   // --- Story 7.8: the five technician flows (the submitIndent pattern) ---------------------------
 
@@ -762,6 +851,12 @@ export function EdgeClient({
       onLoadCrossDockTask={loadCrossDockTask}
       onConfirmCrossDock={confirmCrossDock}
       onSubmitIndent={submitIndent}
+      reportDamage={{
+        onSubmit: submitDamage,
+        settlementOf: damageSettlement,
+        outboxVersion: `${state.pendingCount}:${state.failedCount}`,
+      }}
+      userId={state.userId}
       onRetry={() => {
         const db = database.current;
         if (db) void refreshLocalState(db);

@@ -245,7 +245,8 @@ async function remoteRequest(
   const res = await fetch(remote!.api_base.replace(/\/$/, '') + path, {
     method,
     headers: { 'Content-Type': 'application/json', ...headers },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    // Story 8.9: a Buffer body is sent as raw bytes (a photo upload); anything else as JSON.
+    ...(body ? { body: Buffer.isBuffer(body) ? new Uint8Array(body) : JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(600000),
   });
   const raw = await res.text();

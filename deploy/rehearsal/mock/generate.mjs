@@ -430,6 +430,9 @@ const people = [
   ['qchead1', 'Sunita Rawat', true, [['qc_head', 'qc', W, 'site'], ['qc_head', 'quality', W, 'site'], ['qc_head', 'inventory', R, 'site']]],
   ['dispatch1', 'Sanjay Mishra', true, [['dispatch_clerk', 'warehouse', W, 'site'], ['dispatch_clerk', 'inventory', R, 'site']]],
   ['notify1', 'Anita Joshi', true, [['notification_admin', 'notification', W, '*'], ['notification_admin', 'notification', R, '*']]],
+  // Story 8.9 (AC 6, D16): the CEO decides damage cases QC and finance disagree on, through DOA
+  // only, so the one grant sits on the employee module; nobody else holds the role.
+  ['ceo1', 'Rajiv Malhotra', true, [['ceo', 'employee', W, 'site']]],
 ].map(([local, display_name, fictitious, grants]) => ({
   email: `${local}@${DOMAIN}`,
   display_name,
@@ -461,6 +464,8 @@ const operations = {
     depthead: emailOf('subscr'), unloading: emailOf('unload1'),
     // Story 1.15: holds no procurement and no inventory grant, so its smoke flow proves the base hat.
     employee: emailOf('maint1'),
+    // Story 8.9: decides escalated damage cases.
+    ceo: emailOf('ceo1'),
   },
   // One band per transaction type, no value limits. Every type a pilot flow resolves through
   // resolveApprover / findRoleHolder; calibration.escalation is left out (the runbook forbids
@@ -488,6 +493,10 @@ const operations = {
     ['edge.refused_capture_resolution', 'warehouse_manager'],
     ['jobwork.over_norm_loss', 'finance_controller'],
     ['jobwork.offcut_acquisition', 'cfo'],
+    // Story 8.9: the two concurrence keys and the CEO escalation of a damage case.
+    ['damage.qc_concurrence', 'qc_head'],
+    ['damage.finance_concurrence', 'finance_controller'],
+    ['damage.escalation', 'ceo'],
   ].map(([transaction_type, role]) => ({ transaction_type, role, value_min: null, value_max: null })),
   // Unique per (criticality_class, safety_flag); together they cover every priority p1 to p4.
   sla_policies: [

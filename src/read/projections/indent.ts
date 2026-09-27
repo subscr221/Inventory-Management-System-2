@@ -31,6 +31,8 @@ export interface IndentRow {
   purchase_order_id: string | null;
   correlation_id: string | null;
   source_event_id: string;
+  /** Story 8.9 (AC 5): the damage case a replacement requisition was raised for. */
+  damage_report_id?: string | null;
   created_at: string;
   updated_at: string;
 }

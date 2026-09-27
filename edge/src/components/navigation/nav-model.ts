@@ -17,6 +17,9 @@ export const NAV_ENTRIES: NavEntry[] = [
   { name: 'New requisition', href: '/requisitions/new', label: 'nav.newRequisition' },
   { name: 'Check stock', href: '/stock', label: 'nav.checkStock' },
   { name: 'My requests', href: '/requests', label: 'nav.myRequests' },
+  // Story 8.9 (Task 11.1): report damage (every signed-in person) and the damage cases workbench.
+  { name: 'Report damage', href: '/damage/new', label: 'nav.reportDamage' },
+  { name: 'Damage cases', href: '/damage/cases', label: 'nav.damageCases' },
   // Enterprise views (Phase 2/4): real paths, rendered only when the bootstrap names them.
   { name: 'Workflows', href: '/workflows', label: 'nav.workflows' },
   { name: 'Access control', href: '/access-control', label: 'nav.accessControl' },

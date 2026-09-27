@@ -799,6 +799,14 @@
       "roles": [
         "notification_admin"
       ]
+    },
+    {
+      "email": "ceo1@ancorlabs.org",
+      "display_name": "Rajiv Malhotra",
+      "fictitious": true,
+      "roles": [
+        "ceo"
+      ]
     }
   ],
   "operations": {
@@ -827,7 +835,8 @@
       "indent": "indent1@ancorlabs.org",
       "depthead": "subscr@ancorlabs.org",
       "unloading": "unload1@ancorlabs.org",
-      "employee": "maint1@ancorlabs.org"
+      "employee": "maint1@ancorlabs.org",
+      "ceo": "ceo1@ancorlabs.org"
     },
     "doa_entries": [
       {
@@ -959,6 +968,24 @@
       {
         "transaction_type": "jobwork.offcut_acquisition",
         "role": "cfo",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "damage.qc_concurrence",
+        "role": "qc_head",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "damage.finance_concurrence",
+        "role": "finance_controller",
+        "value_min": null,
+        "value_max": null
+      },
+      {
+        "transaction_type": "damage.escalation",
+        "role": "ceo",
         "value_min": null,
         "value_max": null
       }

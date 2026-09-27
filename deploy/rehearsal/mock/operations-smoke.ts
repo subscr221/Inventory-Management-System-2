@@ -506,6 +506,298 @@ export async function employeeRequisition(ctx: Ctx): Promise<void> {
   ]);
 }
 
+const DAMAGE_STEPS = [
+  'damage: upload a photo as taken',
+  'damage: report 1 unit at a bin with a replacement',
+  'damage: raise the linked replacement requisition',
+  'damage: stores marks the units arrived in QC hold',
+  'damage: QC inspects and confirms the damage',
+  'damage: QC head turns the QC key',
+  'damage: finance turns the finance key',
+  'damage: finance records the ERP reference and closes',
+];
+const DAMAGE_ESCALATION_STEPS = [
+  'damage escalation: report and inspect a second case',
+  'damage escalation: QC key, then finance disagrees',
+  'damage escalation: the CEO decides',
+  'damage escalation: finance records the ERP reference',
+];
+
+/** A small JPEG-shaped body: the photo store checks the magic bytes, not the picture. */
+function smokeJpeg(): Buffer {
+  const out = randomBytes(2048);
+  out[0] = 0xff;
+  out[1] = 0xd8;
+  out[2] = 0xff;
+  out[3] = 0xe0;
+  return out;
+}
+
+/** A bin holding owned stock of the SKU that is not the QC hold area, or null. */
+async function damageBin(ctx: Ctx, sku: string): Promise<string | null> {
+  const quarantine = new Set([ctx.ops['qc_hold_zone'], ctx.ops['quarantine_bin']]);
+  const stocked = await stockOf(ctx, sku, 'invctl').catch(() => [] as Json[]);
+  const bin = stocked.find(
+    (l) => typeof l['location_code'] === 'string' && !quarantine.has(l['location_code']),
+  );
+  return (bin?.['location_code'] as string | undefined) ?? null;
+}
+
+/** A DOA-resolved damage decision as the configured actor, or the person the registry resolved. */
+async function damageDecision(
+  ctx: Ctx,
+  who: string,
+  grant: { role: string; module: string },
+  reportId: string,
+  path: string,
+  body: Json,
+): Promise<Json> {
+  const res = await approveAs(ctx, who, grant, async (headers) =>
+    ctx.request('POST', `/api/v1/damage-reports/${reportId}/${path}`, body, headers),
+  );
+  return (must(res, [200, 201], `damage ${path} (${who})`)['report'] ?? {}) as Json;
+}
+
+/**
+ * Story 8.9: report damage end to end - the base hat reports with a photo and a linked
+ * replacement, stores marks the units arrived, QC inspects, the two DOA keys concur and finance
+ * records the ERP reference. A second case drives a disagreement to the CEO. A pack without an
+ * actor or without stock of the SKU at a bin is a named SKIP, never a crash. Records are
+ * permanent: each run books two units of the SKU into the QC hold area and leaves them held
+ * (both cases close as write-offs).
+ */
+export async function damageReport(ctx: Ctx): Promise<void> {
+  let headers: Headers;
+  try {
+    headers = await ctx.as('employee');
+    for (const who of ['store', 'qc', 'qchead', 'compliance', 'ceo']) await ctx.as(who);
+  } catch (error) {
+    for (const name of [...DAMAGE_STEPS, ...DAMAGE_ESCALATION_STEPS])
+      skip(name, `missing actor: ${(error as Error).message}`);
+    return;
+  }
+  const bin = await damageBin(ctx, EMPLOYEE_SKU);
+  if (bin === null) {
+    for (const name of [...DAMAGE_STEPS, ...DAMAGE_ESCALATION_STEPS])
+      skip(name, `no owned ${EMPLOYEE_SKU} at a non-quarantine bin`);
+    return;
+  }
+  const photoId = uuid();
+  const indentId = uuid();
+  let reportId = '';
+  const report = async (extra: Json): Promise<Json> =>
+    (must(
+      await ctx.request(
+        'POST',
+        '/api/v1/damage-reports',
+        {
+          site_id: ctx.siteId,
+          sku: EMPLOYEE_SKU,
+          quantity: '1',
+          found_at: 'stock',
+          bin_code: bin,
+          reason_code: 'DAMAGED_COMPONENT',
+          photo_attachment_id: photoId,
+          ...extra,
+        },
+        headers,
+      ),
+      201,
+      'report damage',
+    )['report'] ?? {}) as Json;
+  const qcKey = { role: 'qc_head', module: 'qc' };
+  const financeKey = { role: 'finance_controller', module: 'compliance' };
+  const inspect = async (id: string): Promise<Json> =>
+    (must(
+      await ctx.request(
+        'POST',
+        `/api/v1/damage-reports/${id}/inspection`,
+        { confirmed_quantity: '1', defect_code: 'FUNCTIONAL' },
+        await ctx.as('qc'),
+      ),
+      [200, 201],
+      'inspect',
+    )['report'] ?? {}) as Json;
+
+  await flow([
+    [
+      DAMAGE_STEPS[0]!,
+      async () => {
+        const res = must(
+          await ctx.request('PUT', `/api/v1/attachments/${photoId}`, smokeJpeg(), {
+            ...headers,
+            'Content-Type': 'image/jpeg',
+          }),
+          [200, 201],
+          'photo upload',
+        );
+        return `${String(res['byte_size'])} bytes, sha256 ${String(res['sha256']).slice(0, 12)}`;
+      },
+    ],
+    [
+      DAMAGE_STEPS[1]!,
+      async () => {
+        const r = await report({ replacement_indent_id: indentId });
+        reportId = r['report_id'] as string;
+        if (r['hold_mode'] !== 'quarantined')
+          throw new Error(`hold_mode ${String(r['hold_mode'])} (${String(r['hold_note'])})`);
+        if (r['photo_status'] !== 'stored')
+          throw new Error(`photo_status ${String(r['photo_status'])}`);
+        return `${String(r['report_number'])} at ${bin}, booked into QC hold`;
+      },
+    ],
+    [
+      DAMAGE_STEPS[2]!,
+      async () => {
+        const res = must(
+          await ctx.request(
+            'POST',
+            '/api/v1/indents',
+            {
+              indent_id: indentId,
+              damage_report_id: reportId,
+              site_id: ctx.siteId,
+              department_code: 'MAINT',
+              business_stream: 'production',
+              need_by_date: today(),
+              urgent: true,
+              reason: 'Replacement for damaged units (operations smoke test)',
+              confirm_duplicate: true,
+              lines: [{ sku: EMPLOYEE_SKU, item_category: 'spares', requested_qty: 1, uom: 'EA' }],
+            },
+            headers,
+          ),
+          201,
+          'replacement indent',
+        );
+        const indent = (res['indent'] ?? {}) as Json;
+        if (indent['damage_report_id'] !== reportId)
+          throw new Error(`indent links ${String(indent['damage_report_id'])}`);
+        return `${String(indent['indent_number_ext'])} linked to the report`;
+      },
+    ],
+    [
+      DAMAGE_STEPS[3]!,
+      async () => {
+        const r = (must(
+          await ctx.request(
+            'POST',
+            `/api/v1/damage-reports/${reportId}/custody/arrived`,
+            {},
+            await ctx.as('store'),
+          ),
+          [200, 201],
+          'mark arrived',
+        )['report'] ?? {}) as Json;
+        if (r['physical_state'] !== 'in_qc_hold')
+          throw new Error(`physical_state ${String(r['physical_state'])}`);
+        return 'in QC hold';
+      },
+    ],
+    [
+      DAMAGE_STEPS[4]!,
+      async () => {
+        const r = await inspect(reportId);
+        if (r['status'] !== 'awaiting_keys') throw new Error(`status ${String(r['status'])}`);
+        return 'damage confirmed: 1 of 1';
+      },
+    ],
+    [
+      DAMAGE_STEPS[5]!,
+      async () => {
+        const r = await damageDecision(ctx, 'qchead', qcKey, reportId, 'keys/qc/turn', {
+          outcome: 'write_off',
+        });
+        return `qc key ${String(r['qc_key_status'])}`;
+      },
+    ],
+    [
+      DAMAGE_STEPS[6]!,
+      async () => {
+        const r = await damageDecision(
+          ctx,
+          'compliance',
+          financeKey,
+          reportId,
+          'keys/finance/turn',
+          { outcome: 'write_off' },
+        );
+        if (r['status'] !== 'outcome_final') throw new Error(`status ${String(r['status'])}`);
+        return `final ${String(r['final_outcome'])} by ${String(r['decided_by'])}`;
+      },
+    ],
+    [
+      DAMAGE_STEPS[7]!,
+      async () => {
+        const r = await damageDecision(ctx, 'compliance', financeKey, reportId, 'outcome', {
+          erp_document_ref_ext: `JV-SMOKE-${ctx.run}`.slice(0, 64),
+        });
+        if (r['status'] !== 'closed') throw new Error(`status ${String(r['status'])}`);
+        return `closed, ERP ${String(r['erp_document_ref_ext'])}`;
+      },
+    ],
+  ]);
+
+  let secondId = '';
+  await flow([
+    [
+      DAMAGE_ESCALATION_STEPS[0]!,
+      async () => {
+        const r = await report({ photo_attachment_id: uuid() });
+        secondId = r['report_id'] as string;
+        const inspected = await inspect(secondId);
+        if (inspected['status'] !== 'awaiting_keys')
+          throw new Error(`status ${String(inspected['status'])}`);
+        return `${String(r['report_number'])} awaiting keys`;
+      },
+    ],
+    [
+      DAMAGE_ESCALATION_STEPS[1]!,
+      async () => {
+        await damageDecision(ctx, 'qchead', qcKey, secondId, 'keys/qc/turn', {
+          outcome: 'write_off',
+        });
+        const r = await damageDecision(
+          ctx,
+          'compliance',
+          financeKey,
+          secondId,
+          'keys/finance/disagree',
+          { proposed_outcome: 'debit_note', reason: 'Supplier fault (operations smoke test)' },
+        );
+        if (r['status'] !== 'escalated') throw new Error(`status ${String(r['status'])}`);
+        return 'escalated to the CEO';
+      },
+    ],
+    [
+      DAMAGE_ESCALATION_STEPS[2]!,
+      async () => {
+        const r = await damageDecision(
+          ctx,
+          'ceo',
+          { role: 'ceo', module: 'employee' },
+          secondId,
+          'escalation/decide',
+          { outcome: 'write_off', reason: 'QC is right (operations smoke test)' },
+        );
+        if (r['decided_by'] !== 'escalation')
+          throw new Error(`decided_by ${String(r['decided_by'])}`);
+        return `final ${String(r['final_outcome'])} by escalation`;
+      },
+    ],
+    [
+      DAMAGE_ESCALATION_STEPS[3]!,
+      async () => {
+        const r = await damageDecision(ctx, 'compliance', financeKey, secondId, 'outcome', {
+          erp_document_ref_ext: `JV-SMOKE-ESC-${ctx.run}`.slice(0, 64),
+        });
+        if (r['status'] !== 'closed') throw new Error(`status ${String(r['status'])}`);
+        return `closed, ERP ${String(r['erp_document_ref_ext'])}`;
+      },
+    ],
+  ]);
+}
+
 /**
  * Story 3.12: a tolerance breach must reach a person who holds the owner role at pilot. Kept as
  * its own flow so a failure here does not SKIP the rest of the day. Leaves one open gate event with
@@ -1309,6 +1601,7 @@ async function main(): Promise<void> {
     await production(ctx);
     await indent(ctx);
     await employeeRequisition(ctx);
+    await damageReport(ctx);
     await maintenance(ctx);
   } catch (error) {
     crashed = true;

@@ -979,6 +979,8 @@ export interface IndentRaisedPayload {
   approver_actor_id?: string;
   doa_entry_id?: string;
   duplicate_window_days?: number;
+  /** Story 8.9 (AC 5, D15): the damage case this replacement requisition was raised for. */
+  damage_report_id?: string;
 }
 
 export interface IndentRaisedEnvelope extends Omit<EventEnvelope, 'payload'> {
@@ -5538,6 +5540,112 @@ export interface RefusedCaptureResolvedEnvelope extends Omit<EventEnvelope, 'pay
 }
 
 // ---------------------------------------------------------------------------
+// Story 8.9: damage cases (stream 'damage', stream_id = report_id) and the photo store
+// ---------------------------------------------------------------------------
+
+export type DamageOutcomeCode =
+  'debit_note' | 'return_for_replacement' | 'write_off' | 'accept_as_is_price_reduction';
+
+/** Captured on any device by any signed-in person (the base hat). reporter_user_id is server-stamped. */
+export interface DamageReportedPayload {
+  report_id: string;
+  site_id: string;
+  reporter_user_id: string;
+  sku: string;
+  lot_number: string | null;
+  quantity: string;
+  found_at: 'stock' | 'in_use';
+  bin_code: string | null;
+  reason_code: string;
+  reason_note: string | null;
+  photo_attachment_id: string;
+  whole_lot_requested: boolean;
+  replacement_indent_id: string | null;
+}
+
+export interface DamageUnitsArrivedPayload {
+  report_id: string;
+  note: string | null;
+}
+
+export interface DamageSentForExternalCheckPayload {
+  report_id: string;
+  destination: string;
+  reason: string;
+  expected_return_date: string | null;
+  gate_pass_ref_ext: string | null;
+}
+
+export interface DamageReturnedFromExternalCheckPayload {
+  report_id: string;
+  note: string | null;
+  external_result_ref_ext: string | null;
+}
+
+export interface DamageInspectedPayload {
+  report_id: string;
+  confirmed_quantity: string;
+  defect_code: string | null;
+  note: string | null;
+}
+
+export interface DamageWholeLotDecidedPayload {
+  report_id: string;
+  decision: 'hold_lot' | 'keep_local';
+  reason: string;
+  /** Server-derived: the governed Story 8.5 hold this decision placed, if any. */
+  hold_id?: string | null;
+  lot_already_held?: boolean;
+}
+
+export interface DamageKeyTurnedPayload {
+  report_id: string;
+  key: 'qc' | 'finance';
+  outcome: DamageOutcomeCode;
+  price_reduction_pct: string | null;
+  note: string | null;
+  /** Server-derived from the DOA registry. */
+  doa_entry_id?: string;
+}
+
+export interface DamageKeyWithdrawnPayload {
+  report_id: string;
+  key: 'qc' | 'finance';
+  reason: string;
+}
+
+export interface DamageDisagreedPayload {
+  report_id: string;
+  key: 'qc' | 'finance';
+  proposed_outcome: DamageOutcomeCode;
+  price_reduction_pct: string | null;
+  reason: string;
+  doa_entry_id?: string;
+}
+
+export interface DamageEscalationDecidedPayload {
+  report_id: string;
+  outcome: DamageOutcomeCode;
+  price_reduction_pct: string | null;
+  reason: string;
+  doa_entry_id?: string;
+}
+
+export interface DamageOutcomeRecordedPayload {
+  report_id: string;
+  erp_document_ref_ext: string;
+  note: string | null;
+}
+
+/** Metadata only: the bytes live in the attachment table, never on an event (D14). */
+export interface AttachmentUploadedPayload {
+  attachment_id: string;
+  content_type: string;
+  byte_size: number;
+  sha256: string;
+}
+
+// ---------------------------------------------------------------------------
 // Supported event types registry
 // ---------------------------------------------------------------------------
 export const SUPPORTED_EVENT_TYPES = {
@@ -6634,6 +6742,59 @@ export const SUPPORTED_EVENT_TYPES = {
   },
   'sync.refused_capture_resolved': {
     streamType: 'sync',
+    requiresBusinessStream: false,
+  },
+  // Story 8.9: the damage case on its own 'damage' stream (D2: never 'qc', whose registry pins
+  // every event central-only but one). Only damage.reported travels the edge door; the report
+  // relocates held stock inside its own transaction, as goods.received does, so the stream is not
+  // an inventory movement stream and carries no business-stream tag.
+  'damage.reported': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.units_arrived': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.sent_for_external_check': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.returned_from_external_check': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.inspected': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.whole_lot_decided': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.key_turned': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.key_withdrawn': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.disagreed': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.escalation_decided': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  'damage.outcome_recorded': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
+  // Story 8.9 (AC 7, D14): the photo upload's edit-log record; metadata only, never bytes.
+  'attachment.uploaded': {
+    streamType: 'attachment',
     requiresBusinessStream: false,
   },
 } as const;

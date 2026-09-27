@@ -168,6 +168,22 @@ import {
   cancelIndentHandler,
 } from './api/v1/indents.js';
 import {
+  createDamageReportHandler,
+  listDamageReportsHandler,
+  getDamageReportHandler,
+  markArrivedHandler,
+  sendExternalHandler,
+  markReturnedHandler,
+  inspectDamageHandler,
+  decideWholeLotHandler,
+  turnKeyHandler,
+  withdrawKeyHandler,
+  disagreeKeyHandler,
+  decideEscalationHandler,
+  recordOutcomeHandler,
+} from './api/v1/damage-reports.js';
+import { putAttachmentHandler, getAttachmentHandler } from './api/v1/attachments.js';
+import {
   draftPurchaseOrderHandler,
   getNativePurchaseOrderHandler,
   listPurchaseOrdersHandler,
@@ -790,6 +806,24 @@ export function createAppRouter(): Router {
   router.post('/api/v1/indents/:indentId/approve', approveIndentHandler);
   router.post('/api/v1/indents/:indentId/reject', rejectIndentHandler);
   router.post('/api/v1/indents/:indentId/cancel', cancelIndentHandler);
+
+  // Story 8.9: report damage - universal capture, QC task, two keys and the commercial outcome.
+  router.post('/api/v1/damage-reports', createDamageReportHandler);
+  router.get('/api/v1/damage-reports', listDamageReportsHandler);
+  router.get('/api/v1/damage-reports/:reportId', getDamageReportHandler);
+  router.post('/api/v1/damage-reports/:reportId/custody/arrived', markArrivedHandler);
+  router.post('/api/v1/damage-reports/:reportId/custody/sent-external', sendExternalHandler);
+  router.post('/api/v1/damage-reports/:reportId/custody/returned', markReturnedHandler);
+  router.post('/api/v1/damage-reports/:reportId/inspection', inspectDamageHandler);
+  router.post('/api/v1/damage-reports/:reportId/whole-lot', decideWholeLotHandler);
+  router.post('/api/v1/damage-reports/:reportId/keys/:key/turn', turnKeyHandler);
+  router.post('/api/v1/damage-reports/:reportId/keys/:key/withdraw', withdrawKeyHandler);
+  router.post('/api/v1/damage-reports/:reportId/keys/:key/disagree', disagreeKeyHandler);
+  router.post('/api/v1/damage-reports/:reportId/escalation/decide', decideEscalationHandler);
+  router.post('/api/v1/damage-reports/:reportId/outcome', recordOutcomeHandler);
+  // Story 8.9 (AC 7, D14): the photo store; the PUT body is the raw image (router RAW_BODY_PATH_PREFIX).
+  router.put('/api/v1/attachments/:attachmentId', putAttachmentHandler);
+  router.get('/api/v1/attachments/:attachmentId', getAttachmentHandler);
 
   // Story 4.4: Purchase Order Management
   router.post('/api/v1/purchase-orders', draftPurchaseOrderHandler);

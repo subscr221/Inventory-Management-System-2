@@ -125,6 +125,11 @@ export async function provisionEmployeeBase(page: Page, options: EmployeeBaseStu
           : indents;
         return json({ indents: limited });
       }
+      // Story 8.9: My requests also lists the caller's damage reports; none for these specs.
+      if (url.includes('/api/v1/damage-reports?')) {
+        if (!navigator.onLine) throw new TypeError('offline');
+        return json({ reports: [] });
+      }
       if (url.endsWith('/api/v1/edge/events')) {
         throw new TypeError('offline');
       }

@@ -336,7 +336,7 @@ function isIsoTimestamp(value: unknown): value is string {
   );
 }
 
-function isBoundedText(value: unknown, max: number): value is string {
+export function isBoundedText(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
 
@@ -4923,7 +4923,7 @@ export const NCR_HOLD_TERMINAL_OUTCOME = 'closed_with_capa';
  * Binding Scope Decision 10: the fail-closed defect-code gate, mirroring the Story 7.8
  * closure-code route - the allowed list is returned in the error detail.
  */
-function assertKnownDefectCode(value: unknown, context: string): void {
+export function assertKnownDefectCode(value: unknown, context: string): void {
   if (typeof value !== 'string' || !config.qc.defectCodes.includes(value)) {
     reject(
       'DEFECT_CODE_UNKNOWN',
@@ -4957,6 +4957,44 @@ export async function isRepeatDefect(
 ): Promise<boolean> {
   const prior = await countMatchingNcrsInWindow(sku, defectCode, businessDate, windowDays, client);
   return prior >= threshold;
+}
+
+/**
+ * Story 8.9: the one builder of a governed qc.hold_placed envelope, shared by the Story 8.5 hold
+ * route and the damage whole-lot decision (which persists it on the decision's own transaction).
+ * The applier below re-derives everything else under the lot lock.
+ */
+export function buildQcHoldPlacedEnvelope(input: {
+  holdId: string;
+  lotId: string;
+  holdReason: string;
+  defectCode?: string | null;
+  actor: { user_id: string; role: string; location_id: string };
+  occurredAt: string;
+  idempotencyKey: string;
+  correlationId?: string;
+  causationId?: string | null;
+}): EventEnvelope {
+  return {
+    stream_type: 'qc',
+    stream_id: input.holdId,
+    event_type: QC_HOLD_PLACED,
+    payload: {
+      hold_id: input.holdId,
+      lot_id: input.lotId,
+      hold_reason: input.holdReason,
+      ...(input.defectCode !== undefined && input.defectCode !== null
+        ? { defect_code: input.defectCode }
+        : {}),
+    },
+    metadata: {
+      correlation_id: input.correlationId ?? randomUUID(),
+      ...(input.causationId ? { causation_id: input.causationId } : {}),
+      actor: input.actor,
+      occurred_at: input.occurredAt,
+    },
+    idempotency_key: input.idempotencyKey,
+  };
 }
 
 function assertHoldPlacedShape(envelope: EventEnvelope): void {

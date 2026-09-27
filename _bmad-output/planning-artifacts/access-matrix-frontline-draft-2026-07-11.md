@@ -118,6 +118,14 @@ Three consequences worth carrying:
   above it, and an unheld `finance_controller` blocks disposal outright. BOTH roles must be granted
   to real, different users before Story 9.7 goes live.
 
+### Damage-case decisions (Story 8.9)
+
+The damage-case decision role table below adds the one role Story 8.9 introduces. The CEO acts only through the DOA registry, so the role is granted on the `employee` module at the site, held by its own account and by no other person.
+
+| Role ID | Description | Location scope | Anchors |
+|---|---|---|---|
+| `ceo` | Decides damage cases escalated when QC and finance disagree; DOA `damage.escalation` | Site | Story 8.9 AC 3, AC 6 |
+
 ### Deferred to full matrix (placeholders — wave 1 and later)
 
 Restructured from prose into a tracked table and closed out in the structured cross-functional review (2026-07-12) so status and ownership survive the growth to ~36 roles. Tier `read-only` and `executive` roles are modeled as inherited permission bundles over existing capability rows, not bespoke per-role rows (inheritance and location-wildcard-scope rules defined once, in §3.1, and applied to both tiers below).
@@ -254,6 +262,19 @@ The employee base capability table below lists what the `employee` hat grants. E
 | Raise requisition | C |
 | Stock availability (in stock or not, where) | R |
 | My requests (own only) | R |
+| Report damage (Story 8.9) | C |
+
+### 3.9 Damage cases (Story 8.9)
+
+The damage-case capability table below lists who works a damage case after it is reported. Reporting itself is the base-hat row in section 3.8. The key, whole-lot, escalation and ERP-reference rows are granted by the DOA registry, not by a hat: the hat only lets the person reach the screen, and the registry names the one person who may act. The reporter never turns a key, decides the whole lot or decides the escalation on their own case, the two keys are two different people, and the escalation decider holds neither key (SOD-01 applied to a two-key case).
+
+| Capability | Who | Grant |
+|---|---|---|
+| Inspect reported units (confirm the damaged quantity) | `qc_inspector`, `qc_head` | `qc` write at the site |
+| Mark units arrived in QC hold, sent for external check, returned | Store roles, QC | `warehouse` or `qc` write at the site |
+| Decide the whole-lot hold and turn the QC key | `qc_head` | DOA `damage.qc_concurrence` |
+| Turn the finance key and record the ERP reference | `finance_controller` | DOA `damage.finance_concurrence` |
+| Decide an escalated case | `ceo` | DOA `damage.escalation` |
 
 ## 4. Dashboards and Reporting (pilot interim)
 
@@ -319,6 +340,9 @@ Collected during the §7 interview pass and written to the DOA registry (FR-DOA-
 | Transfer bands | `warehouse_manager`, `inventory_controller` | Intra-site transfer: `warehouse_manager` approves alone, any value. Inter-site transfer up to INR 1,00,000: `warehouse_manager` approves alone. Above INR 1,00,000: `inventory_controller` co-approval required. | DOA registry (FR-DOA-01) | collected, finalized |
 | Loss-norm/write-off bands | `jobwork_supervisor` | Over-norm process loss up to 2 percent of order value: `jobwork_supervisor` approves alone. Above 2 percent: escalate to Finance Controller. | DOA registry (FR-DOA-01) | collected, finalized |
 | Tolerance-breach acceptance band | `unloading_supervisor` (primary), `warehouse_manager` (escalation) | `unloading_supervisor` accepts breaches up to 5 percent over the PO-token tolerance. Above 5 percent, or if `unloading_supervisor` is unavailable, `warehouse_manager` is the escalation approver. | DOA registry (FR-DOA-01) | collected, finalized |
+| Damage-case QC key (Story 8.9) | `qc_head` | One unbounded band, `damage.qc_concurrence`: every damage case needs the QC head's key and whole-lot decision. | DOA registry (FR-DOA-01) | pilot band, pending Super Admin review |
+| Damage-case finance key (Story 8.9) | `finance_controller` | One unbounded band, `damage.finance_concurrence`: every damage case needs the finance controller's key and ERP reference. | DOA registry (FR-DOA-01) | pilot band, pending Super Admin review |
+| Damage-case escalation (Story 8.9) | `ceo` | One unbounded band, `damage.escalation`: the CEO decides every case QC and finance disagree on. | DOA registry (FR-DOA-01) | pilot band, pending Super Admin review |
 
 ## 9. Changelog
 
@@ -327,3 +351,4 @@ Collected during the §7 interview pass and written to the DOA registry (FR-DOA-
 | v0.1 | 2026-07-11 | Initial draft skeleton; all cells proposed defaults pending validation | Super Admin (security lead) |
 | v1.0 | 2026-07-12 | Structured cross-functional review closed all seven open items in §6 (formerly §6 v0.1): cells validated (§7), DOA bands collected (§8), tolerance-breach approver split resolved (§3.2), SOD-11 adopted (§5), ~36-role owners assigned (§2), traceability audit closed (OQ7), external roles formally excluded pending trust-boundary review (§6 item 7). Document status changed from DRAFT to FINALIZED. | Department heads listed in §7; Super Admin (security lead) |
 | v1.1 | 2026-09-27 | Story 1.15 (Employee Base Role): section 2 gains the `employee` base hat held by every signed-in person at their site; section 3.8 gains three capability rows (raise requisition, stock availability without quantities, own requests). Quantity, valuation and approval rows are unchanged. | Story 1.15 dev record; pending Super Admin (security lead) review |
+| v1.2 | 2026-09-27 | Story 8.9 (Report Damage): section 2 gains the `ceo` role (decides escalated damage cases through DOA `damage.escalation`, site scope); section 3.8 gains "Report damage" for the employee base hat; new section 3.9 lists the damage-case capabilities (inspection, custody marks, the two DOA keys, the whole-lot decision, escalation, the ERP reference); section 8 gains the three damage DOA bands. | Story 8.9 dev record; pending Super Admin (security lead) review |

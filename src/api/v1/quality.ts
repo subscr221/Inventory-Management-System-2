@@ -30,6 +30,7 @@ import {
   QC_BATCH_RELEASE_RECORDED,
   QC_NCR_OUTCOME_RECORDED,
   QC_HOLD_PLACED,
+  buildQcHoldPlacedEnvelope,
   QC_HOLD_RELEASED,
   QC_NCR_RAISED,
   QC_CAPA_OPENED,
@@ -2327,20 +2328,15 @@ const placeQcHoldBase: RouteHandler = async (req, res, _params) => {
     const defectCode = optionalNullableString(body, 'defect_code');
     const holdId = randomUUID();
     const persisted = await persistEvent(
-      {
-        stream_type: 'qc',
-        stream_id: holdId,
-        event_type: QC_HOLD_PLACED,
-        payload: {
-          hold_id: holdId,
-          lot_id: lot.lot_id,
-          hold_reason: (body['hold_reason'] as string).trim(),
-          ...(defectCode !== null ? { defect_code: defectCode } : {}),
-        },
-        metadata: qcMetadata(actor, now),
-        idempotency_key: idempotencyKeyFrom(body),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
+      buildQcHoldPlacedEnvelope({
+        holdId,
+        lotId: lot.lot_id,
+        holdReason: (body['hold_reason'] as string).trim(),
+        defectCode,
+        actor: { user_id: actor.userId, role: actor.role, location_id: actor.eventLocationId },
+        occurredAt: now,
+        idempotencyKey: idempotencyKeyFrom(body),
+      }),
       auditCtxFor(req, actor, 201),
     );
     const persistedHoldId = replayIdOrReject(persisted, QC_HOLD_PLACED, 'hold_id');

@@ -809,6 +809,21 @@ export const config = {
       true,
     ),
   },
+  damage: {
+    // Story 8.9 (Table 8): the stores role told to bring reported units from the bin to the QC
+    // hold area, and told again when a case clears or closes. Parsed exactly like
+    // QC_INSPECTION_TASK_NOTIFICATION_ROLE: only an ABSENT variable takes the default.
+    storesNotificationRole: (() => {
+      const raw = process.env['DAMAGE_STORES_NOTIFICATION_ROLE'];
+      const value = raw === undefined ? 'store_assistant' : raw.trim();
+      if (value.length === 0 || value.length > 100 || /[\r\n,]/.test(value)) {
+        throw new Error(
+          `Invalid DAMAGE_STORES_NOTIFICATION_ROLE "${raw}": must be a single non-empty role name of at most 100 characters with no line breaks or commas.`,
+        );
+      }
+      return value;
+    })(),
+  },
   qc: {
     // Story 8.5 (FR-Q-10, Binding Scope Decision 10): ONE flat enterprise defect-code catalogue -
     // per-site catalogues are incompatible with the enterprise-wide repeat count in Decision 12

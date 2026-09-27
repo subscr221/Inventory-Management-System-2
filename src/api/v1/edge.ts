@@ -25,6 +25,7 @@ import {
   // requires.
   assertEdgeProductionEventAllowed,
   assertEdgeQcEventAllowed,
+  assertEdgeDamageEventAllowed,
   isPermanentUploadErrorCode,
   classifyUploadFailure,
   REBASE_SAFE_EVENT_TYPES,
@@ -45,10 +46,10 @@ import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/i
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 import { config } from '../../config/index.js';
 import type { AuthContext } from '../../middleware/context.js';
-import type { RoleAssignment } from '../../read/projections/users.js';
 import { getCrossDockTaskById } from '../../read/projections/cross_dock_task.js';
 import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
 import { resolveApprover, INDENT_DOA_TYPE } from './indents.js';
+import { damageAuthorityTypesFor } from '../../compliance/damage.js';
 import {
   countOpenWorkOrders,
   listOpenWorkOrdersForWorklist,
@@ -340,6 +341,10 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
     if (typeof streamType === 'string' && isEmployeeEdgeEvent(body)) {
       return [EMPLOYEE_MODULE, streamType];
     }
+    // Story 8.9: no one holds a 'damage' module, so every other damage event is routed through the
+    // base hat as well and meets its explicit CENTRAL_ONLY_OPERATION refusal in the handler rather
+    // than a module denial that would say nothing about why.
+    if (streamType === 'damage') return [EMPLOYEE_MODULE, streamType];
     if (typeof streamType === 'string') return streamType;
   }
   return '';
@@ -353,7 +358,7 @@ function resolveModuleFromBody(_params: Record<string, string>, body: unknown): 
  */
 const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   name: string;
-  modules: readonly string[] | '*' | 'refused-captures';
+  modules: readonly string[] | '*' | 'refused-captures' | 'damage-cases';
   functionScope: 'read' | 'write';
 }> = [
   { name: 'Dashboard', modules: '*', functionScope: 'read' },
@@ -362,24 +367,51 @@ const NAVIGATION_CAPABILITIES: ReadonlyArray<{
   { name: 'New requisition', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'write' },
   { name: 'Check stock', modules: [EMPLOYEE_MODULE, 'inventory'], functionScope: 'read' },
   { name: 'My requests', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
+  // Story 8.9 (AC 1, AC 8): every signed-in person reports damage; the workbench shows to the
+  // people who work cases - QC or stores at the site, or a damage DOA authority.
+  { name: 'Report damage', modules: [EMPLOYEE_MODULE], functionScope: 'write' },
+  { name: 'Damage cases', modules: 'damage-cases', functionScope: 'read' },
 ];
 
-function navigationFor(roles: RoleAssignment[], siteId: string): string[] {
-  return NAVIGATION_CAPABILITIES.filter(({ modules, functionScope }) => {
-    if (modules === '*') return true;
-    if (modules === 'refused-captures') {
-      return hasRefusedCaptureReadScope(
+/**
+ * Story 8.9 (Task 11.1): the Damage cases workbench scope - a qc or warehouse assignment covering
+ * the site, or the active holder of the role of any of the three damage DOA entries (the same
+ * visibility rule the list route applies, D11).
+ */
+async function hasDamageCaseScope(authContext: AuthContext, siteId: string): Promise<boolean> {
+  const siteHolder = authContext.roles.some(
+    (r) =>
+      (r.module === 'qc' || r.module === 'warehouse' || r.module === '*') &&
+      assignmentCoversLocation(r, siteId),
+  );
+  if (siteHolder) return true;
+  return (await damageAuthorityTypesFor(authContext.userId)).length > 0;
+}
+
+async function navigationFor(authContext: AuthContext, siteId: string): Promise<string[]> {
+  const roles = authContext.roles;
+  const names: string[] = [];
+  for (const { name, modules, functionScope } of NAVIGATION_CAPABILITIES) {
+    let shown: boolean;
+    if (modules === '*') shown = true;
+    else if (modules === 'refused-captures') {
+      shown = hasRefusedCaptureReadScope(
         roles.filter((r) => r.module !== EMPLOYEE_MODULE),
         siteId,
       );
+    } else if (modules === 'damage-cases') {
+      shown = await hasDamageCaseScope(authContext, siteId);
+    } else {
+      shown = roles.some(
+        (r) =>
+          (modules.includes(r.module) || r.module === '*') &&
+          (functionScope === 'read' || r.functionScope === 'write') &&
+          assignmentCoversLocation(r, siteId),
+      );
     }
-    return roles.some(
-      (r) =>
-        (modules.includes(r.module) || r.module === '*') &&
-        (functionScope === 'read' || r.functionScope === 'write') &&
-        assignmentCoversLocation(r, siteId),
-    );
-  }).map(({ name }) => name);
+    if (shown) names.push(name);
+  }
+  return names;
 }
 
 function resolveLocationFromBody(
@@ -406,7 +438,7 @@ const edgeBootstrapBase: RouteHandler = async (req, res) => {
 
   // Story 1.14 (AC 2, Binding Decisions 2 and 4): the edge renders only the names listed here.
   // Story 1.15 (D7): derived from NAVIGATION_CAPABILITIES against the caller's assignments.
-  const navigation = navigationFor(authContext.roles, assignment.locationId);
+  const navigation = await navigationFor(authContext, assignment.locationId);
 
   sendJson(res, 200, {
     user_id: authContext.userId,
@@ -501,6 +533,8 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
   // Story 8.1 (Binding Scope Decision 9): the same allowlist shape for the qc stream - plan
   // creation, approval, completion hand-off and conditional release are central-only.
   assertEdgeQcEventAllowed(body);
+  // Story 8.9 (D2): only the damage report itself is an edge capture.
+  assertEdgeDamageEventAllowed(body);
   // Story 6.4 (FR-MO-13, AC 6): the production stream's allowlist. Release, cancel and close are
   // central-only; close is caught by a payload predicate because it shares an event type with the
   // transitions a plant device legitimately records offline. AC 6 requires the REFUSAL itself to
@@ -726,6 +760,11 @@ const edgeEventUploadBase: RouteHandler = async (req, res) => {
     const approval = await resolveApprover(INDENT_DOA_TYPE, estimatedValue);
     if (approval.approverActorId) body.payload['approver_actor_id'] = approval.approverActorId;
     if (approval.doaEntryId) body.payload['doa_entry_id'] = approval.doaEntryId;
+  }
+  // Story 8.9 (D3): the reporter is the authenticated actor, never trusted from the edge payload
+  // (the requester_user_id stamp above). The damage applier re-stamps it from the actor as well.
+  if (body.stream_type === 'damage' && body.event_type === 'damage.reported') {
+    body.payload['reporter_user_id'] = authContext.userId;
   }
   // Story 7.8: the maintenance identity block. Nothing in any of the five technician payloads
   // names the actor (fault reporter, status updater, meter reader, spares issuer and work-order

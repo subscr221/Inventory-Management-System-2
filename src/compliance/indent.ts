@@ -16,6 +16,7 @@ import {
 } from '../read/projections/indent.js';
 import { findActiveDelegation } from '../read/projections/doa_registry.js';
 import { emitNotification, emitNotificationInTransaction } from '../notify/emit.js';
+import { assertReplacementLink } from './damage.js';
 
 const PROCUREMENT_STREAM_TYPES = new Set(['procurement']);
 const INDENT_EVENT_TYPES = new Set([
@@ -148,6 +149,14 @@ function assertIndentRaisedShape(p: Record<string, unknown>): void {
   }
   if (p['reason'] !== undefined && p['reason'] !== null && typeof p['reason'] !== 'string') {
     reject('INVALID_PARAMS', 'reason must be a string');
+  }
+  // Story 8.9 (AC 5, D15): a replacement requisition names its damage case; the applier checks it.
+  if (
+    p['damage_report_id'] !== undefined &&
+    p['damage_report_id'] !== null &&
+    !isUuid(p['damage_report_id'])
+  ) {
+    reject('INVALID_PARAMS', 'damage_report_id must be a UUID');
   }
 
   if (!Array.isArray(p['lines']) || (p['lines'] as unknown[]).length === 0) {
@@ -309,6 +318,20 @@ async function applyIndentRaised(
   ) {
     reject('INVALID_PARAMS', 'occurred_at is required and must be a valid ISO 8601 date string');
   }
+  // Story 8.9 (AC 5, D15): the replacement link is validated before anything is written - the case
+  // must name this indent back and belong to this requester. Approval, duplicate detection and
+  // numbering are untouched: a replacement is an ordinary requisition under normal rules.
+  const damageReportId = isUuid(p['damage_report_id']) ? (p['damage_report_id'] as string) : null;
+  if (damageReportId !== null) {
+    await assertReplacementLink(
+      {
+        indentId,
+        damageReportId,
+        requesterUserId: p['requester_user_id'] as string,
+      },
+      client,
+    );
+  }
   const year = new Date(occurredAt).getUTCFullYear();
   const indentNumber = await allocateIndentNumber(year, client);
 
@@ -367,6 +390,12 @@ async function applyIndentRaised(
     );
   }
   await recomputeIndentEstimatedValue(indentId, client);
+  if (damageReportId !== null) {
+    await client.query(`UPDATE indent SET damage_report_id = $2 WHERE indent_id = $1`, [
+      indentId,
+      damageReportId,
+    ]);
+  }
 
   if (duplicateOf) {
     // The indent.duplicate_flagged audit event is written by recordIndentDuplicateFlag AFTER this
