@@ -1,5 +1,5 @@
 # generated: 2026-07-12
-# last_updated: '2026-09-17' (9-6 done via group C code review 2026-09-06: 2 decisions ruled, 9
+# last_updated: 2026-09-27 (story 3-12 code review, moved review -> done)
 #   patches applied, story-9-6 22/22, gates clean; 2 deferred 9.6C-1/9.6C-2; 9-7 done
 #   (code review chunks A-E 2026-09-06: chunk A 12 patches + decision-1 interim, chunk B 6,
 #   chunk C 8, chunk E 9 docs patches all applied; chunk D partial on 2026-09-06, COMPLETED
@@ -943,7 +943,7 @@ development_status:
   3-9-forward-pick-replenishment-fr-w-08: done   # PILOT
   3-10-cross-docking-execution-fr-w-09: done   # PILOT
   3-11-grn-line-condition-and-reason-codes: done   # PRE-PILOT BLOCKING (sprint-change 2026-09-26); story context created 2026-09-26 via create-story (baseline 442a2f1). User rulings: store reports and QC decides; units-only quarantine via ZONE-QC-HOLD (no lot-wide 8.5 hold); REJECTED posts stock into quarantine, excluded from PO receipt sums. Code review 2026-09-27 (Blind Hunter + Edge Case Hunter + Acceptance Auditor): 2 decisions resolved (DAMAGED lines over the PO tolerance band now always quarantine per AC3; wider job-work stock_class exemption ratified), 4 patches applied (stray evidence fields rejected, boundary tests, OTHER notification test, discrepancy-view negative test), 1 deferred (pre-existing vacuous schema-drift assertion), 5 dismissed. Full suite 2428/2428.
-  3-12-weighbridge-breach-task-routing-for-pilot-roles: ready-for-dev   # PRE-PILOT BLOCKING defect (sprint-change 2026-09-26); story context created 2026-09-27 via create-story. Routing decision: unloading_supervisor (access matrix breach owner), receiving_supervisor not provisioned. Staging check is runbook row 2.10e (operator task).
+  3-12-weighbridge-breach-task-routing-for-pilot-roles: done   # PRE-PILOT BLOCKING defect (sprint-change 2026-09-26); story context created 2026-09-27 via create-story. Routing decision: unloading_supervisor (access matrix breach owner), receiving_supervisor not provisioned. Staging check is runbook row 2.10e (operator task, still pending). Code review 2026-09-27 (Blind Hunter + Edge Case Hunter + Acceptance Auditor): 1 decision deferred (DOA-band magnitude/availability escalation to warehouse_manager not implemented, real gap corrected in deferred-work.md, follow-up story before scaling past pilot), 1 patch applied (smoke-leg crash guards), 2 deferred, 11 dismissed.
   epic-3-retrospective: optional
   # story 3-2 code review 2026-07-23: 2 decisions resolved + 7 patches applied (server-generated gate_event_id, IST-based localYmd, removed redundant binding_token alias, UNIQUE correlation_id, pagination limit, negative-path tests); 1 patch reverted (alreadyPersisted null-key throw broke HTTP path); moved to done
 

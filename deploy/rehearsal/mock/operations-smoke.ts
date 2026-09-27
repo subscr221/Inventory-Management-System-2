@@ -13,8 +13,11 @@
 // cycle count with approval by another person, pick + pack (a wrong lot refused first) + IRN + documents + dispatch of a
 // seeded sales order, a production order for a seeded BOM (release, stage, issue,
 // complete against the inspection plan), an indent raised and approved, a maintenance fault
-// through work order to completion. Every record is permanent (append-only platform): a remote
-// run consumes one sales order and a little stock each time.
+// through work order to completion. A separate leg (Story 3.12) drives a second vehicle through
+// gate and weighbridge with double the ordered weight and checks the tolerance breach reaches the
+// unloading supervisor's in-app notifications. Every record is permanent (append-only platform):
+// a remote run consumes one sales order and a little stock each time, and leaves one open gate
+// event with a breach weighment behind.
 
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -357,6 +360,135 @@ export async function inbound(ctx: Ctx): Promise<void> {
         );
         must(approved, 200, 'approve adjustment');
         return `self-approval refused (${String(self.body['error_code'] ?? self.status)}), approved by the warehouse manager`;
+      },
+    ],
+  ]);
+}
+
+/**
+ * Story 3.12: a tolerance breach must reach a person who holds the owner role at pilot. Kept as
+ * its own flow so a failure here does not SKIP the rest of the day. Leaves one open gate event with
+ * a breach weighment per run (records are permanent).
+ */
+export async function inboundBreach(ctx: Ctx): Promise<void> {
+  const po = ctx.ops['operations_po'] as string;
+  let token = '';
+  let weighbridgeEventId = '';
+  let breachReason = '';
+
+  await flow([
+    [
+      'inbound: weighbridge breach reaches the unloading supervisor - gate entry',
+      async () => {
+        // A fresh vehicle and challan: ctx.run is stable per site on remote re-runs, so the day's
+        // challan (CH-<run>) would collide with the inbound leg.
+        const res = must(
+          await ctx.request(
+            'POST',
+            '/api/v1/gate-events',
+            {
+              gate_event_id: uuid(),
+              site_code_ext: ctx.siteCode,
+              po_ref_ext: po,
+              vehicle_reg_ext: 'UP81BR0001',
+              challan_photo_ref: `photo://smoke/${ctx.run}/breach`,
+              challan_number_ext: `CH-BR-${uuid().slice(0, 8)}`,
+              driver_name: 'Smoke Driver 2',
+              gate_id: 'GATE-1',
+              entered_at: new Date().toISOString(),
+            },
+            await ctx.as('gate'),
+          ),
+          201,
+          'gate event (breach vehicle)',
+        );
+        token = res['correlation_id'] as string;
+        if (!token) throw new Error('gate event (breach vehicle) returned no correlation_id');
+        return `binding ${String(res['binding_status'])} to ${po}`;
+      },
+    ],
+    [
+      'inbound: weighbridge breach reaches the unloading supervisor - weighment out of band',
+      async () => {
+        const orders = (
+          ctx.ops['operations_po_snapshot']
+            ? [ctx.ops['operations_po_snapshot']]
+            : packJson(ctx, 'erp-sync-purchase-orders.json')['purchase_orders']
+        ) as {
+          po_number_ext: string;
+          lines: { line_no: number; ordered_qty: number }[];
+        }[];
+        const orderLine2 = orders
+          .find((o) => o.po_number_ext === po)
+          ?.lines.find((l) => l.line_no === 2);
+        if (!orderLine2) throw new Error(`PO ${po} has no line 2 for the breach leg`);
+        const ordered = orderLine2.ordered_qty;
+        const res = must(
+          await ctx.request(
+            'POST',
+            '/api/v1/weighbridge-events',
+            {
+              correlation_id: token,
+              tare_kg: 7000,
+              // Net is double the ordered quantity: far above any tolerance band.
+              gross_kg: 7000 + ordered * 2,
+              po_ref_ext: po,
+              line_no: 2,
+              device_id: 'WB-1',
+              capture_method: 'MANUAL',
+            },
+            await ctx.as('weighbridge'),
+          ),
+          201,
+          'weighbridge event (breach)',
+        );
+        if (res['status'] !== 'tolerance_breach')
+          throw new Error(`weighment ${String(res['status'])}, expected tolerance_breach`);
+        if (typeof res['tolerance_breach_reason'] !== 'string' || !res['tolerance_breach_reason'])
+          throw new Error('tolerance_breach_reason missing on the breach response');
+        weighbridgeEventId = res['weighbridge_event_id'] as string;
+        breachReason = res['tolerance_breach_reason'];
+        return `net ${String(res['net_kg'])} kg flagged: ${breachReason}`;
+      },
+    ],
+    [
+      'inbound: weighbridge breach reaches the unloading supervisor - notification with the reason',
+      async () => {
+        // Local mode boots the router only (no dispatcher interval): run one cycle by hand. Remote
+        // mode relies on the app's interval (NOTIFY_DISPATCH_INTERVAL_MS, default 5000).
+        if (!ctx.remote) {
+          const { runDispatchCycle } = await import('../../../src/notify/dispatch.js');
+          await runDispatchCycle();
+        }
+        const deadline = Date.now() + 30_000;
+        let seen = 0;
+        for (;;) {
+          const res = must(
+            await ctx.request(
+              'GET',
+              '/api/v1/notifications?type=weighbridge_tolerance_breach',
+              undefined,
+              await ctx.as('unloading'),
+            ),
+            200,
+            'unloading supervisor notifications',
+          );
+          const list = listOf(res, 'notifications');
+          seen = list.length;
+          const mine = list.find((n) => n['object_id'] === weighbridgeEventId);
+          if (mine) {
+            if (mine['next_step'] !== breachReason)
+              throw new Error(
+                `next_step "${String(mine['next_step'])}" differs from the breach reason "${breachReason}"`,
+              );
+            return `${ctx.emailOf('unloading')} sees the breach: ${breachReason}`;
+          }
+          if (Date.now() >= deadline)
+            throw new Error(
+              `no breach notification for ${weighbridgeEventId} after 30 s (${seen} breach notifications in the inbox)`,
+            );
+          await new Promise((r) => setTimeout(r, 2000));
+        }
       },
     ],
   ]);
@@ -1031,6 +1163,7 @@ async function main(): Promise<void> {
     if (!remote || hasFlag('--with-setup')) await setupOperations(ctx);
     await lotMasterCheck(ctx);
     await inbound(ctx);
+    await inboundBreach(ctx);
     await outbound(ctx);
     await production(ctx);
     await indent(ctx);

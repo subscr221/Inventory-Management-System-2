@@ -270,6 +270,13 @@
       "holder": "unload1@ancorlabs.org"
     },
     {
+      "role": "unloading_supervisor",
+      "module": "notification",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "unload1@ancorlabs.org"
+    },
+    {
       "role": "qc_inspector",
       "module": "qc",
       "function_scope": "write",

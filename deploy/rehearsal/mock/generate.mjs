@@ -417,7 +417,7 @@ const people = [
   ['erp1', 'ERP adapter service', false, [['svc_erp_adapter', 'inventory', W, '*']]],
   ['gate1', 'Ramesh Yadav', false, [['gate_officer', 'inventory', W, 'site'], ['weighbridge_operator', 'inventory', W, 'site']]],
   ['store1', 'Suresh Verma', false, [['store_assistant', 'receiving', W, 'site'], ['store_assistant', 'inventory', W, 'site'], ['store_assistant', 'warehouse', W, 'site']]],
-  ['unload1', 'Mahesh Tyagi', false, [['unloading_supervisor', 'receiving', W, 'site'], ['unloading_supervisor', 'inventory', R, 'site']]],
+  ['unload1', 'Mahesh Tyagi', false, [['unloading_supervisor', 'receiving', W, 'site'], ['unloading_supervisor', 'inventory', R, 'site'], ['unloading_supervisor', 'notification', R, 'site']]],
   ['qc1', 'Neha Saxena', false, [['qc_inspector', 'qc', W, 'site'], ['qc_inspector', 'quality', W, 'site'], ['qc_inspector', 'inventory', R, 'site']]],
   ['picker1', 'Imran Khan', false, [['warehouse_operator', 'warehouse', W, 'site'], ['warehouse_operator', 'inventory', R, 'site']]],
   ['invctl1', 'Pooja Sharma', false, [['inventory_controller', 'inventory', W, 'site'], ['inventory_controller', 'warehouse', W, 'site']]],
@@ -451,7 +451,7 @@ const operations = {
     store: emailOf('store1'), picker: emailOf('picker1'), invctl: emailOf('invctl1'), whmanager: emailOf('cmf_supervisor'),
     dispatch: emailOf('dispatch1'), planner: emailOf('planner1'), engineer: emailOf('dev1'), qc: emailOf('qc1'),
     qchead: emailOf('qchead1'), maint: emailOf('maint1'), maintsup: emailOf('maintsup1'), indent: emailOf('indent1'),
-    depthead: emailOf('subscr'),
+    depthead: emailOf('subscr'), unloading: emailOf('unload1'),
   },
   // One band per transaction type, no value limits. Every type a pilot flow resolves through
   // resolveApprover / findRoleHolder; calibration.escalation is left out (the runbook forbids

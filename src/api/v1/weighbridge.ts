@@ -23,15 +23,16 @@ import {
   listWeighbridgeEvents,
 } from '../../read/projections/weighbridge_event.js';
 import type { WeighbridgeEvent } from '../../read/projections/weighbridge_event.js';
+import { TOLERANCE_BREACH_OWNER_ROLE } from '../../compliance/weighbridge.js';
 
 const NO_LOCATION_UUID = '00000000-0000-0000-0000-000000000000';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WEIGHBRIDGE_WRITE_ROLES = ['weighbridge_operator'];
+// Story 3.12: the breach owner reads from the same constant the compliance seam routes to.
 const WEIGHBRIDGE_READ_ROLES = [
   'weighbridge_operator',
-  'unloading_supervisor',
+  TOLERANCE_BREACH_OWNER_ROLE,
   'warehouse_manager',
-  'receiving_supervisor',
 ];
 
 interface ActorContext {
