@@ -24,6 +24,8 @@ import { WorkflowsView } from './enterprise/workflows-view';
 import { AccessControlView } from './enterprise/access-control-view';
 import { ReportsView } from './enterprise/reports-view';
 import { SampleDataNotice } from './enterprise/sample-data-notice';
+import { CheckStock } from './check-stock';
+import { MyRequests } from './my-requests';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
 import type { SyncUiState } from '../sync/sync-status';
@@ -75,6 +77,7 @@ export interface AppShellProps {
    * Story 7.8: 'frontline' (default, the Story 1.8 shell) or 'maintenance' (the technician page).
    * Story 1.14: 'refused-captures' (the site supervisor's screen).
    * Enterprise: 'workflows', 'access-control', and 'reports' (Phase 3/4 management views).
+   * Story 1.15: 'new-requisition', 'check-stock' and 'my-requests' (the employee base screens).
    */
   view?:
     | 'frontline'
@@ -83,7 +86,15 @@ export interface AppShellProps {
     | 'refused-captures'
     | 'workflows'
     | 'access-control'
-    | 'reports';
+    | 'reports'
+    | BaseView;
+  /** Story 1.15: navigator.onLine as last seen by the edge client (the base screens are online-only). */
+  online?: boolean;
+  /**
+   * Story 1.15 (Task 3.6): true once `navigation` came from a live bootstrap. Only then does a
+   * missing entry mean "no access"; the offline cached menu is a placeholder, not a verdict.
+   */
+  navigationConfirmed?: boolean;
   maintenance?: MaintenanceShellProps;
   /** Story 1.14: what the refused-captures screen needs, injected by the edge client. */
   refusedCaptures?: RefusedCapturesScreenProps;
@@ -101,6 +112,19 @@ export interface AppShellProps {
   signOutIncomplete?: boolean;
   /** Story 1.12: captures parked for people other than the signed-in user (userName '' = unknown). */
   waitingForOthers?: Array<{ userName: string; count: number }>;
+}
+
+type BaseView = 'new-requisition' | 'check-stock' | 'my-requests';
+
+/** Story 1.15: the bootstrap entry each base screen needs; the server decides, the shell obeys. */
+const BASE_VIEW_ENTRY: Record<BaseView, string> = {
+  'new-requisition': 'New requisition',
+  'check-stock': 'Check stock',
+  'my-requests': 'My requests',
+};
+
+function isBaseView(view: string): view is BaseView {
+  return view in BASE_VIEW_ENTRY;
 }
 
 function countMessage(count: number, one: MessageKey, many: MessageKey): string {
@@ -126,6 +150,8 @@ export function AppShell({
   onConfirmCrossDock,
   onSubmitIndent,
   view = 'frontline',
+  online = true,
+  navigationConfirmed = false,
   maintenance,
   refusedCaptures,
   onDismissFailure,
@@ -224,6 +250,27 @@ export function AppShell({
               {t('bootstrap.checkConnection')}
             </button>
           </section>
+        ) : isBaseView(view) &&
+          navigationConfirmed &&
+          !navigation.includes(BASE_VIEW_ENTRY[view]) ? (
+          <section className="edge-card" role="alert" aria-labelledby="base-denied-heading">
+            <h2 id="base-denied-heading">{t('nav.deniedTitle')}</h2>
+            <p>{t('nav.deniedBody')}</p>
+            <a className="secondary-action" href="/">
+              {t('nav.home')}
+            </a>
+          </section>
+        ) : view === 'new-requisition' ? (
+          <div className="card-grid" id="new-requisition">
+            <IndentCapture
+              syncState={syncState}
+              {...(onSubmitIndent ? { onSubmit: onSubmitIndent } : {})}
+            />
+          </div>
+        ) : view === 'check-stock' ? (
+          <CheckStock online={online} />
+        ) : view === 'my-requests' ? (
+          <MyRequests online={online} />
         ) : view === 'refused-captures' ? (
           refusedCaptures ? (
             <RefusedCapturesScreen {...refusedCaptures} />

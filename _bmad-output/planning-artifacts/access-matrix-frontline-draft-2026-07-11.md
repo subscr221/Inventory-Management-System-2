@@ -23,6 +23,14 @@
 
 Role IDs are proposed `snake_case` identifiers for RBAC/SCIM configuration.
 
+### Employee base (every signed-in person)
+
+The employee base role table below defines the one hat every human account holds in addition to its specialist hats. Service accounts (see "Service (non-human) accounts") do not hold it.
+
+| Role ID | Description | Location scope | Anchors |
+|---|---|---|---|
+| `employee` | Base hat every signed-in person holds. Raise requisition, check availability, own requests. Assigned as module `employee`, write, at the person's site. | Site | UJ-IND-01, Story 1.15 |
+
 ### Spine, administration, audit
 
 | Role ID | Description | Location scope | Anchors |
@@ -237,6 +245,16 @@ Legend: **C** = create/execute · **A** = approval hat (resolved via DOA) · **R
 | Final go-live financial sign-off | — | — | A |
 | Sign off a load you executed | ✗ (SOD-07) | | |
 
+### 3.8 Employee base (every signed-in person)
+
+The employee base capability table below lists what the `employee` hat grants. Every role holds these capabilities through the base hat, so no specialist hat is needed for them. Stock quantities, valuations and the "Valuation and NRV views" row in section 3.3 stay gated by inventory read and are unchanged.
+
+| Capability | employee (all roles) |
+|---|---|
+| Raise requisition | C |
+| Stock availability (in stock or not, where) | R |
+| My requests (own only) | R |
+
 ## 4. Dashboards and Reporting (pilot interim)
 
 Domain status views ship inside module epics — default: every role reads its own domain's operational dashboard at its assigned locations; `warehouse_manager`, `inventory_controller`, `qc_head`, `finance_controller` get multi-site domain views. Cross-module executive dashboards (Epic 12) get their own matrix rows with the full role set.
@@ -308,3 +326,4 @@ Collected during the §7 interview pass and written to the DOA registry (FR-DOA-
 |---|---|---|---|
 | v0.1 | 2026-07-11 | Initial draft skeleton; all cells proposed defaults pending validation | Super Admin (security lead) |
 | v1.0 | 2026-07-12 | Structured cross-functional review closed all seven open items in §6 (formerly §6 v0.1): cells validated (§7), DOA bands collected (§8), tolerance-breach approver split resolved (§3.2), SOD-11 adopted (§5), ~36-role owners assigned (§2), traceability audit closed (OQ7), external roles formally excluded pending trust-boundary review (§6 item 7). Document status changed from DRAFT to FINALIZED. | Department heads listed in §7; Super Admin (security lead) |
+| v1.1 | 2026-09-27 | Story 1.15 (Employee Base Role): section 2 gains the `employee` base hat held by every signed-in person at their site; section 3.8 gains three capability rows (raise requisition, stock availability without quantities, own requests). Quantity, valuation and approval rows are unchanged. | Story 1.15 dev record; pending Super Admin (security lead) review |

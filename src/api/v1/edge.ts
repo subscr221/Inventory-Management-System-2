@@ -12,7 +12,10 @@ import {
 import {
   requireRole,
   auditLocationFor,
+  assignmentCoversLocation,
   permittedLocationsForModuleScope,
+  EMPLOYEE_MODULE,
+  EMPLOYEE_EDGE_EVENTS,
 } from '../../middleware/rbac.js';
 import { validateEnvelope, persistEvent } from '../../events/store.js';
 import {
@@ -42,6 +45,7 @@ import { ZoneIncompatibleWarning, zoneWarningEnvelope } from '../../compliance/i
 import { OWNERSHIP_CONFIG_ROLES } from '../../compliance/ownership.js';
 import { config } from '../../config/index.js';
 import type { AuthContext } from '../../middleware/context.js';
+import type { RoleAssignment } from '../../read/projections/users.js';
 import { getCrossDockTaskById } from '../../read/projections/cross_dock_task.js';
 import { assertCrossDockEventShape } from '../../compliance/cross-dock.js';
 import { resolveApprover, INDENT_DOA_TYPE } from './indents.js';
@@ -87,6 +91,15 @@ const PAYLOAD_SITE_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
  * wildcard or an exact site match. Payload site ids that are not UUID-shaped are ignored here
  * exactly as they are there - the shape asserts own that refusal.
  */
+/** Story 1.15: a (stream, event) pair the employee base role may upload. */
+function isEmployeeEdgeEvent(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) return false;
+  const record = body as Record<string, unknown>;
+  return EMPLOYEE_EDGE_EVENTS.some(
+    (e) => e.stream_type === record['stream_type'] && e.event_type === record['event_type'],
+  );
+}
+
 function assertEdgePayloadSiteWriteAccess(
   authContext: NonNullable<ReturnType<typeof getAuthContext>>,
   body: { stream_type: string; event_type: string; payload: Record<string, unknown> },
@@ -98,7 +111,11 @@ function assertEdgePayloadSiteWriteAccess(
     body.stream_type,
     'write',
   );
-  if (!wildcard && !locations.has(siteId)) {
+  // Story 1.15: for the base-role events only, an employee write assignment at the site suffices.
+  const employee = isEmployeeEdgeEvent(body)
+    ? permittedLocationsForModuleScope(authContext.roles, EMPLOYEE_MODULE, 'write')
+    : { wildcard: false, locations: new Set<string>() };
+  if (!wildcard && !locations.has(siteId) && !employee.wildcard && !employee.locations.has(siteId)) {
     throw new AppError(
       403,
       'LOCATION_ACCESS_DENIED',
@@ -276,7 +293,15 @@ interface OperatingAssignment {
 
 function selectOperatingAssignment(authContext: AuthContext): OperatingAssignment {
   const concrete = authContext.roles.filter((r) => r.locationId !== '*');
-  const distinctLocations = new Set(concrete.map((r) => r.locationId));
+  // Code review 2026-09-27: the base hat's own site-level grant must never manufacture an
+  // ambiguity for someone whose specialist assignment is legitimately provisioned below site
+  // granularity (zone/aisle/rack/bin - the access matrix's own hierarchy); a location_id string
+  // mismatch against the base hat's site id is not a second physical site. Ambiguity is judged on
+  // the caller's non-base-hat assignments when any exist; the base hat's own location is used
+  // only when it is the caller's sole concrete grant (a pure base-role user).
+  const specialistConcrete = concrete.filter((r) => r.module !== EMPLOYEE_MODULE);
+  const ambiguityBasis = specialistConcrete.length > 0 ? specialistConcrete : concrete;
+  const distinctLocations = new Set(ambiguityBasis.map((r) => r.locationId));
 
   if (distinctLocations.size === 0) {
     throw new AppError(
@@ -294,8 +319,11 @@ function selectOperatingAssignment(authContext: AuthContext): OperatingAssignmen
   }
 
   const locationId = [...distinctLocations][0]!;
-  const assignment = concrete
-    .filter((r) => r.locationId === locationId)
+  // Story 1.15: the employee base hat is the operating role only for someone who holds nothing else
+  // at the site, so adding it never changes a specialist's displayed or stamped role.
+  const atSite = concrete.filter((r) => r.locationId === locationId);
+  const specialist = atSite.filter((r) => r.module !== EMPLOYEE_MODULE);
+  const assignment = (specialist.length > 0 ? specialist : atSite)
     .sort((a, b) =>
       [a.role, a.module, a.functionScope]
         .join('\0')
@@ -304,12 +332,54 @@ function selectOperatingAssignment(authContext: AuthContext): OperatingAssignmen
   return { role: assignment.role, locationId };
 }
 
-function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string {
+function resolveModuleFromBody(_params: Record<string, string>, body: unknown): string | string[] {
   if (typeof body === 'object' && body !== null) {
     const streamType = (body as Record<string, unknown>)['stream_type'];
+    // Story 1.15: the base-role events accept an employee assignment; the stream module stays
+    // second, so a caller holding both keeps the employee stamp exactly as the online route does.
+    if (typeof streamType === 'string' && isEmployeeEdgeEvent(body)) {
+      return [EMPLOYEE_MODULE, streamType];
+    }
     if (typeof streamType === 'string') return streamType;
   }
   return '';
+}
+
+/**
+ * Story 1.15 (AC 5, D7): the bootstrap menu, one row per entry, in output order. `modules` is
+ * any-of; `'*'` means any assignment at the operating site. Refused captures keeps its own scope
+ * rule (Story 1.14), evaluated over specialist assignments only: no refusal is ever recorded on
+ * the employee module, so the base hat alone would advertise an always-empty screen.
+ */
+const NAVIGATION_CAPABILITIES: ReadonlyArray<{
+  name: string;
+  modules: readonly string[] | '*' | 'refused-captures';
+  functionScope: 'read' | 'write';
+}> = [
+  { name: 'Dashboard', modules: '*', functionScope: 'read' },
+  { name: 'Frontline', modules: '*', functionScope: 'read' },
+  { name: 'Refused captures', modules: 'refused-captures', functionScope: 'read' },
+  { name: 'New requisition', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'write' },
+  { name: 'Check stock', modules: [EMPLOYEE_MODULE, 'inventory'], functionScope: 'read' },
+  { name: 'My requests', modules: [EMPLOYEE_MODULE, 'procurement'], functionScope: 'read' },
+];
+
+function navigationFor(roles: RoleAssignment[], siteId: string): string[] {
+  return NAVIGATION_CAPABILITIES.filter(({ modules, functionScope }) => {
+    if (modules === '*') return true;
+    if (modules === 'refused-captures') {
+      return hasRefusedCaptureReadScope(
+        roles.filter((r) => r.module !== EMPLOYEE_MODULE),
+        siteId,
+      );
+    }
+    return roles.some(
+      (r) =>
+        (modules.includes(r.module) || r.module === '*') &&
+        (functionScope === 'read' || r.functionScope === 'write') &&
+        assignmentCoversLocation(r, siteId),
+    );
+  }).map(({ name }) => name);
 }
 
 function resolveLocationFromBody(
@@ -334,12 +404,9 @@ const edgeBootstrapBase: RouteHandler = async (req, res) => {
 
   const assignment = selectOperatingAssignment(authContext);
 
-  // Story 1.14 (AC 2, Binding Decisions 2 and 4): the edge renders only the names listed here, so
-  // the supervisor screen is advertised to whoever may read a refusal at their operating site.
-  const navigation = ['Dashboard', 'Frontline'];
-  if (hasRefusedCaptureReadScope(authContext.roles, assignment.locationId)) {
-    navigation.push('Refused captures');
-  }
+  // Story 1.14 (AC 2, Binding Decisions 2 and 4): the edge renders only the names listed here.
+  // Story 1.15 (D7): derived from NAVIGATION_CAPABILITIES against the caller's assignments.
+  const navigation = navigationFor(authContext.roles, assignment.locationId);
 
   sendJson(res, 200, {
     user_id: authContext.userId,

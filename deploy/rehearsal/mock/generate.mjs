@@ -430,7 +430,14 @@ const people = [
   ['qchead1', 'Sunita Rawat', true, [['qc_head', 'qc', W, 'site'], ['qc_head', 'quality', W, 'site'], ['qc_head', 'inventory', R, 'site']]],
   ['dispatch1', 'Sanjay Mishra', true, [['dispatch_clerk', 'warehouse', W, 'site'], ['dispatch_clerk', 'inventory', R, 'site']]],
   ['notify1', 'Anita Joshi', true, [['notification_admin', 'notification', W, '*'], ['notification_admin', 'notification', R, '*']]],
-].map(([local, display_name, fictitious, grants]) => ({ email: `${local}@${DOMAIN}`, display_name, fictitious, grants }));
+].map(([local, display_name, fictitious, grants]) => ({
+  email: `${local}@${DOMAIN}`,
+  display_name,
+  fictitious,
+  // Story 1.15 (D1, D8): every human holds the employee base hat at the site; the ERP adapter
+  // service identity does not.
+  grants: local === 'erp1' ? grants : [...grants, ['employee', 'employee', W, 'site']],
+}));
 const emailOf = (local) => `${local}@${DOMAIN}`;
 const rolesFile = {
   site_id: args.siteId,
@@ -452,6 +459,8 @@ const operations = {
     dispatch: emailOf('dispatch1'), planner: emailOf('planner1'), engineer: emailOf('dev1'), qc: emailOf('qc1'),
     qchead: emailOf('qchead1'), maint: emailOf('maint1'), maintsup: emailOf('maintsup1'), indent: emailOf('indent1'),
     depthead: emailOf('subscr'), unloading: emailOf('unload1'),
+    // Story 1.15: holds no procurement and no inventory grant, so its smoke flow proves the base hat.
+    employee: emailOf('maint1'),
   },
   // One band per transaction type, no value limits. Every type a pilot flow resolves through
   // resolveApprover / findRoleHolder; calibration.escalation is left out (the runbook forbids

@@ -13,6 +13,10 @@ export const NAV_ENTRIES: NavEntry[] = [
   { name: 'Frontline', href: '#frontline', label: 'nav.frontline' },
   // Story 1.14 (Binding Decision 4): a real path, rendered only when the bootstrap names it.
   { name: 'Refused captures', href: '/supervisor/refused-captures', label: 'nav.refusedCaptures' },
+  // Story 1.15 (AC 5): the employee base entries every signed-in person is advertised.
+  { name: 'New requisition', href: '/requisitions/new', label: 'nav.newRequisition' },
+  { name: 'Check stock', href: '/stock', label: 'nav.checkStock' },
+  { name: 'My requests', href: '/requests', label: 'nav.myRequests' },
   // Enterprise views (Phase 2/4): real paths, rendered only when the bootstrap names them.
   { name: 'Workflows', href: '/workflows', label: 'nav.workflows' },
   { name: 'Access control', href: '/access-control', label: 'nav.accessControl' },

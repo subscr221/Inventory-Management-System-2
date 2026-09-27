@@ -379,3 +379,101 @@ input:focus-visible {
   color: var(--error-strong);
   font-weight: 700;
 }
+
+/* Story 1.15: the employee base screens (check stock, my requests). Cards like Story 1.14; the
+   in-stock state is words in a pill, the colour only reinforces it (text stays neutral-900 on
+   white for contrast), and no quantity is ever rendered. */
+.base-screen {
+  display: grid;
+  gap: 24px;
+}
+
+.base-screen-title {
+  margin: 0;
+}
+
+.base-form {
+  display: grid;
+  gap: 8px;
+  max-width: 420px;
+}
+
+.base-form input {
+  width: 100%;
+  min-height: 48px;
+  border: 2px solid var(--neutral-500);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.base-form input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.base-hint,
+.base-notice {
+  margin: 0;
+}
+
+.base-notice {
+  min-height: 24px;
+  margin-top: 12px;
+  font-weight: 700;
+}
+
+.base-list {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.base-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--neutral-500);
+  border-radius: 8px;
+}
+
+.base-card-stacked {
+  display: grid;
+  justify-content: stretch;
+}
+
+.base-card-title {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.base-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.base-facts dd {
+  margin: 4px 0 0;
+  font-weight: 700;
+}
+
+.state-pill {
+  padding: 4px 12px;
+  border: 2px solid var(--neutral-500);
+  border-radius: 999px;
+  color: var(--neutral-900);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.state-pill-ok {
+  border-color: var(--success);
+  background: var(--neutral-50);
+}

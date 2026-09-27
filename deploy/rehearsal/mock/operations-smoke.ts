@@ -36,6 +36,7 @@ import {
   must,
   packJson,
   printTable,
+  skip,
   step,
   uuid,
   type Ctx,
@@ -360,6 +361,146 @@ export async function inbound(ctx: Ctx): Promise<void> {
         );
         must(approved, 200, 'approve adjustment');
         return `self-approval refused (${String(self.body['error_code'] ?? self.status)}), approved by the warehouse manager`;
+      },
+    ],
+  ]);
+}
+
+/** Every path to a number-typed value in `value` (Story 1.15: availability carries no quantity). */
+function numericPaths(value: unknown, path = '$'): string[] {
+  if (typeof value === 'number') return [path];
+  if (Array.isArray(value)) return value.flatMap((v, i) => numericPaths(v, `${path}[${i}]`));
+  if (value !== null && typeof value === 'object')
+    return Object.entries(value as Json).flatMap(([k, v]) => numericPaths(v, `${path}.${k}`));
+  return [];
+}
+
+const EMPLOYEE_SKU = 'BRG-6204';
+const EMPLOYEE_STEPS = [
+  'employee: availability shows in stock and no quantity',
+  'employee: raise a requisition from the base role',
+  'employee: own requisition listed with mine=true',
+  'employee: bootstrap advertises the three base entries',
+];
+
+/**
+ * Story 1.15: the base hat end to end as `operations.actors.employee`, a person with no
+ * procurement and no inventory grant. Its own flow so a failure does not SKIP the rest of the day.
+ * A pack without the actor, or a site without stock of the SKU, is a named SKIP, never a crash.
+ */
+export async function employeeRequisition(ctx: Ctx): Promise<void> {
+  let headers: Headers;
+  try {
+    headers = await ctx.as('employee');
+  } catch (error) {
+    for (const name of EMPLOYEE_STEPS) skip(name, `no employee actor: ${(error as Error).message}`);
+    return;
+  }
+  const stocked = await stockOf(ctx, EMPLOYEE_SKU, 'invctl').catch(() => [] as Json[]);
+  if (stocked.length === 0) {
+    for (const name of EMPLOYEE_STEPS) skip(name, `no available ${EMPLOYEE_SKU} at the site`);
+    return;
+  }
+  let indentId = '';
+  await flow([
+    [
+      EMPLOYEE_STEPS[0]!,
+      async () => {
+        const res = must(
+          await ctx.request(
+            'GET',
+            `/api/v1/stock/${encodeURIComponent(EMPLOYEE_SKU)}/availability`,
+            undefined,
+            headers,
+          ),
+          200,
+          'availability',
+        );
+        const numbers = numericPaths(res);
+        if (numbers.length > 0)
+          throw new Error(`numeric values in the body: ${numbers.join(', ')}`);
+        if (res['in_stock'] !== true) throw new Error(`in_stock ${String(res['in_stock'])}`);
+        const denied = await ctx.request(
+          'GET',
+          `/api/v1/stock/${encodeURIComponent(EMPLOYEE_SKU)}`,
+          undefined,
+          headers,
+        );
+        if (denied.status !== 403 || denied.body['error_code'] !== 'MODULE_ACCESS_DENIED')
+          throw new Error(
+            `stock detail answered ${denied.status}, expected 403 MODULE_ACCESS_DENIED`,
+          );
+        return `${(res['locations'] as Json[]).length} location(s), detail refused`;
+      },
+    ],
+    [
+      EMPLOYEE_STEPS[1]!,
+      async () => {
+        const res = must(
+          await ctx.request(
+            'POST',
+            '/api/v1/indents',
+            {
+              site_id: ctx.siteId,
+              department_code: 'MAINT',
+              business_stream: 'production',
+              need_by_date: nextYear(),
+              urgent: false,
+              reason: 'Operations smoke test (employee base role)',
+              confirm_duplicate: true,
+              lines: [
+                {
+                  sku: EMPLOYEE_SKU,
+                  item_category: 'spares',
+                  requested_qty: 2,
+                  uom: 'EA',
+                  unit_price_estimate: 150,
+                },
+              ],
+            },
+            headers,
+          ),
+          201,
+          'raise indent (employee)',
+        );
+        const indent = (res['indent'] ?? {}) as Json;
+        indentId = indent['indent_id'] as string;
+        const me = must(
+          await ctx.request('GET', '/api/v1/edge/bootstrap', undefined, headers),
+          200,
+          'bootstrap (employee)',
+        );
+        if (indent['requester_user_id'] !== me['user_id'])
+          throw new Error(`requester ${String(indent['requester_user_id'])} is not the caller`);
+        return `${String(indent['indent_number_ext'])} raised by the base role`;
+      },
+    ],
+    [
+      EMPLOYEE_STEPS[2]!,
+      async () => {
+        const res = must(
+          await ctx.request('GET', '/api/v1/indents?mine=true', undefined, headers),
+          200,
+          'my requests',
+        );
+        const ids = (res['indents'] as Json[]).map((i) => i['indent_id']);
+        if (!ids.includes(indentId)) throw new Error(`indent ${indentId} not in own list`);
+        return `${ids.length} own requisition(s)`;
+      },
+    ],
+    [
+      EMPLOYEE_STEPS[3]!,
+      async () => {
+        const res = must(
+          await ctx.request('GET', '/api/v1/edge/bootstrap', undefined, headers),
+          200,
+          'bootstrap (employee)',
+        );
+        const navigation = res['navigation'] as string[];
+        for (const name of ['New requisition', 'Check stock', 'My requests'])
+          if (!navigation.includes(name))
+            throw new Error(`navigation lacks "${name}": ${navigation.join(', ')}`);
+        return navigation.join(', ');
       },
     ],
   ]);
@@ -1167,6 +1308,7 @@ async function main(): Promise<void> {
     await outbound(ctx);
     await production(ctx);
     await indent(ctx);
+    await employeeRequisition(ctx);
     await maintenance(ctx);
   } catch (error) {
     crashed = true;

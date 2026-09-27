@@ -175,6 +175,49 @@ export async function getStockBalancesBySku(
   return result.rows.map(mapRow);
 }
 
+export interface RequestableStock {
+  location_id: string;
+  location_code: string | null;
+  in_stock: boolean;
+}
+
+/**
+ * Story 1.15 (D4), corrected by code review 2026-09-27: per bin location the caller may see,
+ * whether any of `sku` could be handed to a requester. Enumerated from `location_register`
+ * (active bins only), LEFT JOINed to `stock_balance`, so a location the caller is scoped to that
+ * has never received or moved this SKU still appears with `in_stock: false` - not silently
+ * absent, as Table 2 requires ("one entry per location the caller may see"). A row counts toward
+ * `in_stock` only when its class is `owned` (consignment/VMI/prototype/job_work/offcut stock is
+ * never requestable through this endpoint, matching the rule `getStockBase`'s consolidated total
+ * already uses), its location is not a quarantine location, and its lot passes the same QC gate
+ * and lot-hold predicate the stock drains use. The sum of `available` over counted rows must be
+ * above zero. Only the boolean leaves SQL: no quantity is returned.
+ */
+export async function getRequestableStockBySku(
+  sku: string,
+  client?: PoolClient,
+): Promise<RequestableStock[]> {
+  const result = await runner(client).query(
+    `SELECT lr.location_id,
+            lr.location_code,
+            COALESCE(SUM(sb.available) FILTER (
+              WHERE sb.stock_class = 'owned'
+                AND COALESCE(lr.quarantine, false) = false
+                AND ${qcGateExclusionSql('sb', false)}
+            ), 0) > 0 AS in_stock
+       FROM location_register lr
+       LEFT JOIN stock_balance sb ON sb.location_id = lr.location_id AND sb.sku = $1
+      WHERE lr.level = 'bin' AND lr.status = 'active'
+      GROUP BY lr.location_id, lr.location_code`,
+    [sku],
+  );
+  return result.rows.map((row) => ({
+    location_id: row['location_id'] as string,
+    location_code: (row['location_code'] as string | null) ?? null,
+    in_stock: row['in_stock'] === true,
+  }));
+}
+
 /**
  * Story 7.4: the owned on-hand balance for one (sku, location) grain plus whether it is at or
  * below a minimum, both computed in SQL NUMERIC. The comparison basis is `on_hand`, NOT

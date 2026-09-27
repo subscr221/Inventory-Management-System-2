@@ -19,6 +19,11 @@ const ALLOWED_LITERAL_PATTERNS = [
   // Story 1.14: the refused-captures supervisor screen and the device dismiss control.
   /^refused\./,
   /^refused-/,
+  // Story 1.15: the employee base screens (check stock, my requests).
+  /^checkStock\./,
+  /^check-stock-/,
+  /^myRequests\./,
+  /^my-requests-/,
   /^Promise$/,
   /^Dashboard$/,
   /^Frontline$/,

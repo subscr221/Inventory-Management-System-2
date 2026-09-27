@@ -81,6 +81,13 @@
       "holder": "info@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "info@ancorlabs.org"
+    },
+    {
       "role": "finance_controller",
       "module": "migration",
       "function_scope": "write",
@@ -106,6 +113,13 @@
       "module": "inventory",
       "function_scope": "read",
       "location_id": "*",
+      "holder": "accounts@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
       "holder": "accounts@ancorlabs.org"
     },
     {
@@ -165,6 +179,13 @@
       "holder": "subscr@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "subscr@ancorlabs.org"
+    },
+    {
       "role": "cfo",
       "module": "jobwork",
       "function_scope": "write",
@@ -175,6 +196,13 @@
       "role": "cfo",
       "module": "migration",
       "function_scope": "read",
+      "location_id": "site",
+      "holder": "anupam@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
       "location_id": "site",
       "holder": "anupam@ancorlabs.org"
     },
@@ -200,6 +228,13 @@
       "holder": "cmf_supervisor@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "cmf_supervisor@ancorlabs.org"
+    },
+    {
       "role": "engineering_admin",
       "module": "engineering",
       "function_scope": "write",
@@ -211,6 +246,13 @@
       "module": "engineering",
       "function_scope": "read",
       "location_id": "*",
+      "holder": "dev1@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
       "holder": "dev1@ancorlabs.org"
     },
     {
@@ -235,6 +277,13 @@
       "holder": "gate1@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "gate1@ancorlabs.org"
+    },
+    {
       "role": "store_assistant",
       "module": "receiving",
       "function_scope": "write",
@@ -251,6 +300,13 @@
     {
       "role": "store_assistant",
       "module": "warehouse",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "store1@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
       "function_scope": "write",
       "location_id": "site",
       "holder": "store1@ancorlabs.org"
@@ -277,6 +333,13 @@
       "holder": "unload1@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "unload1@ancorlabs.org"
+    },
+    {
       "role": "qc_inspector",
       "module": "qc",
       "function_scope": "write",
@@ -298,6 +361,13 @@
       "holder": "qc1@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "qc1@ancorlabs.org"
+    },
+    {
       "role": "warehouse_operator",
       "module": "warehouse",
       "function_scope": "write",
@@ -312,6 +382,13 @@
       "holder": "picker1@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "picker1@ancorlabs.org"
+    },
+    {
       "role": "inventory_controller",
       "module": "inventory",
       "function_scope": "write",
@@ -321,6 +398,13 @@
     {
       "role": "inventory_controller",
       "module": "warehouse",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "invctl1@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
       "function_scope": "write",
       "location_id": "site",
       "holder": "invctl1@ancorlabs.org"
@@ -354,8 +438,22 @@
       "holder": "planner1@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "planner1@ancorlabs.org"
+    },
+    {
       "role": "maintenance_technician",
       "module": "maintenance",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "maint1@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
       "function_scope": "write",
       "location_id": "site",
       "holder": "maint1@ancorlabs.org"
@@ -365,6 +463,13 @@
       "module": "maintenance",
       "function_scope": "write",
       "location_id": "*",
+      "holder": "maintsup1@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
       "holder": "maintsup1@ancorlabs.org"
     },
     {
@@ -382,6 +487,13 @@
       "holder": "indent1@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "indent1@ancorlabs.org"
+    },
+    {
       "role": "internal_auditor",
       "module": "audit",
       "function_scope": "read",
@@ -392,6 +504,13 @@
       "role": "internal_auditor",
       "module": "inventory",
       "function_scope": "read",
+      "location_id": "site",
+      "holder": "audit1@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
       "location_id": "site",
       "holder": "audit1@ancorlabs.org"
     },
@@ -417,6 +536,13 @@
       "holder": "qchead1@ancorlabs.org"
     },
     {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "qchead1@ancorlabs.org"
+    },
+    {
       "role": "dispatch_clerk",
       "module": "warehouse",
       "function_scope": "write",
@@ -427,6 +553,13 @@
       "role": "dispatch_clerk",
       "module": "inventory",
       "function_scope": "read",
+      "location_id": "site",
+      "holder": "dispatch1@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
       "location_id": "site",
       "holder": "dispatch1@ancorlabs.org"
     },
@@ -442,6 +575,13 @@
       "module": "notification",
       "function_scope": "read",
       "location_id": "*",
+      "holder": "notify1@ancorlabs.org"
+    },
+    {
+      "role": "employee",
+      "module": "employee",
+      "function_scope": "write",
+      "location_id": "site",
       "holder": "notify1@ancorlabs.org"
     }
   ]

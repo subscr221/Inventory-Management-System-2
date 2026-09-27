@@ -187,6 +187,8 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'GET /api/v1/notifications/preferences',
       'GET /api/v1/notifications/unread-count',
       'GET /api/v1/stock/:sku',
+      // Story 1.15: employee base role availability (in stock or not, where; no quantities).
+      'GET /api/v1/stock/:sku/availability',
       'GET /api/v1/stock/:sku/valuation',
       'GET /api/v1/valuation/standard-cost-variance-report',
       'PATCH /api/v1/doa/entries/:entryId',

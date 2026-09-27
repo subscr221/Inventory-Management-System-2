@@ -96,6 +96,8 @@ interface RuntimeState {
   syncState: SyncUiState;
   // Story 1.14 (AC 5): navigator.onLine as of the last outbox refresh or online/offline event.
   online: boolean;
+  // Story 1.15 (Task 3.6): `navigation` came from a live bootstrap, not the offline placeholder.
+  navigationConfirmed: boolean;
   // Story 7.8: the cached technician worklist.
   workOrders: CachedWorkOrderRow[];
   worklistMeta: WorklistMeta;
@@ -129,6 +131,7 @@ const initialState: RuntimeState = {
   waitingForOthers: [],
   syncState: 'offline',
   online: true,
+  navigationConfirmed: false,
   workOrders: [],
   worklistMeta: { total: 0, truncated: false, fetchedAt: null },
   closureCatalogue: { fault: [], cause: [], remedy: [] },
@@ -202,7 +205,10 @@ export function EdgeClient({
     | 'refused-captures'
     | 'workflows'
     | 'access-control'
-    | 'reports';
+    | 'reports'
+    | 'new-requisition'
+    | 'check-stock'
+    | 'my-requests';
 }) {
   const database = useRef<PowerSyncDatabase | null>(null);
   // Story 1.12: the sign-in session and a guard so a burst of 401s issues one login redirect.
@@ -441,6 +447,7 @@ export function EdgeClient({
             siteId: bootstrap.site_id,
             siteName: bootstrap.site_name,
             navigation: bootstrap.navigation,
+            navigationConfirmed: true,
             firstSyncRequired: false,
             siteRefusal: null,
             authRequired: false,
@@ -760,6 +767,8 @@ export function EdgeClient({
         if (db) void refreshLocalState(db);
       }}
       view={view}
+      online={state.online}
+      navigationConfirmed={state.navigationConfirmed}
       refusedCaptures={{ siteId: state.siteId, userId: state.userId, online: state.online }}
       onDismissFailure={dismissFailure}
       maintenance={{

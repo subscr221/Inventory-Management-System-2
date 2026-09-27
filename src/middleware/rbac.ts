@@ -129,9 +129,30 @@ export function permittedLocationsForModule(
   return { wildcard, locations };
 }
 
+/**
+ * Story 1.15 (D1): the base hat every signed-in person holds, provisioned as a real assignment
+ * `{ role: 'employee', module: 'employee', function_scope: 'write', location_id: <site> }`. Gates
+ * name this module next to the specialist one (`[EMPLOYEE_MODULE, 'procurement']`), never a role.
+ */
+export const EMPLOYEE_MODULE = 'employee';
+
+/**
+ * Story 1.15: the (stream, event) pairs the edge door accepts from an `employee` write assignment.
+ * Every other event keeps its stream-module write rule. Story 8.9 appends damage capture here.
+ */
+export const EMPLOYEE_EDGE_EVENTS: ReadonlyArray<{ stream_type: string; event_type: string }> = [
+  { stream_type: 'procurement', event_type: 'indent.raised' },
+];
+
 export interface RbacOptions {
-  /** Static module name, or resolved dynamically from route params / parsed body. */
-  module: string | ((params: Record<string, string>, body: unknown) => string);
+  /**
+   * Static module name, or resolved dynamically from route params / parsed body. A list means
+   * any-of: list order decides which assignment authorizes (and so stamps the audit actor).
+   */
+  module:
+    | string
+    | string[]
+    | ((params: Record<string, string>, body: unknown) => string | string[]);
   functionScope: 'read' | 'write';
   /** Optional: resolves the target location for this request. Skipped if it returns undefined. */
   locationId?: (params: Record<string, string>, body: unknown) => string | undefined;
@@ -173,18 +194,41 @@ export function requireRole(options: RbacOptions): (handler: RouteHandler) => Ro
       }
 
       const body = getParsedBody(req);
-      const resolvedModule =
+      const resolved =
         typeof options.module === 'function' ? options.module(params, body) : options.module;
+      const modules = (Array.isArray(resolved) ? resolved : [resolved]).filter(Boolean);
 
       // A request that does not resolve to a concrete module must be rejected outright - a
       // wildcard ('*') assignment must not be allowed to satisfy an unknown/empty module.
-      if (!resolvedModule) {
+      if (modules.length === 0) {
         throw new AppError(400, 'INVALID_MODULE', 'Request does not resolve to a known module');
       }
+      const resolvedModule = modules[0]!;
 
-      const moduleMatches = authContext.roles.filter(
-        (r) => r.module === resolvedModule || r.module === '*',
-      );
+      // Grouped by list position, caller's role order kept within a group, so the first listed
+      // module the caller holds authorizes. A single module keeps the original ordering exactly.
+      let moduleMatches: RoleAssignment[] = [];
+      for (const m of modules) {
+        for (const r of authContext.roles) {
+          if ((r.module === m || r.module === '*') && !moduleMatches.includes(r)) {
+            moduleMatches.push(r);
+          }
+        }
+      }
+      // Code review 2026-09-27 (Story 1.15): the base hat is a fallback, never an override. A
+      // stable partition sinks every EMPLOYEE_MODULE-only match below every other match, so a
+      // caller who holds both a specialist assignment and the base hat at the same location is
+      // always authorized and audited under the specialist role. List-order semantics between two
+      // ordinary (non-employee) modules are unaffected. Without this, listing EMPLOYEE_MODULE
+      // first in a gate (as raise/list/get and the edge door all do) let the universal base-hat
+      // assignment outrank a specialist's own assignment, stamping every specialist's own actions
+      // as 'employee' in the audit trail - selectOperatingAssignment already applies the identical
+      // preference for the bootstrap header role; this closes the same gap here.
+      if (moduleMatches.some((r) => r.module === EMPLOYEE_MODULE)) {
+        const specialist = moduleMatches.filter((r) => r.module !== EMPLOYEE_MODULE);
+        const employeeOnly = moduleMatches.filter((r) => r.module === EMPLOYEE_MODULE);
+        moduleMatches = [...specialist, ...employeeOnly];
+      }
       if (moduleMatches.length === 0) {
         throw new AppError(
           403,

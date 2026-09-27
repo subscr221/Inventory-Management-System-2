@@ -22,7 +22,7 @@ import {
 } from './api/v1/business-stream.js';
 import { getCurrentLocationHandler, seedExpectedLocationHandler } from './api/v1/location.js';
 import { createItemHandler, updateItemHandler, getItemHandler } from './api/v1/items.js';
-import { getStockHandler } from './api/v1/stock.js';
+import { getStockHandler, getStockAvailabilityHandler } from './api/v1/stock.js';
 import {
   getValuationHandler,
   nrvWriteDownHandler,
@@ -559,6 +559,7 @@ export function createAppRouter(): Router {
   router.patch('/api/v1/locations/:locationId', updateLocationHandler);
   router.get('/api/v1/locations/:locationId', getLocationHandler);
   router.get('/api/v1/stock/:sku', getStockHandler);
+  router.get('/api/v1/stock/:sku/availability', getStockAvailabilityHandler);
   router.get('/api/v1/stock/:sku/valuation', getValuationHandler);
   router.post('/api/v1/stock/:sku/valuation/nrv-write-down', nrvWriteDownHandler);
   router.post('/api/v1/stock/:sku/valuation/nrv-recovery', nrvRecoveryHandler);
