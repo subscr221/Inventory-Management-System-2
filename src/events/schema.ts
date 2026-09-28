@@ -6764,6 +6764,10 @@ export const SUPPORTED_EVENT_TYPES = {
     streamType: 'damage',
     requiresBusinessStream: false,
   },
+  'damage.returned_to_stock': {
+    streamType: 'damage',
+    requiresBusinessStream: false,
+  },
   'damage.inspected': {
     streamType: 'damage',
     requiresBusinessStream: false,

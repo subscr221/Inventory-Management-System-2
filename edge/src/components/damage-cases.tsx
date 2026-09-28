@@ -109,6 +109,7 @@ const SUCCESS_LABEL: Record<DamageActionName, MessageKey> = {
   mark_arrived: 'damageCases.done.mark_arrived',
   send_external: 'damageCases.done.send_external',
   mark_returned: 'damageCases.done.mark_returned',
+  mark_returned_to_stock: 'damageCases.done.mark_returned_to_stock',
   turn_qc_key: 'damageCases.done.turn_key',
   withdraw_qc_key: 'damageCases.done.withdraw_key',
   disagree_qc: 'damageCases.done.disagree',
@@ -499,6 +500,18 @@ function CustodyCard({ report, allowed, busy, inFlight, run }: PanelProps) {
               {t('damageCases.markReturned')}
             </ActionButton>
           </div>
+        </div>
+      ) : null}
+      {allowed.includes('mark_returned_to_stock') ? (
+        <div className="edge-actions">
+          <ActionButton
+            action="mark_returned_to_stock"
+            inFlight={inFlight}
+            busy={busy}
+            onClick={() => void run('mark_returned_to_stock', {})}
+          >
+            {t('damageCases.markReturnedToStock')}
+          </ActionButton>
         </div>
       ) : null}
     </section>

@@ -64,6 +64,7 @@ export const DAMAGE_REPORTED = 'damage.reported';
 export const DAMAGE_UNITS_ARRIVED = 'damage.units_arrived';
 export const DAMAGE_SENT_FOR_EXTERNAL_CHECK = 'damage.sent_for_external_check';
 export const DAMAGE_RETURNED_FROM_EXTERNAL_CHECK = 'damage.returned_from_external_check';
+export const DAMAGE_RETURNED_TO_STOCK = 'damage.returned_to_stock';
 export const DAMAGE_INSPECTED = 'damage.inspected';
 export const DAMAGE_WHOLE_LOT_DECIDED = 'damage.whole_lot_decided';
 export const DAMAGE_KEY_TURNED = 'damage.key_turned';
@@ -78,6 +79,7 @@ export const DAMAGE_EVENT_TYPES: readonly string[] = [
   DAMAGE_UNITS_ARRIVED,
   DAMAGE_SENT_FOR_EXTERNAL_CHECK,
   DAMAGE_RETURNED_FROM_EXTERNAL_CHECK,
+  DAMAGE_RETURNED_TO_STOCK,
   DAMAGE_INSPECTED,
   DAMAGE_WHOLE_LOT_DECIDED,
   DAMAGE_KEY_TURNED,
@@ -119,6 +121,7 @@ export const DAMAGE_ACTION_NAMES = [
   'mark_arrived',
   'send_external',
   'mark_returned',
+  'mark_returned_to_stock',
   'turn_qc_key',
   'withdraw_qc_key',
   'disagree_qc',
@@ -527,7 +530,7 @@ export function assertOutcomeRecordable(state: DamageCaseState): void {
 /** Table 4: the physical custody machine. No transition moves the ledger (D6). */
 export function nextPhysicalState(
   state: DamageCaseState,
-  action: 'arrive' | 'send_external' | 'return',
+  action: 'arrive' | 'send_external' | 'return' | 'returned_to_stock',
 ): DamagePhysicalState {
   const from = state.physical_state;
   const invalid = (): never =>
@@ -543,9 +546,21 @@ export function nextPhysicalState(
       : invalid();
   }
   if (action === 'send_external') {
-    return from === 'in_qc_hold' && state.status !== 'closed' ? 'at_external_check' : invalid();
+    return from === 'in_qc_hold' && !LOCKED_STATUSES.has(state.status)
+      ? 'at_external_check'
+      : invalid();
   }
-  return from === 'at_external_check' ? 'in_qc_hold' : invalid();
+  if (action === 'return') {
+    return from === 'at_external_check' ? 'in_qc_hold' : invalid();
+  }
+  // Story 8.9 code review (2026-09-28): the reverse of 'arrive'. Owner ruling - release is manual
+  // (stores physically walks the units back), but the loop must close with a real state transition,
+  // not only the "move the released units back to stock" notification. Only possible once the case
+  // itself has released the units (D5's heldQuantity would already read 0 for it).
+  const released =
+    state.status === 'cleared' ||
+    (state.status === 'closed' && state.final_outcome === PRICE_REDUCTION_OUTCOME);
+  return from === 'in_qc_hold' && released ? 'not_held' : invalid();
 }
 
 /**
@@ -575,7 +590,7 @@ function optionalBoundedText(
     p[field] = null;
     return;
   }
-  if (!isBoundedText(value, max) || /[\r\n]/.test(value)) {
+  if (!isBoundedText(value, max) || /[\r\n\u2028\u2029]/.test(value)) {
     reject(
       'INVALID_PAYLOAD',
       `${field} must be one line of at most ${max} characters on ${context}`,
@@ -591,7 +606,7 @@ function requiredBoundedText(
   context: string,
 ): void {
   const value = p[field];
-  if (!isBoundedText(value, max) || /[\r\n]/.test(value)) {
+  if (!isBoundedText(value, max) || /[\r\n\u2028\u2029]/.test(value)) {
     reject(
       'INVALID_PAYLOAD',
       `${field} is required, one line of at most ${max} characters, on ${context}`,
@@ -706,6 +721,9 @@ export function assertDamageShape(envelope: EventEnvelope): void {
     case DAMAGE_RETURNED_FROM_EXTERNAL_CHECK:
       optionalBoundedText(p, 'note', MAX_DAMAGE_NOTE_LENGTH, type);
       optionalBoundedText(p, 'external_result_ref_ext', MAX_DAMAGE_REF_LENGTH, type);
+      return;
+    case DAMAGE_RETURNED_TO_STOCK:
+      optionalBoundedText(p, 'note', MAX_DAMAGE_NOTE_LENGTH, type);
       return;
     case DAMAGE_INSPECTED: {
       if (
@@ -1099,6 +1117,28 @@ async function applyDamageReported(
     );
   }
 
+  // Story 8.9 code review (2026-09-28): photo_attachment_id was only shape-checked as a UUID; since
+  // canReadAttachment (src/api/v1/attachments.ts, D11) grants read access to anyone who can see a
+  // case referencing the photo, naming another user's already-uploaded attachment here would hand
+  // that photo a wider audience than its uploader chose, and corrupt the case's evidentiary record.
+  // The report may legitimately name an attachment that has not arrived yet (Story 1.8 offline
+  // pattern: photo_status 'pending' until its own PUT lands), so this only rejects an id that is
+  // already claimed by someone else - it never requires the upload to exist first.
+  const photoAttachmentId = p['photo_attachment_id'] as string;
+  const attachment = await client.query(
+    `SELECT uploaded_by FROM attachment WHERE attachment_id = $1`,
+    [photoAttachmentId],
+  );
+  const uploadedBy = attachment.rows[0]?.['uploaded_by'] as string | undefined;
+  if (uploadedBy !== undefined && uploadedBy !== p['reporter_user_id']) {
+    reject(
+      'DAMAGE_PHOTO_NOT_OWNED',
+      'photo_attachment_id must name a photo you uploaded',
+      { photo_attachment_id: photoAttachmentId },
+      403,
+    );
+  }
+
   let bin: { location_id: string; location_code: string } | null = null;
   if (foundAt === 'stock') {
     const binCode = p['bin_code'] as string;
@@ -1160,7 +1200,15 @@ async function applyDamageReported(
     );
   }
 
-  const year = toIstCalendarDate(new Date(envelope.metadata.occurred_at)).slice(0, 4);
+  const occurredAt = envelope.metadata.occurred_at;
+  if (
+    !occurredAt ||
+    typeof occurredAt !== 'string' ||
+    Number.isNaN(new Date(occurredAt).getTime())
+  ) {
+    reject('INVALID_PARAMS', 'occurred_at is required and must be a valid ISO 8601 date string');
+  }
+  const year = toIstCalendarDate(new Date(occurredAt)).slice(0, 4);
   const reportNumber = await allocateDamageReportNumber(year, client);
   await insertDamageReport(
     {
@@ -1254,7 +1302,7 @@ async function applyCustody(
   envelope: EventEnvelope,
   client: PoolClient,
   eventId: string,
-  action: 'arrive' | 'send_external' | 'return',
+  action: 'arrive' | 'send_external' | 'return' | 'returned_to_stock',
 ): Promise<void> {
   const p = envelope.payload as Record<string, unknown>;
   const row = await loadCaseForUpdate(p['report_id'] as string, client);
@@ -1296,18 +1344,25 @@ async function applyCustody(
     });
     return;
   }
-  await updateDamageReport(
-    row.report_id,
-    {
-      physical_state: next,
-      external_returned_at: at,
+  if (action === 'return') {
+    await updateDamageReport(
+      row.report_id,
+      {
+        physical_state: next,
+        external_returned_at: at,
+        external_result_ref_ext: p['external_result_ref_ext'] ?? null,
+      },
+      client,
+    );
+    await recordAction(envelope, client, eventId, row.report_id, 'returned_from_external_check', {
+      note: p['note'] ?? null,
       external_result_ref_ext: p['external_result_ref_ext'] ?? null,
-    },
-    client,
-  );
-  await recordAction(envelope, client, eventId, row.report_id, 'returned_from_external_check', {
+    });
+    return;
+  }
+  await updateDamageReport(row.report_id, { physical_state: next }, client);
+  await recordAction(envelope, client, eventId, row.report_id, 'returned_to_stock', {
     note: p['note'] ?? null,
-    external_result_ref_ext: p['external_result_ref_ext'] ?? null,
   });
 }
 
@@ -1784,6 +1839,8 @@ export async function applyDamageProjection(
       return applyCustody(envelope, client, eventId, 'send_external');
     case DAMAGE_RETURNED_FROM_EXTERNAL_CHECK:
       return applyCustody(envelope, client, eventId, 'return');
+    case DAMAGE_RETURNED_TO_STOCK:
+      return applyCustody(envelope, client, eventId, 'returned_to_stock');
     case DAMAGE_INSPECTED:
       return applyDamageInspected(envelope, client, eventId);
     case DAMAGE_WHOLE_LOT_DECIDED:
@@ -2027,6 +2084,8 @@ export async function allowedDamageActions(
     if (passes(() => nextPhysicalState(state, 'arrive'))) allowed.add('mark_arrived');
     if (passes(() => nextPhysicalState(state, 'send_external'))) allowed.add('send_external');
     if (passes(() => nextPhysicalState(state, 'return'))) allowed.add('mark_returned');
+    if (passes(() => nextPhysicalState(state, 'returned_to_stock')))
+      allowed.add('mark_returned_to_stock');
   }
   for (const key of ['qc', 'finance'] as const) {
     if (!passes(() => assertKeyActionState(state, 'turn'))) break;

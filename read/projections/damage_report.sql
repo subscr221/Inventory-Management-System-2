@@ -96,7 +96,10 @@ CREATE TABLE IF NOT EXISTS damage_report (
   CONSTRAINT chk_damage_report_photo_pairing CHECK ((source = 'report') = (photo_attachment_id IS NOT NULL)),
   CONSTRAINT chk_damage_report_quantity CHECK (quantity > 0),
   CONSTRAINT chk_damage_report_found_at CHECK (found_at IN ('stock', 'in_use')),
-  CONSTRAINT chk_damage_report_bin_pairing CHECK ((found_at = 'stock') = (bin_code IS NOT NULL)),
+  CONSTRAINT chk_damage_report_bin_pairing CHECK (
+    (found_at = 'stock') = (bin_code IS NOT NULL)
+    AND (bin_code IS NOT NULL) = (bin_location_id IS NOT NULL)
+  ),
   CONSTRAINT chk_damage_report_reason_code CHECK (
     reason_code IN ('DEAD_ON_ARRIVAL', 'DAMAGED_COMPONENT', 'WRONG_ITEM_OR_SPEC', 'OTHER')
   ),
@@ -123,6 +126,8 @@ CREATE TABLE IF NOT EXISTS damage_report (
     (external_sent_by IS NULL) = (external_sent_at IS NULL)
     AND (external_sent_by IS NULL) = (external_destination IS NULL)
     AND (physical_state = 'at_external_check') <= (external_sent_by IS NOT NULL)
+    AND (external_returned_at IS NOT NULL) <= (external_sent_by IS NOT NULL)
+    AND (external_result_ref_ext IS NOT NULL) <= (external_returned_at IS NOT NULL)
   ),
   CONSTRAINT chk_damage_report_whole_lot_decision CHECK (
     whole_lot_decision IS NULL OR whole_lot_decision IN ('hold_lot', 'keep_local')

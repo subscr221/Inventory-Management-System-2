@@ -174,6 +174,7 @@ import {
   markArrivedHandler,
   sendExternalHandler,
   markReturnedHandler,
+  markReturnedToStockHandler,
   inspectDamageHandler,
   decideWholeLotHandler,
   turnKeyHandler,
@@ -814,6 +815,10 @@ export function createAppRouter(): Router {
   router.post('/api/v1/damage-reports/:reportId/custody/arrived', markArrivedHandler);
   router.post('/api/v1/damage-reports/:reportId/custody/sent-external', sendExternalHandler);
   router.post('/api/v1/damage-reports/:reportId/custody/returned', markReturnedHandler);
+  router.post(
+    '/api/v1/damage-reports/:reportId/custody/returned-to-stock',
+    markReturnedToStockHandler,
+  );
   router.post('/api/v1/damage-reports/:reportId/inspection', inspectDamageHandler);
   router.post('/api/v1/damage-reports/:reportId/whole-lot', decideWholeLotHandler);
   router.post('/api/v1/damage-reports/:reportId/keys/:key/turn', turnKeyHandler);

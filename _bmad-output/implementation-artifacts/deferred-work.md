@@ -1206,3 +1206,48 @@ No earlier row is closed by this batch. Row 192 (no lock on reserve source-bin s
 - DOA authority is the single oldest active holder of the governing role (`findRoleHolder`, platform-wide Phase-1 simplification): a second QC head or finance controller cannot turn a damage key unless the first is on vacation delegation.
 - The workbench's authority branch scans up to 2,000 recent cases per request (`listOpenDamageReports`) to find those the caller is the pending authority for; fine at pilot volume, needs an indexed pending-step view at scale.
 - The report-time relocation into `ZONE-QC-HOLD` writes no `lot_trace` entry (the bin-move precedent); a lot's trace shows the damage case only through the case itself.
+
+## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome (2026-09-27)
+
+Backend-core chunk only (group 1 of 5; diff `2731fa5..857da7e`). The workbench full-scan/N+1 finding from this pass duplicates the already-recorded "scans up to 2,000 recent cases" entry above and is not re-listed here.
+
+- `resolveDamageAuthority`'s escalate-to-next-available-band DOA fallback and its wall-clock (not `occurred_at`) delegation check were initially triaged as Story 8.9 bugs, but both are pre-existing, already-reviewed, platform-wide conventions (`listActiveDoaEntries`'s docstring names the fallback "Story 2.5 review"; every `findActiveDelegation` call site in the codebase uses wall-clock `today`). Fixing only `damage.ts` would make it inconsistent with every other approver/delegation resolver. Deferred to a cross-cutting DOA/delegation review if the platform owner wants either behavior changed.
+- `RAW_BODY_PATH_PREFIX` in `src/api/router.ts:24` is a blanket string-prefix match over the whole `/api/v1/attachments/` namespace rather than the specific upload route; any future PUT endpoint added under that prefix silently receives a raw Buffer instead of parsed JSON, with no compile-time signal. Pre-existing router style in this codebase, not a regression.
+- Concurrent-PUT idempotent retry on attachments (`putAttachmentBase`, `src/api/v1/attachments.ts`) compares only `sha256` against the stored row, not `content_type` - a retry that mislabels content_type is silently accepted. The narrower check-then-insert race on duplicate `report_id`/`indent_id` (`src/compliance/damage.ts` applyDamageReported ~2208, `src/compliance/indent.ts` applyIndentRaised) is the same class of gap, backstopped in practice by the generic 23505 handler in `src/events/store.ts`.
+- `expected_return_date` on a damage custody record (`src/compliance/damage.ts` ~1824-1836) is validated as a calendar date but never checked against being in the past; not tied to any AC, minor data-quality nicety.
+
+## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 2 (2026-09-28)
+
+Read/events/infra chunk (group 2 of 5). The recursive quarantine-pool CTE finding below is real but requires a location hierarchy deeper than any pilot site has; the fail-open finding is defensive dead code today.
+
+- The recursive quarantine-pool CTE in `assertDamageHeldQuantity` (`src/read/projections/damage_report.ts`) caps at `depth < 10` with no warning if a site's location hierarchy under a quarantine flag is deeper - bins below it would silently drop out of the pool the D5 guard sums against.
+- `assertDamageHeldQuantity` fails open (skips the guard entirely) if `sourceLocationId` doesn't resolve to a row in `location_register` - can't currently occur since `stock_balance.location_id` is FK-constrained there, but the function doesn't rely on that invariant explicitly.
+- Undocumented `hold_note` value `no_qc_hold_zone` (`read/projections/damage_report.sql`) isn't in the story's Table 9 catalogue of five hold-note reasons - a sensible fallback for a site missing `ZONE-QC-HOLD`, just not spec'd.
+- Undocumented `whole_lot_already_held` column isn't in the story's Table 9 column list for the whole-lot group, though the event payload's `lot_already_held` needs somewhere to persist and this is where it lands.
+- `readRawBody` (`src/middleware/body.ts`) throws on an oversized body without draining or destroying the request socket - mirrors the pre-existing `readJsonBody` in the same file exactly, not a Story 8.9 regression; a fix belongs to both together.
+
+## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 3 (2026-09-28)
+
+Edge-app chunk (group 3 of 5). Needs a product decision on photo retention before the first two items are actionable.
+
+- `edge/src/local-db/pending-photos.ts` has no cap, eviction, or retention policy - an orphaned or departed-user's photo blob sits in IndexedDB indefinitely.
+- `reencodeAsJpeg`/`uploadOne` (`edge/src/sync/attachment-uploader.ts`) silently degrade a photo to fit the 10MB cap with no signal to the reporter or QC, and retry a doomed re-encode indefinitely if the server rejects it for a non-size reason.
+- `classifyUploadResponse` treats `ATTACHMENT_CONFLICT` as unconditionally "stored" on an unverified assumption about why the conflict occurred.
+- `DamageCases`'s per-slot idempotency key (`edge/src/components/damage-cases.tsx`) is reused across a retry even if the form body changed between attempts.
+- `InspectionCard`'s client-side quantity check uses `Number()` comparison instead of decimal-string comparison; the server is authoritative and re-validates.
+- `groupWorkbench` (`edge/src/components/damage-case-view.ts`) has no `default` case on `report.status`.
+- `WORKBENCH_LIMIT = 200` (`edge/src/components/damage-cases.tsx`) truncates with no "there are more" indicator.
+- `CasePhoto`'s object-URL cleanup has a narrow unmount-timing race that can leak one blob URL.
+- `DamageCases.loadList` collapses any non-403 failure into "needs-connection," obscuring real backend errors.
+- `missingDamageParts`'s focus target always lands on the same radio regardless of context.
+
+## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 5 (2026-09-28)
+
+Deploy/docs/misc chunk (group 5 of 5, the last one - the full diff has now been reviewed end to end).
+
+- The escalation flow's second damage case in `deploy/rehearsal/mock/operations-smoke.ts` references a photo attachment id that's never uploaded - allowed by the offline-pending schema design, but undocumented as deliberate in the script.
+- Repeated staging runs of `damageReport()` permanently consume 2 units of `BRG-6204` with no reclaim path; eventual stock exhaustion would silently turn future PASS runs into SKIP with nothing flagging it.
+- `deploy/provision/staging-doa-bands.sh`'s comment for the three new damage bands is a garbled run-on sentence.
+- Runbook row 2.10g packs five distinct actions into one evidence cell with no intermediate checkpoint.
+- `operations-smoke.ts`'s `report_id`/QC-key-turn steps don't assert response shape before building follow-up URLs.
+- `ops-lib.ts`/`rehearse.ts`'s remote-request Buffer-body handling for a photo upload wasn't confirmed to match the local-request path's Content-Type care.

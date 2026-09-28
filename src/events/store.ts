@@ -2292,18 +2292,18 @@ export async function persistEvent(
                                                           : null,
                                                     }
                                                   : constraint === 'edge_refused_capture_pkey'
-                                                  ? {
-                                                      refusal_id:
-                                                        typeof p['refusal_id'] === 'string'
-                                                          ? p['refusal_id']
-                                                          : null,
-                                                    }
-                                                  : {
-                                                      asset_id:
-                                                        typeof p['asset_id'] === 'string'
-                                                          ? p['asset_id']
-                                                          : null,
-                                                    };
+                                                    ? {
+                                                        refusal_id:
+                                                          typeof p['refusal_id'] === 'string'
+                                                            ? p['refusal_id']
+                                                            : null,
+                                                      }
+                                                    : {
+                                                        asset_id:
+                                                          typeof p['asset_id'] === 'string'
+                                                            ? p['asset_id']
+                                                            : null,
+                                                      };
         throw new AppError(
           409,
           'DUPLICATE_EVENT',
@@ -2347,16 +2347,29 @@ export async function persistEvent(
                 : null,
           },
         );
-      } else if (
-        // Story 8.9: a damage case is keyed by its client-minted report_id and, for a receipt case,
-        // by its GRN line. Both collide only on a racing replay of the same capture or receipt.
-        constraint === 'damage_report_pkey' ||
-        constraint === 'uq_damage_report_source_grn_line'
-      ) {
+      } else if (constraint === 'damage_report_pkey') {
+        // Story 8.9: a racing replay of the same client-minted report_id.
         throw new AppError(409, 'DUPLICATE_EVENT', 'This damage report has already been recorded', {
           report_id:
-            typeof envelope.payload['report_id'] === 'string' ? envelope.payload['report_id'] : null,
+            typeof envelope.payload['report_id'] === 'string'
+              ? envelope.payload['report_id']
+              : null,
         });
+      } else if (constraint === 'uq_damage_report_source_grn_line') {
+        // Story 8.9: a DIFFERENT report_id tried to open a second case for a GRN line that already
+        // has one - a business-rule violation (one case per line), never an idempotent replay of the
+        // same attempt, so it gets its own code rather than reusing DUPLICATE_EVENT.
+        throw new AppError(
+          409,
+          'DAMAGE_CASE_ALREADY_EXISTS_FOR_GRN_LINE',
+          'A damage case already exists for this GRN line',
+          {
+            source_grn_line_id:
+              typeof envelope.payload['source_grn_line_id'] === 'string'
+                ? envelope.payload['source_grn_line_id']
+                : null,
+          },
+        );
       } else if (constraint === 'asset_pkey') {
         // Server-minted UUIDs make this practically unreachable; mapped for completeness.
         throw new AppError(409, 'DUPLICATE_EVENT', 'An asset with this asset_id already exists', {

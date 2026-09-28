@@ -160,13 +160,14 @@ describe('Story 8.9 Table 11 workbench grouping', () => {
 });
 
 describe('Story 8.9 allowed_actions to panels (the server decides, the edge renders)', () => {
-  it('knows the thirteen action names of Table 11', () => {
+  it('knows the fourteen action names of Table 11', () => {
     assert.deepEqual(DAMAGE_ACTION_NAMES, [
       'inspect',
       'decide_whole_lot',
       'mark_arrived',
       'send_external',
       'mark_returned',
+      'mark_returned_to_stock',
       'turn_qc_key',
       'withdraw_qc_key',
       'disagree_qc',
@@ -185,7 +186,7 @@ describe('Story 8.9 allowed_actions to panels (the server decides, the edge rend
     assert.deepEqual(panelsFor(['turn_finance_key', 'disagree_finance']), ['keys']);
     assert.deepEqual(panelsFor(['withdraw_qc_key']), ['keys']);
     assert.deepEqual(panelsFor(['decide_escalation']), ['escalation']);
-    assert.deepEqual(panelsFor(['send_external', 'mark_returned']), ['custody']);
+    assert.deepEqual(panelsFor(['send_external', 'mark_returned', 'mark_returned_to_stock']), ['custody']);
   });
 
   it('posts each action to its route', () => {
@@ -196,6 +197,7 @@ describe('Story 8.9 allowed_actions to panels (the server decides, the edge rend
       mark_arrived: 'custody/arrived',
       send_external: 'custody/sent-external',
       mark_returned: 'custody/returned',
+      mark_returned_to_stock: 'custody/returned-to-stock',
       turn_qc_key: 'keys/qc/turn',
       withdraw_qc_key: 'keys/qc/withdraw',
       disagree_qc: 'keys/qc/disagree',

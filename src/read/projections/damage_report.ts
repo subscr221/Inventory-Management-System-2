@@ -158,6 +158,7 @@ export async function getDamageReportByGrnLine(
   client?: PoolClient,
   lock: 'none' | 'share' = 'none',
 ): Promise<DamageReportRow | null> {
+  if (!UUID_REGEX.test(grnLineId)) return null;
   const lockClause = lock === 'share' ? ' FOR SHARE' : '';
   const result = await runner(client).query(
     `SELECT ${SELECT_COLUMNS} FROM damage_report d WHERE d.source_grn_line_id = $1${lockClause}`,
@@ -253,6 +254,73 @@ export async function insertDamageReport(
  * Applies a column patch to one case. Column names come only from this module's callers (never
  * from a request), and every value is bound; `updated_at` is always stamped.
  */
+/** Every column `updateDamageReport` may set - every damage_report column except the primary key and timestamps it manages itself. */
+const UPDATABLE_COLUMNS: ReadonlySet<string> = new Set([
+  'report_number',
+  'site_id',
+  'reporter_user_id',
+  'reported_at',
+  'source_event_id',
+  'source',
+  'source_grn_line_id',
+  'source_reason_code',
+  'source_photo_ref',
+  'sku',
+  'lot_number',
+  'quantity',
+  'uom',
+  'found_at',
+  'bin_location_id',
+  'bin_code',
+  'reason_code',
+  'reason_note',
+  'photo_attachment_id',
+  'hold_mode',
+  'hold_note',
+  'quarantine_location_id',
+  'physical_state',
+  'arrived_by',
+  'arrived_at',
+  'external_destination',
+  'external_sent_by',
+  'external_sent_at',
+  'external_expected_return_date',
+  'external_gate_pass_ref_ext',
+  'external_returned_at',
+  'external_result_ref_ext',
+  'whole_lot_requested',
+  'whole_lot_decision',
+  'whole_lot_hold_id',
+  'whole_lot_already_held',
+  'whole_lot_decided_by',
+  'whole_lot_decided_at',
+  'status',
+  'confirmed_quantity',
+  'defect_code',
+  'inspected_by',
+  'inspected_at',
+  'case_value',
+  'qc_key_status',
+  'qc_key_user_id',
+  'qc_key_outcome',
+  'qc_key_price_reduction_pct',
+  'qc_key_at',
+  'finance_key_status',
+  'finance_key_user_id',
+  'finance_key_outcome',
+  'finance_key_price_reduction_pct',
+  'finance_key_at',
+  'final_outcome',
+  'final_price_reduction_pct',
+  'decided_by',
+  'escalation_user_id',
+  'decided_at',
+  'erp_document_ref_ext',
+  'outcome_recorded_by',
+  'outcome_recorded_at',
+  'replacement_indent_id',
+]);
+
 export async function updateDamageReport(
   reportId: string,
   patch: Record<string, unknown>,
@@ -260,6 +328,11 @@ export async function updateDamageReport(
 ): Promise<void> {
   const columns = Object.keys(patch);
   if (columns.length === 0) return;
+  for (const column of columns) {
+    if (!UPDATABLE_COLUMNS.has(column)) {
+      throw new Error(`updateDamageReport: "${column}" is not an updatable damage_report column`);
+    }
+  }
   const sets = columns.map((column, i) => `${column} = $${i + 2}`);
   await client.query(
     `UPDATE damage_report SET ${sets.join(', ')}, updated_at = now() WHERE report_id = $1`,
@@ -383,7 +456,11 @@ export async function listDamageReports(
   return result.rows.map(mapDamageRow);
 }
 
-/** Open cases a DOA authority might act on: every case not yet closed or cleared. */
+/**
+ * Open cases a DOA authority might act on: every case not yet closed or cleared, plus a closed or
+ * cleared case updated in the last 30 days (the same trailing window `listDamageReports` keeps for
+ * the workbench).
+ */
 export async function listOpenDamageReports(client?: PoolClient): Promise<DamageReportRow[]> {
   const result = await runner(client).query(
     `SELECT ${SELECT_COLUMNS} FROM damage_report d

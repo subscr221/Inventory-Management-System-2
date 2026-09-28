@@ -537,8 +537,14 @@ function smokeJpeg(): Buffer {
 async function damageBin(ctx: Ctx, sku: string): Promise<string | null> {
   const quarantine = new Set([ctx.ops['qc_hold_zone'], ctx.ops['quarantine_bin']]);
   const stocked = await stockOf(ctx, sku, 'invctl').catch(() => [] as Json[]);
+  // damageReport() opens two separate 1-unit reports against this same bin (the main flow, then
+  // the escalation flow), so the bin must cover both or the second report silently falls back to
+  // record_only instead of quarantined.
   const bin = stocked.find(
-    (l) => typeof l['location_code'] === 'string' && !quarantine.has(l['location_code']),
+    (l) =>
+      typeof l['location_code'] === 'string' &&
+      !quarantine.has(l['location_code']) &&
+      Number(l['available'] ?? l['quantity'] ?? l['on_hand'] ?? 0) >= 2,
   );
   return (bin?.['location_code'] as string | undefined) ?? null;
 }
@@ -581,6 +587,23 @@ export async function damageReport(ctx: Ctx): Promise<void> {
     for (const name of [...DAMAGE_STEPS, ...DAMAGE_ESCALATION_STEPS])
       skip(name, `no owned ${EMPLOYEE_SKU} at a non-quarantine bin`);
     return;
+  }
+  for (const [transactionType, value] of [
+    ['damage.qc_concurrence', 0],
+    ['damage.finance_concurrence', 0],
+    ['damage.escalation', 0],
+  ] as const) {
+    const res = await ctx.request(
+      'POST',
+      '/api/v1/doa/resolve',
+      { transaction_type: transactionType, value },
+      await ctx.as('compliance'),
+    );
+    if (res.status !== 200) {
+      for (const name of [...DAMAGE_STEPS, ...DAMAGE_ESCALATION_STEPS])
+        skip(name, `no active DOA band for ${transactionType}`);
+      return;
+    }
   }
   const photoId = uuid();
   const indentId = uuid();
@@ -745,6 +768,8 @@ export async function damageReport(ctx: Ctx): Promise<void> {
       async () => {
         const r = await report({ photo_attachment_id: uuid() });
         secondId = r['report_id'] as string;
+        if (r['hold_mode'] !== 'quarantined')
+          throw new Error(`hold_mode ${String(r['hold_mode'])} (${String(r['hold_note'])})`);
         const inspected = await inspect(secondId);
         if (inspected['status'] !== 'awaiting_keys')
           throw new Error(`status ${String(inspected['status'])}`);

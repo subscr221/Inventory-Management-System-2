@@ -3428,8 +3428,10 @@ describe('Story 9.9 event-type registry', () => {
   });
 });
 
-// Story 8.9: the eleven damage-case events on their own 'damage' stream (never 'qc', D2) and the
-// metadata-only photo upload record on 'attachment'.
+// Story 8.9: the twelve damage-case events on their own 'damage' stream (never 'qc', D2) and the
+// metadata-only photo upload record on 'attachment'. damage.returned_to_stock (code review,
+// 2026-09-28) closes the release loop: the reverse of damage.units_arrived, confirming units
+// physically walked back out of ZONE-QC-HOLD once the case has released them.
 describe('Story 8.9 event-type registry', () => {
   it('registers every damage event on the damage stream and the upload on attachment', () => {
     for (const type of [
@@ -3437,6 +3439,7 @@ describe('Story 8.9 event-type registry', () => {
       'damage.units_arrived',
       'damage.sent_for_external_check',
       'damage.returned_from_external_check',
+      'damage.returned_to_stock',
       'damage.inspected',
       'damage.whole_lot_decided',
       'damage.key_turned',
@@ -3455,7 +3458,7 @@ describe('Story 8.9 event-type registry', () => {
       requiresBusinessStream: false,
     });
     const damageTypes = Object.keys(SUPPORTED_EVENT_TYPES).filter((t) => t.startsWith('damage.'));
-    assert.strictEqual(damageTypes.length, 11);
+    assert.strictEqual(damageTypes.length, 12);
   });
 
   it('mirrors the indent replacement link into init-db.sql', () => {

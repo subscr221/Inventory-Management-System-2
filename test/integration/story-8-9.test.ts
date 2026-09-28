@@ -172,6 +172,21 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
     return r.rows[0]!['q'] as string;
   }
 
+  const JPEG_BYTES = Buffer.from([
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0xff, 0xd9,
+  ]);
+
+  /** Uploads a real, owned attachment (code review 2026-09-28: reports must name a photo the actor uploaded). */
+  async function uploadPhoto(who: string): Promise<string> {
+    const attachmentId = randomUUID();
+    const res = await makeRequest(port, 'PUT', `/api/v1/attachments/${attachmentId}`, JPEG_BYTES, {
+      ...H[who],
+      'Content-Type': 'image/jpeg',
+    });
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    return attachmentId;
+  }
+
   function reportBody(
     sku: string,
     overrides: Record<string, unknown> = {},
@@ -183,7 +198,6 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
       found_at: 'stock',
       bin_code: 'BIN-89-A1',
       reason_code: 'DAMAGED_COMPONENT',
-      photo_attachment_id: randomUUID(),
       ...overrides,
     };
   }
@@ -193,7 +207,17 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
     sku: string,
     overrides: Record<string, unknown> = {},
   ): Promise<HttpResult> {
-    return makeRequest(port, 'POST', '/api/v1/damage-reports', reportBody(sku, overrides), H[who]);
+    const photoAttachmentId =
+      'photo_attachment_id' in overrides
+        ? (overrides['photo_attachment_id'] as string | undefined)
+        : await uploadPhoto(who);
+    return makeRequest(
+      port,
+      'POST',
+      '/api/v1/damage-reports',
+      reportBody(sku, { ...overrides, photo_attachment_id: photoAttachmentId }),
+      H[who],
+    );
   }
 
   async function reportOk(
@@ -497,7 +521,8 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
 
   it('AC 1: an employee reports 4 of 10 units at a bin; the units are booked into QC hold', async () => {
     const sku = await newSku({ stock: 10 });
-    const res = await report('emp1', sku);
+    // Story 1.8 offline pattern: the photo hasn't landed yet, only the report has.
+    const res = await report('emp1', sku, { photo_attachment_id: randomUUID() });
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     const r = res.body['report'] as Record<string, unknown>;
     assert.match(r['report_number'] as string, /^DMG-\d{4}-\d{4}$/);
@@ -598,15 +623,24 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
     );
     expectError(await report('emp1', sku, { quantity: '0' }), 400, 'DAMAGE_QUANTITY_INVALID');
     expectError(await report('emp1', 'NO-SUCH-SKU'), 404, 'ITEM_NOT_FOUND');
-    expectError(await report('svc', sku), 403, 'MODULE_ACCESS_DENIED');
-    expectError(await report('empB', sku), 403, 'LOCATION_ACCESS_DENIED');
+    expectError(
+      await report('svc', sku, { photo_attachment_id: randomUUID() }),
+      403,
+      'MODULE_ACCESS_DENIED',
+    );
+    expectError(
+      await report('empB', sku, { photo_attachment_id: randomUUID() }),
+      403,
+      'LOCATION_ACCESS_DENIED',
+    );
     assert.strictEqual(await onHand(sku, binA1), '10.000', 'no refused capture moved stock');
   });
 
   it('AD-16: a replay of the same idempotency key is 409 DUPLICATE_EVENT with the existing event id', async () => {
     const sku = await newSku({ stock: 10 });
     const key = `dmg-${randomUUID()}`;
-    const body = reportBody(sku, { idempotency_key: key });
+    const photoAttachmentId = await uploadPhoto('emp1');
+    const body = reportBody(sku, { idempotency_key: key, photo_attachment_id: photoAttachmentId });
     const first = await makeRequest(port, 'POST', '/api/v1/damage-reports', body, H['emp1']);
     assert.strictEqual(first.status, 201, JSON.stringify(first.body));
     const again = await makeRequest(port, 'POST', '/api/v1/damage-reports', body, H['emp1']);
@@ -621,13 +655,18 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
   it('edge door: damage.reported is a base-hat capture; every other damage event is central-only', async () => {
     const sku = await newSku({ stock: 10 });
     const reportId = randomUUID();
+    const photoAttachmentId = await uploadPhoto('emp1');
     const envelope = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
       event_id: randomUUID(),
       stream_type: 'damage',
       stream_id: reportId,
       event_type: 'damage.reported',
       event_version: 1,
-      payload: { ...reportBody(sku), report_id: reportId, reporter_user_id: U['emp2'] },
+      payload: {
+        ...reportBody(sku, { photo_attachment_id: photoAttachmentId }),
+        report_id: reportId,
+        reporter_user_id: U['emp2'],
+      },
       metadata: {
         correlation_id: randomUUID(),
         actor: { user_id: U['emp1'], role: 'employee', location_id: siteA },
@@ -713,6 +752,47 @@ describe('Story 8.9 Report Damage - Universal Capture, QC Task, and Commercial O
     const arrivedInUse = await actOk('qc1', inUse['report_id'] as string, 'custody/arrived');
     assert.strictEqual(arrivedInUse['physical_state'], 'in_qc_hold');
     assert.strictEqual(await onHand(sku, qcHold), before);
+  });
+
+  it('code review 2026-09-28: mark_returned_to_stock closes the release loop, gated on release', async () => {
+    const sku = await newSku({ stock: 10 });
+    const r = await reportOk('emp1', sku);
+    const id = r['report_id'] as string;
+    await actOk('store1', id, 'custody/arrived');
+    // Not yet released: the case is still on_hold, so the units cannot be marked returned to stock.
+    expectError(
+      await act('store1', id, 'custody/returned-to-stock'),
+      409,
+      'DAMAGE_PHYSICAL_STATE_INVALID',
+    );
+    // QC finds no damage: the case clears and its held units are released.
+    const cleared = await actOk('qc1', id, 'inspection', { confirmed_quantity: '0' });
+    assert.strictEqual(cleared['status'], 'cleared');
+    const returned = await actOk('store1', id, 'custody/returned-to-stock', {
+      note: 'walked back to the shelf',
+    });
+    assert.strictEqual(returned['physical_state'], 'not_held');
+    expectError(
+      await act('store1', id, 'custody/returned-to-stock'),
+      409,
+      'DAMAGE_PHYSICAL_STATE_INVALID',
+    );
+  });
+
+  it('code review 2026-09-28: photo_attachment_id must be uploaded by the reporter, once claimed', async () => {
+    const sku = await newSku({ stock: 10 });
+    const emp1Photo = await uploadPhoto('emp1');
+    expectError(
+      await report('emp2', sku, { photo_attachment_id: emp1Photo }),
+      403,
+      'DAMAGE_PHOTO_NOT_OWNED',
+    );
+    // A pending (not-yet-uploaded) id is fine - the Story 1.8 offline pattern.
+    const pending = await reportOk('emp2', sku, { photo_attachment_id: randomUUID() });
+    assert.strictEqual(pending['photo_status'], 'pending');
+    // The reporter's own already-uploaded photo is fine, including reused across two reports.
+    const own = await reportOk('emp1', sku, { photo_attachment_id: emp1Photo });
+    assert.strictEqual(own['photo_status'], 'stored');
   });
 
   // -------------------------------------------------------------------------

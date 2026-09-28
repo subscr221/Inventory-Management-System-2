@@ -236,7 +236,7 @@ export function ReportDamage({ onSubmit, settlementOf, outboxVersion = '' }: Rep
                 ? t('damage.doneRefused')
                 : t('damage.doneCaptured')}
           </h2>
-          <p>{t('damage.doneDecide')}</p>
+          {settlement === 'refused' ? null : <p>{t('damage.doneDecide')}</p>}
           {done.wholeLot ? <p>{t('damage.doneWholeLot')}</p> : null}
           {done.replacement ? <p>{t('damage.doneReplacement')}</p> : null}
           <div className="edge-actions">

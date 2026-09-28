@@ -704,8 +704,16 @@ export function EdgeClient({
     const insertAll = async (tx: Parameters<typeof insertCaptureEvent>[0]) => {
       for (const event of events) await insertCaptureEvent(tx, event);
     };
-    if (db.writeTransaction) await db.writeTransaction(insertAll);
-    else await insertAll(db);
+    try {
+      if (db.writeTransaction) await db.writeTransaction(insertAll);
+      else await insertAll(db);
+    } catch (err) {
+      // Code review 2026-09-28: the photo above is already stored under photoAttachmentId; if the
+      // event insert that would reference it never lands, remove it rather than leave an orphaned
+      // blob with no owning report.
+      await pendingPhotoStore.remove(photoAttachmentId).catch(() => undefined);
+      throw err;
+    }
     await refreshLocalState(db);
     const damage = events[0]!;
     return {

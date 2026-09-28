@@ -385,6 +385,7 @@ describe('Story 1.9 Spine Acceptance Contract Tests', () => {
       'POST /api/v1/damage-reports/:reportId/custody/arrived',
       'POST /api/v1/damage-reports/:reportId/custody/sent-external',
       'POST /api/v1/damage-reports/:reportId/custody/returned',
+      'POST /api/v1/damage-reports/:reportId/custody/returned-to-stock',
       'POST /api/v1/damage-reports/:reportId/inspection',
       'POST /api/v1/damage-reports/:reportId/whole-lot',
       'POST /api/v1/damage-reports/:reportId/keys/:key/turn',

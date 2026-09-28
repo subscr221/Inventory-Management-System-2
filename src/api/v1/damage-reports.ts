@@ -30,6 +30,7 @@ import {
   DAMAGE_UNITS_ARRIVED,
   DAMAGE_SENT_FOR_EXTERNAL_CHECK,
   DAMAGE_RETURNED_FROM_EXTERNAL_CHECK,
+  DAMAGE_RETURNED_TO_STOCK,
   DAMAGE_INSPECTED,
   DAMAGE_WHOLE_LOT_DECIDED,
   DAMAGE_KEY_TURNED,
@@ -94,6 +95,7 @@ const AUDITED_REJECTIONS = new Set([
   'DAMAGE_LOT_NOT_FOUND',
   'DEFECT_CODE_UNKNOWN',
   'HOLD_EXISTS',
+  'DAMAGE_PHOTO_NOT_OWNED',
 ]);
 
 function isUuid(value: unknown): value is string {
@@ -386,6 +388,14 @@ export const markReturnedHandler = custodyGate(
   }),
 );
 
+export const markReturnedToStockHandler = custodyGate(
+  caseActionBase({
+    eventType: DAMAGE_RETURNED_TO_STOCK,
+    siteModules: DAMAGE_CUSTODY_MODULES,
+    payload: (body) => ({ note: optional(body, 'note') }),
+  }),
+);
+
 export const inspectDamageHandler = inspectionGate(
   caseActionBase({
     eventType: DAMAGE_INSPECTED,
@@ -413,7 +423,7 @@ export const turnKeyHandler = decisionGate(
     payload: (body, params) => ({
       key: keyParam(params),
       outcome: body['outcome'],
-      price_reduction_pct: optional(body, 'price_reduction_pct'),
+      price_reduction_pct: decimal(optional(body, 'price_reduction_pct')),
       note: optional(body, 'note'),
     }),
   }),
@@ -434,7 +444,7 @@ export const disagreeKeyHandler = decisionGate(
     payload: (body, params) => ({
       key: keyParam(params),
       proposed_outcome: body['proposed_outcome'],
-      price_reduction_pct: optional(body, 'price_reduction_pct'),
+      price_reduction_pct: decimal(optional(body, 'price_reduction_pct')),
       reason: body['reason'],
     }),
   }),
@@ -446,7 +456,7 @@ export const decideEscalationHandler = decisionGate(
     siteModules: null,
     payload: (body) => ({
       outcome: body['outcome'],
-      price_reduction_pct: optional(body, 'price_reduction_pct'),
+      price_reduction_pct: decimal(optional(body, 'price_reduction_pct')),
       reason: body['reason'],
     }),
   }),
