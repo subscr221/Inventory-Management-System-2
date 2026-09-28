@@ -1251,3 +1251,16 @@ Deploy/docs/misc chunk (group 5 of 5, the last one - the full diff has now been 
 - Runbook row 2.10g packs five distinct actions into one evidence cell with no intermediate checkpoint.
 - `operations-smoke.ts`'s `report_id`/QC-key-turn steps don't assert response shape before building follow-up URLs.
 - `ops-lib.ts`/`rehearse.ts`'s remote-request Buffer-body handling for a photo upload wasn't confirmed to match the local-request path's Content-Type care.
+
+## Deferred from: code review of 8-9-report-damage-universal-capture-qc-task-and-commercial-outcome, chunk 4 (2026-09-28)
+
+Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items below are additive test-coverage suggestions, not defects - the chunk's one real bug (the mock stub missing the newest action) was fixed directly, see the story file.
+
+- The finance-workbench test doesn't assert the returned case set has no unexpected extra members of an allowed status - weaker than the story's "exactly" wording.
+- `damage-stub.ts`'s `allowed()` independently reimplements server authorization rules with no shared source of truth - a structural drift risk for future changes.
+- No integration test drives `return_for_replacement`/`keep_local`/CEO-decided `debit_note` or `return_for_replacement` through the full HTTP flow end-to-end.
+- Only finance-key turns have a concurrency race test; QC-key turns, inspections, whole-lot decisions, and custody actions have none.
+- Several validation boundaries (413 exact size, missing `send_external` fields, non-bin `bin_code`, over-precision `confirmed_quantity`) are unit-tested but not proven through the live route.
+- `report-damage.spec.ts`'s offline-upload assertion is tautological (the stub can't upload offline regardless of what the app does).
+- `damage-cases.spec.ts`'s "every sibling action is disabled" test checks only two of the panel's buttons.
+- `damage-capture.test.ts`'s `need_by_date` IST-boundary test is a single hardcoded snapshot, not a property test.

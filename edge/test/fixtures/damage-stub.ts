@@ -226,6 +226,9 @@ export async function provisionDamage(page: Page, options: DamageStubOptions = {
         if (['awaiting_arrival', 'with_reporter', 'not_held'].includes(String(physical))) names.push('mark_arrived');
         if (physical === 'in_qc_hold' && r.status !== 'closed') names.push('send_external');
         if (physical === 'at_external_check') names.push('mark_returned');
+        const released =
+          r.status === 'cleared' || (r.status === 'closed' && r['final_outcome'] === 'accept_as_is_price_reduction');
+        if (physical === 'in_qc_hold' && released) names.push('mark_returned_to_stock');
       }
       const keyActions = (key: 'qc' | 'finance') => {
         const mine = r[`${key}_key_status`];
@@ -247,6 +250,7 @@ export async function provisionDamage(page: Page, options: DamageStubOptions = {
         'mark_arrived',
         'send_external',
         'mark_returned',
+        'mark_returned_to_stock',
         'turn_qc_key',
         'withdraw_qc_key',
         'disagree_qc',
@@ -265,6 +269,7 @@ export async function provisionDamage(page: Page, options: DamageStubOptions = {
       'custody/arrived': 'units_arrived',
       'custody/sent-external': 'sent_for_external_check',
       'custody/returned': 'returned_from_external_check',
+      'custody/returned-to-stock': 'returned_to_stock',
       'escalation/decide': 'escalation_decided',
       outcome: 'outcome_recorded',
     };
@@ -296,6 +301,9 @@ export async function provisionDamage(page: Page, options: DamageStubOptions = {
         case 'custody/returned':
           r['physical_state'] = 'in_qc_hold';
           r['external_result_ref_ext'] = body['external_result_ref_ext'] ?? null;
+          break;
+        case 'custody/returned-to-stock':
+          r['physical_state'] = 'not_held';
           break;
         case 'escalation/decide':
           r.status = 'outcome_final';
