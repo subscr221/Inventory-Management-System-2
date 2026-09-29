@@ -39,7 +39,7 @@
 .saved-filters h4 {
   margin: 0 0 var(--space-2) 0;
   color: var(--text);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   font-weight: var(--label-weight);
 }
 
@@ -93,10 +93,10 @@
 .filter-option input,
 .filter-option select {
   padding: 0 var(--space-3);
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   background: var(--surface);
   color: var(--text);
 }

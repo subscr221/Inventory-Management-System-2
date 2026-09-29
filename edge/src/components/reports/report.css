@@ -22,7 +22,7 @@
 .report-header p {
   margin: 0;
   color: var(--text-muted);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
 }
 
 .report-tabs {
@@ -37,7 +37,7 @@
   border: none;
   border-bottom: 3px solid transparent;
   cursor: pointer;
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   color: var(--text-muted);
   font-weight: var(--label-weight);
 }
@@ -108,7 +108,7 @@
 .template-info h4 {
   margin: 0 0 var(--space-1) 0;
   color: var(--text);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   font-weight: var(--label-weight);
 }
 
@@ -167,10 +167,10 @@
 
 .date-range-inputs input {
   padding: 0 var(--space-3);
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   background: var(--surface);
   color: var(--text);
 }
@@ -190,10 +190,10 @@
 
 .param-group select {
   padding: 0 var(--space-3);
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   width: fit-content;
   background: var(--surface);
   color: var(--text);

@@ -78,6 +78,17 @@
   --nav-item-touch: 52px;
   --sidebar-width: 232px;
   --sidebar-width-touch: 232px;
+  --icon-rail-width: 64px;
+  --bottom-nav-height: var(--touch-primary);
+  --body-touch-size: 16px;
+
+  /* Density. Bound to device input in the device-class blocks at the end of this file, never to
+     role. Touch-roomy is the mobile-first default; only a wide fine pointer goes compact. */
+  --control-height: var(--touch-primary);
+  --control-height-secondary: var(--touch-secondary);
+  --nav-item-height: var(--nav-item-touch);
+  --header-height: var(--touch-primary);
+  --text-size: var(--body-touch-size);
 }
 
 * {
@@ -91,7 +102,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   font-weight: var(--body-weight);
   line-height: 1.4;
 }
@@ -200,10 +211,10 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--control-compact);
+  min-height: var(--nav-item-height);
   padding: 0 var(--space-3);
   color: var(--side-text);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   font-weight: var(--body-weight);
   border: 0;
   background: transparent;
@@ -228,7 +239,7 @@ textarea:focus-visible {
 
 .edge-sidebar-icon {
   color: var(--side-text);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   width: 20px;
   text-align: center;
   flex: 0 0 auto;
@@ -249,7 +260,7 @@ textarea:focus-visible {
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-4);
-  height: var(--control-compact);
+  height: var(--header-height);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -271,13 +282,13 @@ textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   padding: 0 var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
   background: var(--surface);
   color: var(--text);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   font-weight: var(--label-weight);
   cursor: pointer;
 }
@@ -290,7 +301,7 @@ textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   padding: 0 var(--space-3);
   border: 0;
   border-radius: var(--rounded);
@@ -309,12 +320,12 @@ textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   padding: 0 var(--space-2);
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   cursor: pointer;
   border-radius: var(--rounded);
 }
@@ -342,7 +353,7 @@ textarea:focus-visible {
   border-bottom: 1px solid var(--border);
   background: var(--warn-bg);
   color: var(--warn);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
 }
 
 .edge-main {
@@ -406,10 +417,10 @@ textarea:focus-visible {
 .edge-nav a {
   display: inline-flex;
   align-items: center;
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   padding: 0 var(--space-3);
   color: var(--text-muted);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   font-weight: var(--label-weight);
   border-bottom: 3px solid transparent;
 }
@@ -459,7 +470,7 @@ textarea:focus-visible {
   border: 1px solid var(--warn);
   border-left-width: 4px;
   border-radius: var(--rounded);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
 }
 
 .sync-counts {
@@ -505,7 +516,7 @@ textarea:focus-visible {
   font-weight: var(--label-weight);
   font-size: var(--label-size);
   padding: 0 var(--space-4);
-  min-height: var(--control-compact);
+  min-height: var(--control-height);
   cursor: pointer;
 }
 
@@ -521,7 +532,7 @@ textarea:focus-visible {
   font-weight: var(--label-weight);
   font-size: var(--label-size);
   padding: 0 var(--space-4);
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   cursor: pointer;
 }
 
@@ -542,7 +553,7 @@ textarea:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--rounded);
   padding: 0 var(--space-3);
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   background: var(--surface);
   color: var(--text);
 }
@@ -590,28 +601,6 @@ textarea:focus-visible {
 
 .skip-link:focus {
   top: var(--space-2);
-}
-
-@media (max-width: 767px) {
-  .edge-header {
-    align-items: flex-start;
-    flex-direction: column;
-    height: auto;
-    padding: var(--space-3);
-  }
-
-  .edge-header-search {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .edge-main {
-    padding: var(--space-3);
-  }
-
-  .edge-sidebar {
-    display: none;
-  }
 }
 
 /* Story 1.14: the refused-captures supervisor screen and the dismiss controls. Cards, not a table
@@ -707,7 +696,7 @@ textarea:focus-visible {
 
 .base-form input {
   width: 100%;
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
   padding: 0 var(--space-3);
@@ -833,7 +822,7 @@ textarea:focus-visible {
 .damage-action-form textarea {
   width: 100%;
   max-width: 480px;
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
   padding: 0 var(--space-3);
@@ -990,4 +979,310 @@ textarea:focus-visible {
   max-height: 360px;
   border-radius: var(--rounded);
   border: 1px solid var(--border);
+}
+
+/* Nav icons shared by the bottom nav and the icon rail. */
+.nav-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+
+/* Bottom nav (DESIGN.md bottom-nav): surface bar, touch-primary high, icon plus label, active
+   item in accent. Four slots; the fourth is More when anything overflows. */
+.bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.bottom-nav-list {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bottom-nav-slot {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.bottom-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: var(--bottom-nav-height);
+  padding: 0 var(--space-1);
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  cursor: pointer;
+}
+
+.bottom-nav-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bottom-nav-item[aria-current='page'],
+.bottom-nav-item.active {
+  color: var(--accent);
+  box-shadow: inset 0 3px 0 var(--accent);
+}
+
+.bottom-nav :focus-visible {
+  outline-color: var(--accent);
+  outline-offset: -3px;
+}
+
+.bottom-nav-more {
+  position: absolute;
+  right: var(--space-2);
+  bottom: calc(100% + var(--space-2));
+  min-width: 232px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded);
+  box-shadow: 0 -4px 12px rgb(0 0 0 / 6%);
+}
+
+.bottom-nav-more[hidden] {
+  display: none;
+}
+
+.bottom-nav-more-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--touch-secondary);
+  padding: 0 var(--space-4);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--body-touch-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bottom-nav-more-item:hover {
+  background: var(--bg);
+}
+
+.bottom-nav-more-item[aria-current='page'] {
+  color: var(--accent);
+  font-weight: var(--label-weight);
+}
+
+/* Icon rail (DESIGN.md icon-rail): collapsed dark navigation, icons in side-text, active item
+   marked with the accent-on-dark inset bar. The inner column stays in view while the page scrolls. */
+.icon-rail {
+  width: var(--icon-rail-width);
+  min-width: var(--icon-rail-width);
+  background: var(--side);
+  color: var(--side-text);
+  border-right: 1px solid var(--side-hover);
+}
+
+.icon-rail-expanded {
+  width: var(--sidebar-width-touch);
+  min-width: var(--sidebar-width-touch);
+}
+
+.icon-rail-inner {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 100vh;
+  max-height: 100dvh;
+  overflow-y: auto;
+}
+
+.icon-rail-list {
+  margin: 0;
+  padding: var(--space-2) 0;
+  list-style: none;
+}
+
+.icon-rail-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--nav-item-touch);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--side-text);
+  font-size: var(--body-touch-size);
+  cursor: pointer;
+}
+
+.icon-rail-expanded .icon-rail-item {
+  justify-content: flex-start;
+  padding: 0 var(--space-4);
+}
+
+.icon-rail-item:hover {
+  background: var(--side-hover);
+}
+
+.icon-rail-item[aria-current='page'] {
+  color: var(--accent-on-dark);
+  background: var(--side-hover);
+  box-shadow: inset 3px 0 0 var(--accent-on-dark);
+}
+
+.icon-rail :focus-visible {
+  outline-color: var(--accent-on-dark);
+  outline-offset: -3px;
+}
+
+.icon-rail-footer {
+  border-top: 1px solid var(--side-hover);
+}
+
+/* Device classes (EXPERIENCE.md Foundation): width plus pointer, never role. The same breakpoints
+   drive use-device-class.ts, which picks the nav surface; the display rules below keep the wrong
+   surface hidden before hydration and during a resize. */
+@media (max-width: 599px) {
+  /* Handheld: bottom nav, touch density */
+  :root {
+    --control-height: var(--touch-primary);
+    --control-height-secondary: var(--touch-secondary);
+    --nav-item-height: var(--nav-item-touch);
+    --header-height: var(--touch-primary);
+    --text-size: var(--body-touch-size);
+  }
+
+  .edge-sidebar,
+  .icon-rail,
+  .edge-nav {
+    display: none;
+  }
+
+  /* Search (the scan bar on scan-driven screens) always sits on top, actions on the row below. */
+  .edge-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+    height: auto;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .edge-header-search {
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .edge-main {
+    padding: var(--space-3);
+    padding-bottom: calc(
+      var(--bottom-nav-height) + var(--space-4) + env(safe-area-inset-bottom, 0px)
+    );
+  }
+
+  .card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The primary action is full width and pinned in the bottom third, clear of the bottom nav. */
+  .primary-action {
+    position: sticky;
+    bottom: calc(var(--bottom-nav-height) + var(--space-3) + env(safe-area-inset-bottom, 0px));
+    z-index: 10;
+    width: 100%;
+    box-shadow: 0 -4px 12px rgb(0 0 0 / 6%);
+  }
+
+  .secondary-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+  }
+}
+
+@media (min-width: 600px) and (max-width: 1100px) {
+  /* Tablet: icon rail, touch density */
+  :root {
+    --control-height: var(--touch-primary);
+    --control-height-secondary: var(--touch-secondary);
+    --nav-item-height: var(--nav-item-touch);
+    --header-height: var(--touch-primary);
+    --text-size: var(--body-touch-size);
+  }
+
+  .edge-sidebar,
+  .bottom-nav,
+  .edge-nav {
+    display: none;
+  }
+
+  .edge-header-search {
+    min-width: 0;
+  }
+}
+
+@media (min-width: 1101px) and (pointer: coarse) {
+  /* Desktop touch: sidebar, touch density */
+  :root {
+    --control-height: var(--touch-primary);
+    --control-height-secondary: var(--touch-secondary);
+    --nav-item-height: var(--nav-item-touch);
+    --header-height: var(--touch-primary);
+    --text-size: var(--body-touch-size);
+  }
+
+  .bottom-nav,
+  .icon-rail:not(.icon-rail-expanded) {
+    display: none;
+  }
+
+  .edge-sidebar {
+    width: var(--sidebar-width-touch);
+    min-width: var(--sidebar-width-touch);
+  }
+
+  .edge-sidebar-caption {
+    font-size: var(--body-touch-size);
+  }
+}
+
+@media (min-width: 1101px) and (pointer: fine) {
+  /* Desktop: sidebar, compact density */
+  :root {
+    --control-height: var(--control-compact);
+    --control-height-secondary: var(--control-compact);
+    --nav-item-height: var(--control-compact);
+    --header-height: var(--control-compact);
+    --text-size: var(--body-size);
+  }
+
+  .bottom-nav,
+  .icon-rail {
+    display: none;
+  }
 }

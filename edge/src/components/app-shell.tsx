@@ -1,4 +1,8 @@
+'use client';
+
 import { SyncStatusBadge } from './sync-status-badge';
+import { BottomNav } from './bottom-nav';
+import { IconRail } from './icon-rail';
 import { TestCaptureButton } from './test-capture-button';
 import { SyncFailureList, type SyncFailureItem } from './sync-failure-list';
 import { ServiceWorkerRegistration } from './service-worker-registration';
@@ -30,6 +34,7 @@ import { ReportDamage, type ReportDamageProps } from './report-damage';
 import { DamageCases } from './damage-cases';
 import { entriesFor } from './navigation/nav-model';
 import { t, type MessageKey } from '../i18n/locale';
+import { useDeviceClass, type DeviceClass } from '../lib/use-device-class';
 import type { SyncUiState } from '../sync/sync-status';
 import type { CachedReservationRow, CachedWorkOrderRow, WorklistMeter } from '../local-db/worklist';
 
@@ -137,6 +142,28 @@ function isBaseView(view: string): view is BaseView {
   return view in BASE_VIEW_ENTRY;
 }
 
+/** The nav registry entry each view belongs to (null: reached from a link, not from the nav). */
+const VIEW_NAV_ENTRY: Record<NonNullable<AppShellProps['view']>, string | null> = {
+  ...BASE_VIEW_ENTRY,
+  frontline: 'Frontline',
+  dashboard: 'Dashboard',
+  maintenance: null,
+  'refused-captures': 'Refused captures',
+  workflows: 'Workflows',
+  'access-control': 'Access control',
+  reports: 'Reports',
+};
+
+type NavSurface = 'bottom-nav' | 'icon-rail' | 'sidebar';
+
+/** EXPERIENCE.md navigation by class: the device class picks the surface, never the role. */
+const NAV_SURFACE: Record<DeviceClass, NavSurface> = {
+  handheld: 'bottom-nav',
+  tablet: 'icon-rail',
+  desktop: 'sidebar',
+  'desktop-touch': 'sidebar',
+};
+
 function countMessage(count: number, one: MessageKey, many: MessageKey): string {
   return t(count === 1 ? one : many).replace('{count}', String(count));
 }
@@ -175,13 +202,26 @@ export function AppShell({
   waitingForOthers = [],
 }: AppShellProps) {
   const navEntries = entriesFor(navigation);
+  const deviceClass = useDeviceClass();
+  const navSurface = NAV_SURFACE[deviceClass];
+  const activeEntry = VIEW_NAV_ENTRY[view];
+  const activeHref = navEntries.find((entry) => entry.name === activeEntry)?.href ?? null;
   return (
-    <div className="edge-shell">
+    <div className="edge-shell" data-device-class={deviceClass}>
       <ServiceWorkerRegistration />
       <a className="skip-link" href="#main-content">
         {t('app.skipToContent')}
       </a>
       <div className="edge-layout">
+        {navSurface === 'icon-rail' ? (
+          <IconRail
+            entries={navEntries}
+            activeHref={activeHref}
+            onSignOut={onSignOut}
+            signingOut={signingOut}
+          />
+        ) : null}
+        {navSurface === 'sidebar' ? (
         <aside className="edge-sidebar">
           <div className="edge-sidebar-brand">
             <h1 className="brand-name">{t('app.title')}</h1>
@@ -215,6 +255,7 @@ export function AppShell({
             </div>
           ) : null}
         </aside>
+        ) : null}
         <div className="edge-content">
           <header className="edge-header">
             <div className="edge-header-search">
@@ -441,6 +482,14 @@ export function AppShell({
           </main>
         </div>
       </div>
+      {navSurface === 'bottom-nav' ? (
+        <BottomNav
+          entries={navEntries}
+          activeHref={activeHref}
+          onSignOut={onSignOut}
+          signingOut={signingOut}
+        />
+      ) : null}
     </div>
   );
 }

@@ -22,7 +22,7 @@
 .rbac-header p {
   margin: 0;
   color: var(--text-muted);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
 }
 
 .rbac-content {
@@ -73,7 +73,7 @@
 .user-item h4 {
   margin: 0 0 var(--space-1) 0;
   color: var(--text);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   font-weight: var(--label-weight);
 }
 
@@ -106,10 +106,10 @@
 
 .user-role select {
   padding: 0 var(--space-2);
-  min-height: var(--control-compact);
+  min-height: var(--control-height-secondary);
   border: 1px solid var(--border);
   border-radius: var(--rounded);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   background: var(--surface);
   color: var(--text);
 }
@@ -131,7 +131,7 @@
 .permission-header h4 {
   margin: 0;
   color: var(--text);
-  font-size: var(--body-size);
+  font-size: var(--text-size);
   font-weight: var(--label-weight);
 }
 
