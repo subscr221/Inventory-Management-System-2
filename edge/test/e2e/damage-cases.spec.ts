@@ -220,6 +220,6 @@ test('a reporter without workbench scope is told so; offline needs a live connec
   await expect(group(page, 'Damage reported - to inspect')).toBeVisible();
   await context.setOffline(true);
   await expect(page.getByText('Approvals need a live connection')).toBeVisible();
-  await expect(page.getByRole('listitem')).toHaveCount(0);
+  await expect(page.getByRole('main').getByRole('listitem')).toHaveCount(0);
   await context.setOffline(false);
 });

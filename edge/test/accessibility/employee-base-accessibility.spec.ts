@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { COMPACT_CONTROL } from '../fixtures/keyboard';
 import { provisionEmployeeBase, KNOWN_SKU } from '../fixtures/employee-base-stub';
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 
 // Story 1.15: the base screens populated, denied and offline, with the API stubbed so the audit
 // covers the real cards rather than the first-sync fallback.
-test('check stock with a result has no automated WCAG 2.1 AA violations and 44px controls', async ({
+test('check stock with a result has no automated WCAG 2.1 AA violations and compact desktop controls', async ({
   page,
 }) => {
   await provisionEmployeeBase(page);
@@ -20,8 +21,8 @@ test('check stock with a result has no automated WCAG 2.1 AA violations and 44px
   expect((await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()).violations).toEqual([]);
   await field.focus();
   await expect(field).toHaveCSS('outline-style', 'solid');
-  await expect(field).toHaveCSS('min-height', '48px');
-  await expect(page.getByRole('button', { name: 'Check' })).toHaveCSS('min-height', '44px');
+  await expect(field).toHaveCSS('min-height', COMPACT_CONTROL);
+  await expect(page.getByRole('button', { name: 'Check' })).toHaveCSS('min-height', COMPACT_CONTROL);
 });
 
 test('my requests populated has no automated WCAG 2.1 AA violations', async ({ page }) => {

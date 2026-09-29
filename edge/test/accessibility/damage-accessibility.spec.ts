@@ -1,5 +1,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { COMPACT_CONTROL } from '../fixtures/keyboard';
 import { CASES, PHOTO_FILE, provisionDamage } from '../fixtures/damage-stub';
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
@@ -32,7 +33,7 @@ test('report damage, fully expanded, has no automated WCAG 2.1 AA violations and
   for (const label of ['Item code (SKU)', 'Lot number', 'Bin']) {
     await expect(page.getByLabel(label, { exact: true })).toHaveCSS('min-height', '56px');
   }
-  await expect(page.getByRole('button', { name: 'Send damage report' })).toHaveCSS('min-height', '44px');
+  await expect(page.getByRole('button', { name: 'Send damage report' })).toHaveCSS('min-height', COMPACT_CONTROL);
 });
 
 test('report damage is operable from the keyboard alone, through to the done screen', async ({ page }) => {
@@ -118,6 +119,11 @@ test('the no-access and needs-connection cards have no automated WCAG 2.1 AA vio
   await provisionDamage(page, { persona: 'qc_inspector' });
   await page.goto('/damage/cases');
   await expect(page.getByRole('region', { name: 'Damage reported - to inspect' })).toBeVisible();
+  // Wait for the live bootstrap: the shell wires its online/offline listener after it, so going
+  // offline before the advertised entry renders loses the event.
+  await expect(
+    page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Damage cases' }),
+  ).toBeVisible();
   await context.setOffline(true);
   await expect(page.getByText('Approvals need a live connection')).toBeVisible();
   await expectNoViolations(page);

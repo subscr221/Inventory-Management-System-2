@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { COMPACT_CONTROL } from '../fixtures/keyboard';
 import { provisionRefusedCaptures } from '../fixtures/refused-captures-stub';
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
@@ -21,14 +22,14 @@ test('shell exposes synchronization status through the accessibility tree', asyn
   await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
 });
 
-test('cross-dock capture is keyboard operable with visible focus and 44px controls', async ({ page }) => {
+test('cross-dock capture is keyboard operable with visible focus and compact desktop controls', async ({ page }) => {
   await page.goto('/');
   const taskInput = page.getByLabel('Cross-dock task ID');
   const loadButton = page.getByRole('button', { name: 'Load known task' });
   await taskInput.focus();
   await expect(taskInput).toBeFocused();
-  await expect(taskInput).toHaveCSS('min-height', '44px');
-  await expect(loadButton).toHaveCSS('min-height', '44px');
+  await expect(taskInput).toHaveCSS('min-height', COMPACT_CONTROL);
+  await expect(loadButton).toHaveCSS('min-height', COMPACT_CONTROL);
   await expect(taskInput).toHaveCSS('outline-style', 'solid');
 });
 
@@ -46,7 +47,7 @@ test('refused-captures screen with the resolve form open has no automated WCAG 2
   expect(results.violations).toEqual([]);
   await expect(note).toHaveCSS('outline-style', 'solid');
   for (const name of ['Confirm resolve', 'Cancel', 'Resolve']) {
-    await expect(page.getByRole('button', { name, exact: true }).first()).toHaveCSS('min-height', '44px');
+    await expect(page.getByRole('button', { name, exact: true }).first()).toHaveCSS('min-height', COMPACT_CONTROL);
   }
 });
 
@@ -64,6 +65,6 @@ test('refused-captures no-access and needs-connection cards have no automated WC
   expect((await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze()).violations).toEqual([]);
   await page.getByRole('button', { name: 'Check connection' }).focus();
   await expect(page.getByRole('button', { name: 'Check connection' })).toHaveCSS('outline-style', 'solid');
-  await expect(page.getByRole('button', { name: 'Check connection' })).toHaveCSS('min-height', '44px');
+  await expect(page.getByRole('button', { name: 'Check connection' })).toHaveCSS('min-height', COMPACT_CONTROL);
   await context.setOffline(false);
 });

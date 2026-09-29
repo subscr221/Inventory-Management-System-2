@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { tabTo } from '../fixtures/keyboard';
 
 async function provision(page: Page) {
   await page.addInitScript(() => {
@@ -64,7 +65,7 @@ test('installed shell loads offline with cached user and site context', async ({
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Inventory Edge Shell' })).toBeVisible();
   await expect(page.getByText('Asha Offline Officer')).toBeVisible();
-  await expect(page.getByText('North Gate')).toBeVisible();
+  await expect(page.getByRole('banner').getByText('North Gate')).toBeVisible();
   await page.waitForFunction(async () => {
     await navigator.serviceWorker.ready;
     return navigator.serviceWorker.controller !== null;
@@ -76,7 +77,7 @@ test('installed shell loads offline with cached user and site context', async ({
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Inventory Edge Shell' })).toBeVisible();
   await expect(page.getByText('Asha Offline Officer')).toBeVisible();
-  await expect(page.getByText('North Gate')).toBeVisible();
+  await expect(page.getByRole('banner').getByText('North Gate')).toBeVisible();
   expect(Date.now() - start).toBeLessThan(5000);
   await context.setOffline(false);
 });
@@ -100,19 +101,19 @@ test('keyboard navigation reaches role navigation and capture action', async ({ 
   // same setState that populates userId/siteId, so once they are visible the shell (and the capture
   // action later in the tab order) is ready. Tab-ing during hydration was the CI flake.
   await expect(page.getByText('Asha Offline Officer')).toBeVisible();
-  await expect(page.getByText('North Gate')).toBeVisible();
+  await expect(page.getByRole('banner').getByText('North Gate')).toBeVisible();
   // The frontline shell deliberately auto-focuses the indent SKU field on load, so a bare first
   // Tab would start past the skip-link and nav. Establish focus at the document top (the skip-link
   // is the first focusable element) before walking the tab order forward, so the assertions read a
   // deterministic sequence regardless of the autofocus.
   await page.getByText('Skip to content').focus();
   await expect(page.getByText('Skip to content')).toBeFocused();
+  // The sidebar comes first in the tab order, then the top bar, then the primary navigation.
+  const nav = page.getByRole('navigation', { name: 'Primary navigation' });
+  await tabTo(page, page.getByRole('button', { name: 'Open search' }));
+  await tabTo(page, nav.getByRole('link', { name: 'Dashboard' }));
   await page.keyboard.press('Tab');
-  await expect(page.getByRole('button', { name: 'Open search' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByRole('link', { name: 'Dashboard' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByRole('link', { name: 'Frontline' })).toBeFocused();
+  await expect(nav.getByRole('link', { name: 'Frontline' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByLabel('Cross-dock task ID')).toBeFocused();
   await page.keyboard.press('Tab');
@@ -140,7 +141,7 @@ test('known cross-dock task capture displays context and scan-first pending resu
   // are populated in the same setState that renders the user and site names. Acting before that
   // state lands was the CI flake ("Database or authentication state not available").
   await expect(page.getByText('Asha Offline Officer')).toBeVisible();
-  await expect(page.getByText('North Gate')).toBeVisible();
+  await expect(page.getByRole('banner').getByText('North Gate')).toBeVisible();
   await page.getByLabel('Cross-dock task ID').focus();
   await expect(page.getByLabel('Cross-dock task ID')).toBeFocused();
   await page.getByLabel('Cross-dock task ID').fill('11111111-1111-4111-8111-111111111111');

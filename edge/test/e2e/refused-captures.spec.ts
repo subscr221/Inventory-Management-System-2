@@ -6,6 +6,7 @@ import {
   TECHNICIAN_ID,
   USER_ID,
 } from '../fixtures/refused-captures-stub';
+import { COMPACT_CONTROL, tabTo } from '../fixtures/keyboard';
 
 // Story 1.14: the refused-captures supervisor screen (AC 1, 2, 3, 5) against stubbed Story 1.13
 // routes. The DOA gate itself is owned by test/integration/story-1-13.test.ts; here each error
@@ -115,7 +116,7 @@ test('a 403 from the list shows the no-access copy and no rows', async ({ page }
   await page.goto(PATH);
   await expect(page.getByText('Your role does not cover refused captures at this site.')).toBeVisible();
   await expect(page.getByRole('region', { name: 'Open refusals' })).toHaveCount(0);
-  await expect(page.getByRole('listitem')).toHaveCount(0);
+  await expect(page.getByRole('main').getByRole('listitem')).toHaveCount(0);
 });
 
 test('offline shows the needs-connection card and nothing from the previous fetch', async ({ page, context }) => {
@@ -125,7 +126,7 @@ test('offline shows the needs-connection card and nothing from the previous fetc
 
   await context.setOffline(true);
   await expect(page.getByText('This list needs a connection.')).toBeVisible();
-  await expect(page.getByRole('listitem')).toHaveCount(0);
+  await expect(page.getByRole('main').getByRole('listitem')).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'Open refusals' })).toHaveCount(0);
   const check = page.getByRole('button', { name: 'Check connection' });
   await expect(check).toBeVisible();
@@ -151,20 +152,20 @@ test('keyboard-only: tab order reaches every Resolve, Confirm and Cancel control
 
   await page.keyboard.press('Tab');
   await expect(page.getByText('Skip to content')).toBeFocused();
+  // The sidebar comes first in the tab order, then the top bar, then the primary navigation.
+  const nav = page.getByRole('navigation', { name: 'Primary navigation' });
+  await tabTo(page, page.getByRole('button', { name: 'Open search' }));
+  await tabTo(page, nav.getByRole('link', { name: 'Dashboard' }));
   await page.keyboard.press('Tab');
-  await expect(page.getByRole('button', { name: 'Open search' })).toBeFocused();
+  await expect(nav.getByRole('link', { name: 'Frontline' })).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(page.getByRole('link', { name: 'Dashboard' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByRole('link', { name: 'Frontline' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByRole('link', { name: 'Refused captures' })).toBeFocused();
+  await expect(nav.getByRole('link', { name: 'Refused captures' })).toBeFocused();
   await page.keyboard.press('Tab');
   const openCards = page.getByRole('region', { name: 'Open refusals' }).getByRole('listitem');
   const firstResolve = openCards.nth(0).getByRole('button', { name: 'Resolve', exact: true });
   const secondResolve = openCards.nth(1).getByRole('button', { name: 'Resolve', exact: true });
   await expect(firstResolve).toBeFocused();
-  await expect(firstResolve).toHaveCSS('min-height', '44px');
+  await expect(firstResolve).toHaveCSS('min-height', COMPACT_CONTROL);
   await expect(firstResolve).toHaveCSS('outline-style', 'solid');
 
   await page.keyboard.press('Enter');
@@ -173,7 +174,7 @@ test('keyboard-only: tab order reaches every Resolve, Confirm and Cancel control
   await expect(note).toHaveCSS('outline-style', 'solid');
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Confirm resolve' })).toBeFocused();
-  await expect(page.getByRole('button', { name: 'Confirm resolve' })).toHaveCSS('min-height', '44px');
+  await expect(page.getByRole('button', { name: 'Confirm resolve' })).toHaveCSS('min-height', COMPACT_CONTROL);
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused();
   await page.keyboard.press('Tab');
@@ -197,16 +198,15 @@ test('keyboard-only: Tab reaches the Check connection control on the offline car
 
   await page.keyboard.press('Tab');
   await expect(page.getByText('Skip to content')).toBeFocused();
+  const nav = page.getByRole('navigation', { name: 'Primary navigation' });
+  await tabTo(page, page.getByRole('button', { name: 'Open search' }));
+  await tabTo(page, nav.getByRole('link', { name: 'Dashboard' }));
   await page.keyboard.press('Tab');
-  await expect(page.getByRole('button', { name: 'Open search' })).toBeFocused();
+  await expect(nav.getByRole('link', { name: 'Frontline' })).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(page.getByRole('link', { name: 'Dashboard' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByRole('link', { name: 'Frontline' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByRole('link', { name: 'Refused captures' })).toBeFocused();
+  await expect(nav.getByRole('link', { name: 'Refused captures' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(check).toBeFocused();
-  await expect(check).toHaveCSS('min-height', '44px');
+  await expect(check).toHaveCSS('min-height', COMPACT_CONTROL);
   await expect(check).toHaveCSS('outline-style', 'solid');
 });
