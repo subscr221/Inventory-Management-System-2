@@ -84,6 +84,27 @@
       "function_scope": "write",
       "location_id": "site",
       "holder": "site.head@example.com"
+    },
+    {
+      "role": "site_head",
+      "module": "jobwork",
+      "function_scope": "write",
+      "location_id": "site",
+      "holder": "site.head@example.com"
+    },
+    {
+      "role": "site_head",
+      "module": "jobwork",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "site.head@example.com"
+    },
+    {
+      "role": "site_head",
+      "module": "notification",
+      "function_scope": "read",
+      "location_id": "site",
+      "holder": "site.head@example.com"
     }
   ]
 }

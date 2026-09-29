@@ -59,6 +59,14 @@ The employee base role table below defines the one hat every human account holds
 | `indent_raiser` | Raises indents from floor (wave 1 with Epic 4; DOA-relevant now) | Assigned site(s) | UJ-IND-01, Story 4.3 |
 | `department_head` | Indent/requisition approval hat; migration sign-off for own domain | Department + site | FR-P-04, FR-DM-03 |
 
+### Site leadership
+
+The site leadership role table below registers the site head (Story 1.16). The role is granted at one site, never at every site, and is held by a named person at each pilot site. At the pilot the same person also wears `warehouse_manager` (owner ruling 2026-09-30); the two hats are separate assignments. This role is not the `plant_head` placeholder in the deferred list below, which stays as it is.
+
+| Role ID | Description | Location scope | Anchors |
+|---|---|---|---|
+| `site_head` | Site-level authority: escalation target for job-work clocks and billing, challan classification correction, and (Story 4.8) assigning standing approvals and self-approval limits. Holds neither `finance_controller` nor `cfo`. | Site | FR-JW-09/10, FR-P-04, Stories 1.16, 4.8, 9.5, 9.6 |
+
 ### BOM and engineering (Epic 5)
 
 | Role ID | Description | Location scope | Anchors |
@@ -276,6 +284,19 @@ The damage-case capability table below lists who works a damage case after it is
 | Turn the finance key and record the ERP reference | `finance_controller` | DOA `damage.finance_concurrence` |
 | Decide an escalated case | `ceo` | DOA `damage.escalation` |
 
+### 3.10 Site head
+
+The site head capability table below lists what the `site_head` hat grants and which story delivers each row. The grants behind the live rows are `jobwork` write, `jobwork` read and `notification` read, all at the site. A user who holds `jobwork` write without the hat is refused the classification correction with `FUNCTION_ACCESS_DENIED`, and a site head is refused on a clock that belongs to another site with `LOCATION_ACCESS_DENIED`.
+
+| Capability | site_head | Status |
+|---|---|---|
+| Correct a challan classification (statutory clock) | U | Live (Story 9.5) |
+| Receive job-work clock and billing escalations | R | Live (Stories 9.5, 9.6) |
+| Assign a standing approval | C | Story 4.8 |
+| Assign a per-person self-approval limit | C | Story 4.8 |
+| Revoke a grant they assigned | U | Story 4.8 |
+| Approve their own grant | Not permitted | Finance department head approves (SOD-01 as amended) |
+
 ## 4. Dashboards and Reporting (pilot interim)
 
 Domain status views ship inside module epics — default: every role reads its own domain's operational dashboard at its assigned locations; `warehouse_manager`, `inventory_controller`, `qc_head`, `finance_controller` get multi-site domain views. Cross-module executive dashboards (Epic 12) get their own matrix rows with the full role set.
@@ -297,6 +318,8 @@ Domain status views ship inside module epics — default: every role reads its o
 | SOD-11 | No single identity holds both `weighbridge_operator` and `store_assistant` at the same site, unless a documented compensating control is on file and countersigned by the site's Warehouse Head | Assignment time (pair-set check) | Finalized 2026-07-12, source §6 item 2; site census (§7) found no site requiring an exception |
 
 **Amended 2026-09-26 (SOD-01):** no self-approval, except a requisition line within the requester's per-person self-approval limit; the limit itself is assigned by the site head or head of department and takes effect only after one-time approval by the finance department head; all self-approved requisitions remain in the audit trail. The original blanket constraint in the SOD-01 row above stands for every other DOA-resolved approval. Rationale: user ruling 2026-09-25 (senior self-approval within a limit), recorded in the UX memlog; applied by `sprint-change-proposal-2026-09-26.md` Section 4.4, delivered by Story 4.8.
+
+**Added 2026-09-30 (Story 1.16, assignment time):** no single identity holds `site_head` together with `finance_controller`, or `site_head` together with `cfo`. Both pairs come from the 2026-09-06 ruling in section 2 (the site head holds neither finance hat) and are refused when roles are provisioned (owner ruling 2026-09-30). They keep the person who assigns a standing grant apart from the finance approver of that grant.
 
 **Blocked-for-everyone rows (design invariants, not SoD):** calibration lockout override (FR-M-13/AD-8) · edit-log disable or hard delete (FR-AC-13/C-07) · untagged transaction (FR-AC-01) · IRN-less dispatch of e-invoiceable supply (FR-AC-14) · direct edit of a Released BOM (FR-B-03) · last-writer-wins location update (INT-LOC-01).
 
@@ -352,3 +375,4 @@ Collected during the §7 interview pass and written to the DOA registry (FR-DOA-
 | v1.0 | 2026-07-12 | Structured cross-functional review closed all seven open items in §6 (formerly §6 v0.1): cells validated (§7), DOA bands collected (§8), tolerance-breach approver split resolved (§3.2), SOD-11 adopted (§5), ~36-role owners assigned (§2), traceability audit closed (OQ7), external roles formally excluded pending trust-boundary review (§6 item 7). Document status changed from DRAFT to FINALIZED. | Department heads listed in §7; Super Admin (security lead) |
 | v1.1 | 2026-09-27 | Story 1.15 (Employee Base Role): section 2 gains the `employee` base hat held by every signed-in person at their site; section 3.8 gains three capability rows (raise requisition, stock availability without quantities, own requests). Quantity, valuation and approval rows are unchanged. | Story 1.15 dev record; pending Super Admin (security lead) review |
 | v1.2 | 2026-09-27 | Story 8.9 (Report Damage): section 2 gains the `ceo` role (decides escalated damage cases through DOA `damage.escalation`, site scope); section 3.8 gains "Report damage" for the employee base hat; new section 3.9 lists the damage-case capabilities (inspection, custody marks, the two DOA keys, the whole-lot decision, escalation, the ERP reference); section 8 gains the three damage DOA bands. | Story 8.9 dev record; pending Super Admin (security lead) review |
+| v1.3 | 2026-09-30 | Story 1.16 (Site Head Role): section 2 gains the "Site leadership" subsection with the `site_head` role (site scope); new section 3.10 lists the site head capabilities: two live, three delivered by Story 4.8 and one not permitted; section 5 records the two assignment-time pairs that keep `site_head` apart from `finance_controller` and `cfo`. No existing row or ruling is changed. | Story 1.16 dev record; pending Super Admin (security lead) review |

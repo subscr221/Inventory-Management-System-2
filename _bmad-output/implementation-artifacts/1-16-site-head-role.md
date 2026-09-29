@@ -4,7 +4,7 @@ baseline_commit: a1d0de0
 
 # Story 1.16: Site Head Role
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -27,42 +27,61 @@ Source: [epics.md Story 1.16](../planning-artifacts/epics.md), user ruling 2026-
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Red tests first (AC: 1, 2, 3, 4)
-  - [ ] 1.1 Unit `test/unit/site-head-role-pack.test.ts` (pattern: `test/unit/employee-base-role-pack.test.ts`, which reads the pack through `resolve(__dirname, '../../docs/migration/pilot-mock-extract/roles.json')`). Assert: exactly one holder of `site_head` in the pack and it is `cmf_supervisor@ancorlabs.org`; that holder has exactly the three `site_head` rows in Table 1; every `site_head` row has `location_id: 'site'` (never `'*'`); the same holder still has its three `warehouse_manager` rows and its `employee` row; no holder of `site_head` holds `finance_controller` or `cfo`; `deploy/provision/roles.example.json` gives `site.head@example.com` the same three `site_head` rows; `forbiddenPairs()` contains both pairs in D6; `planProvisioning` on the pilot pack returns zero violations and zero errors; every role in `REQUIRED_SITE_ROLES` has at least one holder in the pack at `'site'`. Confirm red.
-  - [ ] 1.2 Integration, extend `test/integration/segregated-roles.test.ts`: `verifySegregatedRoles` returns one `required_roles` entry per required role per active site (see D5, four roles); with a holder at the site the entry is `ok: true` and the formatted report contains the line in D5; with no holder the result carries violation code `ROLE_UNHELD_AT_SITE` naming the role and the site, `ok` is false, and the closing line is the existing not-ready line. Negative controls: a holder at a different site does not satisfy this site; a holder at `'*'` does; an inactive user does not. The seven existing calls in this file pass `[]` as the new fourth argument so they keep testing pairs only. Confirm red.
-  - [ ] 1.3 Integration `test/integration/story-1-16.test.ts` (copy `makeRequest`, `provisionUser`, `authFor`, `Role` from `test/integration/story-3-12.test.ts`; boot and truncate as `story-1-15.test.ts` does). Personas: `headA` with the Table 1 rows at site A (concrete UUID); `headB` with the same rows at site B, provisioned BEFORE `headA` so it is the older assignment; `wm` with `warehouse_manager` inventory write at site A only; `emp` with only the employee base hat at site A. Cases, each with exact values and a negative control:
+- [x] Task 1: Red tests first (AC: 1, 2, 3, 4)
+  - [x] 1.1 Unit `test/unit/site-head-role-pack.test.ts` (pattern: `test/unit/employee-base-role-pack.test.ts`, which reads the pack through `resolve(__dirname, '../../docs/migration/pilot-mock-extract/roles.json')`). Assert: exactly one holder of `site_head` in the pack and it is `cmf_supervisor@ancorlabs.org`; that holder has exactly the three `site_head` rows in Table 1; every `site_head` row has `location_id: 'site'` (never `'*'`); the same holder still has its three `warehouse_manager` rows and its `employee` row; no holder of `site_head` holds `finance_controller` or `cfo`; `deploy/provision/roles.example.json` gives `site.head@example.com` the same three `site_head` rows; `forbiddenPairs()` contains both pairs in D6; `planProvisioning` on the pilot pack returns zero violations and zero errors; every role in `REQUIRED_SITE_ROLES` has at least one holder in the pack at `'site'`. Confirm red.
+  - [x] 1.2 Integration, extend `test/integration/segregated-roles.test.ts`: `verifySegregatedRoles` returns one `required_roles` entry per required role per active site (see D5, four roles); with a holder at the site the entry is `ok: true` and the formatted report contains the line in D5; with no holder the result carries violation code `ROLE_UNHELD_AT_SITE` naming the role and the site, `ok` is false, and the closing line is the existing not-ready line. Negative controls: a holder at a different site does not satisfy this site; a holder at `'*'` does; an inactive user does not. The seven existing calls in this file pass `[]` as the new fourth argument so they keep testing pairs only. Confirm red.
+  - [x] 1.3 Integration `test/integration/story-1-16.test.ts` (copy `makeRequest`, `provisionUser`, `authFor`, `Role` from `test/integration/story-3-12.test.ts`; boot and truncate as `story-1-15.test.ts` does). Personas: `headA` with the Table 1 rows at site A (concrete UUID); `headB` with the same rows at site B, provisioned BEFORE `headA` so it is the older assignment; `wm` with `warehouse_manager` inventory write at site A only; `emp` with only the employee base hat at site A. Cases, each with exact values and a negative control:
     - resolution (AC 3): `findRoleHolder('site_head', client, siteAId)` returns `headA`; `findRoleHolder('site_head', client, siteBId)` returns `headB`; `findRoleHolder('site_head', client)` with no location returns `headB` (the oldest, unchanged behaviour); a holder assigned at `'*'` satisfies any site; an unknown site returns null.
     - delegation (AC 3): add an active delegation from `headA` to `wm`. Resolve the way `resolveApprover` does (`indents.ts:83-88`): `findRoleHolder('site_head', client, siteAId)`, then `findActiveDelegation(holder.user_id, today)`. Assert the delegate is `wm` inside the window and that there is no delegation outside it, so the approver is `headA` (reuse the Story 1.4 AC2 shape in `test/integration/story-1-4.test.ts:237`). `headB` has no delegation and resolves to itself.
     - membership (AC 3): register a DOA entry naming `site_head` through `POST /api/v1/doa/entries` (a test-only transaction type such as `test.site_head_authority`), then `isActiveRoleHolderForEntry(entryId, headA, client, siteAId)` is true; with `siteBId` it is false; with no location it is true (unchanged behaviour).
     - gate (AC 4): on the existing site-head-gated action (D7), `emp` and `wm` get 403 `FUNCTION_ACCESS_DENIED` with `details.required_roles` equal to `['compliance_officer', 'site_head']`; `headA` passes the gate for a site A clock; `headA` is refused on a site B clock with the code the route already uses for out-of-scope sites (read it from `test/integration/story-9-5.test.ts:1866`, do not invent one).
-  - [ ] 1.4 Run the three files and record the red output in Debug Log References.
-- [ ] Task 2: Location-aware resolution (AC: 3)
-  - [ ] 2.1 `src/read/projections/doa_registry.ts`: `findRoleHolder(role, client?, locationId?)`. When `locationId` is given, add `AND (a.location_id = $2 OR a.location_id = '*')`, the same clause `resolveTargetUserIds` uses in `src/notify/dispatch.ts:106-122`. Keep `ORDER BY a.created_at ASC, a.assignment_id ASC LIMIT 1`. With no `locationId` the SQL and result are byte-for-byte what they are today. Update the docstring: the "no location dimension" sentence is no longer true.
-  - [ ] 2.2 Same file: `isActiveRoleHolderForEntry(entryId, userId, client?, locationId?)` with the same optional clause on `a.location_id`.
-  - [ ] 2.3 Do NOT change any existing caller (34 importers of `findRoleHolder`). Do NOT change `resolveApprover` in `src/api/v1/indents.ts:70-106`; Stories 4.9 and 4.10 own that function.
-- [ ] Task 3: Pilot pack and provisioning (AC: 1, 2)
-  - [ ] 3.1 `deploy/rehearsal/mock/generate.mjs:415`: append the three Table 1 grants to the `cmf_supervisor` entry, after the `warehouse_manager` grants. Add actor `sitehead: emailOf('cmf_supervisor')` to the actors map (next to `whmanager`, line 461).
-  - [ ] 3.2 `docs/migration/pilot-mock-extract/roles.json` and `world.json`: edit by hand to match, then prove it with a scratch regeneration whose `roles` array and `actors` map are identical to the hand-edited files (the Story 1.15 method). The pack goes from 76 grants to 79. `world.json` `people[].roles` for `cmf_supervisor` becomes `['warehouse_manager', 'site_head']`.
-  - [ ] 3.3 `deploy/provision/roles.example.json`: add the three rows for `site.head@example.com`.
-  - [ ] 3.4 `deploy/provision/staging-bootstrap-accounts.sh:104-105`: add the three rows for `$SITEHEAD` to the heredoc. Mind the JSON commas: line 105 is currently the last element.
-  - [ ] 3.5 `src/cli/provision-roles-core.ts:55`: add the two D6 pairs to `EXTRA_FORBIDDEN_PAIRS`.
-  - [ ] 3.6 Do NOT run `provision:roles --apply` with the pilot pack against the local test database (see Previous story intelligence).
-- [ ] Task 4: `verify:roles` reports the role (AC: 2)
-  - [ ] 4.1 `src/cli/verify-segregated-roles-core.ts`: add `REQUIRED_SITE_ROLES` (four roles) and the `required_roles` report per D5. Signature becomes `verifySegregatedRoles(pool, pairs?, today?, requiredRoles = REQUIRED_SITE_ROLES)`. Everything stays read-only.
-  - [ ] 4.2 `formatSegregatedRolesReport`: print the required-role lines after the pair lines and before the violations. The closing line keeps its two existing wordings.
-  - [ ] 4.3 `src/cli/verify-segregated-roles.ts` needs no change if the core keeps its exported names; confirm and leave it.
-- [ ] Task 5: Access matrix (AC: 1)
-  - [ ] 5.1 `_bmad-output/planning-artifacts/access-matrix-frontline-draft-2026-07-11.md` section 2: new subsection "Site leadership" with the `site_head` row from Table 2, placed after "Warehouse and inventory".
-  - [ ] 5.2 Section 3: new subsection "3.10 Site head" with the capability rows from Table 3, introduced by a sentence that names the table.
-  - [ ] 5.3 Section 5: one line under the SOD table recording the D6 pairs and the 2026-09-06 ruling they come from.
-  - [ ] 5.4 Section 9 changelog: row v1.3 dated with the implementation date, naming Story 1.16.
-  - [ ] 5.5 Load `FORMATTING_RULES.md` before editing any Markdown file: hyphens, no arrow characters in prose, every table named in the text.
+  - [x] 1.4 Run the three files and record the red output in Debug Log References.
+- [x] Task 2: Location-aware resolution (AC: 3)
+  - [x] 2.1 `src/read/projections/doa_registry.ts`: `findRoleHolder(role, client?, locationId?)`. When `locationId` is given, add `AND (a.location_id = $2 OR a.location_id = '*')`, the same clause `resolveTargetUserIds` uses in `src/notify/dispatch.ts:106-122`. Keep `ORDER BY a.created_at ASC, a.assignment_id ASC LIMIT 1`. With no `locationId` the SQL and result are byte-for-byte what they are today. Update the docstring: the "no location dimension" sentence is no longer true.
+  - [x] 2.2 Same file: `isActiveRoleHolderForEntry(entryId, userId, client?, locationId?)` with the same optional clause on `a.location_id`.
+  - [x] 2.3 Do NOT change any existing caller (34 importers of `findRoleHolder`). Do NOT change `resolveApprover` in `src/api/v1/indents.ts:70-106`; Stories 4.9 and 4.10 own that function.
+- [x] Task 3: Pilot pack and provisioning (AC: 1, 2)
+  - [x] 3.1 `deploy/rehearsal/mock/generate.mjs:415`: append the three Table 1 grants to the `cmf_supervisor` entry, after the `warehouse_manager` grants. Add actor `sitehead: emailOf('cmf_supervisor')` to the actors map (next to `whmanager`, line 461).
+  - [x] 3.2 `docs/migration/pilot-mock-extract/roles.json` and `world.json`: edit by hand to match, then prove it with a scratch regeneration whose `roles` array and `actors` map are identical to the hand-edited files (the Story 1.15 method). The pack goes from 76 grants to 79. `world.json` `people[].roles` for `cmf_supervisor` becomes `['warehouse_manager', 'site_head']`.
+  - [x] 3.3 `deploy/provision/roles.example.json`: add the three rows for `site.head@example.com`.
+  - [x] 3.4 `deploy/provision/staging-bootstrap-accounts.sh:104-105`: add the three rows for `$SITEHEAD` to the heredoc. Mind the JSON commas: line 105 is currently the last element.
+  - [x] 3.5 `src/cli/provision-roles-core.ts:55`: add the two D6 pairs to `EXTRA_FORBIDDEN_PAIRS`.
+  - [x] 3.6 Do NOT run `provision:roles --apply` with the pilot pack against the local test database (see Previous story intelligence).
+- [x] Task 4: `verify:roles` reports the role (AC: 2)
+  - [x] 4.1 `src/cli/verify-segregated-roles-core.ts`: add `REQUIRED_SITE_ROLES` (four roles) and the `required_roles` report per D5. Signature becomes `verifySegregatedRoles(pool, pairs?, today?, requiredRoles = REQUIRED_SITE_ROLES)`. Everything stays read-only.
+  - [x] 4.2 `formatSegregatedRolesReport`: print the required-role lines after the pair lines and before the violations. The closing line keeps its two existing wordings.
+  - [x] 4.3 `src/cli/verify-segregated-roles.ts` needs no change if the core keeps its exported names; confirm and leave it.
+- [x] Task 5: Access matrix (AC: 1)
+  - [x] 5.1 `_bmad-output/planning-artifacts/access-matrix-frontline-draft-2026-07-11.md` section 2: new subsection "Site leadership" with the `site_head` row from Table 2, placed after "Warehouse and inventory".
+  - [x] 5.2 Section 3: new subsection "3.10 Site head" with the capability rows from Table 3, introduced by a sentence that names the table.
+  - [x] 5.3 Section 5: one line under the SOD table recording the D6 pairs and the 2026-09-06 ruling they come from.
+  - [x] 5.4 Section 9 changelog: row v1.3 dated with the implementation date, naming Story 1.16.
+  - [x] 5.5 Load `FORMATTING_RULES.md` before editing any Markdown file: hyphens, no arrow characters in prose, every table named in the text.
 - [ ] Task 6: Staging and close-out (AC: 2)
-  - [ ] 6.1 `docs/migration/pilot-cutover-runbook.md`: new row 2.10h after 2.10g and before 2.10b, same column shape. Steps: rebuild the app image; re-apply the pilot roles with `deploy/provision/staging-provision-roles.sh docs/migration/pilot-mock-extract/roles.json --apply`; run `verify:roles` in the app container; expected evidence is the four required-role lines from D5, each showing one holder at CMF-ALIGARH, and the existing pair lines unchanged.
-  - [ ] 6.2 `deploy/rehearsal/mock/operations-smoke.ts`: one new flow `siteHead(ctx)` called from `main` after `employeeRequisition`. It asserts through the API that the `sitehead` actor holds `site_head` at the site and that a non-holder is refused on the D7 action. Use the guarded SKIP pattern of `inboundBreach` when the world has no job-work clock to act on. Existing PASS lines and their names must not change.
+  - [x] 6.1 `docs/migration/pilot-cutover-runbook.md`: new row 2.10h after 2.10g and before 2.10b, same column shape. Steps: rebuild the app image; re-apply the pilot roles with `deploy/provision/staging-provision-roles.sh docs/migration/pilot-mock-extract/roles.json --apply`; run `verify:roles` in the app container; expected evidence is the four required-role lines from D5, each showing one holder at CMF-ALIGARH, and the existing pair lines unchanged.
+  - [x] 6.2 `deploy/rehearsal/mock/operations-smoke.ts`: one new flow `siteHead(ctx)` called from `main` after `employeeRequisition`. It asserts through the API that the `sitehead` actor holds `site_head` at the site and that a non-holder is refused on the D7 action. Use the guarded SKIP pattern of `inboundBreach` when the world has no job-work clock to act on. Existing PASS lines and their names must not change.
   - [ ] 6.3 Operator task (Story 3.12 convention): staging deploy per runbook 2.15, then run row 2.10h and record PASS in Completion Notes.
-  - [ ] 6.4 Gates: `npx tsc --noEmit` (root and edge), `npm run lint`, `prettier --check --end-of-line auto`, `npm run verify:roles`, `test/unit/schema-drift.test.ts`, full `npm test`.
-  - [ ] 6.5 `graphify update .` after the code changes.
+  - [x] 6.4 Gates: `npx tsc --noEmit` (root and edge), `npm run lint`, `prettier --check --end-of-line auto`, `npm run verify:roles`, `test/unit/schema-drift.test.ts`, full `npm test`.
+  - [x] 6.5 `graphify update .` after the code changes.
+
+### Review Findings
+
+Code review 2026-09-30 (Blind Hunter, Edge Case Hunter, Acceptance Auditor; diff against `ec7ce0a`, 14 files). All four Acceptance Criteria were judged MET. 2 decisions, 9 patches, 3 deferred, 7 dismissed.
+
+- [x] [Review][Decision] The bootstrap path names no `qc_head` holder - `staging-bootstrap-accounts.sh` and `roles.example.json` provision five people and none is the QC head, so on a fresh box `verify:roles` reports `FAIL qc_head` and runbook row 2.9a cannot show its expected closing line until the pilot pack is applied. Options: add an optional seventh argument for the QC head, or reword the evidence of rows 2.9 and 2.9a, or defer. RESOLVED by owner ruling 2026-09-30: reword the runbook. Rows 2.9 and 2.9a and the script header now say the `qc_head` line is expected until the pilot roles file is applied; the script keeps its six arguments.
+- [x] [Review][Decision] Test deviations 2 and 3 carry no owner ruling - the wildcard case uses a run-scoped role instead of `site_head`, and the `segregated-roles` cases assert on the rows the suite owns. Both are recorded in Completion Notes; only deviation 1 is ruled. RESOLVED by owner ruling 2026-09-30: both accepted, no code change.
+- [x] [Review][Patch] Location UUIDs are stored as typed, so an upper-case `site_id` in a roles file is not matched by the new located lookups [src/cli/provision-roles-core.ts:108]
+- [x] [Review][Patch] Docstring says a caller that lost its site resolves nobody; a holder at `'*'` still resolves, and only a site id is accepted (no zone or bin) [src/read/projections/doa_registry.ts:299]
+- [x] [Review][Patch] Header comment for `ROLE_UNHELD_AT_SITE` reads as if approvals already resolve at the site; no caller passes a location yet (Task 2.3) [src/cli/verify-segregated-roles-core.ts:34]
+- [x] [Review][Patch] `requiredRoles` is not de-duplicated, so a repeated role doubles its lines and violations [src/cli/verify-segregated-roles-core.ts:337]
+- [x] [Review][Patch] `tail -8` cuts the longer report [deploy/provision/staging-bootstrap-accounts.sh:115, deploy/provision/staging-doa-bands.sh:57]
+- [x] [Review][Patch] The smoke flow and runbook row 2.10h say nothing is changed; the refused correction leaves one audit row per run [deploy/rehearsal/mock/operations-smoke.ts:514, docs/migration/pilot-cutover-runbook.md:131]
+- [x] [Review][Patch] The smoke SKIP message blames the site head actor when any of three actors is missing [deploy/rehearsal/mock/operations-smoke.ts:530]
+- [x] [Review][Patch] Changelog v1.3 says four rows are delivered by Story 4.8; the table has three, plus one not permitted [_bmad-output/planning-artifacts/access-matrix-frontline-draft-2026-07-11.md:373]
+- [x] [Review][Patch] The unit test reads `REQUIRED_SITE_ROLES` through a cast left over from the red phase [test/unit/site-head-role-pack.test.ts:58]
+- [x] [Review][Defer] Forbidden pairs are enforced only by the roles-file planner, not by SCIM and not by `verify:roles` [src/cli/provision-roles-core.ts:55] - deferred, pre-existing
+- [x] [Review][Defer] With a location, an older holder at `'*'` outranks the site's own holder, and no test covers the mixed case [src/read/projections/doa_registry.ts:312] - deferred, pre-existing
+- [x] [Review][Defer] `world.json` `people[].roles` omits `employee`, which the generator writes; the unit test pins the committed form [docs/migration/pilot-mock-extract/world.json] - deferred, pre-existing
 
 ## Dev Notes
 
@@ -228,15 +247,68 @@ Table 6: Owner rulings
 
 ### Agent Model Used
 
+Claude Fable 5.1 (`claude-fable-5-1`), dev-story workflow, 2026-09-30.
+
 ### Debug Log References
+
+1. Red phase (Task 1.4). Command: `node --env-file=.env.test --import tsx --test --test-concurrency=1 test/unit/site-head-role-pack.test.ts test/integration/segregated-roles.test.ts test/integration/story-1-16.test.ts`. Result before any implementation: 31 tests, 21 fail, 10 pass. `segregated-roles.test.ts` failed to load (`does not provide an export named 'REQUIRED_SITE_ROLES'`). The unit file failed 12 of 13 (no `site_head` in the pack, no pairs in `forbiddenPairs()`). `story-1-16.test.ts` failed the located resolution, delegation, located membership and both `verify:roles` cases. The 10 passing cases pin behaviour this story must not change: the lookup with no location, membership with no location, the pilot pack planning with zero violations, and the four gate cases, because the gate already exists (D7).
+2. Green phase. The same command after Tasks 2 to 4: 46 tests, 46 pass, 0 fail.
+3. Gate persona finding. The classification route is wrapped in `requireRole({ module: 'jobwork', functionScope: 'write' })` (`src/api/v1/service-orders.ts:2710`), which runs before the site-head gate in the handler. The personas Task 1.3 names for the refusal (`emp` with only the base hat, `wm` with `inventory` write) hold no `jobwork` grant, so the platform refuses them with 403 `MODULE_ACCESS_DENIED` and they never reach the gate. `test/integration/story-9-5.test.ts:751-753` records the same fact for its own fixtures. See Completion Notes, deviation 1.
+4. Pack regeneration proof (Task 3.2). `node deploy/rehearsal/mock/generate.mjs --site-code CMF-ALIGARH --lines 300 --seed 42 --site-id 9e4a90a8-5e35-4ca9-b988-d563cff74de3 --out <scratch>`: the regenerated `roles` array (79 grants), `people` map, `operations.actors` map (key order included) and `operations.doa_entries` are identical to the hand-edited files.
+5. Type error caught by `npx tsc --noEmit`: `OWN_SITE_IDS` in `segregated-roles.test.ts` inferred the `randomUUID()` template type, so `includes(entry.site_id)` was refused. Typed as `string[]`.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
+- AC 1 (registered): access matrix v1.3. Section 2 gains "Site leadership" with the `site_head` row (Table 2), section 3.10 lists the six capability rows (Table 3), section 5 records the two assignment-time pairs, section 9 has the changelog row. The pilot pack holds the role: 79 grants, 25 roles.
+- AC 2 (provisioned and verified): `cmf_supervisor@ancorlabs.org` holds the three Table 1 grants at the site and keeps `warehouse_manager` and the base hat (D2). The generator, the example roles file and the bootstrap script carry the same rows. `verifySegregatedRoles` takes a fourth argument `requiredRoles = REQUIRED_SITE_ROLES` and returns `required_roles`, one entry per role per active site; an unheld role is violation `ROLE_UNHELD_AT_SITE` and makes `ok` false. The report prints the required-role lines after the pair lines and before the violations; both closing lines are unchanged. Dry run of the pilot pack: 22 people, 79 assignments, 0 segregation violations, 0 errors.
+- AC 3 (resolved at the site): `findRoleHolder(role, client?, locationId?)` and `isActiveRoleHolderForEntry(entryId, userId, client?, locationId?)`. With a location the assignment must be at that location or at `'*'`. With no location the SQL text and the result are what they were. Only `undefined` means no location; any other value filters, so a caller that lost its site resolves nobody. No caller was changed.
+- AC 4 (refused for everyone else): proven on the existing gate (D7). A `jobwork` writer without the hat gets 403 `FUNCTION_ACCESS_DENIED` with `details.required_roles` equal to `['compliance_officer', 'site_head']`; the site A head is refused on a site B clock with `LOCATION_ACCESS_DENIED`; the site A head corrects a site A clock.
+- D6: `EXTRA_FORBIDDEN_PAIRS` gained `site_head` with `finance_controller` and `site_head` with `cfo`. A unit case plans a roles file that gives one person both hats and asserts the refusal.
+- `SegregationViolation.transaction_type` is now `string | null`. It is null only for `ROLE_UNHELD_AT_SITE`, which is about a site and has no transaction type. Nothing outside the core file and its tests reads the field.
+- Deviation 1, ACCEPTED by owner ruling 2026-09-30 (Task 1.3 gate case, AC 4): the two-gate behaviour stands, no change to `requireRole` or the route. The story asks that `emp` and `wm` be refused with `FUNCTION_ACCESS_DENIED` and `details.required_roles`. They cannot be: the route sits behind the `jobwork` write module gate, so a caller with no `jobwork` grant is refused earlier with 403 `MODULE_ACCESS_DENIED` (Debug Log 3). The test keeps both personas exactly as specified and asserts the refusal they really get, and adds a fifth persona, `coord` (`jobwork_coordinator`, `jobwork` write at site A), who reaches the gate and gets the AC 4 code. No production code was changed to force the AC 4 code onto callers outside the module: D7 forbids a new gated route, and changing the module gate would change every `jobwork` route. If the owner wants the literal AC 4 wording for every non-holder, that is a change to `requireRole` or to the route and belongs in its own story.
+- Deviation 2, ACCEPTED by owner ruling 2026-09-30 (Task 1.3, wildcard holder). The case "a holder assigned at `'*'` satisfies any site" uses its own run-scoped role, because a wildcard `site_head` holder would also answer the site A and site B cases and hide a wrong result there.
+- Deviation 3, ACCEPTED by owner ruling 2026-09-30 (Task 1.2). Other suites leave active sites in `location_register`, so the `segregated-roles` cases read the entries of the four locations the suite creates. The whole-result `ok: true` and the ready closing line are asserted with a wildcard holder, the one case that satisfies every site in a shared database. The empty-register case lives in `story-1-16.test.ts`, which truncates the register.
+- Gates (Task 6.4): `npx tsc --noEmit` clean at the root and in `edge/`; `npm run lint` clean; `prettier --check --end-of-line auto` clean on every file this story wrote, while `generate.mjs` and `world.json` were already unformatted on the baseline and were left as they are; `schema-drift` green with zero DDL edits (D1); full `npm test` 2566 of 2566 pass, 0 fail.
+- `verify:roles` locally: bare `npm run verify:roles` refuses to start on this machine (`AUTH_MODE=oidc requires ...`), the same behaviour as `npm run db:migrate`; it needs `--env-file=.env.test`. With it, the pair lines are identical to the baseline and 60 required-role lines follow (15 leftover test sites, 4 roles). Exit code 1 on the baseline (5 violations) and now (20), because the local database holds test litter. The meaningful run is runbook row 2.10h on staging.
+- Local operations smoke: 57 of 57 PASS, including the three new `site head:` lines. Two earlier runs read 56 of 57 with the weighbridge breach leg failing; the cause was the undispatched notification backlog left by the integration suites (154 events), not this story. After draining it the leg passes.
+- Smoke flow design: the holder's gate pass is proven by sending the correction with the class the clock already has, which the platform answers 200 without writing. A staging run therefore changes no statutory clock.
+- Task 6.3 (staging run, operator task) NOT done: nothing is committed or shipped; runbook row 2.10h is written and waiting for the operator. Left unchecked, as Stories 1.15 and 3.12 did.
+- Found, not fixed (out of scope): (1) the generator writes `employee` into every `world.json` `people[].roles` list and the committed `world.json` has never carried it, a drift that dates from Story 1.15; with `employee` ignored the two `people` lists are identical. (2) `deploy/provision/roles.example.json` and the bootstrap script name no `qc_head` holder, so `verify:roles` reports `FAIL qc_head` after a bootstrap until the pilot pack is applied. (3) `staging-bootstrap-accounts.sh` pipes `verify:roles` through `tail -8`, which now cuts the top of a longer report.
+- Code review 2026-09-30 (three layers, no HIGH finding, four Acceptance Criteria judged MET): 2 decisions ruled by the owner, 9 patches applied, 3 deferred to `deferred-work.md`, 7 dismissed. Patches: location ids are lower-cased in `planProvisioning`, with a unit case; `requiredRoles` is de-duplicated, with an integration case; the `findRoleHolder` docstring and the `ROLE_UNHELD_AT_SITE` header comment state what happens today (a wildcard holder still resolves, only a site id matches, approvals do not resolve at the site until Story 4.8); both staging scripts read `tail -40`; the smoke docstring and runbook row 2.10h say the refused correction leaves one audit row; the smoke SKIP message no longer blames one actor; changelog v1.3 counts Table 3 correctly; the unit test imports `REQUIRED_SITE_ROLES` directly. Of the "found, not fixed" items above, (2) is answered by the reworded runbook rows 2.9 and 2.9a and (3) is fixed; (1) stays deferred.
 
 ### File List
+
+New:
+
+- `test/unit/site-head-role-pack.test.ts`
+- `test/integration/story-1-16.test.ts`
+
+Modified:
+
+- `src/read/projections/doa_registry.ts`
+- `src/cli/verify-segregated-roles-core.ts`
+- `src/cli/provision-roles-core.ts`
+- `deploy/rehearsal/mock/generate.mjs`
+- `deploy/rehearsal/mock/operations-smoke.ts`
+- `deploy/provision/roles.example.json`
+- `deploy/provision/staging-bootstrap-accounts.sh`
+- `deploy/provision/staging-doa-bands.sh` (code review)
+- `docs/migration/pilot-mock-extract/roles.json`
+- `docs/migration/pilot-mock-extract/world.json`
+- `docs/migration/pilot-cutover-runbook.md`
+- `test/integration/segregated-roles.test.ts`
+- `_bmad-output/planning-artifacts/access-matrix-frontline-draft-2026-07-11.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/1-16-site-head-role.md`
+- `_bmad-output/implementation-artifacts/deferred-work.md` (code review)
+
+Unchanged, confirmed: `src/cli/verify-segregated-roles.ts` (Task 4.3), `src/api/v1/indents.ts` (Task 2.3), every file under `edge/` (D9).
 
 ## Change Log
 
 - 2026-09-30: Story created (create-story). Status ready-for-dev.
 - 2026-09-30: Owner rulings applied (Table 6): both hats kept, finance pairs enforced, four required roles. Test file path corrected to `test/integration/segregated-roles.test.ts`.
+- 2026-09-30: Implemented (dev-story). `site_head` provisioned in the pilot pack and registered in the access matrix (v1.3); `findRoleHolder` and `isActiveRoleHolderForEntry` take an optional location; `verify:roles` reports four required roles per active site (`ROLE_UNHELD_AT_SITE`); two forbidden pairs enforced at provisioning; smoke flow `siteHead`; runbook row 2.10h. Tests: 2566 of 2566. Status review. Task 6.3 (staging run) open as an operator task. One deviation awaited an owner ruling (Completion Notes, deviation 1).
+- 2026-09-30: Owner ruling on deviation 1: accepted as is. A caller with no `jobwork` grant is refused `MODULE_ACCESS_DENIED` at the module gate; a `jobwork` writer without the hat is refused `FUNCTION_ACCESS_DENIED` at the site-head gate. AC 4 is met by refusal at either gate.
+- 2026-09-30: Code review (Blind Hunter, Edge Case Hunter, Acceptance Auditor). No HIGH finding. Owner rulings: deviations 2 and 3 accepted; the missing `qc_head` in the bootstrap path is answered by rewording runbook rows 2.9 and 2.9a. Nine patches applied, three findings deferred. Tests: 2568 of 2568. Status done. Task 6.3 (staging run) still open.

@@ -668,7 +668,8 @@
       "display_name": "Site Head",
       "fictitious": false,
       "roles": [
-        "warehouse_manager"
+        "warehouse_manager",
+        "site_head"
       ]
     },
     {
@@ -825,6 +826,7 @@
       "picker": "picker1@ancorlabs.org",
       "invctl": "invctl1@ancorlabs.org",
       "whmanager": "cmf_supervisor@ancorlabs.org",
+      "sitehead": "cmf_supervisor@ancorlabs.org",
       "dispatch": "dispatch1@ancorlabs.org",
       "planner": "planner1@ancorlabs.org",
       "engineer": "dev1@ancorlabs.org",

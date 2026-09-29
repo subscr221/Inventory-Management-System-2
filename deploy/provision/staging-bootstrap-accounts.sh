@@ -5,7 +5,9 @@
 #   2. Bootstrap hats for the migration lead at every site ('*') so they can create the site.
 #   3. Token through the rehearsal-only ims-cli client, then POST /api/v1/locations for the site.
 #   4. Final roles file with the real site id, provisioned through the SCIM seam; verify:roles
-#      (expect DOA_BAND_MISSING until staging-doa-bands.sh has run as the finance controller).
+#      (expect DOA_BAND_MISSING until staging-doa-bands.sh has run as the finance controller, and
+#      ROLE_UNHELD_AT_SITE for qc_head until the pilot roles file names a QC head: this script
+#      provisions no QC head).
 # Idempotent where it matters: existing Keycloak users are kept (passwords untouched), an existing
 # site is reused, provisioning REPLACES role sets (never deprovisions).
 # Usage: staging-bootstrap-accounts.sh <site-code> <lead-email> <head-email> <finance-email> <cfo-email> <site-head-email>
@@ -102,11 +104,15 @@ cat > /root/ims-roles.json <<EOF
   { "role": "finance_controller", "module": "jobwork",   "function_scope": "write", "location_id": "*",    "holder": "$FIN" },
   { "role": "finance_controller", "module": "compliance","function_scope": "write", "location_id": "*",    "holder": "$FIN" },
   { "role": "warehouse_manager",  "module": "warehouse", "function_scope": "write", "location_id": "site", "holder": "$SITEHEAD" },
-  { "role": "warehouse_manager",  "module": "inventory", "function_scope": "write", "location_id": "site", "holder": "$SITEHEAD" }
+  { "role": "warehouse_manager",  "module": "inventory", "function_scope": "write", "location_id": "site", "holder": "$SITEHEAD" },
+  { "role": "site_head",          "module": "jobwork",   "function_scope": "write", "location_id": "site", "holder": "$SITEHEAD" },
+  { "role": "site_head",          "module": "jobwork",   "function_scope": "read",  "location_id": "site", "holder": "$SITEHEAD" },
+  { "role": "site_head",          "module": "notification","function_scope": "read","location_id": "site", "holder": "$SITEHEAD" }
 ] }
 EOF
 docker compose exec -T app sh -c "cat > $IN_CONTAINER" < /root/ims-roles.json
 docker compose exec -T app node dist/src/cli/provision-roles.js "$IN_CONTAINER" --apply | tail -6
 docker compose exec -T app rm -f "$IN_CONTAINER" || true
 echo "=== 5. verify:roles"
-docker compose exec -T app node dist/src/cli/verify-segregated-roles.js 2>&1 | tail -8
+# tail -40: the report lists four required roles per active site after the pair lines (Story 1.16).
+docker compose exec -T app node dist/src/cli/verify-segregated-roles.js 2>&1 | tail -40

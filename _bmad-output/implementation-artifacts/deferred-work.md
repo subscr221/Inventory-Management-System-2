@@ -1268,3 +1268,9 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 ## Deferred from: user rulings on Story 4.8 open questions (2026-09-29)
 
 - Email delivery of standing-grant pruning lists (Story 4.8 AC 6 says in-app plus email). DEFERRED PILOT GAP by user ruling 2026-09-29: pilot delivers in_app and web_push only; `chk_notification_deliveries_channel` has no email channel. Trigger: an email notification channel story.
+
+## Deferred from: code review of 1-16-site-head-role (2026-09-30)
+
+- Forbidden pairs (`EXTRA_FORBIDDEN_PAIRS`, including the two `site_head` and finance pairs) are refused only by the roles-file planner (`src/cli/provision-roles-core.ts`). A pair assigned through SCIM directly, or already in the database, is not refused and `verify:roles` does not report it. Same enforcement model as the Story 13.3 pair. A shared-holder check in `verify:roles` would close it.
+- `findRoleHolder` with a location returns the oldest assignment among the site's own holders and the holders at `'*'`, so an older wildcard holder outranks the site's own. Task 2.1 of Story 1.16 kept the ordering on purpose. Story 4.8 (its D3) is the first caller and should decide whether the site's own holder must win, and add the mixed-case test.
+- `docs/migration/pilot-mock-extract/world.json` `people[].roles` omits `employee`, which `deploy/rehearsal/mock/generate.mjs` has written since Story 1.15. `test/unit/site-head-role-pack.test.ts` pins the committed form, so a regeneration of the pack breaks that test until both are aligned.

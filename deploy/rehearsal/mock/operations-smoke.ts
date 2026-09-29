@@ -506,6 +506,90 @@ export async function employeeRequisition(ctx: Ctx): Promise<void> {
   ]);
 }
 
+const SITE_HEAD_STEPS = [
+  'site head: reads the job-work clocks of the site',
+  'site head: a jobwork writer without the hat is refused',
+  'site head: the holder passes the classification gate',
+];
+
+/**
+ * Story 1.16: `operations.actors.sitehead` holds `site_head` at the site. The hat is proven on the
+ * one action gated on it today, the challan classification correction, and no clock is changed:
+ * the correction is sent with the class the clock already has, which the platform answers 200
+ * without writing. The refused attempt is a refused statutory correction, so each run leaves one
+ * audit row for it. A pack without one of the three actors, or a site without a job-work clock, is
+ * a named SKIP.
+ */
+export async function siteHead(ctx: Ctx): Promise<void> {
+  let headers: Awaited<ReturnType<Ctx['as']>>;
+  let withoutHat: Awaited<ReturnType<Ctx['as']>>;
+  let baseRole: Awaited<ReturnType<Ctx['as']>>;
+  try {
+    headers = await ctx.as('sitehead');
+    withoutHat = await ctx.as('depthead');
+    baseRole = await ctx.as('employee');
+  } catch (error) {
+    for (const name of SITE_HEAD_STEPS)
+      skip(name, `an actor of the site head flow is unavailable: ${(error as Error).message}`);
+    return;
+  }
+  let clock: Json | null = null;
+  const read = await step(SITE_HEAD_STEPS[0]!, async () => {
+    const path = `/api/v1/jobwork/reports/aging?site_id=${ctx.siteId}`;
+    const res = must(await ctx.request('GET', path, undefined, headers), 200, 'aging report');
+    const rows = listOf(res, 'rows');
+    clock = rows.find((row) => row['site_id'] === ctx.siteId) ?? null;
+    const denied = await ctx.request('GET', path, undefined, baseRole);
+    if (denied.status !== 403)
+      throw new Error(`the base role read the report: ${denied.status}, expected 403`);
+    return `${rows.length} clock(s) with exposure at the site, the base role refused`;
+  });
+  if (!read) {
+    for (const name of SITE_HEAD_STEPS.slice(1)) skip(name, `needs "${SITE_HEAD_STEPS[0]!}"`);
+    return;
+  }
+  if (clock === null) {
+    for (const name of SITE_HEAD_STEPS.slice(1)) skip(name, 'no job-work clock at the site');
+    return;
+  }
+  const target = clock as Json;
+  const correction = (as: Awaited<ReturnType<Ctx['as']>>) =>
+    ctx.request(
+      'PATCH',
+      `/api/v1/jobwork/clocks/${String(target['clock_id'])}/classification`,
+      { idempotency_key: uuid(), challan_class: target['challan_class'] },
+      as,
+    );
+  await flow([
+    [
+      SITE_HEAD_STEPS[1]!,
+      async () => {
+        const res = await correction(withoutHat);
+        const required = ((res.body['details'] ?? {}) as Json)['required_roles'];
+        if (res.status !== 403 || res.body['error_code'] !== 'FUNCTION_ACCESS_DENIED')
+          throw new Error(
+            `answered ${res.status} ${String(res.body['error_code'])}, expected 403 FUNCTION_ACCESS_DENIED`,
+          );
+        if (!Array.isArray(required) || !required.includes('site_head'))
+          throw new Error(`required_roles ${JSON.stringify(required)} does not name site_head`);
+        return `${ctx.emailOf('depthead')} refused, required ${required.join(', ')}`;
+      },
+    ],
+    [
+      SITE_HEAD_STEPS[2]!,
+      async () => {
+        const res = must(await correction(headers), 200, 'classification (site head)');
+        const after = (res['return_clock'] ?? {}) as Json;
+        if (after['clock_id'] !== target['clock_id'])
+          throw new Error(`answered clock ${String(after['clock_id'])}`);
+        if (after['challan_class'] !== target['challan_class'])
+          throw new Error(`class changed to ${String(after['challan_class'])}`);
+        return `${ctx.emailOf('sitehead')} passed, class still ${String(after['challan_class'])}`;
+      },
+    ],
+  ]);
+}
+
 const DAMAGE_STEPS = [
   'damage: upload a photo as taken',
   'damage: report 1 unit at a bin with a replacement',
@@ -1626,6 +1710,7 @@ async function main(): Promise<void> {
     await production(ctx);
     await indent(ctx);
     await employeeRequisition(ctx);
+    await siteHead(ctx);
     await damageReport(ctx);
     await maintenance(ctx);
   } catch (error) {

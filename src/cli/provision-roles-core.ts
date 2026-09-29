@@ -59,6 +59,20 @@ export const EXTRA_FORBIDDEN_PAIRS: ReadonlyArray<{ a: string; b: string; reason
     reason:
       'Story 13.3 decision 1: the two final go-live sign-offs must come from two people (SIGNOFF_ACTOR_CONFLICT other_final_signoff)',
   },
+  // Story 1.16 (D6): assignment-time pairs only. They are not SEGREGATED_ROLE_PAIRS because no DOA
+  // transaction type governs them yet; Story 4.8 seeds the standing-grant types.
+  {
+    a: 'site_head',
+    b: 'finance_controller',
+    reason:
+      'Ruling 2026-09-06, enforced at provisioning by owner ruling 2026-09-30: the site head holds neither finance hat, so whoever assigns a standing grant is never the finance approver of it',
+  },
+  {
+    a: 'site_head',
+    b: 'cfo',
+    reason:
+      'Ruling 2026-09-06, enforced at provisioning by owner ruling 2026-09-30: the site head holds neither finance hat, so whoever assigns a standing grant is never the finance approver of it',
+  },
 ];
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -92,10 +106,13 @@ export function planProvisioning(file: RolesFile): ProvisioningPlan {
     }
     const holder = typeof entry.holder === 'string' ? entry.holder.trim().toLowerCase() : '';
     if (!EMAIL_REGEX.test(holder)) errors.push(`${where}: holder must be an email address`);
+    // Lower-cased: the register returns its uuid lower-case and the located lookups compare text
+    // (Story 1.16 code review), so an upper-case id in the file must not be stored as typed.
     let locationId: string;
-    if (entry.location_id === 'site') locationId = file.site_id;
-    else if (entry.location_id === '*') locationId = '*';
-    else if (UUID_REGEX.test(entry.location_id ?? '')) locationId = entry.location_id;
+    if (entry.location_id === 'site') {
+      locationId = typeof file.site_id === 'string' ? file.site_id.toLowerCase() : file.site_id;
+    } else if (entry.location_id === '*') locationId = '*';
+    else if (UUID_REGEX.test(entry.location_id ?? '')) locationId = entry.location_id.toLowerCase();
     else {
       errors.push(`${where}: location_id must be 'site', '*' or a UUID`);
       locationId = '*';

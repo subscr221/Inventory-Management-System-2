@@ -54,4 +54,5 @@ band finance_controller damage.finance_concurrence      damage-finance-concurren
 band ceo                damage.escalation               damage-escalation
 unset TOKEN
 echo "=== verify:roles"
-docker compose exec -T app node dist/src/cli/verify-segregated-roles.js 2>&1 | tail -8
+# tail -40: the report lists four required roles per active site after the pair lines (Story 1.16).
+docker compose exec -T app node dist/src/cli/verify-segregated-roles.js 2>&1 | tail -40
