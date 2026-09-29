@@ -13,20 +13,20 @@
 }
 
 .chart-header {
-  padding: 15px 20px;
-  border-bottom: 1px solid var(--neutral-100);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
 }
 
 .chart-title {
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--neutral-900);
+  font-size: var(--title-size);
+  font-weight: var(--title-weight);
+  color: var(--text);
 }
 
 .chart-content {
   flex: 1;
-  padding: 20px;
+  padding: var(--space-4);
   display: flex;
   align-items: center;
   justify-content: center;

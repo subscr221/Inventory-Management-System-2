@@ -181,57 +181,81 @@ export function AppShell({
       <a className="skip-link" href="#main-content">
         {t('app.skipToContent')}
       </a>
-      <header className="edge-header">
-        <div className="edge-brand">
-          <h1>{t('app.title')}</h1>
-          <p>
-            {userName} · {siteName}
-          </p>
-        </div>
-        <div className="edge-header-actions">
-          <GlobalSearch currentRole={role} navigation={navigation} />
-          <SyncStatusBadge state={syncState} />
+      <div className="edge-layout">
+        <aside className="edge-sidebar">
+          <div className="edge-sidebar-brand">
+            <h1 className="brand-name">{t('app.title')}</h1>
+          </div>
+          <p className="edge-sidebar-site">{siteName}</p>
+          <div className="edge-sidebar-section">
+            <p className="edge-sidebar-caption">{userName}</p>
+            {navEntries.length > 0 ? (
+              <ul className="edge-sidebar-nav">
+                {navEntries.map((link) => (
+                  <li key={link.href}>
+                    <a className="edge-sidebar-item" href={link.href}>
+                      {t(link.label as MessageKey)}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
           {onSignOut ? (
-            <button
-              type="button"
-              className="secondary-action"
-              onClick={onSignOut}
-              disabled={signingOut}
-              aria-busy={signingOut}
-            >
-              {t('auth.signOut')}
-            </button>
+            <div className="edge-sidebar-footer">
+              <button
+                type="button"
+                className="edge-sidebar-item"
+                onClick={onSignOut}
+                disabled={signingOut}
+                aria-busy={signingOut}
+              >
+                {t('auth.signOut')}
+              </button>
+            </div>
           ) : null}
-        </div>
-      </header>
-      {signOutBlockedCount > 0 ? (
-        <p className="auth-sign-out-blocked" role="status" aria-live="polite">
-          {countMessage(signOutBlockedCount, 'auth.signOutBlockedOne', 'auth.signOutBlocked')}
-        </p>
-      ) : null}
-      {signOutIncomplete ? (
-        <p className="auth-sign-out-blocked" role="alert">
-          {t('auth.signOutIncomplete')}
-        </p>
-      ) : null}
-      {waitingForOthers.map((entry, index) => (
-        <p key={`${entry.userName}-${index}`} className="auth-sign-out-blocked" role="status">
-          {countMessage(entry.count, 'auth.waitingForOwnerOne', 'auth.waitingForOwner').replace(
-            '{name}',
-            entry.userName || t('auth.unknownOwner'),
-          )}
-        </p>
-      ))}
-      {navEntries.length > 0 ? (
-        <nav className="edge-nav" aria-label={t('nav.label')}>
-          {navEntries.map((link) => (
-            <a key={link.href} href={link.href}>
-              {t(link.label as MessageKey)}
-            </a>
+        </aside>
+        <div className="edge-content">
+          <header className="edge-header">
+            <div className="edge-header-search">
+              <GlobalSearch currentRole={role} navigation={navigation} />
+            </div>
+            <div className="edge-header-actions">
+              <span className="edge-site-switcher">{siteName}</span>
+              <SyncStatusBadge state={syncState} />
+              <a className="quick-create" href="/requisitions/new">
+                + {t('nav.quickCreate')}
+              </a>
+            </div>
+          </header>
+          {signOutBlockedCount > 0 ? (
+            <p className="auth-sign-out-blocked" role="status" aria-live="polite">
+              {countMessage(signOutBlockedCount, 'auth.signOutBlockedOne', 'auth.signOutBlocked')}
+            </p>
+          ) : null}
+          {signOutIncomplete ? (
+            <p className="auth-sign-out-blocked" role="alert">
+              {t('auth.signOutIncomplete')}
+            </p>
+          ) : null}
+          {waitingForOthers.map((entry, index) => (
+            <p key={`${entry.userName}-${index}`} className="auth-sign-out-blocked" role="status">
+              {countMessage(entry.count, 'auth.waitingForOwnerOne', 'auth.waitingForOwner').replace(
+                '{name}',
+                entry.userName || t('auth.unknownOwner'),
+              )}
+            </p>
           ))}
-        </nav>
-      ) : null}
-      <main id="main-content" className="edge-main" tabIndex={-1}>
+          {navEntries.length > 0 ? (
+            <nav className="edge-nav" aria-label={t('nav.label')}>
+              {navEntries.map((link) => (
+                <a key={link.href} href={link.href}>
+                  {t(link.label as MessageKey)}
+                </a>
+              ))}
+            </nav>
+          ) : null}
+          <main id="main-content" className="edge-main" tabIndex={-1}>
         {authRequired ? (
           <div className="auth-required" role="alert">
             {t('sync.authRequired')}
@@ -409,12 +433,14 @@ export function AppShell({
             </section>
           </div>
         )}
-        <SyncFailureList
-          failures={failures}
-          {...(onRetry ? { onRetry } : {})}
-          {...(onDismissFailure ? { onDismiss: onDismissFailure } : {})}
-        />
-      </main>
+            <SyncFailureList
+              failures={failures}
+              {...(onRetry ? { onRetry } : {})}
+              {...(onDismissFailure ? { onDismiss: onDismissFailure } : {})}
+            />
+          </main>
+        </div>
+      </div>
     </div>
   );
 }

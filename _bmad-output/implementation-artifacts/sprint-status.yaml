@@ -1,5 +1,5 @@
 # generated: 2026-07-12
-# last_updated: 2026-09-27 (story 3-12 code review, moved review -> done)
+# last_updated: 2026-09-29 (story 4-8 re-scoped to grants per user rulings; prerequisites 1-16, 2-10, 4-10, 4-11 added)
 #   patches applied, story-9-6 22/22, gates clean; 2 deferred 9.6C-1/9.6C-2; 9-7 done
 #   (code review chunks A-E 2026-09-06: chunk A 12 patches + decision-1 interim, chunk B 6,
 #   chunk C 8, chunk E 9 docs patches all applied; chunk D partial on 2026-09-06, COMPLETED
@@ -398,7 +398,7 @@
 # (Epic 8 QC must precede any Epic 6 closure gate; Epic 6 is NOT in the pilot.)
 
 generated: 2026-07-12
-last_updated: '2026-09-28'   # story 8-9 code review complete across all 5 chunks (backend-core, read/events/infra, edge app, tests, deploy/docs): review -> in-progress, 1 decision + 19 patches applied total; chunk 3 caught a real edge-app regression from chunk 1's own fix, chunk 4's Acceptance Auditor found the test suite unusually solid. Task 13.5 staging run (operator task) is now the only remaining blocker to done
+last_updated: '2026-09-29'   # user rulings on 4-8 open questions: prerequisite stories 1-16, 2-10, 4-10, 4-11 added as backlog; epic-2 reopened; 4-8 ready-for-dev but blocked
 # story 6-4 dev-story 2026-09-01: implemented all 9 tasks from baseline 905a48e (clean tree). Closes
 #   Epic 6. One new projection (production_consumption_variance, append-only, grain
 #   (production_order_id, bom_line_id)) plus two pure services: src/production/lot-genealogy.ts (no
@@ -910,10 +910,11 @@ development_status:
   1-13-refused-and-parked-captures-are-never-lost: done   # PRE-PILOT BLOCKING  # sprint-change-proposal-2026-09-15; AD-18; blocks runbook 2.10c and the rehearsal. Second code review 2026-09-17 (eight finders): 2 patches (DOA band for edge.refused_capture_resolution in staging script + runbook 2.9a; salvage failure no longer skips db.connect), 2 defers + cleanups in deferred-work.md. Runbook 2.9a re-run and 2.10c PASSED on staging 2026-09-17 (Task 8.5 closed).
    1-14-refused-captures-supervisor-screen: done          # PILOT  # depends on 1-13 (done 2026-09-17); story file created 2026-09-17, AC 6 carries the device dismiss and STREAM_CONFLICT clear path from the 1.13 review. Code review 2026-09-17 (3 layers): 11 patches applied, 1 deferred, 8 dismissed. Task 6.5 staging check (runbook 2.10d) remains pending on deploy and the operator.
   1-15-employee-base-role: done   # PILOT (sprint-change 2026-09-26)  # story file created 2026-09-27 via create-story (baseline 4f5164c): base hat as a real `employee` module assignment for every human in the pilot pack; requireRole gains any-of module lists; raise, own-indent get/list (mine=true) and a new no-number GET /stock/:sku/availability accept it; bootstrap navigation becomes table-driven with three base entries; damage capture and Report damage nav ride with 8.9. 8 binding decisions in the story file. 2026-09-27 code review: 9 findings triaged and applied (HIGH: dual-hat actor-role audit-trail fix, D9 added); root suite 2472/2472; Task 6.3 staging run pending operator (Story 3.12 convention).
+  1-16-site-head-role: backlog   # PILOT; prerequisite of 4-8 (user ruling 2026-09-29)
   epic-1-retrospective: optional
 
   # --- Epic 2: Core Inventory and Multi-Location Stock Visibility  [PILOT] ---
-  epic-2: done
+  epic-2: in-progress   # reopened 2026-09-29 by user ruling (Story 2.10 item groups, prerequisite of 4-8); was done
   2-1-item-master-and-location-register: done   # PILOT
   2-2-real-time-multi-location-stock-balances: done   # PILOT
   2-3-lot-batch-and-serial-traceability: done   # PILOT
@@ -923,6 +924,7 @@ development_status:
   2-7-safety-stock-reorder-points-and-obsolescence-flagging: done   # PILOT
   2-8-consignment-and-vmi-stock-segregation: done   # PILOT
   2-9-erp-inbound-reference-projections: done   # PILOT
+  2-10-item-groups-master: backlog   # PILOT; prerequisite of 4-8 (user ruling 2026-09-29)
   epic-2-retrospective: optional
 
   # --- Epic 3: Warehouse Operations and Frontline Capture Flows  [PILOT] ---
@@ -956,8 +958,10 @@ development_status:
   4-5-goods-receipt-and-three-way-match: done
   4-6-msme-compliance-tracking: done
   4-7-supplier-invoice-capture: done
-  4-8-standing-approvals-and-self-approval-limits: backlog   # PILOT (sprint-change 2026-09-26)
+  4-8-standing-approvals-and-self-approval-limits: ready-for-dev   # PILOT (sprint-change 2026-09-26); story file created 2026-09-29; blocked on 1-16, 2-10, 4-10, 4-11 (user rulings 2026-09-29)
   4-9-indent-approver-resolution-fallback: backlog   # defect (sprint-change 2026-09-26)
+  4-10-requisition-line-level-approval-and-mixed-routing: backlog   # PILOT; prerequisite of 4-8; seeds pilot DOA value bands; coordinate with 4-9 (user ruling 2026-09-29)
+  4-11-stores-counter-issue-against-a-requisition: backlog   # PILOT; prerequisite of 4-8; depends on 4-10 (user ruling 2026-09-29)
   epic-4-retrospective: optional
   # story 4-2 skipped for now: epics.md sequences it LAST in epic 4 (consumes PurchaseOrderIssued/Confirmed
   # from 4.4, GoodsReceived + match results from 4.5, SupplierInvoiceCaptured from 4.7). Create 4-2 after

@@ -1264,3 +1264,7 @@ Tests chunk (group 4 of 5). This completes the review of all 5 chunks. All items
 - `report-damage.spec.ts`'s offline-upload assertion is tautological (the stub can't upload offline regardless of what the app does).
 - `damage-cases.spec.ts`'s "every sibling action is disabled" test checks only two of the panel's buttons.
 - `damage-capture.test.ts`'s `need_by_date` IST-boundary test is a single hardcoded snapshot, not a property test.
+
+## Deferred from: user rulings on Story 4.8 open questions (2026-09-29)
+
+- Email delivery of standing-grant pruning lists (Story 4.8 AC 6 says in-app plus email). DEFERRED PILOT GAP by user ruling 2026-09-29: pilot delivers in_app and web_push only; `chk_notification_deliveries_channel` has no email channel. Trigger: an email notification channel story.

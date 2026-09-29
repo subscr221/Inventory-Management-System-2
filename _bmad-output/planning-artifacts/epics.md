@@ -471,6 +471,32 @@ So that everyday needs do not require a procurement or inventory role grant that
 
 **Note:** PILOT. Ratified in the UX run 2026-09-23 to 2026-09-26 (`ux-designs/ux-Inventory Management System_2-2026-09-23/`, EXPERIENCE.md IA base "employee" hat and run memlog). Created 2026-09-26 by `sprint-change-proposal-2026-09-26.md`.
 
+#### Story 1.16: Site Head Role
+
+As a site head,
+I want a provisioned `site_head` role recognised by RBAC and the DOA registry,
+So that site-level authorities (standing approval grants, self-approval limits) resolve to a real person instead of a stand-in role.
+
+**Acceptance Criteria:**
+
+**Given** the access matrix
+**When** this story lands
+**Then** section 2 registers `site_head` (location scope: site) with its capability rows, and the role is in the pilot role pack
+
+**Given** the pilot provisioning path (roles file, Keycloak role pack, `staging-provision-roles.sh`)
+**When** roles are applied
+**Then** a named `site_head` holder exists per pilot site and `verify:roles` reports it
+
+**Given** the DOA registry
+**When** a transaction type names `site_head`
+**Then** `findRoleHolder` and delegation resolve a `site_head` holder at the transaction site like any other role
+
+**Given** a user who is not a site head
+**When** they call a site-head-gated action
+**Then** it is refused with `FUNCTION_ACCESS_DENIED`
+
+**Note:** PILOT. Prerequisite of Story 4.8. Source: user ruling 2026-09-29 (Story 4.8 open questions).
+
 ---
 
 ## Epic 2: Core Inventory and Multi-Location Stock Visibility
@@ -1323,6 +1349,32 @@ So that receiving, replenishment, job-work, and dispatch flows have a defined Ph
 
 **Note (reference data, not a procurement module):** These projections are reference data only — ERP remains the master for PO and sales-order lifecycle (INT-ERP-01). Nothing in this platform mutates PO or sales-order state; receipts recorded against a projected PO line (Story 2.2, Epics 3-4) never write back to the projection. Epic 4 builds procurement workflows on top of these projections; Epics 3, 9, and 11 reference Story 2.9 for PO data and dispatch-order demand.
 
+### Story 2.10: Item Groups Master
+
+As a stock controller,
+I want a governed item group master with each item assigned to a group,
+So that grants, reports and rules can target a named group of items instead of free-text categories.
+
+**Acceptance Criteria:**
+
+**Given** an inventory controller
+**When** they create an item group
+**Then** it gets a unique code and name, is event-sourced and edit-logged, and can be deactivated but never deleted while items reference it
+
+**Given** an item in the item master
+**When** it is assigned to a group
+**Then** the item carries exactly one `item_group` (nullable until assigned), the change is an audited event, and lookups by group return its active items
+
+**Given** existing items
+**When** the story deploys
+**Then** items stay valid with no group, and a report lists ungrouped items for assignment
+
+**Given** a reference to an unknown or inactive group
+**When** an item assignment or a downstream grant is saved
+**Then** it is refused with a stable error code
+
+**Note:** PILOT. Prerequisite of Story 4.8 (grant scope by item group). Source: user ruling 2026-09-29 (Story 4.8 open questions). Reopens Epic 2.
+
 ---
 
 ## Epic 3: Warehouse Operations and Frontline Capture Flows
@@ -1909,19 +1961,21 @@ So that routine repeat issues stop queuing behind approvers while every grant st
 
 **Extends Story 4.3's approval rules (FR-P-04). SOD-01 is amended as recorded in the access matrix and the PRD addendum (sprint-change-proposal-2026-09-26 Section 4.4). Ratified in the UX run 2026-09-23 to 2026-09-26 (`ux-designs/ux-Inventory Management System_2-2026-09-23/`, EXPERIENCE.md Requisitions and Standing Approvals, memlog standing-approval rulings 2026-09-25, Q6 and Q7 rulings). Created 2026-09-26 by `sprint-change-proposal-2026-09-26.md`.**
 
+**Depends on (user ruling 2026-09-29):** Stories 1.16 (site head role), 2.10 (item groups), 4.10 (line-level approval and mixed routing), 4.11 (stores counter issue). Story 4.9 lands before 4.10.
+
 **Acceptance Criteria:**
 
-**Given** a site head or head of department
+**Given** a site head (Story 1.16) or head of department
 **When** they assign a standing approval
-**Then** a grant with id `SA-YYYY-NNN` links one user to one item or item group, with an optional monthly quantity cap (counted against quantity issued) and an optional end date; the grant is inactive until the finance department head approves it once
+**Then** a grant with id `SA-YYYY-NNN` links one user to one SKU or one item group (Story 2.10), with an optional monthly quantity cap (counted against quantity issued) and an optional end date; the grant is inactive until the finance department head approves it once
 
 **Given** an active standing approval
-**When** a requisition or issue falls under it and within its cap
-**Then** it proceeds without a per-transaction approver, and the issue screen and the printed slip both state the grant id it rode on
+**When** a requisition line falls under it and within its cap
+**Then** that line proceeds to stores counter issue (Story 4.11) without a per-transaction approver, and the issue screen and the printed slip both state the grant id it rode on
 
-**Given** an issue that would take the month's issued quantity over the grant's cap, or a requisition outside the grant's scope
+**Given** a requisition line whose issue would take the month's issued quantity over the grant's cap, or a line outside the grant's scope
 **When** it is submitted
-**Then** it falls back to the normal DOA approval path - never rejected for exceeding the grant, never silently self-approved
+**Then** that line alone falls back to the normal DOA approval path (Story 4.10 per-line routing; covered lines in the same requisition still issue) - never rejected for exceeding the grant, never silently self-approved
 
 **Given** a per-person self-approval limit assigned by the site head or head of department and approved once by the finance department head
 **When** the person approves their own requisition line within that limit
@@ -1933,7 +1987,7 @@ So that routine repeat issues stop queuing behind approvers while every grant st
 
 **Given** the pruning cycle (default every 30 days)
 **When** it runs
-**Then** each assigner receives an in-app plus email list of their live grants, with any grant unused for 90 days flagged for review
+**Then** each assigner receives an in-app plus web push list of their live grants, with any grant unused for 90 days flagged for review (email deferred per user ruling 2026-09-29, logged in `deferred-work.md`)
 
 ---
 
@@ -1962,6 +2016,62 @@ So that no indent is ever stored unapprovable and stuck with no path forward.
 **Given** indents stored stuck before this fix
 **When** the fix deploys
 **Then** existing `NOT_RESOLVED_APPROVER` indents are re-resolved through the fallback or surfaced in an exception list for manual routing, and a regression test locks in that an unmatched indent never again persists without an approver path
+
+### Story 4.10: Requisition Line-Level Approval and Mixed Routing
+
+As a requester and as an approver,
+I want each requisition line to carry its own approval route and state,
+So that lines covered by a standing approval go straight to stores while the rest follow DOA approval, without splitting the document.
+
+**Acceptance Criteria:**
+
+**Given** a requisition with several lines
+**When** it is raised
+**Then** each line gets its own route (`doa`, `standing_approval`, `self_approval`) and state (pending, approved, rejected), and the header status is derived from its lines
+
+**Given** a mixed requisition
+**When** some lines are covered by a live grant and others are not
+**Then** covered lines are approved for issue at once and uncovered lines go to the DOA approver resolved on their own value; the document is never split
+
+**Given** a DOA approver
+**When** they decide a requisition
+**Then** they approve or reject individual lines, SOD-01 and the Story 4.3 seam guards apply per line, and each decision is audited
+
+**Given** the pilot value bands (UX ruling Q6: head of department up to Rs 1,00,000, finance controller above)
+**When** this story deploys
+**Then** the bands are confirmed with the owner and seeded as `indent_approval` entries in the DOA registry on staging and in the pilot seed, with a regression test on the band boundaries
+
+**Given** existing whole-indent approvals
+**When** the story deploys
+**Then** they are migrated so every line inherits the header decision, and Story 4.3 behaviour for single-route requisitions is unchanged
+
+**Note:** PILOT. Prerequisite of Story 4.8. Coordinate with Story 4.9 (no-band fallback now resolves per line). Source: user ruling 2026-09-29 (Story 4.8 open questions).
+
+### Story 4.11: Stores Counter Issue Against a Requisition
+
+As a storekeeper,
+I want to issue stock at the counter against approved requisition lines, fully or in part,
+So that approved needs are met from stock with a printed slip and an exact ledger record.
+
+**Acceptance Criteria:**
+
+**Given** an approved requisition line
+**When** the storekeeper issues from a bin
+**Then** the issue decrements stock through the stock-balance ledger, records the issued quantity against the line, and prints a slip naming the requisition, line, requester and approval basis
+
+**Given** a line with quantity still open
+**When** a partial issue is made
+**Then** the line stays open for the remainder until fully issued or closed with a reason; issued never exceeds approved
+
+**Given** a line not yet approved or already fully issued
+**When** an issue is attempted
+**Then** it is refused with a stable error code
+
+**Given** lot or serial controlled items
+**When** they are issued
+**Then** lot and serial capture follows the Story 2.3 rules
+
+**Note:** PILOT. Prerequisite of Story 4.8 (issue-time cap check and slip text). Source: user ruling 2026-09-29 (Story 4.8 open questions).
 
 ---
 
