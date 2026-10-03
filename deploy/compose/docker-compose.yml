@@ -117,7 +117,13 @@ services:
       - backend
 
   postgres:
-    image: postgres:18.4
+    # pgBackRest must be in the image: `docker compose up -d` on every deploy recreates this
+    # container, so an interactively apt-installed pgbackrest would disappear with it and leave
+    # the pilot with no backup tooling at all.
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: ims-postgres-pgbackrest:18.4
     restart: unless-stopped
     environment:
       POSTGRES_DB: inventory_events
@@ -163,9 +169,19 @@ services:
       - "-c"
       - "archive_mode=on"
       - "-c"
-      - "archive_command=cp %p /var/lib/postgresql/wal_archive/%f"
+      # WAL must be archived through pgBackRest, not copied by hand. pgBackRest refuses to run
+      # while archive_command does not invoke it (error 068), and archive-push is what ties each
+      # segment to the backup repository so pgBackRest can expire WAL on its own. The previous
+      # `cp %p /var/lib/postgresql/wal_archive/%f` had no expiry at all: it copied every 16 MB
+      # segment into the pg_data volume forever, which reached 52 GB and filled the 197 GB staging
+      # VPS (98% full) on 2026-10-03.
+      - "archive_command=pgbackrest --stanza=main --config=/etc/pgbackrest.conf archive-push %p"
       - "-c"
-      - "archive_timeout=300"
+      # 900s rather than the previous 300s. Every archive_timeout forces a WAL segment switch even
+      # on an idle pilot, so the shorter timeout produced roughly 4.6 GB/day of WAL for a database
+      # that is 32 MB. A longer timeout plus repo1-retention-full in pgbackrest.conf keeps WAL
+      # bounded without slowing capture sync, which is latency-sensitive and not WAL-volume-bound.
+      - "archive_timeout=900"
       - "-c"
       - "shared_buffers=256MB"
       - "-c"
