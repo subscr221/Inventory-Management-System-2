@@ -23,7 +23,12 @@ import {
 /** The location_id of a bin code (mirrors extra-flows.ts). */
 async function locationIdOf(ctx: Ctx, code: string, who = 'invctl'): Promise<string> {
   const res = must(
-    await ctx.request('GET', `/api/v1/locations/${encodeURIComponent(code)}`, undefined, await ctx.as(who)),
+    await ctx.request(
+      'GET',
+      `/api/v1/locations/${encodeURIComponent(code)}`,
+      undefined,
+      await ctx.as(who),
+    ),
     200,
     `location ${code}`,
   );
@@ -48,31 +53,29 @@ async function cleanupPutaway(ctx: Ctx): Promise<void> {
   let done = 0;
   const left: string[] = [];
   await flow(
-    rows.map(
-      (t): [string, () => Promise<string | void>] => [
-        `putaway ${(t['putaway_task_id'] as string).slice(0, 8)} ${String(t['sku'])} ${String(t['quantity'])}`,
-        async () => {
-          const id = t['putaway_task_id'] as string;
-          const r = await ctx.request(
-            'POST',
-            `/api/v1/putaway-tasks/${id}/complete`,
-            {
-              actual_location_id: binId,
-              override_reason_code: 'OPERATOR_CHOICE',
-              override_confidence: 'certain',
-              idempotency_key: `pilot-cleanup-${id}`,
-            },
-            store,
-          );
-          if (r.status === 200) {
-            done += 1;
-            return `completed into ${bin}`;
-          }
-          left.push(`${id.slice(0, 8)}: ${r.status} ${r.text.slice(0, 200)}`);
-          throw new Error(`${r.status} ${r.text.slice(0, 300)}`);
-        },
-      ],
-    ),
+    rows.map((t): [string, () => Promise<string | void>] => [
+      `putaway ${(t['putaway_task_id'] as string).slice(0, 8)} ${String(t['sku'])} ${String(t['quantity'])}`,
+      async () => {
+        const id = t['putaway_task_id'] as string;
+        const r = await ctx.request(
+          'POST',
+          `/api/v1/putaway-tasks/${id}/complete`,
+          {
+            actual_location_id: binId,
+            override_reason_code: 'OPERATOR_CHOICE',
+            override_confidence: 'certain',
+            idempotency_key: `pilot-cleanup-${id}`,
+          },
+          store,
+        );
+        if (r.status === 200) {
+          done += 1;
+          return `completed into ${bin}`;
+        }
+        left.push(`${id.slice(0, 8)}: ${r.status} ${r.text.slice(0, 200)}`);
+        throw new Error(`${r.status} ${r.text.slice(0, 300)}`);
+      },
+    ]),
   );
   await step('putaway summary', async () => `${done}/${rows.length} completed into ${bin}`);
   if (left.length > 0) throw new Error(`left open: ${left.join('; ')}`);
@@ -110,7 +113,11 @@ async function cleanupQc(ctx: Ctx): Promise<void> {
             'plan version',
           );
           const characteristics = (version['characteristics'] ?? []) as Json[];
-          const sampling = must(await ctx.request('POST', path('sampling'), {}, qc), [200, 201], 'sampling')['sampling'] as Json;
+          const sampling = must(
+            await ctx.request('POST', path('sampling'), {}, qc),
+            [200, 201],
+            'sampling',
+          )['sampling'] as Json;
           const size = Number(sampling['sample_size']);
           for (const c of characteristics) {
             must(
@@ -137,7 +144,10 @@ async function cleanupQc(ctx: Ctx): Promise<void> {
       [
         `qc disposition+release ${lot}`,
         async () => {
-          const body = { disposition: 'accept', justification: 'Pilot cleanup: inspected, all conform' };
+          const body = {
+            disposition: 'accept',
+            justification: 'Pilot cleanup: inspected, all conform',
+          };
           must(
             await ctx.request('POST', path('disposition'), body, await ctx.as('qchead')),
             201,
@@ -147,7 +157,11 @@ async function cleanupQc(ctx: Ctx): Promise<void> {
           const logged = await ctx.request(
             'POST',
             path('retention-sample'),
-            { quantity: '1', uom: String(task['uom'] ?? 'EA'), location_id: await locationIdOf(ctx, bin) },
+            {
+              quantity: '1',
+              uom: String(task['uom'] ?? 'EA'),
+              location_id: await locationIdOf(ctx, bin),
+            },
             qc,
           );
           must(logged, [200, 201], 'retention sample');
@@ -162,7 +176,9 @@ async function cleanupQc(ctx: Ctx): Promise<void> {
 
 async function main(): Promise<void> {
   if (!process.argv.includes('--remote'))
-    throw new Error('staging only: pass --remote deploy/pilot/sim/staging-sim.json --pack docs/migration/pilot-mock-extract');
+    throw new Error(
+      'staging only: pass --remote deploy/pilot/sim/staging-sim.json --pack docs/migration/pilot-mock-extract',
+    );
   const ctx = await boot(null);
   try {
     await cleanupPutaway(ctx);
