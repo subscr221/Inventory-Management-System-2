@@ -1,0 +1,14 @@
+Simulated pilot day  2026-10-04-1248
+
+== password-grant client
+  ims-cli client created
+== API day (pilot-day.ts)
+  FAIL  job-work: receive customer material against the challan (~   1.00 s  challan receipt: expected 201, got 409 {"error_code":"JOBWORK_ORDER_KIT_BOM_REQUIRED","message":"The service order has no kit BOM, so it names no expected customer material; attach a kit BOM before receiving against it","details":{"service_order_id":"dcc7bccc-3b03-47c9-9ab7-7d69a8021262","sku":"CUST-SHEET-3MM"},"trace_id":"90857c3b-9f38-4501-b827-79fb8133c6a6"}
+  SKIP  job-work: the same challan and lot again is refused          0.00 s  needs "job-work: receive customer material against the challan (no PO, no ticket)"
+  SKIP  count: cycle count with a variance                           0.00 s  needs "job-work: receive customer material against the challan (no PO, no ticket)"
+  SKIP  count: counter cannot approve, another person approves       0.00 s  needs "job-work: receive customer material against the challan (no PO, no ticket)"
+  SKIP  replenishment: operator confirms one task                    0.00 s  no open replenishment task: the site has no forward-pick min/max configured (PUT /api/v1/replenishment/config is a planning decision, not a daily action)
+  SKIP  refused captures: resolve one captured by somebody else      0.00 s  no open refused capture of another person at the site
+  SKIP  offcut: CFO signs a job-work offcut acquisition              0.00 s  no retained offcut holding: capturing one needs consumption, output, QC release, dispatch and an ERP-acknowledged billing feed on the job-work order, none of which the pilot day does
+  FAIL: 38/45 steps passed, 1 failed, 6 skipped
+== Browser day (Playwright, real sign-in)
